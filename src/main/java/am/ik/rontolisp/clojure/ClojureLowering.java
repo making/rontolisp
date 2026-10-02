@@ -623,6 +623,19 @@ public final class ClojureLowering {
 	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
+	 * The binding-depth counter of a dynamic var: a special beside the var itself, zero
+	 * at the root and rebound one deeper by every {@code binding} of the var, so
+	 * {@code set!} tests at run time whether the var is thread-bound. Defined beside the
+	 * var by every {@code ^:dynamic} definition. The single-{@code %} suffix keeps it
+	 * apart from user definitions, like the multi-{@code defn} helpers.
+	 * @param key the var key
+	 * @return the counter symbol
+	 */
+	static LispSymbol boundDepthSym(String key) {
+		return new LispSymbol(varSym(key).name() + "%bound-depth");
+	}
+
+	/**
 	 * A {@code let} local's host class, inferred from a construction-literal init: the
 	 * FQN, the plain name (for the shadow walk) and the scope depth that owns it. Only
 	 * {@code let} records -- its bindings never rebind, unlike {@code loop} targets;
@@ -1308,6 +1321,12 @@ public final class ClojureLowering {
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"))) {
 				return ClojureBindingLowering.defuns(this, items);
 			}
+			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
+				// a ^:dynamic def contributes its defparameter plus its
+				// binding-depth counter as two top-level forms, so both keep
+				// their head for SpecialVarCollector
+				return ClojureBindingLowering.defForms(this, items);
+			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")) {
 				return ClojureDispatchLowering.defmultiForms(this, items);
 			}
@@ -1426,6 +1445,34 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * A {@code defn} in a body: a single defun (a dynamic single-arity one its defun plus
+	 * its defparameters) splices behind a progn, like ever; several arities cannot splice
+	 * into expression position.
+	 */
+	LispVal defnInBody(List<LispVal> items) {
+		List<LispVal> forms = ClojureBindingLowering.defuns(this, items);
+		if (forms.size() == 1) {
+			return forms.get(0);
+		}
+		boolean single = forms.stream().filter(ClojureLowering::isLoweredDefun).count() == 1
+				&& forms.stream().allMatch(f -> ClojureLowering.isLoweredDefun(f) || isLoweredDefparameter(f));
+		ClojureLowerUtil.isTrue(single, "a multi-arity defn is only allowed at the top level");
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
+	}
+
+	/** Whether the lowered form is headed by {@code defun}. */
+	static boolean isLoweredDefun(LispVal form) {
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "DEFUN");
+	}
+
+	/** Whether the lowered form is headed by {@code defparameter}. */
+	static boolean isLoweredDefparameter(LispVal form) {
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "DEFPARAMETER");
+	}
+
+	/**
 	 * A form whose head names no program macro: the lowering rows, then a call.
 	 * @param form the form
 	 * @param items its items
@@ -1455,24 +1502,11 @@ public final class ClojureLowering {
 			return ClojureStateLowering.structMapOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defn")) {
-			// in a body: a single defun, like ever; several arities cannot splice
-			// into expression position (a dynamic single-arity one splices its
-			// defun plus its defparameter behind a progn instead)
-			List<LispVal> forms = ClojureBindingLowering.defuns(this, items);
-			if (forms.size() == 1) {
-				return forms.get(0);
-			}
-			ClojureLowerUtil.isTrue(forms.size() == 2, "a multi-arity defn is only allowed at the top level");
-			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
+			return defnInBody(items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defn-")) {
 			// private by convention only: metadata never affects dispatch
-			List<LispVal> forms = ClojureBindingLowering.defuns(this, items);
-			if (forms.size() == 1) {
-				return forms.get(0);
-			}
-			ClojureLowerUtil.isTrue(forms.size() == 2, "a multi-arity defn is only allowed at the top level");
-			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
+			return defnInBody(items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmacro")) {
 			// in a body: a single progn, like ever; the expander registers when

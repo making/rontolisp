@@ -38,6 +38,14 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The compiler flags {@code clojure.main} binds around every load (measured on the
+	 * oracle, Clojure CLI 1.12): a {@code set!} of one answers the value there, so it
+	 * answers the value here too, with no effect.
+	 */
+	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*warn-on-reflection*", "*unchecked-math*",
+			"*print-meta*", "*print-length*", "*print-level*", "*ns*");
+
+	/**
 	 * The tag heading a record value: a record is
 	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table "ns.Name")}, beside
 	 * the {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers; the trailing
@@ -498,13 +506,16 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * {@code (set! target value)}: the one assignable target is a deftype's mutable field
+	 * {@code (set! target value)}: the assignable targets are a deftype's mutable field
 	 * inside the type's own inline method (not inside a closure created there, which
-	 * holds a copy); the write answers the value, like the oracle. Every other target is
-	 * the oracle's error: a local or an immutable field
-	 * ({@code Cannot assign to non-mutable}), a non-dynamic global (the run-time
-	 * {@code Can't change/establish root binding}, after the value evaluates). A dynamic
-	 * or core var and a host field stay refused by name.
+	 * holds a copy) and a {@code ^:dynamic} var inside an enclosing {@code binding} (the
+	 * binding-depth counter beside the var says whether it is thread-bound); the write
+	 * answers the value, like the oracle. Every other target is the oracle's error: a
+	 * local or an immutable field ({@code Cannot assign to non-mutable}), a non-dynamic
+	 * global or an unbound dynamic one (the run-time
+	 * {@code Can't change/establish root binding}, after the value evaluates). A
+	 * {@code clojure.main}-bound compiler flag answers the value with no effect here. A
+	 * host field stays refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -534,8 +545,27 @@ final class ClojureProtocolLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 							LispString.literal("Can't change/establish root binding of: " + name + " with set")));
 		}
+		if (key != null) {
+			// a dynamic var: set the thread-local value inside a binding, else
+			// the oracle's root-binding error. The value binds once, so it
+			// evaluates exactly once, before the test, like the error above.
+			LispVal value = ctx.lower(items.get(2));
+			LispSymbol depth = ClojureLowering.boundDepthSym(key);
+			LispSymbol temp = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List
+				.of(ClojureLowerUtil.list(temp, value))), ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), depth, new LispInteger(0)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), temp),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
+		}
+		if (ALWAYS_BOUND_FLAGS.contains(name)) {
+			// a clojure.main-bound compiler flag: bound around every load on the
+			// oracle, so a set! there answers the value; here it has no effect
+			return ctx.lower(items.get(2));
+		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
-				+ " (only a deftype's mutable field is assignable; thread-bound vars need a design)");
+				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");
 	}
 
 	/**

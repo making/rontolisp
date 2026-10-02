@@ -77,7 +77,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `atom`/`deref`/`@`/`swap!`/`reset!`/`compare-and-set!` (and `volatile!`/`vswap!`/`vreset!`) | a tagged one-vector cell `(:C%ATOM #(value))`, like the set wrapper | every verb reads/writes the cell and answers the new value (`compare-and-set!` compares with `eql` and answers `T`-or-false); misuse signals; `seq`/`first`/`count`/`empty?`/`cons` onto one signal like the oracle instead of reading the wrapper as a list (b45, the b42 `conj` precedent); each works as a function value, so `(map deref atoms)` runs |
 | `ref`/`dosync`/`alter`/`commute`/`ref-set`/`ensure` | the atom cell with a transaction discipline, over one spliced STM runtime | `ref` is the cell (a `:validator` registers in an identity-keyed alist); `dosync` binds the open depth one deeper around the body; `alter`/`commute` apply through the validator (a failed one signals and writes nothing -- the single-threaded rollback) and answer the new value; `ref-set` replaces through it; `ensure` answers the ref; every verb outside `dosync` signals `No transaction running`; `commute` runs once (the oracle may run it twice); `ref`/`alter`/`commute`/`ref-set` work as function values |
 | `agent`/`send`/`send-off`/`await`/`shutdown-agents` | the atom cell as a synchronous agent, over the same runtime | `agent` is the cell (a `:validator` registers the same way); `send`/`send-off` apply at once with `*agent*` bound to the cell, through the validator, answering the cell; `await` checks each cell and answers `nil`; `shutdown-agents` is `nil`; there is no thread pool, so async ordering is out; `agent`/`send`/`send-off` work as function values |
-| `binding` | `let*` over the bound names, sequentially like `let` | only `^:dynamic` vars (and `*out*`) may be bound -- anything else is the oracle's non-dynamic error as a named refusal; a `^:dynamic` `def`/`defonce` lowers to `defparameter` (always sets, like `def`, and proclaims the special, so the `let*` rebinds with dynamic extent); a `^:dynamic` `defn` keeps its `defun`(s) and adds a `defparameter` of the function, so its calls go through the value cell and the `let*` rebinds them the same way (`recur` still jumps straight to the function cell, like the oracle); the body closes over the scope the same way; the body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
+| `binding` | `let*` over the bound names, sequentially like `let`, each project var's binding-depth counter rebound one deeper beside it | only `^:dynamic` vars (and `*out*`) may be bound -- anything else is the oracle's non-dynamic error as a named refusal; a `^:dynamic` `def`/`defonce` lowers to `defparameter` (always sets, like `def`, and proclaims the special, so the `let*` rebinds with dynamic extent) plus a zeroed `%bound-depth` counter special beside it (two top-level forms, so both keep their head for `SpecialVarCollector`); a `^:dynamic` `defn` keeps its `defun`(s) and adds a `defparameter` of the function plus the counter, so its calls go through the value cell and the `let*` rebinds them the same way (`recur` still jumps straight to the function cell, like the oracle); the body closes over the scope the same way; the body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
 | `defn-` | `defn` of a private var | private like `^:private` (b56): `use`/`:refer :all` never refer it, `:refer [x]` of it is the oracle's `x is not public`, and a qualified reference from another namespace is the oracle's compile error `var: #'n/x is not public`; inside its namespace it is an ordinary `defn` |
@@ -112,7 +112,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `var`/`#'` | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
 | metadata (`^`, legacy `#^`) | the reader's `(%with-meta form meta)` (`ClojureLowerUtil.READER_META`), parsed and dropped except on a collection literal | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!` of a deftype mutable field (b61) | `(setf (aref slots i) v)` inside the type's inline methods | see "deftype mutable fields" below; every other target is the oracle's error or a named refusal |
-| `set!` of a dynamic/core var or a host field, `gen-class`/`gen-interface`, `var` / `#'/` | refused by name | each names the missing design (a var `set!` needs a thread-binding test -- `binding` is a plain special `let*`, so nothing knows whether a var is bound; the `java:` surface has no field write; `var` needs its design) |
+| `set!` of a thread-bound `^:dynamic` var (b75) | a `let*` over the value plus an `if` on the var's binding-depth counter: `(setq var tmp)` past zero, the oracle's `Can't change/establish root binding of: ... with set` at zero | the counter (a `varSym`-derived `%bound-depth` special no identifier spells, zero at the root) is defined beside the var by every `^:dynamic` `def`/`defonce`/`defn` and rebound one deeper by every `binding` of the var, so a callee outside the binding's lexical extent still sets it; a `set!` of a `clojure.main`-bound compiler flag (`*warn-on-reflection*`, `*unchecked-math*`, `*print-meta*`, `*print-length*`, `*print-level*`, `*ns*`) answers the value with no effect here |
+| `set!` of any other var or a host field, `gen-class`/`gen-interface`, `var` / `#'/` | refused by name | each names the missing design (the `java:` surface has no field write; `var` needs its design) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
 | `proxy` | `java:proxy` over every interface of the vector, with a name-dispatching lambda | one or more interfaces (b59) and no constructor arguments; each `(method [params...] body...)` (an empty body answers `nil`) becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`), so a name several interfaces declare runs the one body, as the oracle's proxy does; a method left out raises `no proxy method: <name>` when called (the oracle: `UnsupportedOperationException` with the name); refused by name: a class in the vector (`isHostClass`, a lowering-time `Class.forName`; a name that does not load is left to `java:proxy`'s run-time error), constructor arguments, `toString`/`equals`/`hashCode` (`java:proxy` keeps `Object`'s three, so the body would never run -- the oracle runs it), multi-arity methods; all of the refused shapes are b71; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
@@ -262,9 +263,9 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   (spell it with `iterate`). `reduce`, `into` and the transducer consumers walk a lazy input
   whole (b60). Lazy inputs to the other seq verbs consume one level --
   pass a `take`n prefix.
-- protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` (beyond a deftype
-  mutable field, b61) and `var`/`#'`
-  stay absent, each refused by name (backquote lowered in b12, below; regex
+- protocols (lowered in b13, below), `set!` (of a deftype mutable field in b61,
+  of a thread-bound dynamic var and the always-bound compiler flags in b75),
+  `var`/`#'`: `var`/`#'` stay absent, refused by name (backquote lowered in b12, below; regex
   literals lowered in b21, below). Reader metadata on names and locals parses and
   drops (b14), and only `binding` reads `^:dynamic`; value metadata (`with-meta`,
   `meta`, a collection literal's `^`) is real since b62 -- see the table rows above.
@@ -990,8 +991,34 @@ b13 bug for immutable fields too). `^:volatile-mutable` gives no cross-thread or
 
 The todo's premise was overturned on the corpus and the oracle: no shcloj4 program
 declares a mutable field, and `^:mutable` is not Clojure's marker. The corpus `set!` is
-`(set! *warn-on-reflection* true)` (`instant.clj`, a `clojure.main`-bound var), left to
-b75 with the dynamic-var case; a non-dynamic global lowers to the oracle's run-time
+`(set! *warn-on-reflection* true)` (`instant.clj`, a `clojure.main`-bound var),
+lowered in b75 with the dynamic-var case; a non-dynamic global lowers to the oracle's run-time
 `Can't change/establish root binding of: ... with set`. Pinned by
 `deftype-mutable-fields-assign-through-set` in `clojure-spec.yaml` (every line diffed
 against `clj` 1.12, all four backends), `ClojureLoweringTest.setBang*`.
+
+## `set!` of a thread-bound var (b75, 2026-10-02)
+
+Decided against `clj` 1.12.6: `(set! *warn-on-reflection* true)` at a script's top
+level answers `true` (`clojure.main` binds that var -- and `*unchecked-math*`,
+`*print-meta*`, `*print-length*`, `*print-level*`, `*ns*` -- around the load);
+`(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2) *d*)` answers `2`; `(set! *d* 2)`
+outside any `binding` signals `Can't change/establish root binding of: *d* with set`
+(the non-dynamic case already lowered to that error).
+
+`binding` lowers to a plain special `let*`, so nothing knows at run time whether a
+var is thread-bound: every `^:dynamic` definition now defines a binding-depth
+counter special beside the var (zero at the root; the single-`%` suffix keeps it
+apart from user definitions, like the multi-`defn` helpers), every `binding` of the
+var rebinds it one deeper beside the var (unwound with the `let*` itself, like the
+var), and `set!` binds the value once and branches on the counter past zero --
+so a callee outside the binding's lexical extent still sets the thread-local value
+(the counter has dynamic extent), while the root signals after the value evaluates.
+The `clojure.main`-bound compiler flags answer the value with no effect here (a
+deviation outside a load extent, where the oracle would signal: nothing here reads
+them). `set!` of `*out*`/`*in*`/`*agent*` and of any other unknown var stays refused
+by name. Pinned by `set-bang-assigns-thread-bound-vars` in `clojure-spec.yaml`
+(every line diffed against `clj`, all four backends) and the lowered shapes in
+`ClojureLoweringTest` (`setBangRefusesEveryOtherTargetLikeTheOracle`,
+`bindingNeedsDynamicVars`); `instant.clj` advances past its line 13 to its next gap
+(`extend-protocol` over the host class `Instant`).

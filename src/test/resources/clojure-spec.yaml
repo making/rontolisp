@@ -2275,6 +2275,38 @@ cases:
       [42 42]
       6
       11
+  - name: set-bang-assigns-thread-bound-vars
+    # b75: set! of a ^:dynamic var sets the thread-local value inside an
+    # enclosing binding (the binding-depth counter beside the var says whether
+    # it is bound, so a callee outside the binding's lexical extent still sets
+    # it) and signals Can't change/establish root binding outside one, after
+    # the value evaluates; a nested binding restores the outer value. A
+    # clojure.main-bound compiler flag answers the value with no effect here
+    # (the instant.clj line-13 shape). Every line matches the oracle (Clojure
+    # CLI 1.12) byte for byte.
+    source: |
+      (def ^:dynamic *b75-d* 1)
+      (println (binding [*b75-d* 5] (set! *b75-d* 2)))
+      (println *b75-d*)
+      (println (binding [*b75-d* 5] (set! *b75-d* 2) *b75-d*))
+      (println (try (set! *b75-d* 9) (catch Exception e :root-binding)) *b75-d*)
+      (defn b75-read [] *b75-d*)
+      (defn b75-write [v] (set! *b75-d* v))
+      (println (binding [*b75-d* 5] (b75-write 6) (b75-read)))
+      (println (b75-read))
+      (println (binding [*b75-d* 5] (binding [*b75-d* 6] (b75-write 7)) (b75-read)))
+      (println (set! *warn-on-reflection* true))
+      (println (set! *unchecked-math* false))
+    expected: |
+      2
+      1
+      2
+      :root-binding 1
+      6
+      1
+      5
+      true
+      false
   - name: agents-send-synchronously
     # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
     # and the estimate combines deterministically. Sends apply at once (there is

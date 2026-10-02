@@ -644,9 +644,11 @@ final class ClojureStateLowering {
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
 	 * the oracle -- which is why only {@code ^:dynamic} vars (and
 	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
-	 * like {@code let}, and the body closes over the scope the same way. The body lowers
-	 * behind the {@code try} barrier (the oracle wraps it in a {@code try/finally}),
-	 * while the inits stay outside it.
+	 * like {@code let}, and the body closes over the scope the same way. Every bound
+	 * var's binding-depth counter rebinds one deeper beside it, so {@code set!} tests at
+	 * run time whether the var is thread-bound. The body lowers behind the {@code try}
+	 * barrier (the oracle wraps it in a {@code try/finally}), while the inits stay
+	 * outside it.
 	 */
 	static LispVal bindingOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -677,6 +679,11 @@ final class ClojureStateLowering {
 					if (ClojureLowerUtil.isDirectFun(init)) {
 						ctx.markDirect(name);
 					}
+				}
+				else {
+					LispSymbol depth = ClojureLowering.boundDepthSym(key);
+					pairs.add(ClojureLowerUtil.list(depth,
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))));
 				}
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
@@ -812,7 +819,12 @@ final class ClojureStateLowering {
 			ctx.globalDirectFuns.remove(key);
 		}
 		LispSymbol var = ClojureLowering.varSym(key);
-		LispVal set = dynamic ? ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, value)
+		LispVal set = dynamic
+				? ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("progn"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, value),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
+									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)), var, set);

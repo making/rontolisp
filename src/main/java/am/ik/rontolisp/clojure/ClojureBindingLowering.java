@@ -38,7 +38,7 @@ final class ClojureBindingLowering {
 	private ClojureBindingLowering() {
 	}
 
-	static LispVal def(ClojureLowering ctx, List<LispVal> items) {
+	static List<LispVal> defForms(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "def");
@@ -71,10 +71,25 @@ final class ClojureBindingLowering {
 		}
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
-			// and proclaims it, so binding rebinds it with dynamic extent
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value);
+			// and proclaims it, so binding rebinds it with dynamic extent; the
+			// binding-depth counter beside it lets set! test at run time whether
+			// the var is thread-bound. Two top-level forms, so both keep their
+			// defparameter head for SpecialVarCollector.
+			return List.of(
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+							new LispInteger(0)));
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value);
+		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value));
+	}
+
+	static LispVal def(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> forms = defForms(ctx, items);
+		if (forms.size() == 1) {
+			return forms.get(0);
+		}
+		// in a body: one progn, like a dynamic defn's defun plus defparameters
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 	}
 
 	/** Whether the datum is an attr map (its marker head), not a value. */
@@ -237,9 +252,13 @@ final class ClojureBindingLowering {
 		if (dynamic) {
 			// the value cell carries the function for calls and value carries
 			// (a funcall of it, like a def'd function); recur and the
-			// arity-dispatch helpers stay direct calls to the function cell
+			// arity-dispatch helpers stay direct calls to the function cell;
+			// the binding-depth counter beside it lets set! test at run time
+			// whether the var is thread-bound
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), fn,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+					new LispInteger(0)));
 		}
 		return forms;
 	}

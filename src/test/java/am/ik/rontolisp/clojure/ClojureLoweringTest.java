@@ -1031,13 +1031,21 @@ class ClojureLoweringTest {
 		// a non-dynamic global signals at run time, after the value evaluates
 		assertThat(lowered("(def y 1) (set! y 2)"))
 			.contains("(PROGN 2 (ERROR \"Can't change/establish root binding of: y with set\"))");
-		// a thread-bound var needs a design (only binding could bind it)
-		assertThatThrownBy(() -> Clojure.read("(def ^:dynamic *d* 1) (set! *d* 2)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("set! of a var is not supported yet: *d*");
-		assertThatThrownBy(() -> Clojure.read("(set! *warn-on-reflection* true)", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("set! of a var is not supported yet: *warn-on-reflection*");
+		// a thread-bound dynamic var sets the thread-local value inside a
+		// binding (the depth counter beside the var says whether it is bound)
+		// and signals the same error outside one, after the value evaluates
+		assertThat(lowered("(def ^:dynamic *d* 1) (set! *d* 2)")).contains("%bound-depth")
+			.contains("(SETQ |c%*d*|")
+			.contains("(ERROR \"Can't change/establish root binding of: *d* with set\")");
+		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2))")).contains("(LET*")
+			.contains("(|c%*d*| 5)")
+			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
+		// a clojure.main-bound compiler flag answers the value with no effect
+		assertThat(lowered("(set! *warn-on-reflection* true)")).isEqualTo(FALSE_BINDING + "T");
+		assertThat(lowered("(set! *unchecked-math* false)")).contains("RONTOLISP::%CLOJURE-FALSE");
+		// anything else names what is missing
+		assertThatThrownBy(() -> Clojure.read("(set! *no-such-b75* 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! of a var is not supported yet: *no-such-b75*");
 		assertThatThrownBy(() -> Clojure.read("(set! (.-f (Object.)) 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a host field is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(set! 3 4)", null)).isInstanceOf(LispReadException.class)
@@ -1572,7 +1580,8 @@ class ClojureLoweringTest {
 	void metadataNamesDefinitionsWithoutAffectingThem() {
 		assertThat(lowered("(defn- f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(def ^:private x 1)")).contains("(SETQ |c%x| 1)");
-		assertThat(lowered("(def ^:dynamic *d* 1)")).contains("(DEFPARAMETER |c%*d*| 1)");
+		assertThat(lowered("(def ^:dynamic *d* 1)")).contains("(DEFPARAMETER |c%*d*| 1)")
+			.contains("(DEFPARAMETER |c%*d*%bound-depth| 0)");
 		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(defn f {:private true} [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(def x \"a docstring\" 1)")).contains("(SETQ |c%x| 1)");
@@ -1622,7 +1631,9 @@ class ClojureLoweringTest {
 
 	@Test
 	void bindingNeedsDynamicVars() {
-		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 2] *d*)")).contains("LET*").contains("|c%*d*|");
+		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 2] *d*)")).contains("LET*")
+			.contains("|c%*d*|")
+			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
 		assertThat(lowered("(binding [*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
 		assertThatThrownBy(() -> Clojure.read("(def x 1) (binding [x 2] x)", null))
 			.isInstanceOf(LispReadException.class)
@@ -1638,6 +1649,7 @@ class ClojureLoweringTest {
 		// so calls route through it and binding rebinds it with dynamic extent
 		assertThat(lowered("(defn ^:dynamic slow [n] (* n 2)) (slow 21)")).contains("(DEFUN |c%slow| (|c%n|)")
 			.contains("(DEFPARAMETER |c%slow| #'|c%slow|)")
+			.contains("(DEFPARAMETER |c%slow%bound-depth| 0)")
 			.contains("(FUNCALL |c%slow| 21)");
 		assertThat(lowered("(defn ^:dynamic madd ([x] 1) ([x y] 2)) (madd 1 2)")).contains("(DEFUN |c%madd%1|")
 			.contains("(DEFUN |c%madd%2|")
