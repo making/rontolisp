@@ -429,10 +429,11 @@ naming `src`; no inlining any more): 10 print the oracle's bytes (`chat` -- its 
 named like the functions under test -- joins the b55 nine). `preface` fails on the hoisting
 above; the 7 `macros*` fail only on the uppercase `macroexpand` answer (.todo/b73: their
 expansions are otherwise the oracle's, `examples.macros.chain-4/chain` qualified); the rest
-stop at the b55 gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the
-host stack overflow, `clojure.set`, multi-interface `proxy`). The source files load too:
-`wallingford` beside its `examples.replace-symbol` (the two `replace-symbol`s apart), and
-`concurrency` over `examples.chat :refer :all` until `spit` of a non-string.
+stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
+stack overflow, `clojure.set`, `proxy` over a class -- measured after b57/b59/b60 merged).
+The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
+`replace-symbol`s apart), and `concurrency` over `examples.chat :refer :all` until `spit`
+of a non-string (.todo/b74).
 
 Pinned by `ClojureProjectNamespacesTest` (a `deps.edn` project in a temp dir: the entry under
 `test/`, aliases, refers, `use :only`, a file without `ns`, a second `require`, the chat

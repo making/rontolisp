@@ -1830,14 +1830,15 @@ public final class ClojureLowering {
 		}
 		// a program's own definition or local binding shadows the core name, like
 		// the oracle (and like the value position below, which already looks the
-		// name up first)
-		boolean shadowed = known(name);
+		// name up first) -- the current namespace's own or referred var, since
+		// every namespace has its own
+		boolean known = known(name);
 		// the re-* names lower beside the big core switch (which stays under the
 		// method-size limit): same position, before any qualified name
-		if (!shadowed && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
+		if (!known && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return ClojureStringLowering.reCall(this, name, items);
 		}
-		LispVal special = shadowed ? null : builtin(name, items);
+		LispVal special = known ? null : builtin(name, items);
 		if (special != null) {
 			return special;
 		}
@@ -1845,7 +1846,6 @@ public final class ClojureLowering {
 		if (qualified != null) {
 			return ClojureNamespaceLowering.namespaceCall(this, qualified, items, form);
 		}
-		boolean known = known(name);
 		if (!known) {
 			// a qualified name whose head names a project namespace is that
 			// namespace's var or nothing: never a class
