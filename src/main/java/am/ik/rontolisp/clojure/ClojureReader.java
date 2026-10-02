@@ -211,14 +211,16 @@ final class ClojureReader {
 
 	/**
 	 * One {@code ^meta form} (or legacy {@code #^meta form}), positioned at the caret:
-	 * {@code (with-meta form meta)}, which the lowering parses and drops.
+	 * {@code (%with-meta form meta)} -- a head no Clojure call spells, so the lowering
+	 * tells reader metadata (dropped, except on a collection literal) from a
+	 * {@code with-meta} call (which attaches).
 	 */
 	private LispVal readMeta() {
 		next();
 		skipSpace();
 		LispVal meta = readDatum();
 		skipSpace();
-		return list("with-meta", readDatum(), meta);
+		return list(ClojureLowerUtil.READER_META, readDatum(), meta);
 	}
 
 	/**

@@ -2,10 +2,22 @@
 
 `(with-meta obj metadata)`
 
-Answers the object: metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type
-hints) parses and drops everywhere, since it never affects dispatch. Only
-`binding` reads one piece of it (`^:dynamic` marks rebindable vars).
+Answers a copy of `obj` carrying the map `metadata` (`nil` for none), which
+[meta](meta.md) reads back. The original keeps its own metadata, and `=` ignores
+metadata. Maps, vectors, lists, sets, records, `reify` values, lazy seqs and functions
+carry it; a string, number, keyword or other value signals, like the oracle. A symbol
+answers itself without metadata.
+
+Metadata changes dispatch only for a protocol declared `:extend-via-metadata true`
+(see [defprotocol](defprotocol.md)). A value derived from the copy (`assoc`, `conj`,
+...) starts without metadata, where the oracle keeps it.
+
+Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name
+or a local parses and drops; only `binding` reads `^:dynamic`. On a vector, map or set
+literal it attaches, like the oracle's reader: `^:k [1]` carries `{:k true}`.
 
 ```clojure
-(println (with-meta [1 2] {:tag :x})) ; [1 2]
+(def v (with-meta [1 2] {:tag :x}))
+(println v (meta v))  ; [1 2] {:tag :x}
+(println (meta [1 2])) ; nil
 ```

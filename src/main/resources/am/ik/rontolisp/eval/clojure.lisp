@@ -2303,6 +2303,104 @@
   (rontolisp::%clojure-check-arity args 2 2 "update-vals")
   (rontolisp::%clojure-update-vals (car args) (car (cdr args))))
 
+;;;; Metadata: with-meta and meta over an identity side table.
+;;
+;; A value's metadata lives in rontolisp::%clojure-meta-table, an eq table from the
+;; object with-meta answered to its map, made on first use (a program that never
+;; attaches metadata allocates nothing). with-meta answers a fresh shallow copy,
+;; like the oracle's new object: the original keeps its own metadata and = still
+;; compares contents (a reify copy keeps its tag, so it dispatches the same and is
+;; a different object, like the oracle's). The kinds that carry metadata are the
+;; oracle's IObj kinds the lowering has: maps, vectors, lists, sets, records, reify
+;; values, lazy seqs and functions (a wrapping closure).
+;;
+;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md): a
+;; derived value (assoc, conj, ...) starts without metadata where the oracle
+;; carries it over; a symbol answers itself without metadata (an interned symbol
+;; has no copy to hang it on, and = on symbols compares names); the table keeps
+;; every object it was handed for the program's lifetime.
+
+(defvar rontolisp::%clojure-meta-table
+  nil
+  "The metadata side table: an eq table from an object to its metadata map, NIL
+   until the first metadata is attached.")
+
+(defun rontolisp::%clojure-check-meta (m)
+  "M, or the oracle's refusal when it is neither nil nor a map."
+  (if (or (null m) (hash-table-p m) (rontolisp::%clojure-record-p m))
+      m
+      (error "with-meta takes a map as metadata")))
+
+(defun rontolisp::%clojure-put-meta (x m)
+  "X with the metadata map M recorded for it (none for a nil M); answers X."
+  (when (rontolisp::%clojure-check-meta m)
+    (unless rontolisp::%clojure-meta-table
+      (setq rontolisp::%clojure-meta-table (make-hash-table :test 'eq)))
+    (setf (gethash x rontolisp::%clojure-meta-table) m))
+  x)
+
+(defun rontolisp::%clojure-with-meta (x m)
+  "A copy of X carrying the metadata map M, like the oracle's withMeta; a symbol
+   answers itself (see above), anything else that is no IObj in the oracle
+   signals, like its cast."
+  (cond ((hash-table-p x)
+         (let ((copy (make-hash-table :test 'equal)))
+           (maphash (lambda (k v) (setf (gethash k copy) v)) x)
+           (rontolisp::%clojure-put-meta copy m)))
+        ((and (vectorp x) (not (stringp x)))
+         (rontolisp::%clojure-put-meta (copy-seq x) m))
+        ((functionp x)
+         (rontolisp::%clojure-put-meta (lambda (&rest args) (apply x args)) m))
+        ((and (consp x) (not (rontolisp::%clojure-keyword-p x))
+              (not (rontolisp::%clojure-atom-p x))
+              (not
+               (member (car x)
+                       '(:C%TYPE :C%PATTERN :C%MATCHER :C%REDUCED :C%NIL))))
+         (rontolisp::%clojure-put-meta (copy-list x) m))
+        ((and x (symbolp x) (not (eq x t))
+              (not (eq x rontolisp::%clojure-false)))
+         (rontolisp::%clojure-check-meta m)
+         x)
+        (t (error "with-meta takes a collection, a record or a function"))))
+
+(defun rontolisp::%clojure-with-meta-v (&rest args)
+  "with-meta as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "with-meta")
+  (rontolisp::%clojure-with-meta (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-meta (x)
+  "X's metadata map, nil when it carries none."
+  (if rontolisp::%clojure-meta-table
+      (values (gethash x rontolisp::%clojure-meta-table))
+      nil))
+
+(defun rontolisp::%clojure-meta-v (&rest args)
+  "meta as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "meta")
+  (rontolisp::%clojure-meta (car args)))
+
+(defun rontolisp::%clojure-vary-meta (x f args)
+  "A copy of X carrying (apply f (meta x) args)."
+  (rontolisp::%clojure-with-meta x
+   (rontolisp::%clojure-call f (cons (rontolisp::%clojure-meta x) args))))
+
+(defun rontolisp::%clojure-vary-meta-v (&rest args)
+  "vary-meta as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "vary-meta")
+  (rontolisp::%clojure-vary-meta (car args) (car (cdr args)) (cdr (cdr args))))
+
+(defun rontolisp::%clojure-meta-method (x method)
+  "The implementation X's metadata holds under the qualified METHOD symbol, or
+   NIL when it holds none or a falsey one: the oracle's extend-via-metadata
+   lookup, which then invokes it like any IFn."
+  (let ((m (rontolisp::%clojure-meta x)))
+    (if m
+        (let ((f
+               (gethash method
+                        (if (hash-table-p m) m (car (cdr (cdr (cdr m))))))))
+          (if (rontolisp::%clojure-truthy f) f nil))
+        nil)))
+
 ;;;; Reduction and transducers (b60).
 ;;
 ;; A transducer is what the oracle's is: a function from a reducing function to

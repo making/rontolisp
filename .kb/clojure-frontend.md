@@ -81,7 +81,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
 | `defn-` | `defn` of a private var | private like `^:private` (b56): `use`/`:refer :all` never refer it, `:refer [x]` of it is the oracle's `x is not public`, and a qualified reference from another namespace is the oracle's compile error `var: #'n/x is not public`; inside its namespace it is an ordinary `defn` |
-| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
+| `with-meta`/`meta`/`vary-meta` | `%clojure-with-meta` answers a shallow copy (a fresh table, `copy-seq`, `copy-list` of a list or wrapper, a wrapping closure) recorded in the eq side table `%clojure-meta-table` (made on first use); `meta` reads it, nil when absent | the oracle's new-object semantics without a new value shape: `=` and printing never see metadata; IObj kinds only (a string, number, keyword, boolean, atom, deftype, pattern signals, like the oracle's cast); deviations: a symbol answers itself without metadata (an interned symbol has no copy; macro idioms `(with-meta name ...)` keep working), a derived value (`assoc`, `conj`, ...) starts without metadata (the oracle carries it), and the table keeps every object for the program's lifetime (b62) |
+| reader `^` metadata in value position | dropped: the object lowers as itself, except on a vector/map/set literal, where it attaches through `%clojure-put-meta` (no copy: the literal is fresh) | the reader spells `^m x` as `(%with-meta x m)` -- a head no Clojure call spells -- so a type hint never reaches the run-time `with-meta` (b62); layers merge with the outer winning, a keyword is `{:k true}`, a symbol/string `{:tag x}` (the oracle resolves a class symbol to `java.lang.String`; here it stays `String`); quoted data strips it (`'^:a x` is `x`, it printed `(with-meta x :a)` before); `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the plain body (the oracle's bare `do`, no barrier); a non-empty body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
@@ -94,7 +95,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `clojure.test` (`deftest`/`deftest-`/`is`/`are`/`testing`/`run-tests`/`run-all-tests`/`successful?`) | `ClojureTestLowering` over the spliced `rontolisp::%clojure-test-*` runtime in `clojure.lisp` | see "clojure.test" below; `use-fixtures` refused by name, a macro var as a value is the oracle's `Can't take value of a macro` |
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member` in call and value position, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call (a known-class receiver whose overloads at that arity all answer a primitive boolean answers `T`-or-false -- a construction literal, a `let`/`if-let`/`when-let` local bound to one, or a `..` step's declared return; any other receiver keeps the shared `java:` unmarshal), `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field -- decided 2026-10-01, b20, lifting the b08 deviation; a bare `Class/member` value reads the static field when the host class has one, else answers a member-as-value lambda dispatching per arity over the static call -- so `(every? Character/isWhitespace s)` runs -- and a variadic-only member is refused by name), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field; a bare `Class/member` value reads the field or answers an arity-dispatching member lambda), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
 | `make-array`/`aget`/`aset`/`alength` | the general array (`make-array` dims, `aref`, `(setf aref)`, `array-dimension` 0) | the class spells the element type and is ignored -- every array here is general (the book's `interop.clj` shape); only the Clojure spellings are new, so all four backends |
-| `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the protocol name answers its table; single signature per method (several arities stay refused) |
+| `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the `Object` row is a per-method table in the `%default` global (nil until the first `Object` extension; until b62 it was ONE lambda shared by every method, so a several-method `Object` extension ran its last method for all of them); the protocol name answers its table; single signature per method (several arities stay refused); `:extend-via-metadata true` adds a `%inline` table that body implementations (`defrecord`/`deftype`/`reify`) store into instead, and the dispatcher looks inline -> `(%clojure-meta-method target 'ns/method)` (invoked through `%clojure-call`, like the oracle's IFn) -> extension rows -> `Object` -- the oracle's order, measured: metadata beats `extend-type`, a body implementation beats metadata; `satisfies?` reads both tables, never metadata, like the oracle (b62) |
 | `defrecord` / `deftype` | the positional and map constructors (records only -- the oracle defines no `map->` for deftypes) as mangled `defun`s, plus one table row per inline method | a record is `(:C%RECORD tag fields table class)` over the same `equal` table every map uses (no per-backend struct -- the b08 rejection reason), `class` the host class name string the printer spells (`#my_app.core.R{...}`: the defining `ns` with `-` munged to `_`, the name verbatim, like the oracle; b58) -- every rewrap (`rewrapRecord`) carries it, and the pre-scan tracks `ns` forms so a forward name gets the right one; a deftype shares the shape with an opaque `:C%TYPE` tag; names join the whole-file pre-scan (forward refs like `defn`); `(T. ...)`/`(new T ...)` rewrite to `->T`; inline bodies see the fields as locals (an explicit parameter shadows its field, like the oracle); a trailing keyword option is refused |
 | `reify` | one fresh `:C%REIFY` tag per evaluation with a row per method in each protocol's table | a single-shot map plus methods (never `proxy`, which stays the `java:` surface); `=` is identity, like the oracle |
 | `extend-protocol` / `extend-type` / `extend` | `defmethod` rows under the target's tag (`extend` from a map literal of method functions) | targets are the `class`-keyword kinds (`String`, `Number`/`Long`/`Double`, ..., `Map`/`Vector`/`Set`/`List`, plus `nil` and `Object` as the miss default) and known record/deftype names; anything else (an `Instant`, a `Date`, ...) is a named refusal; `extend-type` groups methods under protocol names |
@@ -109,7 +110,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
 | record literals (`#ns.Name{...}` / `#ns.Name[...]`) | the reader's `(%record ns.Name body)`, lowered to the record built in place over the QUOTED body (b58) | the oracle never evaluates the body: `#user.R{:a (+ 1 2)}` holds the list; missing fields `nil`, extra keys kept, a vector body takes exactly the field count; plain, quoted and syntax-quoted literals lower alike, and a macro answering a record decodes back to one (no constructor call, so it works at macro time); the class must match a defined record's printed class name, a deftype literal is refused by name; read-time refusals mirror the oracle: an undotted `#P{...}` is `No reader function for tag P` (`#inst`/`#uuid` stay `unsupported reader form`), a non-map/vector body `Unreadable constructor form`, a non-keyword or repeated key |
 | `var`/`#'` | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
-| metadata (`^`, legacy `#^`) | the reader's `(with-meta form meta)`, parsed and dropped | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
+| metadata (`^`, legacy `#^`) | the reader's `(%with-meta form meta)` (`ClojureLowerUtil.READER_META`), parsed and dropped except on a collection literal | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!` of a deftype mutable field (b61) | `(setf (aref slots i) v)` inside the type's inline methods | see "deftype mutable fields" below; every other target is the oracle's error or a named refusal |
 | `set!` of a dynamic/core var or a host field, `gen-class`/`gen-interface`, `var` / `#'/` | refused by name | each names the missing design (a var `set!` needs a thread-binding test -- `binding` is a plain special `let*`, so nothing knows whether a var is bound; the `java:` surface has no field write; `var` needs its design) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
@@ -264,9 +265,9 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 - protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` (beyond a deftype
   mutable field, b61) and `var`/`#'`
   stay absent, each refused by name (backquote lowered in b12, below; regex
-  literals lowered in b21, below). Metadata instead parses and drops (b14):
-  `^`/`with-meta` lower to the object itself, and only `binding` reads
-  `^:dynamic` -- see the table rows above.
+  literals lowered in b21, below). Reader metadata on names and locals parses and
+  drops (b14), and only `binding` reads `^:dynamic`; value metadata (`with-meta`,
+  `meta`, a collection literal's `^`) is real since b62 -- see the table rows above.
   Hierarchies and `ex-info` lowered in b08 (below); protocols lowered in b13 instead
   of the b08 rejection (a wrapper over the shared table runtime, not a per-backend
   value model -- the decision spike is `.todo/artefacts/b13-protocols/spike.md`). Catch clauses are catch-all in order (the first handles any condition, where the
@@ -456,9 +457,10 @@ the oracle's form-by-form compile.
 - **Dispatch**: `lowerInner` tries `ClojureMacroLowering.macroCall` before any row (it used
   to sit in `call`, after the rows, so a `when-not` macro was silently ignored). Never for
   `isReservedHead`: the oracle's `Compiler.specials` (`SPECIAL_FORMS`; `if`/`do`/`let*`/`new`
-  ...) and `READER_HEADS` (`syntax-quote`/`unquote*`/`deref`/`with-meta`/`fn` -- the reader
-  spells `@x`, `^m x`, `#(...)` with them, where the oracle reads `clojure.core/deref` -- plus
-  `ns`/`in-ns`, which the pre-scan reads). A `defmacro` of one is refused by name (the oracle
+  ...) and `READER_HEADS` (`syntax-quote`/`unquote*`/`deref`/`fn` -- the reader spells `@x`,
+  `#(...)` with them, where the oracle reads `clojure.core/deref` -- plus `ns`/`in-ns`, which
+  the pre-scan reads; `^m x` reads as `%with-meta` since b62, reserved by its `%`, so
+  `with-meta` left the set and a `with-meta` macro shadows the call only). A `defmacro` of one is refused by name (the oracle
   accepts and, for a special form, ignores it).
 - **Above the definition**: the pre-scan still registers every macro, but `lookupVar` hides a
   `pendingCoreMacro` -- MACRO kind, no expander yet, a name in `ClojureCoreNames` (the
@@ -676,8 +678,8 @@ more interfaces (b59) through `java:proxy`, and the literal-only string position
 pattern arms -- each pinned in `clojure-spec.yaml` (run on all four backends)
 or, for the interop legs (`proxy`, host-object `memfn`, literal `String/split`),
 in `ClojureInteropTest`; what stays refused (`definterface`/`gen-class`/`gen-interface`,
-multi-arity protocol methods, `:extend-via-metadata`, `set!`,
-`var`/`#'`, metadata `^`, `proxy` over a class or naming an `Object` method)
+multi-arity protocol methods, `set!`,
+`var`/`#'`, `proxy` over a class or naming an `Object` method)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else
 through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
@@ -791,8 +793,8 @@ Multi-entry maps and multi-member sets never print in the spec (the walk order i
 unspecified); only single-entry/single-member shapes pin the notation.
 State, dynamic scope and the small imperative companions lower the same way (b14):
 metadata-ignored (`defn-`, `^:private`/`^:dynamic`/`^{...}`/type hints on names,
-parameter vectors, patterns and values, `with-meta` as call and as value, `def`
-docstrings and attr maps), `defstruct`/`struct`/`struct-map` over key vectors,
+parameter vectors, patterns and values, `def` docstrings and attr maps; `with-meta`
+attaches since b62), `defstruct`/`struct`/`struct-map` over key vectors,
 `defonce` as `def` unless `boundp`, `ref`/`dosync`/`alter`/`commute`/`ref-set`/
 `ensure` over the atom cell with the spliced STM runtime (depth, identity-keyed
 validator registry, agent var), `agent`/`send`/`send-off`/`await`/
@@ -920,6 +922,18 @@ like the oracle's volatiles -- so the completion step is NOT skipped: `partition
   eager.clj `non-blank-lines` / `line-count` shapes over a file in
   `ClojureInteropTest.filesRoundTripThroughReaderAndLineSeq` (interpreter and JVM). The
   corpus has no other transducer use (`eager.clj`'s `preds` needs `all-ns`).
+
+b62 (2026-10-02) lowers `:extend-via-metadata` (the `note.clj` `MidiNote` protocol of
+the shcloj4 corpus) plus the value metadata it needs (the table rows above). The todo's
+premise that an `extend-type` row wins over metadata was overturned on the oracle (`clj`
+1.12.6): the order is body implementation, metadata, extension rows, `Object`; the key
+is the protocol's namespace-qualified method symbol (`` `msec `` = `user/msec`), never
+`Proto/method`. It also fixed the shared `Object` slot (above), which the corpus shape
+hit first. Pinned by `protocols-extend-via-metadata` and
+`object-extension-keeps-a-row-per-method` in `clojure-spec.yaml` (every line diffed
+against `clj`, all four backends), `metadata-is-parsed-and-dropped` (a type hint in
+value position stays dropped), `ClojureLoweringTest.varStaysRefusedWhileReaderMetadataDrops`
+and the flag assertions in the protocol refusal test, `ClojureReaderTest` (`%with-meta`).
 
 b58 (2026-10-02) closes three reader/metadata refusals: `#^` reads like `^`
 (`ClojureReaderTest.legacyHashCaretMetadataReadsLikeTheCaret`), `ns` strips

@@ -149,13 +149,20 @@ lazy な tail は `...` で打ち切られます。chunk 化はありません�
 
 ## 状態と動的スコープ
 
-メタデータ（`^:private`、`^:dynamic`、`^{...}` attr マップ、型ヒント、`with-meta`）
-はどこにあっても解析して捨てられます。ディスパッチに影響しません。ただし
+名前やローカルについたリーダーメタデータ（`^:private`、`^:dynamic`、`^{...}` attr
+マップ、型ヒント）は解析して捨てられます。ディスパッチに影響しません。ただし
 `def`/`defonce`/`defn` の名前についた `^:dynamic` は var を再束縛可能にします。
 `^:dynamic` な `defn` は直接の定義を保ちつつ、呼び出しは var 経由になるため、
 `binding` が届きます。再束縛を通すのは `binding` だけです。`defn-` は慣習上のプライベート `defn` です。`def` は `defn`
 同様に docstring と attr マップを取ります。`defonce` は束縛済みでない場合の `def`
 であり、リロードでルートを保ちます。
+
+値のメタデータは実在します。[with-meta](reference/with-meta.md) はマップを持つコピーを
+返し、[meta](reference/meta.md) がそれを読み、[vary-meta](reference/vary-meta.md) が
+更新します。ベクター・マップ・セットのリテラルについたリーダーメタデータも `with-meta`
+と同様に付きます。`=` はメタデータを無視します。逸脱は2つです。コピーから導いた値
+（`assoc`、`conj` など）はメタデータなしで始まり（オラクルは引き継ぎます）、シンボルは
+メタデータを持ちません（`with-meta` はシンボルをそのまま返します）。
 
 `ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
 （単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`
@@ -191,6 +198,10 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 `List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
 で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
 を上げます。各メソッドは1つのパラメータベクターを取ります（複数アリティは拒否のまま）。
+`:extend-via-metadata true` と宣言したプロトコルは、ターゲットのメタデータからも
+名前空間で修飾したメソッドのシンボルでメソッドを探します。オラクル同様、
+`defrecord`/`deftype`/`reify` 本体の実装の後、extend の行の前です
+（[defprotocol](reference/defprotocol.md) 参照）。
 
 `defrecord` 値は型タグ付きのマップです。すべてのマップが使うエントリ表を
 `(:C%RECORD tag fields table class)` で包むため、マップ動詞はそれを通して読みます
@@ -231,7 +242,6 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
-| `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | メタデータはディスパッチに影響しない |
 | dynamic・コアの var（`*warn-on-reflection*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先のスレッド束縛 var がない。`java:` にフィールド書き込みがない |
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |

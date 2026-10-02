@@ -35,6 +35,12 @@ import org.jspecify.annotations.Nullable;
  */
 final class ClojureLowerUtil {
 
+	/**
+	 * The head the reader spells {@code ^meta form} with: {@code (%with-meta form meta)},
+	 * apart from a {@code with-meta} call, which attaches its metadata at run time.
+	 */
+	static final String READER_META = "%with-meta";
+
 	private ClojureLowerUtil() {
 	}
 
@@ -73,12 +79,12 @@ final class ClojureLowerUtil {
 
 	/**
 	 * A datum with its {@code ^...} metadata dropped: the reader spells
-	 * {@code ^:private x} as {@code (with-meta x :private)}, and metadata never affects
-	 * dispatch, so every name position unwraps it.
+	 * {@code ^:private x} as {@code (%with-meta x :private)}, and reader metadata never
+	 * affects dispatch, so every name position unwraps it.
 	 */
 	static LispVal stripMeta(LispVal datum) {
 		List<LispVal> parts = items(datum);
-		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), READER_META)) {
 			datum = parts.get(1);
 			parts = items(datum);
 		}
@@ -107,7 +113,7 @@ final class ClojureLowerUtil {
 	 */
 	static boolean nameHasFlag(LispVal nameDatum, String flag) {
 		List<LispVal> parts = items(nameDatum);
-		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), READER_META)) {
 			if (metaHasFlag(parts.get(2), flag)) {
 				return true;
 			}

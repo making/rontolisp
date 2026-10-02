@@ -202,11 +202,11 @@ class ClojureReaderTest {
 	@Test
 	void derefMetaVarAndDiscard() {
 		assertThat(printed("@x")).isEqualTo("[(|deref| |x|)]");
-		assertThat(printed("^:k v")).isEqualTo("[(|with-meta| |v| :|k|)]");
+		assertThat(printed("^:k v")).isEqualTo("[(|%with-meta| |v| :|k|)]");
 		assertThat(printed("#'x")).isEqualTo("[(|var| |x|)]");
 		assertThat(printed("#_skip-me y")).isEqualTo("[|y|]");
 		assertThat(printed("@x ^:k v #'x #_skip-me y"))
-			.isEqualTo("[(|deref| |x|), (|with-meta| |v| :|k|), (|var| |x|), |y|]");
+			.isEqualTo("[(|deref| |x|), (|%with-meta| |v| :|k|), (|var| |x|), |y|]");
 	}
 
 	@Test

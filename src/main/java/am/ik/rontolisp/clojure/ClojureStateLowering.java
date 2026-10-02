@@ -910,14 +910,6 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(run));
 	}
 
-	/** {@code with-meta} as a value: metadata is dropped, so the first argument. */
-	static LispVal withMetaValue(ClojureLowering ctx) {
-		LispSymbol object = ctx.freshTemp();
-		LispSymbol meta = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(object, meta)),
-				object);
-	}
-
 	// dispatch: multimethods over a method table and a dispatcher defun
 
 	/**

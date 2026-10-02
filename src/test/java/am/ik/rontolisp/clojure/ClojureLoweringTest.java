@@ -813,8 +813,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defrecord R [a]) (instance? R 1)")).contains("C%PROTOCOL-TAG");
 		assertThat(lowered("(defrecord R [a]) (.-a (->R 1))")).contains("GETHASH");
 		// the stays-refused set: interfaces and code generation, multi-arity methods,
-		// metadata extension, non-core extend targets, unknown protocols and methods
-		// outside their protocols
+		// a computed metadata-extension flag, non-core extend targets, unknown
+		// protocols and methods outside their protocols
 		assertThatThrownBy(() -> Clojure.read("(gen-class)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: gen-class");
 		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
@@ -824,9 +824,16 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("multi-arity protocol methods are not supported yet: m");
-		assertThatThrownBy(() -> Clojure.read("(defprotocol Q :extend-via-metadata true (m [x]))", null))
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q :extend-via-metadata yes (m [x]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("extend-via-metadata is not supported yet");
+			.hasMessageContaining("extend-via-metadata takes true or false, not yes");
+		// the flag adds the inline table and the metadata lookup; without it neither
+		assertThat(lowered("(defprotocol Q :extend-via-metadata true (m [x]))")).contains("|c%Q%inline|")
+			.contains("%CLOJURE-META-METHOD")
+			.contains("|c%user/m|");
+		assertThat(lowered("(defprotocol Q :extend-via-metadata false (m [x]))")).doesNotContain("|c%Q%inline|")
+			.doesNotContain("%CLOJURE-META-METHOD");
+		assertThat(lowered("(defprotocol Q (m [x]))")).doesNotContain("%CLOJURE-META-METHOD");
 		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (extend-protocol Q Instant (m [x] 1))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("extend-protocol needs a core type, not Instant");
@@ -1328,13 +1335,21 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void varStaysRefusedWhileMetadataDrops() {
+	void varStaysRefusedWhileReaderMetadataDrops() {
 		assertThatThrownBy(() -> Clojure.read("#'x", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("var is not supported yet");
-		// metadata parses and drops: the object lowers as itself
-		assertThat(lowered("(def v 1) ^:k v")).contains("|c%v|").doesNotContain("WITH-META");
+		// reader metadata on a name or a local parses and drops: the object lowers as
+		// itself; on a collection literal it attaches, like the oracle's reader
+		assertThat(lowered("(def v 1) ^:k v")).contains("|c%v|").doesNotContain("META");
+		assertThat(lowered("^:k [1]")).contains("%CLOJURE-PUT-META");
+		assertThat(lowered("'^:k x")).contains("|c%x|").doesNotContain("META");
+		// a with-meta call attaches at run time
+		assertThat(lowered("(with-meta [1] {:a 1})")).contains("%CLOJURE-WITH-META");
+		assertThat(lowered("(meta [1])")).contains("%CLOJURE-META");
 		assertThatThrownBy(() -> Clojure.read("(with-meta 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("with-meta takes an object and metadata");
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/with-meta");
+		assertThatThrownBy(() -> Clojure.read("^1 [1]", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Metadata must be Symbol,Keyword,String or Map");
 	}
 
 	@Test
@@ -1563,8 +1578,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
 		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");
-		assertThatThrownBy(() -> Clojure.read("(defmacro with-meta [x] x)", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(defmacro deref [x] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("cannot name a macro");
+		// the reader spells ^m x with its own head, so a with-meta macro shadows only
+		// the call, never reader metadata
+		assertThat(lowered("(defmacro with-meta [x m] x) (def v 1) (println ^:k v)")).contains("|c%v|")
+			.doesNotContain("%CLOJURE-WITH-META");
 	}
 
 	@Test

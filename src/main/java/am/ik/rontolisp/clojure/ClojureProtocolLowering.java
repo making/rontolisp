@@ -278,14 +278,17 @@ final class ClojureProtocolLowering {
 		if (at < items.size() && ClojureBindingLowering.isAttrMap(items.get(at))) {
 			at++; // the attr map
 		}
+		boolean viaMetadata = false;
 		for (; at + 1 < items.size() && items.get(at) instanceof LispSymbol opt
 				&& opt.name().startsWith(":"); at += 2) {
 			if (opt.name().equals(":extend-via-metadata")) {
 				LispVal flag = items.get(at + 1);
-				if (!(flag instanceof LispSymbol f && (f.name().equals("false") || f.name().equals("nil")))) {
-					throw new LispReadException(
-							"extend-via-metadata is not supported yet: metadata never affects dispatch");
-				}
+				ClojureLowerUtil.isTrue(
+						flag instanceof LispSymbol f
+								&& (f.name().equals("true") || f.name().equals("false") || f.name().equals("nil")),
+						"extend-via-metadata takes true or false, not "
+								+ (flag instanceof LispSymbol named ? named.name() : flag.print()));
+				viaMetadata = ((LispSymbol) flag).name().equals("true");
 			}
 			else {
 				throw new LispReadException("defprotocol option " + opt.name() + " is not supported yet");
@@ -316,7 +319,7 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
 		String var = ClojureLowering.varSym(key).name();
 		return new ClojureLowering.ProtocolDef(methods, new LispSymbol(var + "%methods"),
-				new LispSymbol(var + "%default"));
+				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null);
 	}
 
 	/**
@@ -334,6 +337,10 @@ final class ClojureProtocolLowering {
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.methodsVar(),
 				ClojureCollectionLowering.makeTable()));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(), ClojureLowering.NIL_CONST));
+		if (def.inlineVar() != null) {
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.inlineVar(),
+					ClojureCollectionLowering.makeTable()));
+		}
 		for (String method : def.methods()) {
 			forms.add(dispatcherDefun(ctx, name, method, def));
 		}
@@ -346,7 +353,11 @@ final class ClojureProtocolLowering {
 	/**
 	 * One protocol-method dispatcher: the {@code &rest} shape {@code defmulti} takes, so
 	 * arities (fixed or variadic) fall out of the stored lambda. No arguments signals the
-	 * wrong-count error instead of dispatching on nil, like the oracle's arity error.
+	 * wrong-count error instead of dispatching on nil, like the oracle's arity error. A
+	 * protocol declared {@code :extend-via-metadata true} looks in three places, in the
+	 * oracle's order: the inline table (a body implementation), the target's metadata
+	 * under the protocol-qualified method symbol (invoked like any {@code IFn}), then the
+	 * extension rows and the {@code Object} default.
 	 */
 	static LispVal dispatcherDefun(ClojureLowering ctx, String protocol, String method,
 			ClojureLowering.ProtocolDef def) {
@@ -355,29 +366,56 @@ final class ClojureProtocolLowering {
 		LispSymbol miss = ctx.freshTemp();
 		LispSymbol inner = ctx.freshTemp();
 		LispSymbol found = ctx.freshTemp();
+		LispSymbol chosen = ctx.freshTemp();
+		// the tag's row, else the Object row of this method, else the miss
+		LispVal objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()), miss,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method),
+						def.defaultVar(), miss));
+		LispVal extended = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(
+						ClojureLowerUtil.list(inner,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.methodsVar(), miss)),
+						ClojureLowerUtil.list(found, rowMethod(inner, miss, method)),
+						ClojureLowerUtil.list(chosen, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), objectRow, found)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), chosen, miss),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+								LispString.literal("No implementation of method :" + method + " of protocol :"
+										+ protocol + " found")),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), chosen, args)));
+		if (def.inlineVar() != null) {
+			LispSymbol direct = ctx.freshTemp();
+			LispSymbol viaMeta = ctx.freshTemp();
+			LispVal metaKey = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+					ClojureLowerUtil.idSym(ClojureLowering.varKey(ctx.currentNs, method)));
+			LispVal metaOrExtended = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(viaMeta,
+							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-META-METHOD"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), metaKey)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), viaMeta, ctx.callableApply(viaMeta, args),
+							extended));
+			extended = ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("let*"),
+						ClojureLowerUtil
+							.list(List.of(
+									ClojureLowerUtil.list(inner,
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.inlineVar(),
+													miss)),
+									ClojureLowerUtil.list(direct, rowMethod(inner, miss, method)))),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), direct, miss), metaOrExtended,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), direct, args)));
+		}
 		LispVal lookup = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(
 						ClojureLowerUtil.list(tag,
 								ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
 						ClojureLowerUtil.list(miss,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-						ClojureLowerUtil.list(inner,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.methodsVar(), miss)),
-						ClojureLowerUtil.list(found,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), inner, miss), miss,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-												ClojureCollectionLowering.keywordForm(method), inner, miss))))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-										LispString.literal("No implementation of method :" + method + " of protocol :"
-												+ protocol + " found")),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), def.defaultVar(), args)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), found, args)));
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
+				extended);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
@@ -386,6 +424,16 @@ final class ClojureProtocolLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, method)),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), body);
+	}
+
+	/**
+	 * The method lambda a tag's row holds, or {@code miss}: {@code row} is the tag's
+	 * inner table (or {@code miss} when the tag has none).
+	 */
+	private static LispVal rowMethod(LispSymbol row, LispSymbol miss, String method) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), row, miss), miss, ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method), row, miss));
 	}
 
 	/**
@@ -589,7 +637,7 @@ final class ClojureProtocolLowering {
 				ctx.mutableFieldPlaces.putAll(outerPlaces);
 			}
 		}
-		return methodStoreForm(ctx, def.methodsVar(), key, impl.method(), lambda);
+		return methodStoreForm(ctx, def.inlineTable(), key, impl.method(), lambda);
 	}
 
 	/**
@@ -879,9 +927,26 @@ final class ClojureProtocolLowering {
 				"Can't define method not in interfaces: " + impl.method());
 		LispVal lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());
 		if (key == null) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(), lambda);
+			return objectStoreForm(def, impl.method(), lambda);
 		}
 		return methodStoreForm(ctx, def.methodsVar(), key, impl.method(), lambda);
+	}
+
+	/**
+	 * Stores one {@code Object} row: the method keyword mapped to the lambda in the
+	 * protocol's default table, made on first use (nil until then, so a protocol with no
+	 * {@code Object} extension satisfies nothing it was not extended to).
+	 */
+	static LispVal objectStoreForm(ClojureLowering.ProtocolDef def, String method, LispVal lambda) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(),
+								ClojureCollectionLowering.makeTable())),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+								ClojureCollectionLowering.keywordForm(method), def.defaultVar()),
+						lambda));
 	}
 
 	/**
@@ -980,7 +1045,7 @@ final class ClojureProtocolLowering {
 			String method = ((LispSymbol) entries.get(i)).name().substring(1);
 			ClojureLowerUtil.isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
 			LispVal fun = ClojureBindingLowering.fnValue(ctx, entries.get(i + 1));
-			LispVal row = key == null ? ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), def.defaultVar(), fun)
+			LispVal row = key == null ? objectStoreForm(def, method, fun)
 					: methodStoreForm(ctx, def.methodsVar(), key, method, fun);
 			rows.add(row);
 		}
@@ -1014,14 +1079,24 @@ final class ClojureProtocolLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), def.defaultVar()), ctx.falseVariable,
 						ClojureLowering.TRUE_CONST));
 		ctx.usedProtocols = true;
+		LispVal row = ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.methodsVar(), miss);
+		if (def.inlineVar() != null) {
+			// a body implementation lives in the inline table; metadata never
+			// satisfies, like the oracle
+			LispSymbol direct = ctx.freshTemp();
+			row = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(direct,
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.inlineVar(), miss)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), direct, miss), row, direct));
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(
 						ClojureLowerUtil.list(tag,
 								ClojureLowerUtil.list(new LispSymbol(PROTOCOL_TAG), ctx.lower(items.get(2)))),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-						ClojureLowerUtil.list(inner,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), tag, def.methodsVar(), miss)))),
+						ClojureLowerUtil.list(inner, row))),
 				answer);
 	}
 
@@ -1046,7 +1121,7 @@ final class ClojureProtocolLowering {
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				LispVal lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());
-				body.add(methodStoreForm(ctx, def.methodsVar(),
+				body.add(methodStoreForm(ctx, def.inlineTable(),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self), impl.method(), lambda));
 			}
 		}

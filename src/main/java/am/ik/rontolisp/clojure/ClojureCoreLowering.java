@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayList;
 import java.util.List;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
@@ -89,6 +90,16 @@ final class ClojureCoreLowering {
 				arity(name, n, 2, -1);
 				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)),
 						ctx.lowers(items, 2));
+			case "with-meta":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "meta":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "vary-meta":
+				arity(name, n, 2, -1);
+				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
 			default:
 				return null;
 		}
@@ -104,11 +115,60 @@ final class ClojureCoreLowering {
 		return switch (name) {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
 					"dedupe", "partition-all", "partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred",
-					"some-fn", "update-keys", "update-vals", "reduce-kv" ->
+					"some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			default -> null;
 		};
+	}
+
+	/**
+	 * Reader metadata ({@code ^meta form}) in value position: on a vector, map or set
+	 * literal it attaches to the fresh collection, like the oracle's reader; anywhere
+	 * else (a type hint on a local, a flag on a call) it parses and drops. Nested layers
+	 * merge with the outer one winning, like the oracle's reader; a keyword is {@code {:k
+	 * true}}, a symbol or string {@code {:tag x}}.
+	 * @param ctx the hub
+	 * @param form the {@code (%with-meta form meta)} datum
+	 * @return the lowered value
+	 */
+	static LispVal readerMetaOf(ClojureLowering ctx, LispVal form) {
+		List<LispVal> layers = new ArrayList<>();
+		LispVal target = form;
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			layers.add(parts.get(2));
+			target = parts.get(1);
+			parts = ClojureLowerUtil.items(target);
+		}
+		boolean literal = parts != null && !parts.isEmpty()
+				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
+						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
+		if (!literal) {
+			return ctx.lower(target);
+		}
+		List<LispVal> entries = new ArrayList<>();
+		for (int i = layers.size() - 1; i >= 0; i--) {
+			entries.addAll(metaEntries(layers.get(i)));
+		}
+		return ClojureLowerUtil.list(runtime("put-meta"), ctx.lower(target),
+				ClojureCollectionLowering.mapBuild(ctx.lowers(entries, 0)));
+	}
+
+	/** One reader metadata datum as map entries (key and value datums). */
+	private static List<LispVal> metaEntries(LispVal meta) {
+		if (meta instanceof LispSymbol s && s.name().startsWith(":")) {
+			return List.of(s, new LispSymbol("true"));
+		}
+		if (meta instanceof LispSymbol || meta instanceof LispString) {
+			return List.of(new LispSymbol(":tag"), ClojureLowerUtil.list(new LispSymbol("quote"), meta));
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(meta);
+		if (parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")) {
+			return parts.subList(1, parts.size());
+		}
+		throw new LispReadException("Metadata must be Symbol,Keyword,String or Map");
 	}
 
 	private static LispVal worker(String name, LispVal... args) {

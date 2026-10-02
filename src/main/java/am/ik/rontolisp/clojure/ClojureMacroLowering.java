@@ -57,13 +57,14 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The heads the reader itself spells ({@code `x}, {@code ~x}, {@code ~@x},
-	 * {@code @x}, {@code ^m x}, {@code #(...)}) plus the two the pre-scan reads a
-	 * namespace from: a macro of one would capture the reader's own forms (the oracle
-	 * reads {@code @x} as {@code clojure.core/deref}, which no program macro shadows), so
-	 * a {@code defmacro} of one is refused by name.
+	 * {@code @x}, {@code #(...)}) plus the two the pre-scan reads a namespace from: a
+	 * macro of one would capture the reader's own forms (the oracle reads {@code @x} as
+	 * {@code clojure.core/deref}, which no program macro shadows), so a {@code defmacro}
+	 * of one is refused by name. {@code ^m x} reads as {@code %with-meta}, reserved by
+	 * its {@code %}, so a {@code with-meta} macro shadows the call only.
 	 */
-	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "with-meta",
-			"fn", "ns", "in-ns");
+	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "fn", "ns",
+			"in-ns");
 
 	/**
 	 * Whether a head never reaches the macro table: a special form or a reader head. Any

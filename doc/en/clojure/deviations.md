@@ -83,7 +83,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the `clojure.lisp` library, not the program's own definitions; a call above its
   definition is refused, and a macro has no function value. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...) or of a head the reader spells (`deref`,
-  `with-meta`, `fn`, `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
+  `fn`, `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
 - Syntax-quote qualifies a symbol naming a var the namespace sees; a core name or an
   unresolved symbol stays bare, where the oracle spells `clojure.core/let` and
@@ -131,8 +131,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a send runs (`nil` outside one, where the oracle leaves it unbound).
 - `binding` rebinds only `^:dynamic` vars (anything else is refused, like the
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
-  go through the var while the definition stays direct); metadata otherwise
-  parses and drops, never affecting dispatch.
+  go through the var while the definition stays direct); reader metadata on names
+  and locals otherwise parses and drops, never affecting dispatch.
+- `with-meta` answers a copy carrying the metadata; a value derived from it (`assoc`,
+  `conj`, ...) starts without metadata, where the oracle keeps it, and a symbol carries
+  none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
+  literal stays the symbol as written (`String`), where the oracle resolves the class
+  (`java.lang.String`).
 - `with-open` closes through the `close` method, so only closeables the backend
   reaches work (Java closeables need the JVM); `time` answers its value but its
   millisecond count never pins (only the `Elapsed time:` prefix does).

@@ -151,14 +151,21 @@ one level through the seq view: pass a `take`n prefix first.
 
 ## State and dynamic scope
 
-Metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints, `with-meta`)
-parses and drops everywhere: it never affects dispatch, except that `^:dynamic`
+Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a name
+or a local parses and drops: it never affects dispatch, except that `^:dynamic`
 on a `def`/`defonce`/`defn` name marks the var rebindable -- a `^:dynamic`
 `defn` keeps its direct definition but its calls go through the var, so
 `binding` reaches them. Only `binding` rebinds through it. `defn-` is a
 private-by-convention `defn`; `def` takes a docstring
 and an attr map like `defn`; `defonce` is `def` unless bound, so a reload keeps
 the root.
+
+Value metadata is real: [with-meta](reference/with-meta.md) answers a copy carrying the
+map, [meta](reference/meta.md) reads it, [vary-meta](reference/vary-meta.md) updates
+it, and reader metadata on a vector, map or set literal attaches like `with-meta`.
+`=` ignores it. Two deviations: a value derived from a copy (`assoc`, `conj`, ...)
+starts without metadata, where the oracle keeps it, and a symbol carries none (its
+`with-meta` answers the symbol).
 
 A `ref` is the atom cell with a transaction discipline: `dosync` opens the
 extent (single-threaded, so no retries and no isolation), `alter`/`commute`
@@ -193,7 +200,10 @@ under a target's tag; `satisfies?` tests membership. Extend targets are the kind
 `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil` and `Object` as the miss
 default) and known record/deftype names; anything else is a named refusal. A miss
 with no `Object` row signals, like the oracle. Each method takes one parameter
-vector (several arities stay refused).
+vector (several arities stay refused). A protocol declared `:extend-via-metadata true`
+also finds a method in the target's metadata under the namespace-qualified method
+symbol -- after an implementation in a `defrecord`/`deftype`/`reify` body and before
+the extension rows, like the oracle (see [defprotocol](reference/defprotocol.md)).
 
 A `defrecord` value is a map with a type tag: the entry table every map uses,
 wrapped as `(:C%RECORD tag fields table class)`, so the map verbs read through it
@@ -232,7 +242,6 @@ Each refusal names the missing design, never `unknown name`:
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
-| `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | metadata never affects dispatch |
 | `set!` of a dynamic or core var (`*warn-on-reflection*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no thread-bound var to assign; the `java:` surface has no field write |
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |

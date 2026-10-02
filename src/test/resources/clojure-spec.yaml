@@ -2133,8 +2133,9 @@ cases:
          ab|3.14|ff|false|%
       a[1 2]b
   - name: metadata-is-parsed-and-dropped
-    # ^:private/^:dynamic/^{...}/defn-/with-meta parse and drop: metadata never
-    # affects dispatch, so every shape below answers its bare value.
+    # ^:private/^:dynamic/^{...}/defn-/type hints parse and drop: reader metadata
+    # on a name or a local never affects dispatch, so every shape below answers
+    # its bare value; with-meta answers a copy that prints like the original.
     source: |
       (defn- b14-double [x] (* x 2))
       (println (b14-double 21))
@@ -2145,14 +2146,14 @@ cases:
       (defn b14-hint [^String s] s)
       (println (b14-hint "s"))
       (println (with-meta [1 2] {:tag :x}))
-      (println (with-meta :a nil))
+      (println (b14-hint ^String (str "a" "b")))
     expected: |
       42
       7
       11
       s
       [1 2]
-      :a
+      ab
   - name: defstruct-struct-and-struct-map
     # A defstruct holds its key vector; struct pairs keys with values (missing
     # values are nil, too many signal), struct-map seeds the same keys. Only
@@ -2487,6 +2488,91 @@ cases:
       :B13Clock
       nil
       100
+  - name: object-extension-keeps-a-row-per-method
+    # An Object extension of a several-method protocol answers each method's own
+    # implementation (one shared default slot used to keep only the last one, so
+    # evm-area ran evm-scale's lambda and signalled its arity).
+    source: |
+      (defprotocol EvmShape (evm-area [s]) (evm-name [s]) (evm-scale [s k]))
+      (extend-protocol EvmShape Object
+        (evm-area [s] :area) (evm-name [s] :name) (evm-scale [s k] k))
+      (println (evm-area 1) (evm-name "x") (evm-scale [] 3))
+      (defprotocol EvmSize (evm-width [s]) (evm-height [s]))
+      (extend Object EvmSize {:evm-width (fn [s] :w) :evm-height (fn [s] :h)})
+      (println (evm-width 1) (evm-height 1) (satisfies? EvmSize :k))
+    expected: |
+      :area :name 3
+      :w :h true
+  - name: protocols-extend-via-metadata
+    # The ToDo-as-MidiNote slice of note.clj (Programming Clojure 4th ed.), minus
+    # the MIDI synthesizer: with-meta attaches implementations under the
+    # protocol-qualified method symbols. The oracle's order: an inline body wins,
+    # then metadata, then extend-type rows and Object; a bare symbol key misses, a
+    # protocol without the flag ignores metadata. Metadata round-trips through
+    # meta/vary-meta, never changes =, rides on reader literals, and with-meta
+    # refuses what is no IObj (strings, keywords). long: the oracle's ratio
+    # arithmetic prints 2000N.
+    source: |
+      (defprotocol EvmNote
+        :extend-via-metadata true
+        (evm-msec [this tempo] "Note duration in ms")
+        (evm-key-number [this] "MIDI key number")
+        (evm-velocity [this] "MIDI velocity"))
+      (defn evm-beats->msec [beats tempo] (* (/ beats tempo) 4 60 1000))
+      (defn evm-note->key [pitch octave]
+        (let [scale {:C 0 :E 4 :G 7}]
+          (+ (* 12 (inc octave)) (scale pitch))))
+      (defrecord EvmToDo [desc est type])
+      (defn evm-to-note [todo theme]
+        (let [{:keys [est type]} todo
+              {:keys [mpb pitches volume]} theme
+              octave 4]
+          (with-meta todo
+            {`evm-msec (fn [_ bpm] (evm-beats->msec (/ est mpb) bpm))
+             `evm-key-number (fn [_] (evm-note->key (get pitches type) octave))
+             `evm-velocity (constantly volume)})))
+      (defrecord EvmTheme [mpb pitches volume])
+      (def evm-theme (->EvmTheme 60 {:errand :C, :house :E, :personal :G} 64))
+      (doseq [note (map #(evm-to-note % evm-theme)
+                        [(->EvmToDo "Grocery shopping" 60 :errand)
+                         (->EvmToDo "Mow yard" 30 :house)
+                         (->EvmToDo "Brush teeth" 2 :personal)])]
+        (println (:desc note) (long (evm-msec note 120)) (evm-key-number note) (evm-velocity note)))
+      (defrecord EvmInline [x] EvmNote
+        (evm-msec [_ t] :inline) (evm-key-number [_] :inline) (evm-velocity [_] :inline))
+      (extend-type EvmToDo EvmNote
+        (evm-msec [_ t] :extended) (evm-key-number [_] :extended) (evm-velocity [_] :extended))
+      (extend-protocol EvmNote Object
+        (evm-msec [_ t] :object) (evm-key-number [_] :object) (evm-velocity [_] :object))
+      (def evm-meta {`evm-key-number (fn [_] :meta)})
+      (println (evm-key-number (with-meta (->EvmToDo "d" 1 :house) evm-meta))
+               (evm-key-number (->EvmToDo "d" 1 :house))
+               (evm-key-number (with-meta (->EvmInline 1) evm-meta))
+               (evm-key-number (with-meta [1] evm-meta))
+               (evm-key-number (with-meta [1] {'evm-key-number (fn [_] :bare)}))
+               (evm-msec (with-meta {} evm-meta) 1))
+      (defprotocol EvmPlain (evm-plain [this]))
+      (extend-protocol EvmPlain Object (evm-plain [_] :object))
+      (println (evm-plain (with-meta {} {`evm-plain (fn [_] :meta)})))
+      (def evm-v [1 2])
+      (def evm-w (with-meta evm-v {:k 1}))
+      (println (meta evm-v) (meta evm-w) (= evm-v evm-w)
+               (let [m (meta (vary-meta evm-w assoc :j 2))] [(:k m) (:j m)]))
+      (println (meta ^:flag [1]) (meta ^{:a 1} {}) (meta (with-meta '(1) {:l 1})) (meta 5))
+      (def evm-f (with-meta inc {:doc "inc"}))
+      (println (evm-f 1) (meta evm-f) (fn? evm-f))
+      (println (try (with-meta "s" {}) (catch Exception e :not-iobj))
+               (try (with-meta :k {}) (catch Exception e :not-iobj)))
+    expected: |
+      Grocery shopping 2000 60 64
+      Mow yard 1000 64 64
+      Brush teeth 66 67 64
+      :meta :extended :inline :meta :object :object
+      :object
+      nil {:k 1} true [1 2]
+      {:flag true} {:a 1} {:l 1} nil
+      2 {:doc inc} true
+      :not-iobj :not-iobj
   - name: hangman-players-guess-through-the-protocol
     # b13: the Player slice of hangman/core.clj (random-player/interactive-player
     # via reify, ChoicesPlayer via defrecord, the pure game loop). Letters are

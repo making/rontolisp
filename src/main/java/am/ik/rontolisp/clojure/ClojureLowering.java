@@ -555,10 +555,22 @@ public final class ClojureLowering {
 	 * A protocol the program defines or extends: its method names, the method-table
 	 * global and the {@code Object}-default global. Protocols dispatch over the
 	 * {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the hierarchy
-	 * search); the table maps a tag to the method lambda, the default global the
-	 * {@code Object} row consulted on a miss.
+	 * search); the table maps a tag to its row (method keyword to lambda), the default
+	 * global holds the {@code Object} row consulted on a miss (nil until the first
+	 * {@code Object} extension). A protocol declared {@code :extend-via-metadata true}
+	 * also has {@code inlineVar}: the table of the implementations a
+	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
+	 * target's metadata, which wins over the extension rows, like the oracle; null for
+	 * every other protocol, whose inline rows share the method table.
 	 */
-	record ProtocolDef(Set<String> methods, LispSymbol methodsVar, LispSymbol defaultVar) {
+	record ProtocolDef(Set<String> methods, LispSymbol methodsVar, LispSymbol defaultVar,
+			@Nullable LispSymbol inlineVar) {
+
+		/** The table an inline (body) implementation is stored in. */
+		LispSymbol inlineTable() {
+			return this.inlineVar != null ? this.inlineVar : this.methodsVar;
+		}
+
 	}
 
 	/**
@@ -1721,11 +1733,8 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "var")) {
 			throw new LispReadException("var is not supported yet: #'x needs a design");
 		}
-		if (ClojureLowerUtil.isSymbolNamed(head, "with-meta")) {
-			// metadata is parsed and dropped: it never affects dispatch, so the
-			// object lowers as itself
-			ClojureLowerUtil.isTrue(items.size() == 3, "with-meta takes an object and metadata");
-			return lower(items.get(1));
+		if (ClojureLowerUtil.isSymbolNamed(head, ClojureLowerUtil.READER_META)) {
+			return ClojureCoreLowering.readerMetaOf(this, form);
 		}
 		if (head instanceof LispCons) {
 			if (ClojureSeqLowering.isCollectionHead(head)) {
@@ -2549,7 +2558,6 @@ public final class ClojureLowering {
 			case "agent" -> ClojureStateLowering.agentValue(this);
 			case "send" -> ClojureStateLowering.sendValue(this, "send");
 			case "send-off" -> ClojureStateLowering.sendValue(this, "send-off");
-			case "with-meta" -> ClojureStateLowering.withMetaValue(this);
 			case "odd?" ->
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x));
 			case "even?" ->
@@ -2795,6 +2803,10 @@ public final class ClojureLowering {
 	}
 
 	LispVal quote(LispVal datum) {
+		LispVal bare = ClojureLowerUtil.stripMeta(datum);
+		if (bare != datum) {
+			return quote(bare); // reader metadata on quoted data is dropped
+		}
 		if (datum instanceof LispSymbol s) {
 			String name = s.name();
 			if (name.equals("nil")) {
