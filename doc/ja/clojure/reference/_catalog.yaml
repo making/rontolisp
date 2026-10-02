@@ -94,6 +94,18 @@ categories:
       - { slug: second, name: "second" }
       - { slug: ffirst, name: "ffirst" }
       - { slug: nfirst, name: "nfirst" }
+      - { slug: drop-last, name: "drop-last" }
+      - { slug: split-at, name: "split-at" }
+      - { slug: split-with, name: "split-with" }
+      - { slug: take-last, name: "take-last" }
+      - { slug: nthnext, name: "nthnext" }
+      - { slug: nthrest, name: "nthrest" }
+      - { slug: dedupe, name: "dedupe" }
+      - { slug: partition-all, name: "partition-all" }
+      - { slug: partition-by, name: "partition-by" }
+      - { slug: take-nth, name: "take-nth" }
+      - { slug: not-empty, name: "not-empty" }
+      - { slug: pmap, name: "pmap" }
   - title: "反復"
     index_page: clojure/reference/iteration.md
     functions:
@@ -128,6 +140,11 @@ categories:
       - { slug: merge-with, name: "merge-with" }
       - { slug: into, name: "into" }
       - { slug: frequencies, name: "frequencies" }
+      - { slug: peek, name: "peek" }
+      - { slug: pop, name: "pop" }
+      - { slug: update-keys, name: "update-keys" }
+      - { slug: update-vals, name: "update-vals" }
+      - { slug: reduce-kv, name: "reduce-kv" }
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
       - { slug: struct-map, name: "struct-map" }
@@ -292,6 +309,24 @@ categories:
       - { slug: identity, name: "identity" }
       - { slug: memoize, name: "memoize" }
       - { slug: trampoline, name: "trampoline" }
+      - { slug: juxt, name: "juxt" }
+      - { slug: fnil, name: "fnil" }
+      - { slug: every-pred, name: "every-pred" }
+      - { slug: some-fn, name: "some-fn" }
+      - { slug: min-key, name: "min-key" }
+      - { slug: max-key, name: "max-key" }
+  - title: "トランスデューサー"
+    index_page: clojure/reference/transducers.md
+    functions:
+      - { slug: transduce, name: "transduce" }
+      - { slug: eduction, name: "eduction" }
+      - { slug: sequence, name: "sequence" }
+      - { slug: completing, name: "completing" }
+      - { slug: reduced, name: "reduced" }
+      - { slug: reduced-p, name: "reduced?" }
+      - { slug: unreduced, name: "unreduced" }
+      - { slug: ensure-reduced, name: "ensure-reduced" }
+      - { slug: cat, name: "cat" }
   - title: "入出力"
     index_page: clojure/reference/io.md
     functions:

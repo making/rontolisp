@@ -1370,14 +1370,24 @@ final class JvmJavaDirectSites {
 		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, MethodCode.Label fail) {
 			MethodCode a = this.a;
 			if (kind instanceof JavaImplementationType implementation) {
-				// An object a java:reify / java:proxy of the interface made: of a class
-				// generated for one (JvmJavaImplementations), implementing it.
+				// An object a java:reify / java:proxy of the interfaces made: of a class
+				// generated for one (JvmJavaImplementations), implementing exactly them
+				// --
+				// as the interpreter compares the kind itself.
 				a.aload(slot);
 				a.instanceOf(cls(implementations().baseClass()));
 				a.ifeq(fail);
+				for (JavaType iface : implementation.interfaces()) {
+					a.aload(slot);
+					a.instanceOf(cls(iface));
+					a.ifeq(fail);
+				}
 				a.aload(slot);
-				a.instanceOf(cls(implementation.iface()));
-				a.ifeq(fail);
+				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+				a.invokevirtual(method("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;"));
+				a.arraylength();
+				a.loadConstant(implementation.interfaces().size());
+				a.if_icmpne(fail);
 				return;
 			}
 			if (kind instanceof JavaType host) {

@@ -6,31 +6,33 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /**
- * How a {@code java:reify} or a {@code java:proxy} implements its interface
- * ({@link JavaImplementations}): the methods an implementing class declares -- each
- * {@link Slot} calls one of the form's functions, or, for an abstract method no function
- * implements, throws -- chosen before the form runs, the same on every backend. The
- * interpreter answers them from a {@link java.lang.reflect.Proxy} handler that dispatches
- * on exactly these slots; a compiled program declares them in a generated class
+ * How a {@code java:reify} or a {@code java:proxy} implements its interfaces -- a
+ * {@code java:reify} one, a {@code java:proxy} one or more ({@link JavaImplementations}):
+ * the methods an implementing class declares -- each {@link Slot} calls one of the form's
+ * functions, or, for an abstract method no function implements, throws -- chosen before
+ * the form runs, the same on every backend. The interpreter answers them from a
+ * {@link java.lang.reflect.Proxy} handler that dispatches on exactly these slots; a
+ * compiled program declares them in a generated class
  * ({@code codegen.jvm.JvmJavaImplementations}). A default method no slot overrides keeps
  * its body, and {@code equals}/{@code hashCode} not implemented are {@code Object}'s
  * (identity) -- on both.
  *
  * @param proxy whether it is a {@code java:proxy}: every method, default ones too, calls
  * the one function with the method's name before its arguments
- * @param iface the interface, or {@code null} for an unresolved form
+ * @param interfaces the interfaces, in the form's order; empty for an unresolved form
  * @param slots the methods the implementing class declares, in a fixed order
  * @param reason why an unresolved form is resolved when it runs, or {@code null}
  */
-public record JavaImplementation(boolean proxy, @Nullable JavaType iface, List<Slot> slots, @Nullable String reason) {
+public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason) {
 
 	/** The {@link Slot#implementation} of an abstract method no function implements. */
 	public static final int NONE = -1;
 
 	/**
-	 * Copies the slots.
+	 * Copies the interfaces and the slots.
 	 */
 	public JavaImplementation {
+		interfaces = List.copyOf(interfaces);
 		slots = List.copyOf(slots);
 	}
 
@@ -81,6 +83,28 @@ public record JavaImplementation(boolean proxy, @Nullable JavaType iface, List<S
 	}
 
 	/**
+	 * @return the interface names as the object's {@code toString} and the messages spell
+	 * them ({@link #interfaceNames(List)})
+	 */
+	public String interfaceNames() {
+		return interfaceNames(this.interfaces);
+	}
+
+	/**
+	 * Interfaces as the object's {@code toString} and the messages spell them: the names
+	 * in the form's order, separated by a space.
+	 * @param interfaces the interfaces
+	 * @return e.g. {@code java.lang.Runnable java.util.function.Supplier}
+	 */
+	public static String interfaceNames(List<? extends JavaType> interfaces) {
+		List<String> names = new ArrayList<>();
+		for (JavaType type : interfaces) {
+			names.add(type.name());
+		}
+		return String.join(" ", names);
+	}
+
+	/**
 	 * The dispatch key of a method.
 	 * @param name the method name
 	 * @param parameterTypes its parameter types
@@ -109,17 +133,17 @@ public record JavaImplementation(boolean proxy, @Nullable JavaType iface, List<S
 
 	/**
 	 * @return what {@code toString} answers when no slot implements it:
-	 * {@code #<java-reify I>} or {@code #<java-proxy I>}
+	 * {@code #<java-reify I>} or {@code #<java-proxy I J>}
 	 */
 	public String defaultToString() {
-		return defaultToString(this.proxy, java.util.Objects.requireNonNull(this.iface).name());
+		return defaultToString(this.proxy, interfaceNames());
 	}
 
 	/**
 	 * What the object's {@code toString} answers when no function implements it.
 	 * @param proxy whether it is a {@code java:proxy}
-	 * @param iface the interface name
-	 * @return {@code #<java-reify I>} or {@code #<java-proxy I>}
+	 * @param iface the interface names ({@link #interfaceNames(List)})
+	 * @return {@code #<java-reify I>} or {@code #<java-proxy I J>}
 	 */
 	public static String defaultToString(boolean proxy, String iface) {
 		return "#<java-" + (proxy ? "proxy " : "reify ") + iface + ">";
@@ -151,7 +175,7 @@ public record JavaImplementation(boolean proxy, @Nullable JavaType iface, List<S
 	 * The text after the value in that error: {@code  as class java.lang.String from I}
 	 * (a {@code java:reify} names the method too: {@code from I.m}).
 	 * @param proxy whether it is a {@code java:proxy}
-	 * @param iface the interface name
+	 * @param iface the interface names ({@link #interfaceNames(List)})
 	 * @param method the method name
 	 * @param returnType the method's return type
 	 * @return the suffix

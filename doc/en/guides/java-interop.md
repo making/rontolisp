@@ -36,7 +36,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:call` | Invoke an instance method: `(java:call obj "method" args...)` |
 | `java:static` | Invoke a static method: `(java:static "fqcn" "method" args...)` |
 | `java:field` | Read a static or instance field: `(java:field class-or-obj "name")` |
-| `java:proxy` | Adapt a callable to an interface: `(java:proxy "iface" callable)` |
+| `java:proxy` | Adapt a callable to one or more interfaces: `(java:proxy "iface"... callable)` |
 | `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
 
 A constructed or returned object prints opaquely as `#<java <class-name>>` and
@@ -161,7 +161,9 @@ What the program text says about a value:
   of a class that implements `I` and nothing else a program can name: a call on it resolves
   among `I`'s methods, and one that passes it resolves as its argument. A `let` variable
   keeps that type, which `(java:object "I" :exact)` spells -- no object's class is exactly
-  an interface, so for one `:exact` means this.
+  an interface, so for one `:exact` means this. A `(java:proxy "I" "J" ...)` of several
+  literal interfaces implements each: a call passing it resolves, a call on it is resolved
+  by its class when it runs, and no specifier spells its type.
 
 A call on a value whose known class is an interface also resolves to `Object`'s public
 methods the interface does not declare (`toString`, `getClass`, ...), as Java's own call

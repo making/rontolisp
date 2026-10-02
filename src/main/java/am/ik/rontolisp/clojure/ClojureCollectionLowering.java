@@ -100,7 +100,7 @@ final class ClojureCollectionLowering {
 		if (alias.isEmpty() || tail.isEmpty() || tail.indexOf('/') >= 0) {
 			throw new LispReadException("Invalid token: " + name);
 		}
-		String ns = ctx.aliases.get(alias);
+		String ns = ctx.ns().aliases.get(alias);
 		if (ns == null) {
 			if (alias.equals(ctx.currentNs) || ClojureNamespaceLowering.isKnownNamespace(alias)) {
 				ns = alias;
@@ -589,7 +589,10 @@ final class ClojureCollectionLowering {
 
 	static LispVal conjOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
-		ClojureLowerUtil.isTrue(n >= 1, "conj takes a collection and items");
+		if (n == 0) {
+			// the oracle's init arity: (transduce xf conj coll) starts from it
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"));
+		}
 		LispVal acc = ctx.lower(items.get(1));
 		for (int i = 2; i < items.size(); i++) {
 			acc = conjTwo(ctx, acc, items.get(i));
@@ -770,9 +773,16 @@ final class ClojureCollectionLowering {
 		LispSymbol one = ctx.freshTemp();
 		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(acc, one)),
 				conjTwoForm(ctx, acc, one));
+		// (conj) is [], the oracle's init arity, so (transduce xf conj coll) runs
+		LispSymbol supplied = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(List.of(coll, ClojureLowering.AMPERSAND_REST, items)), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("reduce"), step, items, ClojureLowerUtil.sym(":initial-value"), coll));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.sym("&optional"),
+						ClojureLowerUtil.list(coll, ClojureLowering.NIL_CONST, supplied),
+						ClojureLowering.AMPERSAND_REST, items)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("reduce"), step, items,
+								ClojureLowerUtil.sym(":initial-value"), coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"))));
 	}
 
 	static LispVal disjOf(ClojureLowering ctx, List<LispVal> items) {

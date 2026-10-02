@@ -65,7 +65,10 @@ or have no option to honor (the playground).
 its site already reads through (`SourceLanguage.schemeFiles` adapts it, resolving against
 the naming file's directory like `load`), for `include` and `define-library` files
 (`.kb/scheme-frontend.md`, "Libraries and include"); `SourceSession` takes one the same
-way. A read with no loader names no file. A Common Lisp read ignores it.
+way. A Clojure read gets the same loader through `SourceLanguage.clojureFiles`, for the
+project namespaces a `require` loads and the `deps.edn` naming their roots
+(`.kb/clojure-frontend.md`, "Namespaces and project files"). A read with no loader names
+no file. A Common Lisp read ignores it.
 
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.

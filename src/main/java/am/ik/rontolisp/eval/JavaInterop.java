@@ -544,14 +544,29 @@ final class JavaInterop {
 	// (compiler/JavaImplementations.proxy, which a compiled program's generated class
 	// declares).
 	static LispVal proxy(String interfaceName, LispVal callable, Caller caller) {
-		ReflectiveJavaClasses.Type type = loadClass(interfaceName);
-		if (!type.isInterface()) {
-			throw new LispEvalException(JavaImplementations.notAnInterface(true, interfaceName));
+		return proxy(List.of(interfaceName), callable, caller);
+	}
+
+	// (java:proxy "I" "J" ... callable): one object implementing every interface, each
+	// method of each calling the callable by its name.
+	static LispVal proxy(List<String> interfaceNames, LispVal callable, Caller caller) {
+		List<JavaType> types = new ArrayList<>();
+		List<Class<?>> classes = new ArrayList<>();
+		for (String interfaceName : interfaceNames) {
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.notAnInterface(true, interfaceName));
+			}
+			if (types.contains(type)) {
+				throw new LispEvalException(JavaImplementations.repeatedInterface(interfaceName));
+			}
+			types.add(type);
+			classes.add(type.type());
 		}
-		List<Object> key = List.of(type.type(), PROXY_KEY);
+		List<Object> key = List.of(classes, PROXY_KEY);
 		Dispatch dispatch = IMPLEMENTATIONS.get(key);
 		if (dispatch == null) {
-			dispatch = new Dispatch(JavaImplementations.proxy(type, CLASSES));
+			dispatch = new Dispatch(JavaImplementations.proxy(types, CLASSES));
 			remember(IMPLEMENTATIONS, key, dispatch);
 		}
 		return implement(dispatch, List.of(callable), caller);
@@ -600,10 +615,40 @@ final class JavaInterop {
 
 	// The object: a Proxy whose handler dispatches on the implementation's slots.
 	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller) {
-		Class<?> iface = ((ReflectiveJavaClasses.Type) java.util.Objects
-			.requireNonNull(dispatch.implementation.iface())).type();
-		return new LispJavaObject(Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface },
+		List<JavaType> types = dispatch.implementation.interfaces();
+		Class<?>[] interfaces = new Class<?>[types.size()];
+		for (int i = 0; i < interfaces.length; i++) {
+			interfaces[i] = ((ReflectiveJavaClasses.Type) types.get(i)).type();
+		}
+		return new LispJavaObject(Proxy.newProxyInstance(proxyLoader(interfaces), interfaces,
 				new ImplementationHandler(dispatch, functions, caller)));
+	}
+
+	// The loader a Proxy class over the interfaces is defined in: the first of theirs
+	// that
+	// sees every one of them.
+	private static @Nullable ClassLoader proxyLoader(Class<?>[] interfaces) {
+		for (Class<?> candidate : interfaces) {
+			ClassLoader loader = candidate.getClassLoader();
+			if (seesAll(loader, interfaces)) {
+				return loader;
+			}
+		}
+		return interfaces[0].getClassLoader();
+	}
+
+	private static boolean seesAll(@Nullable ClassLoader loader, Class<?>[] interfaces) {
+		for (Class<?> iface : interfaces) {
+			try {
+				if (Class.forName(iface.getName(), false, loader) != iface) {
+					return false;
+				}
+			}
+			catch (ClassNotFoundException ex) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -635,9 +680,8 @@ final class JavaInterop {
 
 		Dispatch(JavaImplementation implementation) {
 			this.implementation = implementation;
-			JavaType iface = java.util.Objects.requireNonNull(implementation.iface());
-			this.kind = CLASSES.implementationOf(iface);
-			this.ifaceName = iface.name();
+			this.kind = CLASSES.implementationOf(implementation.interfaces());
+			this.ifaceName = implementation.interfaceNames();
 			for (JavaImplementation.Slot slot : implementation.slots()) {
 				this.slots.put(slot.dispatchKey(), slot.implementation());
 			}

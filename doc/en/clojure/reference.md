@@ -13,7 +13,7 @@ has them.
 | [Seqs](reference/seqs.md) | The seq family, lazy where taken and strict otherwise |
 | [Iteration](reference/iteration.md) | `doseq`/`dotimes`/`for` and the strict `dorun`/`doall` |
 | [Maps, sets and vectors](reference/collections.md) | The persistent collection verbs over `equal` hash tables |
-| [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` |
+| [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline`, `juxt`/`fnil`/`every-pred`/`some-fn`/`min-key`/`max-key` |
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |
 | [Multimethods and hierarchies](reference/multimethods.md) | `defmulti`/`defmethod`, `derive` and the hierarchy reads |
@@ -24,6 +24,7 @@ has them.
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
+| [Transducers](reference/transducers.md) | `transduce`/`eduction`/`sequence`/`completing`, `reduced` and its companions, `cat`, and the one-argument arities of the seq verbs |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
 | [Tests (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` and the `run-tests` summary runner |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

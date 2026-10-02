@@ -19,10 +19,13 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   `ClojureUpdateLowering`, `ClojureStringLowering`, `ClojureStateLowering`,
   `ClojureDispatchLowering` / `ClojureHierarchyLowering` /
   `ClojureProtocolLowering`, `ClojureMacroLowering`, `ClojureNamespaceLowering`,
-  `ClojureInteropLowering`, `ClojureTestLowering`, each taking the hub as its first argument and
+  `ClojureInteropLowering`, `ClojureTestLowering`, `ClojureCoreLowering` (the b57
+  backlog), `ClojureTransducerLowering` (b60), each taking the hub as its first argument and
   re-entering it for subforms) and the stateless `ClojureLowerUtil`,
   `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
-  (the REPL session). The hub is the named cycle root in `PackageCycleTest`
+  (the REPL session), `ClojureNsState` (one namespace's wiring and interns),
+  `ClojureSourcePath` + `ClojureFiles` (where a required namespace's file is found, and
+  the seam's file access -- "Namespaces and project files" below). The hub is the named cycle root in `PackageCycleTest`
   (recursive-descent lowering, like the two expression compilers).
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked for `.clj` or
   by `--source-language clojure` (`clj`) (`.kb/source-language.md`). Per FILE, so a
@@ -41,12 +44,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 | Clojure | lowers to | why |
 |---|---|---|
-| identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
+| identifier `foo` | symbol `c%foo`, always prefixed; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace ("Namespaces and project files" below) |
 | `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name holding a real function (a `let` binding of one, a `def`'d one) is a `funcall` of the value cell instead, while any other variable goes through the prelude dispatcher (`rontolisp::%clojure-call`: functions through `apply`, collections through their lookup, like `IFn`), so higher-order `defn` parameters run on collections too; a `declare`d-but-never-defined name keeps its direct-call error; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position). A `^:dynamic` one keeps its `defun`(s) and installs the function in the value cell behind a `defparameter` of it, so calls route through the value cell (a `funcall`, like a `def`'d function) and `binding` rebinds it with dynamic extent; `recur` and the arity-dispatch helpers stay direct calls to the function cell. The pre-scan registers a `^:dynamic` `defn` name as a variable, so even a forward call routes through the value cell |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
 | `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
-| syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | every symbol qualifies behind `c%` (the documented deviation: no namespaces); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
-| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names |
+| syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | a symbol naming a var the defining namespace sees (own or referred; locals are no vars at read time, like the oracle) qualifies as `ns/name`, `user/` included (b56), so the expansion reaches it from any namespace; a core name and an unresolved symbol stay bare (the documented deviation: the oracle spells `clojure.core/let`, `user/x`); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
+| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals and the call site's macro scope | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only; strings and keyword wrappers stay themselves -- b56 fixed `C%DEMANGLE` walking a string as a character vector); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names; a head resolves through the call site's namespace (b56): the lowering hands a quoted alist of the spellings the table global cannot spell itself (a bare own macro outside `user`, a bare referred one, an alias-qualified one) to its table global, and a `user/m` spelling reads as `c%m%macro` |
 | `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
 | `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it); the value lowers against the OLD binding first, so `(def p (memoize p))` after a `(defn p ...)` captures the function cell (`#'c%p`), not the still-unbound value cell (decided 2026-10-02, b52) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding, an anonymous one the same binding only when a `recur` reaches it | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites; a `recur` in any `fn` body (named or not) calls the enclosing clause directly, checked against its arity (decided 2026-10-01, b17) |
@@ -77,15 +80,15 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `binding` | `let*` over the bound names, sequentially like `let` | only `^:dynamic` vars (and `*out*`) may be bound -- anything else is the oracle's non-dynamic error as a named refusal; a `^:dynamic` `def`/`defonce` lowers to `defparameter` (always sets, like `def`, and proclaims the special, so the `let*` rebinds with dynamic extent); a `^:dynamic` `defn` keeps its `defun`(s) and adds a `defparameter` of the function, so its calls go through the value cell and the `let*` rebinds them the same way (`recur` still jumps straight to the function cell, like the oracle); the body closes over the scope the same way; the body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
-| `defn-` | `defn`, private by convention only | metadata never affects dispatch, so there is nothing to enforce |
-| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
+| `defn-` | `defn` of a private var | private like `^:private` (b56): `use`/`:refer :all` never refer it, `:refer [x]` of it is the oracle's `x is not public`, and a qualified reference from another namespace is the oracle's compile error `var: #'n/x is not public`; inside its namespace it is an ordinary `defn` |
+| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the plain body (the oracle's bare `do`, no barrier); a non-empty body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
 | `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
 | `*out*`/`*in*` | `*standard-output*`/`*standard-input*`, not mangled names | the streams the print family writes to / reads from; `binding` may rebind either, like any special (decided 2026-10-01, b20) |
 | `.write`/`.flush`/`.readLine` on a stream | `princ` (nil signals, like the oracle's NullPointerException -- b55) / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
-| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | a bare library symbol names one library like the oracle (`(:use clojure.test)` refers it all; b55 -- it used to set a prefix and wire nothing), a `:reload`/`:reload-all`/`:verbose` flag is skipped, and a `:refer`/`:only`/`:exclude` list spells names like a vector (the oracle's `(reader)`); `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test` resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
+| `ns`/`require`/`use`/`import`/`in-ns` | alias and refer wiring of the current namespace, a project namespace's file lowered ahead of the form (b56) | see "Namespaces and project files" below for the var model, the source path and loading; a bare library symbol names one library like the oracle (`(:use clojure.test)` refers it all; b55 -- it used to set a prefix and wire nothing), a `:reload`/`:reload-all`/`:verbose` flag is skipped, and a `:refer`/`:only`/`:exclude` list spells names like a vector (the oracle's `(reader)`); `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test` resolve (see below); any other `clojure.*` namespace is refused by name (`unknown namespace: clojure.set`), any other namespace is a project one; names are referred only by `use` or a `:refer` option -- a `require` with a bare `:only`/`:exclude` refers nothing, the oracle's `load-lib` (b56; it used to refer the `:only` list); `in-ns` switches the namespace, answering `nil` |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` take pattern values (around matches, through the regex runtime) as well as literal strings and characters (a plain string never compiles -- the b08 literal-only position holds for strings, pinned by `string-replace-and-split-stay-literal`); an empty literal-`split` input is nil (a pattern answers one empty part, like the oracle); a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
 | `clojure.test` (`deftest`/`deftest-`/`is`/`are`/`testing`/`run-tests`/`run-all-tests`/`successful?`) | `ClojureTestLowering` over the spliced `rontolisp::%clojure-test-*` runtime in `clojure.lisp` | see "clojure.test" below; `use-fixtures` refused by name, a macro var as a value is the oracle's `Can't take value of a macro` |
@@ -109,13 +112,13 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | metadata (`^`, legacy `#^`) | the reader's `(with-meta form meta)`, parsed and dropped | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
-| `proxy` | `java:proxy` with a name-dispatching lambda | a single interface and no constructor arguments; each `(method [params...] body...)` becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`); a superclass, constructor arguments, several interfaces and multi-arity methods are refused by name; interpreter and JVM only, like all interop |
+| `proxy` | `java:proxy` over every interface of the vector, with a name-dispatching lambda | one or more interfaces (b59) and no constructor arguments; each `(method [params...] body...)` (an empty body answers `nil`) becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`), so a name several interfaces declare runs the one body, as the oracle's proxy does; a method left out raises `no proxy method: <name>` when called (the oracle: `UnsupportedOperationException` with the name); refused by name: a class in the vector (`isHostClass`, a lowering-time `Class.forName`; a name that does not load is left to `java:proxy`'s run-time error), constructor arguments, `toString`/`equals`/`hashCode` (`java:proxy` keeps `Object`'s three, so the body would never run -- the oracle runs it), multi-arity methods; all of the refused shapes are b71; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
 | `not` | an explicit null-or-false check answering `T`-or-false | |
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
 | `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
 | `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false | as values, lambdas answering `T`-or-false too (every predicate value does, so `(map odd? [1 2])` prints `(true false)` like the oracle) |
-| `map`/`filter`/`reduce`/`apply`/`concat` | `rontolisp::%clojure-map`/`-filter` over the collections, `reduce`/`apply` over the seq view, `rontolisp::%clojure-concat` over the member list | `map` takes any number of collections (stopping at the shortest, like the oracle) and answers a lazy wrapper when any input is lazy, the strict list otherwise; `filter`/`concat` likewise (a false object drops like nil); lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
+| `map`/`filter`/`reduce`/`apply`/`concat` | `rontolisp::%clojure-map`/`-filter` over the collections, `reduce`/`apply` over the seq view, `rontolisp::%clojure-concat` over the member list | `map` takes any number of collections (stopping at the shortest, like the oracle) and answers a lazy wrapper when any input is lazy, the strict list otherwise; `filter`/`concat` likewise (a false object drops like nil); lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`), one call to the spliced `%clojure-reduce`/`-reduce-init` (b60), which walk the seq view one element at a time (a lazy input reduces whole; it used to fold the wrapper's own cells) and stop at a `reduced` answer; the runtime funcalls, so a function form that may hold a collection is wrapped over the dispatcher at the call site and a plain reduce carries no dispatcher; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
 | `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over `rontolisp::%clojure-seq`, the view itself, `rontolisp::%clojure-cons` onto the collection | a seq is a list view that realizes a lazy wrapper one level and coerces strictly otherwise (b11): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; `cons` onto a lazy collection answers a wrapper, so no strict cons ever holds a lazy tail; non-listed verbs consume one level through the view (pass a `take`n prefix) |
 | `nth` (2/3-arity) | the seq view indexed, past the end the default | the 2-arity answers nil past the end where the oracle throws; as a VALUE a lambda with the Clojure order (`(lambda (c i) ...)`), since a bare `#'NTH` takes the index first |
 | `quot` | `truncate` | as a VALUE a two-argument lambda over `truncate` |
@@ -132,7 +135,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `sort`/`sort-by` | `sort` over a copy with the default or wrapped comparator | the default orders numbers, strings, characters and keywords (anything else signals); a comparator runs on truthiness through the null-or-false test; as values rest lambdas |
 | `last`/`butlast`/`second` | `car` of `last` / `butlast` / `cadr` over the seq view | of empty, nil; as values one-argument lambdas |
 | `mapv`/`filterv` | `rontolisp::%clojure-mapv`/`-filterv` over the fully realized lists, coerced to vectors | strict vectors, never lazy wrappers (lazy inputs realize fully); `filterv` tests Clojure truthiness like `filter`; `class` pins the vector answer; as values a rest lambda (`mapv`) / a two-argument lambda (`filterv`) |
-| `mapcat` | `rontolisp::%clojure-mapcat`: the mapped seq views realized and appended | strict concat-of-maps, nil-safe like `concat` (a nil result contributes nothing); a lone function is the oracle's transducer shape and stays refused; as a value a rest lambda |
+| `mapcat` | `rontolisp::%clojure-mapcat`: the mapped seq views realized and appended | strict concat-of-maps, nil-safe like `concat` (a nil result contributes nothing); a lone function is the transducer (b60); as a value a rest lambda |
 | `ffirst`/`nfirst` | `car`/`cdr` of the seq of the `car` of the seq view | each level seqs (a vector head coerces before its own head is read); of empty, nil; as values one-argument lambdas |
 | `boolean` | the null-or-false test answering `T`-or-false | only nil and the false object are falsey (0, empty strings and empty collections are truthy); as a value a one-argument lambda |
 | `char` | `rontolisp::%clojure-char`: itself for a character, `code-char` of the truncated number | anything else signals, like the oracle; as a value a one-argument lambda |
@@ -144,7 +147,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `shuffle` | `rontolisp::%clojure-shuffle`: Fisher-Yates over the realized members coerced to a fresh vector | membership and count pin, never order; nil, strings and maps signal (none shuffle on the oracle either); as a value a one-argument lambda |
 | a set/map/vector literal in call position, or as a function value | the member / table-aware read / `nth` with an optional default | `(#{:h} :h)` is `:h`, `({:a 1} :b :d)` is `:dflt`, `([10 20] 5 :d)` is `:d` (the `nth` past-the-end-is-default position); `(filter #{:h} ...)` runs through the same lambda |
 | `update`/`update-in`/`assoc-in`/`get-in` | a fresh table over the old pairs with the rewritten pair / the nested walk, rewrapped in the record it came from | `update` applies `(apply f (get m k) args...)`; `update-in` recurses (an empty key vector is refused, like the oracle's throw); `assoc-in` builds missing levels (no keys associates under nil, like the oracle); `get-in` threads the default through every level; records read and rewrite through the entry table, keeping the type; as values lambdas walking the key sequence at run time |
-| `select-keys`/`merge-with`/`into`/`frequencies` | a fresh table over the present keys / grown map by map through `f` / a `conj` fold / one `dolist` pass | `select-keys` of nil is the empty map; `merge-with` of no maps is nil (a transducer argument is refused); `into` targets lists/vectors/maps/sets; a record reads through its entry table -- `select-keys` and `into {}` answer plain maps (like the oracle), `merge-with`/`into` onto a record keep the type (like `merge`/`conj`); as values lambdas, with `merge-with`'s reading each rest map through its entry table and rewrapping the accumulator in the first rest map's record (a `nil` first map answers a plain map, like the oracle -- measured 2026-10-01) |
+| `select-keys`/`merge-with`/`into`/`frequencies` | a fresh table over the present keys / grown map by map through `f` / a `conj` fold / one `dolist` pass | `select-keys` of nil is the empty map; `merge-with` of no maps is nil; `into` targets lists/vectors/maps/sets, through the reduce runtime (a lazy source pours in whole), and `(into to xform from)` is the spliced `%clojure-into-xf`, the oracle's `(transduce xform conj to from)` (b60); a record reads through its entry table -- `select-keys` and `into {}` answer plain maps (like the oracle), `merge-with`/`into` onto a record keep the type (like `merge`/`conj`); as values lambdas, with `merge-with`'s reading each rest map through its entry table and rewrapping the accumulator in the first rest map's record (a `nil` first map answers a plain map, like the oracle -- measured 2026-10-01) |
 | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` | right-nested closures / fixed-plus-rest closures / the negated predicate / the kept value / the value itself / an `equal`-tabled closure / a labels self call over thunks | no functions is `identity` for `comp`; `complement` answers `T`-or-false; `memoize` keys the argument list structurally; `trampoline` invokes zero-argument results until a non-function answers; each a function value too |
 | `when-let`/`if-let`/`when-not`/`if-not`/`when-first` | `let*` pairs over one temporary plus `if` on null-or-false | `when-let`/`if-let` destructure like `let` (testing the whole init); `when-not`/`if-not` swap the branches; `when-first` binds the head of the seq view |
 | `coll?`/`string?`/`symbol?` | `or` over the shapes / `stringp` / `symbolp` minus the booleans and nil | `coll?` excludes strings (which the runtime stores as vectors) and nil, like the oracle; as values lambdas answering `T`-or-false |
@@ -160,7 +163,10 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
 | `count` | a table-aware length | maps, sets and records answer `hash-table-count` (records their entries), a deftype or reify signals (a bare length would answer the wrapper's size), everything else `length` |
 | `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/record/vector/string are empty; a deftype or reify signals, like the oracle's `seq` throw |
-| `=`/`not=` | the spliced `rontolisp::%clojure-equal` over each neighbouring pair, answering `T`-or-false (as values `%clojure-equal-values` / its negation) | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; two sequentials (lists, non-string vectors, lazy seqs, and nil as the empty list) compare element by element across kinds, like the oracle (decided 2026-10-02, b55: the inline labels compared vectors with `equal`, i.e. by identity, so `(= [1 2] [1 2])` was false -- the corpus test files compare vectors with seqs in nearly every assertion); `(= [] nil)` is therefore true where the oracle answers false; anything else is `equal`. One shared callee instead of a labels per call site: `(println (= 1 1))` 34,905 -> 33,016 B of wasm, five `=` calls 55,911 -> 34,395 B (2026-10-02, raw module totals) |
+| `=`/`not=` | the spliced `rontolisp::%clojure-equal` over each neighbouring pair, answering `T`-or-false (as values `%clojure-equal-values` / its negation) | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; two sequentials (lists, non-string vectors, lazy seqs, and nil as the empty list) compare element by element across kinds, like the oracle (decided 2026-10-02, b55: the inline labels compared vectors with `equal`, i.e. by identity, so `(= [1 2] [1 2])` was false -- the corpus test files compare vectors with seqs in nearly every assertion); `(= [] nil)` is therefore true where the oracle answers false; anything else is `equal`. One shared callee instead of a labels per call site: `(println (= 1 1))` 34,905 -> 33,016 B of wasm, five `=` calls 55,911 -> 34,395 B (2026-10-02, raw module totals) Measured 2026-10-02 (b57, x86-64, Java 25, raw wasm totals) against the inlined labels form per site it replaced: 36,790 -> 17,595 B for one `(println (= 1 2))`, 87,050 -> 34,004 B for ten sites |
+| the b57 backlog: `drop-last`/`split-at`/`split-with`/`take-last`/`nthnext`/`nthrest`/`peek`/`pop`/`not-empty`/`dedupe`/`partition-all`/`partition-by`/`min-key`/`max-key`/`juxt`/`fnil`/`every-pred`/`some-fn`/`update-keys`/`update-vals`/`reduce-kv` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker (`min-key`/`max-key` share `%clojure-extreme-key`) after a lower-time arity check worded like the oracle (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, a `&rest` entry checking the count at run time with the same wording | `dedupe`/`partition-all`/`partition-by`/`drop-last` answer a lazy wrapper over a lazy input and a strict list otherwise (`%clojure-lazy-or-strict`); `split-at`/`split-with` a two-vector, `take-last` a realized strict list; `dedupe`/`partition-by` compare with `%clojure-equal`; the transducer arities (`(dedupe)`, one-argument `partition-all`/`partition-by`) are transducers (b60), the `-v` entries included; a non-positive `partition-all` size or step signals (the oracle answers an endless seq of `()`); `peek`/`pop` take non-string vectors and plain lists (a strict seq is a list here, so it peeks where the oracle's LazySeq throws), `(pop [])` is the oracle's `Can't pop empty vector`; `some-fn` answers exactly the oracle's failing value (the last `(p x)` for one or two predicates over at most three arguments, else nil; argument-major for one or two predicates, predicate-major for three or more); `fnil`'s answer needs as many arguments as defaults (`.../fnil/fn`, no class-number suffix); `reduce-kv` walks maps/records/vectors (index keys), nil answers the init, a `reduced` answer stops it (b60); `update-vals` keeps a vector a vector, `update-keys` keys a vector by index; type errors signal with the CL wording, not the oracle's ClassCastException text (that names JVM classes) |
+| `pmap` | `map` (`ClojureSeqLowering.mapForm`, as a value `mapValue`) | decided 2026-10-02, b57: no thread pool on any backend, the printed seq is the oracle's; the arity refusal is the oracle's wording |
+| a call to a core name the program defines (`(defn peek ...)`) or binds locally | the program's own call | b57: `call` checks `known(name)` before the core switch (and before the `re-*` names), like the value position always did -- a `(defn second ...)` used to lose its call sites to the core verb; the whole-file pre-scan makes a definition shadow calls ABOVE it too, where the oracle's still reach the core verb (documented deviation) |
 | `{k v ..}` | `rontolisp:plist-hash-table` over the lowered pairs | an `equal` table, never mutated in place: every verb builds a fresh one |
 | `#{..}` | an `equal` table holding each member under itself, wrapped as `(:C%SET table)` | the wrapper tells verbs a set from a map; a repeated literal element is refused by spelling (`Duplicate key`) |
 | `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys, rewrapped in the record it came from | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused; `assoc` keeps the record's tag and fields, like the oracle; `dissoc` keeps the record while every declared field is still present and drops to a plain map otherwise (removing a base field drops the type, removing an extension key keeps it), like the oracle; as values a map plus a rest list of pairs/keys (an odd `assoc` rest count signals at run time) |
@@ -182,8 +188,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | a keyword in call position `(:k m)` / `(:k m dflt)` | the same table-aware read `get` lowers to | the idiomatic map lookup, over b02's map runtime (sets answer their member, vectors/strings their element) |
 | a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a rest-tolerant lookup lambda over the same read (the second call argument is the default, extras ignored) | `(map :k coll)` reads the key out of each member; a keyword-dispatched multimethod takes several call arguments, like the oracle (decided 2026-10-01, b39 -- the value was a one-argument lookup and signalled) |
 | a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole |
-| `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil -- the namespace stays flat, every definition still global); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
-| a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; metadata on the name, a docstring and an attr map are skipped (b58); clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
+| `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
+| a bare `(ns name)` | nothing, but switches to the namespace | a namespace declaration defines nothing itself; the definitions below it belong to the namespace, which it creates and marks loaded (b56); metadata on the name, a docstring and an attr map are skipped (b58); clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements (each element's own quote form, so a symbol or list stays data); a quoted list holding a vector, map, set or regex literal at any depth is a `list` construction over the element forms (b55: the construction code used to land in the list as data, so `'(1 [2])` printed `(1 (VECTOR ...))` -- the `is` expected-form shape) |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
 | transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
@@ -233,7 +239,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 - Vector and table keys compare by identity, not structurally: the runtime's `equal`
   on an array or a table IS identity (`.kb/hash-tables.md`), so
   `(get {[:a] 1} [:a])` misses here and answers `1` there, and a vector member never
-  finds its set. Lists, strings, numbers and keywords key structurally.
+  finds its set. Lists, strings, numbers and keywords key structurally. `=` itself is
+  structural (`%clojure-equal`): only hash lookups keep the identity.
 - A set literal refuses a repeated element BY SPELLING (`Duplicate key: 1`): two
   differently-spelled elements that are equal at run time still dedupe silently, and
   the spelling names the datum as the reader prints it.
@@ -250,7 +257,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   per object, `take`/`drop`/`first`/`rest`/`next`/`seq`/`map`/`filter`/`concat` realize
   through it, printing refuses with `#<LazySeq>` instead of hanging, never a bare
   infinite print); there is no chunking, so an end-less `range` stays refused by name
-  (spell it with `iterate`). Lazy inputs to the other seq verbs consume one level --
+  (spell it with `iterate`). `reduce`, `into` and the transducer consumers walk a lazy input
+  whole (b60). Lazy inputs to the other seq verbs consume one level --
   pass a `take`n prefix.
 - protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` and `var`/`#'`
   stay absent, each refused by name (backquote lowered in b12, below; regex
@@ -354,6 +362,89 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   `*out*`/`*in*` are `*standard-output*`/`*standard-input*`; `defonce` keeps the root where `def` resets
   it; refs and atoms share the cell, so STM verbs accept atom cells.
 
+## Namespaces and project files (b56)
+
+Decided 2026-10-02 against `clj` 1.12.6.1673 (run on the same files with
+`-Sdeps '{:paths ["src" "test"]}'`). **Every namespace has its own vars.** A var is keyed
+`ns/name` in every program-wide table (`globals`, `macros`, `protocols`, `types`,
+`dynamicVars`, `globalDirectFuns`, `classDispatchFns`; `ClojureLowering.varKey`) and lowers to
+`c%ns/name` (`varSym`) -- except `user`'s, `c%name`, so a program without an `ns` lowers as
+before and a Common Lisp file calls its functions as `(c%name ...)`, a namespaced file's as
+`(|c%my.ns/name| ...)`. A quoted `'n/x` is the symbol of var `n/x` (what syntax-quote relies
+on); the JVM method mangle spells `/` and `.`. A local never carries a namespace.
+
+- **Resolution** (`lookupVar`, `resolveVar` adding the privacy refusal; locals first, in
+  the callers): unqualified, the current namespace's intern, then a refer to a project var;
+  qualified, the head as an alias of the current namespace, the current namespace, or any
+  namespace an `ns`/`in-ns` created (`createdNamespaces`) by its full name. `known`,
+  `isFunction`, `isMacro`, `isDirectVar` and `symOf` go through it, so every slice takes a
+  name as written. Another namespace's private var (`defn-`, `^:private`) is `var: #'n/x is
+  not public`; a qualified name whose head is a project namespace lacking the var is
+  `No such var: l/nope` (`refuseMissingVar`), never a class.
+- **Per-namespace wiring** (`ClojureNsState`): aliases, refers, imports, the
+  `:refer-clojure` filter and the interns with their privacy. The pre-scan follows `ns` and
+  `in-ns`; a definition replaces a refer of its name (the oracle warns and replaces).
+  `binding` rebinds the var's own symbol and adds no local, so the body reads the special.
+- **Records** keep the simple-name dispatch tag (deviation: two namespaces' `R` share it);
+  `types` is keyed by var key and `typeKeyOf` resolves a class spelling: own, an imported or
+  dotted name matching `TypeDef.className`, else the only one of that simple name (the flat
+  leniency kept). `(R. ...)`/`(new R ...)` call the defining namespace's `->R`.
+- **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
+  `ns` form marks its namespace loaded AFTER its clauses ran (the oracle's `ns` adds
+  `*loaded-libs*` last; marking first hid the cycle), so a single-file program's later
+  `(:require [a])` reads nothing -- the `clojure-spec.yaml` case runs on all four backends
+  for that reason. Any other non-library namespace reads `my_app/core.clj`, lowers both
+  passes from a clean cursor (no local, recur target, `try` depth or syntax gensym of the
+  requiring form leaks in; all restored after), starting in the requiring namespace like
+  the oracle's `load` (a file without `ns` defines there). Its forms are HOISTED ahead of
+  the top-level datum that loaded it (`hoisted`, drained by `topLevels`); once per lowering.
+  An unknown `clojure.*` stays `unknown namespace`. Refusals in the oracle's words:
+  `Could not locate a/b.clj on the source path: <roots>`, `Cyclic load dependency: [ /a
+  ]->/b->[ /a ]` (newest request first, then the loading stack innermost first),
+  `namespace 'x' not found after loading '/x'`, `x does not exist`, `x is not public`.
+- **The source path** (`ClojureSourcePath`, on the first project require only): the root
+  the entry file's namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; the
+  file's directory when the path does not spell the namespace; the working directory for a
+  session), then the `:paths` of the nearest `deps.edn` walking up from the entry file's
+  directory (read by `ClojureReader` as EDN; `["src"]` when absent or unreadable, alias
+  keywords skipped), else `src` under the working directory -- the `clj` default. Chosen over
+  a `--source-path` flag: `deps.edn` is the oracle's own declaration, so a project runs with
+  no new option. Files come through `ClojureFiles` (the `SchemeFiles` shape):
+  `eval/SourceLanguage.clojureFiles` adapts the site's loader (the parent is absolutized so
+  the walk passes the top of a relative entry path); no loader is `NONE`, refused by name.
+- **Hoisting is the measured deviation**: the corpus `preface` test
+  (`(with-out-str (use :reload 'examples.preface))` inside a `deftest`) prints its
+  `hello` ahead of the test form and captures `""`. Loading at the `require` site
+  (`:reload`, once per program across separately lowered files) is .todo/b72: one init
+  function per namespace hits the JVM's 64 KB method and wasm's body cap for a large
+  namespace (top-level forms are chunked, a lambda body is not), `GlobalVarCollector` sees
+  a `setq` only nested in a top-level non-`defun` form, and `SpecialVarCollector` reads
+  `defparameter` only at a form's head.
+- **Syntax-quote** resolves through `lookupVar` (no locals, no privacy: the refusal belongs
+  to the expansion's site, like the oracle's compile); see the row above.
+
+Corpus (2026-10-02, the 27 `code/test/**` namespaces of shcloj4, each through a driver
+`(require 'ns) (clojure.test/run-tests 'ns)` read from `test/`, the project's own `deps.edn`
+naming `src`; no inlining any more): 10 print the oracle's bytes (`chat` -- its tests are
+named like the functions under test -- joins the b55 nine). `preface` fails on the hoisting
+above; the 7 `macros*` fail only on the uppercase `macroexpand` answer (.todo/b73: their
+expansions are otherwise the oracle's, `examples.macros.chain-4/chain` qualified); the rest
+stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
+stack overflow, `clojure.set`, `proxy` over a class -- measured after b57/b59/b60 merged).
+The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
+`replace-symbol`s apart), and `concurrency` over `examples.chat :refer :all` until `spit`
+of a non-string (.todo/b74).
+
+Pinned by `ClojureProjectNamespacesTest` (a `deps.edn` project in a temp dir: the entry under
+`test/`, aliases, refers, `use :only`, a file without `ns`, a second `require`, the chat
+shape under `clojure.test`, on the interpreter, the JVM and both wasm backends; the
+refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce`,
+`eachNamespaceHasItsOwnVars`, `requireRefersOnlyThroughReferOrUse`,
+`syntaxQuoteQualifiesTheVarsItsNamespaceSees`, `macroexpandCarriesTheCallSitesMacroScope`,
+over `MemoryClojureFiles`), `ClojureSessionTest` (a buffer's require, a later buffer's
+call), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
+`macroexpand-keeps-strings-and-keywords`, every line the oracle's but the expansion's case).
+
 ## clojure.test (b55)
 
 Decided 2026-10-02 against `clj` 1.12.6.1673. The shapes are the oracle's macro expansions,
@@ -407,10 +498,13 @@ oracle on the real project): 9 agree with the oracle's summary line (`fail`, `in
 `macros`), a lazy `for` input (`lazy-index-of-any`), and `chat`, whose test names equal the
 functions under test (a `deftest` redefines them in the flat namespace, b56); 9 stop at
 other gaps: `meta`/`#'` (`introduction`, `exploring`), `drop-last` (b57, `sequences`),
-multi-interface `proxy` (b59, `snake`), `String` as a value (`multimethods`, `interop`),
+`proxy` over a class (b71, `snake`: `[JPanel ActionListener KeyListener]`; since b59 it
+stops at `proxy over a class is not supported yet: javax.swing.JPanel`, not at the interface
+count), `String` as a value (`multimethods`, `interop`),
 `read` (`concurrency`), project-local namespaces (b56, `preface`), the host stack overflow
 (`functional`). The 153,129 B raw wasm of a one-test program
 (`(deftest a (is (= 1 1))) (run-tests)`) is the printer plus the EH-mode handlers.
+Superseded by the b56 run without inlining ("Namespaces and project files" above).
 
 ## A session
 
@@ -423,10 +517,15 @@ earlier `defn`'s function cell, like the same two forms in one file). `SourceSes
 printer (the `ECHO` shape, readable), and decides completeness by bracket counting over `()[]{}` 
 (outside strings and `;` comments) plus a reader probe for a trailing dispatch prefix
 (`'`, `` ` ``, `~`, `@`, `^`, `#'`, `#_`, `#(`).
+A buffer's `require` loads a project namespace from the working directory's source path
+(`SourceSession` hands its loader through `SourceLanguage.clojureFiles`); its forms ride
+with that buffer, a later `require` loads nothing, and an `ns` buffer echoes nothing
+(b56).
 
 ## Tests
 
 `ClojureReaderTest`, `ClojureLoweringTest` (b55: `clojureTest*`), `ClojureSessionTest`,
+`ClojureProjectNamespacesTest` (b56: programs split across files, all four backends),
 `ClojureSpecE2eTest` (the interpreter, the JVM and both WASM backends over
 `src/test/resources/clojure-spec.yaml` -- one case per lowering-table row and per
 builtin group, concatenated into one program and sliced back per case, the
@@ -526,13 +625,13 @@ the interop gaps lower the same way (b08): `derive`/`underive`/`isa?`/
 binding (the unified dispatcher searches `isa?` candidates on a miss, most
 specific wins, then preferences), `ex-info`/`ex-data`/`ex-message` over a
 condition with message and data slots (`throw` signals one as its own
-condition), `memfn` as a lambda over the instance call, single-interface
-`proxy` through `java:proxy`, and the literal-only string position beside the
+condition), `memfn` as a lambda over the instance call, `proxy` of one or
+more interfaces (b59) through `java:proxy`, and the literal-only string position beside the
 pattern arms -- each pinned in `clojure-spec.yaml` (run on all four backends)
 or, for the interop legs (`proxy`, host-object `memfn`, literal `String/split`),
 in `ClojureInteropTest`; what stays refused (`definterface`/`gen-class`/`gen-interface`,
 multi-arity protocol methods, `:extend-via-metadata`, `set!`,
-`var`/`#'`, metadata `^`, multi-interface `proxy`)
+`var`/`#'`, metadata `^`, `proxy` over a class or naming an `Object` method)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else
 through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
@@ -571,7 +670,7 @@ higher-order family (`comp`/`partial`/`complement`/`constantly`/`identity`/
 in `clojure-spec.yaml` (run on all four backends; the corpus slices are
 `keep-indexed` `index_of_any`, `map-indexed` `exploring`, `partition`/`comp`/
 `partial`/`every?` `functional` `count-runs`, `update-in` `note`), the refusals
-(`clojure.spec`/`xml` namespaces, transducers,
+(`clojure.spec`/`xml` namespaces,
 `file-seq`/unknown-`clojure.java.io`-fn, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
 (interpreter and JVM in `ClojureInteropTest`, the wasm preopen case in `ClojureWasmFileIoTest`,
 the un-preopened refusal in `ClojureWasmFileRefusalTest`)
@@ -630,7 +729,7 @@ refusal), `ClojureInteropTest` (the corpus slices: `blank?` from `introduction`,
 `painstakingly-create-array` from `interop`, `take-guess` from `hangman` over a
 mocked `*in*`, interpreter and JVM) and `ClojureWasmInteropRefusalTest` (both wasm
 backends refuse the `java:` legs with the undefined-function call-time error);
-multi-interface `proxy` plus `proxy-super` stay refused (the snake GUI files stay
+`proxy` over a class plus `proxy-super` stay refused (b71; the snake GUI files stay
 non-goals, b16). The host-boolean slice lowers the same way (b29, oracle `clj`
 1.12.6.1673): an instance call on a construction literal -- on a `let` local bound to one, and since b34 on an `if-let`/`when-let` local bound to one or on a `..` step single declared return --
 whose overloads at that arity all answer a primitive boolean answers
@@ -723,6 +822,59 @@ any of it, `(println (+ 1 2))`, is 9,581 B -- the pruner drops the runtime
 wholly, like the STM/hierarchy runtimes). The literal arm itself is untouched
 code beside a run-time branch, so literal-only programs pay nothing new.
 
+## Transducers (b60)
+
+Decided 2026-10-02 against `clj` 1.12.6.1673 (every spec line diffed). **A transducer is
+the oracle's: a function from a reducing function to a reducing function**, built by a
+spliced `rontolisp::%clojure-xf-*` worker (`clojure.lisp`, "Reduction and transducers"),
+not a tagged closure the consumers interpret. So `comp` composes transducers left to right
+with no help, a program's own `(fn [rf] (fn ([] ...) ([acc] ...) ([acc x] ...)))` runs beside
+the core ones, and `(apply comp [...])` needs nothing either. A built-in reducing function
+is an `&optional` lambda telling init / completion / step apart by the supplied-p flags;
+per-reduction state (take's count, partition-all's buffer) lives in variables the
+`(lambda (rf) ...)` closes over, created when the transducer meets its reducing function,
+like the oracle's volatiles -- so the completion step is NOT skipped: `partition-all` /
+`partition-by` flush their tail, after an early `take` stop too.
+
+- Lowering: `ClojureTransducerLowering`. `xformCall` intercepts at the top of the hub's
+  `builtin` (after `coreAllowed`) when a verb in its table has the transducer arity:
+  `map`/`filter`/`remove`/`keep`/`keep-indexed`/`map-indexed`/`take`/`drop`/`take-while`/
+  `drop-while`/`take-nth`/`mapcat`/`partition-all`/`partition-by`/`interpose` (one
+  argument), `dedupe`/`distinct` (none). `xformValue` widens the fixed-arity verbs' value
+  lambdas with an `&optional` collection (`map`/`mapcat` value lambdas answer the
+  transducer for an empty rest, the b57 `-v` entries in Lisp). `callOf`/`valueOf` take
+  `transduce`, `eduction`, `sequence`, `completing`, `reduced`, `reduced?`, `unreduced`,
+  `ensure-reduced`, `cat`, `take-nth` (arity errors in the oracle's wording).
+- `reduced` is the `(:C%REDUCED x)` wrapper; `reduce`, `reduce-kv`, `transduce`, `into`
+  and the stepping consumers stop at it and unwrap it; `deref` reads it (the atom test's
+  else arm calls `%clojure-deref-other`). `(conj)` is `[]` (the init `(transduce xf conj
+  coll)` calls).
+- `sequence`/`eduction` step their inputs through the transducer one element at a time
+  behind a lazy wrapper (`%clojure-xf-puller` batches the outputs of one input step), so a
+  lazy input stays lazy and `take` of an infinite one terminates; a strict input answers
+  the realized strict list (the lazy-or-strict rule). Several collections step in
+  lockstep, spread as the step's arguments (only `map`'s reducing function takes them).
+- Deviations: an `eduction` is that seq, computed once, where the oracle re-runs the
+  transformation each time it is reduced; `println` therefore prints it as the seq (the
+  oracle prints the object; `prn` agrees); a reduced value prints as its wrapper list;
+  `take-nth`'s seq arity signals on a zero step and steps by the magnitude of a negative
+  one (the oracle repeats the first member forever); `halt-when`/`random-sample` are absent.
+- Fixed beside it: `comp` as a VALUE (`(apply comp fns)`) spliced the inner result as a
+  call form, so it called the result (`Not a function: 2`); the spec's apply-comp line pins it.
+- Cost (2026-10-02, x86-64, Java 25, raw wasm module totals, base = HEAD before b60):
+  `(println (reduce + [1 2 3]))` 31,773 -> 33,340 B (the lazy-aware, reduced-aware walk;
+  a first cut that called the IFn dispatcher from the runtime measured 40,365 B, so the
+  dispatcher wrap moved to the call site); `(println (into [] [1 2]))` 42,259 -> 43,613;
+  `(println @(atom 1))` 30,674 -> 30,867; `(println (+ 1 2))` 9,585 unchanged. A
+  transducer program: `(into [] (map inc) [1 2])` 53,436, `(transduce (map inc) + [1 2])`
+  42,415, `(sequence (map inc) [1 2])` 46,677.
+- Pinned by `clojure-spec.yaml` (`b60-into-transduce-and-composition`,
+  `b60-seq-verbs-have-transducer-arities`, `b60-sequence-eduction-and-reduced`, all four
+  backends), `ClojureLoweringTest.transducerAritiesBuildTheSplicedTransducers`, and the
+  eager.clj `non-blank-lines` / `line-count` shapes over a file in
+  `ClojureInteropTest.filesRoundTripThroughReaderAndLineSeq` (interpreter and JVM). The
+  corpus has no other transducer use (`eager.clj`'s `preds` needs `all-ns`).
+
 b58 (2026-10-02) closes three reader/metadata refusals: `#^` reads like `^`
 (`ClojureReaderTest.legacyHashCaretMetadataReadsLikeTheCaret`), `ns` strips
 metadata on its name (`ClojureLoweringTest.nsSkipsMetadataOnItsNameLikeDefAndDefn`),
@@ -733,3 +885,18 @@ and record literals read and records print as `#ns.Name{...}`
 diffed against `clj` 1.12). The todo's premise that a simple `#Rec{...}` reads was
 overturned on the oracle: an undotted tag is a tagged literal (`No reader function
 for tag Rec`), so only the dotted class name is a record literal.
+
+b57 (2026-10-02) lowers the core backlog (the table rows above, oracle `clj`
+1.12.6.1673, every printed line diffed): pinned in `clojure-spec.yaml`
+(`b57-split-and-tail-verbs`, `b57-peek-pop-and-not-empty`,
+`b57-dedupe-partition-all-and-partition-by`,
+`b57-key-extremes-juxt-fnil-and-predicate-combinators`,
+`b57-update-keys-update-vals-and-reduce-kv`, `b57-backlog-verbs-as-values-and-pmap`,
+`b57-equality-is-sequential-and-deep`, all four backends) and `ClojureLoweringTest`
+(`coreBacklogVerbsCallTheirSplicedWorkers`,
+`coreBacklogArityAndTransducerRefusalsUseTheOracleWording`,
+`aProgramDefinitionOrLocalShadowsACoreNameInCallPosition`). The oracle's own traps
+for a probe: `(partition-all 0 ...)` prints forever, and `dedupe` over an infinite
+seq that repeats forever hangs there (its transducer realizes ahead) where the
+lazy wrapper here answers the `take`n prefix. `add-watch`/`remove-watch` stay
+refused (no corpus case).

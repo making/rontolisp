@@ -31,8 +31,8 @@ The supported surface, one page per name, is the [Reference](reference.md): the 
 binding and control forms with sequential and map destructuring, the threading macros,
 the seq verbs over strict list views of every collection, the persistent map and set
 operations over `equal` hash tables, the numeric and predicate core, atoms and volatiles,
-multimethods with hierarchies, `try`/`catch`/`finally` with `ex-info`, the `ns` clause
-wiring with `clojure.string`, `clojure.test` with its summary runner, and Java interop. What each form lowers to, and what stays
+multimethods with hierarchies, `try`/`catch`/`finally` with `ex-info`, namespaces across
+files (`ns`/`require` of project files) and `clojure.string`, `clojure.test` with its summary runner, and Java interop. What each form lowers to, and what stays
 refused, is [Semantics](semantics.md); the reader rules are [Syntax](syntax.md); the
 departures from the oracle are [Deviations](deviations.md).
 

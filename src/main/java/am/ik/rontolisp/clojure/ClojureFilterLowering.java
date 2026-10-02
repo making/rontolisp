@@ -892,15 +892,12 @@ final class ClojureFilterLowering {
 	/**
 	 * {@code mapcat} over an already-lowered function and collections (one or more): one
 	 * call to the spliced {@code rontolisp::%clojure-mapcat}, the strict concat-of-maps
-	 * over the seq views (nil-safe, like {@code concat}). A lone function is the oracle's
-	 * transducer shape, which stays refused.
+	 * over the seq views (nil-safe, like {@code concat}). A lone function is the
+	 * transducer ({@link ClojureTransducerLowering}, which intercepts it first).
 	 */
 	static LispVal mapcatOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
-		ClojureLowerUtil.isTrue(n >= 1, "mapcat takes a function and collections");
-		if (n == 1) {
-			throw new LispReadException("transducers are not supported yet: mapcat");
-		}
+		ClojureLowerUtil.isTrue(n >= 2, "mapcat takes a function and collections");
 		return mapcatForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lowers(items, 2));
 	}
 
@@ -910,15 +907,17 @@ final class ClojureFilterLowering {
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), colls));
 	}
 
-	/** {@code mapcat} as a value: over a function and one rest list of collections. */
+	/**
+	 * {@code mapcat} as a value: over a function and one rest list of collections; of the
+	 * function alone, the transducer.
+	 */
 	static LispVal mapcatValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("mapcat-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapcat-colls"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-				LispString.literal("mapcat takes a function and collections"));
 		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fn, colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls), arity, call);
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAPCAT"), fn), call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, colls)), body);
 	}

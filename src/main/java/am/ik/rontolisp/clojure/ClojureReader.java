@@ -78,6 +78,14 @@ final class ClojureReader {
 	}
 
 	/**
+	 * The file the text came from.
+	 * @return the path, or {@code null} when unknown
+	 */
+	@Nullable String file() {
+		return this.file;
+	}
+
+	/**
 	 * Where the datum starts, or null when it did not come out of this read.
 	 * @param datum the datum
 	 * @return the position

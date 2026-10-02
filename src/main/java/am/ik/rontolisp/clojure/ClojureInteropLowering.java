@@ -72,9 +72,11 @@ final class ClojureInteropLowering {
 		}
 		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {
 			String base = name.substring(0, name.length() - 1);
-			if (ctx.types.containsKey(base)) {
+			String type = ctx.typeKeyOf(base);
+			if (type != null) {
 				// (T. args...) constructs the record or deftype, like ->T
-				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol("->" + base), items.subList(1, items.size())));
+				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
+						items.subList(1, items.size())));
 			}
 			List<LispVal> args = new ArrayList<>();
 			args.add(LispString
@@ -87,7 +89,7 @@ final class ClojureInteropLowering {
 			String head = name.substring(0, slash);
 			String tail = name.substring(slash + 1);
 			if (!tail.isEmpty() && tail.indexOf('/') < 0 && ClojureNamespaceLowering.isClasslike(ctx, head)
-					&& !ctx.types.containsKey(head)) {
+					&& ctx.typeKeyOf(head) == null) {
 				String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
 				if (items.size() == 1) {
 					// no arguments: the zero-argument static method when the host
@@ -311,7 +313,7 @@ final class ClojureInteropLowering {
 		String head = name.substring(0, slash);
 		String tail = name.substring(slash + 1);
 		if (tail.isEmpty() || tail.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, head)
-				|| ctx.types.containsKey(head)) {
+				|| ctx.typeKeyOf(head) != null) {
 			return null;
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
@@ -370,15 +372,27 @@ final class ClojureInteropLowering {
 		if (!(items.get(1) instanceof LispSymbol named)) {
 			throw new LispReadException("new takes a class name, not " + items.get(1).print());
 		}
-		if (ctx.types.containsKey(named.name())) {
+		String type = ctx.typeKeyOf(named.name());
+		if (type != null) {
 			// (new T args...) constructs the record or deftype, like ->T
-			return ctx
-				.lower(ClojureLowerUtil.cons(new LispSymbol("->" + named.name()), items.subList(2, items.size())));
+			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
+					items.subList(2, items.size())));
 		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(ClojureNamespaceLowering.resolveClass(ctx, named.name())));
 		args.addAll(ctx.lowers(items, 2));
 		return ClojureLowerUtil.cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * How the current namespace names a record or deftype's positional constructor:
+	 * {@code ->T} for its own, {@code ns/->T} for another namespace's.
+	 */
+	static String constructorSpelling(ClojureLowering ctx, String typeKey) {
+		int slash = typeKey.indexOf('/');
+		String ns = typeKey.substring(0, slash);
+		String ctor = "->" + typeKey.substring(slash + 1);
+		return ns.equals(ctx.currentNs) ? ctor : ns + "/" + ctor;
 	}
 
 	/**
@@ -481,11 +495,13 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * {@code (proxy [interface] [] (method [params...] body...)...)}: a single interface
-	 * implemented through {@code java:proxy} with a name-dispatching lambda. A
-	 * superclass, constructor arguments and multi-arity methods are refused by name; the
-	 * methods take the Java arguments only (no {@code this}, which has no binding to
-	 * close over). Interpreter and JVM only, like all interop.
+	 * {@code (proxy [interface...] [] (method [params...] body...)...)}: one object
+	 * implementing every interface through {@code java:proxy} with a name-dispatching
+	 * lambda, so a method name several interfaces declare runs the one body. A
+	 * superclass, constructor arguments, an {@code Object} method
+	 * ({@code toString}/{@code equals}/{@code hashCode}) and multi-arity methods are
+	 * refused by name; the methods take the Java arguments only (no {@code this}, which
+	 * has no binding to close over). Interpreter and JVM only, like all interop.
 	 */
 	static LispVal proxyOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "proxy takes a class vector, an argument vector and methods");
@@ -493,15 +509,25 @@ final class ClojureInteropLowering {
 		if (classes == null || classes.isEmpty() || classes.get(0) != ClojureReader.VECTOR) {
 			throw new LispReadException("proxy takes a class vector, not " + items.get(1).print());
 		}
-		if (classes.size() != 2 || !(classes.get(1) instanceof LispSymbol)) {
-			throw new LispReadException("proxy takes a single interface, not " + items.get(1).print());
+		if (classes.size() < 2) {
+			throw new LispReadException("proxy takes at least one interface");
 		}
-		LispSymbol className = (LispSymbol) classes.get(1);
+		List<LispVal> javaProxy = new ArrayList<>();
+		for (LispVal className : classes.subList(1, classes.size())) {
+			if (!(className instanceof LispSymbol symbol)) {
+				throw new LispReadException("proxy takes interface names, not " + className.print());
+			}
+			String iface = ClojureNamespaceLowering.resolveClass(ctx, symbol.name());
+			if (isHostClass(iface)) {
+				throw new LispReadException("proxy over a class is not supported yet: " + iface
+						+ " (proxy implements interfaces only, with no superclass)");
+			}
+			javaProxy.add(LispString.literal(iface));
+		}
 		List<LispVal> argv = ClojureLowerUtil.items(items.get(2));
 		if (argv == null || argv.size() != 1) {
 			throw new LispReadException("proxy constructor arguments are not supported yet: " + items.get(2).print());
 		}
-		String iface = ClojureNamespaceLowering.resolveClass(ctx, className.name());
 		LispSymbol all = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
@@ -511,13 +537,18 @@ final class ClojureInteropLowering {
 		LispVal dispatch = miss;
 		for (int i = items.size() - 1; i >= 3; i--) {
 			List<LispVal> meth = ClojureLowerUtil.items(items.get(i));
-			if (meth == null || meth.size() < 3 || !(meth.get(0) instanceof LispSymbol)) {
+			if (meth == null || meth.size() < 2 || !(meth.get(0) instanceof LispSymbol)) {
 				throw new LispReadException("a proxy method names a method, a parameter vector and a body");
 			}
 			String methodName = ((LispSymbol) meth.get(0)).name();
 			List<LispVal> params = ClojureLowerUtil.items(meth.get(1));
 			if (params == null || params.isEmpty() || params.get(0) != ClojureReader.VECTOR) {
 				throw new LispReadException("a proxy method takes a parameter vector, not " + meth.get(1).print());
+			}
+			if (isObjectMethod(methodName, params.size() - 1)) {
+				// java:proxy keeps Object's three: the body would never run.
+				throw new LispReadException("proxy cannot override " + methodName
+						+ " yet: a proxy keeps Object's equals, hashCode and toString");
 			}
 			Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 			Set<String> seen = new HashSet<>();
@@ -544,7 +575,31 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(got, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), all)),
 							ClojureLowerUtil.list(rest, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), all)))),
 							dispatch));
-		return ClojureLowerUtil.cons(JAVA_PROXY, List.of(LispString.literal(iface), callable));
+		javaProxy.add(callable);
+		return ClojureLowerUtil.cons(JAVA_PROXY, javaProxy);
+	}
+
+	// Object's equals(Object), hashCode() and toString(), which java:proxy never routes
+	// to
+	// the callable.
+	private static boolean isObjectMethod(String name, int arity) {
+		return switch (name) {
+			case "toString", "hashCode" -> arity == 0;
+			case "equals" -> arity == 1;
+			default -> false;
+		};
+	}
+
+	// Whether the name loads, here, as a class that is not an interface: a proxy
+	// superclass. A name that does not load is left to the run-time error.
+	private static boolean isHostClass(String className) {
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			return !found.isInterface();
+		}
+		catch (ClassNotFoundException | LinkageError ex) {
+			return false;
+		}
 	}
 
 	/**

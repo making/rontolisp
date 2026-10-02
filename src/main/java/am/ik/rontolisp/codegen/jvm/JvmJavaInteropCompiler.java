@@ -56,8 +56,7 @@ final class JvmJavaInteropCompiler {
 				requireArity(args.size() >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
 			case LispNames.JAVA_FIELD ->
 				requireArity(args.size() == 3, "java:field expects (java:field class-or-object \"field\")");
-			case LispNames.JAVA_PROXY ->
-				requireArity(args.size() == 3, "java:proxy expects (java:proxy \"interface\" callable)");
+			case LispNames.JAVA_PROXY -> requireArity(args.size() >= 3, JavaImplementations.PROXY_USAGE);
 			case LispNames.JAVA_REIFY ->
 				requireArity(args.size() >= 2 && args.size() % 2 == 0, JavaImplementations.REIFY_USAGE);
 			default -> throw new UnsupportedOperationException("Cannot compile: java:" + member);
@@ -136,8 +135,9 @@ final class JvmJavaInteropCompiler {
 				emitBridgeCall(ctx, ops, "reify");
 			}
 			default -> {
+				// The first interface, then the rest of them and the callable, last.
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				compileRestArray(args, 2, ctx, className);
 				emitBridgeCall(ctx, ops, "proxy");
 			}
 		}
@@ -154,7 +154,7 @@ final class JvmJavaInteropCompiler {
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
 		List<LispVal> functions = new java.util.ArrayList<>();
 		if (implementation.proxy()) {
-			functions.add(args.get(2));
+			functions.add(args.get(args.size() - 1));
 		}
 		else {
 			for (int i = 3; i < args.size(); i += 2) {

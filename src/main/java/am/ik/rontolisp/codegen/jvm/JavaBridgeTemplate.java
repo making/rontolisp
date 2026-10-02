@@ -120,6 +120,9 @@ final class JavaBridgeTemplate {
 	// Mirrors compiler/JavaImplementations.REIFY_USAGE.
 	private static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
 
+	// Mirrors compiler/JavaImplementations.PROXY_USAGE.
+	private static final String PROXY_USAGE = "java:proxy expects (java:proxy \"interface\"... callable)";
+
 	private static final String KIND_NIL = "nil";
 
 	private static final String KIND_T = "t";
@@ -345,17 +348,32 @@ final class JavaBridgeTemplate {
 		}
 	}
 
-	/** Implements {@code (java:proxy "fully.qualified.Interface" callable)}. */
-	static @Nullable Object javaProxy(@Nullable Object interfaceName, @Nullable Object callable) {
-		String name = lispString(interfaceName);
-		if (name == null) {
-			throw new RuntimeException("java:proxy expects (java:proxy \"interface\" callable)");
+	/**
+	 * Implements {@code (java:proxy "fully.qualified.Interface"... callable)} left to run
+	 * time: the rest is the other interface names, then the callable.
+	 */
+	static @Nullable Object javaProxy(@Nullable Object interfaceName, @Nullable Object[] rest) {
+		if (rest.length == 0) {
+			throw new RuntimeException(PROXY_USAGE);
 		}
-		Class<?> iface = loadClass(name);
-		if (!iface.isInterface()) {
-			throw new RuntimeException("java:proxy expects an interface, got " + name);
+		Class<?>[] interfaces = new Class<?>[rest.length];
+		for (int i = 0; i < interfaces.length; i++) {
+			String name = lispString(i == 0 ? interfaceName : rest[i - 1]);
+			if (name == null) {
+				throw new RuntimeException(PROXY_USAGE);
+			}
+			Class<?> iface = loadClass(name);
+			if (!iface.isInterface()) {
+				throw new RuntimeException("java:proxy expects an interface, got " + name);
+			}
+			for (int j = 0; j < i; j++) {
+				if (interfaces[j] == iface) {
+					throw new RuntimeException("java:proxy names interface " + name + " twice");
+				}
+			}
+			interfaces[i] = iface;
 		}
-		return proxy(iface, callable);
+		return proxy(interfaces, rest[rest.length - 1]);
 	}
 
 	/**
@@ -388,27 +406,32 @@ final class JavaBridgeTemplate {
 			slots = reifySlots(iface, designators);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(iface, false, slots, functions);
+		return implementation(new Class<?>[] { iface }, false, slots, functions);
 	}
 
-	// A function value where an interface is expected, or java:proxy: every method but
-	// Object's three calls the callable with the method's name first.
+	// A function value where an interface is expected: the interface's java:proxy.
 	private static Object proxy(Class<?> iface, @Nullable Object callable) {
-		List<Object> key = List.of(iface, PROXY_KEY);
+		return proxy(new Class<?>[] { iface }, callable);
+	}
+
+	// java:proxy: every method of every interface but Object's three calls the callable
+	// with the method's name first.
+	private static Object proxy(Class<?>[] interfaces, @Nullable Object callable) {
+		List<Object> key = List.of(List.of(interfaces), PROXY_KEY);
 		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
 		if (slots == null) {
-			slots = proxySlots(iface);
+			slots = proxySlots(interfaces);
 			remember(IMPLEMENTATIONS, key, slots);
 		}
-		return implementation(iface, true, slots, new @Nullable Object[] { callable });
+		return implementation(interfaces, true, slots, new @Nullable Object[] { callable });
 	}
 
-	// Every method a java:proxy of the interface declares, by name(parameters)return:
+	// Every method a java:proxy of the interfaces declares, by name(parameters)return:
 	// all but Object's three call the callable (mirrors
 	// compiler/JavaImplementations.proxy).
-	private static Map<String, Integer> proxySlots(Class<?> iface) {
+	private static Map<String, Integer> proxySlots(Class<?>[] interfaces) {
 		Map<String, Integer> slots = new HashMap<>();
-		for (Map.Entry<String, List<Method>> group : groups(iface).entrySet()) {
+		for (Map.Entry<String, List<Method>> group : groups(interfaces).entrySet()) {
 			if (OBJECT_METHODS.contains(group.getKey())) {
 				continue;
 			}
@@ -425,10 +448,14 @@ final class JavaBridgeTemplate {
 	// no slot names runs its body; Object's three keep their identity behavior. What the
 	// function raises -- or the refusal of its value -- is recorded on its way out to the
 	// Java caller (the program's _jsig), as a generated class's callback records it.
-	private static Object implementation(Class<?> iface, boolean proxy, Map<String, Integer> slots,
+	private static Object implementation(Class<?>[] interfaces, boolean proxy, Map<String, Integer> slots,
 			@Nullable Object[] functions) {
-		String name = iface.getName();
-		return Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface }, (p, method, methodArgs) -> {
+		StringBuilder names = new StringBuilder();
+		for (Class<?> iface : interfaces) {
+			names.append(names.length() == 0 ? "" : " ").append(iface.getName());
+		}
+		String name = names.toString();
+		return Proxy.newProxyInstance(proxyLoader(interfaces), interfaces, (p, method, methodArgs) -> {
 			String key = keyOf(method);
 			Integer index = slots.get(key + method.getReturnType().getName());
 			if (index == null) {
@@ -564,12 +591,46 @@ final class JavaBridgeTemplate {
 		return slots;
 	}
 
+	// The loader a Proxy class over the interfaces is defined in: the first of theirs
+	// that
+	// sees every one of them (mirrors eval/JavaInterop.proxyLoader).
+	private static @Nullable ClassLoader proxyLoader(Class<?>[] interfaces) {
+		for (Class<?> candidate : interfaces) {
+			ClassLoader loader = candidate.getClassLoader();
+			if (seesAll(loader, interfaces)) {
+				return loader;
+			}
+		}
+		return interfaces[0].getClassLoader();
+	}
+
+	private static boolean seesAll(@Nullable ClassLoader loader, Class<?>[] interfaces) {
+		for (Class<?> iface : interfaces) {
+			try {
+				if (Class.forName(iface.getName(), false, loader) != iface) {
+					return false;
+				}
+			}
+			catch (ClassNotFoundException ex) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// The interface's instance methods by name(parameters), in key order.
 	private static TreeMap<String, List<Method>> groups(Class<?> iface) {
+		return groups(new Class<?>[] { iface });
+	}
+
+	// The interfaces' instance methods by name(parameters), in key order.
+	private static TreeMap<String, List<Method>> groups(Class<?>[] interfaces) {
 		TreeMap<String, List<Method>> groups = new TreeMap<>();
-		for (Method method : iface.getMethods()) {
-			if (!Modifier.isStatic(method.getModifiers())) {
-				groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>()).add(method);
+		for (Class<?> iface : interfaces) {
+			for (Method method : iface.getMethods()) {
+				if (!Modifier.isStatic(method.getModifiers())) {
+					groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>()).add(method);
+				}
 			}
 		}
 		return groups;

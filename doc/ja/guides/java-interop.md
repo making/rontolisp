@@ -14,7 +14,7 @@
 | `java:call` | インスタンスメソッドの呼び出し: `(java:call obj "method" args...)` |
 | `java:static` | 静的メソッドの呼び出し: `(java:static "fqcn" "method" args...)` |
 | `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")` |
-| `java:proxy` | callable をインターフェースへ適合: `(java:proxy "iface" callable)` |
+| `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
 | `java:reify` | インターフェースをメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
 
 生成・返却されたオブジェクトは `#<java <class-name>>` という不透明な形で表示され、`java:call`/`java:field` に再び渡せます。
@@ -102,7 +102,7 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
 - `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く。`(java:object "C" :exact)` は、`java:new` の戻り値と同じく、値がちょうど `C` であり `nil` ではないことを示す
 - `let` / `let*` の変数は初期化式の型を持つ。ただし special 変数である場合と、スコープ内のどこか (クロージャ内を含む) で `setq`、`setf`、`incf` などにより代入される場合を除く
 - `(declaim (type (java:object "C") v))` は、それ以降のフォームで大域変数 `v` の型を示す。`defvar` の初期値は型を示さない。どのフォームもその変数に代入しうるため
-- インターフェース名がリテラルの `(java:reify "I" ...)` と `(java:proxy "I" ...)` は、`I` を実装し、プログラムが名前で指せる型はほかに実装しないクラスのオブジェクトを作る。それに対する呼び出しは `I` のメソッドの中から解決され、それを引数として渡す呼び出しも解決される。`let` 変数はこの型を保ち、その表記が `(java:object "I" :exact)` である。インターフェースをちょうどクラスとするオブジェクトは存在しないので、インターフェースに対する `:exact` はこの意味になる
+- インターフェース名がリテラルの `(java:reify "I" ...)` と `(java:proxy "I" ...)` は、`I` を実装し、プログラムが名前で指せる型はほかに実装しないクラスのオブジェクトを作る。それに対する呼び出しは `I` のメソッドの中から解決され、それを引数として渡す呼び出しも解決される。`let` 変数はこの型を保ち、その表記が `(java:object "I" :exact)` である。インターフェースをちょうどクラスとするオブジェクトは存在しないので、インターフェースに対する `:exact` はこの意味になる。リテラルのインターフェースを複数並べた `(java:proxy "I" "J" ...)` はそのそれぞれを実装する。それを渡す呼び出しは解決され、それに対する呼び出しは実行時にそのクラスで解決され、その型を表す指定子はない
 
 既知のクラスがインターフェースである値に対する呼び出しは、そのインターフェースが宣言していない `Object` の public メソッド（`toString`、`getClass` など）にも解決されます。Java の `list.toString()` と同じです。
 

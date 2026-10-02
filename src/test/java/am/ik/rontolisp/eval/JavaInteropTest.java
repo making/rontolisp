@@ -703,6 +703,30 @@ class JavaInteropTest {
 
 	}
 
+	// A java:proxy of several interfaces is one object Java calls through each, every
+	// method reaching the one callable by its name. Mirrors
+	// JvmJavaInteropCompilerTest#aProxyOfSeveralInterfacesRoutesEachToItsCallable.
+	@Test
+	void aProxyOfSeveralInterfacesRoutesEachToItsCallable() {
+		assertThat(output(JavaImplementationPrograms.PROXY_SEVERAL))
+			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_OUTPUT);
+	}
+
+	// Every name before the callable must be an interface, each once. Mirrors
+	// JvmJavaInteropCompilerTest#aProxyOfSeveralInterfacesRefusesAClassOrARepeat.
+	@Test
+	void aProxyOfSeveralInterfacesRefusesAClassOrARepeat() {
+		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.Runnable\" \"java.lang.String\" (lambda (m) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:proxy expects an interface, got java.lang.String");
+		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.Runnable\" \"java.lang.Runnable\" (lambda (m) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:proxy names interface java.lang.Runnable twice");
+		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.Runnable\" 1 (lambda (m) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:proxy expects (java:proxy \"interface\"... callable)");
+	}
+
 	// A reify held in a let keeps its kind, so the calls passing it resolve; a
 	// declaration that a value is one, which lies, is an error. Mirrors
 	// JvmJavaInteropCompilerTest#aLetBoundReifyKeepsItsKind.
@@ -717,6 +741,21 @@ class JavaInteropTest {
 		assertThatThrownBy(() -> eval(JavaImplementationPrograms.FALSE_IMPLEMENTATION))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessage(JavaImplementationPrograms.FALSE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors
+	// JvmJavaInteropCompilerTest#aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo.
+	@Test
+	void aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			assertThat(output("(setq java:*warn-on-reflection* t)\n" + JavaImplementationPrograms.PROXY_SEVERAL_PASSED))
+				.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_PASSED_OUTPUT);
+		}
+		assertThat(err.toString()).isEmpty();
+		assertThatThrownBy(() -> eval(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageStartingWith(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION_ERROR);
 	}
 
 	// java:*warn-on-reflection* reports a java:reify / java:proxy the compiler would

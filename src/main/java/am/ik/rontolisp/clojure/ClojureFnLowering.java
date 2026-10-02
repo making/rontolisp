@@ -447,8 +447,8 @@ final class ClojureFnLowering {
 					.list(ClojureLowerUtil.sym("declare"), ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), more)),
 				one);
 		LispVal chain = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
-				ctx.callableApply(fun, ClojureLowerUtil.list(List.of(ctx.callableApply(next, args)))));
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), ctx.callableApply(fun,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ctx.callableApply(next, args))));
 		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
 			.sym("null"), fns), identity, ClojureLowerUtil.list(
 					ClojureLowerUtil.sym("if"),

@@ -1863,7 +1863,10 @@ cases:
     # The book's chain_1..5, ported: list/concat bodies, then syntax-quote bodies with
     # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
     # book's). Expansions print; the runnable ones run through the string-method
-    # mapping, so every backend agrees.
+    # mapping, so every backend agrees. A syntax-quoted macro name qualifies with its
+    # namespace (this case runs in b08lit), like the oracle's
+    # (b08lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
+    # bare head through the call site's namespace (sp-chain2's plain quote).
     source: |
       (defmacro sp-chain1 [x form] (list '. x form))
       (defmacro sp-chain2 ([x form] (list '. x form)) ([x form & more] (concat (list 'sp-chain2 (list '. x form)) more)))
@@ -1883,8 +1886,8 @@ cases:
       (. A B)
       (SP-CHAIN2 (. A B) C)
       (. A B)
-      (SP-CHAIN4 (. A B) (C))
-      (SP-CHAIN5 (. A B) C)
+      (B08LIT/SP-CHAIN4 (. A B) (C))
+      (B08LIT/SP-CHAIN5 (. A B) C)
       (. (. A B) C)
       (. (. (. A B) C) D)
       HI
@@ -3316,6 +3319,267 @@ cases:
       #b58_recs.B58P{:a 5, :b 2}
       #b58_recs.B58P{:a nil, :b 1, :z 2}
       #b58_recs.B58P{:a 7, :b 8, :z 1}
+  - name: b57-split-and-tail-verbs
+    # b57: drop-last/split-at/split-with/take-last/nthnext/nthrest over vectors,
+    # strings, nil and lazy inputs. Every line matches the oracle (clj 1.12,
+    # 2026-10-02) except that an empty seq prints nil where the oracle prints ()
+    # (the documented rest-of-empty deviation).
+    source: |
+      (println (drop-last [1 2 3]) (drop-last 2 [1 2 3]) (drop-last 5 [1 2 3]) (drop-last -1 [1 2 3]))
+      (prn (drop-last "abc") (drop-last 1.5 [1 2 3]) (drop-last nil))
+      (println (take 3 (drop-last (iterate inc 0))))
+      (println (split-at 2 [1 2 3 4]) (split-at 0 [1 2]) (split-at 5 [1 2]) (split-at 2 nil))
+      (println (split-with odd? [1 3 4 5]) (split-with odd? [2]) (split-with odd? nil))
+      (println (take-last 2 [1 2 3]) (take-last 0 [1 2 3]) (take-last 5 [1 2 3]) (take-last 1.5 [1 2 3]))
+      (prn (take-last 2 "abc") (take-last 2 (take 5 (iterate inc 0))))
+      (println (nthnext [1 2 3] 1) (nthnext [1 2 3] 3) (nthnext [1 2 3] -1) (nthnext nil 1))
+      (prn (nthrest [1 2 3] 1) (nthrest [1 2 3] 0) (nthrest [1 2 3] 5) (nthrest "abc" 0))
+      (println (try (drop-last :x [1 2 3]) (catch Exception e :signalled)))
+      (println (try (take-last 2 5) (catch Exception e :signalled)))
+    expected: |
+      (1 2) (1) nil (1 2 3)
+      (\a \b) (1) nil
+      (0 1 2)
+      [(1 2) (3 4)] [nil (1 2)] [(1 2) nil] [nil nil]
+      [(1 3) (4 5)] [nil (2)] [nil nil]
+      (2 3) nil (1 2 3) (2 3)
+      (\b \c) (3 4)
+      (2 3) nil (1 2 3) nil
+      (2 3) [1 2 3] nil "abc"
+      :signalled
+      :signalled
+  - name: b57-peek-pop-and-not-empty
+    # b57: peek/pop read a vector at its end and a list at its head; nil answers
+    # nil; an empty vector pops with the oracle's message; strings, sets, maps and
+    # keywords signal (the oracle's ClassCastException). not-empty answers the
+    # collection itself or nil. Every line matches the oracle (clj 1.12,
+    # 2026-10-02) except (pop (list 1)), () there.
+    source: |
+      (println (peek [1 2 3]) (peek '(1 2 3)) (peek nil) (peek []))
+      (println (pop [1 2 3]) (pop '(1 2 3)) (pop nil) (pop [1]) (pop (list 1)))
+      (println (try (pop []) (catch Exception e (ex-message e))))
+      (println (try (peek "abc") (catch Exception e :signalled)) (try (pop #{1}) (catch Exception e :signalled)) (try (peek {:a 1}) (catch Exception e :signalled)) (try (peek :k) (catch Exception e :signalled)))
+      (prn (not-empty [1]) (not-empty []) (not-empty "") (not-empty "a") (not-empty {:a 1}) (not-empty #{}) (not-empty nil))
+      (println (take 2 (not-empty (iterate inc 0))))
+      (println (try (not-empty 5) (catch Exception e :signalled)))
+    expected: |
+      3 1 nil nil
+      [1 2] (2 3) nil [] nil
+      Can't pop empty vector
+      :signalled :signalled :signalled :signalled
+      [1] nil nil "a" {:a 1} nil nil
+      (0 1)
+      :signalled
+  - name: b57-dedupe-partition-all-and-partition-by
+    # b57: dedupe drops consecutive = duplicates (1 and 1.0 stay apart, maps and
+    # sets compare structurally); partition-all keeps the short tail;
+    # partition-by splits where (f x) changes under =. A lazy input answers a lazy
+    # seq (the take lines), a strict one a strict list. A non-positive
+    # partition-all size signals (the oracle answers an endless seq of ()). Every
+    # other line matches the oracle (clj 1.12, 2026-10-02), empty seqs printing
+    # nil where it prints ().
+    source: |
+      (println (dedupe [1 1 2 2 1 3 3]) (dedupe [1 1.0 1]) (dedupe [nil nil false false]))
+      (prn (dedupe "aabb") (dedupe [{:a 1} {:a 1} #{2} #{2}]) (dedupe nil))
+      (println (take 3 (dedupe (map #(quot % 2) (iterate inc 0)))))
+      (println (partition-all 2 [1 2 3 4 5]) (partition-all 2 1 [1 2 3]) (partition-all 3 [1 2]) (partition-all 1.5 [1 2 3]))
+      (prn (partition-all 2 "abc") (partition-all 2 {:a 1}) (partition-all 2 nil))
+      (println (take 3 (partition-all 2 (iterate inc 0))))
+      (println (try (partition-all 0 [1 2]) (catch Exception e :signalled)))
+      (println (partition-by odd? [1 3 2 4 5]) (partition-by identity [nil nil false false 1]))
+      (prn (partition-by identity "aabbc") (partition-by count ["a" "b" "cc"]) (partition-by odd? []))
+      (println (take 2 (partition-by #(quot % 3) (iterate inc 0))))
+    expected: |
+      (1 2 1 3) (1 1.0 1) (nil false)
+      (\a \b) ({:a 1} #{2}) nil
+      (0 1 2)
+      ((1 2) (3 4) (5)) ((1 2) (2 3) (3)) ((1 2)) ((1 2) (3))
+      ((\a \b) (\c)) (([:a 1])) nil
+      ((0 1) (2 3) (4 5))
+      :signalled
+      ((1 3) (2 4) (5)) ((nil nil) (false false) (1))
+      ((\a \a) (\b \b) (\c)) (("a" "b") ("cc")) nil
+      ((0 1 2) (3 4 5))
+  - name: b57-key-extremes-juxt-fnil-and-predicate-combinators
+    # b57: min-key/max-key keep the last of equal keys (and never call k for a lone
+    # value); juxt answers a vector; fnil patches leading nils only (false stays,
+    # so inc signals on it); every-pred answers a boolean; some-fn answers the
+    # first truthy value -- or, failing, the last (p x) for one or two predicates
+    # over at most three arguments and nil otherwise. Every line matches the
+    # oracle (clj 1.12, 2026-10-02).
+    source: |
+      (prn (min-key count "abc" "d" "ef") (max-key count "abc" "d" "ef") (max-key count "ab" "cd") (min-key count "ab" "cd") (min-key count "ab"))
+      (prn (min-key :a {:a 1} {:a 0}) (max-key identity 1 2.5 2) (min-key (fn [x] (throw (ex-info "never" {}))) :only))
+      (println (try (max-key identity 1 :a) (catch Exception e :signalled)))
+      (prn ((juxt inc dec) 5) ((juxt :a :b) {:a 1 :b 2}) ((juxt + *) 2 3 4) ((juxt first count) "abc"))
+      (prn ((fnil inc 0) nil) ((fnil inc 0) 5) ((fnil + 1 2) nil nil) ((fnil + 1 2) nil nil 3) ((fnil + 1 2 3) nil nil nil 4))
+      (println (try ((fnil inc 0) false) (catch Exception e :signalled)))
+      (prn ((every-pred odd? pos?) 1 3 5) ((every-pred odd? pos?) 1 -3 5) ((every-pred odd?)) ((every-pred identity) 1 false) ((every-pred :a) {:a 1}))
+      (prn ((some-fn odd? pos?) 2 4 -1) ((some-fn odd? pos?) -2 -4) ((some-fn :a :b) {:b 2}) ((some-fn identity) nil false))
+      (prn ((some-fn identity) nil false nil false) ((some-fn identity) nil 3) ((some-fn identity)) ((some-fn :a :b :c) {:z 1}) ((some-fn :a :b :c) {:c 3}))
+    expected: |
+      "d" "abc" "cd" "cd" "ab"
+      {:a 0} 2.5 :only
+      :signalled
+      [6 4] [1 2] [9 24] [\a 3]
+      1 6 3 6 10
+      :signalled
+      true false true false true
+      true false 2 false
+      nil 3 nil nil 3
+  - name: b57-update-keys-update-vals-and-reduce-kv
+    # b57: update-keys/update-vals over maps, records, vectors and nil (a vector
+    # stays a vector under update-vals and keys by index under update-keys; a
+    # record answers a plain map); reduce-kv folds a map's or record's entries or
+    # a vector's index pairs, nil answers the init, and a list or set signals.
+    # Single-entry maps only where the walk order would show. Every line matches
+    # the oracle (clj 1.12, 2026-10-02).
+    source: |
+      (defrecord B57R [a])
+      (prn (update-keys {:a 1} name) (update-keys nil name) (update-keys [5] inc))
+      (prn (update-vals {:a 1} inc) (update-vals [1 2] inc) (update-vals nil inc) (update-vals (->B57R 1) inc))
+      (prn (reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2}) (reduce-kv (fn [acc k v] (conj acc k)) [] [:x :y]) (reduce-kv (fn [acc k v] (+ acc v)) 0 nil))
+      (prn (reduce-kv (fn [acc k v] (conj acc [k v])) [] (->B57R 7)))
+      (println (try (reduce-kv (fn [acc k v] acc) 0 '(1 2)) (catch Exception e :signalled)) (try (reduce-kv (fn [acc k v] acc) 0 #{1}) (catch Exception e :signalled)))
+    expected: |
+      {"a" 1} {} {1 5}
+      {:a 2} [2 3] {} {:a 2}
+      3 [0 1] 0
+      [[:a 7]]
+      :signalled :signalled
+  - name: b57-backlog-verbs-as-values-and-pmap
+    # b57: every backlog verb is a function value with the oracle's arity check
+    # (the message is the oracle's, the count included); the transducer arities
+    # answer transducers (b60); pmap is map (single-threaded, the same printed
+    # seq); = and not= as values compare the Clojure way (1 and 1.0 differ, maps
+    # and sets structurally). Every line matches the oracle (clj 1.12,
+    # 2026-10-02) except the fnil/fn message (the oracle suffixes a compiled
+    # class number) and the empty seqs printing nil where it prints ().
+    source: |
+      (prn (map drop-last [[1 2] [3 4 5]]) (apply drop-last [1 [1 2 3]]) ((fn [f] (f 2 [1 2 3])) take-last))
+      (println (try (apply drop-last [1 2 3]) (catch Exception e (ex-message e))))
+      (prn (map (partial split-at 1) [[1 2] [3 4]]) ((fn [f] (f odd? [1 2])) split-with) ((fn [f] (f [1 2 3] 2)) nthnext) ((fn [f] (f [1 2 3] 2)) nthrest))
+      (prn (map peek [[1 2] '(3 4)]) (map pop [[1 2] '(3 4)]) (filter not-empty [[] [1] "" "a"]) (map dedupe [[1 1] [2 2 3]]))
+      (prn (into [] ((fn [f] (f)) dedupe) [1 1 2]) (into [] ((fn [f] (f 2)) partition-all) [1 2 3]))
+      (prn ((fn [f] (f 2 [1 2 3])) partition-all) ((fn [f] (f 2 1 [1 2 3])) partition-all) ((fn [f] (f odd? [1 3 2])) partition-by))
+      (prn (apply max-key count ["a" "bbb" "cc"]) (apply min-key count ["a" "bbb" "cc"]))
+      (println (try ((fn [f] (f count)) max-key) (catch Exception e (ex-message e))))
+      (prn (((fn [f] (f inc dec)) juxt) 1) (((fn [f] (f inc 0)) fnil) nil) (((fn [f] (f odd?)) every-pred) 1 3) (((fn [f] (f odd?)) some-fn) 2 3))
+      (println (try ((fn [f] (f)) juxt) (catch Exception e (ex-message e))))
+      (println (try ((fnil (fn [] 1) 0)) (catch Exception e (ex-message e))))
+      (prn ((fn [f] (f {:a 1} inc)) update-vals) ((fn [f] (f {:a 1} name)) update-keys) ((fn [f] (f + 0 [5 6])) reduce-kv))
+      (println (try ((fn [f] (f + 0)) reduce-kv) (catch Exception e (ex-message e))))
+      (prn (pmap inc [1 2 3]) (pmap + [1 2] [10 20 30]) (pmap inc nil) ((fn [f] (f inc [1 2])) pmap))
+      (prn (map = [1 {:a 1} #{1} 1] [1 {:a 1} #{1} 1.0]) (map not= [1 2] [1 3]) (apply = [1 1 1]))
+    expected: |
+      ((1) (3 4)) (1 2) (2 3)
+      Wrong number of args (3) passed to: clojure.core/drop-last
+      ([(1) (2)] [(3) (4)]) [(1) (2)] (3) (3)
+      (2 3) ([1] (4)) ([1] "a") ((1) (2 3))
+      [1 2] [[1 2] [3]]
+      ((1 2) (3)) ((1 2) (2 3) (3)) ((1 3) (2))
+      "bbb" "a"
+      Wrong number of args (1) passed to: clojure.core/max-key
+      [2 0] 1 true true
+      Wrong number of args (0) passed to: clojure.core/juxt
+      Wrong number of args (0) passed to: clojure.core/fnil/fn
+      {:a 2} {"a" 1} 12
+      Wrong number of args (2) passed to: clojure.core/reduce-kv
+      (2 3 4) (11 22) nil (2 3)
+      (true true true false) (false true) true
+  - name: b60-into-transduce-and-composition
+    # b60: a transducer is the oracle's function from a reducing function to a
+    # reducing function, so comp composes left to right, a program's own
+    # transducer runs beside the core ones, and into/transduce consume them
+    # (completing, the 0-arity init through (conj)/(+), take's early stop over an
+    # infinite input). The eager.clj squares-into shape is the corpus slice; the
+    # apply-comp line also pins the comp value's composition (it called the inner
+    # result as a function before b60). Every line matches the oracle (clj 1.12,
+    # 2026-10-02).
+    source: |
+      (prn (into [] (map inc) [1 2 3]) (into #{} (map inc) [1 1]) (into {} (map (fn [x] [x (* x x)])) [3]) (into '(0) (map inc) [1 2]))
+      (prn (into [] (comp (map inc) (filter odd?)) [1 2 3 4 5]) (into [] (comp (filter odd?) (map inc)) [1 2 3 4 5]))
+      (prn (transduce (map inc) + [1 2 3]) (transduce (map inc) + 10 [1 2 3]) (transduce (filter odd?) conj [1 2 3 4 5]) (transduce (map inc) conj [1 2]))
+      (prn (transduce (comp (take 2) (map inc)) (completing + str) [1 2 3]) (transduce (take 0) + [1 2 3]))
+      (prn (into [] (take 3) (iterate inc 0)) (into [] (comp (map inc) (take 2) (map str)) (range 100)))
+      (prn (into [] (map inc) nil) (into [] (partition-all 2) []))
+      (defn b60-square [x] (* x x))
+      (defn b60-xf [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (* 10 x)))))
+      (prn (into [] (map b60-square) (range 5)) (into [] b60-xf [1 2]) (into [] (comp b60-xf (map inc)) [1 2]) (into [] (apply comp [(map inc) (filter odd?)]) [1 2 3 4]))
+      (prn ((apply comp [inc inc]) 1) (conj) ((fn [f] (f)) conj) ((fn [f] (f [] (map inc) [1])) into))
+    expected: |
+      [2 3 4] #{2} {3 9} (3 2 0)
+      [3 5] [2 4 6]
+      9 19 [1 3 5] [2 3]
+      "5" 0
+      [0 1 2] ["1" "2"]
+      [] []
+      [0 1 4 9 16] [10 20] [11 21] [3 5]
+      3 [] [] [2]
+  - name: b60-seq-verbs-have-transducer-arities
+    # b60: the one-argument (zero for distinct/dedupe) arity of every seq verb
+    # with one is its transducer, in call position and as a value; take-nth
+    # joins with both arities; mapcat is (comp (map f) cat); partition-all and
+    # partition-by flush their tail on completion, after an early take stop too.
+    # Every line matches the oracle (clj 1.12, 2026-10-02).
+    source: |
+      (prn (into [] (keep #(when (odd? %) (* % 10))) [1 2 3]) (into [] (keep-indexed (fn [i x] (when (even? i) x))) [:a :b :c]) (into [] (map-indexed vector) [:a :b]))
+      (prn (into [] (remove odd?) [1 2 3 4]) (into [] (drop 2) [1 2 3 4]) (into [] (take-while odd?) [1 3 4 5]) (into [] (drop-while odd?) [1 3 4 5]))
+      (prn (into [] (distinct) [1 2 1 3 2]) (into [] (interpose :x) [1 2 3]) (into [] cat [[1 2] [3]]) (into [] (take-nth 2) [1 2 3 4 5]))
+      (prn (into [] (mapcat (fn [x] [x x])) [1 2]) (into [] (dedupe) [1 1 2 2 1]) (into [] (partition-by odd?) [1 3 2 4 5]) (into [] (partition-all 2) [1 2 3 4 5]))
+      (prn (into [] (comp (partition-all 2) (take 2)) (range 10)) (into [] (comp (take 2) (partition-all 3)) (range 10)) (into [] (comp (mapcat identity) (take 3)) [[1 2] [3 4] [5]]))
+      (prn (into [] (apply filter [odd?]) [1 2 3]) (into [] (apply distinct []) [1 1 2]) (into [] (apply take-nth [2]) [1 2 3]) (into [] (apply map [inc]) [1]) (into [] (apply mapcat [list]) [1]))
+      (prn (into [] ((fn [f] (f)) dedupe) [1 1 2]) (into [] ((fn [f] (f 2)) partition-all) [1 2 3]) (into [] ((fn [f] (f odd?)) partition-by) [1 3 2]))
+      (prn (take-nth 2 [1 2 3 4 5]) (map (partial take-nth 2) [[1 2 3]]))
+    expected: |
+      [10 30] [:a :c] [[0 :a] [1 :b]]
+      [2 4] [3 4] [1 3] [4 5]
+      [1 2 3] [1 :x 2 :x 3] [1 2 3] [1 3 5]
+      [1 1 2 2] [1 2 1] [[1 3] [2 4] [5]] [[1 2] [3 4] [5]]
+      [[0 1] [2 3]] [[0 1]] [1 2 3]
+      [1 3] [1 2] [1 3] [2] [1]
+      [1 2] [[1 2] [3]] [[1 3] [2]]
+      (1 3 5) ((1 3))
+  - name: b60-sequence-eduction-and-reduced
+    # b60: sequence and eduction step their inputs through the transducer (a
+    # lazy input stays lazy, so take of an infinite one terminates; several
+    # collections step in lockstep); reduce, reduce-kv and transduce stop at a
+    # reduced answer; reduce walks a lazy input whole (it folded the wrapper's
+    # own cells before b60). Every line matches the oracle (clj 1.12,
+    # 2026-10-02): prn prints an eduction as its seq there too.
+    source: |
+      (prn (sequence (map inc) [1 2 3]) (take 3 (sequence (map inc) (iterate inc 0))) (sequence (map vector) [1 2] [3 4]) (sequence (comp (map inc) (partition-all 2)) [1 2 3]))
+      (prn (eduction (filter odd?) (range 6)) (eduction (map inc) (filter even?) [1 2 3 4]) (reduce + 0 (eduction (map inc) [1 2 3])))
+      (prn (reduce (fn [a x] (if (> a 5) (reduced a) (+ a x))) 0 (range 100)) (reduce (fn [a x] (reduced :stop)) [1 2 3]) (reduce (fn [a x] (reduced :stop)) [1]))
+      (prn (reduced? (reduced 1)) (reduced? 1) (unreduced (reduced 2)) (unreduced 3) (reduced? (ensure-reduced 1)) @(reduced 5))
+      (prn (reduce + (map inc (lazy-seq [1 2 3]))) (into [] (map inc (lazy-seq [1 2 3]))) (reduce + []) (reduce + [7]))
+      (prn (reduce-kv (fn [a k v] (if (> a 0) (reduced a) (+ a v))) 0 [5 6 7]))
+      (prn (map reduced? [1]) ((fn [f] (f (map inc) + [1])) transduce) ((fn [f] (f (map inc) [1])) eduction) ((fn [f] (f [1])) sequence) (((fn [f] (f +)) completing) 1 2))
+    expected: |
+      (2 3 4) (1 2 3) ([1 3] [2 4]) ([2 3] [4])
+      (1 3 5) (2 4) 9
+      6 :stop 1
+      true false 2 3 true 5
+      9 [2 3 4] 0 7
+      5
+      (false) 2 (2) (1) 3
+  - name: b57-equality-is-sequential-and-deep
+    # b57: = compares vectors, lists and lazy seqs element-wise across kinds and
+    # deep through maps, sets and records; strings are not character vectors, atoms
+    # stay identity, 1 and 1.0 differ. dedupe and partition-by share the comparison.
+    # Every line matches the oracle (clj 1.12, 2026-10-02) except (= [] nil), false
+    # there: nil is the empty list here, and (= [] '()) is true on both.
+    source: |
+      (prn (= [1 2] [1 2]) (= [1 2] '(1 2)) (= [[1] {:a [2]}] [[1] {:a [2]}]) (= [1] [1 2]) (= [] nil) (= "ab" [\a \b]))
+      (prn (= (map inc [0 1]) [1 2]) (= (lazy-seq [1 2]) '(1 2)) (not= [1] [1]) (dedupe [[1] [1] [2]]) (partition-by (fn [x] [(odd? x)]) [1 3 2]))
+      (prn (= (atom 1) (atom 1)) (= :a :a) (= '(:a "s") [:a "s"]) (= {:a 1} {:a 1.0}))
+      (defrecord B57EqR [a])
+      (prn (= (->B57EqR [1]) (->B57EqR [1])) (= [(->B57EqR 1)] [(->B57EqR 1)]))
+    expected: |
+      true true true false true false
+      true true false ([1] [2]) ((1 3) (2))
+      false true true false
+      true true
   - name: quoted-list-keeps-nested-collection-literals
     # A quoted list holding a vector, a map, a set or a regex literal builds each
     # nested collection at run time, like the oracle reads them -- not the
@@ -3541,3 +3805,64 @@ cases:
       Ran 2 tests containing 3 assertions.
       0 failures, 0 errors.
       true
+  - name: namespaces-in-one-program-resolve-qualified-and-referred
+    # b56: every namespace has its own vars (the vars of user keep the bare mangled
+    # name). An ns form marks its namespace loaded, like the oracle's, so a later
+    # require of it reads no file and the shape is backend-clean: an alias call, a
+    # full-name call, a referred var, a var as a value, a macro through an alias, a
+    # defmethod onto another namespace's multimethod, a record and protocol across
+    # namespaces, a macro whose template reaches a helper of its own namespace, a
+    # private var reached through a public one, an own f beside l/f, syntax-quote
+    # qualifying with the defining namespace, in-ns switching where a name resolves,
+    # and use referring every public var. Every line is the oracle's (clj 1.12).
+    source: |
+      (ns b56.lib)
+      (defn f [x] (inc x))
+      (defn- hidden [x] (* 10 x))
+      (def v 42)
+      (defmacro twice [x] `(* 2 ~x))
+      (defmulti area :shape)
+      (defmethod area :sq [m] (* (:s m) (:s m)))
+      (defprotocol Named (nm [x]))
+      (defrecord Pt [x y] Named (nm [p] (str "pt" x y)))
+      (defn helper [] :helper)
+      (defmacro call-helper [] `(helper))
+      (defn uses-hidden [x] (hidden x))
+      (ns b56.main (:require [b56.lib :as l :refer [v]]))
+      (println (l/f 1) (b56.lib/f 2) v)
+      (println (map l/f [1 2]))
+      (println (l/twice 21))
+      (defmethod l/area :rect [m] (* (:w m) (:h m)))
+      (println (l/area {:shape :sq :s 3}) (l/area {:shape :rect :w 2 :h 5}))
+      (println (l/nm (l/->Pt 1 2)))
+      (println (l/call-helper) (l/uses-hidden 4))
+      (defn f [x] (* 100 x))
+      (println (f 1) (l/f 1))
+      (println `f `l/f `v)
+      (in-ns 'b56.lib)
+      (println (f 5))
+      (ns b56.other (:use b56.lib))
+      (println (f 7) v (nm (->Pt 3 4)))
+    expected: |
+      2 3 42
+      (2 3)
+      42
+      9 10
+      pt12
+      :helper 40
+      100 2
+      b56.main/f b56.lib/f b56.lib/v
+      6
+      8 42 pt34
+  - name: macroexpand-keeps-strings-and-keywords
+    # The run-time expansion answers its strings and keywords as themselves (it
+    # walked a string as a vector of characters and printed a keyword as its
+    # wrapper); only the symbols demangle and uppercase. The oracle prints
+    # (if :yes str :no) and (if :yes "str" :no).
+    source: |
+      (defmacro b56-kw [k s] (list 'if k s :no))
+      (println (macroexpand-1 '(b56-kw :yes "str")))
+      (prn (macroexpand-1 '(b56-kw :yes "str")))
+    expected: |
+      (IF :yes str :no)
+      (IF :yes "str" :no)

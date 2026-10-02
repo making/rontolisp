@@ -114,9 +114,10 @@ final class ClojureMacroLowering {
 			clauses = List.of(ClojureBindingLowering.clause(ctx, items.get(at), items.subList(at + 1, items.size())));
 		}
 		LispVal expander = macroExpander(ctx, name, clauses);
-		LispSymbol table = macroTable(name);
-		ctx.macros.put(name, expander);
-		ctx.globals.put(name, ClojureLowering.Kind.MACRO);
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		LispSymbol table = macroTable(key);
+		ctx.macros.put(key, expander);
+		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
 		ctx.usedMacros = true;
 		LispVal setq = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table, expander);
 		if (ctx.macroEvaluator != null) {
@@ -132,9 +133,12 @@ final class ClojureMacroLowering {
 		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), setq, ClojureLowering.NIL_CONST));
 	}
 
-	/** The runtime table global holding a macro's expander. */
-	static LispSymbol macroTable(String name) {
-		return new LispSymbol(ClojureLowering.mangle(name) + "%macro");
+	/**
+	 * The runtime table global holding a macro's expander: the var's symbol plus
+	 * {@code %macro}.
+	 */
+	static LispSymbol macroTable(String key) {
+		return new LispSymbol(ClojureLowering.varSym(key).name() + "%macro");
 	}
 
 	/**
@@ -199,34 +203,25 @@ final class ClojureMacroLowering {
 	}
 
 	/**
-	 * A call whose head names a macro: the expansion, lowered in place of the call. A
-	 * local binding shadows the macro (a parameter, a {@code let} name); a macro name
-	 * without its expander is a call above its definition. Null when the head names no
-	 * macro.
+	 * A call whose head names a macro -- the current namespace's own, a referred one, or
+	 * one reached through an alias or its namespace's full name: the expansion, lowered
+	 * in place of the call. A local binding shadows the macro (a parameter, a {@code let}
+	 * name); a macro name without its expander is a call above its definition. Null when
+	 * the head names no macro.
 	 */
 	static @Nullable LispVal macroCall(ClojureLowering ctx, String name, List<LispVal> items) {
-		for (Map<String, ClojureLowering.Kind> scope : ctx.scopes) {
-			if (scope.containsKey(name)) {
-				return null; // a local binding shadows the macro
-			}
+		if (ctx.isLocal(name)) {
+			return null; // a local binding shadows the macro
 		}
-		LispVal expander = ctx.macros.get(name);
-		String macroName = name;
-		if (expander == null) {
-			ClojureLowering.VarRef qualified = ClojureNamespaceLowering.resolveQualified(ctx, name);
-			ClojureLowering.VarRef ref = qualified != null ? qualified : ctx.refers.get(name);
-			if (ref != null) {
-				expander = ctx.macros.get(ref.var());
-				macroName = ref.var();
-			}
-		}
-		if (expander == null) {
-			if (ctx.isMacro(name)) {
-				throw new LispReadException("macro `" + name + "` used before its definition");
-			}
+		String key = ctx.resolveVar(name);
+		if (key == null || ctx.globals.get(key) != ClojureLowering.Kind.MACRO) {
 			return null;
 		}
-		return expandMacro(ctx, macroName, expander, items);
+		LispVal expander = ctx.macros.get(key);
+		if (expander == null) {
+			throw new LispReadException("macro `" + name + "` used before its definition");
+		}
+		return expandMacro(ctx, name, expander, items);
 	}
 
 	/**
@@ -535,7 +530,11 @@ final class ClojureMacroLowering {
 			}
 			return bound;
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.idSym(name));
+		// a var of a project namespace qualifies with its namespace, like the
+		// oracle's read-time resolution, so the expansion reaches it from any
+		// namespace it expands in; core names and unresolved symbols stay bare
+		String key = ctx.lookupVar(name);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.idSym(key != null ? key : name));
 	}
 
 	/**
@@ -736,12 +735,73 @@ final class ClojureMacroLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gensym"), ctx.lower(items.get(1)));
 	}
 
-	/** {@code macroexpand-1} / {@code macroexpand} as a value: a one-argument lambda. */
+	/**
+	 * {@code macroexpand-1} / {@code macroexpand} as a value: a one-argument lambda over
+	 * the call site's macro scope.
+	 */
 	static LispVal macroexpandValue(ClojureLowering ctx, String helper) {
 		ctx.usedMacros = true;
 		LispSymbol form = new LispSymbol(ClojureLowering.mangle("expand-form"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(form),
-				ClojureLowerUtil.list(new LispSymbol(helper), form));
+				ClojureLowerUtil.list(new LispSymbol(helper), form, macroScope(ctx)));
+	}
+
+	/**
+	 * {@code (macroexpand-1 form)} / {@code (macroexpand form)}: the runtime expander
+	 * over the form and the call site's macro scope.
+	 */
+	static LispVal macroexpandCall(ClojureLowering ctx, String helper, LispVal form) {
+		ctx.usedMacros = true;
+		return ClojureLowerUtil.list(new LispSymbol(helper), form, macroScope(ctx));
+	}
+
+	/**
+	 * The macros a run-time expansion at this call site reaches by a spelling the table
+	 * lookup alone cannot -- the oracle resolves the head in the current namespace: a
+	 * bare name of the current namespace's own macro (outside {@code user}, whose table
+	 * spells the bare name already), a bare name a refer brought in, and an
+	 * alias-qualified name. A quoted alist of data symbol to table global, or nil when
+	 * there is none (a fully qualified name, and every {@code user} macro, need no
+	 * entry).
+	 */
+	static LispVal macroScope(ClojureLowering ctx) {
+		// sorted, so the same program spells the same alist on every run
+		Map<String, LispSymbol> spelled = new java.util.TreeMap<>();
+		ClojureNsState here = ctx.ns();
+		for (Map.Entry<String, ClojureLowering.Kind> global : ctx.globals.entrySet()) {
+			if (global.getValue() != ClojureLowering.Kind.MACRO) {
+				continue;
+			}
+			String key = global.getKey();
+			int slash = key.indexOf('/');
+			String ns = key.substring(0, slash);
+			String macro = key.substring(slash + 1);
+			if (ns.equals(ctx.currentNs) && !ns.equals("user")) {
+				spelled.putIfAbsent(macro, macroTable(key));
+			}
+			for (Map.Entry<String, String> alias : here.aliases.entrySet()) {
+				if (alias.getValue().equals(ns) && !alias.getKey().equals(ns)) {
+					spelled.putIfAbsent(alias.getKey() + "/" + macro, macroTable(key));
+				}
+			}
+		}
+		for (Map.Entry<String, ClojureLowering.VarRef> referred : here.refers.entrySet()) {
+			String key = ClojureLowering.varKey(referred.getValue().ns(), referred.getValue().var());
+			if (ctx.globals.get(key) == ClojureLowering.Kind.MACRO
+					&& !ctx.globals.containsKey(ClojureLowering.varKey(ctx.currentNs, referred.getKey()))) {
+				spelled.putIfAbsent(referred.getKey(), macroTable(key));
+			}
+		}
+		if (spelled.isEmpty()) {
+			return ClojureLowering.NIL_CONST;
+		}
+		LispVal alist = LispNil.INSTANCE;
+		List<Map.Entry<String, LispSymbol>> entries = new ArrayList<>(spelled.entrySet());
+		for (int i = entries.size() - 1; i >= 0; i--) {
+			alist = new LispCons(
+					new LispCons(ClojureLowerUtil.idSym(entries.get(i).getKey()), entries.get(i).getValue()), alist);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), alist);
 	}
 
 	/**
@@ -769,29 +829,50 @@ final class ClojureMacroLowering {
 		LispSymbol vec = new LispSymbol("vec");
 		LispSymbol index = new LispSymbol("index");
 		LispSymbol acc = new LispSymbol("acc");
-		// (defun C%MACRO-FN (op) ...): the expander for a macro call's head, or nil
+		LispSymbol scope = new LispSymbol("scope");
+		LispSymbol hit = new LispSymbol("hit");
+		// (defun C%MACRO-FN (op scope) ...): the expander for a macro call's head, or
+		// nil -- the call site's scope first (a bare or alias-qualified spelling the
+		// table cannot spell), else the table global the symbol spells, user's
+		// qualified spelling (a syntax-quoted user macro) read as the bare one
 		LispVal isMangled = ClojureHierarchyLowering.hfn("AND",
 				ClojureHierarchyLowering.hfn(">=", ClojureHierarchyLowering.hfn("LENGTH", name), new LispInteger(2)),
 				ClojureHierarchyLowering.hfn("CHAR=", ClojureHierarchyLowering.hfn("CHAR", name, new LispInteger(0)),
 						new LispChar('c')),
 				ClojureHierarchyLowering.hfn("CHAR=", ClojureHierarchyLowering.hfn("CHAR", name, new LispInteger(1)),
 						new LispChar('%')));
-		LispVal tabled = ClojureHierarchyLowering.hlet(
-				List.of(ClojureLowerUtil.list(found,
-						ClojureHierarchyLowering.hfn("INTERN",
-								ClojureHierarchyLowering.hfn("CONCATENATE", ClojureLowerUtil.quoted("string"), name,
-										LispString.literal("%macro"))))),
-				ClojureHierarchyLowering
-					.hfn("IF", ClojureHierarchyLowering.hfn("BOUNDP", found), ClojureHierarchyLowering.hlet(
+		String userPrefix = ClojureLowering.PREFIX + "user/";
+		LispVal unqualified = ClojureHierarchyLowering.hfn("IF",
+				ClojureHierarchyLowering.hfn("AND",
+						ClojureHierarchyLowering.hfn(">=", ClojureHierarchyLowering.hfn("LENGTH", name),
+								new LispInteger(userPrefix.length())),
+						ClojureHierarchyLowering.hfn("STRING=",
+								ClojureHierarchyLowering.hfn("SUBSEQ", name, new LispInteger(0),
+										new LispInteger(userPrefix.length())),
+								LispString.literal(userPrefix))),
+				ClojureHierarchyLowering.hfn("CONCATENATE", ClojureLowerUtil.quoted("string"),
+						LispString.literal(ClojureLowering.PREFIX),
+						ClojureHierarchyLowering.hfn("SUBSEQ", name, new LispInteger(userPrefix.length()))),
+				name);
+		LispVal tableOf = ClojureHierarchyLowering.hfn("IF", hit, ClojureHierarchyLowering.hfn("CDR", hit),
+				ClojureHierarchyLowering.hfn("IF", isMangled,
+						ClojureHierarchyLowering.hfn("INTERN", ClojureHierarchyLowering.hfn("CONCATENATE",
+								ClojureLowerUtil.quoted("string"), unqualified, LispString.literal("%macro"))),
+						ClojureLowering.NIL_CONST));
+		LispVal tabled = ClojureHierarchyLowering
+			.hlet(List.of(ClojureLowerUtil.list(found, tableOf)), ClojureHierarchyLowering.hfn("IF",
+					ClojureHierarchyLowering.hfn("AND", found, ClojureHierarchyLowering.hfn("BOUNDP", found)),
+					ClojureHierarchyLowering.hlet(
 							List.of(ClojureLowerUtil.list(cell, ClojureHierarchyLowering.hfn("SYMBOL-VALUE", found))),
 							ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("FUNCTIONP", cell), cell,
 									ClojureLowering.NIL_CONST)),
-							ClojureLowering.NIL_CONST));
-		runtime.add(ClojureHierarchyLowering.hdefun("C%MACRO-FN", List.of(op),
+					ClojureLowering.NIL_CONST));
+		runtime.add(ClojureHierarchyLowering.hdefun("C%MACRO-FN", List.of(op, scope),
 				ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("SYMBOLP", op),
 						ClojureHierarchyLowering.hlet(
-								List.of(ClojureLowerUtil.list(name, ClojureHierarchyLowering.hfn("SYMBOL-NAME", op))),
-								ClojureHierarchyLowering.hfn("IF", isMangled, tabled, ClojureLowering.NIL_CONST)),
+								List.of(ClojureLowerUtil.list(hit, ClojureHierarchyLowering.hfn("ASSOC", op, scope)),
+										ClojureLowerUtil.list(name, ClojureHierarchyLowering.hfn("SYMBOL-NAME", op))),
+								tabled),
 						ClojureLowering.NIL_CONST)));
 		// (defun C%UNMANGLE (text at end) ...): the demangled spelling as a string
 		LispVal step = ClojureHierarchyLowering.hfnDef("STEP", List.of(at, chars), ClojureHierarchyLowering.hfn("IF",
@@ -860,6 +941,8 @@ final class ClojureMacroLowering {
 				ClojureHierarchyLowering.hlabels(List.of(walkVec),
 						ClojureHierarchyLowering.hfn("WALK", new LispInteger(0), ClojureLowering.NIL_CONST))));
 		// (defun C%DEMANGLE (x) ...): lists and vectors demangled, anything else itself
+		// -- a string included: it is a vector here, and walking it would answer its
+		// characters (a keyword wrapper holds one, so it would print as a vector too)
 		runtime.add(ClojureHierarchyLowering.hdefun("C%DEMANGLE", List.of(value), ClojureHierarchyLowering.hfn("COND",
 				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("NULL", value), ClojureLowering.NIL_CONST),
 				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("SYMBOLP", value),
@@ -869,32 +952,32 @@ final class ClojureMacroLowering {
 								ClojureHierarchyLowering.hfn("C%DEMANGLE", ClojureHierarchyLowering.hfn("CAR", value)),
 								ClojureHierarchyLowering.hfn("C%DEMANGLE",
 										ClojureHierarchyLowering.hfn("CDR", value)))),
+				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("STRINGP", value), value),
 				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("VECTORP", value),
 						ClojureHierarchyLowering.hfn("C%DEMANGLE-VECTOR", value)),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, value))));
-		// (defun C%MACROEXPAND-1 (form) ...): one expansion, demangled for printing
-		runtime
-			.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form), ClojureHierarchyLowering.hlet(
-					List.of(ClojureLowerUtil.list(next,
-							ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
-									ClojureHierarchyLowering.hfn("C%MACRO-FN",
-											ClojureHierarchyLowering.hfn("CAR", form)),
-									ClojureLowering.NIL_CONST))),
-					ClojureHierarchyLowering.hfn("C%DEMANGLE", ClojureHierarchyLowering.hfn("IF", next,
-							ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form)),
-							form)))));
-		// (defun C%MACROEXPAND (form) ...): to the fixpoint, demangled once at the end
-		LispVal walkExpand = ClojureHierarchyLowering
-			.hfnDef("WALK", List.of(form), ClojureHierarchyLowering.hlet(
-					List.of(ClojureLowerUtil.list(next,
-							ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
-									ClojureHierarchyLowering.hfn("C%MACRO-FN",
-											ClojureHierarchyLowering.hfn("CAR", form)),
-									ClojureLowering.NIL_CONST))),
-					ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("WALK",
-							ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form))),
-							form)));
-		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND, List.of(form),
+		// (defun C%MACROEXPAND-1 (form scope) ...): one expansion, demangled
+		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form, scope),
+				ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil.list(next,
+						ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
+								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", form),
+										scope),
+								ClojureLowering.NIL_CONST))),
+						ClojureHierarchyLowering.hfn("C%DEMANGLE",
+								ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("FUNCALL", next,
+										ClojureHierarchyLowering.hfn("CDR", form)), form)))));
+		// (defun C%MACROEXPAND (form scope) ...): to the fixpoint, demangled once
+		LispVal walkExpand = ClojureHierarchyLowering.hfnDef("WALK", List.of(form),
+				ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil.list(next,
+						ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
+								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", form),
+										scope),
+								ClojureLowering.NIL_CONST))),
+						ClojureHierarchyLowering.hfn("IF", next,
+								ClojureHierarchyLowering.hfn("WALK", ClojureHierarchyLowering.hfn("FUNCALL", next,
+										ClojureHierarchyLowering.hfn("CDR", form))),
+								form)));
+		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND, List.of(form, scope),
 				ClojureHierarchyLowering.hlabels(List.of(walkExpand),
 						ClojureHierarchyLowering.hfn("C%DEMANGLE", ClojureHierarchyLowering.hfn("WALK", form)))));
 		return runtime;

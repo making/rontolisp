@@ -14,6 +14,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.clojure.Clojure;
+import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 
@@ -133,7 +134,8 @@ public enum SourceLanguage {
 					file);
 		}
 		if (this == CLOJURE) {
-			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create()), source, file);
+			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader)),
+					source, file);
 		}
 		return refuseCircularLists(
 				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
@@ -183,6 +185,52 @@ public enum SourceLanguage {
 			}
 			catch (IOException ex) {
 				return null;
+			}
+		};
+	}
+
+	/**
+	 * The files a Clojure program names, through a loader: the project namespaces a
+	 * {@code require} loads and the {@code deps.edn} naming their roots. Where the roots
+	 * are is the front end's decision ({@code clojure/ClojureSourcePath}); this only
+	 * reads and joins paths. A parent directory is absolute, so the search for a
+	 * {@code deps.edn} walks past the top of a relative entry path; a host with no
+	 * working directory (the browser) keeps the lexical parent.
+	 * @param loader the loader, or {@code null} for none
+	 * @return the files
+	 */
+	static ClojureFiles clojureFiles(@Nullable SourceLoader loader) {
+		if (loader == null) {
+			return ClojureFiles.NONE;
+		}
+		return new ClojureFiles() {
+			@Override
+			public @Nullable String read(String path) {
+				if (!loader.exists(path)) {
+					return null;
+				}
+				try {
+					return loader.load(path);
+				}
+				catch (IOException ex) {
+					return null;
+				}
+			}
+
+			@Override
+			public @Nullable String parent(String path) {
+				try {
+					java.nio.file.Path parent = java.nio.file.Path.of(path).toAbsolutePath().normalize().getParent();
+					return parent == null ? null : parent.toString();
+				}
+				catch (RuntimeException ex) {
+					return SourceLoader.parentDir(path);
+				}
+			}
+
+			@Override
+			public String resolve(@Nullable String dir, String relative) {
+				return SourceLoader.resolve(dir, relative);
 			}
 		};
 	}

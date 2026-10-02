@@ -2,8 +2,9 @@
 
 Code that writes code. A `defmacro` defines a compile-time expander: call sites
 expand while lowering, before any backend runs, and the same expander answers
-`macroexpand-1` at run time. Templates are syntax-quote over the `c%` namespace,
-with `~`/`~@` and per-expansion `x#` gensyms. The `unless` below is
+`macroexpand-1` at run time. Templates are syntax-quote, a var the defining namespace
+sees qualifying with its namespace, with `~`/`~@` and per-expansion `x#` gensyms. The
+`unless` below is
 `(defmacro unless [c t] (list 'if c nil t))`.
 
 | Name | Example | Result |
