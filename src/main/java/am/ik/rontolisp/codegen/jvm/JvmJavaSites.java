@@ -141,6 +141,9 @@ final class JvmJavaSites {
 			if (implementation.resolved()) {
 				return null;
 			}
+			if (LispNames.JAVA_SUBCLASS_QUALIFIED.equals(((LispSymbol) site.car()).name())) {
+				return "it extends its superclass with a generated class: " + implementation.reason();
+			}
 			return "it implements its interface with java.lang.reflect.Proxy: " + implementation.reason();
 		}
 		JavaSite resolution = resolve(site);

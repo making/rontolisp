@@ -76,7 +76,7 @@ final class WasmDotimesCompiler {
 			// An async body's locals belong to the spill machinery, and --dynamic
 			// resolves variables through the environment. A top-level counter is fine:
 			// the eval mirror writes a global backing store, never a lexical slot
-			// (WasmSetqCompiler.mirrorsTopLevelGlobal), and a dotimes counter is a
+			// (WasmSetqCompiler.mirrorsGlobal), and a dotimes counter is a
 			// lexical no eval'd form can name.
 			return false;
 		}

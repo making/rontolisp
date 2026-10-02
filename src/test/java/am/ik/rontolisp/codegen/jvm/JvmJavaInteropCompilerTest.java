@@ -782,6 +782,90 @@ class JvmJavaInteropCompilerTest {
 			.hasMessage("java:proxy expects (java:proxy \"interface\"... callable)");
 	}
 
+	// Mirrors JavaInteropTest#aSubclassExtendsItsSuperclass.
+	@Test
+	void aSubclassExtendsItsSuperclass() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.SUBCLASS))
+			.isEqualTo(JavaImplementationPrograms.SUBCLASS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#whatASubclassCannotDoIsAnError: what fails when the
+	// resolved form runs raises what the interpreter raises; a form left to run time
+	// is refused by name (the bridge generates no classes), and --java-static refuses
+	// it before it runs.
+	@Test
+	void whatASubclassCannotDoIsAnError() {
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this name &rest args) "s")) "lastModified")
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass: cannot return \"s\" as long from java.io.File");
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.io.File" '() '("toString") 1 (lambda (this name &rest args) "s")) "toString")
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("No matching constructor for java.io.File with 1 argument(s)");
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.util.AbstractList" '() '("size") (lambda (this name &rest args) 0)) "get" 0)
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java.lang.UnsupportedOperationException: get");
+		// A superclass that is no class, a final one, an unknown method and
+		// constructor arguments no constructor takes leave the form to run time.
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.util.function.Supplier\" '() '() (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.util.function.Supplier is left to run time");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.io.File\" '() '(\"nope\") \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.io.File\" '() '() 1 2 3 4 5 (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		// A superclass computed at run time is refused by name too (the interpreter
+		// resolves it when it runs).
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(let ((super "java.io.File"))
+						  (print (java:call (java:subclass super '() '("lastModified") "x" (lambda (this name &rest args) 42)) "lastModified")))
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(let ((super "java.io.File"))
+					  (java:subclass super '() '("lastModified") "x" (lambda (this name &rest args) 42)))
+					"""))).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-static: 1 java: call cannot be compiled without reflection:")
+			.hasMessageContaining("java:subclass: it extends its superclass with a generated class:");
+	}
+
+	// A resolved java:subclass needs no bridge and no reflection: its class is
+	// generated, like a java:proxy's. (Calls on the object are resolved by its
+	// class when they run, as for a proxy of several interfaces.)
+	@Test
+	void aResolvedSubclassNeedsNoBridge() throws Exception {
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(java:subclass "java.io.File" '() '("lastModified") "recent"
+					  (lambda (this name &rest args) 42))
+					"""));
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect");
+	}
+
 	// A reify passed where its interface is expected resolves the call before it runs:
 	// the object's kind is its interface's implementation, so the call is direct.
 	@Test

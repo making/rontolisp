@@ -56,6 +56,24 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void stringWriterBindsToOutAndStrAnswersWithoutClearing() throws Exception {
+		// b76: a zero-argument (new java.io.StringWriter) lowers to a string
+		// output stream (never a host Writer), so binding *out* to it captures
+		// printing, and str/.toString answer the text so far WITHOUT clearing it
+		// (the oracle prints 12 12 12). The all-four-backend pin is the
+		// clojure-spec.yaml case; the (Class.) spelling and the excerpt macro live
+		// here with the other interop pins.
+		assertBothEqual("(let [b76-s (new java.io.StringWriter)] (binding [*out* b76-s] (print 1) (print 2))"
+				+ " (println (str b76-s) (str b76-s) (.toString b76-s)))", "12 12 12\n");
+		assertBothEqual("(let [b76-w (java.io.StringWriter.)] (. b76-w write \"ab\") (. b76-w flush)"
+				+ " (println (str b76-w)) (. b76-w close))", "ab\n");
+		assertBothEqual(
+				"(defmacro with-out-str [& body] `(let [s# (new java.io.StringWriter)]"
+						+ " (binding [*out* s#] ~@body (str s#)))) (println (with-out-str (print 1) (print 2)))",
+				"12\n");
+	}
+
+	@Test
 	void staticFieldsAnswerAsValues() throws Exception {
 		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
 		// value, through an import
@@ -181,6 +199,122 @@ class ClojureInteropTest {
 				(println (count (.getActionListeners (javax.swing.Timer. 10 q))))
 				(println (try (.keyPressed q nil) (catch Exception e (ex-message e))))
 				""", ":clicked nil\n1\nno proxy method: keyPressed\n");
+	}
+
+	// Oracle: a proxy over a class extends it -- the sequences test's File shape:
+	// the constructor arguments choose the superclass constructor, a named method
+	// runs its body, an unnamed one is inherited.
+	@Test
+	void proxyOverAClassExtendsIt() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [java.io.File] ["recent"] (lastModified [] 42)))
+				(println (.lastModified p))
+				(println (.getName p))
+				(println (.toString p))
+				""", "42\nrecent\nrecent\n");
+	}
+
+	// Oracle: toString/equals/hashCode run their bodies; this is the proxy object;
+	// proxy-super calls the superclass implementation.
+	@Test
+	void proxyOverAClassSeesThisAndSuper() throws Exception {
+		assertBothEqual("""
+				(ns b71this (:import (java.io File)))
+				(def p (proxy [File] ["x"]
+				         (toString [] (str "super-was:" (proxy-super toString)))
+				         (equals [o] true)
+				         (hashCode [] 7)))
+				(println (.toString p))
+				(println (.equals p p))
+				(println (.hashCode p))
+				(println (.getName p))
+				""", "super-was:x\ntrue\n7\nx\n");
+	}
+
+	// Oracle: a protected method overrides -- paintComponent records -- while an
+	// unnamed one is inherited.
+	@Test
+	void proxyOverAClassOverridesProtectedMethods() throws Exception {
+		assertBothEqual("""
+				(ns b71paint (:import (javax.swing JPanel)))
+				(def seen (atom []))
+				(def p (proxy [JPanel] [] (paintComponent [g] (swap! seen conj :painted))))
+				(.paintComponent p nil)
+				(println @seen)
+				(println (.isOpaque p))
+				""", "[:painted]\ntrue\n");
+	}
+
+	// The book's snake.clj shape: a class with interfaces over a constructor without
+	// arguments, this with a type hint, and an inherited method beside the bodies.
+	@Test
+	void proxyOverAClassWithInterfacesRunsSnakeShapes() throws Exception {
+		assertBothEqual("""
+				(ns b71snake (:import (javax.swing JPanel) (java.awt.event ActionListener KeyListener)))
+				(def p (proxy [JPanel ActionListener KeyListener] []
+				         (actionPerformed [e] (.repaint ^JPanel this))
+				         (keyPressed [e] nil)
+				         (keyReleased [e] nil)
+				         (keyTyped [e] nil)
+				         (toString [] "panel!")))
+				(println (.toString p))
+				(.actionPerformed p nil)
+				(println :repaint-ok)
+				(println (.isOpaque p))
+				""", "panel!\n:repaint-ok\ntrue\n");
+	}
+
+	// The book's interop.clj shape: a SAX handler proxy receives parser callbacks.
+	@Test
+	void proxyOverAClassHandlesSaxCallbacks() throws Exception {
+		java.nio.file.Path fixture = workDir.resolve("b71-sax.xml");
+		java.nio.file.Files.writeString(fixture, "<a><b/></a>");
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual(
+				"(ns b71sax (:import (org.xml.sax.helpers DefaultHandler)))" + "(def seen (atom []))"
+						+ "(def h (proxy [DefaultHandler] []"
+						+ " (startElement [uri local qname attrs] (swap! seen conj qname))"
+						+ " (endElement [uri local qname] (swap! seen conj (str \"/\" qname)))))"
+						+ "(let [f (javax.xml.parsers.SAXParserFactory/newInstance)]"
+						+ " (.parse (.newSAXParser f) (java.io.File. " + path + ") h))" + "(println @seen)",
+				"[a b /b /a]\n");
+	}
+
+	// An unnamed abstract method throws with the method's name when it is called; a
+	// final superclass, an unknown method, a second class, a duplicate method, an
+	// argument vector that is no vector and a proxy-super outside a method are
+	// refused by name.
+	@Test
+	void proxyOverAClassRefusals() throws Exception {
+		assertBothEqual("""
+				(ns b71uoe (:import (java.util AbstractList)) (:require [clojure.string :as s]))
+				(def a (proxy [AbstractList] [] (size [] 0)))
+				(println (.size a))
+				(println (try (.get a 0)
+				           (catch Exception e (s/includes? (ex-message e) "UnsupportedOperationException: get"))))
+				""", "0\ntrue\n");
+		assertThatThrownBy(
+				() -> interpret("(ns b71r1 (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		assertThatThrownBy(
+				() -> runOnJvm("(ns b71r1 (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] [\"x\"] (nope [] 1))")).isInstanceOf(Exception.class)
+			.hasMessageContaining("has no method nope");
+		assertThatThrownBy(() -> runOnJvm("(proxy [java.io.File] [\"x\"] (nope [] 1))")).isInstanceOf(Exception.class)
+			.hasStackTraceContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File java.lang.String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("is a class, not an interface");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] [\"x\"] (getName [] 1) (getName [] 2))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy defines method getName twice");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] \"x\" (getName [] 1))")).isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy takes an argument vector, not");
+		assertThatThrownBy(() -> interpret("(proxy-super toString)")).isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy-super outside a proxy method");
 	}
 
 	@Test

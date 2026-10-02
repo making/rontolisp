@@ -48,7 +48,7 @@ final class WasmDefvarCompiler {
 				// otherwise pay a local.tee AND a local per top-level binding for a
 				// reader that is not there.
 				int tmpSlot = -1;
-				if (WasmSetqCompiler.mirrorsTopLevelGlobal(name.name(), ctx)) {
+				if (WasmSetqCompiler.mirrorsGlobal(name.name(), ctx)) {
 					tmpSlot = ctx.allocTemp();
 					ctx.writer.write(Instruction.TEE_LOCAL);
 					ctx.writer.writeUnsignedLeb128(tmpSlot);
@@ -58,7 +58,7 @@ final class WasmDefvarCompiler {
 				// Stack stays clean (SET_GLOBAL consumed the value, the mirror drops the
 				// _store return).
 				if (tmpSlot >= 0) {
-					WasmSetqCompiler.mirrorTopLevelGlobal(name.name(), tmpSlot, ctx);
+					WasmSetqCompiler.mirrorGlobal(name.name(), tmpSlot, ctx);
 				}
 				ctx.definedGlobals.add(name.name());
 			}
@@ -70,11 +70,11 @@ final class WasmDefvarCompiler {
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(slot);
 			// Mirror the binding into the eval runtime's global env (no-op unless the
-			// name has a global backing store and eval is used at top level -- a defvar
+			// name has a global backing store and eval is used -- a defvar
 			// without one is a lexical of this function body); the stack is left clean
-			// (the SET_LOCAL consumed the value and mirrorTopLevelGlobal drops the
+			// (the SET_LOCAL consumed the value and mirrorGlobal drops the
 			// _store return).
-			WasmSetqCompiler.mirrorTopLevelGlobal(name.name(), slot, ctx);
+			WasmSetqCompiler.mirrorGlobal(name.name(), slot, ctx);
 		}
 		// defvar returns the variable name symbol -- unless the caller is dropping it.
 		if (emitName) {

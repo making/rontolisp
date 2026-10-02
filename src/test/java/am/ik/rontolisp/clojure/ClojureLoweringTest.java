@@ -994,11 +994,29 @@ class ClojureLoweringTest {
 			.contains("(JAVA:PROXY \"java.util.function.Supplier\" \"java.lang.Runnable\" (LAMBDA");
 		assertThatThrownBy(() -> Clojure.read("(proxy [] [] (get [] 1))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy takes at least one interface");
-		// A superclass (the book's snake.clj JPanel) is refused by name, before it runs.
-		assertThatThrownBy(() -> Clojure
-			.read("(proxy [javax.swing.JPanel java.awt.event.ActionListener] [] (actionPerformed [e] nil))", null))
+		// A superclass (the book's snake.clj JPanel) is a java:subclass: the
+		// superclass, the quoted interfaces and methods, the constructor arguments
+		// and the callable taking this first.
+		assertThat(lowered(
+				"(proxy [javax.swing.JPanel java.awt.event.ActionListener] [] (actionPerformed [e] nil) (toString [] \"p\"))"))
+			.contains("(JAVA:SUBCLASS \"javax.swing.JPanel\"")
+			.contains("'(\"java.awt.event.ActionListener\")")
+			.contains("'(\"actionPerformed\" \"toString\")");
+		// A class behind the first position is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File java.lang.String] [] (toString [] \"p\"))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy over a class is not supported yet: javax.swing.JPanel");
+			.hasMessageContaining("is a class, not an interface");
+		// A final superclass is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.String] [] (toString [] \"p\"))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		// A duplicate method is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (getName [] 1) (getName [] 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy defines method getName twice");
+		// A proxy-super outside a proxy method is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy-super toString)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy-super outside a proxy method");
 		// java:proxy keeps Object's three, so a body for one would never run.
 		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (run []) (toString [] \"p\"))", null))
 			.isInstanceOf(LispReadException.class)
@@ -1006,9 +1024,28 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (equals [o] true))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy cannot override equals yet");
-		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (lastModified [] 0))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy over a class is not supported yet: java.io.File");
+		// The sequences test's File proxy is a java:subclass with constructor
+		// arguments, this in its bodies and no refusal.
+		assertThat(lowered("(proxy [java.io.File] [\"f\"] (lastModified [] (str this)) (toString [] \"f!\"))"))
+			.contains("(JAVA:SUBCLASS \"java.io.File\"")
+			.contains("'(\"lastModified\" \"toString\")")
+			.contains("\"f\"");
+	}
+
+	@Test
+	void aZeroArgumentStringWriterLowersToAStringOutputStream() {
+		// b76: a zero-argument (new java.io.StringWriter) -- the oracle's own
+		// with-out-str construction -- is a string output stream on every backend,
+		// never a java:new (which wasm refuses); .toString of one answers the
+		// text so far without clearing it, so str reads it back twice.
+		assertThat(lowered("(new java.io.StringWriter)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter.)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+			.doesNotContain("JAVA:NEW");
+		// an initial capacity keeps the host construction, like any other class
+		assertThat(lowered("(new java.io.StringWriter 16)")).contains("JAVA:NEW").contains("java.io.StringWriter");
+		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains("GET-OUTPUT-STREAM-STRING")
+			.contains("WRITE-STRING");
 	}
 
 	@Test
@@ -1314,7 +1351,7 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
 		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%a|");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%user/a|");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -1661,6 +1698,14 @@ class ClojureLoweringTest {
 			.contains("|c%*d*|")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
 		assertThat(lowered("(binding [*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
+		// a syntax-quote qualifies the stream specials (b77: `*out* reads
+		// clojure.core/*out*), and the oracle binds the qualified spelling like
+		// the bare one (b79)
+		assertThat(lowered("(binding [clojure.core/*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
+		assertThat(lowered("(binding [clojure.core/*in* 1] 1)")).contains("*STANDARD-INPUT*");
+		assertThatThrownBy(() -> Clojure.read("(binding [clojure.core/nope 1] 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("binding clojure.core/nope needs a ^:dynamic var");
 		assertThatThrownBy(() -> Clojure.read("(def x 1) (binding [x 2] x)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("binding x needs a ^:dynamic var");
@@ -1714,8 +1759,12 @@ class ClojureLoweringTest {
 			.hasMessageContaining("promise is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(deliver p 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deliver is not supported yet");
+		// proxy-super lowers inside a proxy method body only.
 		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy-super is not supported yet");
+			.hasMessageContaining("proxy-super outside a proxy method");
+		assertThat(lowered("(proxy [java.io.File] [\"f\"] (toString [] (proxy-super toString)))"))
+			.contains("JAVA:SUBCLASS")
+			.contains("super$toString$0");
 	}
 
 	@Test
@@ -1923,10 +1972,30 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesTheVarsItsNamespaceSees() {
 		// like the oracle's read-time resolution: an own or referred var carries its
-		// namespace (user's included); core names and unresolved symbols stay bare
-		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope))")).contains("'|c%s.a/h|")
-			.contains("'|c%nope|");
+		// namespace (user's included); anything else qualifies too (b77): a core
+		// name the namespace sees as clojure.core/name, any other unresolved
+		// spelling with the defining namespace, an alias head with its namespace,
+		// a class head with its fully qualified name
+		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))")).contains("'|c%s.a/h|")
+			.contains("'|c%s.a/nope|")
+			.contains("'|c%clojure.core/let|");
 		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
+		assertThat(loweredWithMacros(
+				"(ns s.b (:require [clojure.string :as s])) (defmacro m [] `(s/join s/nope System/nanoTime foo/bar import*))"))
+			.contains("'|c%clojure.string/join|")
+			.contains("'|c%clojure.string/nope|")
+			.contains("'|c%java.lang.System/nanoTime|")
+			.contains("'|c%foo/bar|")
+			.contains("'|c%s.b/import*|");
+		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
+			.contains("'|c%s.c/map|")
+			.contains("'|c%clojure.core/filter|");
+		// a class spelling is already fully qualified (b79, measured on the
+		// oracle: `java.io.StringWriter reads as written, `String as
+		// java.lang.String) -- never with the defining namespace
+		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
+			.contains("'|c%java.io.StringWriter|")
+			.contains("'|c%java.lang.String|");
 	}
 
 	@Test
@@ -1996,9 +2065,21 @@ class ClojureLoweringTest {
 			.contains("(DECLAIM (SPECIAL |c%app.dyn/y| |c%app.dyn/y%bound-depth|))")
 			.contains("(DEFPARAMETER |c%app.dyn/y%bound-depth| 0)")
 			.contains("(SETQ |c%app.dyn/x| 1)")
-			.contains("(DEFVAR |c%app.dyn/y%set| NIL)")
-			.contains("(UNLESS |c%app.dyn/y%set| (SETQ |c%app.dyn/y| 2) (SETQ |c%app.dyn/y%set| T))");
+			// b78: a reload keeps the defonce root through a runtime boundp probe
+			// of the var itself -- every store feeds the eval mirror the probe
+			// reads, so no set flag beside the var is needed any more
+			.contains("(UNLESS (BOUNDP '|c%app.dyn/y|) (SETQ |c%app.dyn/y| 2))")
+			.doesNotContain("%set");
 		assertThat(out).doesNotContain("(DEFPARAMETER |c%app.dyn/x| 1)");
+	}
+
+	@Test
+	void aDefonceInANamespaceKeepsItsRootThroughBoundp() {
+		// the plain (non-dynamic) init shape rides the same probe: the init's own
+		// assignment poisons the name, so the compile-time boundp fold leaves the
+		// probe to the run time, where the mirror answers it (b78)
+		String out = loweredWithFiles("(require 'app.once)", Map.of("src/app/once.clj", "(ns app.once) (defonce v 1)"));
+		assertThat(out).contains("(UNLESS (BOUNDP '|c%app.once/v|) (SETQ |c%app.once/v| 1))").doesNotContain("%set");
 	}
 
 }

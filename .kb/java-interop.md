@@ -1,7 +1,7 @@
 # `java:` interop (interpreter, JVM direct calls, generated interface classes, the reflection bridge)
 
 Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `java:new`,
-`java:call`, `java:static`, `java:field`, `java:proxy`, `java:reify`; the type specifier
+`java:call`, `java:static`, `java:field`, `java:proxy`, `java:subclass`, `java:reify`; the type specifier
 `java:object` and the variable `java:*warn-on-reflection*` (static resolution, below).
 
 - Interpreter: `eval/JavaInterop`, `LispEvaluator.registerJava()`; value = `LispJavaObject`,
@@ -453,7 +453,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `JavaImplementationPrograms.PROXY_SEVERAL` / `_PASSED` / `FALSE_SINGLE_IMPLEMENTATION` in
   `JavaInteropTest` and `JvmJavaInteropCompilerTest`, `JavaImplementationsTest`, the parity
   test's `proxySlots(Class[])` corpus. A superclass is not an interface: a proxy over a class
-  needs a generated subclass on the interpreter too (no `Proxy` can), b71.
+  needs a generated subclass on the interpreter too (no `Proxy` can) -- `java:subclass`,
+  next section.
 - Dispatch key is `name(params)return` (`Slot.dispatchKey`): a covariant default variant is never
   shadowed by an abstract sibling.
 - A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT
@@ -518,6 +519,60 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `Runnable` on a thread, a `forEach` lambda, a literal proxy, `IntBinaryOperator`) built in 26 s,
   output identical to `java -jar`
   (`ShippedBridgeNativeImageE2eTest#anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration`).
+
+## Extending a class (java:subclass, b71)
+
+- `(java:subclass "S" '(\"I\"...) '(\"m\"...) ctor-args... callable)`: one object extending
+  the superclass `S` (and the extra interfaces `I...`), each named method calling the
+  callable as `(callable this name args...)` -- `this` first, then the name, so a Clojure
+  proxy body sees its object and a `proxy-super` reaches the superclass implementation
+  through the generated `super$m$a` accessor (one public method per named (name, arity),
+  calling the most derived concrete declaration, else an interface default; none when no
+  superclass implementation exists). The constructor arguments choose the superclass
+  constructor by THE rule (`JavaOverloads` over the public and protected constructors),
+  always when the form runs on the interpreter, by a generated program-side dispatch
+  (`_jsubclass$N`, the dispatched-site scan over the same overloads) compiled.
+- One rule, `compiler/JavaImplementations.subclass` over `JavaType.overridableMethods()`
+  (the public or protected non-final instance methods of the class chain, bridge and
+  synthetic ones never, most-derived wins, covariant variants kept) and
+  `subclassConstructors()` (public and protected): both lookups implement both, pinned by
+  `JvmClassFileLookupTest#everySuperclassIsSubclassedTheSame`. A named method is a slot
+  calling the callable; an unnamed concrete class method is inherited (it calls super);
+  an unnamed abstract one -- and an unnamed interface method -- is a slot throwing
+  `UnsupportedOperationException` with the method's name (the oracle). `toString` /
+  `equals` / `hashCode` override like any other class method (unlike `java:proxy`, which
+  keeps `Object`'s three).
+- The object's KIND is `compiler/JavaImplementationType` with a superclass (canonical per
+  superclass and interface list in each lookup): assignable to the superclass, its chain
+  and the interfaces; `single()` is null, so a call on it and a `(java:object ... :exact)`
+  spell nothing and resolve by its class when they run, while passing it where the
+  superclass is expected resolves (a `WIDEN`). A direct call's kind test is `instanceof`
+  the superclass (but not exactly it) and each interface, with exactly the extra
+  interfaces directly implemented -- as strict as the interpreter's identity kind check.
+- Interpreter (`eval/JavaInterop`, `eval/ClassProxyMaker`): the subclass is defined at run
+  time (`java.lang.classfile`, one child loader per class, the dispatch interface
+  `eval/ClassProxyHandler` typed with JDK types only); the constructor is chosen over the
+  argument kinds, never remembered. Interpreted native image stays refused as today.
+- JVM (`JvmJavaImplementations`, owned by `JvmJavaSites`): one `$Subclass<N>` per
+  (superclass, interfaces, slots, arity) shape, one constructor per viable superclass
+  constructor overload (linkable parameters), the `fns` field, public overrides calling
+  the program-side `_jsub$K(Object fn, Object self, Object[] args)` callbacks (the
+  `_jimpl$K` shape with `this` and the name first, shaker roots and split-pinned the
+  same), no default `toString`. A form left to run time is refused by name (the bridge's
+  `javaSubclass` throws; `--java-static` refuses at codegen naming the reason) -- the
+  interpreter resolves it when it runs, so computed names diverge by backend, documented
+  in the guide.
+- A project class the compile class path lacks resolves the same way: the interpreter
+  loads it, the compiler leaves the form to run time (bridge refusal), so a class proxy
+  over one needs `--java-classpath`.
+- Tests: `testsupport/JavaImplementationPrograms.SUBCLASS` (both backends),
+  `JavaInteropTest` / `JvmJavaInteropCompilerTest` (resolved errors alike, unresolved
+  refusals, `--java-static`), `JavaImplementationsTest` (slots, resolution, kinds),
+  `ClojureInteropTest` (the `File`, `proxy-super`, `paintComponent`, snake and SAX
+  shapes) and `ClojureWasmInteropRefusalTest` (both wasm backends refuse `java:subclass`
+  with the undefined-function call-time error, like every `java:` leg); user doc
+  `guides/java-interop.md` ("Class proxies via java:subclass"), `reference/functions/
+  java-subclass.md` and the Clojure `proxy` page.
 
 ## What a callback raises passes through the Java call
 - A function called back from Java (a `java:reify` / `java:proxy` object's method, a function

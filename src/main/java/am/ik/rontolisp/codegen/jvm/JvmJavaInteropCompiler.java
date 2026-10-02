@@ -14,18 +14,18 @@ import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaSite;
 
 /**
- * Compiles the six {@code java:} interop functions ({@code java:new}, {@code java:call},
- * {@code java:static}, {@code java:field}, {@code java:proxy}, {@code java:reify}). A
- * site the shared resolver resolves at compile time ({@link JvmJavaSites}) becomes a
- * DIRECT call: the site evaluates its receiver and arguments and calls its own method
- * ({@link JvmJavaDirectSites}), which checks them, converts them and invokes the member
- * with plain bytecode, exactly as the interpreter runs the same site. A
- * {@code java:reify} or {@code java:proxy} whose interface resolves evaluates its
- * functions and calls the factory of the class generated for it
- * ({@link JvmJavaImplementations}). Any other site -- left to run time -- calls the
- * {@link JavaBridgeTemplate bridge class} shipped beside the program: it first invokes
- * the emitted {@code _javaInit} helper (which binds the program into the bridge, see
- * {@link JvmJavaRuntimeBuilder}), then evaluates the arguments -- the leading fixed
+ * Compiles the seven {@code java:} interop functions ({@code java:new},
+ * {@code java:call}, {@code java:static}, {@code java:field}, {@code java:proxy},
+ * {@code java:reify}, {@code java:subclass}). A site the shared resolver resolves at
+ * compile time ({@link JvmJavaSites}) becomes a DIRECT call: the site evaluates its
+ * receiver and arguments and calls its own method ({@link JvmJavaDirectSites}), which
+ * checks them, converts them and invokes the member with plain bytecode, exactly as the
+ * interpreter runs the same site. A {@code java:reify} or {@code java:proxy} whose
+ * interface resolves evaluates its functions and calls the factory of the class generated
+ * for it ({@link JvmJavaImplementations}). Any other site -- left to run time -- calls
+ * the {@link JavaBridgeTemplate bridge class} shipped beside the program: it first
+ * invokes the emitted {@code _javaInit} helper (which binds the program into the bridge,
+ * see {@link JvmJavaRuntimeBuilder}), then evaluates the arguments -- the leading fixed
  * arguments as-is and the variadic tail packed into an {@code Object[]} -- and calls the
  * matching bridge entry point, which resolves by reflection from the receiver's run-time
  * class and the argument kinds. Under {@code --java-static} such a site is a compile
@@ -37,13 +37,14 @@ final class JvmJavaInteropCompiler {
 	}
 
 	/**
-	 * Returns whether the given {@code java} package member is one of the six interop
+	 * Returns whether the given {@code java} package member is one of the seven interop
 	 * functions this compiler handles.
 	 */
 	static boolean handles(String member) {
 		return LispNames.JAVA_NEW.equals(member) || LispNames.JAVA_CALL.equals(member)
 				|| LispNames.JAVA_STATIC.equals(member) || LispNames.JAVA_FIELD.equals(member)
-				|| LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member);
+				|| LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member)
+				|| LispNames.JAVA_SUBCLASS.equals(member);
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -59,10 +60,12 @@ final class JvmJavaInteropCompiler {
 			case LispNames.JAVA_PROXY -> requireArity(args.size() >= 3, JavaImplementations.PROXY_USAGE);
 			case LispNames.JAVA_REIFY ->
 				requireArity(args.size() >= 2 && args.size() % 2 == 0, JavaImplementations.REIFY_USAGE);
+			case LispNames.JAVA_SUBCLASS -> requireArity(args.size() >= 5, JavaImplementations.SUBCLASS_USAGE);
 			default -> throw new UnsupportedOperationException("Cannot compile: java:" + member);
 		}
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
-		boolean implementsInterface = LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member);
+		boolean implementsInterface = LispNames.JAVA_PROXY.equals(member) || LispNames.JAVA_REIFY.equals(member)
+				|| LispNames.JAVA_SUBCLASS.equals(member);
 		String bridgeReason = sites.bridgeReason(cons);
 		if (bridgeReason != null && sites.javaStatic()) {
 			// Refused: the attempt fails once every site has been seen; the value only
@@ -76,7 +79,12 @@ final class JvmJavaInteropCompiler {
 			// interpreter's rule): a resolved one makes an object of its generated class.
 			JavaImplementation implementation = sites.implementation(cons);
 			if (implementation.resolved()) {
-				compileImplementation(implementation, args, ctx, className);
+				if (implementation.isSubclass()) {
+					compileSubclass(implementation, args, ctx, className);
+				}
+				else {
+					compileImplementation(implementation, args, ctx, className);
+				}
 				return;
 			}
 		}
@@ -135,6 +143,14 @@ final class JvmJavaInteropCompiler {
 				emitBridgeCall(ctx, ops, "reify");
 			}
 			default -> {
+				if (LispNames.JAVA_SUBCLASS.equals(member)) {
+					// The superclass, the two quoted lists, the evaluated constructor
+					// arguments and the callable, last: the bridge refuses it by name.
+					JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+					compileRestArray(args, 2, ctx, className);
+					emitBridgeCall(ctx, ops, "subclass");
+					return;
+				}
 				// The first interface, then the rest of them and the callable, last.
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				compileRestArray(args, 2, ctx, className);
@@ -171,6 +187,30 @@ final class JvmJavaInteropCompiler {
 			ctx.body.aastore();
 		}
 		ctx.body.invokestatic(factory);
+	}
+
+	/**
+	 * A resolved {@code java:subclass}: its callable and its constructor arguments are
+	 * evaluated left to right -- the superclass and the two quoted lists are literals and
+	 * evaluate to nothing -- into the construction dispatcher of the class generated for
+	 * it, which chooses the superclass constructor when it runs.
+	 */
+	private static void compileSubclass(JavaImplementation implementation, List<LispVal> args, JvmLispCompiler.Ctx ctx,
+			String className) {
+		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
+		MethodRefEntry construct = sites.implementations().subclassFactory(implementation, args.size() - 5);
+		JvmExprCompiler.compileExpr(args.get(args.size() - 1), ctx, className);
+		emitMaterialize(ctx);
+		JvmEmitHelper.emitIntConst(ctx, args.size() - 5);
+		ctx.body.anewarray(ctx.objectClass);
+		for (int i = 4; i < args.size() - 1; i++) {
+			ctx.body.dup();
+			JvmEmitHelper.emitIntConst(ctx, i - 4);
+			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			emitMaterialize(ctx);
+			ctx.body.aastore();
+		}
+		ctx.body.invokestatic(construct);
 	}
 
 	/**

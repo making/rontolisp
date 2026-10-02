@@ -320,6 +320,45 @@ class JvmClassFileLookupTest {
 		return list;
 	}
 
+	// A java:subclass extends its superclass by the same methods on both lookups:
+	// every public or protected non-final instance method of the class chain, and
+	// the same inheritable constructors -- so a form declares the same slots
+	// interpreted and compiled, and the object's kind is assignable to the same
+	// types.
+	@Test
+	void everySuperclassIsSubclassedTheSame() {
+		List<String> supers = List.of("java.io.File", "java.util.ArrayList", "java.util.AbstractList",
+				"javax.swing.JPanel", "org.xml.sax.helpers.DefaultHandler", "java.awt.event.WindowAdapter",
+				"java.lang.Thread", "java.util.HashMap");
+		for (String name : supers) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name), name);
+			JavaType read = Objects.requireNonNull(classFiles.find(name), name);
+			assertThat(overridable(read)).as("%s overridable", name).isEqualTo(overridable(reflected));
+			assertThat(signatures(read.subclassConstructors())).as("%s constructors", name)
+				.isEqualTo(signatures(reflected.subclassConstructors()));
+			assertThat(slots(JavaImplementations.subclass(read, List.of(), List.of("toString"))))
+				.as("%s subclass", name)
+				.isEqualTo(slots(JavaImplementations.subclass(reflected, List.of(), List.of("toString"))));
+			JavaImplementationType readKind = classFiles.subclassOf(read, List.of());
+			JavaImplementationType reflectedKind = REFLECTION.subclassOf(reflected, List.of());
+			assertThat(classFiles.subclassOf(read, List.of())).isSameAs(readKind);
+			for (String target : CORPUS) {
+				assertThat(Objects.requireNonNull(classFiles.find(target)).isAssignableFrom(readKind))
+					.as("%s <- %s", target, readKind)
+					.isEqualTo(Objects.requireNonNull(REFLECTION.find(target)).isAssignableFrom(reflectedKind));
+			}
+		}
+	}
+
+	private static List<String> overridable(JavaType type) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : type.overridableMethods()) {
+			list.add(signature(e) + (e.isAbstract() ? " abstract" : "") + (e.isPublic() ? " public" : " protected"));
+		}
+		list.sort(null);
+		return list;
+	}
+
 	private static List<String> slots(JavaImplementation implementation) {
 		List<String> slots = new ArrayList<>();
 		for (JavaImplementation.Slot slot : implementation.slots()) {

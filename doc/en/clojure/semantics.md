@@ -85,8 +85,9 @@ whatever the program defines under that name. A special form, or a head the read
 spells (`deref` for `@x`, `with-meta`, `fn` for `#(...)`), cannot name a macro.
 
 `` `form `` builds a form as data over the mangled namespace: a symbol naming a var the
-defining namespace sees qualifies with that var's namespace (a core name or an
-unresolved symbol stays bare), `~` inserts its form's value, `~@` splices a sequence into the enclosing
+defining namespace sees qualifies with that var's namespace like the oracle (a special
+form stays bare; a core name spells `clojure.core/name`, any other unresolved spelling
+the defining namespace), `~` inserts its form's value, `~@` splices a sequence into the enclosing
 list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
 one symbol per expansion, the same at every occurrence within it. An unquote outside
 any syntax-quote is an error, as is a splice outside a sequence. `macroexpand-1`
@@ -249,9 +250,9 @@ Each refusal names the missing design, never `unknown name`:
 | `set!` of a dynamic or core var (`*warn-on-reflection*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no thread-bound var to assign; the `java:` surface has no field write |
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
-| `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |
-| `proxy` over a class, constructor arguments | `proxy over a class is not supported yet: ...`, `proxy constructor arguments are not supported yet: ...` | `java:proxy` implements interfaces only; no subclass is generated |
-| `toString`/`equals`/`hashCode` in a `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run |
+| `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
+| `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |
+| `toString`/`equals`/`hashCode` in an interface-only `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run (a class proxy runs it) |
 | a variadic-only static member as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static` |
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |

@@ -372,14 +372,22 @@
    T is \"true\", NIL is NIL-REPLACEMENT (\"\" for str, \"nil\" for print/pr), a
    keyword its colon spelling, anything else the datum. A pattern spells its
    source under str but hash-quote readably (like the oracle); a matcher spells
-   unreadably either way."
-  (if (rontolisp::%clojure-re-pattern-p x)
-      (if readable
-          (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x) "\"")
-          (rontolisp::%clojure-re-pat-source x))
-      (let ((stream (make-string-output-stream)))
-        (rontolisp::%clojure-print x nil-replacement readable stream)
-        (get-output-stream-string stream))))
+   unreadably either way. A string OUTPUT stream answers the text so far WITHOUT
+   clearing it under str (a zero-argument java.io.StringWriter lowers to one, so
+   binding *out* to it and reading it back runs on every backend); readably it
+   prints as the stream it is, like the oracle's #object."
+  (if (and (null readable) (typep x 'string-stream) (output-stream-p x))
+      (let ((text (get-output-stream-string x)))
+        (write-string text x)
+        text)
+      (if (rontolisp::%clojure-re-pattern-p x)
+          (if readable
+              (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x)
+                           "\"")
+              (rontolisp::%clojure-re-pat-source x))
+          (let ((stream (make-string-output-stream)))
+            (rontolisp::%clojure-print x nil-replacement readable stream)
+            (get-output-stream-string stream)))))
 
 (defun rontolisp::%clojure-write-datum (x nil-replacement readable)
   "Write X in Clojure notation to *standard-output*: the println/print/pr/prn

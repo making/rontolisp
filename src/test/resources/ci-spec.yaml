@@ -12018,6 +12018,16 @@ cases:
       (print (symbol-value '*sym-api-var*))
       (print (symbol-value (intern "*SYM-API-VAR*")))
       (print (symbol-value :sym-api-kw))
+      ;; A global assigned only inside a lambda is unbound until the body runs:
+      ;; every store feeds the eval mirror the runtime boundp/symbol-value read
+      ;; (b78 -- the mirror used to see top-level stores only and read stale).
+      (setq sym-api-init (lambda () (setq sym-api-lam 7) nil))
+      (print (boundp (intern "SYM-API-LAM")))
+      (print (boundp 'sym-api-lam))
+      (funcall sym-api-init)
+      (print (boundp (intern "SYM-API-LAM")))
+      (print (boundp 'sym-api-lam))
+      (print (symbol-value (intern "SYM-API-LAM")))
       (defun sym-api-fn (x) x)
       (print (fboundp 'sym-api-fn))
       (print (fboundp 'car))
@@ -12085,6 +12095,11 @@ cases:
       42
       42
       :SYM-API-KW
+      NIL
+      NIL
+      T
+      T
+      7
       T
       T
       T

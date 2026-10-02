@@ -85,8 +85,9 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 の `fn`）はマクロの名前にできません。
 
 `` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。定義側の
-名前空間から見える var を指すシンボルはその var の名前空間で限定され（核の名前と解決
-できないシンボルは素のままです）、`~` はそのフォームの値を埋め込み、`~@` は外側の
+名前空間から見える var を指すシンボルは oracle と同じくその var の名前空間で限定され
+（special form は素のままです。核の名前は `clojure.core/name`、その他の解決できない
+シンボルは定義側の名前空間で綴ります）、`~` はそのフォームの値を埋め込み、`~@` は外側の
 リスト・ベクター・マップ・セットの中に列を継ぎ足します。各 `x#` は syntax-quote
 ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
 の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
@@ -249,9 +250,9 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | dynamic・コアの var（`*warn-on-reflection*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先のスレッド束縛 var がない。`java:` にフィールド書き込みがない |
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
-| `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |
-| クラスを含む `proxy`、コンストラクタ引数 | `proxy over a class is not supported yet: ...`, `proxy constructor arguments are not supported yet: ...` | `java:proxy` はインターフェースだけを実装し、サブクラスを生成しない |
-| proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない |
+| proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
+| 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
+| インターフェースだけの proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない（クラスの proxy は実行する） |
 | 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |

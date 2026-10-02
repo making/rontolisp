@@ -57,11 +57,11 @@ final class JvmDefvarCompiler {
 				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 				ctx.body.dup();
 				ctx.body.putstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())));
-				// Mirror into the eval runtime's global env (no-op unless eval is used at
-				// top level); leaves the stack as it was (the DUP'd copy is consumed by
+				// Mirror into the eval runtime's global env (no-op unless eval is used);
+				// leaves the stack as it was (the DUP'd copy is consumed by
 				// the
 				// mirror's _store, which returns it, then we pop it).
-				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
+				JvmSetqCompiler.mirrorGlobal(name.name(), ctx);
 				ctx.body.pop();
 				ctx.definedGlobals.add(name.name());
 			}
@@ -72,11 +72,11 @@ final class JvmDefvarCompiler {
 			// Mirror the binding into the eval runtime's global env; _store returns the
 			// value, which we discard here because the local slot keeps the compiled
 			// copy. A name without a global backing store never reaches the mirror
-			// (JvmSetqCompiler.mirrorsTopLevelGlobal), so the DUP/POP is emitted only
+			// (JvmSetqCompiler.mirrorsGlobal), so the DUP/POP is emitted only
 			// when the mirror is.
-			if (JvmSetqCompiler.mirrorsTopLevelGlobal(name.name(), ctx)) {
+			if (JvmSetqCompiler.mirrorsGlobal(name.name(), ctx)) {
 				ctx.body.dup();
-				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
+				JvmSetqCompiler.mirrorGlobal(name.name(), ctx);
 				ctx.body.pop();
 			}
 			int slot = ctx.allocLocal(name.name());

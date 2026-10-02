@@ -154,6 +154,43 @@ public final class JavaImplementationPrograms {
 			"#<java-proxy java.util.function.Supplier java.lang.Runnable>\"""";
 
 	/**
+	 * java:subclass over a JDK class: the constructor arguments choose the superclass
+	 * constructor, a named method runs its body (which sees the object as {@code this}),
+	 * an unnamed one is inherited, and a {@code proxy-super} reaches the superclass
+	 * implementation through the generated accessor.
+	 */
+	public static final String SUBCLASS = """
+			(let ((f (java:subclass "java.io.File" '() '("lastModified") "recent"
+			            (lambda (this name &rest args)
+			              (if (equal name "lastModified")
+			                  (if (equal (java:call this "getName") "recent") 42 -1)
+			                  nil)))))
+			  (print (java:call f "lastModified"))
+			  (print (java:call f "getName"))
+			  (print (java:call f "toString"))
+			  (print (java:call f "equals" f)))
+			(let ((g (java:subclass "java.io.File" '() '("toString" "equals" "hashCode") "x"
+			            (lambda (this name &rest args)
+			              (if (equal name "toString") "over!"
+			                  (if (equal name "equals") T 7))))))
+			  (print (java:call g "toString"))
+			  (print (java:call g "equals" g))
+			  (print (java:call g "hashCode"))
+			  (print (java:call g "super$toString$0")))
+			""";
+
+	/** What {@link #SUBCLASS} prints. */
+	public static final String SUBCLASS_OUTPUT = """
+			42
+			"recent"
+			"recent"
+			T
+			"over!"
+			T
+			7
+			"x\"""";
+
+	/**
 	 * A listener held in a {@code let} keeps its kind, so the calls passing it resolve:
 	 * added, fired, removed, fired again.
 	 */

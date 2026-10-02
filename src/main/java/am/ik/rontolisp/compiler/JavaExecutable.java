@@ -44,6 +44,21 @@ public interface JavaExecutable {
 	boolean isConstructor();
 
 	/**
+	 * @return whether it is declared {@code public}: what an overriding method in a
+	 * generated subclass keeps (a {@code protected} one keeps {@code protected})
+	 */
+	default boolean isPublic() {
+		return true;
+	}
+
+	/**
+	 * @return whether it is declared {@code protected}
+	 */
+	default boolean isProtected() {
+		return false;
+	}
+
+	/**
 	 * @return whether it has no body: an interface method that is neither default nor
 	 * static, or an abstract class's abstract method -- what a class implementing the
 	 * interface must supply ({@link JavaImplementations})

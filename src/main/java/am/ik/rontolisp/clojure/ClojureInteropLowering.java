@@ -47,6 +47,16 @@ final class ClojureInteropLowering {
 
 	static final LispSymbol JAVA_PROXY = new LispSymbol("JAVA:PROXY");
 
+	static final LispSymbol JAVA_SUBCLASS = new LispSymbol("JAVA:SUBCLASS");
+
+	/**
+	 * The one host class the lowering builds itself: a zero-argument
+	 * {@code java.io.StringWriter} is a Common Lisp string output stream on every backend
+	 * (b76) -- never a host {@code Writer}, which no backend writes to and wasm refuses
+	 * outright.
+	 */
+	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
+
 	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
@@ -78,9 +88,13 @@ final class ClojureInteropLowering {
 				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
 						items.subList(1, items.size())));
 			}
+			String constructed = ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1));
+			LispVal stringWriter = stringWriterConstruction(constructed, items.size() - 1);
+			if (stringWriter != null) {
+				return stringWriter;
+			}
 			List<LispVal> args = new ArrayList<>();
-			args.add(LispString
-				.literal(ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1))));
+			args.add(LispString.literal(constructed));
 			args.addAll(ctx.lowers(items, 1));
 			return ClojureLowerUtil.cons(JAVA_NEW, args);
 		}
@@ -378,10 +392,28 @@ final class ClojureInteropLowering {
 			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
 					items.subList(2, items.size())));
 		}
+		String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
+		LispVal stringWriter = stringWriterConstruction(cls, items.size() - 2);
+		if (stringWriter != null) {
+			return stringWriter;
+		}
 		List<LispVal> args = new ArrayList<>();
-		args.add(LispString.literal(ClojureNamespaceLowering.resolveClass(ctx, named.name())));
+		args.add(LispString.literal(cls));
 		args.addAll(ctx.lowers(items, 2));
 		return ClojureLowerUtil.cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * A zero-argument {@code java.io.StringWriter} construction (dotted or imported,
+	 * resolved): a fresh string output stream, so every backend runs it -- wasm included,
+	 * which never sees the refused {@code java:new}. Anything else (an initial-capacity
+	 * argument, another class) is null, so the call keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal stringWriterConstruction(String cls, int argCount) {
+		if (cls.equals(STRING_WRITER_CLASS) && argCount == 0) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"));
+		}
+		return null;
 	}
 
 	/**
@@ -519,8 +551,11 @@ final class ClojureInteropLowering {
 			}
 			String iface = ClojureNamespaceLowering.resolveClass(ctx, symbol.name());
 			if (isHostClass(iface)) {
-				throw new LispReadException("proxy over a class is not supported yet: " + iface
-						+ " (proxy implements interfaces only, with no superclass)");
+				if (className == classes.get(1)) {
+					return proxyClassOf(ctx, items, classes, iface);
+				}
+				throw new LispReadException(
+						"proxy takes a single superclass and interfaces: " + iface + " is a class, not an interface");
 			}
 			javaProxy.add(LispString.literal(iface));
 		}
@@ -590,6 +625,18 @@ final class ClojureInteropLowering {
 		};
 	}
 
+	// Whether the name loads, here, as a final class: a proxy superclass must be
+	// extensible. A name that does not load is left to the run-time error.
+	private static boolean isFinalClass(String className) {
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			return !found.isInterface() && java.lang.reflect.Modifier.isFinal(found.getModifiers());
+		}
+		catch (ClassNotFoundException | LinkageError ex) {
+			return false;
+		}
+	}
+
 	// Whether the name loads, here, as a class that is not an interface: a proxy
 	// superclass. A name that does not load is left to the run-time error.
 	private static boolean isHostClass(String className) {
@@ -600,6 +647,142 @@ final class ClojureInteropLowering {
 		catch (ClassNotFoundException | LinkageError ex) {
 			return false;
 		}
+	}
+
+	/**
+	 * {@code (proxy [superclass interface...] [args...] (method [params...] body...)...)}:
+	 * one object extending the superclass through {@code java:subclass} with a
+	 * name-dispatching lambda taking the object first, so a name several interfaces
+	 * declare runs the one body, as the oracle's proxy does. Each body sees {@code this}
+	 * (the proxy object) and calls the superclass implementation through
+	 * {@code (proxy-super method args...)}. A method left out is inherited when the class
+	 * chain implements it, else refused with the method's name when it is called;
+	 * {@code toString}/{@code equals}/{@code hashCode} run their bodies, like the oracle.
+	 * Interpreter and JVM only, like all interop.
+	 */
+	static LispVal proxyClassOf(ClojureLowering ctx, List<LispVal> items, List<LispVal> classes, String superclass) {
+		if (isFinalClass(superclass)) {
+			throw new LispReadException("proxy cannot extend final class " + superclass);
+		}
+		List<LispVal> javaSubclass = new ArrayList<>();
+		javaSubclass.add(LispString.literal(superclass));
+		List<LispVal> ifaceNames = new ArrayList<>();
+		for (LispVal className : classes.subList(2, classes.size())) {
+			if (!(className instanceof LispSymbol symbol)) {
+				throw new LispReadException("proxy takes interface names, not " + className.print());
+			}
+			String iface = ClojureNamespaceLowering.resolveClass(ctx, symbol.name());
+			if (isHostClass(iface)) {
+				throw new LispReadException(
+						"proxy takes a single superclass and interfaces: " + iface + " is a class, not an interface");
+			}
+			ifaceNames.add(LispString.literal(iface));
+		}
+		javaSubclass.add(quotedList(ifaceNames));
+		List<LispVal> argv = ClojureLowerUtil.items(items.get(2));
+		if (argv == null || argv.isEmpty() || argv.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("proxy takes an argument vector, not " + items.get(2).print());
+		}
+		List<LispVal> ctorArgs = new ArrayList<>();
+		for (LispVal arg : argv.subList(1, argv.size())) {
+			ctorArgs.add(ctx.lower(arg));
+		}
+		List<String> methodNames = new ArrayList<>();
+		for (int i = 3; i < items.size(); i++) {
+			List<LispVal> meth = ClojureLowerUtil.items(items.get(i));
+			if (meth == null || meth.size() < 2 || !(meth.get(0) instanceof LispSymbol)) {
+				throw new LispReadException("a proxy method names a method, a parameter vector and a body");
+			}
+			String methodName = ((LispSymbol) meth.get(0)).name();
+			if (methodNames.contains(methodName)) {
+				throw new LispReadException("proxy defines method " + methodName + " twice");
+			}
+			methodNames.add(methodName);
+		}
+		LispSymbol thisSym = ClojureLowerUtil.idSym("this");
+		LispSymbol got = ctx.freshTemp();
+		LispSymbol rest = ctx.freshTemp();
+		LispVal miss = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
+						LispString.literal("no proxy method: "), got));
+		LispVal dispatch = miss;
+		for (int i = items.size() - 1; i >= 3; i--) {
+			List<LispVal> meth = ClojureLowerUtil.items(items.get(i));
+			if (meth == null || meth.size() < 2 || !(meth.get(0) instanceof LispSymbol)) {
+				throw new LispReadException("a proxy method names a method, a parameter vector and a body");
+			}
+			String methodName = ((LispSymbol) meth.get(0)).name();
+			List<LispVal> params = ClojureLowerUtil.items(meth.get(1));
+			if (params == null || params.isEmpty() || params.get(0) != ClojureReader.VECTOR) {
+				throw new LispReadException("a proxy method takes a parameter vector, not " + meth.get(1).print());
+			}
+			Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+			Set<String> seen = new HashSet<>();
+			scope.put("this", ClojureLowering.Kind.VARIABLE);
+			List<LispVal> fnParams = new ArrayList<>();
+			fnParams.add(thisSym);
+			for (int j = 1; j < params.size(); j++) {
+				String pname = ClojureLowerUtil.plainName(params.get(j), "proxy");
+				ClojureLowerUtil.isTrue(seen.add(pname), "proxy parameter names must be distinct: " + pname);
+				scope.put(pname, ClojureLowering.Kind.VARIABLE);
+				fnParams.add(ClojureLowerUtil.idSym(pname));
+			}
+			Map<String, ClojureLowering.Kind> use = new HashMap<>(scope);
+			ctx.proxyMethods.push(new ClojureLowering.ProxyMethod(thisSym));
+			LispVal run;
+			try {
+				run = ctx.inScope(use,
+						() -> ClojureLowerUtil.list(
+								ClojureLowerUtil.sym("apply"), ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+										ClojureLowerUtil.list(fnParams), ctx.bodyOf(meth.subList(2, meth.size()))),
+								thisSym, rest));
+			}
+			finally {
+				ctx.proxyMethods.pop();
+			}
+			LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), got, LispString.literal(methodName));
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, run, dispatch);
+		}
+		List<LispVal> methodLiterals = new ArrayList<>();
+		for (String name : methodNames) {
+			methodLiterals.add(LispString.literal(name));
+		}
+		javaSubclass.add(quotedList(methodLiterals));
+		javaSubclass.addAll(ctorArgs);
+		LispVal callable = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(thisSym, got, ClojureLowering.AMPERSAND_REST, rest)), dispatch);
+		javaSubclass.add(callable);
+		return ClojureLowerUtil.cons(JAVA_SUBCLASS, javaSubclass);
+	}
+
+	// A quoted list of literals, as java:subclass takes its interface and method names.
+	private static LispVal quotedList(List<LispVal> names) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
+	}
+
+	/**
+	 * {@code (proxy-super method args...)} inside a proxy method body: the superclass
+	 * implementation on {@code this}, through the generated {@code super} accessor of the
+	 * method's arity. Outside a proxy method body it is refused by name.
+	 */
+	static LispVal proxySuperOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowering.ProxyMethod method = ctx.proxyMethods.peekLast();
+		if (method == null) {
+			throw new LispReadException("proxy-super outside a proxy method");
+		}
+		ClojureLowerUtil.isTrue(items.size() >= 2, "proxy-super takes a method and arguments");
+		if (!(items.get(1) instanceof LispSymbol target)) {
+			throw new LispReadException("proxy-super takes a method name, not " + items.get(1).print());
+		}
+		List<LispVal> args = new ArrayList<>();
+		args.add(method.self);
+		// Mirrors compiler/JavaImplementations.superAccessor: one accessor per (name,
+		// arity), so the lowering needs no types to spell it.
+		args.add(LispString.literal("super$" + target.name() + "$" + (items.size() - 2)));
+		for (LispVal arg : items.subList(2, items.size())) {
+			args.add(ctx.lower(arg));
+		}
+		return ClojureLowerUtil.cons(JAVA_CALL, args);
 	}
 
 	/**
@@ -840,8 +1023,9 @@ final class ClojureInteropLowering {
 	 * output, {@code readLine} reads through {@code read-line} (nil past the end, like
 	 * the oracle) and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
-	 * without reaching {@code java:call}. Null when the method maps to nothing, so the
-	 * call goes to {@code java:call}.
+	 * without reaching {@code java:call}. {@code toString} answers a string output
+	 * stream's text so far without clearing it (b76). Null when the method maps to
+	 * nothing, so the call goes to {@code java:call}.
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -866,7 +1050,39 @@ final class ClojureInteropLowering {
 		if (method.equals("close") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv);
 		}
+		if (method.equals("toString") && args.isEmpty()) {
+			// A StringWriter lowered to a string output stream (b76) answers the
+			// text so far without clearing it; anything else keeps the java:call,
+			// whose run-time error names what is missing, like before.
+			return stringWriterContents(ctx, recv);
+		}
 		return null;
+	}
+
+	/**
+	 * The text a string output stream holds, WITHOUT clearing it:
+	 * {@code get-output-stream-string} answers and empties (CL's contract), so the text
+	 * is written straight back. Only a string-stream in the output direction takes this
+	 * path (there is no portable string-stream predicate, so the test is the exact
+	 * {@code string-stream} type plus the real direction, both true on all four
+	 * backends); anything else keeps the {@code java:call}, like before.
+	 */
+	static LispVal stringWriterContents(ClojureLowering ctx, LispVal recv) {
+		LispSymbol text = ctx.freshTemp();
+		LispVal readback = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(text,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-output-stream-string"), recv)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, recv), text);
+		List<LispVal> direct = new ArrayList<>();
+		direct.add(recv);
+		direct.add(LispString.literal("toString"));
+		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv,
+								ClojureLowerUtil.quoted("string-stream")),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("output-stream-p"), recv)),
+				readback, call);
 	}
 
 	/**

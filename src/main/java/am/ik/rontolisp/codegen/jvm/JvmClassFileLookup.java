@@ -54,6 +54,8 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 	private final ConcurrentHashMap<List<JavaType>, JavaImplementationType> implementations = new ConcurrentHashMap<>();
 
+	private final ConcurrentHashMap<List<JavaType>, JavaImplementationType> subclasses = new ConcurrentHashMap<>();
+
 	private JvmClassFileLookup(JvmClassPath classPath, @Nullable Path ctSym, int release) {
 		this.classPath = classPath;
 		this.ctSym = ctSym;
@@ -203,6 +205,15 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 	@Override
 	public JavaImplementationType implementationOf(List<JavaType> interfaces) {
 		return this.implementations.computeIfAbsent(List.copyOf(interfaces), JavaImplementationType::new);
+	}
+
+	@Override
+	public JavaImplementationType subclassOf(JavaType superclass, List<JavaType> interfaces) {
+		List<JavaType> key = new ArrayList<>(interfaces.size() + 1);
+		key.add(superclass);
+		key.addAll(interfaces);
+		return this.subclasses.computeIfAbsent(List.copyOf(key),
+				types -> new JavaImplementationType(types.get(0), types.subList(1, types.size())));
 	}
 
 	private @Nullable JavaType load(String name) {
@@ -577,6 +588,10 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 		private volatile @Nullable List<ClassMethod> declaredPublicMethods;
 
+		private volatile @Nullable List<ClassMethod> overridableMethods;
+
+		private volatile @Nullable List<ClassMethod> subclassConstructors;
+
 		private final ConcurrentHashMap<String, List<ClassMethod>> methodsByName = new ConcurrentHashMap<>();
 
 		private volatile @Nullable List<ClassMethod> constructors;
@@ -714,6 +729,36 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 			return cached;
 		}
 
+		// The declared methods a generated subclass may override: public or protected,
+		// neither static nor final, neither synthetic nor bridge, never a constructor.
+		List<ClassMethod> declaredOverridableMethods() {
+			List<ClassMethod> list = new ArrayList<>();
+			for (ClassFileInfo.Member member : this.info.methods()) {
+				if (member.name().startsWith("<")) {
+					continue;
+				}
+				if (!(member.isPublic() || member.isProtected()) || member.isStatic() || member.isFinal()
+						|| (member.access()
+								& (am.ik.jvm.AccessFlag.ACC_SYNTHETIC | am.ik.jvm.AccessFlag.ACC_BRIDGE)) != 0) {
+					continue;
+				}
+				list.add(new ClassMethod(this, member));
+			}
+			return list;
+		}
+
+		// The declared constructors a generated subclass may call: public or
+		// protected.
+		List<ClassMethod> declaredSubclassConstructors() {
+			List<ClassMethod> list = new ArrayList<>();
+			for (ClassFileInfo.Member member : this.info.methods()) {
+				if ("<init>".equals(member.name()) && (member.isPublic() || member.isProtected())) {
+					list.add(new ClassMethod(this, member));
+				}
+			}
+			return list;
+		}
+
 		/** Class.getMethods(): the PublicMethods merge. */
 		@Override
 		public List<ClassMethod> publicMethods() {
@@ -778,6 +823,43 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 				}
 				cached = List.copyOf(list);
 				this.constructors = cached;
+			}
+			return cached;
+		}
+
+		// The class chain's public or protected non-final instance methods, merged as
+		// Class.getMethods() merges them: the most derived declaration of a signature
+		// wins, covariant return-type variants are all kept. Of an interface, nothing.
+		@Override
+		public List<ClassMethod> overridableMethods() {
+			List<ClassMethod> cached = this.overridableMethods;
+			if (cached == null) {
+				Map<Signature, List<ClassMethod>> merged = new LinkedHashMap<>();
+				for (ClassMethod m : declaredOverridableMethods()) {
+					merge(merged, m);
+				}
+				ClassType superclass = superclass();
+				if (superclass != null) {
+					for (ClassMethod m : superclass.overridableMethods()) {
+						merge(merged, m);
+					}
+				}
+				List<ClassMethod> all = new ArrayList<>();
+				for (List<ClassMethod> list : merged.values()) {
+					all.addAll(list);
+				}
+				cached = List.copyOf(all);
+				this.overridableMethods = cached;
+			}
+			return cached;
+		}
+
+		@Override
+		public List<ClassMethod> subclassConstructors() {
+			List<ClassMethod> cached = this.subclassConstructors;
+			if (cached == null) {
+				cached = List.copyOf(declaredSubclassConstructors());
+				this.subclassConstructors = cached;
 			}
 			return cached;
 		}
@@ -1009,6 +1091,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		@Override
 		public boolean isAbstract() {
 			return (this.member.access() & am.ik.jvm.AccessFlag.ACC_ABSTRACT) != 0;
+		}
+
+		@Override
+		public boolean isPublic() {
+			return this.member.isPublic();
+		}
+
+		@Override
+		public boolean isProtected() {
+			return this.member.isProtected();
 		}
 
 		@Override

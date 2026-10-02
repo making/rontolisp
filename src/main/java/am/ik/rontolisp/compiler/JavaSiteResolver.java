@@ -794,10 +794,16 @@ public final class JavaSiteResolver {
 		}
 		if (JavaImplementations.isImplementationForm(cons)) {
 			// A java:reify / java:proxy whose interface resolves makes an object of a
-			// class no program names, whose kind is the interface's implementation type.
+			// class no program names, whose kind is the interface's implementation type;
+			// a java:subclass one of its superclass and extra interfaces.
 			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
-			return implementation.resolved() ? kinds(this.lookup.implementationOf(implementation.interfaces()))
-					: JavaStaticType.UNKNOWN;
+			if (!implementation.resolved()) {
+				return JavaStaticType.UNKNOWN;
+			}
+			if (implementation.superclass() != null) {
+				return kinds(this.lookup.subclassOf(implementation.superclass(), implementation.interfaces()));
+			}
+			return kinds(this.lookup.implementationOf(implementation.interfaces()));
 		}
 		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
 			return JavaStaticType.UNKNOWN;

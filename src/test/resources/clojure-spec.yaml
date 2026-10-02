@@ -4113,3 +4113,72 @@ cases:
       (2 3) 3
       11 (2 3)
       :declared :declared
+  - name: b76-string-writer-binds-to-out-and-str-answers-without-clearing
+    # b76: a zero-argument (new java.io.StringWriter) lowers to a Common Lisp
+    # string output stream on every backend (never a host Writer, which no backend
+    # writes to and wasm refuses outright), so the oracle's own with-out-str macro
+    # -- a defmacro of the core name rebinding *out* around the body and reading
+    # the writer back -- runs everywhere: printing through the rebound *out*
+    # lands in the stream, .write/.flush print through the streamp dispatch, and
+    # str/.toString answer the text so far WITHOUT clearing it (the oracle prints
+    # 12 12 12).
+    source: |
+      (defmacro with-out-str [& body]
+        `(let [s# (new java.io.StringWriter)]
+           (binding [*out* s#] ~@body (str s#))))
+      (println (with-out-str (print 1) (print 2)))
+      (let [b76-s (new java.io.StringWriter)]
+        (binding [*out* b76-s] (print 1) (print 2))
+        (println (str b76-s) (str b76-s) (.toString b76-s)))
+      (let [b76-w (new java.io.StringWriter)]
+        (. b76-w write "ab")
+        (. b76-w flush)
+        (println (str b76-w))
+        (. b76-w close))
+    expected: |
+      12
+      12 12 12
+      ab
+  - name: binding-accepts-qualified-stream-specials
+    # b79: a syntax-quote qualifies *out* with its namespace (b77: `*out*
+    # reads clojure.core/*out*), and the oracle binds the qualified spelling
+    # like the bare one -- the b76 with-out-str macro reaches binding this way.
+    # Every line matches the oracle.
+    source: |
+      (defmacro b79-with-out-str [& body]
+        `(let [s# (new java.io.StringWriter)]
+           (binding [clojure.core/*out* s#] ~@body (str s#))))
+      (println (b79-with-out-str (print 1) (print 2)))
+      (let [b79-s (new java.io.StringWriter)]
+        (binding [clojure.core/*out* b79-s] (print 1) (print 2))
+        (println (str b79-s) (str b79-s)))
+    expected: |
+      12
+      12 12
+  - name: syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace
+    # b77: like the oracle, a syntax-quoted symbol qualifies even when it resolves
+    # to nothing: a core name the namespace sees spells clojure.core/name, any other
+    # unresolved spelling the defining namespace, an alias head its namespace (no var
+    # check) and a class head its fully qualified name (imported or java.lang); a
+    # special form stays bare, and a qualified head naming neither stays as written.
+    # A name (:refer-clojure :exclude [map]) hides spells its own namespace instead.
+    # The bench-shaped expansion pins the composition with macroexpand (which answers
+    # the mangled data, so = against the quoted oracle spelling holds). Every line
+    # is the oracle's (clj 1.12.6.1673), on all four backends.
+    source: |
+      (ns b77.sq (:require [clojure.string :as s]))
+      (defmacro b77-bench [expr]
+        `(let [b77-start (System/nanoTime) b77-result ~expr]
+           {:result b77-result :elapsed (- (System/nanoTime) b77-start)}))
+      (println (= (macroexpand-1 '(b77-bench 1))
+                  '(clojure.core/let [b77.sq/b77-start (java.lang.System/nanoTime) b77.sq/b77-result 1]
+                     {:result b77.sq/b77-result :elapsed (clojure.core/- (java.lang.System/nanoTime) b77.sq/b77-start)})))
+      (println `b77-loose `let `s/join `s/nope `System/nanoTime `foo/bar)
+      (ns b77.excl (:refer-clojure :exclude [map]))
+      (println `map `filter)
+      (println `java.io.StringWriter `String)
+    expected: |
+      true
+      b77.sq/b77-loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
+      b77.excl/map clojure.core/filter
+      java.io.StringWriter java.lang.String

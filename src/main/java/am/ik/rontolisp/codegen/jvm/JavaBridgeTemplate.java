@@ -377,6 +377,16 @@ final class JavaBridgeTemplate {
 	}
 
 	/**
+	 * A {@code (java:subclass ...)} left to run time: refused by name (a class proxy
+	 * needs its superclass before it runs, so the bridge generates no classes).
+	 */
+	static @Nullable Object javaSubclass(@Nullable Object superclassName, @Nullable Object[] rest) {
+		String name = lispString(superclassName);
+		throw new RuntimeException("java:subclass " + (name == null ? "(no superclass)" : name)
+				+ " is left to run time: a class proxy needs its superclass before it runs");
+	}
+
+	/**
 	 * Implements {@code (java:reify "fully.qualified.Interface" "method" function ...)}
 	 * left to run time: the rest is designator, function, ... (mirrors
 	 * {@code compiler/JavaImplementations.reify}).

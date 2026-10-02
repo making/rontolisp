@@ -4474,6 +4474,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunBoundpSeesAnAssignmentMadeInsideALambda() throws Exception {
+		// b78: every store to a global feeds the eval mirror, so a runtime boundp
+		// answers what a lambda body assigned -- the mirror used to see top-level
+		// stores only and read stale forever after. The probes survive the
+		// compile-time fold (the init's own assignment poisons the name).
+		assertThat(compileAndRun("(setq b78-init (lambda () (setq b78-lam 42) nil))"
+				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))" + " (funcall b78-init)"
+				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))"
+				+ " (print (symbol-value (intern \"B78-LAM\"))) (print b78-lam)"))
+			.isEqualTo("NIL\nNIL\nT\nT\n42\n42");
+	}
+
+	@Test
 	void compileAndRunQuotedConstantsStaySymbolsWhileCodePositionAnswersTheValue() throws Exception {
 		// .todo/679: 'pi used to read as a double wherever the spelling appeared.
 		// The names read as symbols now; this backend seeds the globals with its

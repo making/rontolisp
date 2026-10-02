@@ -327,8 +327,8 @@ Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three back
 ## The standard stream variables are bound in the MIRROR too
 A compiled program keeps a special in **two homes that did not know about each other** — the
 per-name global field (JVM) / module global (WASM) a direct read uses, seeded with the stream
-defaults, and the `_genv` / `GLOBAL_ENV` mirror `symbol-value`/`boundp`/`eval` probe, which only
-a top-level assignment writes. Both now seed from ONE table,
+defaults, and the `_genv` / `GLOBAL_ENV` mirror `symbol-value`/`boundp`/`eval` probe, which every
+store to a global writes (b78 -- a top-level assignment only, before). Both now seed from ONE table,
 `compiler.StreamDesignators.standardStreamDefaults()` (`*standard-output*`/`*standard-input*` ->
 the `t` designator, `*error-output*` -> the reserved handle `2`).
 

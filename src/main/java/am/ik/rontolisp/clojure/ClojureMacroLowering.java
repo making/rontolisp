@@ -67,6 +67,15 @@ final class ClojureMacroLowering {
 			"in-ns");
 
 	/**
+	 * The names a syntax-quote leaves bare: the oracle's special forms, measured on
+	 * {@code clj} 1.12.6.1673 (b77). One less than {@link #SPECIAL_FORMS}:
+	 * {@code import*} is no special form there -- the oracle spells {@code ns/import*}.
+	 */
+	static final Set<String> SYNTAX_QUOTE_BARE = Set.of("def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do",
+			"fn*", "quote", "var", ".", "set!", "deftype*", "reify*", "try", "throw", "monitor-enter", "monitor-exit",
+			"catch", "finally", "new", "&");
+
+	/**
 	 * Whether a head never reaches the macro table: a special form or a reader head. Any
 	 * other name -- a lowering row like {@code with-out-str} or {@code when} included --
 	 * expands through a program macro of that name once the macro is defined.
@@ -429,12 +438,16 @@ final class ClojureMacroLowering {
 
 	/**
 	 * {@code `form}: syntax-quote, lowered to {@code quote} with unquote splicing over
-	 * the mangled namespace. Every symbol qualifies (the {@code c%} prefix, the
-	 * documented deviation: there are no namespaces to qualify against); {@code ~} lowers
-	 * its form as code, {@code ~@} splices a sequence into the enclosing list, vector,
-	 * map or set, and each {@code x#} binds one {@code (gensym "x")} per syntax-quote
-	 * node, so the name is one symbol per expansion and the same symbol at every
-	 * occurrence within it.
+	 * the mangled namespace. A symbol naming a var the defining namespace sees qualifies
+	 * with its namespace (like the oracle's read-time resolution, so the expansion
+	 * reaches it from any namespace); a special form stays bare, while every other symbol
+	 * qualifies even when it resolves to nothing (b77): a core name the namespace sees
+	 * spells {@code clojure.core/name}, any other unresolved spelling the defining
+	 * namespace, an alias head its namespace, a class head its fully qualified name.
+	 * {@code ~} lowers its form as code, {@code ~@} splices a sequence into the enclosing
+	 * list, vector, map or set, and each {@code x#} binds one {@code (gensym "x")} per
+	 * syntax-quote node, so the name is one symbol per expansion and the same symbol at
+	 * every occurrence within it.
 	 */
 	static LispVal syntaxQuote(ClojureLowering ctx, LispVal datum) {
 		return syntaxQuoteNode(ctx, datum);
@@ -544,10 +557,13 @@ final class ClojureMacroLowering {
 		}
 		// a var of a project namespace qualifies with its namespace, like the
 		// oracle's read-time resolution, so the expansion reaches it from any
-		// namespace it expands in; core names and unresolved symbols stay bare --
-		// except a core name a program macro below shadows, which keeps the core
-		// meaning as clojure.core/name
-		if (SPECIAL_FORMS.contains(name)) {
+		// namespace it expands in; a special form stays bare, while every other
+		// symbol qualifies even unresolved (b77): a core name the namespace sees
+		// as clojure.core/name (a pending program macro below still shadows:
+		// shadowedCoreName above), any other unresolved spelling with the defining
+		// namespace, an alias head with its namespace, a class head with its fully
+		// qualified name -- only a qualified head naming neither stays as written
+		if (SYNTAX_QUOTE_BARE.contains(name)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(name));
 		}
 		if (ctx.shadowedCoreName(name)) {
@@ -555,7 +571,66 @@ final class ClojureMacroLowering {
 					ClojureLowerUtil.dataSym(ClojureCoreNames.PREFIX + name));
 		}
 		String key = ctx.lookupVar(name);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(key != null ? key : name));
+		if (key != null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(key));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+				ClojureLowerUtil.dataSym(unresolvedQualification(ctx, name)));
+	}
+
+	/**
+	 * Where an unresolved syntax-quoted symbol qualifies, like the oracle (measured on
+	 * {@code clj} 1.12.6.1673, b77): unqualified, a core name the namespace sees
+	 * ({@code (:refer-clojure ...)} may hide it) spells {@code clojure.core/name}, a
+	 * class spelling its fully qualified name (an import, then {@code java.lang}, then a
+	 * dotted spelling as written -- b79, the oracle refuses to {@code def} over one, so
+	 * the class wins) and anything else the defining namespace; qualified, an alias head
+	 * spells its namespace (no var check, like the oracle) and a class head its fully
+	 * qualified name (dotted as written, imported, or {@code java.lang}); a qualified
+	 * head naming neither stays as written.
+	 */
+	static String unresolvedQualification(ClojureLowering ctx, String name) {
+		int slash = ClojureLowering.qualifierSlash(name);
+		if (slash < 0) {
+			if (name.indexOf('/') >= 0) {
+				return name; // several slashes: no one namespace to qualify with
+			}
+			if (ClojureCoreNames.contains(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
+				return ClojureCoreNames.PREFIX + name;
+			}
+			// a class spelling is already fully qualified (b79, measured on the
+			// oracle: `java.io.StringWriter reads as written, `String as
+			// java.lang.String, an imported name through its import -- and the
+			// oracle refuses to def over one, so the class wins over any var)
+			String imported = ctx.ns().classNames.get(name);
+			if (imported != null) {
+				return imported;
+			}
+			if (ClojureNamespaceLowering.JAVA_LANG.contains(name)) {
+				return "java.lang." + name;
+			}
+			if (name.indexOf('.') >= 0) {
+				return name;
+			}
+			return ClojureLowering.varKey(ctx.currentNs, name);
+		}
+		String head = name.substring(0, slash);
+		String tail = name.substring(slash + 1);
+		String aliased = ctx.ns().aliases.get(head);
+		if (aliased != null) {
+			return aliased + "/" + tail;
+		}
+		if (head.indexOf('.') >= 0) {
+			return name; // already fully qualified
+		}
+		String imported = ctx.ns().classNames.get(head);
+		if (imported != null) {
+			return imported + "/" + tail;
+		}
+		if (ClojureNamespaceLowering.JAVA_LANG.contains(head)) {
+			return "java.lang." + name;
+		}
+		return name;
 	}
 
 	/**

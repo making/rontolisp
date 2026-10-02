@@ -85,12 +85,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   form (`if`, `do`, `let*`, `new`, ...) or of a head the reader spells (`deref`,
   `fn`, `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
-- Syntax-quote qualifies a symbol naming a var the namespace sees; a core name or an
-  unresolved symbol stays bare, where the oracle spells `clojure.core/let` and
-  `user/x` -- except a core name a program macro defined further down shadows, which
-  spells `clojure.core/name` like the oracle. In a REPL session a macro defined in an
-  earlier buffer keeps the bare spelling, so its expansion reaches a shadowing macro a
-  later buffer defines. Each `x#` binds one gensym per expansion -- the oracle resolves one per
+- Syntax-quote qualifies every symbol but a special form, like the oracle: a core name
+  spells `clojure.core/name` (one a `(:refer-clojure ...)` filter hides spells its own
+  namespace instead), any other unresolved spelling the defining namespace, an alias
+  head its namespace, a class head its fully qualified name. Each `x#` binds one gensym per expansion -- the oracle resolves one per
   compilation, so two expansions share its suffixes where ours differ (fresher, never
   captured). `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=`
   against a quoted form holds and printing spells the oracle's lowercase. Nested syntax-quote

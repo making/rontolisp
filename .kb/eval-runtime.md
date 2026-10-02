@@ -158,19 +158,26 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   11-parameter defun called directly, wasm 1,426 -> 2,284; `(print (mapcar #'- '(1 2)))` 23,931 ->
   24,118 JVM, 9,673 -> 2,880 wasm.
 
-## Top-level global mirroring
+## Global mirroring
 
-When `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` (`Ctx.topLevel`) also calls
-`_store(name, value, genv)` (`Jvm/WasmSetqCompiler.mirrorTopLevelGlobal`); the compiled value stays in
-a `main`/`_start` local, so the mirror is write-through one-way.
-
-**Only a name with a global backing store is mirrored** -- `ctx.globals`/`ctx.globalIndices`
+When `usesEval`, a `setq`/`defvar`/`defparameter`/`defconstant` of a name with a
+global backing store (`compiler/GlobalVarCollector`) also calls
+`_store(name, value, genv)` (`Jvm/WasmSetqCompiler.mirrorGlobal`); the compiled value stays in
+a `main`/`_start` local, so the mirror is write-through one-way. Since b78
+(2026-10-02) the store mirrors WHEREVER it stands -- a defun/lambda body included --
+so a runtime `boundp`/`symbol-value` sees what the body assigned; before, only a
+top-level store mirrored and a probe of a lambda-assigned global read stale
+forever. Only a name with a global backing store is mirrored
 (`compiler/GlobalVarCollector`). A top-level LEXICAL is not: CL's `eval` resolves against the null
 lexical environment, and expander temporaries (`__loop_acc0`, the `while` cursor, `__nrev_*`) are
-symbols in no package. `mirrorsTopLevelGlobal(name, ctx)` is a NAME test, not a scope test, because
-`GlobalVarCollector` is deliberately scope-blind. `_store` is an `_envLookup` (linear alist walk), so
+symbols in no package. `mirrorsGlobal(name, ctx)` is a NAME test, not a scope test, because
+`GlobalVarCollector` is deliberately scope-blind -- and a captured cell is never
+mirrored: the value a closure body stores through it is lexical, not the global
+default. `_store` is an `_envLookup` (linear alist walk), so
 mirroring a loop variable costs one walk per assignment per iteration (7.1x JVM / 3.0x wasm-GC on
-`loop ... sum` to 10^8).
+`loop ... sum` to 10^8; measured on a top-level loop, where only the mirror has
+ever run -- a function body assigning a global in an eval-using program pays the
+same per call since b78).
 
 ## Tests
 
@@ -180,3 +187,7 @@ mirroring a loop variable costs one walk per assignment per iteration (7.1x JVM 
   `WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
   (+ `--component` twin)
 - `Jvm/WasmLispCompilerTest.aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv`
+- `JvmLispCompilerTest.compileAndRunBoundpSeesAnAssignmentMadeInsideALambda`,
+  `WasmLispCompilerIntegrationTest.boundpSeesAnAssignmentMadeInsideALambda` (+ `--component`
+  twin), the `symbol-runtime-api` ci-spec case -- a runtime `boundp` of a
+  lambda-assigned global answers what the body stored (b78).

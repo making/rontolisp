@@ -18,9 +18,9 @@ import static org.junit.jupiter.api.Assumptions.abort;
 /**
  * The {@code java:} refusal of the new interop value shapes on both WASM backends: a
  * static field as a value, a member as a value, a zero-arg static call and a host-boolean
- * instance call all compile to the undefined-function call-time error (pinned here by the
- * compile warning naming it) and trap when run. The behavior itself lives in
- * {@link ClojureInteropTest} on the interpreter and the JVM.
+ * instance call, and a proxy over a class all compile to the undefined-function call-time
+ * error (pinned here by the compile warning naming it) and trap when run. The behavior
+ * itself lives in {@link ClojureInteropTest} on the interpreter and the JVM.
  */
 class ClojureWasmInteropRefusalTest {
 
@@ -67,6 +67,18 @@ class ClojureWasmInteropRefusalTest {
 	@Test
 	void hostBooleanCallRefusesOnTheComponent() throws Exception {
 		assertRefusal("(println (.isEmpty (java.util.ArrayList.)))", "JAVA:CALL", true);
+	}
+
+	@Test
+	void proxyOverAClassRefusesOnPreview1() throws Exception {
+		assertRefusal("(println (.lastModified (proxy [java.io.File] [\"x\"] (lastModified [] 42))))", "JAVA:SUBCLASS",
+				false);
+	}
+
+	@Test
+	void proxyOverAClassRefusesOnTheComponent() throws Exception {
+		assertRefusal("(println (.lastModified (proxy [java.io.File] [\"x\"] (lastModified [] 42))))", "JAVA:SUBCLASS",
+				true);
 	}
 
 	private static void assertRefusal(String program, String surface, boolean component) throws Exception {

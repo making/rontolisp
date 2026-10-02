@@ -4,7 +4,8 @@
 
 Rebinds each var around the body with dynamic extent: code the body calls sees
 the binding, and the root returns after. Only `^:dynamic` vars (and `*out*`/`*in*`,
-already special) may be bound; anything else is refused, like the oracle's
+already special -- bare or `clojure.core/`-qualified, since a syntax-quote
+qualifies them) may be bound; anything else is refused, like the oracle's
 non-dynamic error. A `^:dynamic` `defn` holds its function in the var, so it
 rebinds too (any other `defn` stays refused). Inits run sequentially, like `let`.
 
