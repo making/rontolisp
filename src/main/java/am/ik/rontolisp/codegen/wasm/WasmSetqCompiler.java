@@ -181,7 +181,9 @@ final class WasmSetqCompiler {
 
 		// A top-level global variable (not shadowed by a lexical here): store into its
 		// module-level wasm global. Works from any function body, so a defun/lambda can
-		// assign a global. The eval mirror still runs at top level (no-op elsewhere).
+		// assign a global. The eval mirror runs everywhere the eval runtime does
+		// (b78: an assignment nested in a lambda never reached it, so a runtime
+		// boundp/symbol-value read a stale mirror).
 		// --reentrant: a dynamically-bound special's setq assigns the ACTIVE binding in
 		// this call's task record when there is one -- the CL rule -- and the global
 		// default otherwise (WasmDynVars.emitWrite).
@@ -200,7 +202,7 @@ final class WasmSetqCompiler {
 				ctx.writer.write(Instruction.SET_GLOBAL);
 				ctx.writer.writeUnsignedLeb128(globalIndex);
 			}
-			mirrorTopLevelGlobal(name, tmpSlot, ctx);
+			mirrorGlobal(name, tmpSlot, ctx);
 			// Leave the assigned value on the stack as the form's result.
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
@@ -242,16 +244,18 @@ final class WasmSetqCompiler {
 	}
 
 	/**
-	 * Mirrors a top-level global variable binding into the embedded {@code eval}
-	 * runtime's global environment ({@code GLOBAL_ENV}), so an eval'd expression can
-	 * resolve a variable that compiled code defined via {@code setq}/{@code defvar} (the
-	 * compiled value otherwise lives only in a {@code _start} local the interpreter
-	 * cannot see). No-op unless the program uses {@code eval} and this is the top-level
-	 * context. Reads the assigned value back from {@code slot}; the value already on the
-	 * stack (left there by the {@code local.tee}) is preserved as the form's result.
+	 * Mirrors a global variable binding into the embedded {@code eval} runtime's global
+	 * environment ({@code GLOBAL_ENV}), so an eval'd expression can resolve a variable
+	 * that compiled code defined via {@code setq}/{@code defvar} (the compiled value
+	 * otherwise lives only in a {@code _start} local the interpreter cannot see). Runs
+	 * wherever the eval runtime does -- a store inside a defun/lambda body mirrors too,
+	 * so a runtime {@code boundp}/{@code
+	 * symbol-value} sees what the body assigned (b78). No-op unless the program uses
+	 * {@code eval}. Reads the assigned value back from {@code slot}; the value already on
+	 * the stack (left there by the {@code local.tee}) is preserved as the form's result.
 	 */
-	static void mirrorTopLevelGlobal(String name, int slot, WasmLispCompiler.Ctx ctx) {
-		if (!mirrorsTopLevelGlobal(name, ctx)) {
+	static void mirrorGlobal(String name, int slot, WasmLispCompiler.Ctx ctx) {
+		if (!mirrorsGlobal(name, ctx)) {
 			return;
 		}
 		// _store(place, value, GLOBAL_ENV) -> value ; drop the returned value (the result
@@ -267,22 +271,23 @@ final class WasmSetqCompiler {
 	}
 
 	/**
-	 * Whether {@link #mirrorTopLevelGlobal} would emit anything here. A caller that has
-	 * to stage the assigned value in a local ONLY so the mirror can read it back asks
-	 * first, so a program that never evals does not pay a {@code local.tee} -- and a
-	 * local -- per top-level binding.
+	 * Whether {@link #mirrorGlobal} would emit anything here. A caller that has to stage
+	 * the assigned value in a local ONLY so the mirror can read it back asks first, so a
+	 * program that never evals does not pay a {@code local.tee} -- and a local -- per
+	 * top-level binding.
 	 * <p>
 	 * Only a name with a global backing store qualifies: a lexical -- a top-level
 	 * {@code let}/{@code loop}/{@code do} variable, or a macro-generated temporary -- is
 	 * invisible to {@code eval}, which resolves against the null lexical environment, so
 	 * mirroring one is not conservatism but wasted work ({@code _store} walks the global
-	 * alist linearly, once per assignment, on every iteration of a top-level loop).
+	 * alist linearly, once per assignment, on every iteration of a loop that assigns a
+	 * global).
 	 * @param name the assigned variable name
 	 * @param ctx the context the assignment is being emitted into
 	 * @return {@code true} when the mirror emits
 	 */
-	static boolean mirrorsTopLevelGlobal(String name, WasmLispCompiler.Ctx ctx) {
-		return ctx.topLevel && ctx.usesEval && ctx.globalIndices.containsKey(name);
+	static boolean mirrorsGlobal(String name, WasmLispCompiler.Ctx ctx) {
+		return ctx.usesEval && ctx.globalIndices.containsKey(name);
 	}
 
 }

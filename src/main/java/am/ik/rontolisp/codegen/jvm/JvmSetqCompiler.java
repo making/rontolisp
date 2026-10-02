@@ -152,11 +152,13 @@ final class JvmSetqCompiler {
 			// A top-level global variable (not shadowed by a lexical here): store into
 			// its
 			// dedicated static field. Works from any method body, so a defun/lambda can
-			// assign a global. The eval mirror still runs at top level (no-op elsewhere).
+			// assign a global. The eval mirror runs everywhere the eval runtime does
+			// (b78: an assignment nested in a lambda never reached it, so a runtime
+			// boundp/symbol-value read a stale mirror).
 			// A dynamically-bound special assigns this thread's active binding instead
 			// when one exists (emitGlobalStore).
 			emitGlobalStore(name, ctx);
-			mirrorTopLevelGlobal(name, ctx);
+			mirrorGlobal(name, ctx);
 		}
 		else {
 			// A plain lexical local of this method body. NOT mirrored into the eval
@@ -209,15 +211,17 @@ final class JvmSetqCompiler {
 	}
 
 	/**
-	 * Mirrors a top-level global variable binding into the embedded {@code eval}
-	 * runtime's global environment, so an eval'd expression can resolve a variable that
-	 * compiled code defined via {@code setq}/{@code defvar} (the compiled value otherwise
-	 * lives only in a {@code main()} local the interpreter cannot see). No-op unless
-	 * {@link #mirrorsTopLevelGlobal} holds. Expects the assigned value on the stack and
-	 * leaves it there (the {@code _store} call returns it).
+	 * Mirrors a global variable binding into the embedded {@code eval} runtime's global
+	 * environment, so an eval'd expression can resolve a variable that compiled code
+	 * defined via {@code setq}/{@code defvar} (the compiled value otherwise lives only in
+	 * a {@code main()} local the interpreter cannot see). Runs wherever the eval runtime
+	 * does -- a store inside a defun/lambda body mirrors too, so a runtime
+	 * {@code boundp}/{@code symbol-value} sees what the body assigned (b78). No-op unless
+	 * {@link #mirrorsGlobal} holds. Expects the assigned value on the stack and leaves it
+	 * there (the {@code _store} call returns it).
 	 */
-	static void mirrorTopLevelGlobal(String name, JvmLispCompiler.Ctx ctx) {
-		if (!mirrorsTopLevelGlobal(name, ctx)) {
+	static void mirrorGlobal(String name, JvmLispCompiler.Ctx ctx) {
+		if (!mirrorsGlobal(name, ctx)) {
 			return;
 		}
 		// stack: value -> _store(name, value, null) -> value
@@ -233,13 +237,13 @@ final class JvmSetqCompiler {
 	 * temporary -- is invisible to {@code eval}, which resolves against the null lexical
 	 * environment, so mirroring one is not conservatism but wasted work (and
 	 * {@code _store} is a linear walk of the global alist, paid on every iteration of a
-	 * top-level loop).
+	 * loop that assigns a global.
 	 * @param name the assigned variable name
 	 * @param ctx the context the assignment is being emitted into
 	 * @return {@code true} when the mirror emits
 	 */
-	static boolean mirrorsTopLevelGlobal(String name, JvmLispCompiler.Ctx ctx) {
-		return ctx.topLevel && ctx.evalStoreRef != null && ctx.globals.contains(name);
+	static boolean mirrorsGlobal(String name, JvmLispCompiler.Ctx ctx) {
+		return ctx.evalStoreRef != null && ctx.globals.contains(name);
 	}
 
 }

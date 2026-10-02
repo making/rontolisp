@@ -1471,19 +1471,6 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The set flag of a {@code defonce} in a namespace init: whether its init statement
-	 * already ran. A runtime {@code boundp} probe is unsound there -- on the compiled
-	 * backends it reads the eval runtime's global-env mirror, which only a top-level
-	 * assignment reaches, never one inside the init lambda -- so the keep/reset decision
-	 * rides a plain variable, like the loaded flag itself.
-	 * @param key the var key
-	 * @return the flag symbol
-	 */
-	static LispSymbol defonceSetSym(String key) {
-		return new LispSymbol(varSym(key).name() + "%set");
-	}
-
-	/**
 	 * One init chunk of a namespace.
 	 * @param ns the namespace
 	 * @param chunk the 1-based chunk number

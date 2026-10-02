@@ -429,10 +429,12 @@ on); the JVM method mangle spells `/` and `.`. A local never carries a namespace
   skips it). The flag is a `defvar`, so a namespace two separately lowered files require
   still runs once per process; a `require` inside a body lowers to the call where it
   stands, so it loads when the body runs. A `def` resets on reload where a `defonce`
-  keeps its root, through a `%set` flag beside the var -- a runtime `boundp` probe is
-  unsound in the init (measured 2026-10-02: the compiled backends read it off the eval
-  mirror, which only a top-level assignment reaches, never one inside the init lambda, so
-  the reload always reset). Chunks split past 16 KiB of printed statements (one huge
+  keeps its root, through a runtime `(boundp 'var)` probe of the var itself --
+  since b78 (2026-10-02) every store to a global feeds the eval mirror the probe
+  reads, so the init's own assignment is visible to it; before, the probe was
+  unsound in the init (measured 2026-10-02: the mirror saw only top-level
+  assignments, never one inside the init lambda, so the reload always reset) and
+  the decision rode a `%set` flag beside the var instead. Chunks split past 16 KiB of printed statements (one huge
   statement stays one huge chunk, the wasm tail-spine gap for `defun`s); each is a
   top-level `(setq |c%n%init-N| (lambda () ...))` under a `(setq |c%n%init| ...)` driver,
   so `GlobalVarCollector` keeps the stores (it walks assignments nested in a top-level

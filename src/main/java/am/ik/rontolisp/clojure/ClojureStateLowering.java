@@ -843,16 +843,16 @@ final class ClojureStateLowering {
 					new LispInteger(0)));
 		}
 		if (hoisted != null) {
-			// a reload keeps the root through a set flag beside the var: a runtime
-			// boundp probe is unsound in the init (the compiled backends read it off
-			// the eval mirror, which a lambda's assignment never reaches), so the
-			// decision rides a plain variable, like the loaded flag. The defvar keeps
-			// the flag across separately lowered files, like that flag.
-			LispSymbol setFlag = ClojureLowering.defonceSetSym(key);
-			hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), setFlag, ClojureLowering.NIL_CONST));
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), setFlag,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), setFlag, ClojureLowering.TRUE_CONST));
+			// a reload keeps the root through a runtime boundp probe of the var
+			// itself: every store to a global feeds the eval mirror the compiled
+			// boundp reads (b78), so the init's own assignment is visible to the
+			// probe and no set flag beside the var is needed. The probe survives
+			// the compile-time boundp fold -- the init's assignment poisons the
+			// name -- like the loaded flag's plain-variable test.
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value));
 		}
 		else {
 			set = dynamic

@@ -43,6 +43,10 @@ unbound.
 - Never answered: a **`cl` symbol** (some are born bound), a valueless **`(defvar x)`**, a
   name in any **`special` declaration** (a TYPE-only `declaim` does not block), a
   **computed designator** (`(boundp (intern ...))`), which keeps the eval runtime.
+- Never answered either: a name assigned only inside a deferred body. That
+  assignment poisons the name, so the probe is left to the run time, where the
+  eval mirror answers it -- every store to a global feeds the mirror since b78
+  (`.kb/eval-runtime.md`), so the answer agrees with the interpreter.
 
 ## What the fold leaves behind
 - TOP LEVEL: the surviving branch is spliced INTO the top-level list, restoring the
@@ -66,7 +70,12 @@ FUNCTION registry including every backend built-in -- a set this pass does not h
   -- byte-identical to the answer; the size half is WASM-only on purpose and read off the
   SHAKEN module.
 - Runtime answers: `JvmLispCompilerTest#compileAndRunBoundp`,
-  `WasmLispCompilerIntegrationTest#boundpChecksTheGlobalVariableNamespace`.
+  `WasmLispCompilerIntegrationTest#boundpChecksTheGlobalVariableNamespace`;
+  a probe of a lambda-assigned global:
+  `JvmLispCompilerTest#compileAndRunBoundpSeesAnAssignmentMadeInsideALambda`,
+  `WasmLispCompilerIntegrationTest#boundpSeesAnAssignmentMadeInsideALambda` (+ `--component`
+  twin), `LispEvaluatorTest#boundpChecksTheGlobalVariableNamespace`, the
+  `symbol-runtime-api` ci-spec case (b78).
 - **`ci-spec.yaml` covers the UNFOLDED path**: one case calls `eval`, so the concatenated
   program trips the gate on all four backends. If that case ever leaves the spec, the
   driver starts exercising the fold and those answers must still be identical.

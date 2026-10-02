@@ -2051,9 +2051,21 @@ class ClojureLoweringTest {
 			.contains("(DECLAIM (SPECIAL |c%app.dyn/y| |c%app.dyn/y%bound-depth|))")
 			.contains("(DEFPARAMETER |c%app.dyn/y%bound-depth| 0)")
 			.contains("(SETQ |c%app.dyn/x| 1)")
-			.contains("(DEFVAR |c%app.dyn/y%set| NIL)")
-			.contains("(UNLESS |c%app.dyn/y%set| (SETQ |c%app.dyn/y| 2) (SETQ |c%app.dyn/y%set| T))");
+			// b78: a reload keeps the defonce root through a runtime boundp probe
+			// of the var itself -- every store feeds the eval mirror the probe
+			// reads, so no set flag beside the var is needed any more
+			.contains("(UNLESS (BOUNDP '|c%app.dyn/y|) (SETQ |c%app.dyn/y| 2))")
+			.doesNotContain("%set");
 		assertThat(out).doesNotContain("(DEFPARAMETER |c%app.dyn/x| 1)");
+	}
+
+	@Test
+	void aDefonceInANamespaceKeepsItsRootThroughBoundp() {
+		// the plain (non-dynamic) init shape rides the same probe: the init's own
+		// assignment poisons the name, so the compile-time boundp fold leaves the
+		// probe to the run time, where the mirror answers it (b78)
+		String out = loweredWithFiles("(require 'app.once)", Map.of("src/app/once.clj", "(ns app.once) (defonce v 1)"));
+		assertThat(out).contains("(UNLESS (BOUNDP '|c%app.once/v|) (SETQ |c%app.once/v| 1))").doesNotContain("%set");
 	}
 
 }

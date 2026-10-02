@@ -17098,6 +17098,12 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(boundp nil)")).isEqualTo(LispTrue.INSTANCE);
 		// lexical bindings are invisible, like CL's dynamic-only boundp
 		assertThat(evalMulti("(let ((lex 1)) (boundp 'lex))")).isEqualTo(LispNil.INSTANCE);
+		// b78: an assignment nested in a lambda binds the global when it runs, so a
+		// later probe answers bound -- the reference the compiled backends match.
+		assertThat(evalMulti("(setq b78-init (lambda () (setq b78-lam 42) nil)) (boundp 'b78-lam)"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(setq b78-init (lambda () (setq b78-lam 42) nil)) (funcall b78-init) (boundp 'b78-lam)"))
+			.isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test
