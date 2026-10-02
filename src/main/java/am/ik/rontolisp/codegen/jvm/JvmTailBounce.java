@@ -162,36 +162,63 @@ final class JvmTailBounce {
 
 	/**
 	 * The unwrap check, in the slot-free form the runtime builders emit: the value on the
-	 * stack is replaced by the trampoline's answer, or left as it is. Pure stack work, so
-	 * a builder with a fixed local layout needs no slot of its own.
+	 * stack is replaced by the trampoline's answer, or left as it is. One call to the
+	 * shared {@code _unw} ({@link #unwBody}): every dispatcher call site of a trampolined
+	 * class carries one, and the check spelled out inline cost ~22 bytes a site -- enough
+	 * to push the ci-spec corpus's largest top-level form past the 64 KB method limit.
+	 * {@code _unw} is small enough for HotSpot to inline at every site.
 	 * @param a the code being emitted
 	 * @param cp the class's constant pool
-	 * @param thisClass the class carrying {@code _tramp}
+	 * @param thisClass the class carrying {@code _unw} and {@code _tramp}
 	 * @param objectArrayClass {@code Object[]}
 	 * @param hasTr whether the class has a trampoline at all; without one this emits
 	 * nothing
 	 */
 	static void unwrapRaw(MethodCode a, ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
 			boolean hasTr) {
-		if (!hasTr || System.getenv("RL_NO_UNWRAP") != null) {
+		if (!hasTr) {
 			return;
 		}
-		MethodCode.Label plain = a.newLabel();
-		MethodCode.Label done = a.newLabel();
-		a.dup();
-		a.instanceOf(objectArrayClass);
-		a.ifeq(plain);
-		a.dup();
-		a.checkcast(objectArrayClass);
-		a.iconst_0();
-		a.aaload();
-		a.instanceOf(cp.classEntry("java/lang/Boolean"));
-		a.ifeq(plain);
-		a.invokestatic(cp.methodRef(thisClass, cp.utf8Entry("_tramp"),
-				cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		a.goto_(done);
-		a.labelBinding(plain);
-		a.labelBinding(done);
+		a.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(UNW_NAME), cp.utf8Entry(UNW_DESC)));
+	}
+
+	/** The shared unwrap check's name. */
+	static final String UNW_NAME = "_unw";
+
+	/** The shared unwrap check's descriptor. */
+	static final String UNW_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * The body of {@code _unw(Object)Object}: a bounce array -- an {@code Object[]} whose
+	 * slot 0 is the marker -- goes to {@code _tramp}, anything else returns as it is.
+	 * @param cp the class's constant pool
+	 * @param thisClass the class carrying {@code _tramp}
+	 * @return the method body
+	 */
+	static MethodCode unwBody(ConstantPool cp, ClassEntry thisClass) {
+		ClassEntry objectArray = cp.classEntry("[Ljava/lang/Object;");
+		MethodCode code = new MethodCode();
+		MethodCode.Label plain = code.newLabel();
+		code.aload(0);
+		code.instanceOf(objectArray);
+		code.ifeq(plain);
+		code.aload(0);
+		code.checkcast(objectArray);
+		code.arraylength();
+		code.ifeq(plain);
+		code.aload(0);
+		code.checkcast(objectArray);
+		code.iconst_0();
+		code.aaload();
+		code.instanceOf(cp.classEntry("java/lang/Boolean"));
+		code.ifeq(plain);
+		code.aload(0);
+		code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry("_tramp"), cp.utf8Entry(UNW_DESC)));
+		code.areturn();
+		code.labelBinding(plain);
+		code.aload(0);
+		code.areturn();
+		return code;
 	}
 
 	/**

@@ -1706,7 +1706,10 @@ outside such a cycle changes: a program with none lowers byte-identically.
   array is the method's result. Every caller of a compiled function's result checks for
   the array and, on the shape, drives the call it names in ITS OWN frame -- the shared
   `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes back
-  (`JvmTailBounce`). One frame per tail chain plus the dispatcher's; the
+  (`JvmTailBounce`). The check is one `invokestatic _unw` per call site (a 34-byte
+  helper that hands a bounce to `_tramp`); spelled out inline it cost ~22 bytes a site and
+  took the ci-spec corpus's largest top-level form to 68,454 B, past the 64 KB method limit
+  (2026-10-03, CI red at `ec836db36`). One frame per tail chain plus the dispatcher's; the
   state machine below runs 1,000,000 deep. A tail `apply` keeps a frame pair per hop,
   and a call the Lisp-2 rewrite lowers to a fresh funcall cons (a Common Lisp variable
   head) keeps a real frame -- the mark cannot survive the rewrite.

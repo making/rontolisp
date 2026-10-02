@@ -278,11 +278,7 @@ final class JvmBodyOutliner {
 		}
 		ctx.body.invokestatic(ref);
 		// The continuation's result is this method's: unwrap a bounce it ends in.
-		if (ctx.hasTr) {
-			if (ctx.hasTr) {
-				JvmTailBounce.emitUnwrap(ctx, className);
-			}
-		}
+		JvmTailBounce.emitUnwrap(ctx, className);
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
 		cont.tailBounce = ctx.tailBounce;

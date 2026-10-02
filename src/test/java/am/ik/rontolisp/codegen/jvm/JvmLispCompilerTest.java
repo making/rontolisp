@@ -22995,6 +22995,40 @@ class JvmLispCompilerTest {
 		assertThat(runClass(bounced)).isEqualTo("DONE");
 	}
 
+	@Test
+	void theUnwrapCheckAtACallSiteIsOneCallToASharedHelper() throws Exception {
+		// Every dispatcher call site in a trampolined class checks its result for a
+		// bounce. Inline, the check cost ~22 bytes per site and pushed the ci-spec
+		// corpus's largest top-level form past the 64 KB method limit
+		// (.kb/jvm-method-size-limits.md); as a call to _unw it costs one invokestatic.
+		int sites = 200;
+		StringBuilder calls = new StringBuilder("(let ((f (car (list #'1+))) (acc 0))\n");
+		for (int i = 0; i < sites; i++) {
+			calls.append("  (setq acc (funcall f acc))\n");
+		}
+		calls.append("  (print acc))\n");
+		String bouncing = "(defun g (self n) (if (= n 0) 'done (funcall self self (- n 1))))\n"
+				+ "(print (g (function g) 3))\n";
+		byte[] direct = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(calls.toString()));
+		byte[] trampolined = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(calls + bouncing));
+		assertThat(declaredMethodNames(trampolined)).contains("_tramp", "_unw");
+		int growth = topLevelCodeLength(trampolined) - topLevelCodeLength(direct);
+		assertThat(growth).as("bytes the unwrap adds over %d call sites", sites).isLessThan(sites * 4 + 100);
+		assertThat(runClass(trampolined)).isEqualTo("200\nDONE");
+	}
+
+	/** The code length summed over {@code main} and the {@code _top$N} chunks. */
+	private static int topLevelCodeLength(byte[] classBytes) {
+		int total = 0;
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (name.equals("main") || name.startsWith("_top$")) {
+				total += method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength();
+			}
+		}
+		return total;
+	}
+
 	/** Every method the class declares, in declaration order. */
 	private static List<String> declaredFieldNames(byte[] classBytes) {
 		return java.lang.classfile.ClassFile.of()

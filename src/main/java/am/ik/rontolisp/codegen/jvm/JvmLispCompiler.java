@@ -4030,6 +4030,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// exact bytes.
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainCtx.trampName(),
 					mainCtx.trampDesc(), JvmTailBounce.trampBody(indirectCallArities, cp, thisClass));
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.UNW_NAME),
+					cp.utf8Entry(JvmTailBounce.UNW_DESC), JvmTailBounce.unwBody(cp, thisClass));
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
