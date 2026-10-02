@@ -28,12 +28,14 @@ class ClojureWasmFileIoTest {
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnPreview1() throws Exception {
-		assertThat(runWithPreopen(false)).isEqualTo("a\nb\n(a b)\n7\n");
+		assertThat(runWithPreopen(false))
+			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#b51wio.B74W{:a 1, :b 2}\n7\n");
 	}
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnTheComponent() throws Exception {
-		assertThat(runWithPreopen(true)).isEqualTo("a\nb\n(a b)\n7\n");
+		assertThat(runWithPreopen(true))
+			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#b51wio.B74W{:a 1, :b 2}\n7\n");
 	}
 
 	private static String runWithPreopen(boolean component) throws Exception {
@@ -47,9 +49,13 @@ class ClojureWasmFileIoTest {
 		Files.deleteIfExists(written);
 		String out = "\"" + written.toString().replace("\\", "\\\\") + "\"";
 		String words = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		String program = "(ns b51wio (:require [clojure.java.io :as jio]))" + "(spit " + out + " \"a\\nb\")"
-				+ "(println (slurp " + out + "))" + "(println (line-seq " + out + "))" + "(with-open [r (jio/reader "
-				+ words + ")] (println (count (line-seq r))))";
+		String program = "(ns b51wio (:require [clojure.java.io :as jio]))" + "(defrecord B74W [a b])" + "(spit " + out
+				+ " \"a\\nb\")" + "(println (slurp " + out + "))" + "(println (line-seq " + out + "))" + "(spit " + out
+				+ " '(1 2))" + "(println (slurp " + out + "))" + "(spit " + out + " [1 2])" + "(println (slurp " + out
+				+ "))" + "(spit " + out + " {:a 1})" + "(println (slurp " + out + "))" + "(spit " + out + " 42)"
+				+ "(println (slurp " + out + "))" + "(spit " + out + " nil)" + "(println (pr-str (slurp " + out + ")))"
+				+ "(spit " + out + " \"s\")" + "(spit " + out + " (->B74W 1 2) :append true)" + "(println (slurp " + out
+				+ "))" + "(with-open [r (jio/reader " + words + ")] (println (count (line-seq r))))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)

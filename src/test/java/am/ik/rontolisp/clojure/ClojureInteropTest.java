@@ -204,6 +204,27 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void spitWritesStrSpellingOfNonStrings() throws Exception {
+		// b74: spit writes (str content): a list, vector, map, number and record
+		// go through the str spelling, nil writes nothing, a string is written
+		// as before; :append included. The wasm legs (a --dir preopen) live in
+		// ClojureWasmFileIoTest.
+		String path = "\"" + workDir.resolve("b74-spit.txt").toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual("(spit " + path + " '(1 2)) (println (slurp " + path + "))", "(1 2)\n");
+		assertBothEqual("(spit " + path + " [1 2]) (println (slurp " + path + "))", "[1 2]\n");
+		assertBothEqual("(spit " + path + " {:a 1}) (println (slurp " + path + "))", "{:a 1}\n");
+		assertBothEqual("(spit " + path + " 42) (println (slurp " + path + "))", "42\n");
+		assertBothEqual("(spit " + path + " nil) (println (pr-str (slurp " + path + ")))", "\"\"\n");
+		assertBothEqual(
+				"(spit " + path + " \"s\") (spit " + path + " '(9) :append true) (println (slurp " + path + "))",
+				"s(9)\n");
+		assertBothEqual("(defrecord B74R [a b]) (spit " + path + " (->B74R 1 2)) (println (slurp " + path + "))",
+				"#user.B74R{:a 1, :b 2}\n");
+		assertBothEqual("(defrecord B74S [a b]) (spit " + path + " \"s\") (spit " + path + " (->B74S 1 2) :append true)"
+				+ " (println (slurp " + path + "))", "s#user.B74S{:a 1, :b 2}\n");
+	}
+
+	@Test
 	void filesRoundTripThroughReaderAndLineSeq() throws Exception {
 		// clojure.java.io/reader opens a buffered file-stream reader: line-seq reads
 		// it without closing (with-open owns closing, like the oracle), over the

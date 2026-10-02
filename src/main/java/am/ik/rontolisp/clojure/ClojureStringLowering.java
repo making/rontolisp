@@ -909,16 +909,17 @@ final class ClojureStringLowering {
 	}
 
 	/**
-	 * {@code spit}: the string written to the path, answering nil. With an
-	 * {@code :append} flag the writes append, else the file is superseded.
+	 * {@code spit}: the {@code str} spelling of the content written to the path,
+	 * answering nil. With an {@code :append} flag the writes append, else the file is
+	 * superseded.
 	 */
 	static LispVal spitOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
-		ClojureLowerUtil.isTrue(n == 2 || n == 4, "spit takes a path, a string and an optional :append flag");
+		ClojureLowerUtil.isTrue(n == 2 || n == 4, "spit takes a path, content and an optional :append flag");
 		LispVal exists;
 		if (n == 4) {
 			if (!ClojureLowerUtil.isSymbolNamed(items.get(3), ":append")) {
-				throw new LispReadException("spit takes a path, a string and an optional :append flag");
+				throw new LispReadException("spit takes a path, content and an optional :append flag");
 			}
 			exists = ctx.ifFalsey(ctx.lower(items.get(4)), ClojureLowerUtil.sym(":append"),
 					ClojureLowerUtil.sym(":supersede"));
@@ -933,9 +934,10 @@ final class ClojureStringLowering {
 	static LispVal spitForm(ClojureLowering ctx, LispVal path, LispVal content, LispVal exists) {
 		LispSymbol file = ctx.freshTemp();
 		LispSymbol text = ctx.freshTemp();
+		LispVal spelled = strOf(ctx, content, LispString.literal(""), ClojureLowering.NIL_CONST);
 		LispSymbol stream = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, path), ClojureLowerUtil.list(text, content))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(file, path), ClojureLowerUtil.list(text, spelled))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("with-open-file"),
 						ClojureLowerUtil.list(List.of(stream, file, ClojureLowerUtil.sym(":direction"),
 								ClojureLowerUtil.sym(":output"), ClojureLowerUtil.sym(":if-exists"), exists)),
