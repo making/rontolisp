@@ -4139,3 +4139,28 @@ cases:
       12
       12 12 12
       ab
+  - name: syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace
+    # b77: like the oracle, a syntax-quoted symbol qualifies even when it resolves
+    # to nothing: a core name the namespace sees spells clojure.core/name, any other
+    # unresolved spelling the defining namespace, an alias head its namespace (no var
+    # check) and a class head its fully qualified name (imported or java.lang); a
+    # special form stays bare, and a qualified head naming neither stays as written.
+    # A name (:refer-clojure :exclude [map]) hides spells its own namespace instead.
+    # The bench-shaped expansion pins the composition with macroexpand (which answers
+    # the mangled data, so = against the quoted oracle spelling holds). Every line
+    # is the oracle's (clj 1.12.6.1673), on all four backends.
+    source: |
+      (ns b77.sq (:require [clojure.string :as s]))
+      (defmacro b77-bench [expr]
+        `(let [b77-start (System/nanoTime) b77-result ~expr]
+           {:result b77-result :elapsed (- (System/nanoTime) b77-start)}))
+      (println (= (macroexpand-1 '(b77-bench 1))
+                  '(clojure.core/let [b77.sq/b77-start (java.lang.System/nanoTime) b77.sq/b77-result 1]
+                     {:result b77.sq/b77-result :elapsed (clojure.core/- (java.lang.System/nanoTime) b77.sq/b77-start)})))
+      (println `b77-loose `let `s/join `s/nope `System/nanoTime `foo/bar)
+      (ns b77.excl (:refer-clojure :exclude [map]))
+      (println `map `filter)
+    expected: |
+      true
+      b77.sq/b77-loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
+      b77.excl/map clojure.core/filter

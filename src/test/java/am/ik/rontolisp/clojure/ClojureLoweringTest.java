@@ -1351,7 +1351,7 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesSplicesAndGensyms() {
 		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
-		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%a|");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%user/a|");
 		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
 		assertThat(out2).contains("|c%mu-doc%macro|");
 	}
@@ -1964,10 +1964,24 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesTheVarsItsNamespaceSees() {
 		// like the oracle's read-time resolution: an own or referred var carries its
-		// namespace (user's included); core names and unresolved symbols stay bare
-		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope))")).contains("'|c%s.a/h|")
-			.contains("'|c%nope|");
+		// namespace (user's included); anything else qualifies too (b77): a core
+		// name the namespace sees as clojure.core/name, any other unresolved
+		// spelling with the defining namespace, an alias head with its namespace,
+		// a class head with its fully qualified name
+		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope let))")).contains("'|c%s.a/h|")
+			.contains("'|c%s.a/nope|")
+			.contains("'|c%clojure.core/let|");
 		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
+		assertThat(loweredWithMacros(
+				"(ns s.b (:require [clojure.string :as s])) (defmacro m [] `(s/join s/nope System/nanoTime foo/bar import*))"))
+			.contains("'|c%clojure.string/join|")
+			.contains("'|c%clojure.string/nope|")
+			.contains("'|c%java.lang.System/nanoTime|")
+			.contains("'|c%foo/bar|")
+			.contains("'|c%s.b/import*|");
+		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
+			.contains("'|c%s.c/map|")
+			.contains("'|c%clojure.core/filter|");
 	}
 
 	@Test
