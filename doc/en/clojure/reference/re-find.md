@@ -11,5 +11,5 @@ is `nil`. Works as a function value too.
 ```clojure
 (println (re-find #"a+" "aaab")) ; aaa
 (println (re-find #"a+" "c")) ; nil
-(println (re-find #"(\\w+)@(\\w+)" "user@host")) ; [user@host user host]
+(println (re-find #"(\w+)@(\w+)" "user@host")) ; [user@host user host]
 ```

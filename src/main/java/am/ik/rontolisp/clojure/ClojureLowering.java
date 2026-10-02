@@ -1264,8 +1264,9 @@ public final class ClojureLowering {
 		String name = plainName(nameDatum, "def");
 		boolean dynamic = nameIsDynamic(nameDatum);
 		int at = 2;
-		if (items.size() > at && items.get(at) instanceof LispString) {
-			at++; // the docstring
+		if (items.size() > at + 1 && items.get(at) instanceof LispString) {
+			at++; // the docstring (only with a value behind it: a lone string is the
+					// value)
 		}
 		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
 			at++; // the attr map (only with a value behind it: a lone map is the value)

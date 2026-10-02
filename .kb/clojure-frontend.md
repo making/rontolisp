@@ -68,7 +68,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
 | `defn-` | `defn`, private by convention only | metadata never affects dispatch, so there is nothing to enforce |
-| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value) |
+| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the plain body (the oracle's bare `do`, no barrier); a non-empty body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
@@ -91,7 +91,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | strings (`"..."`) | `LispString`, self-evaluating | the standard escapes plus `\uXXXX` and octal `\0`-`\7` (up to three digits, capped at `\377` -- the escape stops at whitespace, `,` or a macro char, anything else is the oracle's `Invalid digit` refusal), like the oracle; anything else -- `\'` included -- is the oracle's `Unsupported escape character` refusal (b41 fixed the old default arm duplicating the next char; b44 added the octal arm and refused `\'` instead of keeping the lenient read; b47 reshaped the `\u` errors to the oracle's `Invalid unicode escape` (first digit) / `Invalid digit` (later digit) / `Invalid character length` (a short run before a stop), keeping `truncated \u escape` only for a buffer ending mid-escape so the session still waits for more input) |
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
-| regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle |
+| regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21; verbatim backslashes since b50) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle; the reader keeps every escape verbatim like the oracle (so `#"\\d"` reads a literal backslash plus `d`), refusing unknown alphabetic escapes, a short/non-hex `\u`/`\x`, a `\0` with no octal digit behind it and a lone `\E` at read time |
 | syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
 | `var`/`#'`, metadata (`^`) | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
 | `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
@@ -623,7 +623,13 @@ oracle. Pinned in `clojure-spec.yaml`
 `demo-mutable-re`, `utils.clj` `jar-urls` -- run on all four backends), the
 lowered shapes and arity refusals in `ClojureReaderTest`/`ClojureLoweringTest`,
 and the run-time signals plus value legs in `ClojureInteropTest`
-(interpreter and JVM).
+(interpreter and JVM). b50 keeps the reader verbatim like the oracle (the old
+read halved every `\\` run, so `#"\\d"` answered the digit class; now it reads
+a literal backslash plus `d`, pinned by `regex-literal-backslashes-stay-verbatim` --
+no runtime change, the `clojure.lisp` parser already reads the escapes), and
+fixes `def` eating a lone string value as a docstring (pinned by
+`def-lone-string-is-the-value-not-a-docstring`, the
+`examples/clojure/demo.clj` greeting regression).
 Cost (2026-10-01, x86-64 Linux, Java 25, raw module totals --
 `.kb/size-measurement.md`: the target number is the raw total a downloader
 pays): `(println (re-find #"a+" "aaab"))` compiles to 63,300 B of wasm

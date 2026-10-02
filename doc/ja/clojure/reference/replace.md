@@ -11,5 +11,5 @@
 (println (clojure.string/replace "aaa" \a \b)) ; bbb
 (println (clojure.string/replace "aaa" "." "b")) ; aaa
 (println (clojure.string/replace "aaa" #"a" "b")) ; bbb
-(println (clojure.string/replace "abc123def" #"(\\d+)" "<$1>")) ; abc<123>def
+(println (clojure.string/replace "abc123def" #"(\d+)" "<$1>")) ; abc<123>def
 ```

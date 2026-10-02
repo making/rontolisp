@@ -34,6 +34,12 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void defLoneStringIsTheValueNotADocstring() {
+		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| \"hello\")\n|c%x|");
+		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+	}
+
+	@Test
 	void defnIsADefunCalledDirectly() {
 		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) |c%x|)\n(|c%f| 1)");
 		assertThat(lowered("(defn f [x] x) f")).isEqualTo(FALSE_BINDING + "(DEFUN |c%f| (|c%x|) |c%x|)\n#'|c%f|");
@@ -1364,7 +1370,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(defn f {:private true} [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(def x \"a docstring\" 1)")).contains("(SETQ |c%x| 1)");
-		assertThat(lowered("(def x \"a docstring\")")).contains("(SETQ |c%x| NIL)");
+		assertThat(lowered("(def x \"a docstring\")")).contains("(SETQ |c%x| \"a docstring\")");
 		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
 		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");

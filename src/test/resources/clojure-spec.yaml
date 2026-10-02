@@ -694,6 +694,24 @@ cases:
     expected: |
       nil
       42
+  - name: def-lone-string-is-the-value-not-a-docstring
+    # A docstring only counts with a value behind it: (def g "hello") binds
+    # "hello" (b50: the old read ate the string as a docstring and bound nil,
+    # which blanked the examples/clojure/demo.clj greeting). With a value the
+    # string is the docstring, and a lone map stays the value.
+    source: |
+      (def b50-greeting "hello")
+      (println b50-greeting)
+      (println (str b50-greeting "X"))
+      (def b50-with-doc "a docstring" "the value")
+      (println b50-with-doc)
+      (def b50-plain-map {:a 1})
+      (println b50-plain-map)
+    expected: |
+      hello
+      helloX
+      the value
+      {:a 1}
   - name: higher-order-compose-over-map-filter-reduce
     source: |
       (defn comp-sq [coll]
@@ -3116,14 +3134,14 @@ cases:
     # with them (nil past no match); re-seq collects every match; re-matches
     # needs the whole string.
     source: |
-      (println (re-find #"(\\w+)@(\\w+)" "user@host"))
+      (println (re-find #"(\w+)@(\w+)" "user@host"))
       (println (re-find #"z(zz)?" "z"))
       (println (re-seq #"a+" "aaabbaa"))
-      (println (re-seq #"(\\w+)@(\\w+)" "a@b c@d"))
+      (println (re-seq #"(\w+)@(\w+)" "a@b c@d"))
       (println (re-seq #"z" "abc"))
       (println (re-matches #"a+" "aaa"))
       (println (re-matches #"a+" "aaab"))
-      (println (re-matches #"(\\w+)@(\\w+)" "user@host"))
+      (println (re-matches #"(\w+)@(\w+)" "user@host"))
     expected: |
       [user@host user host]
       [z nil]
@@ -3138,12 +3156,12 @@ cases:
     # match, re-groups answers the last match's vector, and an exhausted
     # matcher answers nil.
     source: |
-      (let [m (re-matcher #"\\w+" "the quick brown fox")]
+      (let [m (re-matcher #"\w+" "the quick brown fox")]
         (loop [match (re-find m)]
           (when match
             (println match)
             (recur (re-find m)))))
-      (let [m (re-matcher #"(\\w+)@(\\w+)" "user@host")]
+      (let [m (re-matcher #"(\w+)@(\w+)" "user@host")]
         (println (re-find m))
         (println (re-groups m)))
       (let [m (re-matcher #"a" "a")]
@@ -3171,14 +3189,14 @@ cases:
       (println (count (s/split "" #",")))
       (println (s/split "x" #"x+"))
       (println (filter #(> (count %) 2) (s/split "hi there a b" #"\W+")))
-      (println (let [[w1 w2 w3] (s/split "foo bar baz qux" #"\\s+")] [w1 w2 w3]))
+      (println (let [[w1 w2 w3] (s/split "foo bar baz qux" #"\s+")] [w1 w2 w3]))
       (println (s/replace "aaa" #"a" "b"))
       (println (s/replace "aaa" #"a+" "b"))
       (println (s/replace-first "aaa" #"a+" "b"))
-      (println (s/replace "abc123def" #"(\\d+)" "<$1>"))
+      (println (s/replace "abc123def" #"(\d+)" "<$1>"))
       (println (s/replace "abc" #"(b)" (s/re-quote-replacement "$1")))
       (println (s/replace "abc" #"b" (fn [m] (str "<" m ">"))))
-      (println (s/replace "a1b2" #"(\\d)" (fn [m] (str "[" (get m 1) "]"))))
+      (println (s/replace "a1b2" #"(\d)" (fn [m] (str "[" (get m 1) "]"))))
       (println (filter #(re-find #"jar$" %) ["a.jar" "b.zip"]))
       (println (map re-pattern ["a+" "b+"]))
       (println (class #"a+"))
@@ -3206,3 +3224,23 @@ cases:
       :matcher
       false
       #<Matcher a+>
+  - name: regex-literal-backslashes-stay-verbatim
+    # The reader keeps backslashes verbatim like the oracle (b50: the old read
+    # halved every run, so #"\\d" answered the digit class). A single-backslash
+    # class agrees on both sides, and \" and \n stay two characters for str.
+    source: |
+      (println (str #"\\d+"))
+      (println (str #"\d+"))
+      (println (re-find #"\\d" "\\d"))
+      (println (re-find #"\\\\" "a\\b"))
+      (println (re-find #"\d+" "abc123"))
+      (println (str #"a\"b"))
+      (println (str #"a\nb"))
+    expected: |
+      \\d+
+      \d+
+      \d
+      nil
+      123
+      a\"b
+      a\nb

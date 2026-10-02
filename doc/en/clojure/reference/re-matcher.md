@@ -8,7 +8,7 @@ the last match (an empty match advancing one character, like the oracle), and
 like the oracle. Works as a function value too.
 
 ```clojure
-(let [m (re-matcher #"\\w+" "the quick brown fox")]
+(let [m (re-matcher #"\w+" "the quick brown fox")]
   (loop [match (re-find m)]
     (when match
       (println match)

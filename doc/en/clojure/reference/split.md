@@ -18,5 +18,5 @@ never patterns.
 (println (clojure.string/split "a,b," "," -1)) ; (a b )
 (println (clojure.string/split "aaa" ".")) ; (aaa)
 (println (clojure.string/split "a,b" #",")) ; (a b)
-(println (clojure.string/split "a b  c" #"\\s+")) ; (a b c)
+(println (clojure.string/split "a b  c" #"\s+")) ; (a b c)
 ```

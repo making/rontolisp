@@ -7,7 +7,7 @@ Answers the matcher `m`'s last match as a vector (the whole first), like
 oracle. Works as a function value too.
 
 ```clojure
-(let [m (re-matcher #"(\\w+)@(\\w+)" "user@host")]
+(let [m (re-matcher #"(\w+)@(\w+)" "user@host")]
   (println (re-find m))
   (println (re-groups m)))
 ```

@@ -83,6 +83,13 @@ class ClojureReaderTest {
 	@Test
 	void regexLiteralsReadAsMarkedSourceStrings() {
 		assertThat(printed("#\"a+\"")).isEqualTo("[(|%regex| \"a+\")]");
+		// backslashes stay verbatim for the pattern parser (b50, oracle `clj`
+		// 1.12.6.1673): `#"\\d"` reads two characters, not the digit class
+		assertThat(printed("#\"\\\\d\"")).isEqualTo("[(|%regex| \"\\\\\\\\d\")]");
+		assertThat(printed("#\"\\d\"")).isEqualTo("[(|%regex| \"\\\\d\")]");
+		assertThat(printed("#\"a\\Qb\\Ec\"")).isEqualTo("[(|%regex| \"a\\\\Qb\\\\Ec\")]");
+		assertThatThrownBy(() -> read("#\"\\q\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Illegal/unsupported escape sequence");
 		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #:");
 	}

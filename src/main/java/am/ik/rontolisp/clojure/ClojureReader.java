@@ -320,10 +320,15 @@ final class ClojureReader {
 	}
 
 	/**
-	 * One regex literal's source: like {@link #readString} for the standard escapes, but
-	 * any other backslashed character passes through verbatim for the pattern parser
-	 * (which names what it cannot lower), while {@link #readString} refuses it like the
-	 * oracle.
+	 * One regex literal's source: every escape validates like the oracle's but stays
+	 * verbatim for the pattern parser (which names what it cannot lower), measured on
+	 * {@code clj} 1.12.6.1673 (2026-10-02). {@code \\} stays two characters (so
+	 * {@code #"\\d"} reads a literal backslash plus {@code d}, where the old read halved
+	 * the run and answered the digit class); {@code \"} and {@code \'} stay two
+	 * characters without ending the literal; the recognized escape letters stay as
+	 * written while any other letter is the oracle's read-time refusal; {@code \\u} takes
+	 * four hex digits and {@code \x} two; a {@code \0} needs an octal digit behind it;
+	 * {@code \Q} copies raw through {@code \E} (a lone {@code \E} is refused).
 	 */
 	private LispVal readRegexSource() {
 		next();
@@ -345,30 +350,104 @@ final class ClojureReader {
 			}
 			char e = next();
 			switch (e) {
-				case 'n' -> text.append('\n');
-				case 't' -> text.append('\t');
-				case 'r' -> text.append('\r');
-				case 'f' -> text.append('\f');
-				case 'b' -> text.append('\b');
-				case '\\' -> text.append('\\');
-				case '"' -> text.append('"');
-				case '\'' -> text.append('\'');
+				case 'n', 't', 'r', 'f', 'b', 'a', 'e', 'h', 'v', 'w', 'd', 's', 'c', 'p', 'z', 'A', 'B', 'D', 'G', 'H',
+						'P', 'R', 'S', 'V', 'W', 'X', 'Z' -> {
+					text.append('\\');
+					text.append(e);
+				}
+				case '\\', '"', '\'', '/' -> {
+					text.append('\\');
+					text.append(e);
+				}
+				case 'Q' -> {
+					text.append('\\');
+					text.append('Q');
+					readRegexQuoted(text);
+				}
+				case 'E' -> throw error("Illegal/unsupported escape sequence: \\E");
 				case 'u' -> {
-					if (this.pos + 4 > this.source.length()) {
-						throw error("truncated \\u escape");
+					text.append('\\');
+					text.append('u');
+					text.append(readRegexHex(4, "Unicode"));
+				}
+				case 'x' -> {
+					text.append('\\');
+					text.append('x');
+					text.append(readRegexHex(2, "hexadecimal"));
+				}
+				// Octal `0`-`7` stays verbatim (up to two more `0`-`7`): the
+				// oracle refuses a `\0` with no octal digit behind it, while
+				// `8`/`9` stay verbatim here (the pattern parser reads the
+				// backreference, like the oracle) where the string reader
+				// refuses them instead.
+				case '0', '1', '2', '3', '4', '5', '6', '7' -> {
+					if (e == '0' && (this.pos >= this.source.length() || !isOctalDigit(peek()))) {
+						throw error("Illegal octal escape sequence: \\0");
 					}
-					int cp = Integer.parseInt(this.source.substring(this.pos, this.pos + 4), 16);
-					for (int i = 0; i < 4; i++) {
-						next();
+					text.append('\\');
+					text.append(e);
+					int count = 1;
+					while (count < 3 && this.pos < this.source.length() && isOctalDigit(peek())) {
+						text.append(next());
+						count++;
 					}
-					text.append(Character.toChars(cp));
+				}
+				case '8', '9' -> {
+					text.append('\\');
+					text.append(e);
 				}
 				default -> {
+					if (Character.isLetter(e)) {
+						throw error("Illegal/unsupported escape sequence: \\" + e);
+					}
 					text.append('\\');
 					text.append(e);
 				}
 			}
 		}
+	}
+
+	/**
+	 * A {@code \Q..\E} span's raw body onto {@code text}: every character copies verbatim
+	 * (even the closing quote, which does not end the literal here), through the closing
+	 * {@code \E} when one comes, like the oracle.
+	 * @param text the source being built
+	 */
+	private void readRegexQuoted(StringBuilder text) {
+		while (true) {
+			if (this.pos >= this.source.length()) {
+				throw error("unterminated string");
+			}
+			char c = next();
+			if (c == '\\' && this.pos < this.source.length() && peek() == 'E') {
+				text.append(c);
+				text.append(next());
+				return;
+			}
+			text.append(c);
+		}
+	}
+
+	/**
+	 * {@code count} hex digits of a regex {@code \\u}/{@code \x} escape, kept verbatim:
+	 * anything else is the oracle's refusal.
+	 * @param count the digits the escape takes (four for {@code \\u}, two for {@code \x})
+	 * @param kind the escape's name for the refusal
+	 * @return the digits as written
+	 */
+	private String readRegexHex(int count, String kind) {
+		StringBuilder raw = new StringBuilder();
+		for (int i = 0; i < count; i++) {
+			if (this.pos >= this.source.length() || Character.digit(peek(), 16) < 0) {
+				throw error("Illegal " + kind + " escape sequence");
+			}
+			raw.append(next());
+		}
+		return raw.toString();
+	}
+
+	private static boolean isOctalDigit(char c) {
+		return c >= '0' && c <= '7';
 	}
 
 	private LispVal readString() {
