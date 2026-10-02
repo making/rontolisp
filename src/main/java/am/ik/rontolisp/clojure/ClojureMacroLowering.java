@@ -581,11 +581,13 @@ final class ClojureMacroLowering {
 	/**
 	 * Where an unresolved syntax-quoted symbol qualifies, like the oracle (measured on
 	 * {@code clj} 1.12.6.1673, b77): unqualified, a core name the namespace sees
-	 * ({@code (:refer-clojure ...)} may hide it) spells {@code clojure.core/name} and
-	 * anything else the defining namespace; qualified, an alias head spells its namespace
-	 * (no var check, like the oracle) and a class head its fully qualified name (dotted
-	 * as written, imported, or {@code java.lang}); a qualified head naming neither stays
-	 * as written.
+	 * ({@code (:refer-clojure ...)} may hide it) spells {@code clojure.core/name}, a
+	 * class spelling its fully qualified name (an import, then {@code java.lang}, then a
+	 * dotted spelling as written -- b79, the oracle refuses to {@code def} over one, so
+	 * the class wins) and anything else the defining namespace; qualified, an alias head
+	 * spells its namespace (no var check, like the oracle) and a class head its fully
+	 * qualified name (dotted as written, imported, or {@code java.lang}); a qualified
+	 * head naming neither stays as written.
 	 */
 	static String unresolvedQualification(ClojureLowering ctx, String name) {
 		int slash = ClojureLowering.qualifierSlash(name);
@@ -595,6 +597,20 @@ final class ClojureMacroLowering {
 			}
 			if (ClojureCoreNames.contains(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
 				return ClojureCoreNames.PREFIX + name;
+			}
+			// a class spelling is already fully qualified (b79, measured on the
+			// oracle: `java.io.StringWriter reads as written, `String as
+			// java.lang.String, an imported name through its import -- and the
+			// oracle refuses to def over one, so the class wins over any var)
+			String imported = ctx.ns().classNames.get(name);
+			if (imported != null) {
+				return imported;
+			}
+			if (ClojureNamespaceLowering.JAVA_LANG.contains(name)) {
+				return "java.lang." + name;
+			}
+			if (name.indexOf('.') >= 0) {
+				return name;
 			}
 			return ClojureLowering.varKey(ctx.currentNs, name);
 		}

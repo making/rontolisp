@@ -1698,6 +1698,14 @@ class ClojureLoweringTest {
 			.contains("|c%*d*|")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
 		assertThat(lowered("(binding [*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
+		// a syntax-quote qualifies the stream specials (b77: `*out* reads
+		// clojure.core/*out*), and the oracle binds the qualified spelling like
+		// the bare one (b79)
+		assertThat(lowered("(binding [clojure.core/*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
+		assertThat(lowered("(binding [clojure.core/*in* 1] 1)")).contains("*STANDARD-INPUT*");
+		assertThatThrownBy(() -> Clojure.read("(binding [clojure.core/nope 1] 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("binding clojure.core/nope needs a ^:dynamic var");
 		assertThatThrownBy(() -> Clojure.read("(def x 1) (binding [x 2] x)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("binding x needs a ^:dynamic var");
@@ -1982,6 +1990,12 @@ class ClojureLoweringTest {
 		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
 			.contains("'|c%s.c/map|")
 			.contains("'|c%clojure.core/filter|");
+		// a class spelling is already fully qualified (b79, measured on the
+		// oracle: `java.io.StringWriter reads as written, `String as
+		// java.lang.String) -- never with the defining namespace
+		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
+			.contains("'|c%java.io.StringWriter|")
+			.contains("'|c%java.lang.String|");
 	}
 
 	@Test

@@ -661,6 +661,16 @@ final class ClojureStateLowering {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
+				// a syntax-quote qualifies the stream specials with their namespace
+				// (b77: `*out* reads clojure.core/*out*), and the oracle binds the
+				// qualified spelling like the bare one -- normalize it before the
+				// stream test, so the pair and the scope entry spell the special
+				if (name.startsWith(ClojureCoreNames.PREFIX)) {
+					String core = name.substring(ClojureCoreNames.PREFIX.length());
+					if (core.equals("*out*") || core.equals("*in*") || core.equals("*agent*")) {
+						name = core;
+					}
+				}
 				boolean stream = name.equals("*out*") || name.equals("*in*") || name.equals("*agent*");
 				// a project var (own, referred, or qualified) rebinds its own special;
 				// the body reads it through the var, so no local shadows it

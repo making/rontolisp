@@ -4139,6 +4139,22 @@ cases:
       12
       12 12 12
       ab
+  - name: binding-accepts-qualified-stream-specials
+    # b79: a syntax-quote qualifies *out* with its namespace (b77: `*out*
+    # reads clojure.core/*out*), and the oracle binds the qualified spelling
+    # like the bare one -- the b76 with-out-str macro reaches binding this way.
+    # Every line matches the oracle.
+    source: |
+      (defmacro b79-with-out-str [& body]
+        `(let [s# (new java.io.StringWriter)]
+           (binding [clojure.core/*out* s#] ~@body (str s#))))
+      (println (b79-with-out-str (print 1) (print 2)))
+      (let [b79-s (new java.io.StringWriter)]
+        (binding [clojure.core/*out* b79-s] (print 1) (print 2))
+        (println (str b79-s) (str b79-s)))
+    expected: |
+      12
+      12 12
   - name: syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace
     # b77: like the oracle, a syntax-quoted symbol qualifies even when it resolves
     # to nothing: a core name the namespace sees spells clojure.core/name, any other
@@ -4160,7 +4176,9 @@ cases:
       (println `b77-loose `let `s/join `s/nope `System/nanoTime `foo/bar)
       (ns b77.excl (:refer-clojure :exclude [map]))
       (println `map `filter)
+      (println `java.io.StringWriter `String)
     expected: |
       true
       b77.sq/b77-loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       b77.excl/map clojure.core/filter
+      java.io.StringWriter java.lang.String
