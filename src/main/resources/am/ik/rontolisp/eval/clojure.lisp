@@ -1893,10 +1893,6 @@
       lazy
       (rontolisp::%clojure-realize-all lazy)))
 
-(defun rontolisp::%clojure-transducer-refusal (name)
-  "Signal the refusal of NAME's transducer arity."
-  (error "transducers are not supported yet: ~A" name))
-
 (defun rontolisp::%clojure-drop-last (n coll)
   "COLL without its last N members (the oracle's map over COLL and its drop)."
   (rontolisp::%clojure-map (lambda (x y)
@@ -2045,9 +2041,9 @@
          (setq s (rontolisp::%clojure-seq (cdr s))))))))
 
 (defun rontolisp::%clojure-dedupe-v (&rest args)
-  "dedupe as a value (the zero-argument transducer stays refused)."
+  "dedupe as a value: [] the transducer, [coll] the seq."
   (if (null args)
-      (rontolisp::%clojure-transducer-refusal "dedupe")
+      (rontolisp::%clojure-xf-dedupe)
       (progn
         (rontolisp::%clojure-check-arity args 1 1 "dedupe")
         (rontolisp::%clojure-dedupe (car args)))))
@@ -2072,10 +2068,9 @@
                   (rontolisp::%clojure-drop step s))))))))
 
 (defun rontolisp::%clojure-partition-all-v (&rest args)
-  "partition-all as a value: [n coll] or [n step coll] (the one-argument
-   transducer stays refused)."
+  "partition-all as a value: [n] the transducer, [n coll] or [n step coll]."
   (let ((n (rontolisp::%clojure-check-arity args 1 3 "partition-all")))
-    (cond ((= n 1) (rontolisp::%clojure-transducer-refusal "partition-all"))
+    (cond ((= n 1) (rontolisp::%clojure-xf-partition-all (car args)))
           ((= n 2)
            (rontolisp::%clojure-partition-all (car args) (car args)
                                               (car (cdr args))))
@@ -2108,9 +2103,9 @@
                (setq more (rontolisp::%clojure-seq (cdr more))))))))))
 
 (defun rontolisp::%clojure-partition-by-v (&rest args)
-  "partition-by as a value (the one-argument transducer stays refused)."
+  "partition-by as a value: [f] the transducer, [f coll] the seq."
   (if (= (rontolisp::%clojure-check-arity args 1 2 "partition-by") 1)
-      (rontolisp::%clojure-transducer-refusal "partition-by")
+      (rontolisp::%clojure-xf-partition-by (car args))
       (rontolisp::%clojure-partition-by (car args) (car (cdr args)))))
 
 (defun rontolisp::%clojure-extreme-key (k x more greatest)
@@ -2260,10 +2255,19 @@
         (t (error "~A needs a map or a vector" name))))
 
 (defun rontolisp::%clojure-reduce-kv (f init coll)
-  "(f acc k v) folded over COLL's pairs from INIT."
-  (let ((acc init))
-    (dolist (kv (rontolisp::%clojure-kv-pairs coll "reduce-kv") acc)
-      (setq acc (rontolisp::%clojure-call f (list acc (car kv) (cdr kv)))))))
+  "(f acc k v) folded over COLL's pairs from INIT, stopping at a reduced
+   answer (unwrapped)."
+  (let ((acc init) (pairs (rontolisp::%clojure-kv-pairs coll "reduce-kv")))
+    (do ()
+        ((null pairs) acc)
+      (setq acc
+            (rontolisp::%clojure-call f
+             (list acc (car (car pairs)) (cdr (car pairs)))))
+      (if (rontolisp::%clojure-reduced-p acc)
+          (progn
+            (setq acc (car (cdr acc)))
+            (setq pairs nil))
+          (setq pairs (cdr pairs))))))
 
 (defun rontolisp::%clojure-reduce-kv-v (&rest args)
   "reduce-kv as a value."
@@ -2298,6 +2302,518 @@
   "update-vals as a value."
   (rontolisp::%clojure-check-arity args 2 2 "update-vals")
   (rontolisp::%clojure-update-vals (car args) (car (cdr args))))
+
+;;;; Reduction and transducers (b60).
+;;
+;; A transducer is what the oracle's is: a function from a reducing function to
+;; a reducing function, so comp composes them left to right with no help and a
+;; program may write its own (fn [rf] (fn ([] ...) ([acc] ...) ([acc x] ...))).
+;; A reducing function takes zero arguments (init), one (completion) or two
+;; (step); the built-in ones here are &optional lambdas telling the three apart
+;; by the supplied-p flags. Per-reduction state (take's count, partition-all's
+;; buffer) lives in variables the (lambda (rf) ...) closes over, created when
+;; the transducer is applied to a reducing function, like the oracle's
+;; volatiles. (reduced x) is the (:C%REDUCED x) wrapper beside the other
+;; keyword-tagged cells; reduce, reduce-kv, transduce and every stepping
+;; consumer stop at one and unwrap it.
+;;
+;; reduce walks the lazy-aware seq view one element at a time, so a lazy input
+;; reduces whole (it used to consume one level and fold the wrapper's own
+;; cells). sequence and eduction step their inputs through the transducer one
+;; element at a time behind a lazy wrapper, so a lazy input answers a lazy seq
+;; and stays lazy (take of an infinite one terminates); a strict input answers
+;; the realized strict list (the lazy-or-strict rule of the rows above).
+;;
+;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
+;; an eduction is that seq, computed once, where the oracle re-runs the
+;; transformation every time it is reduced; a reduced value prints as its
+;; wrapper list.
+
+(defun rontolisp::%clojure-reduced (x)
+  "(reduced x): X wrapped so a reduction stops and answers it."
+  (list :C%REDUCED x))
+
+(defun rontolisp::%clojure-reduced-p (x)
+  "Whether X is the (:C%REDUCED value) wrapper."
+  (and (consp x) (eq (car x) :C%REDUCED) (consp (cdr x)) (null (cdr (cdr x)))))
+
+(defun rontolisp::%clojure-reduced-pred (x)
+  "reduced? answering T-or-false."
+  (if (rontolisp::%clojure-reduced-p x) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-unreduced (x)
+  "The value inside a reduced X, else X."
+  (if (rontolisp::%clojure-reduced-p x) (car (cdr x)) x))
+
+(defun rontolisp::%clojure-ensure-reduced (x)
+  "X when it is reduced, else X wrapped."
+  (if (rontolisp::%clojure-reduced-p x) x (rontolisp::%clojure-reduced x)))
+
+(defun rontolisp::%clojure-deref-other (x)
+  "deref of anything but an atom cell: a reduced value's content (the oracle's
+   Reduced is an IDeref), else the oracle's cast failure."
+  (if (rontolisp::%clojure-reduced-p x)
+      (car (cdr x))
+      (error "deref needs an atom")))
+
+(defun rontolisp::%clojure-call-1 (f x)
+  "F applied to X: a real function directly, anything else through the IFn
+   dispatcher (no argument list consed for the common case)."
+  (if (functionp f) (funcall f x) (rontolisp::%clojure-call f (list x))))
+
+(defun rontolisp::%clojure-rf-init (rf)
+  "The reducing function RF's init arity."
+  (if (functionp rf) (funcall rf) (rontolisp::%clojure-call rf nil)))
+
+(defun rontolisp::%clojure-rf-complete (rf acc)
+  "The reducing function RF's completion arity."
+  (if (functionp rf) (funcall rf acc) (rontolisp::%clojure-call rf (list acc))))
+
+(defun rontolisp::%clojure-rf-step (rf acc x)
+  "The reducing function RF's step arity."
+  (if (functionp rf)
+      (funcall rf acc x)
+      (rontolisp::%clojure-call rf (list acc x))))
+
+(defun rontolisp::%clojure-seq-rest (s)
+  "The seq past the head of the realized seq S: its tail, realized one level
+   when it is a lazy wrapper (a strict tail is already a seq)."
+  (let ((r (cdr s)))
+    (if (rontolisp::%clojure-lazy-p r) (rontolisp::%clojure-realize r) r)))
+
+(defun rontolisp::%clojure-reduce-seq (f acc s)
+  "The real function F folded from ACC over the realized seq S, stopping at a
+   reduced answer (unwrapped), like the oracle: only F's answers are tested,
+   never ACC. F is funcalled: the lowering wraps a value that may hold a
+   collection in a dispatcher lambda, so a plain reduce never carries the IFn
+   dispatcher."
+  (let ((done nil))
+    (do ()
+        ((or done (null s)) acc)
+      (setq acc (funcall f acc (car s)))
+      (if (rontolisp::%clojure-reduced-p acc)
+          (progn
+            (setq acc (car (cdr acc)))
+            (setq done t))
+          (setq s (rontolisp::%clojure-seq-rest s))))))
+
+(defun rontolisp::%clojure-reduce (f coll)
+  "(reduce f coll): (f) of empty, the lone member of one, else F folded from
+   the head over the rest."
+  (let ((s (rontolisp::%clojure-seq coll)))
+    (if (null s)
+        (funcall f)
+        (rontolisp::%clojure-reduce-seq f (car s)
+                                        (rontolisp::%clojure-seq-rest s)))))
+
+(defun rontolisp::%clojure-reduce-init (f init coll)
+  "(reduce f init coll)."
+  (rontolisp::%clojure-reduce-seq f init (rontolisp::%clojure-seq coll)))
+
+(defun rontolisp::%clojure-xf-rf (rf step complete)
+  "A reducing function over RF: STEP (a two-argument closure) for the step
+   arity, COMPLETE (one argument) for the completion or nil to pass it to RF,
+   and the init arity passed to RF."
+  (lambda (&optional (acc nil acc-p) (x nil x-p))
+    (cond (x-p (funcall step acc x))
+          (acc-p (if complete
+                     (funcall complete acc)
+                     (rontolisp::%clojure-rf-complete rf acc)))
+          (t (rontolisp::%clojure-rf-init rf)))))
+
+(defun rontolisp::%clojure-xf-map (f)
+  "(map f): each input through F (several inputs, from a multi-collection
+   sequence, spread as F's arguments)."
+  (lambda (rf)
+    (lambda (&optional (acc nil acc-p) (x nil x-p) &rest more)
+      (cond (x-p (rontolisp::%clojure-rf-step rf acc
+                                              (if more
+                                                  (rontolisp::%clojure-call f
+                                                   (cons x more))
+                                                  (rontolisp::%clojure-call-1 f
+                                                   x))))
+            (acc-p (rontolisp::%clojure-rf-complete rf acc))
+            (t (rontolisp::%clojure-rf-init rf))))))
+
+(defun rontolisp::%clojure-xf-filter (pred keep)
+  "(filter pred) when KEEP, (remove pred) otherwise: Clojure truthiness."
+  (lambda (rf)
+    (rontolisp::%clojure-xf-rf rf
+                               (lambda (acc x)
+                                 (if (rontolisp::%clojure-truthy
+                                      (rontolisp::%clojure-call-1 pred x))
+                                     (if keep
+                                         (rontolisp::%clojure-rf-step rf acc x)
+                                         acc)
+                                     (if keep
+                                         acc
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                               nil)))
+
+(defun rontolisp::%clojure-xf-keep (f)
+  "(keep f): F's non-nil answers (false is kept, like the oracle)."
+  (lambda (rf)
+    (rontolisp::%clojure-xf-rf rf
+                               (lambda (acc x)
+                                 (let ((v (rontolisp::%clojure-call-1 f x)))
+                                   (if (null v)
+                                       acc
+                                       (rontolisp::%clojure-rf-step rf acc v))))
+                               nil)))
+
+(defun rontolisp::%clojure-xf-indexed (f keep)
+  "(keep-indexed f) when KEEP, (map-indexed f) otherwise: F over the index
+   from 0 and the input."
+  (lambda (rf)
+    (let ((i -1))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (setq i (+ i 1))
+                                   (let ((v
+                                          (rontolisp::%clojure-call f
+                                           (list i x))))
+                                     (if (and keep (null v))
+                                         acc
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      v))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-take (n)
+  "(take n): the first N inputs, then a reduced answer, so the reduction
+   stops reading (the oracle's count: (take 0) still reads one input)."
+  (lambda (rf)
+    (let ((left n))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (let ((was left))
+                                     (setq left (- left 1))
+                                     (let ((r
+                                            (if (> was 0)
+                                                (rontolisp::%clojure-rf-step rf
+                                                                             acc
+                                                                             x)
+                                                acc)))
+                                       (if (> left 0)
+                                           r
+                                           (rontolisp::%clojure-ensure-reduced
+                                            r))))) nil))))
+
+(defun rontolisp::%clojure-xf-drop (n)
+  "(drop n): every input past the first N."
+  (lambda (rf)
+    (let ((left n))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (let ((was left))
+                                     (setq left (- left 1))
+                                     (if (> was 0)
+                                         acc
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-take-while (pred)
+  "(take-while pred): inputs while PRED holds, then a reduced answer."
+  (lambda (rf)
+    (rontolisp::%clojure-xf-rf rf
+                               (lambda (acc x)
+                                 (if (rontolisp::%clojure-truthy
+                                      (rontolisp::%clojure-call-1 pred x))
+                                     (rontolisp::%clojure-rf-step rf acc x)
+                                     (rontolisp::%clojure-reduced acc))) nil)))
+
+(defun rontolisp::%clojure-xf-drop-while (pred)
+  "(drop-while pred): every input from the first PRED rejects."
+  (lambda (rf)
+    (let ((dropping t))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (if (and dropping
+                                            (rontolisp::%clojure-truthy
+                                             (rontolisp::%clojure-call-1 pred
+                                                                         x)))
+                                       acc
+                                       (progn
+                                         (setq dropping nil)
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-take-nth (n)
+  "(take-nth n): every Nth input from the first (a zero N signals, like the
+   oracle's division)."
+  (lambda (rf)
+    (let ((i -1))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (setq i (+ i 1))
+                                   (if (= (rem i n) 0)
+                                       (rontolisp::%clojure-rf-step rf acc x)
+                                       acc)) nil))))
+
+(defun rontolisp::%clojure-xf-cat (rf)
+  "cat: each input's members stepped through RF in turn. A reduced answer is
+   wrapped once more so the inner reduce stops and hands it on, still reduced
+   (the oracle's preserving-reduced)."
+  (rontolisp::%clojure-xf-rf rf
+                             (lambda (acc x)
+                               (rontolisp::%clojure-reduce-init
+                                (lambda (a y)
+                                  (let ((r
+                                         (rontolisp::%clojure-rf-step rf a y)))
+                                    (if (rontolisp::%clojure-reduced-p r)
+                                        (rontolisp::%clojure-reduced r)
+                                        r))) acc x)) nil))
+
+(defun rontolisp::%clojure-xf-mapcat (f)
+  "(mapcat f): (comp (map f) cat)."
+  (lambda (rf)
+    (funcall (rontolisp::%clojure-xf-map f) (rontolisp::%clojure-xf-cat rf))))
+
+(defun rontolisp::%clojure-xf-flush (rf acc buf)
+  "The completion of a buffering transducer: the reversed BUF stepped as one
+   vector when it holds anything (unwrapped, so the completion still runs),
+   then RF's completion."
+  (rontolisp::%clojure-rf-complete rf
+                                   (if buf
+                                       (rontolisp::%clojure-unreduced
+                                        (rontolisp::%clojure-rf-step rf acc
+                                         (coerce (reverse buf) 'vector)))
+                                       acc)))
+
+(defun rontolisp::%clojure-xf-partition-all (n)
+  "(partition-all n): vectors of N inputs, the short tail flushed at the end."
+  (lambda (rf)
+    (let ((buf nil) (count 0))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (setq buf (cons x buf))
+                                   (setq count (+ count 1))
+                                   (if (= count n)
+                                       (let ((v (coerce (reverse buf) 'vector)))
+                                         (setq buf nil)
+                                         (setq count 0)
+                                         (rontolisp::%clojure-rf-step rf acc v))
+                                       acc))
+                                 (lambda (acc)
+                                   (let ((pending buf))
+                                     (setq buf nil)
+                                     (setq count 0)
+                                     (rontolisp::%clojure-xf-flush rf acc
+                                      pending)))))))
+
+(defun rontolisp::%clojure-xf-partition-by (f)
+  "(partition-by f): vectors of consecutive inputs whose (f input) stays =."
+  (lambda (rf)
+    (let ((buf nil) (have nil) (prev nil))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (let ((v (rontolisp::%clojure-call-1 f x))
+                                         (p prev)
+                                         (h have))
+                                     (setq prev v)
+                                     (setq have t)
+                                     (if (or (not h)
+                                             (rontolisp::%clojure-equal v p))
+                                         (progn
+                                           (setq buf (cons x buf))
+                                           acc)
+                                         (let ((out
+                                                (coerce (reverse buf) 'vector)))
+                                           (setq buf nil)
+                                           (let ((r
+                                                  (rontolisp::%clojure-rf-step
+                                                   rf acc out)))
+                                             (if (not
+                                                  (rontolisp::%clojure-reduced-p
+                                                   r))
+                                                 (setq buf (cons x buf)))
+                                             r)))))
+                                 (lambda (acc)
+                                   (let ((pending buf))
+                                     (setq buf nil)
+                                     (rontolisp::%clojure-xf-flush rf acc
+                                      pending)))))))
+
+(defun rontolisp::%clojure-xf-dedupe ()
+  "(dedupe): inputs not = to the one before."
+  (lambda (rf)
+    (let ((have nil) (prior nil))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (let ((h have) (p prior))
+                                     (setq have t)
+                                     (setq prior x)
+                                     (if (and h (rontolisp::%clojure-equal p x))
+                                         acc
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-distinct ()
+  "(distinct): first occurrences, by equal membership (the seq arity's)."
+  (lambda (rf)
+    (let ((seen (make-hash-table :test 'equal)))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (if (gethash x seen)
+                                       acc
+                                       (progn
+                                         (setf (gethash x seen) t)
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-interpose (sep)
+  "(interpose sep): SEP between consecutive inputs."
+  (lambda (rf)
+    (let ((started nil))
+      (rontolisp::%clojure-xf-rf rf
+                                 (lambda (acc x)
+                                   (if started
+                                       (let ((s
+                                              (rontolisp::%clojure-rf-step rf
+                                               acc sep)))
+                                         (if (rontolisp::%clojure-reduced-p s)
+                                             s
+                                             (rontolisp::%clojure-rf-step rf s
+                                                                          x)))
+                                       (progn
+                                         (setq started t)
+                                         (rontolisp::%clojure-rf-step rf acc
+                                                                      x))))
+                                 nil))))
+
+(defun rontolisp::%clojure-xf-comp (xfs)
+  "The transducers of the XFS list composed like comp: the first sees each
+   input first."
+  (lambda (rf)
+    (let ((r rf))
+      (dolist (xf (reverse xfs) r)
+        (setq r (rontolisp::%clojure-call-1 xf r))))))
+
+(defun rontolisp::%clojure-completing (f cf)
+  "(completing f cf): F's init and step arities over CF as the completion."
+  (lambda (&optional (acc nil acc-p) (x nil x-p))
+    (cond (x-p (rontolisp::%clojure-rf-step f acc x))
+          (acc-p (rontolisp::%clojure-call-1 cf acc))
+          (t (rontolisp::%clojure-rf-init f)))))
+
+(defun rontolisp::%clojure-transduce (xf f init coll)
+  "(transduce xf f init coll): (xf f) reduced from INIT over COLL, then its
+   completion run on the answer."
+  (let ((rf (rontolisp::%clojure-call-1 xf f)))
+    (rontolisp::%clojure-rf-complete rf
+     (rontolisp::%clojure-reduce-init rf init coll))))
+
+(defun rontolisp::%clojure-transduce-3 (xf f coll)
+  "(transduce xf f coll): the init is (f), called before XF sees F."
+  (rontolisp::%clojure-transduce xf f (rontolisp::%clojure-rf-init f) coll))
+
+(defun rontolisp::%clojure-into-xf (to xf from step)
+  "(into to xf from): FROM through XF conjoined onto TO by STEP."
+  (rontolisp::%clojure-transduce xf
+   (rontolisp::%clojure-completing step #'identity) to from))
+
+(defun rontolisp::%clojure-sequence (coll)
+  "(sequence coll): a lazy COLL itself, else its strict seq view."
+  (if (rontolisp::%clojure-lazy-p coll)
+      coll
+      (rontolisp::%clojure-strict-seq coll)))
+
+(defun rontolisp::%clojure-xf-puller (xf colls)
+  "A zero-argument closure answering XF's next outputs over the COLLS list as
+   a list in order, or nil once the inputs end (or a step answers reduced) and
+   the completion has flushed. Several collections step in lockstep, each
+   input spread as the step's arguments, to the shortest."
+  (let ((out nil) (seqs colls) (done nil))
+    (let ((xrf
+           (rontolisp::%clojure-call-1 xf
+                                       (lambda (&optional acc (x nil x-p))
+                                         (if x-p (setq out (cons x out)))
+                                         acc))))
+      (lambda ()
+        (do ()
+            ((or out done)
+             (let ((batch (reverse out)))
+               (setq out nil)
+               batch))
+          (let ((ss (mapcar #'rontolisp::%clojure-seq seqs)))
+            (if (rontolisp::%clojure-map-done-p ss)
+                (progn
+                  (setq done t)
+                  (rontolisp::%clojure-rf-complete xrf nil))
+                (let ((r
+                       (if (cdr ss)
+                           (rontolisp::%clojure-call xrf
+                            (cons nil (rontolisp::%clojure-map-heads ss)))
+                           (rontolisp::%clojure-rf-step xrf nil
+                                                        (car (car ss))))))
+                  (setq seqs (rontolisp::%clojure-map-tails ss))
+                  (if (rontolisp::%clojure-reduced-p r)
+                      (progn
+                        (setq done t)
+                        (rontolisp::%clojure-rf-complete xrf nil)))))))))))
+
+(defun rontolisp::%clojure-xf-lazy (pull batch)
+  "The lazy seq of BATCH and then every batch PULL answers, one member per
+   wrapper."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((b (if batch batch (funcall pull))))
+       (if (null b)
+           nil
+           (cons (car b) (rontolisp::%clojure-xf-lazy pull (cdr b))))))))
+
+(defun rontolisp::%clojure-sequence-xf (xf colls)
+  "(sequence xf coll...): the inputs stepped through XF: a lazy seq when any
+   input is lazy, the realized strict list otherwise."
+  (let ((lazy
+         (rontolisp::%clojure-xf-lazy (rontolisp::%clojure-xf-puller xf colls)
+                                      nil)))
+    (if (rontolisp::%clojure-any-lazy-p colls)
+        lazy
+        (rontolisp::%clojure-realize-all lazy))))
+
+(defun rontolisp::%clojure-take-nth (n coll)
+  "(take-nth n coll): every Nth member from the first."
+  (rontolisp::%clojure-sequence-xf (rontolisp::%clojure-xf-take-nth n)
+                                   (list coll)))
+
+(defun rontolisp::%clojure-take-nth-v (&rest args)
+  "take-nth as a value: [n] the transducer, [n coll] the seq."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "take-nth") 1)
+      (rontolisp::%clojure-xf-take-nth (car args))
+      (rontolisp::%clojure-take-nth (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-transduce-v (&rest args)
+  "transduce as a value: [xf f coll] or [xf f init coll]."
+  (if (= (rontolisp::%clojure-check-arity args 3 4 "transduce") 3)
+      (rontolisp::%clojure-transduce-3 (car args) (car (cdr args))
+                                       (car (cdr (cdr args))))
+      (rontolisp::%clojure-transduce (car args) (car (cdr args))
+                                     (car (cdr (cdr args)))
+                                     (car (cdr (cdr (cdr args)))))))
+
+(defun rontolisp::%clojure-eduction-v (&rest args)
+  "eduction as a value: transducers then one collection."
+  (rontolisp::%clojure-check-arity args 1 nil "eduction")
+  (let ((rev (reverse args)))
+    (rontolisp::%clojure-sequence-xf
+     (rontolisp::%clojure-xf-comp (reverse (cdr rev))) (list (car rev)))))
+
+(defun rontolisp::%clojure-sequence-v (&rest args)
+  "sequence as a value: [coll] or [xf coll...]."
+  (if (= (rontolisp::%clojure-check-arity args 1 nil "sequence") 1)
+      (rontolisp::%clojure-sequence (car args))
+      (rontolisp::%clojure-sequence-xf (car args) (cdr args))))
+
+(defun rontolisp::%clojure-completing-v (&rest args)
+  "completing as a value: [f] or [f cf]."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "completing") 1)
+      (rontolisp::%clojure-completing (car args) #'identity)
+      (rontolisp::%clojure-completing (car args) (car (cdr args)))))
 ;;;; clojure.test (b55): the run-time half of deftest/is/are/testing and the
 ;;;; run-tests summary runner.
 ;;

@@ -103,6 +103,7 @@ categories:
       - { slug: dedupe, name: "dedupe" }
       - { slug: partition-all, name: "partition-all" }
       - { slug: partition-by, name: "partition-by" }
+      - { slug: take-nth, name: "take-nth" }
       - { slug: not-empty, name: "not-empty" }
       - { slug: pmap, name: "pmap" }
   - title: "反復"
@@ -314,6 +315,18 @@ categories:
       - { slug: some-fn, name: "some-fn" }
       - { slug: min-key, name: "min-key" }
       - { slug: max-key, name: "max-key" }
+  - title: "トランスデューサー"
+    index_page: clojure/reference/transducers.md
+    functions:
+      - { slug: transduce, name: "transduce" }
+      - { slug: eduction, name: "eduction" }
+      - { slug: sequence, name: "sequence" }
+      - { slug: completing, name: "completing" }
+      - { slug: reduced, name: "reduced" }
+      - { slug: reduced-p, name: "reduced?" }
+      - { slug: unreduced, name: "unreduced" }
+      - { slug: ensure-reduced, name: "ensure-reduced" }
+      - { slug: cat, name: "cat" }
   - title: "入出力"
     index_page: clojure/reference/io.md
     functions:

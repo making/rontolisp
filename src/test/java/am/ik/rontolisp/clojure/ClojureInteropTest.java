@@ -224,6 +224,14 @@ class ClojureInteropTest {
 				"[apple fig cherry kiwi ]\n");
 		// the eager.clj non-blank-lines count over the same fixture
 		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))", "6\n");
+		// the eager.clj transducer shapes (b60): non-blank-lines pours the lines
+		// through (filter non-blank?) into a vector, line-count reduces an eduction
+		String eager = prelude + "(defn b60-non-blank? [s] (not (s/blank? s)))";
+		assertBothEqual(eager + "(with-open [r (jio/reader " + path + ")]"
+				+ " (println (count (into [] (filter b60-non-blank?) (line-seq r)))))", "6\n");
+		assertBothEqual(eager + "(with-open [r (jio/reader " + path + ")]"
+				+ " (println (reduce (fn [cnt el] (inc cnt)) 0 (eduction (filter b60-non-blank?) (line-seq r)))))",
+				"6\n");
 		// the sequences.clj with-open shape over a referred reader, answering the line
 		// count
 		assertBothEqual("(ns b22ref (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path

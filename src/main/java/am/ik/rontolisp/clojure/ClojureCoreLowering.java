@@ -53,12 +53,10 @@ final class ClojureCoreLowering {
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "dedupe":
-				transducer(name, n == 0);
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "partition-all":
-				arity(name, n, 1, 3);
-				transducer(name, n == 1);
+				arity(name, n, 2, 3);
 				if (n == 2) {
 					// the size is also the step: one evaluation, bound once
 					LispSymbol size = ctx.freshTemp();
@@ -68,8 +66,7 @@ final class ClojureCoreLowering {
 				}
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
 			case "partition-by":
-				arity(name, n, 1, 2);
-				transducer(name, n == 1);
+				arity(name, n, 2, 2);
 				return worker(name, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "min-key", "max-key":
 				arity(name, n, 2, -1);
@@ -134,15 +131,9 @@ final class ClojureCoreLowering {
 	}
 
 	/** The oracle's arity refusal when {@code n} falls outside {@code min..max}. */
-	private static void arity(String name, int n, int min, int max) {
+	static void arity(String name, int n, int min, int max) {
 		if (n < min || (max >= 0 && n > max)) {
 			throw new LispReadException("Wrong number of args (" + n + ") passed to: clojure.core/" + name);
-		}
-	}
-
-	private static void transducer(String name, boolean refused) {
-		if (refused) {
-			throw new LispReadException("transducers are not supported yet: " + name);
 		}
 	}
 

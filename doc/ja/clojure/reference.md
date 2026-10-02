@@ -23,6 +23,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
+| [トランスデューサー](reference/transducers.md) | `transduce`・`eduction`・`sequence`・`completing`、`reduced` とその仲間、`cat`、seq 関数の1引数形 |
 | [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`clojure.java.io/reader` と `format` |
 | [テスト (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` と `run-tests` の集計ランナー |
 | [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |

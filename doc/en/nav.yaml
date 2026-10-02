@@ -263,6 +263,8 @@ sections:
             title: "Regular expressions"
           - file: clojure/reference/higher-order.md
             title: "Higher-order functions"
+          - file: clojure/reference/transducers.md
+            title: "Transducers"
           - file: clojure/reference/io.md
             title: "IO"
           - file: clojure/reference/interop.md

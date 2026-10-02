@@ -1539,6 +1539,10 @@ public final class ClojureLowering {
 		if (!ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return null; // excluded by (:refer-clojure ...): a user definition wins
 		}
+		LispVal xform = ClojureTransducerLowering.xformCall(this, name, items);
+		if (xform != null) {
+			return xform;
+		}
 		int n = items.size() - 1;
 		switch (name) {
 			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt", "reverse":
@@ -1668,10 +1672,11 @@ public final class ClojureLowering {
 						"reduce takes a function, an optional value and a collection");
 				if (n == 2) {
 					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-							ClojureSeqLowering.seqForm(this, lower(items.get(2))), null);
+							lower(items.get(2)), null);
 				}
-				return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(3))), lower(items.get(2)));
+				LispVal reduceFn = ClojureBindingLowering.fnValue(this, items.get(1));
+				LispVal reduceInit = lower(items.get(2));
+				return ClojureSeqLowering.reduceForm(this, reduceFn, lower(items.get(3)), reduceInit);
 			case "apply":
 				return ClojureSeqLowering.applyOf(this, items);
 			case "concat":
@@ -1956,7 +1961,8 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "fn? takes one argument");
 				return booleanAnswer(plain("functionp", items));
 			default:
-				return ClojureCoreLowering.callOf(this, name, items);
+				LispVal core = ClojureCoreLowering.callOf(this, name, items);
+				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
 		}
 	}
 
@@ -2110,7 +2116,10 @@ public final class ClojureLowering {
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
-			default -> ClojureCoreLowering.valueOf(this, name);
+			default -> {
+				LispVal core = ClojureCoreLowering.valueOf(this, name);
+				yield core != null ? core : ClojureTransducerLowering.valueOf(name);
+			}
 		};
 	}
 
@@ -2237,7 +2246,7 @@ public final class ClojureLowering {
 			}
 			LispVal synth = valueOf(name);
 			if (synth != null) {
-				return synth;
+				return ClojureTransducerLowering.xformValue(this, name, synth);
 			}
 			String cl = builtinValue(name);
 			if (cl == null) {

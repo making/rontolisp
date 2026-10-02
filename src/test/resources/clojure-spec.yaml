@@ -3447,19 +3447,17 @@ cases:
   - name: b57-backlog-verbs-as-values-and-pmap
     # b57: every backlog verb is a function value with the oracle's arity check
     # (the message is the oracle's, the count included); the transducer arities
-    # stay refused by name; pmap is map (single-threaded, the same printed seq);
-    # = and not= as values compare the Clojure way (1 and 1.0 differ, maps and
-    # sets structurally). Every line matches the oracle (clj 1.12, 2026-10-02)
-    # except the transducer refusals (the oracle answers a transducer), the
-    # fnil/fn message (the oracle suffixes a compiled class number) and the
-    # empty seqs printing nil where it prints ().
+    # answer transducers (b60); pmap is map (single-threaded, the same printed
+    # seq); = and not= as values compare the Clojure way (1 and 1.0 differ, maps
+    # and sets structurally). Every line matches the oracle (clj 1.12,
+    # 2026-10-02) except the fnil/fn message (the oracle suffixes a compiled
+    # class number) and the empty seqs printing nil where it prints ().
     source: |
       (prn (map drop-last [[1 2] [3 4 5]]) (apply drop-last [1 [1 2 3]]) ((fn [f] (f 2 [1 2 3])) take-last))
       (println (try (apply drop-last [1 2 3]) (catch Exception e (ex-message e))))
       (prn (map (partial split-at 1) [[1 2] [3 4]]) ((fn [f] (f odd? [1 2])) split-with) ((fn [f] (f [1 2 3] 2)) nthnext) ((fn [f] (f [1 2 3] 2)) nthrest))
       (prn (map peek [[1 2] '(3 4)]) (map pop [[1 2] '(3 4)]) (filter not-empty [[] [1] "" "a"]) (map dedupe [[1 1] [2 2 3]]))
-      (println (try ((fn [f] (f)) dedupe) (catch Exception e (ex-message e))))
-      (println (try ((fn [f] (f 2)) partition-all) (catch Exception e (ex-message e))))
+      (prn (into [] ((fn [f] (f)) dedupe) [1 1 2]) (into [] ((fn [f] (f 2)) partition-all) [1 2 3]))
       (prn ((fn [f] (f 2 [1 2 3])) partition-all) ((fn [f] (f 2 1 [1 2 3])) partition-all) ((fn [f] (f odd? [1 3 2])) partition-by))
       (prn (apply max-key count ["a" "bbb" "cc"]) (apply min-key count ["a" "bbb" "cc"]))
       (println (try ((fn [f] (f count)) max-key) (catch Exception e (ex-message e))))
@@ -3475,8 +3473,7 @@ cases:
       Wrong number of args (3) passed to: clojure.core/drop-last
       ([(1) (2)] [(3) (4)]) [(1) (2)] (3) (3)
       (2 3) ([1] (4)) ([1] "a") ((1) (2 3))
-      transducers are not supported yet: dedupe
-      transducers are not supported yet: partition-all
+      [1 2] [[1 2] [3]]
       ((1 2) (3)) ((1 2) (2 3) (3)) ((1 3) (2))
       "bbb" "a"
       Wrong number of args (1) passed to: clojure.core/max-key
@@ -3487,6 +3484,82 @@ cases:
       Wrong number of args (2) passed to: clojure.core/reduce-kv
       (2 3 4) (11 22) nil (2 3)
       (true true true false) (false true) true
+  - name: b60-into-transduce-and-composition
+    # b60: a transducer is the oracle's function from a reducing function to a
+    # reducing function, so comp composes left to right, a program's own
+    # transducer runs beside the core ones, and into/transduce consume them
+    # (completing, the 0-arity init through (conj)/(+), take's early stop over an
+    # infinite input). The eager.clj squares-into shape is the corpus slice; the
+    # apply-comp line also pins the comp value's composition (it called the inner
+    # result as a function before b60). Every line matches the oracle (clj 1.12,
+    # 2026-10-02).
+    source: |
+      (prn (into [] (map inc) [1 2 3]) (into #{} (map inc) [1 1]) (into {} (map (fn [x] [x (* x x)])) [3]) (into '(0) (map inc) [1 2]))
+      (prn (into [] (comp (map inc) (filter odd?)) [1 2 3 4 5]) (into [] (comp (filter odd?) (map inc)) [1 2 3 4 5]))
+      (prn (transduce (map inc) + [1 2 3]) (transduce (map inc) + 10 [1 2 3]) (transduce (filter odd?) conj [1 2 3 4 5]) (transduce (map inc) conj [1 2]))
+      (prn (transduce (comp (take 2) (map inc)) (completing + str) [1 2 3]) (transduce (take 0) + [1 2 3]))
+      (prn (into [] (take 3) (iterate inc 0)) (into [] (comp (map inc) (take 2) (map str)) (range 100)))
+      (prn (into [] (map inc) nil) (into [] (partition-all 2) []))
+      (defn b60-square [x] (* x x))
+      (defn b60-xf [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (* 10 x)))))
+      (prn (into [] (map b60-square) (range 5)) (into [] b60-xf [1 2]) (into [] (comp b60-xf (map inc)) [1 2]) (into [] (apply comp [(map inc) (filter odd?)]) [1 2 3 4]))
+      (prn ((apply comp [inc inc]) 1) (conj) ((fn [f] (f)) conj) ((fn [f] (f [] (map inc) [1])) into))
+    expected: |
+      [2 3 4] #{2} {3 9} (3 2 0)
+      [3 5] [2 4 6]
+      9 19 [1 3 5] [2 3]
+      "5" 0
+      [0 1 2] ["1" "2"]
+      [] []
+      [0 1 4 9 16] [10 20] [11 21] [3 5]
+      3 [] [] [2]
+  - name: b60-seq-verbs-have-transducer-arities
+    # b60: the one-argument (zero for distinct/dedupe) arity of every seq verb
+    # with one is its transducer, in call position and as a value; take-nth
+    # joins with both arities; mapcat is (comp (map f) cat); partition-all and
+    # partition-by flush their tail on completion, after an early take stop too.
+    # Every line matches the oracle (clj 1.12, 2026-10-02).
+    source: |
+      (prn (into [] (keep #(when (odd? %) (* % 10))) [1 2 3]) (into [] (keep-indexed (fn [i x] (when (even? i) x))) [:a :b :c]) (into [] (map-indexed vector) [:a :b]))
+      (prn (into [] (remove odd?) [1 2 3 4]) (into [] (drop 2) [1 2 3 4]) (into [] (take-while odd?) [1 3 4 5]) (into [] (drop-while odd?) [1 3 4 5]))
+      (prn (into [] (distinct) [1 2 1 3 2]) (into [] (interpose :x) [1 2 3]) (into [] cat [[1 2] [3]]) (into [] (take-nth 2) [1 2 3 4 5]))
+      (prn (into [] (mapcat (fn [x] [x x])) [1 2]) (into [] (dedupe) [1 1 2 2 1]) (into [] (partition-by odd?) [1 3 2 4 5]) (into [] (partition-all 2) [1 2 3 4 5]))
+      (prn (into [] (comp (partition-all 2) (take 2)) (range 10)) (into [] (comp (take 2) (partition-all 3)) (range 10)) (into [] (comp (mapcat identity) (take 3)) [[1 2] [3 4] [5]]))
+      (prn (into [] (apply filter [odd?]) [1 2 3]) (into [] (apply distinct []) [1 1 2]) (into [] (apply take-nth [2]) [1 2 3]) (into [] (apply map [inc]) [1]) (into [] (apply mapcat [list]) [1]))
+      (prn (into [] ((fn [f] (f)) dedupe) [1 1 2]) (into [] ((fn [f] (f 2)) partition-all) [1 2 3]) (into [] ((fn [f] (f odd?)) partition-by) [1 3 2]))
+      (prn (take-nth 2 [1 2 3 4 5]) (map (partial take-nth 2) [[1 2 3]]))
+    expected: |
+      [10 30] [:a :c] [[0 :a] [1 :b]]
+      [2 4] [3 4] [1 3] [4 5]
+      [1 2 3] [1 :x 2 :x 3] [1 2 3] [1 3 5]
+      [1 1 2 2] [1 2 1] [[1 3] [2 4] [5]] [[1 2] [3 4] [5]]
+      [[0 1] [2 3]] [[0 1]] [1 2 3]
+      [1 3] [1 2] [1 3] [2] [1]
+      [1 2] [[1 2] [3]] [[1 3] [2]]
+      (1 3 5) ((1 3))
+  - name: b60-sequence-eduction-and-reduced
+    # b60: sequence and eduction step their inputs through the transducer (a
+    # lazy input stays lazy, so take of an infinite one terminates; several
+    # collections step in lockstep); reduce, reduce-kv and transduce stop at a
+    # reduced answer; reduce walks a lazy input whole (it folded the wrapper's
+    # own cells before b60). Every line matches the oracle (clj 1.12,
+    # 2026-10-02): prn prints an eduction as its seq there too.
+    source: |
+      (prn (sequence (map inc) [1 2 3]) (take 3 (sequence (map inc) (iterate inc 0))) (sequence (map vector) [1 2] [3 4]) (sequence (comp (map inc) (partition-all 2)) [1 2 3]))
+      (prn (eduction (filter odd?) (range 6)) (eduction (map inc) (filter even?) [1 2 3 4]) (reduce + 0 (eduction (map inc) [1 2 3])))
+      (prn (reduce (fn [a x] (if (> a 5) (reduced a) (+ a x))) 0 (range 100)) (reduce (fn [a x] (reduced :stop)) [1 2 3]) (reduce (fn [a x] (reduced :stop)) [1]))
+      (prn (reduced? (reduced 1)) (reduced? 1) (unreduced (reduced 2)) (unreduced 3) (reduced? (ensure-reduced 1)) @(reduced 5))
+      (prn (reduce + (map inc (lazy-seq [1 2 3]))) (into [] (map inc (lazy-seq [1 2 3]))) (reduce + []) (reduce + [7]))
+      (prn (reduce-kv (fn [a k v] (if (> a 0) (reduced a) (+ a v))) 0 [5 6 7]))
+      (prn (map reduced? [1]) ((fn [f] (f (map inc) + [1])) transduce) ((fn [f] (f (map inc) [1])) eduction) ((fn [f] (f [1])) sequence) (((fn [f] (f +)) completing) 1 2))
+    expected: |
+      (2 3 4) (1 2 3) ([1 3] [2 4]) ([2 3] [4])
+      (1 3 5) (2 4) 9
+      6 :stop 1
+      true false 2 3 true 5
+      9 [2 3 4] 0 7
+      5
+      (false) 2 (2) (1) 3
   - name: b57-equality-is-sequential-and-deep
     # b57: = compares vectors, lists and lazy seqs element-wise across kinds and
     # deep through maps, sets and records; strings are not character vectors, atoms

@@ -4,7 +4,8 @@ A seq is a list view over any collection: strict collections coerce (lists pass 
 untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets
 one member per element, in the table's walk order, unspecified), while a lazy seq
 realizes one element at a time through the same view. The empty result of every verb is
-`nil`. There is no chunking.
+`nil`. There is no chunking. The one-argument arities of the seq verbs are
+[transducers](transducers.md).
 
 | Name | Example | Result |
 |---|---|---|
@@ -66,5 +67,6 @@ realizes one element at a time through the same view. The empty result of every 
 | `dedupe` | `(dedupe [1 1 2 1])` | `(1 2 1)` |
 | `partition-all` | `(partition-all 2 [1 2 3])` | `((1 2) (3))` |
 | `partition-by` | `(partition-by odd? [1 3 2])` | `((1 3) (2))` |
+| `take-nth` | `(take-nth 2 [1 2 3])` | `(1 3)` |
 | `not-empty` | `(not-empty [])` | `nil` |
 | `pmap` | `(pmap inc [1 2])` | `(2 3)` |

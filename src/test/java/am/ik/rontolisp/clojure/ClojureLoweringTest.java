@@ -290,7 +290,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map + '(1 2))")).contains("%CLOJURE-MAP").contains("#'+");
 		assertThat(lowered("(map + '(1 2) '(3 4))")).contains("%CLOJURE-MAP");
 		assertThat(lowered("(filter odd? '(1 2 3))")).contains("%CLOJURE-FILTER");
-		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(reduce + 0 '(1 2))")).contains("%CLOJURE-REDUCE-INIT");
 		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(concat '(1 2) [3 4])")).contains("%CLOJURE-CONCAT");
 		assertThat(lowered("(concat)")).isEqualTo(FALSE_BINDING + "NIL");
@@ -318,9 +318,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(range 1 5 2)")).contains("LABELS");
 		assertThatThrownBy(() -> Clojure.read("(range)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("infinite range is not supported: range needs an end");
-		assertThatThrownBy(() -> Clojure.read("(take 1)", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(take)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("take takes a count and a collection");
-		assertThatThrownBy(() -> Clojure.read("(drop 1)", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(drop)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("drop takes a count and a collection");
 	}
 
@@ -346,7 +346,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("cycle takes one collection");
 		assertThatThrownBy(() -> Clojure.read("(iterate inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("iterate takes a function and a value");
-		assertThatThrownBy(() -> Clojure.read("(map inc)", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(map)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("map takes a function and collections");
 	}
 
@@ -518,8 +518,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("get takes a map");
 		assertThatThrownBy(() -> Clojure.read("(hash-map :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("hash-map takes key/value pairs");
-		assertThatThrownBy(() -> Clojure.read("(conj)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("conj takes a collection and items");
+		// (conj) is the oracle's init arity, [] (b60: (transduce xf conj coll))
+		assertThat(lowered("(conj)")).isEqualTo(FALSE_BINDING + "(VECTOR)");
 		assertThatThrownBy(() -> Clojure.read("(count a b)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("count takes one collection");
 	}
@@ -572,7 +572,7 @@ class ClojureLoweringTest {
 		assertThat(unknown.location()).isNotNull();
 		assertThat(unknown.location().line()).isEqualTo(1);
 		assertThat(unknown.location().column()).isEqualTo(1);
-		LispReadException secondLine = catchThrowableOfType(() -> Clojure.read("(def x 1)\n  (take 1)", "prog.clj"),
+		LispReadException secondLine = catchThrowableOfType(() -> Clojure.read("(def x 1)\n  (take)", "prog.clj"),
 				LispReadException.class);
 		assertThat(secondLine.getMessage()).isEqualTo("prog.clj:2:3: take takes a count and a collection");
 		LispReadException nested = catchThrowableOfType(() -> Clojure.read("(let [x 1] (nope x))", "prog.clj"),
@@ -1280,8 +1280,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map mapv [inc] [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map rand-nth [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map vals [{:a 1}])")).contains("LAMBDA").contains("MAPHASH");
-		assertThatThrownBy(() -> Clojure.read("(mapcat reverse)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transducers are not supported yet: mapcat");
+		assertThat(lowered("(mapcat reverse)")).contains("(RONTOLISP::%CLOJURE-XF-MAPCAT #'REVERSE)");
 		assertThatThrownBy(() -> Clojure.read("(mapv inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("mapv takes a function and collections");
 	}
@@ -1319,8 +1318,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(frequencies [1])")).contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(update-in {:a 1} :a inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("update-in takes a vector of keys");
-		assertThatThrownBy(() -> Clojure.read("(into [] [1] (map inc))", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transducers are not supported yet: into");
+		assertThat(lowered("(into [] (map inc) [1])")).contains("(RONTOLISP::%CLOJURE-INTO-XF (VECTOR)");
+		assertThatThrownBy(() -> Clojure.read("(into [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("into takes a target, an optional transducer and a source");
 	}
 
 	@Test
@@ -1555,7 +1555,7 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void coreBacklogArityAndTransducerRefusalsUseTheOracleWording() {
+	void coreBacklogArityRefusalsUseTheOracleWording() {
 		assertThatThrownBy(() -> Clojure.read("(drop-last 1 2 3)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/drop-last");
 		assertThatThrownBy(() -> Clojure.read("(split-at 2)", null)).isInstanceOf(LispReadException.class)
@@ -1570,12 +1570,48 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/reduce-kv");
 		assertThatThrownBy(() -> Clojure.read("(pmap inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/pmap");
-		assertThatThrownBy(() -> Clojure.read("(dedupe)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transducers are not supported yet: dedupe");
-		assertThatThrownBy(() -> Clojure.read("(partition-all 2)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transducers are not supported yet: partition-all");
-		assertThatThrownBy(() -> Clojure.read("(partition-by odd?)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("transducers are not supported yet: partition-by");
+		assertThatThrownBy(() -> Clojure.read("(transduce (map inc) +)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/transduce");
+		assertThatThrownBy(() -> Clojure.read("(take-nth 1 2 3)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/take-nth");
+		assertThatThrownBy(() -> Clojure.read("(completing)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/completing");
+	}
+
+	@Test
+	void transducerAritiesBuildTheSplicedTransducers() {
+		// b60: the one-argument (zero for dedupe/distinct) arity of a seq verb is its
+		// transducer, a function over a reducing function built by a spliced worker
+		assertThat(lowered("(map inc)")).contains("(RONTOLISP::%CLOJURE-XF-MAP");
+		assertThat(lowered("(filter odd?)")).contains("(RONTOLISP::%CLOJURE-XF-FILTER").endsWith(" T)");
+		assertThat(lowered("(remove odd?)")).contains("(RONTOLISP::%CLOJURE-XF-FILTER").endsWith(" NIL)");
+		assertThat(lowered("(take 2)")).contains("(RONTOLISP::%CLOJURE-XF-TAKE 2)");
+		assertThat(lowered("(take-nth 2)")).contains("(RONTOLISP::%CLOJURE-XF-TAKE-NTH 2)");
+		assertThat(lowered("(dedupe)")).contains("(RONTOLISP::%CLOJURE-XF-DEDUPE)");
+		assertThat(lowered("(distinct)")).contains("(RONTOLISP::%CLOJURE-XF-DISTINCT)");
+		assertThat(lowered("(partition-all 2)")).contains("(RONTOLISP::%CLOJURE-XF-PARTITION-ALL 2)");
+		assertThat(lowered("(partition-by odd?)")).contains("(RONTOLISP::%CLOJURE-XF-PARTITION-BY");
+		assertThat(lowered("(keep-indexed vector)")).contains("(RONTOLISP::%CLOJURE-XF-INDEXED").endsWith(" T)");
+		assertThat(lowered("(map-indexed vector)")).contains("(RONTOLISP::%CLOJURE-XF-INDEXED").endsWith(" NIL)");
+		// the consumers and companions
+		assertThat(lowered("(transduce (map inc) + [1])")).contains("(RONTOLISP::%CLOJURE-TRANSDUCE-3");
+		assertThat(lowered("(transduce (map inc) + 0 [1])")).contains("(RONTOLISP::%CLOJURE-TRANSDUCE ");
+		assertThat(lowered("(eduction (map inc) (filter odd?) [1])")).contains("(RONTOLISP::%CLOJURE-SEQUENCE-XF")
+			.contains("(RONTOLISP::%CLOJURE-XF-COMP (LIST");
+		assertThat(lowered("(sequence [1])")).contains("(RONTOLISP::%CLOJURE-SEQUENCE (VECTOR 1))");
+		assertThat(lowered("(completing +)")).contains("(RONTOLISP::%CLOJURE-COMPLETING #'+ #'IDENTITY)");
+		assertThat(lowered("(reduced? (reduced 1))"))
+			.contains("(RONTOLISP::%CLOJURE-REDUCED-PRED (RONTOLISP::%CLOJURE-REDUCED 1))");
+		assertThat(lowered("(into [] cat [[1]])")).contains("#'RONTOLISP::%CLOJURE-XF-CAT");
+		// reduce goes through the lazy-aware, reduced-aware runtime; a value that may
+		// hold a collection is wrapped over the dispatcher at the call site
+		assertThat(lowered("(reduce + [1])")).contains("(RONTOLISP::%CLOJURE-REDUCE #'+ (VECTOR 1))");
+		assertThat(lowered("(reduce + 0 [1])")).contains("(RONTOLISP::%CLOJURE-REDUCE-INIT #'+ 0 (VECTOR 1))");
+		assertThat(lowered("(defn f [g] (reduce g [1]))")).contains("RONTOLISP::%CLOJURE-CALL");
+		// as values: the fixed-arity seq verbs widen to the transducer arity
+		assertThat(lowered("(map filter [odd?])")).contains("&OPTIONAL").contains("%CLOJURE-XF-FILTER");
+		assertThat(lowered("(map take-nth [2])")).contains("#'RONTOLISP::%CLOJURE-TAKE-NTH-V");
+		assertThat(lowered("(map reduced [1])")).contains("#'RONTOLISP::%CLOJURE-REDUCED");
 	}
 
 	@Test
