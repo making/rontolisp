@@ -545,10 +545,21 @@ public final class ClojureLowering {
 	 * opaque (a deftype), its declared field names, its dispatch-tag spelling and its
 	 * host class name ({@code my_app.core.Name}: the defining namespace with {@code -}
 	 * munged to {@code _}, then the name verbatim, like the oracle's), which a record
-	 * prints and a record literal names.
+	 * prints and a record literal names. {@code mutableFields} are the deftype fields
+	 * declared {@code ^:unsynchronized-mutable} or {@code ^:volatile-mutable}, a subset
+	 * of {@code fields} in declaration order: they live in a slot vector behind the
+	 * public table, so only the type's own inline methods read or {@code set!} them.
 	 */
-	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className) {
+	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className,
+			List<String> mutableFields) {
 	}
+
+	/**
+	 * The slot forms of the deftype mutable fields in the method being lowered, by field
+	 * name ({@code (aref slots i)} over the method's slot-vector temporary). A name is
+	 * the field only while its innermost scope kind is {@link Kind#MUTABLE_FIELD}.
+	 */
+	final Map<String, LispVal> mutableFieldPlaces = new LinkedHashMap<>();
 
 	/** The protocols defined so far, by name (the whole-file pre-scan fills it first). */
 	final Map<String, ProtocolDef> protocols = new HashMap<>();
@@ -1018,7 +1029,7 @@ public final class ClojureLowering {
 			return forms.get(0);
 		}
 		if (head == ClojureReader.FN_ANON || ClojureLowerUtil.isSymbolNamed(head, "fn")) {
-			return ClojureBindingLowering.fn(this, items);
+			return capturingMutableFields(() -> ClojureBindingLowering.fn(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "let")) {
 			return ClojureBindingLowering.let(this, items);
@@ -1066,7 +1077,7 @@ public final class ClojureLowering {
 			return ClojureLoopLowering.dotimesOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "for")) {
-			return ClojureLoopLowering.forOf(this, items);
+			return capturingMutableFields(() -> ClojureLoopLowering.forOf(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmulti")) {
 			List<LispVal> forms = ClojureDispatchLowering.defmultiForms(this, items);
@@ -1109,7 +1120,7 @@ public final class ClojureLowering {
 			return ClojureProtocolLowering.extendForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "reify")) {
-			return ClojureProtocolLowering.reifyForm(this, items);
+			return capturingMutableFields(() -> ClojureProtocolLowering.reifyForm(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "satisfies?")) {
 			return ClojureProtocolLowering.satisfiesOf(this, items);
@@ -1172,7 +1183,7 @@ public final class ClojureLowering {
 			return ClojureStateLowering.refOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "dosync")) {
-			return ClojureStateLowering.dosyncOf(this, items);
+			return capturingMutableFields(() -> ClojureStateLowering.dosyncOf(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "alter")) {
 			return ClojureStateLowering.alterOf(this, items, "alter");
@@ -1242,13 +1253,13 @@ public final class ClojureLowering {
 			return switched;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "set!")) {
-			throw new LispReadException("set! is not supported yet: mutable fields need a design");
+			return ClojureProtocolLowering.setBangOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "memfn")) {
 			return ClojureInteropLowering.memfnOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "proxy")) {
-			return ClojureInteropLowering.proxyOf(this, items);
+			return capturingMutableFields(() -> ClojureInteropLowering.proxyOf(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "proxy-super")) {
 			throw new LispReadException(
@@ -1875,7 +1886,7 @@ public final class ClojureLowering {
 			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
 				throw new LispReadException("transients are not supported yet: " + name);
 			case "lazy-seq":
-				return ClojureLazyLowering.lazySeqOf(this, items);
+				return capturingMutableFields(() -> ClojureLazyLowering.lazySeqOf(this, items));
 			case "lazy-cat":
 				return ClojureLazyLowering.lazyCatOf(this, items);
 			case "repeat":
@@ -2515,9 +2526,88 @@ public final class ClojureLowering {
 		}
 	}
 
+	/**
+	 * The innermost local binding kind of a name, or null when no local scope binds it (a
+	 * global or an unknown name).
+	 */
+	@Nullable Kind localKind(String name) {
+		for (int i = this.scopes.size() - 1; i >= 0; i--) {
+			Kind kind = this.scopes.get(i).get(name);
+			if (kind != null) {
+				return kind;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The deftype mutable fields a closure created here would capture: every field whose
+	 * innermost binding is still the field itself, in declaration order.
+	 */
+	List<String> visibleMutableFields() {
+		List<String> names = new ArrayList<>();
+		for (String name : this.mutableFieldPlaces.keySet()) {
+			if (localKind(name) == Kind.MUTABLE_FIELD) {
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * One closure-creating form ({@code fn}, {@code reify}, {@code lazy-seq},
+	 * {@code for}, {@code dosync}, {@code proxy}) lowered inside a deftype method: the
+	 * oracle compiles it to a class whose constructor copies each mutable field it reads,
+	 * so the closure sees the value at creation and a {@code set!} inside it is the
+	 * non-mutable refusal. Each visible mutable field rebinds as a plain local around the
+	 * form, initialized from its slot; only the fields the lowered form mentions bind.
+	 */
+	LispVal capturingMutableFields(java.util.function.Supplier<LispVal> lowering) {
+		List<String> names = visibleMutableFields();
+		if (names.isEmpty()) {
+			return lowering.get();
+		}
+		Map<String, Kind> scope = new HashMap<>();
+		for (String name : names) {
+			scope.put(name, Kind.VARIABLE);
+		}
+		LispVal value = inScope(scope, lowering);
+		List<LispVal> bindings = capturedBindings(names, value);
+		return bindings.isEmpty() ? value
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), value);
+	}
+
+	/** The slot form of a mutable field in scope (see {@link #mutableFieldPlaces}). */
+	LispVal mutableFieldPlace(String name) {
+		LispVal place = this.mutableFieldPlaces.get(name);
+		if (place == null) {
+			throw new IllegalStateException("no mutable field in scope: " + name);
+		}
+		return place;
+	}
+
+	/**
+	 * The {@code (field slot)} bindings of the captured fields the lowered form mentions.
+	 */
+	List<LispVal> capturedBindings(List<String> names, LispVal lowered) {
+		List<LispVal> bindings = new ArrayList<>();
+		for (String name : names) {
+			LispSymbol local = ClojureLowerUtil.idSym(name);
+			if (ClojureLowerUtil.mentions(lowered, local.name())) {
+				bindings.add(ClojureLowerUtil.list(local, mutableFieldPlace(name)));
+			}
+		}
+		return bindings;
+	}
+
 	enum Kind {
 
-		VARIABLE, FUNCTION, MACRO
+		/**
+		 * {@code MUTABLE_FIELD}: a deftype's {@code ^:unsynchronized-mutable}/
+		 * {@code ^:volatile-mutable} field inside one of its inline methods, read and
+		 * {@code set!} through the instance's slot ({@link #mutableFieldPlaces}).
+		 */
+		VARIABLE, FUNCTION, MACRO, MUTABLE_FIELD
 
 	}
 

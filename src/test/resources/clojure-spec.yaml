@@ -2591,6 +2591,61 @@ cases:
       true
       :str
       :fn
+  - name: deftype-mutable-fields-assign-through-set
+    # b61: ^:unsynchronized-mutable / ^:volatile-mutable fields are assignable with
+    # set! inside the type's own methods (set! answers the value); a read after
+    # another method's write sees it; a closure (fn, #(), letfn, reify, lazy-seq,
+    # for) copies the field at creation; a parameter shadows a mutable or an
+    # immutable field (before b61 the immutable field shadowed it back); the field is
+    # private to .-field; a non-dynamic global's set! signals at run time. Every
+    # line matches the oracle (Clojure CLI 1.12) byte for byte.
+    source: |
+      (defprotocol B61Counter
+        (b61-bump! [c]) (b61-peek [c]) (b61-via-self [c]) (b61-reader [c])
+        (b61-shadow [c x]) (b61-captures [c]))
+      (deftype B61Box [^:unsynchronized-mutable x ^:volatile-mutable n label]
+        B61Counter
+        (b61-bump! [_] (set! n (+ n 10)) (set! x (inc x)))
+        (b61-peek [_] [x n label])
+        (b61-via-self [this] (b61-bump! this) x)
+        (b61-reader [_] (fn [] x))
+        (b61-shadow [_ x] x)
+        (b61-captures [_]
+          (let [r (reify B61Counter (b61-peek [_] x))
+                s (lazy-seq (list x))]
+            (letfn [(g [] x)]
+              (loop [i 0] (when (< i 3) (set! x (+ x i)) (recur (inc i))))
+              [(b61-peek r) (first s) (g) (vec (for [i [1]] x)) (#(+ x %) 100) x]))))
+      (def b61-a (B61Box. 1 0 :a))
+      (println (b61-bump! b61-a))
+      (println (b61-peek b61-a))
+      (println (b61-via-self b61-a))
+      (def b61-r (b61-reader b61-a))
+      (b61-bump! b61-a)
+      (println (b61-r) (b61-peek b61-a))
+      (println (b61-shadow b61-a 42))
+      (deftype B61Pair [x] B61Counter (b61-shadow [_ x] x))
+      (println (b61-shadow (B61Pair. 1) 43))
+      (println (b61-captures b61-a))
+      (def b61-b (->B61Box 10 0 :b))
+      (b61-bump! b61-b)
+      (println (b61-peek b61-a) (b61-peek b61-b))
+      (println (.-label b61-a))
+      (println (try (.-x b61-a) (catch Exception e :private)))
+      (def b61-y 1)
+      (println (try (set! b61-y 2) (catch Exception e :root-binding)) b61-y)
+    expected: |
+      2
+      [2 10 :a]
+      3
+      3 [4 30 :a]
+      42
+      43
+      [4 4 4 [7] 107 7]
+      [7 30 :a] [11 10 :b]
+      :a
+      :private
+      :root-binding 1
   - name: jio-reader-resolves-on-every-backend
     # clojure.java.io resolves beside clojure.string, for reader only: the alias,
     # the referred bare var and the fully-qualified spelling all name the same

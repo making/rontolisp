@@ -65,6 +65,9 @@
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは
  エントリのマップだけです。
+- deftype の `^:volatile-mutable` フィールドは `^:unsynchronized-mutable` と同じ素の
+ スロットです（スレッド間の順序保証はありません）。可変フィールドへの `.-field` は
+ `No such field: ...` をシグナルします（オラクルは `No matching field found: ...`）。
 - `split`/`replace` は seq を返しベクターにはなりません。素の文字列は文字通りのままです（パターン値だけがパターンマッチします）。`index-of` は
  見つからないときオラクル同様に `-1` を返します（`clojure.string/index-of` は `nil`）。
 - 本体内の `def` は本体が走るときにグローバルを設定します。本体内の `defn` は文位置の

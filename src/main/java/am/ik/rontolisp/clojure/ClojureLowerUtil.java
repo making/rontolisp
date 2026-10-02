@@ -106,6 +106,48 @@ final class ClojureLowerUtil {
 		return false;
 	}
 
+	/**
+	 * Whether a name datum carries the flag keyword (spelled with its colon) in any of
+	 * its {@code ^...} metadata: the bare keyword, or an attr map holding it with a value
+	 * other than {@code false}/{@code nil}.
+	 */
+	static boolean nameHasMetaFlag(LispVal nameDatum, String flag) {
+		List<LispVal> parts = items(nameDatum);
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+			LispVal meta = parts.get(2);
+			if (isSymbolNamed(meta, flag)) {
+				return true;
+			}
+			List<LispVal> map = items(meta);
+			if (map != null && !map.isEmpty() && isSymbolNamed(map.get(0), "%hash-map")) {
+				for (int i = 1; i + 1 < map.size(); i += 2) {
+					if (isSymbolNamed(map.get(i), flag) && !isSymbolNamed(map.get(i + 1), "false")
+							&& !isSymbolNamed(map.get(i + 1), "nil")) {
+						return true;
+					}
+				}
+			}
+			nameDatum = parts.get(1);
+			parts = items(nameDatum);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a lowered form mentions the symbol anywhere (quoted data included, which
+	 * only costs an unneeded binding).
+	 */
+	static boolean mentions(LispVal form, String symbolName) {
+		LispVal at = form;
+		while (at instanceof LispCons cons) {
+			if (mentions(cons.car(), symbolName)) {
+				return true;
+			}
+			at = cons.cdr();
+		}
+		return at instanceof LispSymbol s && s.name().equals(symbolName);
+	}
+
 	/** Whether a name datum carries {@code ^:dynamic} metadata, under any wrapping. */
 	static boolean nameIsDynamic(LispVal nameDatum) {
 		List<LispVal> parts = items(nameDatum);

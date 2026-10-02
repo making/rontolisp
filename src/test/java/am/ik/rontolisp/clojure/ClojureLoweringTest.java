@@ -972,8 +972,67 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (lastModified [] 0))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy over a class is not supported yet: java.io.File");
-		assertThatThrownBy(() -> Clojure.read("(set! x 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("set! is not supported yet");
+	}
+
+	@Test
+	void setBangWritesADeftypeMutableFieldThroughItsSlot() {
+		String out = lowered("(defprotocol P (bump! [c])) "
+				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");
+		// the constructor keeps the immutable field in the table, the mutable ones in
+		// a slot vector behind it; the method reads and writes the slots
+		assertThat(out).contains("(VECTOR c%x c%y)")
+			.contains("(SYMBOL-MACROLET ((c%x (AREF")
+			.contains("(SETF (AREF __clojure_");
+		// a closure copies the field at creation: a let* around the lambda
+		assertThat(lowered("(defprotocol P (r [c])) (deftype T [^:unsynchronized-mutable x] P (r [_] (fn [] x)))"))
+			.containsPattern("\\(LET\\* \\(\\(c%x \\(AREF __clojure_\\d+ 0\\)\\)\\) \\(LAMBDA");
+	}
+
+	@Test
+	void setBangRefusesEveryOtherTargetLikeTheOracle() {
+		String proto = "(defprotocol P (m [c] ) (m2 [c v])) ";
+		// ClojureScript's ^:mutable is no marker on the oracle
+		assertThatThrownBy(() -> Clojure.read(proto + "(deftype T [^:mutable x] P (m [_] (set! x 1)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot assign to non-mutable: x");
+		assertThatThrownBy(() -> Clojure.read(proto + "(deftype T [x] P (m [_] (set! x 1)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot assign to non-mutable: x");
+		// a closure holds a copy; a parameter or a local shadows the field
+		for (String body : List.of("((fn [] (set! x 1)))", "(#(set! x %) 1)", "(letfn [(g [] (set! x 1))] (g))",
+				"(let [x 2] (set! x 1))", "(first (for [i [1]] (set! x i)))", "(first (lazy-seq (set! x 1)))",
+				"(dosync (set! x 1))")) {
+			assertThatThrownBy(
+					() -> Clojure.read(proto + "(deftype T [^:unsynchronized-mutable x] P (m [_] " + body + "))", null))
+				.as(body)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Cannot assign to non-mutable: x");
+		}
+		assertThatThrownBy(
+				() -> Clojure.read(proto + "(deftype T [^:unsynchronized-mutable x] P (m2 [_ x] (set! x 1)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot assign to non-mutable: x");
+		assertThatThrownBy(() -> Clojure.read("(fn [a] (set! a 1))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot assign to non-mutable: a");
+		assertThatThrownBy(() -> Clojure.read("(defrecord R [^:unsynchronized-mutable a])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(":volatile-mutable or :unsynchronized-mutable not supported for record fields");
+		// a non-dynamic global signals at run time, after the value evaluates
+		assertThat(lowered("(def y 1) (set! y 2)"))
+			.contains("(PROGN 2 (ERROR \"Can't change/establish root binding of: y with set\"))");
+		// a thread-bound var needs a design (only binding could bind it)
+		assertThatThrownBy(() -> Clojure.read("(def ^:dynamic *d* 1) (set! *d* 2)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! of a var is not supported yet: *d*");
+		assertThatThrownBy(() -> Clojure.read("(set! *warn-on-reflection* true)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! of a var is not supported yet: *warn-on-reflection*");
+		assertThatThrownBy(() -> Clojure.read("(set! (.-f (Object.)) 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! of a host field is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(set! 3 4)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid assignment target");
+		assertThatThrownBy(() -> Clojure.read("(def y 1) (set! y)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Malformed assignment, expecting (set! target val)");
 	}
 
 	@Test

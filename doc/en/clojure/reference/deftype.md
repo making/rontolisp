@@ -7,7 +7,9 @@ the record's 4-list shape with a `:C%TYPE` tag; reads miss (`get` answers the
 default), writers and `seq`/`count`/`empty?` signal, and `=` is identity, like the
 oracle. Only the positional constructor `->Name` lowers (the oracle defines no
 `map->Name` for deftypes); `(Name. ...)` rewrites to it. Inline method bodies see
-the fields as locals, like `defrecord`. The name joins the whole-file pre-scan.
+the fields as locals, like `defrecord`. A field marked `^:unsynchronized-mutable` or
+`^:volatile-mutable` is private to those methods, which assign it with
+[`set!`](set-bang.md). The name joins the whole-file pre-scan.
 
 ```clojure
 (deftype T [a])

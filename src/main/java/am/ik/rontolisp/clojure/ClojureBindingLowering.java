@@ -799,19 +799,37 @@ final class ClojureBindingLowering {
 		return ctx.inScope(scope, () -> {
 			// a later entry shadows an earlier one with the same name, like the
 			// oracle (labels itself refuses a name twice)
+			// the functions are closures: inside a deftype method they copy the
+			// mutable fields they read at letfn entry, while the body keeps the
+			// fields themselves (see capturingMutableFields)
+			List<String> captured = ctx.visibleMutableFields();
+			Map<String, ClojureLowering.Kind> captureScope = new HashMap<>();
+			for (String name : captured) {
+				captureScope.put(name, ClojureLowering.Kind.VARIABLE);
+			}
 			Map<String, LispVal> bindings = new LinkedHashMap<>();
 			for (List<LispVal> parts : fnspecs) {
 				String fname = ClojureLowerUtil.plainName(parts.get(0), "letfn");
 				String callName = ClojureLowerUtil.idSym(fname).name();
-				ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, parts, 1, fname, callName);
+				ClojureLowering.SplitLambda split = ctx.inScope(captureScope,
+						() -> singleOrMultiFn(ctx, parts, 1, fname, callName));
 				for (LispVal worker : split.workers()) {
 					LispVal key = ((LispCons) worker).car();
 					bindings.put(((LispSymbol) key).name(), worker);
 				}
 				bindings.put(callName, new LispCons(new LispSymbol(callName), ((LispCons) split.lambda()).cdr()));
 			}
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"),
-					ClojureLowerUtil.list(new ArrayList<>(bindings.values())), ctx.body(items, 2));
+			LispVal functions = ClojureLowerUtil.list(new ArrayList<>(bindings.values()));
+			LispVal body = ctx.body(items, 2);
+			List<LispVal> copies = ctx.capturedBindings(captured, functions);
+			if (copies.isEmpty()) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), functions, body);
+			}
+			// the copies shadow the fields' symbol macros; the body re-establishes
+			// them over the same (field slot) pairs
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(copies),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), functions, ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(copies), body)));
 		});
 	}
 

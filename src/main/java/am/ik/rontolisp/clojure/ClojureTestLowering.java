@@ -304,7 +304,7 @@ final class ClojureTestLowering {
 		if (global != null) {
 			return switch (global) {
 				case FUNCTION -> true;
-				case MACRO -> false;
+				case MACRO, MUTABLE_FIELD -> false; // a field is never global
 				case VARIABLE -> ctx.globalDirectFuns.contains(name);
 			};
 		}
