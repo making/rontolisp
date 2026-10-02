@@ -102,8 +102,8 @@ public final class Scheme {
 	 */
 	public static List<LispVal> runtimeForms(Predicate<String> spelled, SchemeStandard standard) {
 		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled, standard));
-		forms.add(SchemeLowering.libraryPredicateForm());
-		forms.add(SchemeLowering.extensionKeywordForm(standard));
+		forms.add(SchemeLibraryLowering.libraryPredicateForm());
+		forms.add(SchemeLibraryLowering.extensionKeywordForm(standard));
 		forms.addAll(SchemeCharacters.runtimeForms());
 		forms.add(SchemeFeatures.featuresForm());
 		return List.copyOf(forms);

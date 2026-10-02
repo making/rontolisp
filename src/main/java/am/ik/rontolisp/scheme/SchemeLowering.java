@@ -56,7 +56,7 @@ import org.jspecify.annotations.Nullable;
  */
 final class SchemeLowering {
 
-	private static final SequencedMap<String, Core> SYNTAX = syntaxTable();
+	static final SequencedMap<String, Core> SYNTAX = syntaxTable();
 
 	private static SequencedMap<String, Core> syntaxTable() {
 		SequencedMap<String, Core> table = new LinkedHashMap<>();
@@ -105,14 +105,14 @@ final class SchemeLowering {
 	}
 
 	/** The keywords of {@code (scheme lazy)}. */
-	private static final SequencedMap<String, Core> LAZY_SYNTAX = orderedMap("delay", Core.DELAY, "delay-force",
+	static final SequencedMap<String, Core> LAZY_SYNTAX = orderedMap("delay", Core.DELAY, "delay-force",
 			Core.DELAY_FORCE);
 
 	/** The keyword of {@code (scheme case-lambda)}. */
-	private static final SequencedMap<String, Core> CASE_LAMBDA_SYNTAX = orderedMap("case-lambda", Core.CASE_LAMBDA);
+	static final SequencedMap<String, Core> CASE_LAMBDA_SYNTAX = orderedMap("case-lambda", Core.CASE_LAMBDA);
 
 	/** The SICP keyword no R7RS library exports: {@code (cons-stream a b)}. */
-	private static final SequencedMap<String, Core> SICP_SYNTAX = orderedMap("cons-stream", Core.CONS_STREAM);
+	static final SequencedMap<String, Core> SICP_SYNTAX = orderedMap("cons-stream", Core.CONS_STREAM);
 
 	/**
 	 * The syntactic keywords a file may spell without defining: every implemented
@@ -142,34 +142,34 @@ final class SchemeLowering {
 
 	// The keywords a desugaring spells. Compared by IDENTITY before any scope lookup, so
 	// (define (f if) (or a b)) still expands `or` into the real `if`.
-	private static final Map<LispSymbol, Core> CORE_SYMBOLS = new IdentityHashMap<>();
+	static final Map<LispSymbol, Core> CORE_SYMBOLS = new IdentityHashMap<>();
 
-	private static final Map<Core, LispSymbol> CORE_BY_CORE = new java.util.EnumMap<>(Core.class);
+	static final Map<Core, LispSymbol> CORE_BY_CORE = new java.util.EnumMap<>(Core.class);
 
-	private static final LispSymbol CORE_IF = core("if", Core.IF);
+	static final LispSymbol CORE_IF = core("if", Core.IF);
 
-	private static final LispSymbol CORE_LET = core("let", Core.LET);
+	static final LispSymbol CORE_LET = core("let", Core.LET);
 
-	private static final LispSymbol CORE_BEGIN = core("begin", Core.BEGIN);
+	static final LispSymbol CORE_BEGIN = core("begin", Core.BEGIN);
 
-	private static final LispSymbol CORE_AND = core("and", Core.AND);
+	static final LispSymbol CORE_AND = core("and", Core.AND);
 
-	private static final LispSymbol CORE_OR = core("or", Core.OR);
+	static final LispSymbol CORE_OR = core("or", Core.OR);
 
-	private static final LispSymbol CORE_COND = core("cond", Core.COND);
+	static final LispSymbol CORE_COND = core("cond", Core.COND);
 
-	private static final LispSymbol CORE_LAMBDA = core("lambda", Core.LAMBDA);
+	static final LispSymbol CORE_LAMBDA = core("lambda", Core.LAMBDA);
 
-	private static final LispSymbol CORE_RAW_PREDICATE = core("raw-predicate", Core.RAW_PREDICATE);
+	static final LispSymbol CORE_RAW_PREDICATE = core("raw-predicate", Core.RAW_PREDICATE);
 
 	// (raw form): a Common Lisp form a desugaring puts where an expression stands.
-	private static final LispSymbol CORE_RAW = core("raw", Core.RAW);
+	static final LispSymbol CORE_RAW = core("raw", Core.RAW);
 
 	// Stands where a desugaring has no expression to put: the missing arm of an if, a
 	// cond or case no clause of which is taken. Lowered to the unspecified object.
-	private static final LispSymbol CORE_UNSPECIFIED = core("unspecified", Core.UNSPECIFIED);
+	static final LispSymbol CORE_UNSPECIFIED = core("unspecified", Core.UNSPECIFIED);
 
-	private static final LispSymbol CORE_DELAY = core("delay", Core.DELAY);
+	static final LispSymbol CORE_DELAY = core("delay", Core.DELAY);
 
 	private static LispSymbol core(String name, Core core) {
 		LispSymbol symbol = new LispSymbol(name);
@@ -203,12 +203,12 @@ final class SchemeLowering {
 	 * What an identifier means at a point in the program; what a user library exports
 	 * ({@link SchemeLibraries}).
 	 */
-	private sealed interface Binding {
+	sealed interface Binding {
 
 	}
 
 	/** A variable: referenced bare, called through {@code funcall}. */
-	private record Variable(LispSymbol symbol) implements Binding {
+	record Variable(LispSymbol symbol) implements Binding {
 	}
 
 	/**
@@ -218,7 +218,7 @@ final class SchemeLowering {
 	 * @param clauses a {@code case-lambda}'s clauses, each its own {@code defun}, in
 	 * order; empty for any other procedure
 	 */
-	private record GlobalFunction(LispSymbol symbol, List<Clause> clauses) implements Binding {
+	record GlobalFunction(LispSymbol symbol, List<Clause> clauses) implements Binding {
 
 		GlobalFunction(LispSymbol symbol) {
 			this(symbol, List.of());
@@ -244,7 +244,7 @@ final class SchemeLowering {
 	 * @param required how many required formals it has
 	 * @param rest whether it has a rest formal
 	 */
-	private record Clause(LispSymbol symbol, int required, boolean rest) {
+	record Clause(LispSymbol symbol, int required, boolean rest) {
 
 		boolean accepts(int argumentCount) {
 			return this.rest ? argumentCount >= this.required : argumentCount == this.required;
@@ -253,10 +253,10 @@ final class SchemeLowering {
 	}
 
 	/** A record type's predicate: a {@code defun} answering {@code T}/{@code NIL}. */
-	private record GlobalPredicate(LispSymbol symbol) implements Binding {
+	record GlobalPredicate(LispSymbol symbol) implements Binding {
 	}
 
-	private record Builtin(SchemeBuiltins.Entry entry) implements Binding {
+	record Builtin(SchemeBuiltins.Entry entry) implements Binding {
 	}
 
 	/**
@@ -265,10 +265,10 @@ final class SchemeLowering {
 	 * export of {@code (scheme base)}, so unreachable by name through {@code import} --
 	 * only the no-import default merges it (a REPL, and a file with no import at all).
 	 */
-	private record Constant(LispVal form) implements Binding {
+	record Constant(LispVal form) implements Binding {
 	}
 
-	private record Syntax(Core core, String name) implements Binding {
+	record Syntax(Core core, String name) implements Binding {
 	}
 
 	/**
@@ -279,7 +279,7 @@ final class SchemeLowering {
 	 * @param macro the expander's macro, opaque here
 	 * @param name its name where it was defined
 	 */
-	private record ImportedSyntax(Object macro, String name) implements Binding {
+	record ImportedSyntax(Object macro, String name) implements Binding {
 	}
 
 	/**
@@ -288,17 +288,17 @@ final class SchemeLowering {
 	 * bare reference -- sets {@link #escaped}, and the loop is lowered again as a
 	 * procedure.
 	 */
-	private static final class LoopName implements Binding {
+	static final class LoopName implements Binding {
 
-		private boolean escaped;
+		boolean escaped;
 
 	}
 
-	private static final class Scope {
+	static final class Scope {
 
 		private final @Nullable Scope parent;
 
-		private final Map<String, Binding> bindings = new HashMap<>();
+		final Map<String, Binding> bindings = new HashMap<>();
 
 		Scope(@Nullable Scope parent) {
 			this.parent = parent;
@@ -317,11 +317,11 @@ final class SchemeLowering {
 	}
 
 	/** A label a tail call may jump to instead of calling. */
-	private static final class Target {
+	static final class Target {
 
 		private final Binding binding;
 
-		private final LispSymbol label;
+		final LispSymbol label;
 
 		private final List<LispSymbol> assigned;
 
@@ -333,16 +333,16 @@ final class SchemeLowering {
 
 		private final List<String> names;
 
-		private boolean used;
+		boolean used;
 
-		private boolean shadowed;
+		boolean shadowed;
 
 		// The case-lambda clause whose defun this loop is, or null.
-		private @Nullable LispSymbol clause;
+		@Nullable LispSymbol clause;
 
 		// What a jump assigns besides the arguments, as variable-value pairs: a
 		// tail-call group's member selector.
-		private List<LispVal> presets = List.of();
+		List<LispVal> presets = List.of();
 
 		Target(Binding binding, LoopShape shape, Scope home, List<String> names) {
 			this.binding = binding;
@@ -391,7 +391,7 @@ final class SchemeLowering {
 	 * @param rest whether the last one collects the remaining arguments in a list
 	 * @param parallel whether the assignment must be a {@code psetq}
 	 */
-	private record LoopShape(LispSymbol label, List<LispSymbol> assigned, boolean rest, boolean parallel) {
+	record LoopShape(LispSymbol label, List<LispSymbol> assigned, boolean rest, boolean parallel) {
 	}
 
 	/**
@@ -402,7 +402,7 @@ final class SchemeLowering {
 	 * @param exit the outermost loop's block, for a leaf that may answer other than one
 	 * value
 	 */
-	private record Destination(LispSymbol result, List<Target> targets, Exit exit) {
+	record Destination(LispSymbol result, List<Target> targets, Exit exit) {
 	}
 
 	/**
@@ -416,11 +416,11 @@ final class SchemeLowering {
 	 * procedure with no self tail call) numbers nothing differently. Shared by the loops
 	 * nested in the one that owns the result variable.
 	 */
-	private static final class Exit {
+	static final class Exit {
 
 		private final LispSymbol block;
 
-		private boolean used;
+		boolean used;
 
 		Exit(LispSymbol result) {
 			this.block = new LispSymbol(result.name().replace("%SCM-R", "%SCM-B"));
@@ -438,7 +438,7 @@ final class SchemeLowering {
 	 * the last, a top-level form of a file): an effect then answers its raw Common Lisp
 	 * value instead of the unspecified object, which saves loading it
 	 */
-	private record Context(Scope scope, @Nullable Destination destination, boolean discarded) {
+	record Context(Scope scope, @Nullable Destination destination, boolean discarded) {
 
 		static Context of(Scope scope) {
 			return new Context(scope, null, false);
@@ -465,7 +465,7 @@ final class SchemeLowering {
 	 * @param negated whether the form is true exactly when the Scheme test is FALSE (the
 	 * generic {@code (eq v false)} shape, which saves a {@code not})
 	 */
-	private record Test(LispVal form, boolean negated) {
+	record Test(LispVal form, boolean negated) {
 
 		LispVal positive() {
 			return this.negated ? list(symbol("NOT"), this.form) : this.form;
@@ -479,7 +479,7 @@ final class SchemeLowering {
 	 * @param required the required parameters
 	 * @param rest the rest parameter, or {@code null}
 	 */
-	private record Formals(List<LispSymbol> required, @Nullable LispSymbol rest) {
+	record Formals(List<LispSymbol> required, @Nullable LispSymbol rest) {
 
 		List<LispSymbol> all() {
 			List<LispSymbol> all = new ArrayList<>(this.required);
@@ -501,8 +501,8 @@ final class SchemeLowering {
 	 * @param clause the {@code case-lambda} clause of {@code self} this procedure is, or
 	 * {@code null}: a self call is a jump only when its count picks this clause
 	 */
-	private record ProcedureSpec(Formals formals, List<LispVal> body, @Nullable Binding self,
-			@Nullable LispSymbol selfName, @Nullable LispSymbol clause) {
+	record ProcedureSpec(Formals formals, List<LispVal> body, @Nullable Binding self, @Nullable LispSymbol selfName,
+			@Nullable LispSymbol clause) {
 
 		ProcedureSpec(Formals formals, List<LispVal> body, @Nullable Binding self, @Nullable LispSymbol selfName) {
 			this(formals, body, self, selfName, null);
@@ -510,7 +510,7 @@ final class SchemeLowering {
 
 	}
 
-	private record Lowered(LispVal lambdaList, List<LispVal> body) {
+	record Lowered(LispVal lambdaList, List<LispVal> body) {
 	}
 
 	/**
@@ -518,12 +518,65 @@ final class SchemeLowering {
 	 * never assigned. At the top level a {@link GlobalFunction} with no
 	 * {@code case-lambda} clauses; in a body (an internal {@code define}, a
 	 * {@code letrec} binding) the {@link Variable} the body binds it to.
-	 *
 	 * @param form the {@code define}, or a {@code letrec} binding's {@code lambda}
 	 * @param definition its parse
 	 * @param binding its binding: a tail call to it is a jump
 	 */
-	private record Member(LispCons form, Definition definition, Binding binding) {
+	/**
+	 * A parsed {@code define}.
+	 *
+	 * @param name the defined identifier
+	 * @param formals the parameters when the value is a syntactic {@code lambda}, else
+	 * {@code null}
+	 * @param body the procedure body, or the single value expression
+	 * @param caseLambda the {@code case-lambda} datum the value is, desugared into
+	 * {@code formals} and {@code body}, or {@code null}
+	 */
+	record Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body, @Nullable LispCons caseLambda) {
+
+		Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body) {
+			this(name, formals, body, null);
+		}
+
+		boolean procedure() {
+			return this.formals != null;
+		}
+
+	}
+
+	Definition definition(LispCons form) {
+		List<LispVal> parts = elements(form, form);
+		if (parts.size() < 2) {
+			throw error("malformed define", form);
+		}
+		if (parts.get(1) instanceof LispCons target) {
+			if (!(target.car() instanceof LispSymbol name)) {
+				throw error("curried define is not supported", form);
+			}
+			if (parts.size() < 3) {
+				throw error("a procedure definition needs a body", form);
+			}
+			return new Definition(name, target.cdr(), parts.subList(2, parts.size()));
+		}
+		LispSymbol name = identifier(parts.get(1), form);
+		if (parts.size() > 3) {
+			throw error("malformed define", form);
+		}
+		LispVal value = parts.size() == 3 ? parts.get(2) : LispNil.INSTANCE;
+		LispCons caseLambda = null;
+		if (value instanceof LispCons dispatch && syntaxOf(dispatch, this.global) == Core.CASE_LAMBDA) {
+			// A procedure all the same: a defun when the file defines it once.
+			caseLambda = dispatch;
+			value = caseLambda(dispatch);
+		}
+		if (value instanceof LispCons lambda && syntaxOf(lambda, this.global) == Core.LAMBDA
+				&& lambda.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons) {
+			return new Definition(name, rest.car(), elements(rest.cdr(), lambda), caseLambda);
+		}
+		return new Definition(name, null, List.of(value));
+	}
+
+	record Member(LispCons form, Definition definition, Binding binding) {
 
 		GlobalFunction function() {
 			return (GlobalFunction) this.binding;
@@ -539,13 +592,13 @@ final class SchemeLowering {
 	 * {@code defun}; in a body it is a {@code lambda} in a variable of the body and each
 	 * member a {@code lambda} calling it.
 	 */
-	private static final class Group {
+	static final class Group {
 
 		// In definition order; the first one's definition emits the group's function.
-		private final List<Member> members;
+		final List<Member> members;
 
 		// The group's function, once the first member's definition has emitted it.
-		private @Nullable LispSymbol function;
+		@Nullable LispSymbol function;
 
 		Group(List<Member> members) {
 			this.members = members;
@@ -568,49 +621,52 @@ final class SchemeLowering {
 
 	/** What a lowering attempt changes that a discarded one must put back. */
 	private record Snapshot(int counter, int closures, List<LispVal> hoisted,
-			Map<LispCons, InternalRecord> internalRecords, Set<String> internalRecordNames,
+			Map<LispCons, SchemeRecordLowering.InternalRecord> internalRecords, Set<String> internalRecordNames,
 			Map<LispCons, LispVal> caseLambdas, String enclosing) {
 	}
 
 	// The text being lowered: the file, or the buffer a session is reading now.
-	private SchemeReader reader;
+	SchemeReader reader;
 
-	private List<LispVal> datums = List.of();
+	List<LispVal> datums = List.of();
 
 	// A session lowers one buffer at a time against a global scope that outlives each of
 	// them, so nothing may depend on having seen the whole program.
-	private final boolean interactive;
+	final boolean interactive;
 
-	private final SchemeStandard standard;
+	final SchemeStandard standard;
 
-	private boolean falseBound;
+	boolean falseBound;
 
-	private final Set<LispSymbol> generated = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+	final Set<LispSymbol> generated = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
-	private final Set<String> assignedNames = new HashSet<>();
+	final Set<String> assignedNames = new HashSet<>();
 
 	// Each case-lambda datum's desugaring, so every pre-scan and the lowering see one.
-	private final Map<LispCons, LispVal> caseLambdas = new IdentityHashMap<>();
+	final Map<LispCons, LispVal> caseLambdas = new IdentityHashMap<>();
 
 	// What a file's names read before their definition hold until then.
-	private final SequencedMap<LispSymbol, LispVal> initialValues = new LinkedHashMap<>();
+	final SequencedMap<LispSymbol, LispVal> initialValues = new LinkedHashMap<>();
 
-	private final Scope global = new Scope(null);
+	final Scope global = new Scope(null);
 
 	// The user libraries this lowering and the ones it imports know.
-	private final SchemeLibraries<Binding> libraries;
+	final SchemeLibraries<Binding> libraries;
 
 	// What this lowering's top-level names start with: nothing for a program or a
 	// session, the library's private prefix for a library (SchemeNames.libraryPrefix).
-	private final String prefix;
+	final String prefix;
 
 	// The bindings imported from a user library: an importer may not assign them, and
 	// under r7rs may not redefine them either.
-	private final Set<Binding> libraryImports = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+	final Set<Binding> libraryImports = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
-	private final LispSymbol falseVariable = symbol(SchemeBuiltins.FALSE_VARIABLE);
+	// The lowered forms of a library: set by lowerLibrary.
+	List<LispVal> libraryForms = List.of();
 
-	private final LispSymbol unspecifiedVariable = symbol(SchemeBuiltins.UNSPECIFIED_VARIABLE);
+	final LispSymbol falseVariable = symbol(SchemeBuiltins.FALSE_VARIABLE);
+
+	final LispSymbol unspecifiedVariable = symbol(SchemeBuiltins.UNSPECIFIED_VARIABLE);
 
 	/**
 	 * The catch tag {@code exit} throws its code to, in canonical spelling: the template
@@ -618,37 +674,37 @@ final class SchemeLowering {
 	 */
 	static final String EXIT_TAG_NAME = "RONTOLISP::%SCHEME-EXIT-TAG";
 
-	private static final String EXIT_FUNCTION_NAME = "RONTOLISP::%SCHEME-EXIT";
+	static final String EXIT_FUNCTION_NAME = "RONTOLISP::%SCHEME-EXIT";
 
-	private int counter;
+	int counter;
 
-	private int closures;
+	int closures;
 
 	// The tail-call groups of a file, by member name (declareGroups).
-	private final Map<String, Group> groups = new HashMap<>();
+	final Map<String, Group> groups = new HashMap<>();
 
 	// Each internal define-record-type datum's hoisted type, so a body lowered twice (a
 	// loop tried as a pure loop first) defines it once and binds the same names.
-	private final Map<LispCons, InternalRecord> internalRecords = new IdentityHashMap<>();
+	final Map<LispCons, SchemeRecordLowering.InternalRecord> internalRecords = new IdentityHashMap<>();
 
 	// Every internal record type name taken so far; a session keeps them, so a type
 	// typed again in a later buffer is a new one and the old instances keep their
 	// layout.
-	private final Set<String> internalRecordNames = new HashSet<>();
+	final Set<String> internalRecordNames = new HashSet<>();
 
 	// What the top-level form being lowered hoists ahead of itself: the defstruct and
 	// modifier defuns of the internal record types it holds.
-	private final List<LispVal> hoisted = new ArrayList<>();
+	final List<LispVal> hoisted = new ArrayList<>();
 
 	// The mangled name of the top-level definition being lowered, "" for any other form:
 	// what an internal record type's name is qualified by.
-	private String enclosing = "";
+	String enclosing = "";
 
 	// Created by the first file or buffer that defines a macro; a session keeps it, and
 	// with it the macros of earlier buffers.
-	private @Nullable SchemeExpander expander;
+	@Nullable SchemeExpander expander;
 
-	private SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard,
+	SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard,
 			SchemeLibraries<Binding> libraries, String prefix) {
 		this.reader = reader;
 		this.interactive = interactive;
@@ -680,7 +736,7 @@ final class SchemeLowering {
 	static SchemeLowering ofSession(SchemeStandard standard, SchemeFiles files) {
 		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true, standard,
 				new SchemeLibraries<>(files, null), "");
-		lowering.imports(0);
+		SchemeLibraryLowering.imports(lowering, 0);
 		return lowering;
 	}
 
@@ -708,16 +764,16 @@ final class SchemeLowering {
 		this.internalRecords.clear();
 		// A library typed at a prompt is declared, not lowered: a later import lowers it.
 		List<LispVal> program = new ArrayList<>();
-		for (int index = 0; resolveTopLevelCondExpand(index); index++) {
+		for (int index = 0; SchemeLibraryLowering.resolveTopLevelCondExpand(this, index); index++) {
 			LispVal datum = this.datums.get(index);
-			if (isLibraryDefinition(datum)) {
-				declareLibrary((LispCons) datum, buffer, null);
+			if (SchemeLibraryLowering.isLibraryDefinition(datum)) {
+				SchemeLibraryLowering.declareLibrary(this, (LispCons) datum, buffer, null);
 			}
 			else {
 				program.add(datum);
 			}
 		}
-		List<LispVal> included = includes(program, null);
+		List<LispVal> included = SchemeLibraryLowering.includes(this, program, null);
 		// Before the expansion too, so a macro imported at this prompt expands here.
 		for (LispVal datum : included) {
 			sessionImport(datum);
@@ -743,7 +799,7 @@ final class SchemeLowering {
 			collectAssigned(form);
 			sessionImport(form);
 		}
-		declareGlobals(forms);
+		SchemeDefinitionLowering.declareGlobals(this, forms);
 		List<SchemeTopLevel> out = new ArrayList<>();
 		if (!this.falseBound) {
 			out.add(new SchemeTopLevel(List.of(falseBinding()), false));
@@ -761,9 +817,9 @@ final class SchemeLowering {
 			List<LispVal> lowered = new ArrayList<>();
 			boolean echoes = false;
 			for (LispVal form : group) {
-				echoes = topLevel(form, lowered);
+				echoes = SchemeDefinitionLowering.topLevel(this, form, lowered);
 			}
-			out.add(new SchemeTopLevel(List.copyOf(exitGuardEntry(lowered)), echoes));
+			out.add(new SchemeTopLevel(List.copyOf(SchemeExitGuardLowering.exitGuardEntry(this, lowered)), echoes));
 		}
 		// Only now: a buffer that failed to lower evaluated nothing, the binding
 		// included.
@@ -773,10 +829,10 @@ final class SchemeLowering {
 
 	// At a prompt every import is a leading one, and it only ever ADDS names; importing
 	// the same set again changes nothing.
-	private void sessionImport(LispVal form) {
+	void sessionImport(LispVal form) {
 		if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
 			for (LispVal set : elements(cons.cdr(), cons)) {
-				importSet(set, cons)
+				SchemeLibraryLowering.importSet(this, set, cons)
 					.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
 			}
 		}
@@ -789,14 +845,15 @@ final class SchemeLowering {
 	List<LispVal> lower() {
 		this.datums = new ArrayList<>(this.reader.readAll());
 		List<LispVal> forms = new ArrayList<>();
-		int start = imports(declareLibraries());
-		for (LispVal datum : expanded(includes(this.datums.subList(start, this.datums.size()), this.reader.file()))) {
+		int start = SchemeLibraryLowering.imports(this, SchemeLibraryLowering.declareLibraries(this));
+		for (LispVal datum : expanded(SchemeLibraryLowering.includes(this,
+				this.datums.subList(start, this.datums.size()), this.reader.file()))) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
 			collectAssigned(form);
 		}
-		declareGlobals(forms);
+		SchemeDefinitionLowering.declareGlobals(this, forms);
 		List<LispVal> out = new ArrayList<>();
 		// #f is a DISTINCT non-NIL value, so '() stays NIL and every list primitive keeps
 		// working. It lives in a variable because a quoted symbol costs a lookup per
@@ -817,11 +874,11 @@ final class SchemeLowering {
 		// after them runs inside the exit catch when the file can reach it.
 		int bodyFrom = out.size();
 		for (LispVal form : forms) {
-			topLevel(form, out);
+			SchemeDefinitionLowering.topLevel(this, form, out);
 		}
-		if (mayThrowExit(forms) || this.foreignExitOrEval) {
+		if (SchemeExitGuardLowering.mayThrowExit(forms) || this.foreignExitOrEval) {
 			for (int i = bodyFrom; i < out.size(); i++) {
-				out.set(i, exitGuard(out.get(i)));
+				out.set(i, SchemeExitGuardLowering.exitGuard(this, out.get(i)));
 			}
 		}
 		return out;
@@ -829,7 +886,7 @@ final class SchemeLowering {
 
 	// The datums with every macro expanded, when the program defines any: a program that
 	// spells no syntax definition is lowered exactly as before.
-	private List<LispVal> expanded(List<LispVal> datums) {
+	List<LispVal> expanded(List<LispVal> datums) {
 		if (this.expander == null
 				&& !SchemeExpander.needed(datums, this::globalKeyword, name -> importedMacro(name) != null)) {
 			return datums;
@@ -870,11 +927,11 @@ final class SchemeLowering {
 	// The identifiers a macro exported by another library emits for that library's
 	// bindings (SchemeExpander.Host.foreign), one per binding; and whether one of them
 	// is exit or eval, which mayThrowExit cannot see by spelling.
-	private final Map<Binding, LispSymbol> foreignSymbols = new IdentityHashMap<>();
+	final Map<Binding, LispSymbol> foreignSymbols = new IdentityHashMap<>();
 
-	private final Set<LispSymbol> foreignIdentifiers = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+	final Set<LispSymbol> foreignIdentifiers = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
-	private boolean foreignExitOrEval;
+	boolean foreignExitOrEval;
 
 	private final class ExpanderHost implements SchemeExpander.Host {
 
@@ -915,7 +972,7 @@ final class SchemeLowering {
 
 		@Override
 		public int condExpandClause(LispCons form) {
-			return SchemeFeatures.clause(form, SchemeLowering.this.featureHost);
+			return SchemeFeatures.clause(form, SchemeLibraryLowering.featureHost(SchemeLowering.this));
 		}
 
 		@Override
@@ -944,817 +1001,14 @@ final class SchemeLowering {
 
 	}
 
-	private LispVal falseBinding() {
+	LispVal falseBinding() {
 		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")), this.unspecifiedVariable,
 				list(symbol("QUOTE"), symbol(SchemeNames.UNSPECIFIED_NAME)));
 	}
 
-	// Whether any top-level datum can reach the throwing exit: it spells exit -- as a
-	// call, a first-class value or quoted data an eval may take apart -- or a string
-	// one may read it out of (the same line the run-time procedure table draws), or it
-	// spells eval, whose run-time data may name exit. Anything else cannot throw to
-	// the tag, so it is emitted exactly as before and a program that never quits
-	// compiles to the same bytes.
-	private static boolean mayThrowExit(List<LispVal> forms) {
-		for (LispVal form : forms) {
-			if (spellsExitOrEval(form)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean spellsExitOrEval(LispVal form) {
-		while (form instanceof LispCons cons) {
-			if (spellsExitOrEval(cons.car())) {
-				return true;
-			}
-			form = cons.cdr();
-		}
-		return switch (form) {
-			case LispSymbol symbol -> symbol.name().equals("exit") || symbol.name().equals("eval");
-			case LispString string -> string.value().contains("exit");
-			case LispArray array -> {
-				for (LispVal element : array.data()) {
-					if (spellsExitOrEval(element)) {
-						yield true;
-					}
-				}
-				yield false;
-			}
-			case null, default -> false;
-		};
-	}
-
-	private LispVal quotedExitTag() {
-		return list(symbol("QUOTE"), symbol(EXIT_TAG_NAME));
-	}
-
-	// Wraps one file top-level form -- a STATEMENT nobody reads the value of -- so an
-	// exit inside it unwinds through the outstanding dynamic-wind afters to this
-	// catch, which ends the process through %scheme-exit with the thrown code. A defun
-	// or defstruct stays bare: the backends only hoist one that is a direct child of
-	// the program, and defining never throws -- a body only runs inside some value
-	// form's extent. The fresh cell tells a throw from normal completion, whatever the
-	// code is: (exit '()) throws NIL, which a literal marker could not tell apart.
-	private LispVal exitGuard(LispVal form) {
-		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()))) {
-			return form;
-		}
-		if (isTopLevelLoadCall(form)) {
-			// A bare top-level (load "literal"): the compile path's LoadInliner only
-			// inlines one it sees at the top level, and the guard's LET/CATCH shape
-			// would hide it -- a path string merely SPELLING exit or eval would turn
-			// every guard on and silence the inline. The forms that run under it carry
-			// their own guards on both paths that execute them (the inlined file's
-			// lowering here, the interpreter's per-file lowering at run time), so the
-			// load call itself needs no guard.
-			return form;
-		}
-		LispSymbol done = fresh("EXIT-DONE");
-		LispSymbol code = fresh("EXIT-CODE");
-		LispVal caught = list(symbol("CATCH"), quotedExitTag(), list(symbol("PROGN"), form, done));
-		LispVal guarded = list(symbol("LET"), listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)))),
-				list(symbol("LET"), listOf(List.of(list(code, caught))), list(symbol("IF"),
-						list(symbol("EQ"), code, done), LispNil.INSTANCE, list(symbol(EXIT_FUNCTION_NAME), code))));
-		return form instanceof LispCons lowered ? inherit(lowered, guarded) : guarded;
-	}
-
-	// Wraps one session entry the same way. A session has no whole file to wrap and no
-	// artifact to keep small, so every entry is wrapped unconditionally -- including a
-	// definition, whose value may throw -- while a defun or defstruct stays bare like
-	// in a file. Every form but the last takes the statement guard (the session
-	// discards their values); the last answers the entry's value, which is what the
-	// prompt echoes. A last form that is itself a syntactic multiple-value producer --
-	// in lowered code only (VALUES ...) can stand there alone -- keeps its shape with
-	// its ARGUMENTS guarded instead: the prompt echoes through evalValues, which takes
-	// the multi-value path only for that shape, so (values) echoes nothing and
-	// (values 1 'a) echoes both.
-	private List<LispVal> exitGuardEntry(List<LispVal> forms) {
-		if (forms.isEmpty()) {
-			return forms;
-		}
-		List<LispVal> out = new ArrayList<>();
-		for (int i = 0; i < forms.size() - 1; i++) {
-			out.add(exitGuard(forms.get(i)));
-		}
-		LispVal last = forms.get(forms.size() - 1);
-		if (last instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()))) {
-			out.add(last);
-		}
-		else if (isMvProducer(last)) {
-			out.add(guardProducerArgs((LispCons) last));
-		}
-		else {
-			out.add(exitGuardValue(last));
-		}
-		return List.copyOf(out);
-	}
-
-	// The session's value guard: like the file's, but answers the form's VALUES -- all
-	// of them, held as a list while the catch and the exit test run, because a value
-	// that went through a variable and an (eq ...) is one value in Common Lisp
-	// (.kb/multiple-values.md): (values 1 2) from a procedure echoes both lines, a
-	// (values) echoes none.
-	/** Whether the form is the lowered shape of a {@code load} procedure call. */
-	private static boolean isTopLevelLoadCall(LispVal form) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "LOAD".equals(head.name());
-	}
-
-	private LispVal exitGuardValue(LispVal form) {
-		LispSymbol done = fresh("EXIT-DONE");
-		LispSymbol values = fresh("EXIT-VALUES");
-		LispSymbol code = fresh("EXIT-CODE");
-		LispVal caught = list(symbol("CATCH"), quotedExitTag(),
-				list(symbol("PROGN"), list(symbol("SETQ"), values, list(symbol("MULTIPLE-VALUE-LIST"), form)), done));
-		LispVal guarded = list(symbol("LET"),
-				listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)), list(values, LispNil.INSTANCE))),
-				list(symbol("LET"), listOf(List.of(list(code, caught))),
-						list(symbol("IF"), list(symbol("EQ"), code, done), list(symbol("VALUES-LIST"), values),
-								list(symbol(EXIT_FUNCTION_NAME), code))));
-		return form instanceof LispCons lowered ? inherit(lowered, guarded) : guarded;
-	}
-
-	// Guards the arguments of a syntactic multiple-value producer in place, keeping
-	// the producer's shape (and a zero-argument (VALUES) bare). Mirrors
-	// LispMacroExpander's producer recognition, which the scheme package may not
-	// import; in lowered code a producer head is always the real operator -- a user
-	// binding of values lowers to a distinct lowercase symbol.
-	private LispVal guardProducerArgs(LispCons form) {
-		if (!form.isProperList()) {
-			return exitGuardValue(form);
-		}
-		List<LispVal> parts = form.toList();
-		List<LispVal> guarded = new ArrayList<>();
-		guarded.add(parts.get(0));
-		for (int i = 1; i < parts.size(); i++) {
-			guarded.add(exitGuardValue(parts.get(i)));
-		}
-		return inherit(form, listOf(guarded));
-	}
-
-	private static boolean isMvProducer(LispVal form) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
-			return false;
-		}
-		int size = cons.toList().size();
-		return switch (op.name()) {
-			case "VALUES" -> true;
-			case "FLOOR", "CEILING", "ROUND", "TRUNCATE", "FFLOOR", "FCEILING", "FROUND", "FTRUNCATE" ->
-				size == 2 || size == 3;
-			case "GETHASH" -> size == 3 || size == 4;
-			case "ARRAY-DISPLACEMENT" -> size == 2;
-			case "SUBTYPEP" -> size == 3;
-			case "FIND-SYMBOL", "INTERN" -> size == 2 || size == 3;
-			case "READ-FROM-STRING" -> size == 2;
-			default -> false;
-		};
-	}
-
-	// ------------------------------------------------------------------ imports
-
-	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
-	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact",
-			"complex", "cxr", "lazy", "case-lambda", "process-context", "eval", "repl", "load", "file");
-
-	/**
-	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether
-	 * {@code (scheme name)} is one of {@link #IMPORTABLE_LIBRARIES}, for what a run-time
-	 * {@code (environment '(scheme base))} checks its import sets against. Generated so
-	 * the list is spelled once.
-	 * @return the definition, in the library's canonical shape
-	 */
-	static LispVal libraryPredicateForm() {
-		List<LispVal> names = new ArrayList<>();
-		for (String library : IMPORTABLE_LIBRARIES) {
-			names.add(symbol(library));
-		}
-		LispSymbol name = symbol("NAME");
-		return list(symbol("DEFUN"), symbol("RONTOLISP::%SCHEME-LIBRARY-P"), list(name),
-				list(symbol("IF"), list(symbol("MEMBER"), name, list(symbol("QUOTE"), listOf(names))),
-						LispTrue.INSTANCE, LispNil.INSTANCE));
-	}
-
-	/**
-	 * {@code (defun rontolisp::%scheme-eval-extension-keyword-p (name) ...)}: whether
-	 * {@code name} is a keyword {@code eval} knows beyond R7RS -- the {@code sicp} syntax
-	 * ({@code cons-stream}), none under {@link SchemeStandard#R7RS}. Generated from the
-	 * same table the lowering reads, so the list is spelled once.
-	 * @param standard the standard the program is read against
-	 * @return the definition, in the library's canonical shape
-	 */
-	static LispVal extensionKeywordForm(SchemeStandard standard) {
-		List<LispVal> names = new ArrayList<>();
-		if (standard == SchemeStandard.RONTOLISP) {
-			for (String keyword : SICP_SYNTAX.keySet()) {
-				names.add(symbol(SchemeNames.mangle(keyword)));
-			}
-		}
-		LispSymbol name = symbol("NAME");
-		return list(symbol("DEFUN"), symbol("RONTOLISP::%SCHEME-EVAL-EXTENSION-KEYWORD-P"), list(name),
-				list(symbol("IF"), list(symbol("MEMBER"), name, list(symbol("QUOTE"), listOf(names))),
-						LispTrue.INSTANCE, LispNil.INSTANCE));
-	}
-
-	// Leading (import ...) forms -- after the leading define-library forms, at `start` --
-	// pick what the global scope holds; a program with none sees everything, like a REPL.
-	private int imports(int start) {
-		int index = start;
-		Map<String, Binding> imported = new LinkedHashMap<>();
-		while (resolveTopLevelCondExpand(index) && this.datums.get(index) instanceof LispCons form
-				&& form.car() instanceof LispSymbol head && head.name().equals("import")) {
-			for (LispVal set : elements(form.cdr(), form)) {
-				imported.putAll(importSet(set, form));
-			}
-			index++;
-		}
-		if (index == start) {
-			// R7RS 5.1: a program begins with an import declaration. A session has no
-			// program to begin, and starts with every library instead; a file of
-			// libraries alone has no program.
-			if (this.standard == SchemeStandard.R7RS && !this.interactive
-					&& (start == 0 || start < this.datums.size())) {
-				SourceLocation first = start < this.datums.size() ? this.reader.locate(this.datums.get(start)) : null;
-				throw new LispReadException("an R7RS program begins with an import declaration",
-						first != null ? first : this.reader.locateFirstDatum());
-			}
-			imported.putAll(everything());
-		}
-		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
-			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
-		}
-		return index;
-	}
-
-	// What a program, a library or a session with no import declaration sees.
-	private Map<String, Binding> everything() {
-		Map<String, Binding> imported = new LinkedHashMap<>();
-		for (String library : IMPORTABLE_LIBRARIES) {
-			imported.putAll(library(library));
-		}
-		// Not R7RS exports, so not reachable by name through (import ...): a REPL, and a
-		// file with no import at all, sees them anyway, the way an unqualified SICP
-		// sample -- written against an implementation that already had them -- expects.
-		// r5rs is the same shape: (scheme r5rs) would promise all of R5RS. Strict R7RS
-		// sees neither.
-		if (this.standard == SchemeStandard.RONTOLISP) {
-			imported.putAll(library("sicp"));
-			imported.putAll(library("r5rs"));
-		}
-		return imported;
-	}
-
-	private Map<String, Binding> importSet(LispVal set, LispCons form) {
-		List<LispVal> parts = elements(set, form);
-		if (parts.isEmpty() || !(parts.get(0) instanceof LispSymbol head)) {
-			throw error("malformed import set", form);
-		}
-		boolean modifier = parts.size() >= 2 && parts.get(1) instanceof LispCons;
-		if (!modifier) {
-			if (parts.size() == 2 && head.name().equals("scheme") && parts.get(1) instanceof LispSymbol name
-					&& IMPORTABLE_LIBRARIES.contains(name.name())) {
-				return library(name.name());
-			}
-			if (!head.name().equals("scheme")) {
-				return userLibrary(libraryName(set, form), form);
-			}
-			List<String> names = IMPORTABLE_LIBRARIES.stream().map(library -> "(scheme " + library + ")").toList();
-			throw error("library " + set.print() + " is not available: this experimental front end has "
-					+ String.join(", ", names.subList(0, names.size() - 1)) + " and " + names.getLast() + " only",
-					form);
-		}
-		Map<String, Binding> base = importSet(parts.get(1), form);
-		Map<String, Binding> result = new LinkedHashMap<>();
-		List<LispVal> arguments = parts.subList(2, parts.size());
-		switch (head.name()) {
-			case "only" -> {
-				for (LispVal argument : arguments) {
-					String name = identifier(argument, form).name();
-					result.put(name, imported(base, name, form));
-				}
-			}
-			case "except" -> {
-				result.putAll(base);
-				for (LispVal argument : arguments) {
-					String name = identifier(argument, form).name();
-					imported(base, name, form);
-					result.remove(name);
-				}
-			}
-			case "prefix" -> {
-				String prefix = identifier(arguments.size() == 1 ? arguments.get(0) : LispNil.INSTANCE, form).name();
-				base.forEach((name, binding) -> result.put(prefix + name, binding));
-			}
-			case "rename" -> {
-				result.putAll(base);
-				for (LispVal argument : arguments) {
-					List<LispVal> pair = elements(argument, form);
-					if (pair.size() != 2) {
-						throw error("malformed rename", form);
-					}
-					String from = identifier(pair.get(0), form).name();
-					Binding binding = imported(base, from, form);
-					result.remove(from);
-					result.put(identifier(pair.get(1), form).name(), binding);
-				}
-			}
-			default -> throw error("unknown import set: " + head.name(), form);
-		}
-		return result;
-	}
-
-	private Binding imported(Map<String, Binding> base, String name, LispCons form) {
-		Binding binding = base.get(name);
-		if (binding == null) {
-			throw error("the library does not export " + name, form);
-		}
-		return binding;
-	}
-
-	private Map<String, Binding> library(String library) {
-		Map<String, Binding> exports = new LinkedHashMap<>();
-		if (library.equals("base")) {
-			SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
-		}
-		if (library.equals("lazy")) {
-			LAZY_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
-		}
-		if (library.equals("case-lambda")) {
-			CASE_LAMBDA_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
-		}
-		if (library.equals("sicp")) {
-			SICP_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
-			SchemeBuiltins.constants().forEach((name, form) -> exports.put(name, new Constant(form)));
-		}
-		for (SchemeBuiltins.Entry entry : SchemeBuiltins.entries(this.standard).values()) {
-			if (entry.library().equals(library)) {
-				exports.put(entry.name(), new Builtin(entry));
-			}
-		}
-		return exports;
-	}
-
-	// ------------------------------------------------------------------ libraries
-
-	private static boolean isLibraryDefinition(LispVal datum) {
-		return datum instanceof LispCons form && form.car() instanceof LispSymbol head
-				&& head.name().equals("define-library");
-	}
-
-	// The leading define-library forms of a file: declared here, lowered when imported.
-	private int declareLibraries() {
-		int index = 0;
-		while (resolveTopLevelCondExpand(index) && isLibraryDefinition(this.datums.get(index))) {
-			declareLibrary((LispCons) this.datums.get(index), this.reader, this.reader.file());
-			index++;
-		}
-		return index;
-	}
-
-	// A cond-expand standing at the top level at `index` is replaced by the datums of the
-	// clause it takes, until the datum there is none: what the leading scans (the
-	// define-library, then the import declarations) run over, so a clause may hold
-	// either, and a (library ...) requirement sees every library declared before it.
-	// Spelled, not resolved: there is no scope before the imports, as for `import`.
-	// Answers whether a datum stands at `index`.
-	private boolean resolveTopLevelCondExpand(int index) {
-		while (index < this.datums.size() && this.datums.get(index) instanceof LispCons form
-				&& form.car() instanceof LispSymbol head && head.name().equals("cond-expand")) {
-			List<LispVal> taken = condExpandBody(form);
-			this.datums.remove(index);
-			this.datums.addAll(index, taken);
-		}
-		return index < this.datums.size();
-	}
-
-	// The datums of the clause a (cond-expand clause...) takes.
-	private List<LispVal> condExpandBody(LispCons form) {
-		List<LispVal> clauses = elements(form.cdr(), form);
-		int taken = SchemeFeatures.clause(form, this.featureHost);
-		return SchemeFeatures.body(clauses.get(taken), form, this.featureHost);
-	}
-
-	// (cond-expand clause...) as the (begin datums...) of the clause it takes.
-	private LispCons condExpanded(LispCons form) {
-		return positioned(form, new LispCons(CORE_BEGIN, listOf(condExpandBody(form))));
-	}
-
-	private final SchemeFeatures.Host featureHost = new SchemeFeatures.Host() {
-
-		@Override
-		public boolean libraryAvailable(LispVal name, LispCons form) {
-			return SchemeLowering.this.libraryAvailable(libraryName(name, form));
-		}
-
-		@Override
-		public LispReadException error(String message, LispCons form) {
-			return SchemeLowering.this.error(message, form);
-		}
-
-	};
-
-	// (library name) of cond-expand: a standard library this front end has, or a user
-	// library declared already or found as a file -- whether an import of it would find
-	// it, without lowering it.
-	private boolean libraryAvailable(List<String> name) {
-		if (name.getFirst().equals("scheme")) {
-			return name.size() == 2 && IMPORTABLE_LIBRARIES.contains(name.get(1));
-		}
-		if (this.libraries.declared(name) != null) {
-			return true;
-		}
-		SchemeFiles.Source source = libraryFileSource(name);
-		if (source != null) {
-			declareLibraryFile(source);
-		}
-		return this.libraries.declared(name) != null;
-	}
-
-	private void declareLibrary(LispCons form, SchemeReader reader, @Nullable String file) {
-		List<String> name = libraryName(second(form), form);
-		if (name.getFirst().equals("scheme")) {
-			throw error("library names beginning with scheme are reserved: " + printed(name), form);
-		}
-		if (!this.libraries.declare(name, new SchemeLibraries.Declaration(form, reader, file))) {
-			throw error("library " + printed(name) + " is defined twice", form);
-		}
-	}
-
-	// A library name, R7RS 5.6.1: identifiers and exact non-negative integers.
-	private List<String> libraryName(LispVal datum, LispCons form) {
-		List<String> name = new ArrayList<>();
-		LispVal rest = datum;
-		while (rest instanceof LispCons cell) {
-			switch (cell.car()) {
-				case LispSymbol part when part != SchemeReader.TRUE && part != SchemeReader.FALSE ->
-					name.add(part.name());
-				case LispInteger integer when integer.value() >= 0 -> name.add(Long.toString(integer.value()));
-				default -> throw error("malformed library name: " + SchemeExpander.written(datum), form);
-			}
-			rest = cell.cdr();
-		}
-		if (name.isEmpty() || rest != LispNil.INSTANCE) {
-			throw error("malformed library name: " + SchemeExpander.written(datum), form);
-		}
-		return name;
-	}
-
-	private static String printed(List<String> name) {
-		return "(" + String.join(" ", name) + ")";
-	}
-
-	// An import of a user library: lowered the first time, its exports every time.
-	private Map<String, Binding> userLibrary(List<String> name, LispCons form) {
-		Map<String, Binding> exports = this.libraries.exports(name);
-		if (exports == null) {
-			exports = instantiate(name, form);
-		}
-		for (Binding binding : exports.values()) {
-			if (binding instanceof Variable || binding instanceof GlobalFunction || binding instanceof GlobalPredicate
-					|| binding instanceof ImportedSyntax) {
-				this.libraryImports.add(binding);
-			}
-		}
-		return exports;
-	}
-
-	private Map<String, Binding> instantiate(List<String> name, LispCons form) {
-		SchemeLibraries.Declaration declaration = this.libraries.declared(name);
-		if (declaration == null) {
-			declaration = libraryFile(name, form);
-		}
-		List<List<String>> cycle = this.libraries.enter(name);
-		if (cycle != null) {
-			throw error("library import cycle: "
-					+ String.join(" -> ", cycle.stream().map(SchemeLowering::printed).toList()), form);
-		}
-		boolean done = false;
-		try {
-			SchemeLowering library = new SchemeLowering(declaration.reader(), false, this.standard, this.libraries,
-					SchemeNames.libraryPrefix(name));
-			Map<String, Binding> exports = library.lowerLibrary(declaration);
-			this.libraries.leave(name, exports, library.libraryForms);
-			done = true;
-			return exports;
-		}
-		finally {
-			if (!done) {
-				this.libraries.abandon(name);
-			}
-		}
-	}
-
-	// (a b) is a/b.sld (else a/b.scm) beside the file the lowering started from, the way
-	// Gauche finds it on its load path; every define-library in that file is declared.
-	private SchemeLibraries.Declaration libraryFile(List<String> name, LispCons form) {
-		SchemeFiles.Source source = libraryFileSource(name);
-		if (source == null) {
-			throw error("library " + printed(name) + " is not available: no define-library of it precedes the"
-					+ " program and there is no " + String.join("/", name) + ".sld", form);
-		}
-		declareLibraryFile(source);
-		SchemeLibraries.Declaration declaration = this.libraries.declared(name);
-		if (declaration == null) {
-			throw error(source.path() + " does not define library " + printed(name), form);
-		}
-		return declaration;
-	}
-
-	// (a b) is a/b.sld, else a/b.scm, or null.
-	private SchemeFiles.@Nullable Source libraryFileSource(List<String> name) {
-		String stem = String.join("/", name);
-		for (String extension : List.of(".sld", ".scm")) {
-			SchemeFiles.Source source = this.libraries.files().find(this.libraries.root(), stem + extension);
-			if (source != null) {
-				return source;
-			}
-		}
-		return null;
-	}
-
-	private void declareLibraryFile(SchemeFiles.Source source) {
-		SchemeReader reader = new SchemeReader(source.text(), source.path());
-		for (LispVal datum : reader.readAll()) {
-			if (isLibraryDefinition(datum)) {
-				LispCons definition = (LispCons) datum;
-				this.libraries.declare(libraryName(second(definition), definition),
-						new SchemeLibraries.Declaration(definition, reader, source.path()));
-			}
-		}
-	}
-
-	// The lowered forms of a library: set by lowerLibrary.
-	private List<LispVal> libraryForms = List.of();
-
-	/**
-	 * Lowers a library's body as a whole file of its own: its imports are its scope, its
-	 * top-level names are private ({@link SchemeNames#libraryPrefix}), and what it
-	 * exports reaches an importer as the bindings themselves -- a {@code defun} stays a
-	 * direct call there.
-	 */
-	private Map<String, Binding> lowerLibrary(SchemeLibraries.Declaration declaration) {
-		List<LispCons> importForms = new ArrayList<>();
-		List<LispCons> exportForms = new ArrayList<>();
-		List<Chunk> chunks = new ArrayList<>();
-		LispCons form = declaration.form();
-		List<LispVal> parts = elements(form, form);
-		libraryDeclarations(parts.subList(2, parts.size()), declaration.file(), form,
-				new Declarations(importForms, exportForms, chunks), new java.util.ArrayDeque<>());
-		Map<String, Binding> imported = new LinkedHashMap<>();
-		for (LispCons importForm : importForms) {
-			for (LispVal set : elements(importForm.cdr(), importForm)) {
-				imported.putAll(importSet(set, importForm));
-			}
-		}
-		if (importForms.isEmpty()) {
-			if (this.standard == SchemeStandard.R7RS && !chunks.isEmpty()) {
-				throw error("a library that imports nothing binds nothing, not even define:"
-						+ " add (import (scheme base))", form);
-			}
-			imported.putAll(everything());
-		}
-		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
-			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
-		}
-		List<LispVal> body = new ArrayList<>();
-		for (Chunk chunk : chunks) {
-			body.addAll(includes(chunk.datums(), chunk.file()));
-		}
-		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : expanded(body)) {
-			spliceBegins(datum, forms);
-		}
-		for (LispVal datum : forms) {
-			collectAssigned(datum);
-		}
-		declareGlobals(forms);
-		List<LispVal> out = new ArrayList<>();
-		for (LispVal datum : forms) {
-			topLevel(datum, out);
-		}
-		if (mayThrowExit(forms) || this.foreignExitOrEval) {
-			out.replaceAll(this::exitGuard);
-		}
-		this.libraryForms = instantiationGuarded(out);
-		return exports(exportForms);
-	}
-
-	/**
-	 * Body datums and the file they were read from, what an {@code include} in them is
-	 * relative to.
-	 *
-	 * @param datums the datums
-	 * @param file the file, or {@code null} for a session buffer
-	 */
-	private record Chunk(List<LispVal> datums, @Nullable String file) {
-	}
-
-	/**
-	 * What a library's declarations collect, in order.
-	 *
-	 * @param imports the {@code import} declarations
-	 * @param exports the {@code export} declarations
-	 * @param body the {@code begin} and {@code include} bodies
-	 */
-	private record Declarations(List<LispCons> imports, List<LispCons> exports, List<Chunk> body) {
-	}
-
-	private void libraryDeclarations(List<LispVal> declarations, @Nullable String file, LispCons library,
-			Declarations out, java.util.Deque<String> reading) {
-		for (LispVal datum : declarations) {
-			if (!(datum instanceof LispCons declaration) || !(declaration.car() instanceof LispSymbol head)) {
-				throw error("malformed library declaration: " + SchemeExpander.written(datum), library);
-			}
-			switch (head.name()) {
-				case "export" -> out.exports().add(declaration);
-				case "import" -> out.imports().add(declaration);
-				case "begin" -> out.body().add(new Chunk(elements(declaration.cdr(), declaration), file));
-				case "include", "include-ci" -> {
-					for (Included included : readIncluded(declaration, file, head.name().equals("include-ci"),
-							reading)) {
-						out.body().add(new Chunk(included.datums(), included.file()));
-					}
-				}
-				case "include-library-declarations" -> {
-					for (Included included : readIncluded(declaration, file, false, reading)) {
-						reading.push(included.file());
-						libraryDeclarations(included.datums(), included.file(), library, out, reading);
-						reading.pop();
-					}
-				}
-				case "cond-expand" -> libraryDeclarations(condExpandBody(declaration), file, library, out, reading);
-				default -> throw error("unknown library declaration: " + head.name(), declaration);
-			}
-		}
-	}
-
-	// The exports: (export id (rename internal external) ...), each resolved in the
-	// library's own scope after its body is lowered.
-	private Map<String, Binding> exports(List<LispCons> exportForms) {
-		Map<String, Binding> exports = new LinkedHashMap<>();
-		for (LispCons exportForm : exportForms) {
-			for (LispVal spec : elements(exportForm.cdr(), exportForm)) {
-				LispSymbol internal;
-				LispSymbol external;
-				if (spec instanceof LispCons rename && rename.car() instanceof LispSymbol head
-						&& head.name().equals("rename")) {
-					List<LispVal> pair = elements(rename.cdr(), exportForm);
-					if (pair.size() != 2) {
-						throw error("malformed export rename: " + SchemeExpander.written(spec), exportForm);
-					}
-					internal = identifier(pair.get(0), exportForm);
-					external = identifier(pair.get(1), exportForm);
-				}
-				else {
-					internal = identifier(spec, exportForm);
-					external = internal;
-				}
-				// A syntax definition shadows an import of the same name, as the expander
-				// resolves it.
-				Object macro = this.expander != null ? this.expander.exportedMacro(internal.name()) : null;
-				Binding binding = macro != null ? new ImportedSyntax(macro, internal.name())
-						: this.global.find(name(internal));
-				if (binding == null) {
-					throw error("the library exports " + internal.name() + ", which it neither defines nor imports",
-							exportForm);
-				}
-				if (exports.put(external.name(), binding) != null) {
-					throw error("the library exports " + external.name() + " twice", exportForm);
-				}
-			}
-		}
-		return exports;
-	}
-
-	// A library runs once per program, however many separately lowered files import it
-	// (R7RS 5.6.1): its definitions are idempotent and stay top-level forms (the
-	// backends hoist a defun or defstruct only as a direct child of the program), its
-	// statements run behind a flag the first instantiation sets.
-	private List<LispVal> instantiationGuarded(List<LispVal> forms) {
-		List<LispVal> definitions = new ArrayList<>();
-		List<LispVal> statements = new ArrayList<>();
-		if (!this.initialValues.isEmpty()) {
-			List<LispVal> assignment = new ArrayList<>(List.of(symbol("SETQ")));
-			this.initialValues.forEach((variable, value) -> {
-				assignment.add(variable);
-				assignment.add(value);
-			});
-			statements.add(listOf(assignment));
-		}
-		for (LispVal form : forms) {
-			boolean definition = form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-					&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()));
-			(definition ? definitions : statements).add(form);
-		}
-		if (statements.isEmpty()) {
-			return List.copyOf(definitions);
-		}
-		LispSymbol flag = symbol(this.prefix + "%SCM-INSTANTIATED");
-		List<LispVal> guarded = new ArrayList<>();
-		guarded.add(list(symbol("DEFVAR"), flag, LispNil.INSTANCE));
-		guarded.addAll(definitions);
-		List<LispVal> body = new ArrayList<>(List.of(symbol("PROGN"), list(symbol("SETQ"), flag, LispTrue.INSTANCE)));
-		body.addAll(statements);
-		guarded.add(list(symbol("IF"), flag, LispNil.INSTANCE, listOf(body)));
-		return List.copyOf(guarded);
-	}
-
-	/**
-	 * A file an {@code include} read.
-	 *
-	 * @param datums the file's datums
-	 * @param file the resolved path
-	 */
-	private record Included(List<LispVal> datums, String file) {
-	}
-
-	private List<Included> readIncluded(LispCons form, @Nullable String from, boolean foldCase,
-			java.util.Deque<String> reading) {
-		List<LispVal> names = elements(form.cdr(), form);
-		if (names.isEmpty()) {
-			throw error("include needs a file name", form);
-		}
-		List<Included> files = new ArrayList<>();
-		for (LispVal name : names) {
-			if (!(name instanceof LispString path)) {
-				throw error("include takes file names as strings, got " + SchemeExpander.written(name), form);
-			}
-			SchemeFiles.Source source = this.libraries.files().find(from, path.value());
-			if (source == null) {
-				throw error("include: cannot read " + path.value(), form);
-			}
-			if (reading.contains(source.path())) {
-				throw error("include: " + path.value() + " includes itself", form);
-			}
-			files.add(new Included(this.reader.other(source.text(), source.path(), foldCase).readAll(), source.path()));
-		}
-		return files;
-	}
-
-	// Splices every (include "file" ...) the datums spell as a (begin datums...) of the
-	// files' contents, and every (cond-expand clause...) as a (begin datums...) of the
-	// clause it takes, recursively, BEFORE macros are expanded -- so an included or
-	// feature-dependent definition or syntax definition is seen by every pre-scan. Quoted
-	// data is left alone, and so is a cond-expand in a syntax-rules template: what the
-	// expander does with it (SchemeExpander). Datums that spell neither are returned as
-	// they are, the same objects.
-	private List<LispVal> includes(List<LispVal> datums, @Nullable String file) {
-		List<LispVal> out = new ArrayList<>(datums.size());
-		boolean changed = false;
-		for (LispVal datum : datums) {
-			LispVal resolved = included(datum, file, new java.util.ArrayDeque<>(), true);
-			changed |= resolved != datum;
-			out.add(resolved);
-		}
-		return changed ? out : datums;
-	}
-
-	private LispVal included(LispVal datum, @Nullable String file, java.util.Deque<String> reading, boolean features) {
-		if (!(datum instanceof LispCons form)) {
-			return datum;
-		}
-		Core core = syntaxOf(form, this.global);
-		if (core == Core.QUOTE || core == Core.QUASIQUOTE) {
-			return datum;
-		}
-		if (core == Core.COND_EXPAND && features) {
-			return included(condExpanded(form), file, reading, true);
-		}
-		if (core == Core.INCLUDE || core == Core.INCLUDE_CI) {
-			List<LispVal> spliced = new ArrayList<>();
-			for (Included included : readIncluded(form, file, core == Core.INCLUDE_CI, reading)) {
-				reading.push(included.file());
-				for (LispVal inner : included.datums()) {
-					spliced.add(included(inner, included.file(), reading, features));
-				}
-				reading.pop();
-			}
-			return positioned(form, new LispCons(CORE_BEGIN, listOf(spliced)));
-		}
-		List<LispVal> elements = new ArrayList<>();
-		boolean changed = false;
-		LispVal rest = form;
-		while (rest instanceof LispCons cell) {
-			LispVal element = included(cell.car(), file, reading, features && core != Core.SYNTAX_RULES);
-			changed |= element != cell.car();
-			elements.add(element);
-			rest = cell.cdr();
-		}
-		if (!changed) {
-			return datum;
-		}
-		LispVal rebuilt = rest;
-		for (int i = elements.size() - 1; i >= 0; i--) {
-			rebuilt = new LispCons(elements.get(i), rebuilt);
-		}
-		return positioned(form, (LispCons) rebuilt);
-	}
-
 	// ------------------------------------------------------------------ top level
 
-	private void spliceBegins(LispVal datum, List<LispVal> out) {
+	void spliceBegins(LispVal datum, List<LispVal> out) {
 		if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.BEGIN) {
 			for (LispVal inner : elements(form.cdr(), form)) {
 				spliceBegins(inner, out);
@@ -1767,7 +1021,7 @@ final class SchemeLowering {
 
 	// Every (set! name ...) anywhere, by name and blind to scope: over-approximating is
 	// safe, it only costs the direct call or the loop.
-	private void collectAssigned(LispVal datum) {
+	void collectAssigned(LispVal datum) {
 		if (datum instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && head.name().endsWith("set!")
 					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
@@ -1786,586 +1040,11 @@ final class SchemeLowering {
 		}
 	}
 
-	private void declareGlobals(List<LispVal> forms) {
-		Map<String, Integer> definitions = new HashMap<>();
-		Map<String, LispSymbol> procedures = new LinkedHashMap<>();
-		Map<String, LispCons> caseLambdas = new HashMap<>();
-		Map<String, LispSymbol> variables = new LinkedHashMap<>();
-		List<LispCons> records = new ArrayList<>();
-		for (LispVal datum : forms) {
-			if (!(datum instanceof LispCons form)) {
-				continue;
-			}
-			Core core = syntaxOf(form, this.global);
-			if (core == Core.DEFINE) {
-				Definition definition = definition(form);
-				String name = name(definition.name());
-				refuseARecordProcedure(definition.name(), form);
-				refuseRedefiningAnImport(definition.name(), form);
-				definitions.merge(name, 1, Integer::sum);
-				(definition.procedure() ? procedures : variables).putIfAbsent(name, definition.name());
-				if (definition.caseLambda() != null) {
-					caseLambdas.putIfAbsent(name, definition.caseLambda());
-				}
-			}
-			else if (core == Core.DEFINE_VALUES) {
-				for (LispSymbol variable : formals(second(form), form).all()) {
-					refuseARecordProcedure(variable, form);
-					refuseRedefiningAnImport(variable, form);
-					definitions.merge(name(variable), 2, Integer::sum);
-					variables.putIfAbsent(name(variable), variable);
-				}
-			}
-			else if (core == Core.DEFINE_RECORD_TYPE) {
-				RecordType type = recordType(form);
-				refuseRedefiningAnImport(type.name(), form);
-				for (LispSymbol procedure : recordProcedures(type)) {
-					refuseRedefiningAnImport(procedure, form);
-				}
-				records.add(form);
-			}
-		}
-		Set<String> readEarly = this.interactive ? Set.of() : readBeforeDefinition(forms);
-		variables.forEach((name, identifier) -> this.global.bindings.put(name, new Variable(global(identifier))));
-		procedures.forEach((name, identifier) -> {
-			boolean direct = !this.interactive && definitions.getOrDefault(name, 0) == 1
-					&& !this.assignedNames.contains(name) && !variables.containsKey(name) && !readEarly.contains(name);
-			LispCons caseLambda = caseLambdas.get(name);
-			this.global.bindings.put(name,
-					!direct ? new Variable(global(identifier)) : new GlobalFunction(global(identifier),
-							caseLambda == null ? List.of() : clauses(identifier, caseLambda)));
-		});
-		for (LispCons record : records) {
-			declareRecord(record, definitions);
-		}
-		if (!this.interactive) {
-			declareGroups(forms);
-		}
-	}
-
-	// ------------------------------------------------------------------ tail-call groups
-
-	/**
-	 * Finds the tail-call groups. The top-level procedures that may call each other in a
-	 * cycle -- by a cheap scan of the call heads, blind to scope -- are lowered as a
-	 * group once, as a probe, and what their bodies actually JUMP to decides: a set the
-	 * jumps do not hold together is settled again as the cycles they do form. A program
-	 * with no such cycle is lowered exactly as before.
-	 */
-	private void declareGroups(List<LispVal> forms) {
-		List<Member> members = new ArrayList<>();
-		for (LispVal datum : forms) {
-			if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE) {
-				Definition definition = definition(form);
-				if (definition.procedure() && definition.caseLambda() == null
-						&& this.global.bindings.get(name(definition.name())) instanceof GlobalFunction function
-						&& function.clauses().isEmpty()) {
-					members.add(new Member(form, definition, function));
-				}
-			}
-		}
-		for (Group group : groups(members, this.global)) {
-			for (Member member : group.members) {
-				this.groups.put(name(member.definition().name()), group);
-			}
-		}
-	}
-
-	/**
-	 * The groups among the procedures a scope defines: the ones that may call each other
-	 * in a cycle -- by a cheap scan of the call heads, blind to scope -- are lowered as a
-	 * group once, as a probe, and what their bodies actually JUMP to decides. Empty, and
-	 * nothing numbered, when there is no such cycle.
-	 */
-	private List<Group> groups(List<Member> members, Scope home) {
-		if (members.size() < 2) {
-			return List.of();
-		}
-		Map<String, Integer> index = new HashMap<>();
-		for (int i = 0; i < members.size(); i++) {
-			index.putIfAbsent(members.get(i).definition().name().name(), i);
-		}
-		List<Set<Integer>> mentions = new ArrayList<>();
-		for (Member member : members) {
-			Set<String> heads = new HashSet<>();
-			collectCallHeads(member.definition().body(), heads);
-			Set<Integer> callees = new HashSet<>();
-			for (String head : heads) {
-				Integer callee = index.get(head);
-				if (callee != null) {
-					callees.add(callee);
-				}
-			}
-			mentions.add(callees);
-		}
-		List<Group> out = new ArrayList<>();
-		for (List<Integer> cycle : cycles(mentions)) {
-			settleGroup(cycle.stream().map(members::get).toList(), home, out);
-		}
-		return out;
-	}
-
-	// A candidate the jumps do not hold together is settled again as the cycles they do
-	// form.
-	private void settleGroup(List<Member> candidate, Scope home, List<Group> out) {
-		Snapshot snapshot = snapshot();
-		LoweredGroup probe;
-		try {
-			probe = lowerGroup(candidate, home);
-		}
-		catch (RuntimeException ex) {
-			// The real lowering reports it, positioned, where the form stands.
-			return;
-		}
-		finally {
-			restore(snapshot);
-		}
-		List<List<Integer>> cycles = cycles(probe.jumps());
-		if (cycles.size() == 1 && cycles.get(0).size() == candidate.size()) {
-			out.add(new Group(candidate));
-			return;
-		}
-		for (List<Integer> cycle : cycles) {
-			settleGroup(cycle.stream().map(candidate::get).toList(), home, out);
-		}
-	}
-
-	private Snapshot snapshot() {
-		return new Snapshot(this.counter, this.closures, new ArrayList<>(this.hoisted),
-				new IdentityHashMap<>(this.internalRecords), new HashSet<>(this.internalRecordNames),
-				new IdentityHashMap<>(this.caseLambdas), this.enclosing);
-	}
-
-	private void restore(Snapshot snapshot) {
-		this.counter = snapshot.counter();
-		this.closures = snapshot.closures();
-		this.hoisted.clear();
-		this.hoisted.addAll(snapshot.hoisted());
-		this.internalRecords.clear();
-		this.internalRecords.putAll(snapshot.internalRecords());
-		this.internalRecordNames.clear();
-		this.internalRecordNames.addAll(snapshot.internalRecordNames());
-		this.caseLambdas.clear();
-		this.caseLambdas.putAll(snapshot.caseLambdas());
-		this.enclosing = snapshot.enclosing();
-	}
-
-	/**
-	 * The group's {@code defun}: {@code (defun G (W C1 .. Cn) (let ((R nil)) (tagbody TOP
-	 * (if (= W 1) (go L1) ..) L0 (let ((a C1) ..) body0) (go END) L1 .. END) R))}.
-	 * {@code W} picks the member to run; the carriers are shared by position, as many as
-	 * the widest member takes. Every member rebinds its variables from them per entry, so
-	 * a jump is plain {@code setq}s of carriers no argument can mention, and a closure
-	 * captures its own entry's binding.
-	 *
-	 * <p>
-	 * A jump to itself goes to the member's label. A jump to another member also sets
-	 * {@code W} and goes to {@code TOP}, the one entry of every cycle: jumping straight
-	 * into another member's label would give the loop an entry per member. The layout is
-	 * measured (.kb/scheme-frontend.md, "Tail-call groups"): a stub per member that sets
-	 * {@code W} cost wasm a dispatch round per jump, and the members as an {@code if}
-	 * chain under {@code TOP} ran the metacircular evaluator 15% slower on the JVM.
-	 */
-	private LoweredGroup lowerGroup(List<Member> members, Scope home) {
-		boolean topLevel = home == this.global;
-		List<Formals> formals = new ArrayList<>();
-		int width = 0;
-		for (Member member : members) {
-			Formals parsed = formals(Objects.requireNonNull(member.definition().formals()), member.form());
-			formals.add(parsed);
-			width = Math.max(width, parsed.all().size());
-		}
-		LispSymbol function = fresh("G");
-		LispSymbol which = fresh("W");
-		List<LispSymbol> carriers = new ArrayList<>();
-		for (int i = 0; i < width; i++) {
-			carriers.add(fresh("C"));
-		}
-		LispSymbol result = fresh("R");
-		Exit exit = new Exit(result);
-		List<LispSymbol> labels = new ArrayList<>();
-		for (int i = 0; i < members.size(); i++) {
-			labels.add(fresh("L"));
-		}
-		LispSymbol top = fresh("L");
-		LispSymbol end = fresh("L");
-		LispVal dispatch = null;
-		for (int i = members.size() - 1; i >= 1; i--) {
-			// A numeric =, not EQL: the JVM backend compiles EQL on an untyped
-			// variable to a generic call, which cost the metacircular evaluator a third
-			// of its run time as the entry dispatch of every non-tail m-eval.
-			LispVal test = list(symbol("="), which, new LispInteger(i));
-			LispVal jump = list(symbol("GO"), labels.get(i));
-			dispatch = dispatch == null ? list(symbol("IF"), test, jump) : list(symbol("IF"), test, jump, dispatch);
-		}
-		List<LispVal> tagbody = new ArrayList<>(List.of(symbol("TAGBODY"), top, Objects.requireNonNull(dispatch)));
-		List<Set<Integer>> jumps = new ArrayList<>();
-		String enclosing = this.enclosing;
-		for (int i = 0; i < members.size(); i++) {
-			Member member = members.get(i);
-			List<Target> targets = new ArrayList<>();
-			for (int j = 0; j < members.size(); j++) {
-				Formals parsed = formals.get(j);
-				Target target = new Target(
-						members.get(j).binding(), new LoopShape(i == j ? labels.get(j) : top,
-								carriers.subList(0, parsed.all().size()), parsed.rest() != null, false),
-						home, List.of());
-				if (i != j) {
-					target.presets = List.of(which, new LispInteger(j));
-				}
-				targets.add(target);
-			}
-			if (topLevel) {
-				this.enclosing = name(member.definition().name());
-			}
-			Scope inner = new Scope(home);
-			List<LispVal> pairs = new ArrayList<>();
-			List<LispSymbol> all = formals.get(i).all();
-			for (int j = 0; j < all.size(); j++) {
-				pairs.add(list(bind(all.get(j), inner), carriers.get(j)));
-			}
-			List<LispVal> statements = body(member.definition().body(),
-					Context.storing(new Scope(inner), new Destination(result, targets, exit)));
-			Set<Integer> jumped = new HashSet<>();
-			collectJumps(listOf(statements), new GroupLabels(i, labels.get(i), which), jumped);
-			jumps.add(jumped);
-			tagbody.add(labels.get(i));
-			// A PROGN even around one statement: a bare symbol in a tagbody is a label.
-			tagbody.add(pairs.isEmpty() ? new LispCons(symbol("PROGN"), listOf(statements))
-					: new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(statements))));
-			if (i < members.size() - 1) {
-				tagbody.add(list(symbol("GO"), end));
-			}
-		}
-		this.enclosing = enclosing;
-		tagbody.add(end);
-		List<LispVal> lambdaList = new ArrayList<>();
-		lambdaList.add(which);
-		lambdaList.addAll(carriers);
-		LispVal body = exiting(exit,
-				list(symbol("LET"), list(list(result, LispNil.INSTANCE)), listOf(tagbody), result));
-		return new LoweredGroup(function, listOf(lambdaList), body, jumps);
-	}
-
-	/**
-	 * The groups among the procedures a body or a {@code letrec} binds, by the form
-	 * defining each member. A candidate is a variable bound to a syntactic
-	 * {@code lambda}; one that is ever assigned (by spelling, like
-	 * {@code collectAssigned}) or bound twice is no member.
-	 */
-	private Map<LispCons, Group> internalGroups(List<Member> candidates, Set<String> alsoBound, Scope scope) {
-		if (candidates.size() < 2) {
-			return Map.of();
-		}
-		Map<String, Integer> counts = new HashMap<>();
-		for (Member candidate : candidates) {
-			counts.merge(candidate.definition().name().name(), 1, Integer::sum);
-		}
-		List<Member> members = new ArrayList<>();
-		for (Member candidate : candidates) {
-			String name = candidate.definition().name().name();
-			if (counts.getOrDefault(name, 0) == 1 && !alsoBound.contains(name)
-					&& !this.assignedNames.contains(name(candidate.definition().name()))
-					&& candidate.binding() instanceof Variable) {
-				members.add(candidate);
-			}
-		}
-		Map<LispCons, Group> out = new IdentityHashMap<>();
-		for (Group group : groups(members, scope)) {
-			for (Member member : group.members) {
-				out.put(member.form(), group);
-			}
-		}
-		return out;
-	}
-
-	private static Member member(Group group, LispVal form) {
-		for (Member member : group.members) {
-			if (member.form() == form) {
-				return member;
-			}
-		}
-		throw new IllegalStateException("not a member of its group");
-	}
-
-	// A member's own defun: enters the group at its label, nil in the carriers it does
-	// not take.
-	private LispVal groupEntry(Group group, Member member) {
-		Entry entry = entry(group, member);
-		return inherit(member.form(), list(symbol("DEFUN"), member.function().symbol(), entry.lambdaList(),
-				new LispCons(Objects.requireNonNull(group.function), entry.arguments())));
-	}
-
-	// A member of a body's group: a lambda calling the group's, which the first member's
-	// definition assigns to its variable ahead of its own.
-	private List<LispVal> internalGroupDefinition(Group group, Member member, Scope scope, List<LispVal> pairs) {
-		List<LispVal> out = new ArrayList<>();
-		if (group.function == null) {
-			LoweredGroup lowered = lowerGroup(group.members, scope);
-			group.function = lowered.function();
-			pairs.add(list(lowered.function(), LispNil.INSTANCE));
-			this.closures++;
-			out.add(inherit(group.members.get(0).form(), list(symbol("SETQ"), lowered.function(),
-					list(symbol("LAMBDA"), lowered.lambdaList(), lowered.body()))));
-		}
-		this.closures++;
-		Entry entry = entry(group, member);
-		out.add(inherit(member.form(),
-				list(symbol("SETQ"), variableSymbol(member.definition().name(), scope),
-						list(symbol("LAMBDA"), entry.lambdaList(), new LispCons(symbol("FUNCALL"),
-								new LispCons(Objects.requireNonNull(group.function), entry.arguments()))))));
-		return out;
-	}
-
-	private record Entry(LispVal lambdaList, LispVal arguments) {
-	}
-
-	// A member's parameters, and what it hands the group's function after it: its
-	// index, its parameters, nil in the carriers it does not take.
-	private Entry entry(Group group, Member member) {
-		int width = 0;
-		for (Member other : group.members) {
-			width = Math.max(width,
-					formals(Objects.requireNonNull(other.definition().formals()), other.form()).all().size());
-		}
-		Formals formals = formals(Objects.requireNonNull(member.definition().formals()), member.form());
-		List<LispSymbol> parameters = new ArrayList<>();
-		for (LispSymbol formal : formals.all()) {
-			parameters.add(cl(formal));
-		}
-		List<LispVal> arguments = new ArrayList<>();
-		arguments.add(new LispInteger(group.members.indexOf(member)));
-		arguments.addAll(parameters);
-		while (arguments.size() < width + 1) {
-			arguments.add(LispNil.INSTANCE);
-		}
-		return new Entry(lambdaList(parameters, formals.rest() != null), listOf(arguments));
-	}
-
-	/**
-	 * How a member's jumps are spelled: {@code (go self)} to itself, {@code (setq .. W j
-	 * ..)} before the {@code (go TOP)} to member {@code j}.
-	 */
-	private record GroupLabels(int member, LispSymbol self, LispSymbol which) {
-	}
-
-	// The members the jumps in the form go to.
-	private static void collectJumps(LispVal form, GroupLabels labels, Set<Integer> out) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head && head.name().equals("GO") && cons.cdr() instanceof LispCons rest
-				&& labels.self().equals(rest.car())) {
-			out.add(labels.member());
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head && head.name().equals("SETQ")) {
-			LispVal pair = cons.cdr();
-			while (pair instanceof LispCons variable && variable.cdr() instanceof LispCons value) {
-				if (labels.which().equals(variable.car()) && value.car() instanceof LispInteger member) {
-					out.add((int) member.value());
-				}
-				pair = value.cdr();
-			}
-		}
-		LispVal rest = cons;
-		while (rest instanceof LispCons cell) {
-			collectJumps(cell.car(), labels, out);
-			rest = cell.cdr();
-		}
-	}
-
-	// Every symbol heading a call-shaped datum, by spelling: mentionsCall's walk.
-	private static void collectCallHeads(List<LispVal> body, Set<String> out) {
-		for (LispVal datum : body) {
-			LispVal rest = datum;
-			boolean head = true;
-			while (rest instanceof LispCons cell) {
-				if (head && cell.car() instanceof LispSymbol symbol) {
-					out.add(symbol.name());
-				}
-				if (cell.car() instanceof LispCons) {
-					collectCallHeads(List.of(cell.car()), out);
-				}
-				head = false;
-				rest = cell.cdr();
-			}
-		}
-	}
-
-	/**
-	 * The strongly connected sets of more than one node (Tarjan), each sorted, ordered by
-	 * their smallest node.
-	 */
-	private static List<List<Integer>> cycles(List<Set<Integer>> graph) {
-		int size = graph.size();
-		int[] order = new int[size];
-		int[] low = new int[size];
-		boolean[] onStack = new boolean[size];
-		java.util.Arrays.fill(order, -1);
-		java.util.ArrayDeque<Integer> stack = new java.util.ArrayDeque<>();
-		List<List<Integer>> out = new ArrayList<>();
-		int[] next = { 0 };
-		for (int node = 0; node < size; node++) {
-			if (order[node] < 0) {
-				connect(node, new Tarjan(graph, order, low, onStack, stack, next, out));
-			}
-		}
-		out.sort(java.util.Comparator.comparingInt(cycle -> cycle.get(0)));
-		return out;
-	}
-
-	private record Tarjan(List<Set<Integer>> graph, int[] order, int[] low, boolean[] onStack,
-			java.util.ArrayDeque<Integer> stack, int[] next, List<List<Integer>> out) {
-	}
-
-	private static void connect(int node, Tarjan state) {
-		int[] order = state.order();
-		int[] low = state.low();
-		order[node] = state.next()[0];
-		low[node] = state.next()[0];
-		state.next()[0]++;
-		state.stack().push(node);
-		state.onStack()[node] = true;
-		for (int successor : state.graph().get(node)) {
-			if (order[successor] < 0) {
-				connect(successor, state);
-				low[node] = Math.min(low[node], low[successor]);
-			}
-			else if (state.onStack()[successor]) {
-				low[node] = Math.min(low[node], order[successor]);
-			}
-		}
-		if (low[node] == order[node]) {
-			List<Integer> component = new ArrayList<>();
-			int member;
-			do {
-				member = state.stack().pop();
-				state.onStack()[member] = false;
-				component.add(member);
-			}
-			while (member != node);
-			if (component.size() > 1) {
-				component.sort(null);
-				state.out().add(component);
-			}
-		}
-	}
-
-	/**
-	 * The names this file defines over an imported binding -- a builtin, a SICP constant
-	 * -- that a form may READ before the first definition. Those become variables holding
-	 * the imported value until then ({@link #initialValues}): a {@code defun} is
-	 * position-blind, so the interpreter has no function yet and the compile path hoists
-	 * the user's. A read counts when it is in a form run at the top level (anything but a
-	 * procedure definition and a record type), directly or through what anything defined
-	 * before that form mentions. Scope-blind, like {@link #collectAssigned}:
-	 * over-approximating only costs the direct call.
-	 */
-	private Set<String> readBeforeDefinition(List<LispVal> forms) {
-		Map<String, Integer> firstDefinition = new HashMap<>();
-		List<List<String>> defined = new ArrayList<>();
-		List<Boolean> run = new ArrayList<>();
-		// What each form mentions: a definition's value or body, never its own target.
-		List<Set<String>> mentioned = new ArrayList<>();
-		for (int i = 0; i < forms.size(); i++) {
-			List<String> names = new ArrayList<>();
-			Set<String> referenced = new HashSet<>();
-			boolean runs = true;
-			if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE) {
-				Definition definition = definition(form);
-				names.add(name(definition.name()));
-				definition.body().forEach(expression -> collectNames(expression, referenced));
-				runs = !definition.procedure();
-			}
-			else if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE_VALUES) {
-				formals(second(form), form).all().forEach(variable -> names.add(name(variable)));
-				collectNames(form.cdr() instanceof LispCons rest ? rest.cdr() : LispNil.INSTANCE, referenced);
-			}
-			else if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE_RECORD_TYPE) {
-				runs = false;
-			}
-			else {
-				collectNames(forms.get(i), referenced);
-			}
-			mentioned.add(referenced);
-			for (String name : names) {
-				Binding imported = this.global.bindings.get(name);
-				if (imported instanceof Builtin || imported instanceof Constant
-						|| this.libraryImports.contains(imported)) {
-					firstDefinition.putIfAbsent(name, i);
-				}
-			}
-			defined.add(names);
-			run.add(runs);
-		}
-		Set<String> early = new HashSet<>();
-		if (firstDefinition.isEmpty()) {
-			return early;
-		}
-		Map<String, Set<String>> mentions = new HashMap<>();
-		for (int i = 0; i < forms.size(); i++) {
-			Set<String> referenced = mentioned.get(i);
-			if (run.get(i)) {
-				List<String> pending = new ArrayList<>(referenced);
-				Set<String> reached = new HashSet<>(referenced);
-				while (!pending.isEmpty()) {
-					String name = pending.removeLast();
-					Integer definedAt = firstDefinition.get(name);
-					if (definedAt != null && definedAt >= i) {
-						early.add(name);
-					}
-					for (String next : mentions.getOrDefault(name, Set.of())) {
-						if (reached.add(next)) {
-							pending.add(next);
-						}
-					}
-				}
-			}
-			for (String name : defined.get(i)) {
-				mentions.computeIfAbsent(name, key -> new HashSet<>()).addAll(referenced);
-			}
-		}
-		for (String name : early) {
-			LispVal value = switch (this.global.bindings.get(name)) {
-				case Builtin builtin -> builtin.entry().function();
-				case Constant constant -> constant.form();
-				case Variable variable -> variable.symbol();
-				case GlobalFunction function -> list(symbol("FUNCTION"), function.symbol());
-				case GlobalPredicate predicate -> predicateValue(predicate);
-				case null, default -> throw new IllegalStateException("not an imported value: " + name);
-			};
-			this.initialValues.put(symbol(this.prefix + name), value);
-		}
-		return early;
-	}
-
-	private void collectNames(LispVal datum, Set<String> out) {
-		switch (datum) {
-			case LispSymbol identifier -> out.add(name(identifier));
-			case LispCons cons -> {
-				LispVal rest = cons;
-				while (rest instanceof LispCons cell) {
-					collectNames(cell.car(), out);
-					rest = cell.cdr();
-				}
-				collectNames(rest, out);
-			}
-			case LispArray array -> {
-				for (LispVal element : array.data()) {
-					collectNames(element, out);
-				}
-			}
-			default -> {
-			}
-		}
-	}
-
 	// R7RS 5.6.1: in a program it is an error to redefine an imported binding. Strict
 	// mode reports it where the default lets a user definition win; a session may
 	// redefine, as an R7RS REPL does. Before declareGlobals overwrites anything, the
 	// global scope holds exactly the imports.
-	private void refuseRedefiningAnImport(LispSymbol identifier, LispCons form) {
+	void refuseRedefiningAnImport(LispSymbol identifier, LispCons form) {
 		if (this.standard != SchemeStandard.R7RS || this.interactive) {
 			return;
 		}
@@ -2377,7 +1056,7 @@ final class SchemeLowering {
 
 	// A file refuses a redefined record procedure in declareRecord, which sees both
 	// definitions; a session meets the second one alone, against the scope it kept.
-	private void refuseARecordProcedure(LispSymbol identifier, LispCons form) {
+	void refuseARecordProcedure(LispSymbol identifier, LispCons form) {
 		Binding known = this.global.bindings.get(name(identifier));
 		if ((known instanceof GlobalFunction || known instanceof GlobalPredicate)
 				&& !this.libraryImports.contains(known)) {
@@ -2385,322 +1064,10 @@ final class SchemeLowering {
 		}
 	}
 
-	// Answers whether the datum has a value at all: a definition, an import and a record
-	// type have none. What an expression answers is the value's to say -- an effect's is
-	// the unspecified object, which a session does not echo.
-	private boolean topLevel(LispVal datum, List<LispVal> out) {
-		this.hoisted.clear();
-		this.enclosing = "";
-		if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE
-				&& form.cdr() instanceof LispCons rest) {
-			// Malformed or not: definition() reports that, positioned, below.
-			LispVal target = rest.car() instanceof LispCons signature ? signature.car() : rest.car();
-			if (target instanceof LispSymbol name) {
-				this.enclosing = name(name);
-			}
-		}
-		List<LispVal> lowered = new ArrayList<>();
-		boolean echoes = topLevelForm(datum, lowered);
-		// The internal record types stand before the form that uses them: the
-		// interpreter runs the forms in order.
-		out.addAll(this.hoisted);
-		out.addAll(lowered);
-		this.hoisted.clear();
-		return echoes;
+	record DefinedIn(LispCons form, Scope scope, @Nullable Binding self) {
 	}
 
-	private boolean topLevelForm(LispVal datum, List<LispVal> out) {
-		if (datum instanceof LispCons form) {
-			try {
-				switch (syntaxOf(form, this.global)) {
-					case DEFINE -> {
-						for (LispVal defined : topLevelDefine(form)) {
-							out.add(defined instanceof LispCons cons ? inherit(form, cons) : defined);
-						}
-						trampoline(definition(form).name(), out);
-					}
-					case DEFINE_VALUES -> {
-						out.add(inherit(form, defineValues(form, this.global)));
-						for (LispSymbol variable : formals(second(form), form).all()) {
-							trampoline(variable, out);
-						}
-					}
-					case DEFINE_RECORD_TYPE -> recordType(form, out);
-					case IMPORT -> {
-						if (!this.interactive) {
-							throw error("import must come before everything else", form);
-						}
-					}
-					case null, default -> {
-						out.add(topLevelValue(form));
-						return true;
-					}
-				}
-				return false;
-			}
-			catch (LispReadException ex) {
-				throw ex;
-			}
-			catch (RuntimeException ex) {
-				throw SourceProvenance.noteFailure(form, ex);
-			}
-		}
-		out.add(topLevelValue(datum));
-		return true;
-	}
-
-	// A file never reads a top-level form's value; a session echoes it, and so needs the
-	// unspecified object to know what not to show.
-	private LispVal topLevelValue(LispVal datum) {
-		return lower(datum, this.interactive ? Context.of(this.global) : Context.discarding(this.global));
-	}
-
-	// (defun f (&rest a) (apply f a)): what a call lowered BEFORE the session defined f
-	// reaches. It reads the variable on every call, so it follows set! and redefinition.
-	private void trampoline(LispSymbol identifier, List<LispVal> out) {
-		if (this.interactive) {
-			LispSymbol name = cl(identifier);
-			LispSymbol arguments = fresh("A");
-			out.add(list(symbol("DEFUN"), name, list(symbol("&REST"), arguments),
-					list(symbol("APPLY"), name, arguments)));
-		}
-	}
-
-	/**
-	 * A parsed {@code define}.
-	 *
-	 * @param name the defined identifier
-	 * @param formals the parameters when the value is a syntactic {@code lambda}, else
-	 * {@code null}
-	 * @param body the procedure body, or the single value expression
-	 * @param caseLambda the {@code case-lambda} datum the value is, desugared into
-	 * {@code formals} and {@code body}, or {@code null}
-	 */
-	private record Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body,
-			@Nullable LispCons caseLambda) {
-
-		Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body) {
-			this(name, formals, body, null);
-		}
-
-		boolean procedure() {
-			return this.formals != null;
-		}
-
-	}
-
-	private Definition definition(LispCons form) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 2) {
-			throw error("malformed define", form);
-		}
-		if (parts.get(1) instanceof LispCons target) {
-			if (!(target.car() instanceof LispSymbol name)) {
-				throw error("curried define is not supported", form);
-			}
-			if (parts.size() < 3) {
-				throw error("a procedure definition needs a body", form);
-			}
-			return new Definition(name, target.cdr(), parts.subList(2, parts.size()));
-		}
-		LispSymbol name = identifier(parts.get(1), form);
-		if (parts.size() > 3) {
-			throw error("malformed define", form);
-		}
-		LispVal value = parts.size() == 3 ? parts.get(2) : LispNil.INSTANCE;
-		LispCons caseLambda = null;
-		if (value instanceof LispCons dispatch && syntaxOf(dispatch, this.global) == Core.CASE_LAMBDA) {
-			// A procedure all the same: a defun when the file defines it once.
-			caseLambda = dispatch;
-			value = caseLambda(dispatch);
-		}
-		if (value instanceof LispCons lambda && syntaxOf(lambda, this.global) == Core.LAMBDA
-				&& lambda.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons) {
-			return new Definition(name, rest.car(), elements(rest.cdr(), lambda), caseLambda);
-		}
-		return new Definition(name, null, List.of(value));
-	}
-
-	private List<LispVal> topLevelDefine(LispCons form) {
-		Definition definition = definition(form);
-		Group group = this.groups.get(name(definition.name()));
-		if (group != null) {
-			return groupDefinition(group, form);
-		}
-		Binding binding = this.global.find(name(definition.name()));
-		if (binding instanceof GlobalFunction function && !function.clauses().isEmpty()
-				&& definition.caseLambda() != null) {
-			return caseLambdaDefuns(function, definition, Objects.requireNonNull(definition.caseLambda()));
-		}
-		return List.of(topLevelDefinition(form, definition, binding));
-	}
-
-	// The first member's define emits the group's defun ahead of its own entry.
-	private List<LispVal> groupDefinition(Group group, LispCons form) {
-		Member member = group.members.stream()
-			.filter(candidate -> candidate.form() == form)
-			.findFirst()
-			.orElseThrow(() -> new IllegalStateException("not a member of its group"));
-		List<LispVal> out = new ArrayList<>();
-		if (group.function == null) {
-			LoweredGroup lowered = lowerGroup(group.members, this.global);
-			group.function = lowered.function();
-			out.add(inherit(group.members.get(0).form(),
-					list(symbol("DEFUN"), lowered.function(), lowered.lambdaList(), lowered.body())));
-		}
-		out.add(groupEntry(group, member));
-		return out;
-	}
-
-	private LispVal topLevelDefinition(LispCons form, Definition definition, @Nullable Binding binding) {
-		if (binding instanceof GlobalFunction function && definition.formals() != null) {
-			Lowered lowered = procedure(new ProcedureSpec(formals(definition.formals(), form), definition.body(),
-					function, definition.name()), this.global);
-			return new LispCons(symbol("DEFUN"),
-					new LispCons(function.symbol(), new LispCons(lowered.lambdaList(), listOf(lowered.body()))));
-		}
-		if (!(binding instanceof Variable variable)) {
-			throw error("cannot redefine " + definition.name().name() + ", a record procedure", form);
-		}
-		// A session's procedure keeps its self tail calls a loop, like the defun a file
-		// would make of it, unless the session has assigned the name so far. A set! typed
-		// LATER cannot reach back into it: only a saved old value would tell.
-		Binding self = this.interactive && !this.assignedNames.contains(name(definition.name())) ? variable : null;
-		return list(symbol("SETQ"), variable.symbol(),
-				definedValue(definition, new DefinedIn(form, this.global, self)));
-	}
-
-	private record DefinedIn(LispCons form, Scope scope, @Nullable Binding self) {
-	}
-
-	// A top-level procedure defined once by a case-lambda: one defun per clause, named
-	// s%%{<name> <n>} -- no identifier mangles to it (SchemeNames.libraryPrefix's
-	// argument) -- which a direct call picks by its argument count, and the procedure's
-	// own defun dispatching on the count at run time for everything else: a first-class
-	// use, apply, and a count no clause accepts, which it reports. Empty -- the
-	// procedure is lowered as one dispatching lambda -- when a clause may call ANOTHER
-	// clause that may call it back: the single procedure keeps every tail call among
-	// its clauses a jump, and separate defuns would turn such a cycle into recursion.
-	// The scan is by name and blind to scope, like collectAssigned: over-approximating
-	// only keeps the dispatch.
-	private List<Clause> clauses(LispSymbol identifier, LispCons caseLambda) {
-		List<Clause> clauses = new ArrayList<>();
-		List<List<LispVal>> bodies = new ArrayList<>();
-		String base = this.prefix + SchemeNames.PREFIX + "%{" + name(identifier) + " ";
-		for (LispVal clause : elements(caseLambda.cdr(), caseLambda)) {
-			// caseLambda() has checked every clause's shape by now.
-			List<LispVal> parts = elements(clause, (LispCons) clause);
-			Formals formals = formals(parts.get(0), (LispCons) clause);
-			clauses.add(new Clause(symbol(base + (clauses.size() + 1) + "}"), formals.required().size(),
-					formals.rest() != null));
-			bodies.add(parts.subList(1, parts.size()));
-		}
-		GlobalFunction probe = new GlobalFunction(identifier, clauses);
-		List<Set<Integer>> calls = new ArrayList<>();
-		for (int i = 0; i < bodies.size(); i++) {
-			Set<Integer> callees = new HashSet<>();
-			for (LispVal datum : bodies.get(i)) {
-				collectClauseCalls(datum, identifier.name(), probe, callees);
-			}
-			callees.remove(i);
-			calls.add(callees);
-		}
-		for (int start = 0; start < clauses.size(); start++) {
-			List<Integer> pending = new ArrayList<>(calls.get(start));
-			Set<Integer> reached = new HashSet<>();
-			while (!pending.isEmpty()) {
-				int next = pending.removeLast();
-				if (next == start) {
-					return List.of();
-				}
-				if (reached.add(next)) {
-					pending.addAll(calls.get(next));
-				}
-			}
-		}
-		return List.copyOf(clauses);
-	}
-
-	// The clauses the calls headed by the name pick, by argument count, as indexes.
-	private static void collectClauseCalls(LispVal datum, String name, GlobalFunction function, Set<Integer> out) {
-		if (datum instanceof LispArray array) {
-			for (LispVal element : array.data()) {
-				collectClauseCalls(element, name, function, out);
-			}
-		}
-		if (!(datum instanceof LispCons form)) {
-			return;
-		}
-		int operands = -1;
-		LispVal rest = form;
-		while (rest instanceof LispCons cell) {
-			collectClauseCalls(cell.car(), name, function, out);
-			operands++;
-			rest = cell.cdr();
-		}
-		if (form.car() instanceof LispSymbol head && head.name().equals(name) && rest == LispNil.INSTANCE) {
-			Clause clause = function.clauseFor(operands);
-			if (clause != null) {
-				out.add(function.clauses().indexOf(clause));
-			}
-		}
-	}
-
-	// The clauses' defuns, then the dispatching one: the shape caseLambda() desugars to,
-	// with each clause body a call of the clause's defun.
-	private List<LispVal> caseLambdaDefuns(GlobalFunction function, Definition definition, LispCons caseLambda) {
-		List<LispVal> defuns = new ArrayList<>();
-		List<LispVal> clauses = elements(caseLambda.cdr(), caseLambda);
-		for (int i = 0; i < clauses.size(); i++) {
-			LispCons where = (LispCons) clauses.get(i);
-			List<LispVal> parts = elements(where, where);
-			Clause clause = function.clauses().get(i);
-			Lowered lowered = procedure(new ProcedureSpec(formals(parts.get(0), where), parts.subList(1, parts.size()),
-					function, definition.name(), clause.symbol()), this.global);
-			defuns.add(inherit(where, new LispCons(symbol("DEFUN"),
-					new LispCons(clause.symbol(), new LispCons(lowered.lambdaList(), listOf(lowered.body()))))));
-		}
-		LispSymbol arguments = fresh("A");
-		LispSymbol count = fresh("N");
-		boolean counted = false;
-		LispVal chain = list(symbol("RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY"), arguments);
-		for (int i = clauses.size() - 1; i >= 0; i--) {
-			Clause clause = function.clauses().get(i);
-			LispVal call;
-			if (clause.rest()) {
-				call = list(symbol("APPLY"), list(symbol("FUNCTION"), clause.symbol()), arguments);
-			}
-			else {
-				List<LispVal> taken = new ArrayList<>();
-				for (int j = 0; j < clause.required(); j++) {
-					taken.add(list(symbol("NTH"), new LispInteger(j), arguments));
-				}
-				call = new LispCons(clause.symbol(), listOf(taken));
-			}
-			if (clause.rest() && clause.required() == 0) {
-				// Takes every count: nothing after it is reachable.
-				chain = call;
-				continue;
-			}
-			counted = true;
-			chain = list(symbol("IF"),
-					list(symbol(clause.rest() ? ">=" : "="), count, new LispInteger(clause.required())), call, chain);
-		}
-		LispVal dispatch = counted ? list(symbol("LET"), list(list(count, list(symbol("LENGTH"), arguments))), chain)
-				: chain;
-		defuns.add(list(symbol("DEFUN"), function.symbol(), list(symbol("&REST"), arguments), dispatch));
-		return defuns;
-	}
-
-	private LispVal definedValue(Definition definition, DefinedIn where) {
-		if (definition.formals() == null) {
-			return value(definition.body().get(0), where.scope());
-		}
-		return lambda(new ProcedureSpec(formals(definition.formals(), where.form()), definition.body(), where.self(),
-				definition.name()), where.scope());
-	}
-
-	private LispVal defineValues(LispCons form, Scope scope) {
+	LispVal defineValues(LispCons form, Scope scope) {
 		List<LispVal> parts = elements(form, form);
 		if (parts.size() != 3) {
 			throw error("malformed define-values", form);
@@ -2722,219 +1089,9 @@ final class SchemeLowering {
 
 	// ------------------------------------------------------------------ records
 
-	private void declareRecord(LispCons form, Map<String, Integer> definitions) {
-		RecordType type = recordType(form);
-		for (LispSymbol procedure : recordProcedures(type)) {
-			String name = name(procedure);
-			if (definitions.merge(name, 1, Integer::sum) != 1 || this.assignedNames.contains(name)) {
-				throw error("a record procedure cannot be redefined or assigned: " + procedure.name(), form);
-			}
-			this.global.bindings.put(name, procedure == type.predicate() ? new GlobalPredicate(global(procedure))
-					: new GlobalFunction(global(procedure)));
-		}
-	}
-
-	private static List<LispSymbol> recordProcedures(RecordType type) {
-		List<LispSymbol> procedures = new ArrayList<>(type.accessors().values());
-		procedures.addAll(type.modifiers().values());
-		if (type.constructor() != null) {
-			procedures.add(type.constructor());
-		}
-		procedures.add(type.predicate());
-		return procedures;
-	}
-
-	/**
-	 * A parsed {@code define-record-type}.
-	 *
-	 * @param name the type name
-	 * @param constructor the constructor name, or {@code null}
-	 * @param constructorFields the fields the constructor takes, in order
-	 * @param predicate the predicate name
-	 * @param fields every field, in order
-	 * @param accessors field to accessor name
-	 * @param modifiers field to modifier name
-	 */
-	private record RecordType(LispSymbol name, @Nullable LispSymbol constructor, List<String> constructorFields,
-			LispSymbol predicate, List<String> fields, SequencedMap<String, LispSymbol> accessors,
-			SequencedMap<String, LispSymbol> modifiers) {
-	}
-
-	private RecordType recordType(LispCons form) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 4) {
-			throw error("malformed define-record-type", form);
-		}
-		LispSymbol name = parts.get(1) instanceof LispCons named ? identifier(named.car(), form)
-				: identifier(parts.get(1), form);
-		List<String> fields = new ArrayList<>();
-		SequencedMap<String, LispSymbol> accessors = new LinkedHashMap<>();
-		SequencedMap<String, LispSymbol> modifiers = new LinkedHashMap<>();
-		for (LispVal spec : parts.subList(4, parts.size())) {
-			List<LispVal> field = spec instanceof LispSymbol ? List.of(spec) : elements(spec, form);
-			if (field.isEmpty() || field.size() > 3) {
-				throw error("malformed record field", form);
-			}
-			String fieldName = identifier(field.get(0), form).name();
-			if (fields.contains(fieldName)) {
-				throw error("duplicate record field: " + fieldName, form);
-			}
-			fields.add(fieldName);
-			if (field.size() >= 2) {
-				accessors.put(fieldName, identifier(field.get(1), form));
-			}
-			if (field.size() == 3) {
-				modifiers.put(fieldName, identifier(field.get(2), form));
-			}
-		}
-		LispSymbol constructor = null;
-		List<String> constructorFields = new ArrayList<>();
-		if (parts.get(2) instanceof LispCons spec) {
-			List<LispVal> constructorSpec = elements(spec, form);
-			constructor = identifier(constructorSpec.get(0), form);
-			for (LispVal field : constructorSpec.subList(1, constructorSpec.size())) {
-				String fieldName = identifier(field, form).name();
-				if (!fields.contains(fieldName)) {
-					throw error("the constructor names an unknown field: " + fieldName, form);
-				}
-				constructorFields.add(fieldName);
-			}
-		}
-		else if (parts.get(2) instanceof LispSymbol bare && bare != SchemeReader.FALSE) {
-			constructor = bare;
-			constructorFields.addAll(fields);
-		}
-		return new RecordType(name, constructor, constructorFields, identifier(parts.get(3), form), fields, accessors,
-				modifiers);
-	}
-
-	// A record type is a defstruct: that is what registers the instance layout on every
-	// backend (.kb/defstruct.md). Each slot is NAMED after its accessor and the conc-name
-	// is empty, so the generated accessor IS the Scheme accessor -- no wrapper call.
-	private void recordType(LispCons form, List<LispVal> out) {
-		RecordType type = recordType(form);
-		Map<String, LispSymbol> slots = new HashMap<>();
-		List<LispVal> slotList = new ArrayList<>();
-		for (String field : type.fields()) {
-			LispSymbol accessor = type.accessors().get(field);
-			LispSymbol slot = accessor != null ? global(accessor) : fresh("SLOT");
-			slots.put(field, slot);
-			slotList.add(slot);
-		}
-		List<LispVal> constructorParams = new ArrayList<>();
-		for (String field : type.constructorFields()) {
-			constructorParams.add(slots.get(field));
-		}
-		LispSymbol constructor = type.constructor() != null ? global(type.constructor()) : fresh("MAKE");
-		LispVal options = list(global(type.name()),
-				list(symbol(":CONSTRUCTOR"), constructor, listOf(constructorParams)),
-				list(symbol(":PREDICATE"), global(type.predicate())), list(symbol(":COPIER"), LispNil.INSTANCE),
-				list(symbol(":CONC-NAME"), LispNil.INSTANCE));
-		out.add(inherit(form, new LispCons(symbol("DEFSTRUCT"), new LispCons(options, listOf(slotList)))));
-		type.modifiers().forEach((field, modifier) -> {
-			LispSymbol record = fresh("R");
-			LispSymbol newValue = fresh("V");
-			LispSymbol slot = slots.get(field);
-			if (slot == null || !type.accessors().containsKey(field)) {
-				throw error("a modifier needs an accessor for its field: " + field, form);
-			}
-			// A modifier answers the unspecified object, like set-car!, so a REPL does
-			// not
-			// echo the stored value.
-			out.add(inherit(form, list(symbol("DEFUN"), global(modifier), list(record, newValue),
-					list(symbol("SETF"), list(slot, record), newValue), this.unspecifiedVariable)));
-		});
-	}
-
-	/**
-	 * An internal record type, hoisted to the top level.
-	 *
-	 * @param procedures what the body binds: each record procedure and the top-level
-	 * procedure it means
-	 */
-	private record InternalRecord(List<LocalProcedure> procedures) {
-	}
-
-	private record LocalProcedure(LispSymbol identifier, Binding binding) {
-	}
-
-	private void refuseAgainInBody(LispSymbol identifier, Set<String> recordNames, LispCons form) {
-		if (recordNames.contains(name(identifier))) {
-			throw error("a body defines " + identifier.name() + " twice", form);
-		}
-	}
-
-	// An internal define-record-type is a TOP-LEVEL defstruct, hoisted ahead of the
-	// top-level form holding it: a defstruct is what registers the layout on every
-	// backend, and the compile path refuses one anywhere else. Its name,
-	// s%%[<enclosing definition> <type>], is one no identifier mangles to
-	// (SchemeNames.libraryPrefix's argument), qualified by the top-level definition it
-	// stands in so two procedures' types never meet. The slots are named after the
-	// FIELDS -- the expander may have renamed the accessors -- and the accessors are the
-	// generated ones through a conc-name; the other procedures are defuns named after
-	// the type. The body binds its names to these, so every call stays direct. One type
-	// per occurrence, not per evaluation (R7RS leaves generativity unspecified).
-	private InternalRecord internalRecord(LispCons form) {
-		InternalRecord known = this.internalRecords.get(form);
-		if (known != null) {
-			return known;
-		}
-		RecordType type = recordType(form);
-		String base = this.prefix + SchemeNames.PREFIX + "%[" + SchemeNames.component(this.enclosing) + " "
-				+ SchemeNames.component(name(type.name()));
-		String candidate = base + "]";
-		for (int ordinal = 2; !this.internalRecordNames.add(candidate); ordinal++) {
-			candidate = base + " " + ordinal + "]";
-		}
-		String structName = candidate;
-		String concName = structName + " ";
-		Map<String, LispSymbol> slots = new HashMap<>();
-		List<LispVal> slotList = new ArrayList<>();
-		for (String field : type.fields()) {
-			LispSymbol slot = symbol(SchemeNames.mangle(field));
-			slots.put(field, slot);
-			slotList.add(slot);
-		}
-		List<LocalProcedure> procedures = new ArrayList<>();
-		type.accessors()
-			.forEach((field, accessor) -> procedures
-				.add(new LocalProcedure(accessor, new GlobalFunction(symbol(concName + SchemeNames.mangle(field))))));
-		List<LispVal> constructorParams = new ArrayList<>();
-		for (String field : type.constructorFields()) {
-			constructorParams.add(slots.get(field));
-		}
-		LispSymbol constructor;
-		if (type.constructor() != null) {
-			constructor = symbol(structName + "(" + name(type.constructor()) + ")");
-			procedures.add(new LocalProcedure(type.constructor(), new GlobalFunction(constructor)));
-		}
-		else {
-			constructor = fresh("MAKE");
-		}
-		LispSymbol predicate = symbol(structName + "(" + name(type.predicate()) + ")");
-		procedures.add(new LocalProcedure(type.predicate(), new GlobalPredicate(predicate)));
-		LispVal options = list(symbol(structName), list(symbol(":CONSTRUCTOR"), constructor, listOf(constructorParams)),
-				list(symbol(":PREDICATE"), predicate), list(symbol(":COPIER"), LispNil.INSTANCE),
-				list(symbol(":CONC-NAME"), new LispString(concName)));
-		this.hoisted.add(inherit(form, new LispCons(symbol("DEFSTRUCT"), new LispCons(options, listOf(slotList)))));
-		type.modifiers().forEach((field, modifier) -> {
-			LispSymbol name = symbol(structName + "(" + name(modifier) + ")");
-			LispSymbol record = fresh("R");
-			LispSymbol newValue = fresh("V");
-			this.hoisted.add(inherit(form,
-					list(symbol("DEFUN"), name, list(record, newValue),
-							list(symbol("SETF"), list(symbol(concName + SchemeNames.mangle(field)), record), newValue),
-							this.unspecifiedVariable)));
-			procedures.add(new LocalProcedure(modifier, new GlobalFunction(name)));
-		});
-		InternalRecord record = new InternalRecord(List.copyOf(procedures));
-		this.internalRecords.put(form, record);
-		return record;
-	}
-
 	// ------------------------------------------------------------------ expressions
 
-	private LispVal value(LispVal expression, Scope scope) {
+	LispVal value(LispVal expression, Scope scope) {
 		return lower(expression, Context.of(scope));
 	}
 
@@ -2942,7 +1099,7 @@ final class SchemeLowering {
 	 * Lowers one expression: to a form answering its value when the context has no
 	 * destination, else to a statement that stores the value in the destination or jumps.
 	 */
-	private LispVal lower(LispVal expression, Context context) {
+	LispVal lower(LispVal expression, Context context) {
 		if (expression == CORE_UNSPECIFIED) {
 			return context.discarded() ? LispNil.INSTANCE : leaf(this.unspecifiedVariable, context);
 		}
@@ -2960,7 +1117,7 @@ final class SchemeLowering {
 		return leaf(atom(expression, context.scope()), context);
 	}
 
-	private LispVal leaf(LispVal valueForm, Context context) {
+	LispVal leaf(LispVal valueForm, Context context) {
 		Destination destination = context.destination();
 		if (destination == null) {
 			return valueForm;
@@ -2974,13 +1131,13 @@ final class SchemeLowering {
 	}
 
 	// The loop form, inside the block its leaves return from when any does.
-	private static LispVal exiting(Exit exit, LispVal loop) {
+	static LispVal exiting(Exit exit, LispVal loop) {
 		return exit.used ? list(symbol("BLOCK"), exit.block, loop) : loop;
 	}
 
 	// A form run for its effect, whose Scheme value is the unspecified object: the raw
 	// form alone where nobody reads the value.
-	private LispVal effect(LispVal effectForm, Context context) {
+	LispVal effect(LispVal effectForm, Context context) {
 		if (context.discarded()) {
 			return effectForm;
 		}
@@ -2991,7 +1148,7 @@ final class SchemeLowering {
 		return list(symbol("PROGN"), effectForm, list(symbol("SETQ"), destination.result(), this.unspecifiedVariable));
 	}
 
-	private LispVal atom(LispVal expression, Scope scope) {
+	LispVal atom(LispVal expression, Scope scope) {
 		return switch (expression) {
 			case LispSymbol identifier -> {
 				if (identifier == SchemeReader.TRUE) {
@@ -3005,13 +1162,13 @@ final class SchemeLowering {
 	}
 
 	// A record predicate as a first-class Scheme procedure: #t/#f, not T/NIL.
-	private LispVal predicateValue(GlobalPredicate predicate) {
+	LispVal predicateValue(GlobalPredicate predicate) {
 		LispSymbol argument = fresh("X");
 		return list(symbol("LAMBDA"), list(argument),
 				SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE, list(predicate.symbol(), argument)));
 	}
 
-	private LispVal reference(LispSymbol identifier, Scope scope) {
+	LispVal reference(LispSymbol identifier, Scope scope) {
 		Binding binding = lookup(identifier, scope);
 		return switch (binding) {
 			case Variable variable -> variable.symbol();
@@ -3032,7 +1189,7 @@ final class SchemeLowering {
 		};
 	}
 
-	private LispVal lowerForm(LispCons form, Context context) {
+	LispVal lowerForm(LispCons form, Context context) {
 		if (form.car() instanceof LispSymbol head) {
 			Binding binding = lookup(head, context.scope());
 			if (binding instanceof Syntax syntax) {
@@ -3042,7 +1199,7 @@ final class SchemeLowering {
 		return application(form, context);
 	}
 
-	private LispVal syntax(Syntax syntax, LispCons form, Context context) {
+	LispVal syntax(Syntax syntax, LispCons form, Context context) {
 		Scope scope = context.scope();
 		return switch (syntax.core()) {
 			case QUOTE -> leaf(quoted(single(form)), context);
@@ -3052,7 +1209,7 @@ final class SchemeLowering {
 				if (parts.size() < 3) {
 					throw error("a lambda needs formals and a body", form);
 				}
-				yield leaf(lambda(
+				yield leaf(SchemeLambdaLowering.lambda(this,
 						new ProcedureSpec(formals(parts.get(1), form), parts.subList(2, parts.size()), null, null),
 						scope), context);
 			}
@@ -3083,13 +1240,13 @@ final class SchemeLowering {
 			case BEGIN -> {
 				List<LispVal> parts = elements(form.cdr(), form);
 				yield parts.isEmpty() ? lower(CORE_UNSPECIFIED, context)
-						: progn(body(parts, context.in(new Scope(scope))));
+						: progn(SchemeBindingLowering.body(this, parts, context.in(new Scope(scope))));
 			}
-			case LET -> let(form, context);
-			case LET_STAR -> letStar(form, context);
-			case LETREC, LETREC_STAR -> letrec(form, context);
-			case LET_VALUES -> letValues(form, context, false);
-			case LET_STAR_VALUES -> letValues(form, context, true);
+			case LET -> SchemeBindingLowering.let(this, form, context);
+			case LET_STAR -> SchemeBindingLowering.letStar(this, form, context);
+			case LETREC, LETREC_STAR -> SchemeBindingLowering.letrec(this, form, context);
+			case LET_VALUES -> SchemeBindingLowering.letValues(this, form, context, false);
+			case LET_STAR_VALUES -> SchemeBindingLowering.letValues(this, form, context, true);
 			case DO -> lower(desugarDo(form), context);
 			case COND -> lower(desugarCond(elements(form.cdr(), form), context.scope(), form), context);
 			case CASE -> lower(desugarCase(form, context.scope()), context);
@@ -3149,7 +1306,7 @@ final class SchemeLowering {
 			// Spliced before the lowering too, except where no walk enters: a
 			// quasiquote's
 			// unquoted expression.
-			case COND_EXPAND -> lower(condExpanded(form), context);
+			case COND_EXPAND -> lower(SchemeLibraryLowering.condExpanded(this, form), context);
 			case ELSE, ARROW, UNQUOTE, UNQUOTE_SPLICING, ELLIPSIS, UNDERSCORE ->
 				throw error("misplaced " + syntax.name(), form);
 			// SchemeExpander consumes these before the lowering; one reaches here only
@@ -3167,7 +1324,7 @@ final class SchemeLowering {
 	// clauses as a procedure of the raised object, as a cond whose missing else raises
 	// the object again -- from the guard, whose body has been unwound by then
 	// (.kb/scheme-frontend.md, "Exceptions").
-	private LispVal guard(LispCons form, Scope scope) {
+	LispVal guard(LispCons form, Scope scope) {
 		List<LispVal> parts = elements(form, form);
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispCons spec)) {
 			throw error("a guard needs (variable clause...) and a body", form);
@@ -3192,7 +1349,7 @@ final class SchemeLowering {
 	// tail call of a procedure defined by one is a jump like any lambda's. No clause
 	// accepting the count is a Scheme error naming the arguments. Desugared once per
 	// datum: the pre-scans ask for it before the lowering does.
-	private LispVal caseLambda(LispCons form) {
+	LispVal caseLambda(LispCons form) {
 		LispVal cached = this.caseLambdas.get(form);
 		if (cached != null) {
 			return cached;
@@ -3240,7 +1397,7 @@ final class SchemeLowering {
 	// the parameters and values alternating, in the order written, converts every value
 	// before binding any, and runs the body thunk with them bound -- a special let inside
 	// the helper, so every exit restores them (.kb/scheme-frontend.md, "Parameters").
-	private LispVal parameterize(LispCons form, List<LispVal> bindings, List<LispVal> body, Scope scope) {
+	LispVal parameterize(LispCons form, List<LispVal> bindings, List<LispVal> body, Scope scope) {
 		List<LispVal> operands = new ArrayList<>();
 		operands.add(symbol("LIST"));
 		for (LispVal binding : bindings) {
@@ -3258,14 +1415,14 @@ final class SchemeLowering {
 
 	// (delay e) and (delay-force e): a promise record around the state and a thunk
 	// lowered like any lambda, so a loop that delays rebinds its variables per iteration.
-	private LispVal promise(int state, LispCons form, Scope scope) {
+	LispVal promise(int state, LispCons form, Scope scope) {
 		LispVal thunk = value(inherit(form, list(CORE_LAMBDA, LispNil.INSTANCE, single(form))), scope);
 		return list(symbol("RONTOLISP::%SCHEME-DELAY"), new LispInteger(state), thunk);
 	}
 
 	// ------------------------------------------------------------------ application
 
-	private LispVal application(LispCons form, Context context) {
+	LispVal application(LispCons form, Context context) {
 		List<LispVal> parts = elements(form, form);
 		Scope scope = context.scope();
 		LispVal operator = parts.get(0);
@@ -3291,7 +1448,7 @@ final class SchemeLowering {
 
 	// An effect builtin's raw form: what a call lowers to before the unspecified object
 	// is added.
-	private LispVal builtinEffect(Call call, Builtin builtin, Scope scope) {
+	LispVal builtinEffect(Call call, Builtin builtin, Scope scope) {
 		LispVal literal = displayOfALiteral(call, builtin);
 		return literal != null ? literal : builtinCall(call, builtin, scope);
 	}
@@ -3299,7 +1456,7 @@ final class SchemeLowering {
 	private record Call(LispCons form, LispVal operator, List<LispVal> operands, @Nullable Binding binding) {
 	}
 
-	private LispVal call(Call call, Scope scope) {
+	LispVal call(Call call, Scope scope) {
 		if (call.binding() instanceof Builtin builtin) {
 			LispVal multipleValues = callWithValues(call, scope);
 			if (multipleValues != null) {
@@ -3368,7 +1525,7 @@ final class SchemeLowering {
 		};
 	}
 
-	private LispVal builtinCall(Call call, Builtin builtin, Scope scope) {
+	LispVal builtinCall(Call call, Builtin builtin, Scope scope) {
 		LispVal raw = builtin.entry().call(values(call.operands(), scope), () -> fresh("A"));
 		if (raw == null) {
 			throw error("wrong number of arguments to " + builtin.entry().name() + ": " + call.operands().size(),
@@ -3398,17 +1555,19 @@ final class SchemeLowering {
 		if (formals.rest() != null) {
 			return null;
 		}
-		LispVal produced = progn(body(producerParts.subList(2, producerParts.size()), Context.of(new Scope(scope))));
+		LispVal produced = progn(SchemeBindingLowering.body(this, producerParts.subList(2, producerParts.size()),
+				Context.of(new SchemeLowering.Scope(scope))));
 		Scope inner = new Scope(scope);
 		List<LispVal> variables = new ArrayList<>();
 		for (LispSymbol formal : formals.required()) {
 			variables.add(bind(formal, inner));
 		}
-		return new LispCons(symbol("MULTIPLE-VALUE-BIND"), new LispCons(listOf(variables), new LispCons(produced,
-				listOf(body(consumerParts.subList(2, consumerParts.size()), Context.of(inner))))));
+		return new LispCons(symbol("MULTIPLE-VALUE-BIND"),
+				new LispCons(listOf(variables), new LispCons(produced, listOf(SchemeBindingLowering.body(this,
+						consumerParts.subList(2, consumerParts.size()), Context.of(inner))))));
 	}
 
-	private List<LispVal> values(List<LispVal> expressions, Scope scope) {
+	List<LispVal> values(List<LispVal> expressions, Scope scope) {
 		List<LispVal> lowered = new ArrayList<>();
 		for (LispVal expression : expressions) {
 			lowered.add(value(expression, scope));
@@ -3416,7 +1575,7 @@ final class SchemeLowering {
 		return lowered;
 	}
 
-	private LispVal jump(Target target, List<LispVal> arguments) {
+	LispVal jump(Target target, List<LispVal> arguments) {
 		target.used = true;
 		List<LispVal> assignments = new ArrayList<>();
 		int required = target.rest ? target.assigned.size() - 1 : target.assigned.size();
@@ -3443,7 +1602,7 @@ final class SchemeLowering {
 
 	// ------------------------------------------------------------------ tests
 
-	private Test test(LispVal expression, Scope scope) {
+	Test test(LispVal expression, Scope scope) {
 		if (expression == SchemeReader.FALSE) {
 			return new Test(LispNil.INSTANCE, false);
 		}
@@ -3489,13 +1648,13 @@ final class SchemeLowering {
 	}
 
 	// (if c a b) over an arbitrary value: (if (eq c false) b a).
-	private Test generic(LispVal expression, Scope scope) {
+	Test generic(LispVal expression, Scope scope) {
 		return new Test(list(symbol("EQ"), value(expression, scope), this.falseVariable), true);
 	}
 
 	// Whether the expression can only answer #t or #f, so its VALUE is (if test t false)
 	// rather than a temporary per `or` operand.
-	private boolean isBoolean(LispVal expression, Scope scope) {
+	boolean isBoolean(LispVal expression, Scope scope) {
 		if (expression == SchemeReader.TRUE || expression == SchemeReader.FALSE) {
 			return true;
 		}
@@ -3520,7 +1679,7 @@ final class SchemeLowering {
 
 	// ------------------------------------------------------------------ derived forms
 
-	private static LispVal desugarAnd(List<LispVal> operands) {
+	static LispVal desugarAnd(List<LispVal> operands) {
 		if (operands.isEmpty()) {
 			return SchemeReader.TRUE;
 		}
@@ -3531,7 +1690,7 @@ final class SchemeLowering {
 				SchemeReader.FALSE);
 	}
 
-	private LispVal desugarOr(List<LispVal> operands) {
+	LispVal desugarOr(List<LispVal> operands) {
 		if (operands.isEmpty()) {
 			return SchemeReader.FALSE;
 		}
@@ -3543,7 +1702,7 @@ final class SchemeLowering {
 		return list(CORE_LET, list(list(temporary, operands.get(0))), list(CORE_IF, temporary, temporary, rest));
 	}
 
-	private LispVal desugarCond(List<LispVal> clauses, Scope scope, LispCons form) {
+	LispVal desugarCond(List<LispVal> clauses, Scope scope, LispCons form) {
 		if (clauses.isEmpty()) {
 			return CORE_UNSPECIFIED;
 		}
@@ -3571,14 +1730,14 @@ final class SchemeLowering {
 		return list(CORE_IF, test, new LispCons(CORE_BEGIN, listOf(clause.subList(1, clause.size()))), rest);
 	}
 
-	private boolean isArrow(LispVal datum, Scope scope) {
+	boolean isArrow(LispVal datum, Scope scope) {
 		return datum instanceof LispSymbol keyword && lookup(keyword, scope) instanceof Syntax syntax
 				&& syntax.core() == Core.ARROW;
 	}
 
 	// (case key ((d...) e...)... (else e...)): the key once, then eqv? tests spelled
 	// straight in Common Lisp, so they fuse into the ifs.
-	private LispVal desugarCase(LispCons form, Scope scope) {
+	LispVal desugarCase(LispCons form, Scope scope) {
 		List<LispVal> parts = elements(form, form);
 		if (parts.size() < 2) {
 			throw error("malformed case", form);
@@ -3609,7 +1768,7 @@ final class SchemeLowering {
 
 	// (do ((var init step)...) (test result...) body...) is a named let whose only
 	// reference to its name is the tail call, so it always lowers to a pure loop.
-	private LispVal desugarDo(LispCons form) {
+	LispVal desugarDo(LispCons form) {
 		List<LispVal> parts = elements(form, form);
 		if (parts.size() < 3) {
 			throw error("malformed do", form);
@@ -3639,362 +1798,7 @@ final class SchemeLowering {
 										new LispCons(CORE_BEGIN, listOf(body)))))));
 	}
 
-	// ------------------------------------------------------------------ binding forms
-
-	private record Bindings(List<LispSymbol> variables, List<LispVal> inits) {
-	}
-
-	private Bindings bindings(LispVal specs, LispCons form) {
-		List<LispSymbol> variables = new ArrayList<>();
-		List<LispVal> inits = new ArrayList<>();
-		for (LispVal spec : elements(specs, form)) {
-			List<LispVal> binding = elements(spec, form);
-			if (binding.size() != 2) {
-				throw error("a binding is (variable init)", form);
-			}
-			variables.add(identifier(binding.get(0), form));
-			inits.add(binding.get(1));
-		}
-		return new Bindings(variables, inits);
-	}
-
-	private LispVal let(LispCons form, Context context) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol) {
-			return namedLet(form, context);
-		}
-		if (parts.size() < 3) {
-			throw error("malformed let", form);
-		}
-		Bindings bindings = bindings(parts.get(1), form);
-		Scope inner = new Scope(context.scope());
-		List<LispVal> pairs = new ArrayList<>();
-		for (int i = 0; i < bindings.variables().size(); i++) {
-			LispVal init = value(bindings.inits().get(i), context.scope());
-			pairs.add(list(bind(bindings.variables().get(i), inner), init));
-		}
-		return new LispCons(symbol("LET"),
-				new LispCons(listOf(pairs), listOf(body(parts.subList(2, parts.size()), context.in(inner)))));
-	}
-
-	private LispVal letStar(LispCons form, Context context) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 3) {
-			throw error("malformed let*", form);
-		}
-		Bindings bindings = bindings(parts.get(1), form);
-		Scope inner = context.scope();
-		List<LispVal> pairs = new ArrayList<>();
-		for (int i = 0; i < bindings.variables().size(); i++) {
-			LispVal init = value(bindings.inits().get(i), inner);
-			inner = new Scope(inner);
-			pairs.add(list(bind(bindings.variables().get(i), inner), init));
-		}
-		return new LispCons(symbol("LET*"), new LispCons(listOf(pairs),
-				listOf(body(parts.subList(2, parts.size()), context.in(new Scope(inner))))));
-	}
-
-	// letrec and letrec*: bind to nil, then assign in order -- the shape `labels` itself
-	// lowers to (.kb/flet-labels.md), so mutual recursion works on every backend.
-	private LispVal letrec(LispCons form, Context context) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 3) {
-			throw error("malformed letrec", form);
-		}
-		Bindings bindings = bindings(parts.get(1), form);
-		Scope inner = new Scope(context.scope());
-		List<LispVal> pairs = new ArrayList<>();
-		for (LispSymbol variable : bindings.variables()) {
-			pairs.add(list(bind(variable, inner), LispNil.INSTANCE));
-		}
-		List<Member> candidates = new ArrayList<>();
-		for (int i = 0; i < bindings.variables().size(); i++) {
-			LispSymbol variable = bindings.variables().get(i);
-			if (bindings.inits().get(i) instanceof LispCons lambda && syntaxOf(lambda, inner) == Core.LAMBDA) {
-				List<LispVal> lambdaParts = elements(lambda, lambda);
-				if (lambdaParts.size() >= 3) {
-					candidates.add(new Member(lambda,
-							new Definition(variable, lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size())),
-							Objects.requireNonNull(lookup(variable, inner))));
-				}
-			}
-		}
-		Map<LispCons, Group> groups = internalGroups(candidates, Set.of(), inner);
-		List<LispVal> forms = new ArrayList<>();
-		for (int i = 0; i < bindings.variables().size(); i++) {
-			LispSymbol variable = bindings.variables().get(i);
-			LispVal init = bindings.inits().get(i);
-			Group group = init instanceof LispCons lambda ? groups.get(lambda) : null;
-			if (group != null) {
-				forms.addAll(internalGroupDefinition(group, member(group, init), inner, pairs));
-			}
-			else {
-				forms.add(list(symbol("SETQ"), variableSymbol(variable, inner), recursiveValue(variable, init, inner)));
-			}
-		}
-		forms.addAll(body(parts.subList(2, parts.size()), context.in(new Scope(inner))));
-		return new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(forms)));
-	}
-
-	// The value of a variable that may be a procedure calling itself: a syntactic lambda
-	// bound to a never-assigned variable gets its self tail calls turned into a loop.
-	private LispVal recursiveValue(LispSymbol variable, LispVal init, Scope scope) {
-		if (init instanceof LispCons lambda && syntaxOf(lambda, scope) == Core.LAMBDA
-				&& !this.assignedNames.contains(name(variable))) {
-			List<LispVal> parts = elements(lambda, lambda);
-			if (parts.size() >= 3) {
-				return inherit(lambda, lambda(new ProcedureSpec(formals(parts.get(1), lambda),
-						parts.subList(2, parts.size()), lookup(variable, scope), variable), scope));
-			}
-		}
-		return value(init, scope);
-	}
-
-	private LispVal namedLet(LispCons form, Context context) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 4) {
-			throw error("malformed named let", form);
-		}
-		LispSymbol loopName = (LispSymbol) parts.get(1);
-		Bindings bindings = bindings(parts.get(2), form);
-		List<LispVal> inits = values(bindings.inits(), context.scope());
-		return namedLet(new NamedLet(form, loopName, bindings.variables(), inits, parts.subList(3, parts.size())),
-				context);
-	}
-
-	private LispVal namedLet(NamedLet loop, Context context) {
-		LispSymbol loopName = loop.name();
-		List<LispVal> inits = loop.inits();
-		if (!this.assignedNames.contains(name(loopName))) {
-			LispVal pure = pureLoop(loop, context, false);
-			if (pure != null) {
-				return pure;
-			}
-		}
-		// The name escapes: a real procedure, bound letrec-style and called once.
-		Scope inner = new Scope(context.scope());
-		LispSymbol procedure = bind(loopName, inner);
-		LispVal lambda = recursiveValue(loopName,
-				new LispCons(CORE_LAMBDA, new LispCons(listOf(new ArrayList<>(loop.variables())), listOf(loop.body()))),
-				inner);
-		LispVal call = new LispCons(symbol("FUNCALL"), new LispCons(procedure, listOf(inits)));
-		return leaf(list(symbol("LET"), list(list(procedure, LispNil.INSTANCE)),
-				list(symbol("SETQ"), procedure, lambda), call), context);
-	}
-
-	private record NamedLet(LispCons form, LispSymbol name, List<LispSymbol> variables, List<LispVal> inits,
-			List<LispVal> body) {
-	}
-
-	/**
-	 * A named {@code let} as {@code tagbody}/{@code go}, or {@code null} when the name is
-	 * used as anything but a tail call. The loop variables are assigned in place -- the
-	 * shape the backends' typed loops recognize -- unless the body creates a closure: a
-	 * closure must capture THIS iteration's variables, so that loop rebinds them per
-	 * iteration from carriers ({@code fresh}).
-	 */
-	private @Nullable LispVal pureLoop(NamedLet loop, Context context, boolean fresh) {
-		LoopName binding = new LoopName();
-		Scope inner = new Scope(context.scope());
-		inner.bindings.put(name(loop.name()), binding);
-		Scope bodyScope = new Scope(inner);
-		List<LispSymbol> variables = new ArrayList<>();
-		List<LispSymbol> carriers = new ArrayList<>();
-		for (LispSymbol variable : loop.variables()) {
-			variables.add(bind(variable, bodyScope));
-			carriers.add(fresh("C"));
-		}
-		Target target = new Target(binding, new LoopShape(fresh("L"), fresh ? carriers : variables, false, !fresh),
-				bodyScope, loop.variables().stream().map(this::name).toList());
-		Destination outer = context.destination();
-		LispSymbol result = outer != null ? outer.result() : fresh("R");
-		List<Target> targets = new ArrayList<>(outer != null ? outer.targets() : List.of());
-		targets.add(target);
-		// An inner loop stores into the enclosing loop's destination, and leaves through
-		// the enclosing loop's block.
-		Exit exit = outer != null ? outer.exit() : new Exit(result);
-		int closuresBefore = this.closures;
-		List<LispVal> statements = body(loop.body(),
-				Context.storing(bodyScope, new Destination(result, targets, exit)));
-		if (binding.escaped) {
-			return null;
-		}
-		if (!fresh && target.used && (this.closures != closuresBefore || target.shadowed)) {
-			return pureLoop(loop, context, true);
-		}
-		List<LispVal> pairs = new ArrayList<>();
-		for (int i = 0; i < variables.size(); i++) {
-			pairs.add(list(fresh ? carriers.get(i) : variables.get(i), loop.inits().get(i)));
-		}
-		if (outer == null) {
-			pairs.add(list(result, LispNil.INSTANCE));
-		}
-		List<LispVal> forms = new ArrayList<>();
-		forms.add(loopBody(new LoopBody(target, fresh ? variables : List.of(), carriers, statements)));
-		if (outer == null) {
-			forms.add(result);
-		}
-		LispVal lowered = new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(forms)));
-		return outer == null ? exiting(exit, lowered) : lowered;
-	}
-
-	private record LoopBody(Target target, List<LispSymbol> rebound, List<LispSymbol> carriers,
-			List<LispVal> statements) {
-	}
-
-	// (tagbody L statements...), the statements inside a per-iteration (let ((v c)...))
-	// when the loop rebinds; just the statements when nothing ever jumps.
-	private static LispVal loopBody(LoopBody loop) {
-		List<LispVal> statements = loop.statements();
-		if (!loop.rebound().isEmpty()) {
-			List<LispVal> pairs = new ArrayList<>();
-			for (int i = 0; i < loop.rebound().size(); i++) {
-				pairs.add(list(loop.rebound().get(i), loop.carriers().get(i)));
-			}
-			statements = List.of(new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(statements))));
-		}
-		if (!loop.target().used) {
-			return progn(statements);
-		}
-		return new LispCons(symbol("TAGBODY"), new LispCons(loop.target().label, listOf(statements)));
-	}
-
-	private LispVal letValues(LispCons form, Context context, boolean sequential) {
-		List<LispVal> parts = elements(form, form);
-		if (parts.size() < 3) {
-			throw error("malformed let-values", form);
-		}
-		List<LispVal> clauses = elements(parts.get(1), form);
-		Scope inner = new Scope(context.scope());
-		// Parallel clauses bind temporaries first, so no init sees another clause's
-		// variables; one clause (the common case) and let*-values bind directly.
-		boolean direct = sequential || clauses.size() <= 1;
-		List<ValuesClause> lowered = new ArrayList<>();
-		List<LispVal> renames = new ArrayList<>();
-		for (LispVal clauseDatum : clauses) {
-			List<LispVal> clause = elements(clauseDatum, form);
-			if (clause.size() != 2) {
-				throw error("a let-values binding is (formals init)", form);
-			}
-			LispVal init = value(clause.get(1), direct ? inner : context.scope());
-			Formals formals = formals(clause.get(0), form);
-			if (direct) {
-				inner = new Scope(inner);
-			}
-			List<LispSymbol> names = new ArrayList<>();
-			for (LispSymbol formal : formals.all()) {
-				if (direct) {
-					names.add(bind(formal, inner));
-				}
-				else {
-					LispSymbol temporary = fresh("V");
-					names.add(temporary);
-					renames.add(list(cl(formal), temporary));
-				}
-			}
-			lowered.add(new ValuesClause(names, formals.rest() != null, init));
-		}
-		if (!direct) {
-			inner = new Scope(inner);
-			for (LispVal clauseDatum : clauses) {
-				for (LispSymbol formal : formals(elements(clauseDatum, form).get(0), form).all()) {
-					bind(formal, inner);
-				}
-			}
-		}
-		List<LispVal> body = body(parts.subList(2, parts.size()), context.in(new Scope(inner)));
-		LispVal result = direct ? progn(body)
-				: new LispCons(symbol("LET"), new LispCons(listOf(renames), listOf(body)));
-		for (int i = lowered.size() - 1; i >= 0; i--) {
-			result = lowered.get(i).around(result, this);
-		}
-		return result;
-	}
-
-	private record ValuesClause(List<LispSymbol> names, boolean rest, LispVal init) {
-
-		LispVal around(LispVal body, SchemeLowering lowering) {
-			if (!this.rest) {
-				return list(symbol("MULTIPLE-VALUE-BIND"), listOf(new ArrayList<>(this.names)), this.init, body);
-			}
-			LispSymbol all = lowering.fresh("M");
-			List<LispVal> pairs = new ArrayList<>();
-			int last = this.names.size() - 1;
-			for (int i = 0; i < last; i++) {
-				pairs.add(list(this.names.get(i), list(symbol("NTH"), new LispInteger(i), all)));
-			}
-			pairs.add(list(this.names.get(last), list(symbol("NTHCDR"), new LispInteger(last), all)));
-			return list(symbol("LET"), list(list(all, list(symbol("MULTIPLE-VALUE-LIST"), this.init))),
-					list(symbol("LET"), listOf(pairs), body));
-		}
-
-	}
-
-	// ------------------------------------------------------------------ procedures and
-	// bodies
-
-	private LispVal lambda(ProcedureSpec spec, Scope scope) {
-		this.closures++;
-		Lowered lowered = procedure(spec, scope);
-		return new LispCons(symbol("LAMBDA"), new LispCons(lowered.lambdaList(), listOf(lowered.body())));
-	}
-
-	private Lowered procedure(ProcedureSpec spec, Scope scope) {
-		if (spec.self() != null && spec.selfName() != null && mentionsCall(spec.body(), spec.selfName().name())) {
-			Lowered loop = selfLoop(spec, scope, false);
-			if (loop != null) {
-				return loop;
-			}
-		}
-		Scope inner = new Scope(scope);
-		List<LispSymbol> parameters = new ArrayList<>();
-		for (LispSymbol formal : spec.formals().all()) {
-			parameters.add(bind(formal, inner));
-		}
-		return new Lowered(lambdaList(parameters, spec.formals().rest() != null),
-				body(spec.body(), Context.of(new Scope(inner))));
-	}
-
-	// A procedure whose tail calls to itself jump: the parameters arrive in carriers and
-	// the body runs inside (tagbody L ...), storing its value in a result variable. Null
-	// when no call turned out to be a self tail call, so the plain shape is used.
-	private @Nullable Lowered selfLoop(ProcedureSpec spec, Scope scope, boolean fresh) {
-		Scope inner = new Scope(scope);
-		List<LispSymbol> variables = new ArrayList<>();
-		List<LispSymbol> carriers = new ArrayList<>();
-		for (LispSymbol formal : spec.formals().all()) {
-			variables.add(bind(formal, inner));
-			carriers.add(fresh("C"));
-		}
-		boolean rest = spec.formals().rest() != null;
-		Target target = new Target(java.util.Objects.requireNonNull(spec.self()),
-				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh), inner,
-				spec.formals().all().stream().map(this::name).toList());
-		target.clause = spec.clause();
-		LispSymbol result = fresh("R");
-		Exit exit = new Exit(result);
-		int closuresBefore = this.closures;
-		List<LispVal> statements = body(spec.body(),
-				Context.storing(new Scope(inner), new Destination(result, List.of(target), exit)));
-		if (!target.used) {
-			return null;
-		}
-		if (!fresh && (this.closures != closuresBefore || target.shadowed)) {
-			return selfLoop(spec, scope, true);
-		}
-		List<LispVal> pairs = new ArrayList<>();
-		if (!fresh) {
-			for (int i = 0; i < variables.size(); i++) {
-				pairs.add(list(variables.get(i), carriers.get(i)));
-			}
-		}
-		pairs.add(list(result, LispNil.INSTANCE));
-		LispVal loop = loopBody(new LoopBody(target, fresh ? variables : List.of(), carriers, statements));
-		return new Lowered(lambdaList(carriers, rest),
-				List.of(exiting(exit, list(symbol("LET"), listOf(pairs), loop, result))));
-	}
-
-	private static LispVal lambdaList(List<LispSymbol> parameters, boolean rest) {
+	static LispVal lambdaList(List<LispSymbol> parameters, boolean rest) {
 		List<LispVal> lambdaList = new ArrayList<>(parameters);
 		if (rest) {
 			lambdaList.add(lambdaList.size() - 1, symbol("&REST"));
@@ -4002,137 +1806,9 @@ final class SchemeLowering {
 		return listOf(lambdaList);
 	}
 
-	// Whether some call-shaped datum is headed by the name: the cheap reason to even try
-	// the loop shape.
-	private static boolean mentionsCall(List<LispVal> body, String name) {
-		for (LispVal datum : body) {
-			LispVal rest = datum;
-			boolean head = true;
-			while (rest instanceof LispCons cell) {
-				if (head && cell.car() instanceof LispSymbol symbol && symbol.name().equals(name)) {
-					return true;
-				}
-				if (cell.car() instanceof LispCons && mentionsCall(List.of(cell.car()), name)) {
-					return true;
-				}
-				head = false;
-				rest = cell.cdr();
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Lowers a body: internal definitions become {@code letrec*} -- bound to nil around
-	 * the whole body, assigned where they stand -- and the last form takes the context's
-	 * destination.
-	 */
-	private List<LispVal> body(List<LispVal> forms, Context context) {
-		List<LispVal> flat = new ArrayList<>();
-		for (LispVal form : forms) {
-			spliceBodyBegins(form, context.scope(), flat);
-		}
-		if (flat.isEmpty()) {
-			// Every caller checked its form has a body; (begin) splices to nothing.
-			throw new IllegalArgumentException("an empty body");
-		}
-		Scope scope = context.scope();
-		List<LispVal> pairs = new ArrayList<>();
-		// An internal record type binds no variable at all: its names mean the hoisted
-		// top-level procedures, called directly. Such a name may not be defined twice.
-		Set<String> variables = new HashSet<>();
-		Set<String> recordNames = new HashSet<>();
-		// What a define-values binds: no tail-call group member.
-		Set<String> valuesNames = new HashSet<>();
-		for (LispVal form : flat) {
-			if (form instanceof LispCons cons) {
-				Core core = syntaxOf(cons, scope);
-				if (core == Core.DEFINE) {
-					LispSymbol name = definition(cons).name();
-					refuseAgainInBody(name, recordNames, cons);
-					variables.add(name(name));
-					pairs.add(list(bind(name, scope), LispNil.INSTANCE));
-				}
-				else if (core == Core.DEFINE_VALUES) {
-					for (LispSymbol variable : formals(second(cons), cons).all()) {
-						refuseAgainInBody(variable, recordNames, cons);
-						variables.add(name(variable));
-						valuesNames.add(variable.name());
-						pairs.add(list(bind(variable, scope), LispNil.INSTANCE));
-					}
-				}
-				else if (core == Core.DEFINE_RECORD_TYPE) {
-					for (LocalProcedure procedure : internalRecord(cons).procedures()) {
-						String name = name(procedure.identifier());
-						if (variables.contains(name) || !recordNames.add(name)) {
-							throw error("a body defines " + procedure.identifier().name() + " twice", cons);
-						}
-						scope.bindings.put(name, procedure.binding());
-					}
-				}
-			}
-		}
-		List<Member> candidates = new ArrayList<>();
-		for (LispVal form : flat) {
-			if (form instanceof LispCons cons && syntaxOf(cons, scope) == Core.DEFINE) {
-				Definition definition = definition(cons);
-				if (definition.procedure() && definition.caseLambda() == null) {
-					candidates
-						.add(new Member(cons, definition, Objects.requireNonNull(lookup(definition.name(), scope))));
-				}
-			}
-		}
-		Map<LispCons, Group> groups = internalGroups(candidates, valuesNames, scope);
-		List<LispVal> lowered = new ArrayList<>();
-		for (int i = 0; i < flat.size(); i++) {
-			LispVal form = flat.get(i);
-			boolean last = i == flat.size() - 1;
-			Core core = form instanceof LispCons cons ? syntaxOf(cons, scope) : null;
-			Group group = form instanceof LispCons cons ? groups.get(cons) : null;
-			if (group != null) {
-				lowered.addAll(internalGroupDefinition(group, member(group, form), scope, pairs));
-			}
-			else if (core == Core.DEFINE && form instanceof LispCons cons) {
-				Definition definition = definition(cons);
-				Binding self = this.assignedNames.contains(name(definition.name())) ? null
-						: lookup(definition.name(), scope);
-				lowered.add(inherit(cons, list(symbol("SETQ"), variableSymbol(definition.name(), scope),
-						definedValue(definition, new DefinedIn(cons, scope, self)))));
-			}
-			else if (core == Core.DEFINE_VALUES && form instanceof LispCons cons) {
-				lowered.add(inherit(cons, defineValues(cons, scope)));
-			}
-			else if (core == Core.DEFINE_RECORD_TYPE) {
-				// Defined at the top level already; a body ending in one answers the
-				// unspecified object.
-				if (last) {
-					lowered.add(lower(CORE_UNSPECIFIED, context));
-				}
-			}
-			else {
-				lowered.add(lower(form, last ? context : Context.discarding(scope)));
-			}
-		}
-		if (pairs.isEmpty()) {
-			return lowered;
-		}
-		return List.of(new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(lowered))));
-	}
-
-	private void spliceBodyBegins(LispVal datum, Scope scope, List<LispVal> out) {
-		if (datum instanceof LispCons form && syntaxOf(form, scope) == Core.BEGIN && form.cdr() instanceof LispCons) {
-			for (LispVal inner : elements(form.cdr(), form)) {
-				spliceBodyBegins(inner, scope, out);
-			}
-		}
-		else {
-			out.add(datum);
-		}
-	}
-
 	// ------------------------------------------------------------------ data
 
-	private LispVal quoted(LispVal datum) {
+	LispVal quoted(LispVal datum) {
 		LispVal converted = datum(datum);
 		return switch (converted) {
 			case LispSymbol symbol -> list(symbol("QUOTE"), symbol);
@@ -4144,7 +1820,7 @@ final class SchemeLowering {
 
 	// A Scheme datum as the Common Lisp datum it denotes: '() is NIL, #t is T, #f is the
 	// false value's symbol, an identifier its mangled spelling.
-	private LispVal datum(LispVal datum) {
+	LispVal datum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol symbol -> {
 				if (symbol == SchemeReader.TRUE) {
@@ -4191,7 +1867,7 @@ final class SchemeLowering {
 	// Walks the cdr spine in a loop, so a long template costs no stack per element: an
 	// ordinary cell's car is expanded on the way down, as the recursive walk did before
 	// descending, and a splice's own element on the way back up, after its tail.
-	private LispVal quasi(LispVal template, Quasi quasi) {
+	LispVal quasi(LispVal template, Quasi quasi) {
 		List<LispCons> cells = new ArrayList<>();
 		List<@Nullable LispVal> cars = new ArrayList<>();
 		LispVal node = template;
@@ -4283,7 +1959,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ names and
 	// helpers
 
-	private @Nullable Binding lookup(LispSymbol identifier, Scope scope) {
+	@Nullable Binding lookup(LispSymbol identifier, Scope scope) {
 		Core core = CORE_SYMBOLS.get(identifier);
 		if (core != null) {
 			return new Syntax(core, identifier.name());
@@ -4291,34 +1967,34 @@ final class SchemeLowering {
 		return scope.find(name(identifier));
 	}
 
-	private @Nullable Core syntaxOf(LispCons form, Scope scope) {
+	@Nullable Core syntaxOf(LispCons form, Scope scope) {
 		return form.car() instanceof LispSymbol head && lookup(head, scope) instanceof Syntax syntax ? syntax.core()
 				: null;
 	}
 
 	// The scope key AND the emitted spelling: a generated temporary verbatim (uppercase,
 	// which no mangled user identifier can be), a user identifier mangled.
-	private String name(LispSymbol identifier) {
+	String name(LispSymbol identifier) {
 		return this.generated.contains(identifier) ? identifier.name() : SchemeNames.mangle(identifier.name());
 	}
 
-	private LispSymbol cl(LispSymbol identifier) {
+	LispSymbol cl(LispSymbol identifier) {
 		return this.generated.contains(identifier) ? identifier : symbol(name(identifier));
 	}
 
 	// A top-level name this lowering defines: the user's spelling in a program, private
 	// to the library in a library (SchemeNames.libraryPrefix).
-	private LispSymbol global(LispSymbol identifier) {
+	LispSymbol global(LispSymbol identifier) {
 		return this.generated.contains(identifier) ? identifier : symbol(this.prefix + name(identifier));
 	}
 
-	private LispSymbol bind(LispSymbol identifier, Scope scope) {
+	LispSymbol bind(LispSymbol identifier, Scope scope) {
 		LispSymbol variable = cl(identifier);
 		scope.bindings.put(name(identifier), new Variable(variable));
 		return variable;
 	}
 
-	private LispSymbol variableSymbol(LispSymbol identifier, Scope scope) {
+	LispSymbol variableSymbol(LispSymbol identifier, Scope scope) {
 		return switch (lookup(identifier, scope)) {
 			// A library's own macro may assign the library's variable.
 			case Variable variable when this.libraryImports.contains(variable)
@@ -4332,13 +2008,13 @@ final class SchemeLowering {
 		};
 	}
 
-	private LispSymbol fresh(String kind) {
+	LispSymbol fresh(String kind) {
 		LispSymbol temporary = new LispSymbol(this.prefix + "%SCM-" + kind + (++this.counter));
 		this.generated.add(temporary);
 		return temporary;
 	}
 
-	private Formals formals(LispVal datum, LispCons form) {
+	Formals formals(LispVal datum, LispCons form) {
 		List<LispSymbol> required = new ArrayList<>();
 		LispVal rest = datum;
 		while (rest instanceof LispCons cell) {
@@ -4348,14 +2024,14 @@ final class SchemeLowering {
 		return new Formals(required, rest == LispNil.INSTANCE ? null : identifier(rest, form));
 	}
 
-	private LispSymbol identifier(LispVal datum, LispCons form) {
+	LispSymbol identifier(LispVal datum, LispCons form) {
 		if (datum instanceof LispSymbol symbol && symbol != SchemeReader.TRUE && symbol != SchemeReader.FALSE) {
 			return symbol;
 		}
 		throw error("expected an identifier, got " + datum.print(), form);
 	}
 
-	private LispVal single(LispCons form) {
+	LispVal single(LispCons form) {
 		List<LispVal> parts = elements(form, form);
 		if (parts.size() != 2) {
 			throw error("expected exactly one operand", form);
@@ -4363,11 +2039,11 @@ final class SchemeLowering {
 		return parts.get(1);
 	}
 
-	private LispVal second(LispCons form) {
+	LispVal second(LispCons form) {
 		return form.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
 	}
 
-	private List<LispVal> elements(LispVal list, LispCons form) {
+	List<LispVal> elements(LispVal list, LispCons form) {
 		List<LispVal> elements = new ArrayList<>();
 		LispVal rest = list;
 		while (rest instanceof LispCons cell) {
@@ -4380,14 +2056,14 @@ final class SchemeLowering {
 		return elements;
 	}
 
-	private LispReadException error(String message, LispCons form) {
+	LispReadException error(String message, LispCons form) {
 		return new LispReadException(message, this.reader.locate(form));
 	}
 
 	// A datum rewrite standing where `original` stands, positioned in both tables: the
 	// reader's (syntax errors) and SourceProvenance's -- whose answer, a located copy on
 	// the interpreter, is the cell the reader must know.
-	private <T extends LispVal> T positioned(LispCons original, T rewritten) {
+	<T extends LispVal> T positioned(LispCons original, T rewritten) {
 		T answer = inherit(original, rewritten);
 		if (answer instanceof LispCons cons) {
 			this.reader.inherit(original, cons);
@@ -4395,23 +2071,23 @@ final class SchemeLowering {
 		return answer;
 	}
 
-	private static <T extends LispVal> T inherit(LispCons original, T lowered) {
+	static <T extends LispVal> T inherit(LispCons original, T lowered) {
 		return SourceProvenance.inherit(original, lowered);
 	}
 
-	private static LispVal progn(List<LispVal> forms) {
+	static LispVal progn(List<LispVal> forms) {
 		return forms.size() == 1 ? forms.get(0) : new LispCons(symbol("PROGN"), listOf(forms));
 	}
 
-	private static LispSymbol symbol(String name) {
+	static LispSymbol symbol(String name) {
 		return new LispSymbol(name);
 	}
 
-	private static LispVal list(LispVal... elements) {
+	static LispVal list(LispVal... elements) {
 		return SchemeBuiltins.list(elements);
 	}
 
-	private static LispVal listOf(List<? extends LispVal> elements) {
+	static LispVal listOf(List<? extends LispVal> elements) {
 		return SchemeBuiltins.listOf(new ArrayList<>(elements));
 	}
 

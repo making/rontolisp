@@ -189,7 +189,7 @@ regions carry it.
 **A body's `define-record-type` is a top-level `defstruct`, hoisted; the body binds
 names, not variables.** `defstruct` is what registers the instance layout on every
 backend and the compile path refuses one below the top level (`.kb/defstruct.md`), so
-`SchemeLowering.internalRecord` emits the `defstruct` and the modifier `defun`s into
+`SchemeRecordLowering.internalRecord` emits the `defstruct` and the modifier `defun`s into
 `hoisted`, which `topLevel` puts AHEAD of the top-level form being lowered (the
 interpreter runs forms in order; the exit wrapper and a session entry keep a
 `defstruct`/`defun` bare). `body` binds each record procedure in the body's scope to a
@@ -361,7 +361,7 @@ its record in `internalRecords` by datum identity and defines nothing twice.
 - "Read before": a name mentioned (scope-blind, `collectNames`) by a form RUN at the top
   level -- anything but a procedure definition or a record type -- at or before the
   name's first definition, directly or through what any name defined before that form
-  mentions (`SchemeLowering.readBeforeDefinition`). So `(define (f x) (abs x))
+  mentions (`SchemeDefinitionLowering.readBeforeDefinition`). So `(define (f x) (abs x))
   (define (abs x) ...) (f 1)` keeps both `defun`s, and `(define (f x) (abs x)) (f 1)
   (define (abs x) ...)` does not. A body of a procedure defined earlier and called later
   sees the user's binding, as a global lookup at call time would.
@@ -387,7 +387,7 @@ standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyw
 alone), `process-context`, `eval` (`eval`, `environment`), `repl`
 (`interaction-environment`), `load` (the one `(scheme load)` export, the Common Lisp
 `load`: the compile path inlines a literal one and the interpreter loads at run time, the
-file read as Scheme either way) `complex` (the six `(scheme complex)` exports, below) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+file read as Scheme either way) `complex` (the six `(scheme complex)` exports, below) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLibraryLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
 <tag>))` names them, and a file with no import at all merges all fourteen. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
@@ -396,7 +396,7 @@ system-global-environment` -- via `SchemeLowering.Constant` over
 `SchemeBuiltins.constants()`, not an `Entry`, since they are values, not procedures --
 `filter reduce fold-left fold-right delete last-pair append!
 list-index 1+ -1+ random runtime parallel-execute test-and-set!`) is no R7RS library, so no import names it:
-`SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
+`SchemeLibraryLowering.imports()`'s no-import branch merges it too, so a file with no import at
 all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
 narrows to exactly what it names. `r5rs` (`scheme-report-environment`) rides the same
 no-import default, as do R5RS's `exact->inexact` and `inexact->exact` (tagged `base`
@@ -405,7 +405,7 @@ the whole of R5RS, so it stays refused by name (`.todo/829`
 measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
 mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
 has the harness). A user `define` of any of these still wins, exactly like `square`:
-`SchemeLowering.declareGlobals` overwrites the global scope entry for any name the file
+`SchemeDefinitionLowering.declareGlobals` overwrites the global scope entry for any name the file
 defines regardless of what library put there first -- under `--scheme-standard
 rontolisp`; `r7rs` refuses it (next section).
 
@@ -420,7 +420,7 @@ is R7RS-small within the implemented subset:
 1. **A file that does not begin with `import` is refused** at lowering, positioned at its
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
-2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
+2. **`sicp` and `r5rs` names are never visible**: `SchemeLibraryLowering.imports()`'s no-import
    branch (the session's) merges the fourteen libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
@@ -1260,7 +1260,7 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
 ## Libraries and include (`define-library`, `include`; 2026-09-19, `.todo/882`)
 
 **A library is a file lowering of its own whose top-level names are PRIVATE symbols, and
-an export is the binding itself.** `SchemeLowering.instantiate` lowers the library body
+an export is the binding itself.** `SchemeLibraryLowering.instantiate` lowers the library body
 with a child `SchemeLowering` (its own global `Scope` from its own `import`s, its own
 expander, prefix `SchemeNames.libraryPrefix`), and the importer's `importSet` puts the
 exported `Binding` objects into its scope under the external names -- so a `defun`
@@ -1419,7 +1419,7 @@ features (`gauche`, `srfi-N`, `posix`, ...); a program testing those takes its `
 
 - **Requirements** (`SchemeFeatures.clause`): an identifier, `(and ..)`, `(or ..)`,
   `(not x)`, `(library name)`, compared by NAME; a last `else`. `(library name)` holds
-  when an import would find it (`SchemeLowering.libraryAvailable`): `(scheme <tag>)` of
+  when an import would find it (`SchemeLibraryLowering.libraryAvailable`): `(scheme <tag>)` of
   `IMPORTABLE_LIBRARIES` (not `r5rs`, `time`, ...), a library declared already, or one
   whose `.sld`/`.scm` file declares it -- that declares the file's libraries, as an import
   would, without lowering them. **No clause taken and no `else` is a positioned error**
@@ -1622,7 +1622,7 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   `examples/scheme` (`evaluator.scm`, +262 B of class, +8 B of wasm) change; every
   changed leaf is a user procedure call, `funcall` or `apply`. The rest lower byte-identically.
 
-## Tail-call groups (`SchemeLowering.declareGroups`; 2026-09-19, `.todo/897`)
+## Tail-call groups (`SchemeGroupLowering.declareGroups`; 2026-09-19, `.todo/897`)
 
 **Top-level procedures of a file whose TAIL calls to each other form a cycle are one
 `defun`, and every tail call among them is a jump.** `ev?`/`od?`, a state machine, SICP's
@@ -1720,7 +1720,7 @@ Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGr
 and the `top-level-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of
 `scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` prints the same).
 
-### Internal groups (`SchemeLowering.internalGroups`; 2026-09-19, `.todo/898`)
+### Internal groups (`SchemeGroupLowering.internalGroups`; 2026-09-19, `.todo/898`)
 
 **The same probe runs on every body and every `letrec`**: the internal `define`s bound to a
 syntactic `lambda` (and the `letrec` bindings whose init is one) whose tail calls cycle are
