@@ -1814,6 +1814,39 @@ cases:
       (1 2)
       ([1 10] [2 20])
       ([1 2 3])
+  - name: for-over-lazy-map
+    # for steps through a lazy input one realized level at a time, so a lazy tail
+    # never reaches the pattern as wrapper internals, and a :while stops an
+    # infinite input. The answer stays the strict list. Measured on the oracle
+    # (Clojure CLI 1.12.6).
+    source: |
+      (println (for [[idx elt] (map vector (iterate inc 0) "zzab")] idx))
+      (println (for [[i c] (map vector (iterate inc 0) "zzab") :when (= c \a) :let [j (* i 10)]] j))
+      (println (for [x (filter odd? (map inc (iterate inc 0))) :while (< x 8)] x))
+      (println (for [x (concat [1] (lazy-seq [2])) y (map inc (lazy-seq [10 20]))] [x y]))
+      (println (for [x [1 2] [i _] (map vector (iterate inc x) "ab")] i))
+    expected: |
+      (0 1 2 3)
+      (20)
+      (1 3 5 7)
+      ([1 11] [1 21] [2 11] [2 21])
+      (1 2 2 3)
+  - name: doseq-does-not-yield-lazy-internals
+    # doseq walks a lazy input the same stepped way: destructuring, :when, :let
+    # and :while see only the elements. Measured on the oracle (Clojure CLI 1.12.6).
+    source: |
+      (doseq [[idx elt] (map vector (iterate inc 0) "zzab") :when (not= elt \z) :let [k (str idx elt)]] (println k))
+      (println (doseq [x (concat [1 2] (lazy-seq [3]))] (print x)))
+      (println (doseq [x (iterate inc 0) :while (< x 3)] (print x)))
+      (def b81-log (atom []))
+      (doseq [x (map inc (lazy-seq [1 2])) y (filter even? (concat [1 2] (lazy-seq [3 4])))] (swap! b81-log b10-push [x y]))
+      (println @b81-log)
+    expected: |
+      2a
+      3b
+      123nil
+      012nil
+      [[2 2] [2 4] [3 2] [3 4]]
   - name: dorun-doall
     # Seqs are already strict, so realizing one is evaluating it: dorun answers
     # nil, doall the collection itself (never coerced -- a vector stays a vector).

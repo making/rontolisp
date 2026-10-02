@@ -516,8 +516,9 @@
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; no chunking (every element realizes singly), no parallel realization, infinite
-;; range stays refused, and lazy inputs to the non-listed verbs (doseq/for/reduce
-;; and friends) consume one level through %clojure-seq -- pass a taken prefix.
+;; range stays refused, and lazy inputs to the non-listed verbs consume one level
+;; through %clojure-seq -- pass a taken prefix (reduce/into walk whole through
+;; %clojure-seq-rest, doseq/for step through it in the lowering).
 
 (defun rontolisp::%clojure-lazy-p (x)
   "Whether X is the (:C%LAZY cell) wrapper lazy-seq and friends build."

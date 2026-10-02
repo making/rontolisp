@@ -4,8 +4,10 @@ Difficulty: High
 
 Measured 2026-10-02, oracle `clj` 1.12.6.1673 vs exec jar at `ec836db36`:
 
-- After b81, `examples.test.lazy-index-of-any` still fails its `with-out-str`
-  comparison: oracle realizes `logging-seq` prints lazily
+- After b81 (measured 2026-10-02), `examples.test.lazy-index-of-any` is
+  `2 failures, 0 errors` (oracle `0 failures, 0 errors`): both `with-out-str`
+  comparisons capture all 10 `Iterating over` lines where the oracle captures 1
+  and 4: oracle realizes `logging-seq` prints lazily
   (`(take 1 (for [x (logging-seq "abcd")] x))` prints once), while ronto's
   `for` is strict by design (lowering-table `for` row: nested `dolist`
   accumulating in reverse into a strict list), so the whole input realizes

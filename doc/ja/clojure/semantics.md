@@ -115,8 +115,9 @@ splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoi
 
 ## 反復
 
-`doseq` は副作用のために seq ビューを反復し `nil` を答えます:束縛ペアごとに `dolist`
-が 1 つ、左から右へ入れ子になり、本体は暗黙の `do` です。`dotimes` はカウント未満の
+`doseq` は副作用のために seq ビューを反復し `nil` を答えます:束縛ペアごとにループ
+が 1 つ、左から右へ入れ子になり、本体は暗黙の `do` です。各ループは lazy 入力を 1 要素
+ずつ進むため、`:while` は無限の入力も止めます。`dotimes` はカウント未満の
 `0` から同じく束縛し `nil` を答えます。カウントは先に `truncate` を通るため、`2.5`
 は `0 1` を数え、非数はそこでシグナルします（オラクルの `intCast` と同様）。`for` は
 本体を全組合せに適用した strict なリストを答え、逆順に蓄積します。空の結果は `nil`
@@ -190,7 +191,8 @@ lazy な tail は `...` で打ち切られます。chunk 化はありません�
 closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
 `read-line` 越しに読みます（末尾越しはオラクル同様 `nil`）。
-他の seq 動詞（`doseq`/`for`/`reduce` や `keep` 群）への lazy 入力は seq ビューを1レベル
+`doseq`/`for`/`reduce`/`into` は lazy 入力を最後まで辿ります（`for` の答えは strict な
+リストのまま）。他の seq 動詞（`keep` 群）への lazy 入力は seq ビューを1レベル
 だけ消費します。先に `take` した prefix を渡してください。
 
 ## プロトコル、レコード、型

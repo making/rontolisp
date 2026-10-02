@@ -61,9 +61,9 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `->`/`->>`/`as->` | the threaded call, rewritten as datums | `->` inserts second, `->>` last; a bare name or keyword calls/reads with the value; `as->` is nested `let`s, so shadowing matches the oracle. A step over a collection literal signals (collections are not functions here) |
 | `doto`/`cond->`/`cond->>`/`some->`/`some->>` | the threaded calls around one temporary | `doto` answers its (unchanged) target; `cond->` threads only on truthy tests; `some->` stops at `nil` but not at `false`, like the oracle |
 | `list*` | a right fold of `cons` over the seq view | of one argument, just its seq (signalling for a non-collection, like the oracle) |
-| `doseq` | nested `dolist` loops over the seq view around an implicit `do`, answering `nil` | `:when` skips, `:while` ends its level through a block (an outer level's ends the whole form), `:let` binds sequentially; patterns destructure like `let`; an empty vector runs the body once, `nil` never |
+| `doseq` | nested stepped `do` loops over the seq view around an implicit `do`, answering `nil` (b81: `(do ((s view (%clojure-seq-rest s))) ((null s)) (let ((x (car s))) ...))`, `ClojureLoopLowering.stepOf`; a `dolist` walked a realized lazy cons's wrapper tail `(:C%LAZY cell)` as list structure, so `(for [[i e] (map vector (iterate inc 0) "ab")] i)` destructured `:C%LAZY` and signalled `seq needs a collection`; the step realizes the next level only when the next element is wanted, so a `:while` stops an infinite input. +1,094 B raw wasm for `(println (for [x [1 2 3]] (* x 10)))` 35,215 -> 36,309 and `(doseq [x [1 2 3]] (println x))` 31,575 -> 32,669, 2026-10-02: the spliced `%clojure-seq-rest`/`-realize`) | `:when` skips, `:while` ends its level through a block (an outer level's ends the whole form), `:let` binds sequentially; patterns destructure like `let`; an empty vector runs the body once, `nil` never |
 | `dotimes [i n]` | the core `dotimes` over `(truncate n)`, answering `nil` | the count runs through `truncate` first (the oracle's `intCast`: `2.5` counts `0 1`, a non-number signals there); exactly one plain name and count, else a named refusal |
-| `for` | nested `dolist` loops accumulating in reverse into a strict list | `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); empty is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
+| `for` | nested stepped `do` loops (the `doseq` shape) accumulating in reverse into a strict list | `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); empty is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
 | `dorun`/`doall` | the strict companions: the collection (and the optional count) evaluated, answering `nil`/the collection itself, each a function value too | seqs are already strict, so realizing is evaluating; `doall` never coerces (a vector stays a vector) |
 | `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value, a per-multimethod prefers table and an `Object`-method slot in four globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table (a keyword dispatch value takes the lookup plus an optional default, like `(:k m dflt)`, so multi-argument calls dispatch on it -- decided 2026-10-01, b39; set/vector values share the rest-tolerant shape while a map literal stays the attr-map, like the oracle); `defmethod` stores a parameter lambda (destructuring included) under the dispatch value lowered by `dispatchKeyForm` -- a class spelling (`String`, `Number`, ..., dotted/`java.lang`/imported names, known record/deftype names) onto the keyword the `class` dispatcher produces for it, `nil` onto the `(:C%NIL)` marker (the dispatcher maps a true nil onto it first, so no table ever keys on nil, while a dispatch value that literally is `:nil` keeps its keyword row, like the oracle; a `class` call inside the dispatch function answers nil itself for a nil
 argument, so the null test maps it onto the marker too -- bare, wrapped in another
@@ -262,8 +262,10 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   through it, printing refuses with `#<LazySeq>` instead of hanging, never a bare
   infinite print); there is no chunking, so an end-less `range` stays refused by name
   (spell it with `iterate`). `reduce`, `into` and the transducer consumers walk a lazy input
-  whole (b60). Lazy inputs to the other seq verbs consume one level --
-  pass a `take`n prefix.
+  whole (b60), `doseq`/`for` step through it (b81; `for` still answers a strict list, b82).
+  Lazy inputs to the other seq verbs consume one level -- pass a `take`n prefix; their
+  answers are silently wrong, not refused (`(count (map inc (lazy-seq [1 2 3])))` is 2,
+  `last` the wrapper's cell; measured 2026-10-02, b88).
 - protocols (lowered in b13, below), `set!` (of a deftype mutable field in b61,
   of a thread-bound dynamic var and the always-bound compiler flags in b75),
   `var`/`#'`: `var`/`#'` stay absent, refused by name (backquote lowered in b12, below; regex
@@ -454,7 +456,7 @@ oracle's lowercase; b77 qualifies the unresolved symbols too, so `macros/bench-1
 prints the oracle's bytes: `clojure.core/let`, `examples.macros.bench-1/start`,
 `java.lang.System/nanoTime`), plus `preface` since b72: its `(use :reload ...)` inside a `deftest` captures
 the file's print where the `require` runs); of the 7 `macros*`, `examples.macros.chain-4/chain` qualifies like the oracle; the rest
-stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
+stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input (b81 removed its 2 errors, the 2 `with-out-str` line-count failures are b82's strict `for`), the host
 stack overflow, `clojure.set` -- measured after b57/b59/b60 merged; `proxy` over a class
 joined them then and left with b71, unmeasured on the corpus here).
 The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
@@ -724,9 +726,9 @@ parameter (which may hold a collection) dispatches, a `defn` name stays a direct
 call and a `declare`d-but-never-defined name keeps its direct-call error --
 pinned in `clojure-spec.yaml` (run on all four backends) and in
 `ClojureLoweringTest` (the lowered shapes). Imperative loops and comprehensions lower the same way (b10):
-`doseq` as nested `dolist` loops over the seq view answering `nil` (an empty vector
+`doseq` as nested stepped loops over the seq view answering `nil` (an empty vector
 runs the body once), `dotimes` as the core `dotimes` over a truncated count,
-`for` as nested `dolist` loops accumulating in reverse into a strict list
+`for` as the same loops accumulating in reverse into a strict list
 (`:when`/`:while`/`:let` per level, an inner `:while` ending only its level like the
 oracle, destructuring through the `let` lowering, `dorun`/`doall` as the strict
 companions) -- each pinned in `clojure-spec.yaml` (run on all four backends) or,

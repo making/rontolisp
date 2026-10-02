@@ -202,11 +202,11 @@ final class ClojureLoopLowering {
 
 	/**
 	 * {@code doseq}: side-effecting iteration over the seq view, answering nil. One
-	 * {@code dolist} per binding pair (which the macro expander already shares with every
-	 * backend), nested left to right; patterns destructure through the same {@code let}
-	 * lowering; {@code :when} skips the element, {@code :while} ends its level's loop
-	 * through a block (an outer level's ends the whole form), {@code :let} binds
-	 * sequentially. An empty binding vector runs the body once.
+	 * stepped {@code do} loop per binding pair ({@link #stepOf}), nested left to right;
+	 * patterns destructure through the same {@code let} lowering; {@code :when} skips the
+	 * element, {@code :while} ends its level's loop through a block (an outer level's
+	 * ends the whole form), {@code :let} binds sequentially. An empty binding vector runs
+	 * the body once.
 	 */
 	static LispVal doseqOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "doseq takes a binding vector and a body");
@@ -249,11 +249,11 @@ final class ClojureLoopLowering {
 	}
 
 	/**
-	 * {@code for}: a strict list comprehension over the seq view -- nested {@code dolist}
-	 * loops accumulating in reverse, like {@code take}'s labels walk, so no backend
-	 * learns a representation. Modifiers behave per level, left to right: {@code :when}
-	 * skips the element, {@code :while} ends its level's loop (an outer level's ends the
-	 * whole comprehension), {@code :let} binds sequentially. Answers the strict list,
+	 * {@code for}: a strict list comprehension over the seq view -- nested stepped
+	 * {@code do} loops ({@link #stepOf}) accumulating in reverse, so no backend learns a
+	 * representation. Modifiers behave per level, left to right: {@code :when} skips the
+	 * element, {@code :while} ends its level's loop (an outer level's ends the whole
+	 * comprehension), {@code :let} binds sequentially. Answers the strict list,
 	 * {@code nil} when empty (the {@code rest}/{@code take} divergence, not {@code ()}).
 	 */
 	static LispVal forOf(ClojureLowering ctx, List<LispVal> items) {
@@ -317,11 +317,11 @@ final class ClojureLoopLowering {
 
 	/**
 	 * One binding level wrapped around its inner content: the collection's seq view
-	 * iterated by {@code dolist} (patterns through the {@code let} destructuring), the
-	 * level's modifiers applied in order around the content. A {@code :while} ends the
-	 * level's own loop through a block, so an outer level's ends the whole
-	 * {@code doseq}/{@code for} while an inner one's lets the outer loops continue, like
-	 * the oracle's.
+	 * stepped through by {@link #stepOf} (patterns through the {@code let}
+	 * destructuring), the level's modifiers applied in order around the content. A
+	 * {@code :while} ends the level's own loop through a block, so an outer level's ends
+	 * the whole {@code doseq}/{@code for} while an inner one's lets the outer loops
+	 * continue, like the oracle's.
 	 */
 	static LispVal seqLevel(ClojureLowering ctx, ClojureLowering.SeqLevel level, LispVal inner,
 			Map<String, ClojureLowering.Kind> scope, String owner) {
@@ -344,7 +344,7 @@ final class ClojureLoopLowering {
 				default -> throw new LispReadException("Invalid '" + owner + "' keyword " + modifier.kind());
 			}
 		}
-		LispVal loopForm = dolistOf(ctx, level.pattern(), seq, wrap, scope, owner);
+		LispVal loopForm = stepOf(ctx, level.pattern(), seq, wrap, scope, owner);
 		if (whileBlock != null) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("block"), whileBlock, loopForm);
 		}
@@ -352,25 +352,36 @@ final class ClojureLoopLowering {
 	}
 
 	/**
-	 * One {@code dolist} over an already-lowered seq view: a plain name binds the element
-	 * directly, a pattern through the {@code let} destructuring over a temporary.
+	 * One loop over an already-lowered seq view, stepping through it one realized level
+	 * at a time:
+	 * {@code (do ((s view (%clojure-seq-rest s))) ((null s)) (let ((x (car s)))
+	 * wrap))}. A lazy seq's realized cons holds another wrapper as its tail, which a
+	 * {@code dolist} would walk as list structure; the step realizes it instead, and only
+	 * when the next element is wanted, so a {@code :while} stops an infinite input. A
+	 * plain name binds the element directly, a pattern through the {@code let}
+	 * destructuring over a temporary; each element gets a fresh binding.
 	 */
-	static LispVal dolistOf(ClojureLowering ctx, LispVal pattern, LispVal seq, LispVal wrap,
+	static LispVal stepOf(ClojureLowering ctx, LispVal pattern, LispVal seq, LispVal wrap,
 			Map<String, ClojureLowering.Kind> scope, String owner) {
+		LispSymbol cursor = ctx.freshTemp();
+		LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), cursor);
+		LispVal body;
 		if (pattern instanceof LispSymbol) {
 			String name = ClojureLowerUtil.plainName(pattern, owner);
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.idSym(name), seq)), wrap);
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), head))), wrap);
 		}
-		LispSymbol temp = ctx.freshTemp();
-		List<LispVal> pairs = new ArrayList<>();
-		ClojureBindingLowering.destructureInto(ctx, pattern, temp, pairs, scope, owner);
-		if (pairs.isEmpty()) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(temp, seq)),
-					wrap);
+		else {
+			LispSymbol temp = ctx.freshTemp();
+			List<LispVal> pairs = new ArrayList<>();
+			pairs.add(ClojureLowerUtil.list(temp, head));
+			ClojureBindingLowering.destructureInto(ctx, pattern, temp, pairs, scope, owner);
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs), wrap);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(temp, seq)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs), wrap));
+		LispVal step = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-REST"), cursor);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("do"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cursor, seq, step))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), cursor))), body);
 	}
 
 	/**
