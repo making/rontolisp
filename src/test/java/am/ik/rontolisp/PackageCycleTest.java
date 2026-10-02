@@ -113,7 +113,8 @@ class PackageCycleTest {
 			"am.ik.rontolisp.compiler.JavaType",
 			"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form",
 			"am.ik.rontolisp.clojure.ClojureLowering",
-			"recursive-descent lowering: the per-form helpers lower their subforms through the hub dispatcher");
+			"recursive-descent lowering: the per-form helpers lower their subforms through the hub dispatcher",
+			"am.ik.rontolisp.scheme.SchemeLowering", "recursive-descent lowering, same shape as the clojure front end");
 
 	@Test
 	void classCyclesAreOnlyTheDesignedMutualRecursions() throws IOException {

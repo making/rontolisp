@@ -7,8 +7,9 @@ Switches to the namespace, creating it, and wires its clauses: `:as` registers a
 `(:refer-clojure :only ...)`/`(:refer-clojure :exclude ...)` narrow the visible core. There
 is no `:rename`. The definitions below the form belong to the namespace. A required
 namespace other than `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test`
-is a project namespace: one an earlier `ns` form of the program declared, or one loaded once
-from its file on the source path ([Semantics](../semantics.md#namespaces-and-files)); a file
+is a project namespace: one an earlier `ns` form of the program declared, or one whose
+file on the source path loads when the clause runs -- once per program, again under
+`:reload` ([Semantics](../semantics.md#namespaces-and-files)); a file
 no root holds is an error.
 
 ```clojure

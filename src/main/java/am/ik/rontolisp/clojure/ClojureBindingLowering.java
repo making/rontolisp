@@ -39,6 +39,22 @@ final class ClojureBindingLowering {
 	}
 
 	static List<LispVal> defForms(ClojureLowering ctx, List<LispVal> items) {
+		return defForms(ctx, items, null);
+	}
+
+	/**
+	 * A {@code def} lowered for a namespace init: the setq statement, plus -- for a
+	 * {@code ^:dynamic} var, into {@code hoisted} -- the declaim and the binding-depth
+	 * counter, which stay top-level at the head where {@code SpecialVarCollector} and
+	 * {@code GlobalVarCollector} read them (a {@code defparameter} nested in the init
+	 * would proclaim nothing and hide the counter's store).
+	 * @param ctx the lowering
+	 * @param items the def datum's items
+	 * @param hoisted where a dynamic var's top-level forms go, or null for the ordinary
+	 * top-level shape
+	 * @return the forms (the init statement, or the top-level shapes)
+	 */
+	static List<LispVal> defForms(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "def");
@@ -74,7 +90,16 @@ final class ClojureBindingLowering {
 			// and proclaims it, so binding rebinds it with dynamic extent; the
 			// binding-depth counter beside it lets set! test at run time whether
 			// the var is thread-bound. Two top-level forms, so both keep their
-			// defparameter head for SpecialVarCollector.
+			// defparameter head for SpecialVarCollector. In a namespace init the
+			// setq runs at load time instead, and the declaim plus the counter
+			// ride top-level, where both collectors read them.
+			if (hoisted != null) {
+				hoisted.add(ClojureLowering.declaimSpecial(ClojureLowering.varSym(key),
+						ClojureLowering.boundDepthSym(key)));
+				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
+						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
+				return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value));
+			}
 			return List.of(
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),

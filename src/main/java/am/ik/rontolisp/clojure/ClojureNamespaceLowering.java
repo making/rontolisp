@@ -163,10 +163,11 @@ final class ClojureNamespaceLowering {
 	 * {@code require} of it reads no file), wires the {@code :require} / {@code :use}
 	 * aliases and refers -- loading each project namespace they name -- the
 	 * {@code :import} class names and the {@code :refer-clojure} filter, and defines
-	 * nothing. Metadata, the docstring and the attr map are ignored, like the declaration
-	 * itself.
+	 * nothing itself. Returns the required namespaces' init calls, which run here, in
+	 * program order. Metadata, the docstring and the attr map are ignored, like the
+	 * declaration itself.
 	 */
-	static void processNs(ClojureLowering ctx, LispVal form) {
+	static List<LispVal> processNs(ClojureLowering ctx, LispVal form) {
 		List<LispVal> items = ClojureLowerUtil.items(form);
 		if (items == null || items.size() < 2) {
 			throw new LispReadException("ns takes a name: " + form.print());
@@ -176,13 +177,15 @@ final class ClojureNamespaceLowering {
 		}
 		ctx.currentNs = name.name();
 		ctx.createdNamespaces.add(name.name());
-		nsClauses(ctx, items);
+		List<LispVal> calls = nsClauses(ctx, items);
 		// loaded once its clauses ran, like the oracle's ns: a require of it from a
 		// namespace its own clauses load is a cycle, not a no-op
 		ctx.loadedNamespaces.add(name.name());
+		return calls;
 	}
 
-	private static void nsClauses(ClojureLowering ctx, List<LispVal> items) {
+	private static List<LispVal> nsClauses(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> calls = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
 			LispVal clause = items.get(i);
 			if (clause instanceof LispString) {
@@ -196,13 +199,14 @@ final class ClojureNamespaceLowering {
 				continue; // metadata and anything else that declares nothing
 			}
 			switch (head.name()) {
-				case ":require" -> requireSpecs(ctx, parts.subList(1, parts.size()), false);
-				case ":use" -> requireSpecs(ctx, parts.subList(1, parts.size()), true);
+				case ":require" -> calls.addAll(requireSpecs(ctx, parts.subList(1, parts.size()), false));
+				case ":use" -> calls.addAll(requireSpecs(ctx, parts.subList(1, parts.size()), true));
 				case ":import" -> importSpecs(ctx, parts.subList(1, parts.size()));
 				case ":refer-clojure" -> referClojure(ctx, parts.subList(1, parts.size()));
 				default -> throw new LispReadException("ns clause " + head.name() + " is not supported yet");
 			}
 		}
+		return calls;
 	}
 
 	/**
@@ -247,21 +251,38 @@ final class ClojureNamespaceLowering {
 	 * and prefix lists -- each either bare or quoted ({@code 'spec}, the oracle's
 	 * bare-{@code require} spelling; the {@code ns} clauses quote implicitly, so both
 	 * paths share this parser). An unquoted vector spec stays accepted too (a lenient
-	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). A project
-	 * namespace loads from its file ({@link #loadNamespace}); one no root holds is the
-	 * oracle's missing-library failure, and an unknown {@code clojure.*} library is
-	 * refused by name.
+	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). A
+	 * {@code :reload} flag re-runs every project namespace the call names,
+	 * {@code :reload-all} with every transitive dependency first, like the oracle;
+	 * {@code :verbose} is skipped, like every other bare flag. Returns the namespaces'
+	 * init calls, in libspec order.
 	 */
-	static void requireSpecs(ClojureLowering ctx, List<LispVal> specs, boolean referAll) {
+	static List<LispVal> requireSpecs(ClojureLowering ctx, List<LispVal> specs, boolean referAll) {
+		ClojureLowering.LoadMode mode = ClojureLowering.LoadMode.GUARDED;
 		for (LispVal spec : specs) {
 			LispVal unwrapped = unwrapQuote(spec);
 			if (unwrapped instanceof LispSymbol flag && flag.name().startsWith(":")) {
-				continue; // :reload, :reload-all, :verbose: one load per program here
+				if (flag.name().equals(":reload-all")) {
+					mode = ClojureLowering.LoadMode.RELOAD_ALL;
+				}
+				else if (flag.name().equals(":reload") && mode == ClojureLowering.LoadMode.GUARDED) {
+					mode = ClojureLowering.LoadMode.RELOAD;
+				}
+			}
+		}
+		List<LispVal> calls = new ArrayList<>();
+		for (LispVal spec : specs) {
+			LispVal unwrapped = unwrapQuote(spec);
+			if (unwrapped instanceof LispSymbol flag && flag.name().startsWith(":")) {
+				continue; // :reload, :reload-all, :verbose and friends name no library
 			}
 			if (unwrapped instanceof LispSymbol bare) {
 				// a bare symbol names one library, like the oracle (a prefix
 				// takes the list form below): (:use clojure.test) refers it all
-				requireOne(ctx, null, List.of(bare), referAll, spec);
+				LispVal call = requireOne(ctx, null, List.of(bare), referAll, spec, mode);
+				if (call != null) {
+					calls.add(call);
+				}
 				continue;
 			}
 			if (!ClojureBindingLowering.isVectorDatum(unwrapped)) {
@@ -279,13 +300,19 @@ final class ClojureNamespaceLowering {
 				}
 				if (prefixParts.size() < 2) {
 					// (prefix) names the prefix library itself, like a bare symbol.
-					requireOne(ctx, null, prefixParts, referAll, spec);
+					LispVal prefixCall = requireOne(ctx, null, prefixParts, referAll, spec, mode);
+					if (prefixCall != null) {
+						calls.add(prefixCall);
+					}
 					continue;
 				}
 				for (int i = 1; i < prefixParts.size(); i++) {
 					LispVal sub = unwrapQuote(prefixParts.get(i));
 					if (sub instanceof LispSymbol sym) {
-						requireOne(ctx, prefixName.name(), List.of(sym), referAll, spec);
+						LispVal subCall = requireOne(ctx, prefixName.name(), List.of(sym), referAll, spec, mode);
+						if (subCall != null) {
+							calls.add(subCall);
+						}
 						continue;
 					}
 					List<LispVal> subParts = ClojureLowerUtil.items(sub);
@@ -293,7 +320,11 @@ final class ClojureNamespaceLowering {
 							|| subParts.size() < 2 || !(subParts.get(1) instanceof LispSymbol)) {
 						throw new LispReadException("require takes library specs, not " + spec.print());
 					}
-					requireOne(ctx, prefixName.name(), subParts.subList(1, subParts.size()), referAll, spec);
+					LispVal subCall = requireOne(ctx, prefixName.name(), subParts.subList(1, subParts.size()), referAll,
+							spec, mode);
+					if (subCall != null) {
+						calls.add(subCall);
+					}
 				}
 				continue;
 			}
@@ -301,8 +332,12 @@ final class ClojureNamespaceLowering {
 			if (parts == null || parts.size() < 2 || !(parts.get(1) instanceof LispSymbol)) {
 				throw new LispReadException("require takes library specs, not " + spec.print());
 			}
-			requireOne(ctx, null, parts.subList(1, parts.size()), referAll, spec);
+			LispVal call = requireOne(ctx, null, parts.subList(1, parts.size()), referAll, spec, mode);
+			if (call != null) {
+				calls.add(call);
+			}
 		}
+		return calls;
 	}
 
 	/**
@@ -312,10 +347,11 @@ final class ClojureNamespaceLowering {
 	 * are referred only by {@code use} or a {@code :refer} option -- a {@code require}
 	 * with a bare {@code :only} or {@code :exclude} refers nothing -- and {@code :only}
 	 * narrows the refer-all default of {@code use}, {@code :exclude} subtracting either
-	 * way.
+	 * way. Returns the namespace's init call in the call's load mode, or null when it has
+	 * nothing to run.
 	 */
-	static void requireOne(ClojureLowering ctx, @Nullable String prefix, List<LispVal> parts, boolean use,
-			LispVal spec) {
+	static @Nullable LispVal requireOne(ClojureLowering ctx, @Nullable String prefix, List<LispVal> parts, boolean use,
+			LispVal spec, ClojureLowering.LoadMode mode) {
 		String ns = ((LispSymbol) parts.get(0)).name();
 		if (prefix != null) {
 			ns = prefix + "." + ns;
@@ -362,6 +398,13 @@ final class ClojureNamespaceLowering {
 				// the language's own libraries are lowerings, never project files
 				throw new LispReadException("unknown namespace: " + ns);
 			}
+			// a dependency edge for :reload-all: the file being lowered owns it
+			// (the innermost file on the loading stack), or the entry program's
+			// namespace at its own top level
+			String owner = !ctx.loadingNamespaces.isEmpty() ? ctx.loadingNamespaces.peek() : ctx.currentNs;
+			if (!owner.equals(ns)) {
+				ctx.namespaceDeps.computeIfAbsent(owner, k -> new LinkedHashSet<>()).add(ns);
+			}
 			loadNamespace(ctx, ns);
 			if ((alias != null || refer) && !ctx.createdNamespaces.contains(ns)) {
 				// the file defined no such namespace (its forms went into the
@@ -374,7 +417,7 @@ final class ClojureNamespaceLowering {
 			ctx.ns().aliases.put(alias, ns);
 		}
 		if (!refer) {
-			return;
+			return ctx.requireCall(ns, mode);
 		}
 		if (only != null) {
 			for (String var : only) {
@@ -391,6 +434,7 @@ final class ClojureNamespaceLowering {
 				}
 			}
 		}
+		return ctx.requireCall(ns, mode);
 	}
 
 	/**
@@ -443,9 +487,10 @@ final class ClojureNamespaceLowering {
 	/**
 	 * Loads a project namespace once per program read: nothing when it is already loaded
 	 * (an {@code ns} form of the program, or an earlier {@code require}), else its file
-	 * from the source path, lowered in place ahead of the requiring form. A namespace
-	 * already loading is the oracle's cyclic-load refusal; one no root holds is named
-	 * with the roots searched.
+	 * from the source path -- definitions ahead of the requiring form, statements into
+	 * the namespace's init, whose flag and driver are emitted here -- lowered in place. A
+	 * namespace already loading is the oracle's cyclic-load refusal; one no root holds is
+	 * named with the roots searched.
 	 */
 	static void loadNamespace(ClojureLowering ctx, String ns) {
 		if (ctx.loadedNamespaces.contains(ns)) {
@@ -473,6 +518,7 @@ final class ClojureNamespaceLowering {
 					+ ctx.sourcePath.describeRoots());
 		}
 		ctx.loadFile(ns, found);
+		ctx.emitNamespaceInit(ns);
 	}
 
 	/**

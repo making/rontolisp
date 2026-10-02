@@ -38,8 +38,11 @@ Common Lisp ファイルはこの名前で呼び出します。
 する `src/demo/main.clj` なら `src`、`ns` のないファイルならそのファイルのディレクトリ）、
 次にエントリファイルの位置から上へたどって最初に見つかる `deps.edn` の `:paths`（指定が
 なければ `["src"]`）の順で、`deps.edn` がどこにもなければ作業ディレクトリの `src` です。
-ファイルはプログラムにつき 1 度だけ、それを require したフォームより前に lower され、
-2 度目の `require` は何もロードしません。`ns` フォームのないファイルは、require した側の
+ファイルはプログラムにつき 1 度だけ lower されます。定義は require したフォームより前に
+残り、それ以外のトップレベルフォームは `require` の実行時に走ります。関数本体の中の
+`require` も、本体の実行時にロードします。2 度目の `require` は何もロードしません。
+`:reload` はファイルを再実行し（`def` はリセット、`defonce` はルートを保持）、
+`:reload-all` は依存先を先に再実行します。いずれも oracle と同じです。`ns` フォームのないファイルは、require した側の
 名前空間に定義を追加します。`use` と `:refer :all` は public な var をすべて refer します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
 oracle と同じ文言のエラーになります。

@@ -52,6 +52,12 @@ public final class GlobalVarCollector {
 							globals.add(place.name());
 						}
 					}
+					// The values may hold further assignments -- a namespace init is a
+					// top-level setq of a lambda over the namespace's setqs -- and those
+					// assign the same globals a head-position setq would (nested in a
+					// top-level non-defun form), so they get the same walk as below.
+					collectNestedDefunNames(cons, globals);
+					collectNestedAssignedNames(cons, globals);
 				}
 				default -> {
 					// A defun nested inside a top-level non-defun form (the CL

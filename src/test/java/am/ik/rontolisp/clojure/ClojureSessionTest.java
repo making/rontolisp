@@ -118,6 +118,31 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aBufferRequiringAPrintingNamespaceLoadsItBehindAFlag() {
+		// the namespace's statements ride with the buffer that first requires it, as an
+		// init behind the loaded flag; a later :reload buffer calls it outright
+		ClojureSession session = new ClojureSession(new MemoryClojureFiles(
+				Map.of("src/app/lib.clj", "(ns app.lib) (println \"hi\") (def v 1) (defn f [x] x)")));
+		session.setMacroEvaluator(ClojureMacroTime.create());
+		List<String> required = session.read("(require '[app.lib :as l])")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(required).anyMatch(form -> form.contains("(DEFVAR |c%app.lib%loaded| NIL)"))
+			.anyMatch(form -> form.contains("(SETQ |c%app.lib%init| (LAMBDA NIL (FUNCALL |c%app.lib%init-1|)))"))
+			.anyMatch(form -> form
+				.contains("(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))"));
+		List<String> reloaded = session.read("(require '[app.lib] :reload)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(reloaded)
+			.anyMatch(form -> form.contains("(PROGN (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))"));
+	}
+
+	@Test
 	void isCompleteCountsBracketsStringsAndComments() {
 		assertThat(ClojureSession.isComplete("(defn f [x] x)")).isTrue();
 		assertThat(ClojureSession.isComplete("(defn f [x]")).isFalse();

@@ -244,10 +244,49 @@ public final class ClojureLowering {
 	ClojureSourcePath sourcePath = new ClojureSourcePath(ClojureFiles.NONE, null);
 
 	/**
-	 * The forms of the namespaces loaded while the current top-level datum lowers: they
-	 * run ahead of it, so a {@code require} anywhere loads before the form holding it.
+	 * The forms of the namespaces loaded while the current top-level datum lowers: the
+	 * definitions stay top-level (a {@code defn} keeps its direct call and its
+	 * tree-shaker visibility there), while a namespace's statements run from its init
+	 * when the {@code require} executes (see {@link #namespaceInits}).
 	 */
 	List<LispVal> hoisted = new ArrayList<>();
+
+	/**
+	 * The statements of every project namespace file loaded so far, by namespace, in file
+	 * order: everything that must run when the namespace loads --
+	 * {@code def}/{@code defonce} setqs, prints, nested require calls, method rows,
+	 * arbitrary calls, ... -- while the definitions ({@code defn} and friends, see
+	 * {@link #isDefinitionalDatum}) stay top-level. The require site runs these behind
+	 * the namespace's loaded flag (see {@link #requireCall}), so a {@code require} inside
+	 * a body loads when the body runs, {@code :reload} re-runs them ({@code def} resets,
+	 * {@code defonce} keeps), and a namespace two separately lowered files require still
+	 * runs once per process.
+	 */
+	final Map<String, List<LispVal>> namespaceInits = new LinkedHashMap<>();
+
+	/**
+	 * The project namespaces each namespace (or the entry program's namespace) requires
+	 * directly, in require order: what a {@code :reload-all} re-runs ahead of the
+	 * namespace itself, dependencies first.
+	 */
+	final Map<String, LinkedHashSet<String>> namespaceDeps = new HashMap<>();
+
+	/**
+	 * The namespaces whose loaded flag and init were already emitted in this lowering.
+	 */
+	final Set<String> initEmitted = new HashSet<>();
+
+	/**
+	 * Cuts a namespace init into chunks once the chunk's statements pass this many
+	 * printed characters. A chunk is one lambda body, and neither the JVM's 64 KB method
+	 * limit nor wasm's function-body cap (256 KiB bodies, the top level chunked at 48 KiB
+	 * of emitted body) is measured in statements, so a bare statement count cannot bound
+	 * them; printed characters track the emitted size closely enough for straight-line
+	 * init code that a 16 KiB cut stays far under both. One huge statement still makes
+	 * one huge chunk -- the same accepted gap as a defun that is one long run of
+	 * statements on wasm.
+	 */
+	static final int INIT_CHUNK_TARGET_CHARS = 16 * 1024;
 
 	/** The scopes, innermost last; globals live in {@link #globals}. */
 	final List<Map<String, Kind>> scopes = new ArrayList<>();
@@ -1276,11 +1315,13 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * Lowers a project namespace's file in place, both passes, ahead of the top-level
-	 * datum whose {@code require} loaded it ({@link #hoisted}). The file starts in the
-	 * requiring namespace, like the oracle's {@code load} (its own {@code ns} form
-	 * switches), and lowers from a clean cursor -- no local, recur target or {@code try}
-	 * of the requiring form reaches it -- restored afterwards.
+	 * Lowers a project namespace's file in place, both passes: the definitions ahead of
+	 * the top-level datum whose {@code require} loaded them ({@link #hoisted}), the
+	 * statements into the namespace's init ({@link #namespaceInits}), which the require
+	 * site runs behind the loaded flag. The file starts in the requiring namespace, like
+	 * the oracle's {@code load} (its own {@code ns} form switches), and lowers from a
+	 * clean cursor -- no local, recur target or {@code try} of the requiring form reaches
+	 * it -- restored afterwards.
 	 * @param ns the namespace being loaded
 	 * @param found its file
 	 */
@@ -1318,10 +1359,38 @@ public final class ClojureLowering {
 		this.reader = fileReader;
 		this.loadingNamespaces.push(ns);
 		List<LispVal> loaded = new ArrayList<>();
+		List<LispVal> statements = this.namespaceInits.computeIfAbsent(ns, k -> new ArrayList<>());
 		try {
 			declare(datums);
 			for (LispVal datum : datums) {
-				loaded.addAll(topLevels(datum));
+				if (isInitDef(datum)) {
+					// a def/defonce of the namespace runs when the namespace loads
+					// (a reload resets a def and keeps a defonce, like the oracle);
+					// a dynamic one's declaim and counter ride top-level, where the
+					// collectors read them
+					statements.addAll(initDefForms(datum, loaded));
+				}
+				else {
+					// like topLevels, but the drained hoisted forms (the namespaces
+					// this datum loads) stay top-level while only the datum's own
+					// forms join the definitions or the init
+					List<LispVal> outer = this.hoisted;
+					this.hoisted = new ArrayList<>();
+					List<LispVal> own;
+					try {
+						own = topLevelsOf(datum);
+					}
+					finally {
+						loaded.addAll(this.hoisted);
+						this.hoisted = outer;
+					}
+					if (isDefinitionalDatum(datum)) {
+						loaded.addAll(own);
+					}
+					else {
+						statements.addAll(own);
+					}
+				}
 			}
 			this.loadedNamespaces.add(ns);
 		}
@@ -1351,13 +1420,292 @@ public final class ClojureLowering {
 		this.hoisted.addAll(loaded);
 	}
 
+	/**
+	 * How one {@code require}/{@code use} call site (or one {@code ns} clause) loads the
+	 * namespaces it names: behind the loaded flag, unconditionally ({@code :reload}), or
+	 * with every transitive dependency ({@code :reload-all}).
+	 */
+	enum LoadMode {
+
+		GUARDED, RELOAD, RELOAD_ALL
+
+	}
+
+	/**
+	 * The loaded flag of a namespace: a lone {@code %} followed by a letter other than
+	 * {@code c} is spelled by no mangled identifier, so it stays apart from user
+	 * definitions.
+	 * @param ns the namespace
+	 * @return the flag symbol
+	 */
+	static LispSymbol loadedFlagSym(String ns) {
+		return new LispSymbol(mangle(ns) + "%loaded");
+	}
+
+	/**
+	 * The init driver of a namespace: the lambda calling each init chunk in order.
+	 * @param ns the namespace
+	 * @return the driver symbol
+	 */
+	static LispSymbol initSym(String ns) {
+		return new LispSymbol(mangle(ns) + "%init");
+	}
+
+	/**
+	 * The set flag of a {@code defonce} in a namespace init: whether its init statement
+	 * already ran. A runtime {@code boundp} probe is unsound there -- on the compiled
+	 * backends it reads the eval runtime's global-env mirror, which only a top-level
+	 * assignment reaches, never one inside the init lambda -- so the keep/reset decision
+	 * rides a plain variable, like the loaded flag itself.
+	 * @param key the var key
+	 * @return the flag symbol
+	 */
+	static LispSymbol defonceSetSym(String key) {
+		return new LispSymbol(varSym(key).name() + "%set");
+	}
+
+	/**
+	 * One init chunk of a namespace.
+	 * @param ns the namespace
+	 * @param chunk the 1-based chunk number
+	 * @return the chunk symbol
+	 */
+	static LispSymbol initChunkSym(String ns, int chunk) {
+		return new LispSymbol(mangle(ns) + "%init-" + chunk);
+	}
+
+	/**
+	 * Whether a namespace has statements to run when it loads.
+	 * @param ns the namespace
+	 * @return {@code true} when its init exists and is non-empty
+	 */
+	boolean hasInit(String ns) {
+		List<LispVal> statements = this.namespaceInits.get(ns);
+		return statements != null && !statements.isEmpty();
+	}
+
+	/**
+	 * The run of one namespace at one call site: its init behind its loaded flag
+	 * (guarded), unconditionally ({@code :reload}), or with every transitive dependency
+	 * first ({@code :reload-all}), marking each one loaded after it runs. A reload
+	 * re-runs the statements, so a {@code def} resets where a {@code defonce} keeps its
+	 * value, like the oracle. Null when the namespace has nothing to run (a known
+	 * library, the entry's own namespace, or a file of definitions only).
+	 * @param ns the namespace
+	 * @param mode how it loads
+	 * @return the call form, or null
+	 */
+	@Nullable LispVal requireCall(String ns, LoadMode mode) {
+		if (!hasInit(ns)) {
+			return null;
+		}
+		LispSymbol flag = loadedFlagSym(ns);
+		LispVal run = ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(ns));
+		LispVal mark = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), flag, TRUE_CONST);
+		return switch (mode) {
+			case GUARDED -> ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), flag, run, mark);
+			case RELOAD -> ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), run, mark);
+			case RELOAD_ALL -> {
+				// each member runs and marks before the next: a later init's own
+				// guarded call to an earlier dependency then skips it, like the
+				// oracle's single reload-all pass
+				List<LispVal> steps = new ArrayList<>();
+				for (String member : reloadClosure(ns)) {
+					if (hasInit(member)) {
+						steps.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(member)));
+						steps.add(
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), loadedFlagSym(member), TRUE_CONST));
+					}
+				}
+				yield ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), steps);
+			}
+		};
+	}
+
+	/**
+	 * A namespace with every namespace it requires, transitively, dependencies first and
+	 * the namespace itself last, each once.
+	 * @param ns the namespace
+	 * @return the reload order
+	 */
+	List<String> reloadClosure(String ns) {
+		List<String> out = new ArrayList<>();
+		visitReload(ns, new HashSet<>(), out);
+		return out;
+	}
+
+	private void visitReload(String ns, Set<String> seen, List<String> out) {
+		if (!seen.add(ns)) {
+			return;
+		}
+		LinkedHashSet<String> deps = this.namespaceDeps.get(ns);
+		if (deps != null) {
+			for (String dep : deps) {
+				visitReload(dep, seen, out);
+			}
+		}
+		out.add(ns);
+	}
+
+	/**
+	 * Emits a loaded namespace's run-time definitions once per lowering: the loaded flag
+	 * (a {@code defvar}, so a namespace two separately lowered files require still runs
+	 * once per process), the init chunks holding its statements, and the driver calling
+	 * them in order.
+	 * @param ns the namespace just loaded
+	 */
+	void emitNamespaceInit(String ns) {
+		if (!this.initEmitted.add(ns)) {
+			return;
+		}
+		List<LispVal> statements = this.namespaceInits.get(ns);
+		if (statements == null || statements.isEmpty()) {
+			return;
+		}
+		List<LispVal> defs = new ArrayList<>();
+		defs.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), loadedFlagSym(ns), NIL_CONST));
+		List<LispVal> chunkSyms = new ArrayList<>();
+		List<LispVal> chunk = new ArrayList<>();
+		int chars = 0;
+		for (LispVal statement : statements) {
+			String printed = statement.print();
+			if (!chunk.isEmpty() && chars + printed.length() > INIT_CHUNK_TARGET_CHARS) {
+				chunkSyms.add(closeInitChunk(ns, chunkSyms.size() + 1, chunk, defs));
+				chunk = new ArrayList<>();
+				chars = 0;
+			}
+			chunk.add(statement);
+			chars += printed.length();
+		}
+		chunkSyms.add(closeInitChunk(ns, chunkSyms.size() + 1, chunk, defs));
+		List<LispVal> calls = new ArrayList<>();
+		for (LispVal chunkSym : chunkSyms) {
+			calls.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), chunkSym));
+		}
+		defs.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), initSym(ns), lambda0(calls)));
+		this.hoisted.addAll(defs);
+	}
+
+	/**
+	 * One init chunk emitted: the chunk symbol holding a lambda over its statements. A
+	 * top-level {@code setq} of a lambda (never a {@code defun}, which would hide the
+	 * {@code setq}s inside from {@code GlobalVarCollector} and route every call site
+	 * through the variable).
+	 * @param ns the namespace
+	 * @param number the 1-based chunk number
+	 * @param chunk its statements
+	 * @param defs where the chunk definition goes
+	 * @return the chunk symbol
+	 */
+	private static LispSymbol closeInitChunk(String ns, int number, List<LispVal> chunk, List<LispVal> defs) {
+		LispSymbol sym = initChunkSym(ns, number);
+		defs.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), sym, lambda0(chunk)));
+		return sym;
+	}
+
+	/**
+	 * A zero-argument lambda over the body forms.
+	 * @param body the body
+	 * @return the lambda
+	 */
+	static LispVal lambda0(List<LispVal> body) {
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(NIL_CONST);
+		parts.addAll(body);
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("lambda"), parts);
+	}
+
+	/**
+	 * A top-level proclamation that the names are special: what a {@code ^:dynamic} var
+	 * moved into a namespace init keeps at the head, so {@code SpecialVarCollector} still
+	 * sees it there.
+	 * @param names the variables
+	 * @return the declaim form
+	 */
+	static LispVal declaimSpecial(LispSymbol... names) {
+		List<LispVal> clause = new ArrayList<>();
+		clause.add(ClojureLowerUtil.sym("special"));
+		clause.addAll(List.of(names));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("declaim"), ClojureLowerUtil.list(clause));
+	}
+
+	/**
+	 * The call forms with a trailing {@code nil}: what a {@code require}/{@code use}
+	 * answers, like the oracle.
+	 * @param calls the init calls
+	 * @return the call forms plus nil
+	 */
+	static List<LispVal> withNil(List<LispVal> calls) {
+		List<LispVal> out = new ArrayList<>(calls);
+		out.add(NIL_CONST);
+		return out;
+	}
+
+	/**
+	 * Whether a top-level datum of a loaded file defines (rather than runs): the branches
+	 * of {@link #topLevelsOf} that stay top-level ahead of the requiring form -- the
+	 * namespace's {@code defun}s and their companions -- while every other datum becomes
+	 * a statement of the namespace's init.
+	 * @param datum the datum
+	 * @return {@code true} for a definition
+	 */
+	boolean isDefinitionalDatum(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items == null || items.isEmpty() || !(items.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		String name = head.name();
+		return name.equals("defn") || name.equals("defn-") || name.equals("defmulti") || name.equals("defprotocol")
+				|| name.equals("defrecord") || name.equals("deftype") || name.equals("defmacro")
+				|| name.equals("defstruct") || ClojureTestLowering.isDeftestHead(this, items.get(0));
+	}
+
+	/**
+	 * Whether a top-level datum of a loaded file is a {@code def}/{@code defonce}: its
+	 * setq runs in the namespace's init, while a dynamic one's declaim and counter ride
+	 * top-level.
+	 * @param datum the datum
+	 * @return {@code true} for a def or defonce
+	 */
+	static boolean isInitDef(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		return items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce"));
+	}
+
+	/**
+	 * A {@code def}/{@code defonce} datum of a loaded file lowered for the namespace's
+	 * init: the setq statement, plus any hoisted top-level forms (the declaim and the
+	 * binding-depth counter of a dynamic var, which stay at the head where the collectors
+	 * read them).
+	 * @param datum the datum
+	 * @param hoisted where the hoisted forms go
+	 * @return the init statements
+	 */
+	List<LispVal> initDefForms(LispVal datum, List<LispVal> hoisted) {
+		try {
+			List<LispVal> items = ClojureLowerUtil.items(datum);
+			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
+				return ClojureBindingLowering.defForms(this, items, hoisted);
+			}
+			if (items == null) {
+				throw new LispReadException("defonce takes a name and an optional value");
+			}
+			return List.of(ClojureStateLowering.defonceForm(this, items, hoisted));
+		}
+		catch (LispReadException ex) {
+			throw positioned(ex, datum);
+		}
+	}
+
 	private List<LispVal> topLevelsOf(LispVal form) {
 		try {
 			if (ClojureLowerUtil.isNsForm(form)) {
-				ClojureNamespaceLowering.processNs(this, form); // wires the aliases;
-																// defines nothing
+				// wires the aliases and defines nothing itself; its clauses'
+				// require calls run here, in program order
+				List<LispVal> calls = ClojureNamespaceLowering.processNs(this, form);
 				this.namespacesSeen.add(this.currentNs);
-				return List.of();
+				return calls;
 			}
 			List<LispVal> items = ClojureLowerUtil.items(form);
 			if (items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
@@ -1766,12 +2114,14 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "require")) {
-			ClojureNamespaceLowering.requireSpecs(this, ClojureNamespaceLowering.specsOf(items, "require"), false);
-			return NIL_CONST;
+			List<LispVal> calls = ClojureNamespaceLowering.requireSpecs(this,
+					ClojureNamespaceLowering.specsOf(items, "require"), false);
+			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "use")) {
-			ClojureNamespaceLowering.requireSpecs(this, ClojureNamespaceLowering.specsOf(items, "use"), true);
-			return NIL_CONST;
+			List<LispVal> calls = ClojureNamespaceLowering.requireSpecs(this,
+					ClojureNamespaceLowering.specsOf(items, "use"), true);
+			return calls.isEmpty() ? NIL_CONST : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), withNil(calls));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "import")) {
 			ClojureNamespaceLowering.importSpecs(this, ClojureNamespaceLowering.specsOf(items, "import"));

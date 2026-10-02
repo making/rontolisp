@@ -37,8 +37,11 @@ file: `my-app.core` is `my_app/core.clj`, read from the first source root holdin
 the directory the entry file's own namespace names (`src` for `src/demo/main.clj` declaring
 `demo.main`, the file's directory without an `ns`), then the `:paths` of the nearest
 `deps.edn` at or above the entry file (`["src"]` when it names none), or `src` under the
-working directory when there is no `deps.edn`. A file lowers once per program, ahead of the
-form that required it; a second `require` loads nothing, and a file without an `ns` form
+working directory when there is no `deps.edn`. A file lowers once per program: its definitions stay ahead of
+the form that required it, while its other top-level forms run when the `require` runs --
+including a `require` inside a function body, which loads when the body runs. A second
+`require` loads nothing; `:reload` runs the file again (`def` resets, `defonce` keeps its
+root) and `:reload-all` re-runs its dependencies first, like the oracle. A file without an `ns` form
 defines into the requiring namespace. `use` and `:refer :all` bring in every public var; a
 file no root holds, a cycle of requires and a refer of a missing or private var are errors
 in the oracle's words.

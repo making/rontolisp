@@ -10,6 +10,9 @@ and one no root holds is an error. Only `:refer` refers names: a bare `:only` re
 like the oracle.
 An unquoted vector spec is accepted too, though real Clojure rejects it.
 A prefix list `'(prefix [sub ...])` wires each member under the prefix, quoted or bare.
+`:reload` runs each named namespace again (`def` resets, `defonce` keeps its root);
+`:reload-all` re-runs their dependencies first. A `require` inside a function body loads
+when the body runs, answering `nil` like any other `require`.
 
 ```clojure
 (require '[clojure.string :as s])

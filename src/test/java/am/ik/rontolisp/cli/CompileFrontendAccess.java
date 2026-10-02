@@ -237,4 +237,24 @@ public final class CompileFrontendAccess {
 		return new Program(result.program(), result.features());
 	}
 
+	/**
+	 * A Common Lisp source text read from a file, through the whole front end the way the
+	 * CLI does for a {@code .lisp} entry file: what its {@code (load ...)} forms name is
+	 * found beside {@code baseDir}, in whatever language each file's extension picks.
+	 * @param source the Common Lisp program text
+	 * @param entryFile the path the text was read from
+	 * @param baseDir the directory relative loads resolve against
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program commonLisp(String source, String entryFile, String baseDir, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).baseDir(baseDir).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
 }

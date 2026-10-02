@@ -3877,9 +3877,8 @@ cases:
       ok
   - name: fn-pred-list-refers-and-reload-flags
     # fn? answers true for functions only; a :only/:refer list spells the names
-    # like a vector, and a :reload flag in a require is skipped -- the corpus
-    # test files' functional / concurrency / preface shapes (oracle clj
-    # 1.12.6.1673).
+    # like a vector, and a :reload flag over a lowering library loads nothing new
+    # (a project namespace re-runs under it -- the corpus preface shape).
     source: |
       (defn b55-f [x] x)
       (println (fn? b55-f) (fn? (fn [] 1)) (fn? +) (fn? :a) (fn? #{}) (fn? "s") (fn? nil))

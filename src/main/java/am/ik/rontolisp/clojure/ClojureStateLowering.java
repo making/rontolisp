@@ -799,6 +799,21 @@ final class ClojureStateLowering {
 	 * reload keeps the root, like the oracle.
 	 */
 	static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items) {
+		return defonceForm(ctx, items, null);
+	}
+
+	/**
+	 * A {@code defonce} lowered for a namespace init: the bound-or-set statement, plus --
+	 * for a {@code ^:dynamic} var, into {@code hoisted} -- the declaim and the
+	 * binding-depth counter, which stay top-level at the head where the collectors read
+	 * them. A reload keeps the root through the same {@code boundp} test either way.
+	 * @param ctx the lowering
+	 * @param items the defonce datum's items
+	 * @param hoisted where a dynamic var's top-level forms go, or null for the ordinary
+	 * top-level shape
+	 * @return the form
+	 */
+	static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "defonce");
@@ -819,13 +834,34 @@ final class ClojureStateLowering {
 			ctx.globalDirectFuns.remove(key);
 		}
 		LispSymbol var = ClojureLowering.varSym(key);
-		LispVal set = dynamic
-				? ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("progn"),
+		LispVal set;
+		if (dynamic && hoisted != null) {
+			// in a namespace init the setq runs at load time, and the declaim
+			// plus the counter ride top-level, where both collectors read them
+			hoisted.add(ClojureLowering.declaimSpecial(var, ClojureLowering.boundDepthSym(key)));
+			hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+					new LispInteger(0)));
+		}
+		if (hoisted != null) {
+			// a reload keeps the root through a set flag beside the var: a runtime
+			// boundp probe is unsound in the init (the compiled backends read it off
+			// the eval mirror, which a lambda's assignment never reaches), so the
+			// decision rides a plain variable, like the loaded flag. The defvar keeps
+			// the flag across separately lowered files, like that flag.
+			LispSymbol setFlag = ClojureLowering.defonceSetSym(key);
+			hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), setFlag, ClojureLowering.NIL_CONST));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), setFlag,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), setFlag, ClojureLowering.TRUE_CONST));
+		}
+		else {
+			set = dynamic
+					? ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, value),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
-				: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)), var, set);
 	}

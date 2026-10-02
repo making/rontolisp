@@ -1941,4 +1941,64 @@ class ClojureLoweringTest {
 			.contains("(C%MACROEXPAND-1 '(|c%m|) NIL)");
 	}
 
+	@Test
+	void aRequiredNamespaceRunsItsStatementsFromAnInitBehindAFlag() {
+		// the defn stays a top-level defun; the print and the def run from the
+		// namespace's init, which the require site calls behind the loaded flag
+		String out = loweredWithFiles("(ns m (:require [app.lib :as l])) (println (l/f 1))",
+				Map.of("src/app/lib.clj", "(ns app.lib) (println \"hi\") (def v 1) (defn f [x] (inc x))"));
+		assertThat(out).contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))")
+			.contains("(DEFVAR |c%app.lib%loaded| NIL)")
+			.contains("(SETQ |c%app.lib%init-1| (LAMBDA NIL")
+			.contains("(SETQ |c%app.lib/v| 1)")
+			.contains("(SETQ |c%app.lib%init| (LAMBDA NIL (FUNCALL |c%app.lib%init-1|)))")
+			.contains("(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))");
+		// definitions ahead of the requiring form, statements inside the init
+		assertThat(out.indexOf("(DEFUN |c%app.lib/f|")).isLessThan(out.indexOf("|c%app.lib%init-1| (LAMBDA"));
+		assertThat(out.indexOf("\"hi\"")).isGreaterThan(out.indexOf("|c%app.lib%init-1| (LAMBDA"));
+		assertThat(out.indexOf("(UNLESS |c%app.lib%loaded|")).isGreaterThan(out.indexOf("|c%app.lib%init| (LAMBDA"));
+	}
+
+	@Test
+	void aReloadCallRunsTheInitUnconditionally() {
+		String files = "(ns app.lib) (println \"hi\") (def v 1)";
+		Map<String, String> fs = Map.of("src/app/lib.clj", files);
+		// a second require is another guarded call, but the flag is still one defvar
+		String both = loweredWithFiles("(require 'app.lib) (require 'app.lib)", fs);
+		String guarded = "(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))";
+		assertThat(both).containsOnlyOnce("(DEFVAR |c%app.lib%loaded| NIL)");
+		assertThat(both.indexOf(guarded)).isLessThan(both.lastIndexOf(guarded));
+		// :reload calls the init outright, and still marks it loaded
+		assertThat(loweredWithFiles("(require '[app.lib] :reload)", fs))
+			.contains("(PROGN (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))");
+		// a library namespace has no init, so even :reload is nothing at run time
+		assertThat(loweredWithFiles("(require '[clojure.string :as s] :reload) (s/join \",\" [\"a\"])", Map.of()))
+			.doesNotContain("FUNCALL");
+	}
+
+	@Test
+	void aReloadAllCallRunsDependenciesFirst() {
+		Map<String, String> fs = Map.of("src/app/b.clj", "(ns app.b) (println \"b\") (def bv 1)", "src/app/a.clj",
+				"(ns app.a (:require [app.b :as b])) (println \"a\") (def av b/bv)");
+		String out = loweredWithFiles("(require '[app.a] :reload-all)", fs);
+		assertThat(out).contains("(FUNCALL |c%app.b%init|) (SETQ |c%app.b%loaded| T) (FUNCALL |c%app.a%init|)");
+		assertThat(out.indexOf("(FUNCALL |c%app.b%init|)")).isLessThan(out.indexOf("(FUNCALL |c%app.a%init|)"));
+	}
+
+	@Test
+	void aDynamicDefInANamespaceHoistsItsDeclaim() {
+		// the setq runs in the init; the declaim and the binding-depth counter
+		// stay top-level at the head, where both collectors read them
+		String out = loweredWithFiles("(require 'app.dyn)",
+				Map.of("src/app/dyn.clj", "(ns app.dyn) (def ^:dynamic x 1) (defonce ^:dynamic y 2)"));
+		assertThat(out).contains("(DECLAIM (SPECIAL |c%app.dyn/x| |c%app.dyn/x%bound-depth|))")
+			.contains("(DEFPARAMETER |c%app.dyn/x%bound-depth| 0)")
+			.contains("(DECLAIM (SPECIAL |c%app.dyn/y| |c%app.dyn/y%bound-depth|))")
+			.contains("(DEFPARAMETER |c%app.dyn/y%bound-depth| 0)")
+			.contains("(SETQ |c%app.dyn/x| 1)")
+			.contains("(DEFVAR |c%app.dyn/y%set| NIL)")
+			.contains("(UNLESS |c%app.dyn/y%set| (SETQ |c%app.dyn/y| 2) (SETQ |c%app.dyn/y%set| T))");
+		assertThat(out).doesNotContain("(DEFPARAMETER |c%app.dyn/x| 1)");
+	}
+
 }

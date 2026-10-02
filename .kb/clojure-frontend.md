@@ -400,8 +400,12 @@ on); the JVM method mangle spells `/` and `.`. A local never carries a namespace
   for that reason. Any other non-library namespace reads `my_app/core.clj`, lowers both
   passes from a clean cursor (no local, recur target, `try` depth or syntax gensym of the
   requiring form leaks in; all restored after), starting in the requiring namespace like
-  the oracle's `load` (a file without `ns` defines there). Its forms are HOISTED ahead of
-  the top-level datum that loaded it (`hoisted`, drained by `topLevels`); once per lowering.
+  the oracle's `load` (a file without `ns` defines there). A definition
+  (`defn`/`defmulti`/`defprotocol`/`defrecord`/`deftype`/`defmacro`/`deftest`/`defstruct`)
+  stays top-level ahead of the top-level datum that loaded it (`hoisted`, drained by
+  `topLevels`; `loadFile` splits the drain, so a nested namespace's definitions never land
+  in the outer namespace's init); every other datum becomes a statement of the namespace's
+  init (see below); once per lowering.
   An unknown `clojure.*` stays `unknown namespace`. Refusals in the oracle's words:
   `Could not locate a/b.clj on the source path: <roots>`, `Cyclic load dependency: [ /a
   ]->/b->[ /a ]` (newest request first, then the loading stack innermost first),
@@ -416,23 +420,33 @@ on); the JVM method mangle spells `/` and `.`. A local never carries a namespace
   no new option. Files come through `ClojureFiles` (the `SchemeFiles` shape):
   `eval/SourceLanguage.clojureFiles` adapts the site's loader (the parent is absolutized so
   the walk passes the top of a relative entry path); no loader is `NONE`, refused by name.
-- **Hoisting is the measured deviation**: the corpus `preface` test
-  (`(with-out-str (use :reload 'examples.preface))` inside a `deftest`) prints its
-  `hello` ahead of the test form and captures `""`. Loading at the `require` site
-  (`:reload`, once per program across separately lowered files) is .todo/b72: one init
-  function per namespace hits the JVM's 64 KB method and wasm's body cap for a large
-  namespace (top-level forms are chunked, a lambda body is not), `GlobalVarCollector` sees
-  a `setq` only nested in a top-level non-`defun` form, and `SpecialVarCollector` reads
-  `defparameter` only at a form's head.
+- **Loading at the `require` site** (b72, decided 2026-10-02 against `clj`
+  1.12.6.1673): a required namespace's statements run from init chunks the `require`
+  site calls behind a `(defvar |c%n%loaded| nil)` flag -- guarded, unconditionally under
+  `:reload`, or with every transitive dependency first under `:reload-all` (each member
+  runs and marks before the next, so a later init's guarded call to an earlier dependency
+  skips it). The flag is a `defvar`, so a namespace two separately lowered files require
+  still runs once per process; a `require` inside a body lowers to the call where it
+  stands, so it loads when the body runs. A `def` resets on reload where a `defonce`
+  keeps its root, through a `%set` flag beside the var -- a runtime `boundp` probe is
+  unsound in the init (measured 2026-10-02: the compiled backends read it off the eval
+  mirror, which only a top-level assignment reaches, never one inside the init lambda, so
+  the reload always reset). Chunks split past 16 KiB of printed statements (one huge
+  statement stays one huge chunk, the wasm tail-spine gap for `defun`s); each is a
+  top-level `(setq |c%n%init-N| (lambda () ...))` under a `(setq |c%n%init| ...)` driver,
+  so `GlobalVarCollector` keeps the stores (it walks assignments nested in a top-level
+  `setq`, like any other non-`defun` form), and a `^:dynamic` `def`'s
+  `(declaim (special x))` plus its `%bound-depth` counter stay top-level at the head for
+  `SpecialVarCollector`.
 - **Syntax-quote** resolves through `lookupVar` (no locals, no privacy: the refusal belongs
   to the expansion's site, like the oracle's compile); see the row above.
 
 Corpus (2026-10-02, the 27 `code/test/**` namespaces of shcloj4, each through a driver
 `(require 'ns) (clojure.test/run-tests 'ns)` read from `test/`, the project's own `deps.edn`
-naming `src`; no inlining any more): 16 print the oracle's bytes (`chat` -- its tests are
+naming `src`; no inlining any more): 17 print the oracle's bytes (`chat` -- its tests are
 named like the functions under test -- joins the b55 nine -- plus 6 of the 7 `macros*`
-since b73). `preface` fails on the hoisting
-above; of the 7 `macros*`, 6 print the oracle's bytes since b73 (the expander answers the
+since b73, plus `preface` since b72: its `(use :reload ...)` inside a `deftest` captures
+the file's print where the `require` runs); of the 7 `macros*`, 6 print the oracle's bytes since b73 (the expander answers the
 mangled data itself, so `=` holds and printing spells the oracle's lowercase;
 `examples.macros.chain-4/chain` qualifies like it) while `macros/bench-1` still fails on
 the syntax-quote qualification deviation alone (the oracle spells `clojure.core/let`,
@@ -445,12 +459,17 @@ of a non-string (.todo/b74).
 
 Pinned by `ClojureProjectNamespacesTest` (a `deps.edn` project in a temp dir: the entry under
 `test/`, aliases, refers, `use :only`, a file without `ns`, a second `require`, the chat
-shape under `clojure.test`, on the interpreter, the JVM and both wasm backends; the
-refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce`,
-`eachNamespaceHasItsOwnVars`, `requireRefersOnlyThroughReferOrUse`,
+shape under `clojure.test`, the corpus preface shape, `:reload` keeping `defonce`,
+`:reload-all` running dependencies first, a `require` inside a body, and one namespace two
+`load`ed files require running once -- each on the interpreter, the JVM and both wasm
+backends; the refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce`,
+`aRequiredNamespaceRunsItsStatementsFromAnInitBehindAFlag`,
+`aReloadCallRunsTheInitUnconditionally`, `aReloadAllCallRunsDependenciesFirst`,
+`aDynamicDefInANamespaceHoistsItsDeclaim`, `eachNamespaceHasItsOwnVars`,
+`requireRefersOnlyThroughReferOrUse`,
 `syntaxQuoteQualifiesTheVarsItsNamespaceSees`, `macroexpandCarriesTheCallSitesMacroScope`,
 over `MemoryClojureFiles`), `ClojureSessionTest` (a buffer's require, a later buffer's
-call), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
+call, a printing namespace's init behind its flag and a later `:reload` buffer), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
 `macroexpand-keeps-strings-and-keywords`, every line the oracle's).
 
 ## Core-named macros (b63)

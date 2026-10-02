@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
@@ -44,32 +45,72 @@ class ClojureProjectNamespacesTest {
 	@TempDir
 	static Path project;
 
-	private static final Map<String, String> FILES = Map.of("deps.edn", "{:paths [\"src\"]}\n", "src/app/greet.clj", """
-			(ns app.greet)
-			(println "loading app.greet")
-			(def greeting "hello")
-			(defn- shout [s] (.toUpperCase s))
-			(defn greet [n] (str greeting ", " n))
-			(defn loud [n] (shout (greet n)))
-			(defmacro twice [x] `(* 2 ~x))
-			(defonce counter (atom 0))
-			""", "src/app/util.clj", """
-			(ns app.util (:require [app.greet :as g]))
-			(println "loading app.util")
-			(defn twice-greet [n] [(g/greet n) (g/twice 3)])
-			""", "src/app/nons.clj", """
-			(defn from-nons [] :into-the-requiring-ns)
-			""", "src/app/inbox.clj", """
-			(ns app.inbox)
-			(defrecord Note [from text])
-			(def notes (ref ()))
-			(defn valid? [n] (boolean (and (:from n) (:text n))))
-			(defn post [n] (dosync (alter notes conj n)))
-			""", "src/app/cyc_a.clj", """
-			(ns app.cyc-a (:require [app.cyc-b]))
-			""", "src/app/cyc_b.clj", """
-			(ns app.cyc-b (:require [app.cyc-a]))
-			""");
+	private static final Map<String, String> FILES = Map.ofEntries(Map.entry("deps.edn", "{:paths [\"src\"]}\n"),
+			Map.entry("src/app/greet.clj", """
+					(ns app.greet)
+					(println "loading app.greet")
+					(def greeting "hello")
+					(defn- shout [s] (.toUpperCase s))
+					(defn greet [n] (str greeting ", " n))
+					(defn loud [n] (shout (greet n)))
+					(defmacro twice [x] `(* 2 ~x))
+					(defonce counter (atom 0))
+					"""), Map.entry("src/app/util.clj", """
+					(ns app.util (:require [app.greet :as g]))
+					(println "loading app.util")
+					(defn twice-greet [n] [(g/greet n) (g/twice 3)])
+					"""), Map.entry("src/app/nons.clj", """
+					(defn from-nons [] :into-the-requiring-ns)
+					"""), Map.entry("src/app/inbox.clj", """
+					(ns app.inbox)
+					(defrecord Note [from text])
+					(def notes (ref ()))
+					(defn valid? [n] (boolean (and (:from n) (:text n))))
+					(defn post [n] (dosync (alter notes conj n)))
+					"""), Map.entry("src/app/cyc_a.clj", """
+					(ns app.cyc-a (:require [app.cyc-b]))
+					"""), Map.entry("src/app/cyc_b.clj", """
+					(ns app.cyc-b (:require [app.cyc-a]))
+					"""), Map.entry("src/examples/preface.clj", """
+					(ns examples.preface)
+					(println "hello")
+					"""), Map.entry("test/examples/test/preface.clj", """
+					(ns examples.test.preface
+					  (:use clojure.test))
+					(deftest test-load-preface
+					  (is (= "hello\\n" (with-out-str (use :reload 'examples.preface)))))
+					"""), Map.entry("src/app/counter_ns.clj", """
+					(ns app.counter-ns)
+					(defonce calls (atom 0))
+					(def snapshot @calls)
+					(defn touch [] (swap! calls inc))
+					"""), Map.entry("src/app/dep_b.clj", """
+					(ns app.dep-b)
+					(println "loading b")
+					(def bv 1)
+					"""), Map.entry("src/app/dep_a.clj", """
+					(ns app.dep-a (:require [app.dep-b :as b]))
+					(println "loading a")
+					(def av (+ 10 b/bv))
+					"""), Map.entry("src/app/late.clj", """
+					(ns app.late)
+					(println "loading late")
+					(defn g [] :late!)
+					"""), Map.entry("src/app/dyn.clj", """
+					(ns app.dyn)
+					(def ^:dynamic *level* 0)
+					(defn level [] *level*)
+					"""), Map.entry("src/app/shared.clj", """
+					(ns app.shared)
+					(println "loading shared")
+					(defn s [] :shared!)
+					"""), Map.entry("test/app/a.clj", """
+					(ns app.a (:require [app.shared :as sh]))
+					(println (sh/s) :from-a)
+					"""), Map.entry("test/app/b.clj", """
+					(ns app.b (:require [app.shared :as sh]))
+					(println (sh/s) :from-b)
+					"""));
 
 	/**
 	 * The entry under {@code test/}, the oracle's test layout: its namespace names the
@@ -163,6 +204,208 @@ class ClojureProjectNamespacesTest {
 		}
 	}
 
+	/**
+	 * The corpus preface shape: the test namespace never requires the printing one; the
+	 * test body's own {@code (use :reload ...)} runs its file, so the print lands inside
+	 * the capture, like the oracle.
+	 */
+	private static final String PREFACE_DRIVER = """
+			(ns b72.preface-driver (:use clojure.test))
+			(require 'examples.test.preface)
+			(run-tests 'examples.test.preface)
+			""";
+
+	private static final String PREFACE_OUT = """
+
+			Testing examples.test.preface
+
+			Ran 1 tests containing 1 assertions.
+			0 failures, 0 errors.
+			""";
+
+	@Test
+	void thePrefaceShapeLoadsWhenTheRequireRuns() throws Exception {
+		Path entry = project.resolve("test").resolve("preface_driver.clj");
+		Files.writeString(entry, PREFACE_DRIVER);
+		assertThat(interpret(entry)).isEqualTo(PREFACE_OUT);
+		assertThat(runOnJvm(entry, "B72Preface")).isEqualTo(PREFACE_OUT);
+	}
+
+	@Test
+	void thePrefaceShapeLoadsWhenTheRequireRunsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = project.resolve("test").resolve("preface_driver.clj");
+		Files.writeString(entry, PREFACE_DRIVER);
+		assertThat(runOnWasm(entry, false)).isEqualTo(PREFACE_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(PREFACE_OUT);
+	}
+
+	/**
+	 * {@code :reload} re-runs the namespace: the {@code def} resets to the current root,
+	 * the {@code defonce} keeps it, like the oracle.
+	 */
+	private static final String RELOAD_MAIN = """
+			(ns app.reload-test (:require [app.counter-ns :as c]))
+			(c/touch) (c/touch)
+			(println @c/calls c/snapshot)
+			(require '[app.counter-ns] :reload)
+			(println @c/calls c/snapshot)
+			(c/touch)
+			(println @c/calls c/snapshot)
+			""";
+
+	private static final String RELOAD_OUT = """
+			2 0
+			2 2
+			3 2
+			""";
+
+	@Test
+	void reloadRerunsTheNamespaceKeepingDefonce() throws Exception {
+		Path entry = entry("reload_test.clj", RELOAD_MAIN);
+		assertThat(interpret(entry)).isEqualTo(RELOAD_OUT);
+		assertThat(runOnJvm(entry, "B72Reload")).isEqualTo(RELOAD_OUT);
+	}
+
+	@Test
+	void reloadRerunsTheNamespaceKeepingDefonceOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("reload_test.clj", RELOAD_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(RELOAD_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(RELOAD_OUT);
+	}
+
+	/**
+	 * {@code :reload-all} re-runs the namespace with every transitive dependency first,
+	 * like the oracle.
+	 */
+	private static final String RELOAD_ALL_MAIN = """
+			(ns app.dep-test (:require [app.dep-a :as a]))
+			(println "first" a/av)
+			(require '[app.dep-a] :reload-all)
+			(println "second" a/av)
+			""";
+
+	private static final String RELOAD_ALL_OUT = """
+			loading b
+			loading a
+			first 11
+			loading b
+			loading a
+			second 11
+			""";
+
+	@Test
+	void reloadAllRerunsDependenciesFirst() throws Exception {
+		Path entry = entry("dep_test.clj", RELOAD_ALL_MAIN);
+		assertThat(interpret(entry)).isEqualTo(RELOAD_ALL_OUT);
+		assertThat(runOnJvm(entry, "B72ReloadAll")).isEqualTo(RELOAD_ALL_OUT);
+	}
+
+	@Test
+	void reloadAllRerunsDependenciesFirstOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("dep_test.clj", RELOAD_ALL_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(RELOAD_ALL_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(RELOAD_ALL_OUT);
+	}
+
+	/**
+	 * A {@code require} inside a function body loads when the body runs: the load print
+	 * comes after the earlier top-level print, not ahead of the program.
+	 */
+	private static final String LATE_MAIN = """
+			(ns app.late-test)
+			(defn f [] (require '[app.late :as l]) (l/g))
+			(println "before")
+			(println (f))
+			""";
+
+	private static final String LATE_OUT = """
+			before
+			loading late
+			:late!
+			""";
+
+	@Test
+	void aRequireInsideABodyLoadsWhenTheBodyRuns() throws Exception {
+		Path entry = entry("late_test.clj", LATE_MAIN);
+		assertThat(interpret(entry)).isEqualTo(LATE_OUT);
+		assertThat(runOnJvm(entry, "B72Late")).isEqualTo(LATE_OUT);
+	}
+
+	@Test
+	void aRequireInsideABodyLoadsWhenTheBodyRunsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("late_test.clj", LATE_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(LATE_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(LATE_OUT);
+	}
+
+	/**
+	 * A `^:dynamic` var of a required namespace rebinds through `binding`: its declaim
+	 * and counter ride top-level, so the rebinding has dynamic extent on every backend.
+	 */
+	private static final String DYN_MAIN = """
+			(ns app.dyn-test (:require [app.dyn :as d]))
+			(println (d/level))
+			(binding [d/*level* 5] (println (d/level)))
+			(println (d/level))
+			""";
+
+	private static final String DYN_OUT = """
+			0
+			5
+			0
+			""";
+
+	@Test
+	void aDynamicVarOfARequiredNamespaceRebinds() throws Exception {
+		Path entry = entry("dyn_test.clj", DYN_MAIN);
+		assertThat(interpret(entry)).isEqualTo(DYN_OUT);
+		assertThat(runOnJvm(entry, "B72Dyn")).isEqualTo(DYN_OUT);
+	}
+
+	@Test
+	void aDynamicVarOfARequiredNamespaceRebindsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("dyn_test.clj", DYN_MAIN);
+		assertThat(runOnWasm(entry, false)).isEqualTo(DYN_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(DYN_OUT);
+	}
+
+	/**
+	 * A namespace two separately lowered files require runs once: each {@code (load ...)}
+	 * lowers on its own (its own loaded flag, already bound by the first), so the shared
+	 * file's print appears a single time on every backend.
+	 */
+	private static final String TWICE_OUT = """
+			loading shared
+			:shared! :from-a
+			:shared! :from-b
+			""";
+
+	@Test
+	void aNamespaceTwoSeparatelyLoweredFilesRequireRunsOnce() throws Exception {
+		Path entry = twiceEntry();
+		assertThat(interpretLoads(entry)).isEqualTo(TWICE_OUT);
+		assertThat(runLoadsOnJvm(entry, "B72Twice")).isEqualTo(TWICE_OUT);
+	}
+
+	@Test
+	void aNamespaceTwoSeparatelyLoweredFilesRequireRunsOnceOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = twiceEntry();
+		assertThat(runLoadsOnWasm(entry, false)).isEqualTo(TWICE_OUT);
+		assertThat(runLoadsOnWasm(entry, true)).isEqualTo(TWICE_OUT);
+	}
+
+	private static Path twiceEntry() throws IOException {
+		Path path = project.resolve("test").resolve("app").resolve("twice_main.lisp");
+		Files.writeString(path, "(load \"a.clj\")\n(load \"b.clj\")\n");
+		return path;
+	}
+
 	@Test
 	void aMissingNamespaceFileIsNamedWithTheRootsSearched() throws Exception {
 		Path entry = entry("missing_test.clj", "(ns app.missing-test (:require [app.nowhere]))");
@@ -236,6 +479,24 @@ class ClojureProjectNamespacesTest {
 			Files.createDirectories(target.getParent());
 			Files.write(target, file.getValue());
 		}
+		return execJvm(name, classes);
+	}
+
+	private static String runLoadsOnJvm(Path entry, String name) throws Exception {
+		JvmSourceCompiler.Result result = new JvmSourceCompiler(name)
+			.baseDir(Objects.requireNonNull(entry.getParent()).toString())
+			.compile(Files.readString(entry), entry.toString());
+		Path classes = Files.createTempDirectory(project, name);
+		Files.write(classes.resolve(name + ".class"), result.classBytes());
+		for (var file : result.runtimeClasses().entrySet()) {
+			Path target = classes.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		return execJvm(name, classes);
+	}
+
+	private static String execJvm(String name, Path classes) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { classes.toUri().toURL() },
 				ClassLoader.getSystemClassLoader()); var _ = ThreadStdio.out(out)) {
@@ -248,9 +509,33 @@ class ClojureProjectNamespacesTest {
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
+	private static String interpretLoads(Path entry) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		CliStack.call("clojure-namespaces", () -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			evaluator.setLoadBaseDir(Objects.requireNonNull(entry.getParent()).toString());
+			for (LispVal form : SourceLanguage.COMMON_LISP.read(Files.readString(entry), Features.INTERPRETER,
+					entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem())) {
+				evaluator.eval(form);
+			}
+			return null;
+		});
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
 	private static String runOnWasm(Path entry, boolean component) throws Exception {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(Files.readString(entry),
 				entry.toString(), true, component);
+		return execWasm(frontend, component);
+	}
+
+	private static String runLoadsOnWasm(Path entry, boolean component) throws Exception {
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.commonLisp(Files.readString(entry),
+				entry.toString(), Objects.requireNonNull(entry.getParent()).toString(), true, component);
+		return execWasm(frontend, component);
+	}
+
+	private static String execWasm(CompileFrontendAccess.Program frontend, boolean component) throws Exception {
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())
