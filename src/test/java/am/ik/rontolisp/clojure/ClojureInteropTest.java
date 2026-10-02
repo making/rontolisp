@@ -167,8 +167,9 @@ class ClojureInteropTest {
 
 	@Test
 	void filesRoundTripThroughSpitSlurpAndLineSeq() throws Exception {
-		// File IO has no wasm leg (no filesystem there), so it lives here with the
-		// interop cases: interpreter and JVM only.
+		// File IO lives here with the interop cases for the interpreter and the
+		// JVM; the wasm legs (a --dir preopen) live in ClojureWasmFileIoTest and
+		// the un-preopened refusal in ClojureWasmFileRefusalTest.
 		String path = "\"" + workDir.resolve("b15-io.txt").toString().replace("\\", "\\\\") + "\"";
 		assertBothEqual("(spit " + path + " \"a\\nb\") (println (slurp " + path + "))", "a\nb\n");
 		assertBothEqual("(spit " + path + " \"a\\nb\") (println (line-seq " + path + "))", "(a b)\n");
@@ -183,7 +184,7 @@ class ClojureInteropTest {
 		// clojure.java.io/reader opens a buffered file-stream reader: line-seq reads
 		// it without closing (with-open owns closing, like the oracle), over the
 		// vendored words fixture rather than the book's 32k corpus. Interpreter and
-		// JVM only, like the pins above (no filesystem on wasm).
+		// JVM here; the wasm preopen leg is in ClojureWasmFileIoTest.
 		java.nio.file.Path fixture = workDir.resolve("b22-words.txt");
 		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
 			assertThat(in).isNotNull();
@@ -216,7 +217,8 @@ class ClojureInteropTest {
 		// spell their libspecs quoted (the oracle's bare-require spelling, b24): a
 		// quoted :as over .write/str-join, and quoted :refer of reader/blank? over
 		// with-open/line-seq and the vendored fixture. Interpreter and JVM only
-		// (files), like the pins above.
+		// (files), like the pins above; the wasm preopen leg is in
+		// ClojureWasmFileIoTest.
 		java.nio.file.Path fixture = workDir.resolve("b24-words.txt");
 		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
 			assertThat(in).isNotNull();

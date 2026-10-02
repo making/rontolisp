@@ -17,8 +17,9 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * The filesystem refusal of the {@code clojure.java.io/reader} program on both WASM
  * backends: without a preopened directory covering the path, opening the fixture signals
  * the file-error instead of answering a reader. (With a preopen the same program reads,
- * like every backend -- but the spec suite's shared yaml cannot pin file IO, so the
- * behavior lives in {@link ClojureInteropTest} on the interpreter and the JVM.)
+ * like every backend -- pinned in {@link ClojureWasmFileIoTest} -- but the spec suite's
+ * shared yaml cannot pin file IO, so the interpreter and JVM legs live in
+ * {@link ClojureInteropTest}.)
  */
 class ClojureWasmFileRefusalTest {
 

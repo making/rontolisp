@@ -1,7 +1,8 @@
 # IO
 
 File entry points over the `eval` IO layer. They run on the interpreter and the
-JVM -- there is no filesystem on wasm. `format` renders Java-format strings over
+JVM; on wasm they need a `--dir` preopen covering the path, like `open`/`with-open-file` --
+without one the open signals the file-error. `format` renders Java-format strings over
 Clojure-notation arguments.
 
 | Name | Example | Result |
