@@ -19,7 +19,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   `ClojureUpdateLowering`, `ClojureStringLowering`, `ClojureStateLowering`,
   `ClojureDispatchLowering` / `ClojureHierarchyLowering` /
   `ClojureProtocolLowering`, `ClojureMacroLowering`, `ClojureNamespaceLowering`,
-  `ClojureInteropLowering`, each taking the hub as its first argument and
+  `ClojureInteropLowering`, `ClojureTestLowering`, each taking the hub as its first argument and
   re-entering it for subforms) and the stateless `ClojureLowerUtil`,
   `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
   (the REPL session). The hub is the named cycle root in `PackageCycleTest`
@@ -84,10 +84,11 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
 | `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
 | `*out*`/`*in*` | `*standard-output*`/`*standard-input*`, not mangled names | the streams the print family writes to / reads from; `binding` may rebind either, like any special (decided 2026-10-01, b20) |
-| `.write`/`.flush`/`.readLine` on a stream | `princ` / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
-| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string` and `clojure.java.io` (`reader` only) resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
+| `.write`/`.flush`/`.readLine` on a stream | `princ` (nil signals, like the oracle's NullPointerException -- b55) / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
+| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | a bare library symbol names one library like the oracle (`(:use clojure.test)` refers it all; b55 -- it used to set a prefix and wire nothing), a `:reload`/`:reload-all`/`:verbose` flag is skipped, and a `:refer`/`:only`/`:exclude` list spells names like a vector (the oracle's `(reader)`); `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test` resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` take pattern values (around matches, through the regex runtime) as well as literal strings and characters (a plain string never compiles -- the b08 literal-only position holds for strings, pinned by `string-replace-and-split-stay-literal`); an empty literal-`split` input is nil (a pattern answers one empty part, like the oracle); a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
+| `clojure.test` (`deftest`/`deftest-`/`is`/`are`/`testing`/`run-tests`/`run-all-tests`/`successful?`) | `ClojureTestLowering` over the spliced `rontolisp::%clojure-test-*` runtime in `clojure.lisp` | see "clojure.test" below; `use-fixtures` refused by name, a macro var as a value is the oracle's `Can't take value of a macro` |
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member` in call and value position, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call (a known-class receiver whose overloads at that arity all answer a primitive boolean answers `T`-or-false -- a construction literal, a `let`/`if-let`/`when-let` local bound to one, or a `..` step's declared return; any other receiver keeps the shared `java:` unmarshal), `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field -- decided 2026-10-01, b20, lifting the b08 deviation; a bare `Class/member` value reads the static field when the host class has one, else answers a member-as-value lambda dispatching per arity over the static call -- so `(every? Character/isWhitespace s)` runs -- and a variadic-only member is refused by name), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field; a bare `Class/member` value reads the field or answers an arity-dispatching member lambda), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
 | `make-array`/`aget`/`aset`/`alength` | the general array (`make-array` dims, `aref`, `(setf aref)`, `array-dimension` 0) | the class spells the element type and is ignored -- every array here is general (the book's `interop.clj` shape); only the Clojure spellings are new, so all four backends |
 | `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the protocol name answers its table; single signature per method (several arities stay refused) |
@@ -153,10 +154,11 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `lazy-seq` | `rontolisp::%clojure-make-lazy` over a zero-argument lambda of the body | the body (an implicit `do`) runs on first realization, at most once per seq object (memoized through `rplaca`/`rplacd` on the wrapper cell, primitives every backend already compiles -- no new runtime); the body is its own zero-arity `recur` target (decided 2026-10-01, b28): a `recur` in its tail position re-runs the thunk itself, checked against arity 0, and the thunk lambda wraps itself in a `labels` self-binding only when a `recur` reaches it (the anonymous-`fn` shape); `lazy-cat` desugars to `(concat (lazy-seq e) ...)` at datum time |
 | `repeat`/`cycle`/`iterate`/`repeatedly` | `rontolisp::%clojure-repeat`/`-cycle`/`-iterate`/`-repeatedly` (infinite arities), strict-list builders (finite arities) | the infinite arities answer wrapper chains through the IFn dispatcher; `(repeat n x)`/`(repeatedly n f)` answer strict lists and print like the oracle; each names a function value too |
 | a vector literal | a `vector` call | |
+| `vector?`/`fn?` | `vectorp` minus `stringp` / `functionp`, answering `T`-or-false | a string is a CL vector but no Clojure vector (b55: `vectorp` alone answered true, the corpus `life_without_multi.clj` my-print shape); `fn?` is false for keywords, sets and maps; both are values too |
 | `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
 | `count` | a table-aware length | maps, sets and records answer `hash-table-count` (records their entries), a deftype or reify signals (a bare length would answer the wrapper's size), everything else `length` |
 | `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/record/vector/string are empty; a deftype or reify signals, like the oracle's `seq` throw |
-| `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; anything else is `equal` |
+| `=`/`not=` | the spliced `rontolisp::%clojure-equal` over each neighbouring pair, answering `T`-or-false (as values `%clojure-equal-values` / its negation) | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; two sequentials (lists, non-string vectors, lazy seqs, and nil as the empty list) compare element by element across kinds, like the oracle (decided 2026-10-02, b55: the inline labels compared vectors with `equal`, i.e. by identity, so `(= [1 2] [1 2])` was false -- the corpus test files compare vectors with seqs in nearly every assertion); `(= [] nil)` is therefore true where the oracle answers false; anything else is `equal`. One shared callee instead of a labels per call site: `(println (= 1 1))` 34,905 -> 33,016 B of wasm, five `=` calls 55,911 -> 34,395 B (2026-10-02, raw module totals) |
 | `{k v ..}` | `rontolisp:plist-hash-table` over the lowered pairs | an `equal` table, never mutated in place: every verb builds a fresh one |
 | `#{..}` | an `equal` table holding each member under itself, wrapped as `(:C%SET table)` | the wrapper tells verbs a set from a map; a repeated literal element is refused by spelling (`Duplicate key`) |
 | `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys, rewrapped in the record it came from | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused; `assoc` keeps the record's tag and fields, like the oracle; `dissoc` keeps the record while every declared field is still present and drops to a plain map otherwise (removing a base field drops the type, removing an extension key keeps it), like the oracle; as values a map plus a rest list of pairs/keys (an odd `assoc` rest count signals at run time) |
@@ -170,7 +172,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `vec` | `coerce` of the fully realized seq view to a vector | `(vec nil)` is `[]`, `(vec "ab")` is the character vector, maps contribute one two-vector per entry and sets one member per element; lazy inputs realize fully (an infinite input hangs, like the oracle's); as a value a one-argument lambda |
 | `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, a keyword to its colon spelling, collections in Clojure notation through `rontolisp::%clojure-str-of` |
 | `pr-str` | `concatenate 'string` over mapped parts joined with a space | the readable arm of `str` (like `pr`): `(pr-str)` is `""`, `nil` maps to `"nil"` |
-| `println`/`print`/`pr`/`prn` | one `rontolisp::%clojure-write-datum` call per part straight to `*standard-output*`, spaces as `write-char`, the newline as `terpri`, answering nil | parts joined with a single space, like Clojure; `pr`/`prn` convert readably, so strings print quoted; collections print in Clojure notation; no `with-output-to-string` ever reaches a compiled program (a literal one flips a WASM module into EH mode -- measured gate, `.todo/artefacts/b07-clojure-print/NOTES.md` finding 6); the print family answers nil, like the oracle |
+| `println`/`print`/`pr`/`prn` | one `rontolisp::%clojure-write-datum` call per part straight to `*standard-output*`, spaces as `write-char`, the newline as `terpri`, answering nil; with several parts and any computed one, every part binds to a temporary first (b55: a part that printed or threw split the line, where the oracle evaluates the arguments first) | parts joined with a single space, like Clojure; `pr`/`prn` convert readably, so strings print quoted; collections print in Clojure notation; no `with-output-to-string` ever reaches a compiled program (a literal one flips a WASM module into EH mode -- measured gate, `.todo/artefacts/b07-clojure-print/NOTES.md` finding 6); the print family answers nil, like the oracle |
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
 | `nil` | `NIL` | falsey |
 | `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
@@ -180,7 +182,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole |
 | `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil -- the namespace stays flat, every definition still global); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
 | a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
-| `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements |
+| `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements (each element's own quote form, so a symbol or list stays data); a quoted list holding a vector, map, set or regex literal at any depth is a `list` construction over the element forms (b55: the construction code used to land in the list as data, so `'(1 [2])` printed `(1 (VECTOR ...))` -- the `is` expected-form shape) |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
 | transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
 
@@ -349,6 +351,63 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   `*out*`/`*in*` are `*standard-output*`/`*standard-input*`; `defonce` keeps the root where `def` resets
   it; refs and atoms share the cell, so STM verbs accept atom cells.
 
+## clojure.test (b55)
+
+Decided 2026-10-02 against `clj` 1.12.6.1673. The shapes are the oracle's macro expansions,
+lowered; the runtime is Lisp in `clojure.lisp`, so all four backends run one code path:
+
+- `deftest name body` -> `(defun c%name%body () body)` (the `recur` target, the oracle's
+  inner `fn`), `(defun c%name () (%clojure-test-var "name" #'c%name%body "(f:l)"))` and
+  `(%clojure-test-register "ns" "name" #'c%name)`. The pre-scan registers the name as a
+  FUNCTION from the spelling (`deftest`/`deftest-`/`x/deftest`), so `(name)` calls it like
+  the oracle. Registry = per namespace in definition order (a redefinition replaces in place).
+- `is` -> `(let ((E 'form) (M msg)) (%clojure-test-try (lambda () ASSERT) E M "(f:l)"))`,
+  lowered behind the `try` barrier. ASSERT picks the oracle's `assert-expr` kind: `thrown?`
+  / `thrown-with-msg?` (bare names only, like the oracle's symbol dispatch); a PREDICATE when
+  the head resolves to a function var -- not a local, keyword, `.`/`Class.` spelling, user
+  macro, `def`'d non-function, or a name in `ClojureTestLowering.CORE_MACROS` -- whose
+  arguments bind to `%is-argN` locals first (literals and function/class names stay in
+  place, so `instance?`/`format` still see their literal) and whose failure shows
+  `(not (f values...))`; anything else the ANY kind (failure shows the value).
+- `are` substitutes its template per argument group at lower time (postwalk-replace; reader
+  markers stay), each `is` reporting the `are` line; a count that does not divide is the
+  oracle's `The number of args doesn't match are's argv.`
+- Reports go to `%clojure-test-out`, captured by `%clojure-test-init` (the runtime start
+  every test-using program runs first, like the STM runtime) -- the oracle's `*test-out*`,
+  so `with-out-str` never captures a report. The init also takes a lambda over the ex-info
+  readers (forced on: `usedExInfo`), so the library never names a program-generated
+  function, and an ex-info error prints the oracle's `clojure.lang.ExceptionInfo: msg` plus
+  the data line.
+- `(file:line)` is a lower-time string: the reader's position of the `is`/`are`/`deftest`
+  form, the file's last path segment (the oracle's stack-frame file) or `NO_SOURCE_FILE`;
+  an unlocated form (a macro expansion) names the enclosing `deftest`. `ClojureSpecE2eTest`
+  compares the suffix as `(spec.clj:N)` (the file differs per leg, the line moves with the
+  cases above); `ClojureLoweringTest` pins the position.
+- `run-tests` takes symbols or strings (as a value too, so `(apply run-tests nss)`), bakes
+  the namespaces seen so far (`namespacesSeen`, `user` first) into the call so an unknown
+  one is the oracle's `No namespace: x found`; `run-all-tests` runs those plus every
+  registered one, narrowed by `re-matches`.
+
+Deviations: tests run in definition order (the oracle's is its ns-interns map order);
+`thrown?` matches any condition (the catch-all `try` precedent); error reports print the
+condition's message, no stack trace, at the `is` line (the oracle names the throwing frame);
+a failed `thrown-with-msg?` shows the message (the oracle `#error {...}`); a host
+StackOverflowError is no CL condition, so `(is (thrown? StackOverflowError ...))` ends the
+program (the corpus `functional` test); `run-all-tests` lists only the program's namespaces; a thrown host `Throwable` (`(throw (Exception. "boom"))`) reaches the report as `#<java java.lang.Exception>`, so `thrown-with-msg?` cannot match its message (b66).
+
+Corpus (2026-10-02; the 27 `code/test/**` namespaces of the shcloj4 corpus, each inlined with
+the example sources it requires since b56 is open, the oracle run on the real project): 12
+agree with the oracle's summary line (`fail`, `index-of-any`, `life-without-multi`,
+`male-female`, `male-female-seq`, `memoized-male-female`, `replace-symbol`, `trampoline`,
+`wallingford`, ...); 8 run but differ on documented deviations (`macroexpand-1` answers
+uppercase: the 6 `macros*` files; lazy `for` input: `lazy-index-of-any`) or the
+redefinition gap (b65: a later `defn` of the same name wins on the compiled backends); the
+rest stop at other gaps: `#^`/record literals (b58), `meta`/`#'` (`introduction`,
+`exploring`), `drop-last` (b57), multi-interface `proxy` (b59), `String` as a value
+(`multimethods`), `read` (`concurrency`), project-local namespaces (b56, `preface`), the
+host stack overflow (`functional`). The 153,129 B raw wasm of a one-test program
+(`(deftest a (is (= 1 1))) (run-tests)`) is the printer plus the EH-mode handlers.
+
 ## A session
 
 `ClojureSession` keeps the lowering across buffers: every buffer declares its own
@@ -363,7 +422,7 @@ printer (the `ECHO` shape, readable), and decides completeness by bracket counti
 
 ## Tests
 
-`ClojureReaderTest`, `ClojureLoweringTest`, `ClojureSessionTest`,
+`ClojureReaderTest`, `ClojureLoweringTest` (b55: `clojureTest*`), `ClojureSessionTest`,
 `ClojureSpecE2eTest` (the interpreter, the JVM and both WASM backends over
 `src/test/resources/clojure-spec.yaml` -- one case per lowering-table row and per
 builtin group, concatenated into one program and sliced back per case, the

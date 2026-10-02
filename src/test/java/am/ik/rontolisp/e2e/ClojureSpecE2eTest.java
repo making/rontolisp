@@ -132,7 +132,7 @@ class ClojureSpecE2eTest {
 	private static DynamicContainer backend(String leg, Spec spec, Callable<String> run) {
 		List<String> actual;
 		try {
-			actual = splitLines(run.call());
+			actual = splitLines(run.call()).stream().map(ClojureSpecE2eTest::normalizeTestLocation).toList();
 		}
 		catch (Exception | StackOverflowError ex) {
 			return dynamicContainer(leg, Stream.of(dynamicTest("(execution failed)", () -> fail(leg + ": " + ex, ex))));
@@ -229,6 +229,20 @@ class ClojureSpecE2eTest {
 				.readValue(YamlResources.safeReader(new String(in.readAllBytes(), StandardCharsets.UTF_8)), Spec.class);
 		}
 	}
+
+	/**
+	 * A {@code clojure.test} report line with its {@code (file:line)} suffix spelled
+	 * {@code (spec.clj:N)}: the position is a lower-time constant (identical on every
+	 * backend by construction, and pinned in {@code ClojureLoweringTest}), while its file
+	 * differs per leg and its line moves with every case above it in the concatenated
+	 * program.
+	 */
+	static String normalizeTestLocation(String line) {
+		return TEST_LOCATION.matcher(line).replaceAll("$1(spec.clj:N)");
+	}
+
+	private static final java.util.regex.Pattern TEST_LOCATION = java.util.regex.Pattern
+		.compile("^((?:FAIL|ERROR) in \\([^)]*\\) )\\((?:[^()\\s:]+\\.clj|NO_SOURCE_FILE):\\d+\\)$");
 
 	private static List<String> splitLines(String text) {
 		if (text.isEmpty()) {

@@ -20,7 +20,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
   Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
 - Vector and table keys compare by identity, so a vector key misses a lookup its oracle
-  answers; a repeated set-literal element is refused by spelling.
+  answers; a repeated set-literal element is refused by spelling. `=` itself compares
+  vectors, lists and lazy seqs element-wise like the oracle, and since `nil` is the empty
+  list, `(= [] nil)` is `true` where the oracle answers `false`.
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; map/set seq order is the table's walk
   order; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
@@ -32,6 +34,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure
   signals. A threading step over a collection literal signals (collections are not
   functions here).
+- `clojure.test` runs the tests in definition order (the oracle's order is its
+  namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
+  names, like `catch`; an error report prints the condition's message (an `ex-info` the
+  oracle's way) with no stack trace, at the `is` form's line where the oracle names the
+  frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
+  oracle prints `#error {...}`; a host stack overflow is no condition and ends the
+  program. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
 - Multimethod dispatch values compare like `equal` table keys (vectors by identity --

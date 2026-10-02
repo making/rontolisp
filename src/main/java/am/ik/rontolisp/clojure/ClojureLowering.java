@@ -205,6 +205,13 @@ public final class ClojureLowering {
 	String currentNs = "user";
 
 	/**
+	 * Every namespace an {@code ns} or {@code in-ns} named so far, {@code user} first:
+	 * the namespaces {@code run-tests} knows beside the ones that defined a test (the
+	 * oracle refuses any other).
+	 */
+	final Set<String> namespacesSeen = new LinkedHashSet<>(List.of("user"));
+
+	/**
 	 * What {@code (:refer-clojure :only [...])} restricts the core to, or null without
 	 * one; {@code (:refer-clojure :exclude [...])} removes instead. A name outside the
 	 * set is not a builtin, so a user definition of it wins.
@@ -593,6 +600,21 @@ public final class ClojureLowering {
 	boolean stmEmitted;
 
 	/**
+	 * Whether the program uses {@code clojure.test}: the test runtime start (the report
+	 * stream, the ex-info reader) runs once, behind the false binding.
+	 */
+	boolean usedTest;
+
+	/** Whether the test runtime start was already emitted (files emit it inline). */
+	boolean testEmitted;
+
+	/**
+	 * The {@code (file:line)} of the {@code deftest} being lowered, or null outside one:
+	 * what a report names for an assertion the reader never saw (a macro's expansion).
+	 */
+	@Nullable String testLocation;
+
+	/**
 	 * Whether the program defines or expands macros: the macro runtime (the table lookup,
 	 * the demangler and {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in
 	 * once, behind the false binding.
@@ -651,6 +673,10 @@ public final class ClojureLowering {
 		if (lowering.usedStm) {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
+		}
+		if (lowering.usedTest) {
+			// the test runtime starts before anything else, like the false value
+			lowering.forms.addAll(1, ClojureTestLowering.testRuntime(lowering));
 		}
 		return lowering.forms;
 	}
@@ -723,6 +749,12 @@ public final class ClojureLowering {
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
 		}
+		if (this.usedTest && !this.testEmitted) {
+			// The test runtime starts ahead of the buffer that first needs it,
+			// like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(ClojureTestLowering.testRuntime(this), false));
+			this.testEmitted = true;
+		}
 		return out;
 	}
 
@@ -775,6 +807,11 @@ public final class ClojureLowering {
 			// order, like the oracle's compile
 			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defmacro"), Kind.MACRO);
 		}
+		else if (ClojureTestLowering.isDeftestSpelling(items.get(0))) {
+			// a clojure.test definition is a zero-argument function: (name) runs
+			// the test, like the oracle
+			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "deftest"), Kind.FUNCTION);
+		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "declare")) {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
@@ -815,6 +852,7 @@ public final class ClojureLowering {
 			if (ClojureLowerUtil.isNsForm(form)) {
 				ClojureNamespaceLowering.processNs(this, form); // wires the aliases;
 																// defines nothing
+				this.namespacesSeen.add(this.currentNs);
 				return List.of();
 			}
 			List<LispVal> items = ClojureLowerUtil.items(form);
@@ -849,6 +887,9 @@ public final class ClojureLowering {
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defstruct")) {
 				return List.of(ClojureStateLowering.defstructForm(this, items));
+			}
+			if (items != null && !items.isEmpty() && ClojureTestLowering.isDeftestHead(this, items.get(0))) {
+				return ClojureTestLowering.deftestForms(this, items, form);
 			}
 			return List.of(lower(form));
 		}
@@ -1181,7 +1222,9 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "in-ns")) {
-			return ClojureNamespaceLowering.inNsOf(this, items);
+			LispVal switched = ClojureNamespaceLowering.inNsOf(this, items);
+			this.namespacesSeen.add(this.currentNs);
+			return switched;
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "set!")) {
 			throw new LispReadException("set! is not supported yet: mutable fields need a design");
@@ -1274,7 +1317,7 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "recur")) {
 			return ClojureBindingLowering.recurOf(this, form, items);
 		}
-		return call(items);
+		return call(form, items);
 	}
 
 	/**
@@ -1398,7 +1441,7 @@ public final class ClojureLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), raw, TRUE_CONST, this.falseVariable);
 	}
 
-	LispVal call(List<LispVal> items) {
+	LispVal call(LispVal form, List<LispVal> items) {
 		if (!(items.get(0) instanceof LispSymbol op)) {
 			throw new LispReadException("a call's head must be a name: " + items.get(0).print());
 		}
@@ -1421,7 +1464,7 @@ public final class ClojureLowering {
 		}
 		VarRef qualified = ClojureNamespaceLowering.resolveQualified(this, name);
 		if (qualified != null) {
-			return ClojureNamespaceLowering.namespaceCall(this, qualified, items);
+			return ClojureNamespaceLowering.namespaceCall(this, qualified, items, form);
 		}
 		LispVal interop = ClojureInteropLowering.interopCall(this, name, items);
 		if (interop != null) {
@@ -1430,7 +1473,7 @@ public final class ClojureLowering {
 		ClojureLowerUtil.isTrue(known(name) || this.refers.containsKey(name), "unknown name: " + name);
 		VarRef referred = known(name) ? null : this.refers.get(name);
 		if (referred != null) {
-			return ClojureNamespaceLowering.namespaceCall(this, referred, items);
+			return ClojureNamespaceLowering.namespaceCall(this, referred, items, form);
 		}
 		if (this.inDispatchFn) {
 			// a call to a recorded class-calling definition inside a dispatch
@@ -1584,7 +1627,12 @@ public final class ClojureLowering {
 			case "alength":
 				return ClojureInteropLowering.alengthOf(this, items);
 			case "vector?":
-				return booleanAnswer(plain("vectorp", items));
+				// a string is a CL vector but no Clojure vector, like the oracle
+				ClojureLowerUtil.isTrue(n == 1, "vector? takes one argument");
+				LispSymbol vectorTemp = freshTemp();
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
+						ClojureLowerUtil.list(ClojureLowerUtil.list(vectorTemp, lower(items.get(1)))),
+						booleanAnswer(vectorRaw(vectorTemp)));
 			case "map":
 				ClojureLowerUtil.isTrue(n >= 2, "map takes a function and collections");
 				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
@@ -1882,6 +1930,9 @@ public final class ClojureLowering {
 				return ClojureFnLowering.shuffleForm(this, lower(items.get(1)));
 			case "vec":
 				return ClojureCollectionLowering.vecOf(this, items);
+			case "fn?":
+				ClojureLowerUtil.isTrue(n == 1, "fn? takes one argument");
+				return booleanAnswer(plain("functionp", items));
 			default:
 				return null;
 		}
@@ -1899,6 +1950,12 @@ public final class ClojureLowering {
 	@Nullable LispVal valueOf(String name) {
 		return switch (name) {
 			case "inc", "dec" -> ClojureFnLowering.incValue(this, name);
+			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
+			case "not=" -> notEqualValue();
+			case "vector?" -> ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw);
+			case "fn?" ->
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
 			case "str" -> ClojureStringLowering.strValue(this);
 			case "pr-str" -> ClojureStringLowering.prStrValue(this);
 			case "seq" -> ClojureSeqLowering.seqValue(this);
@@ -2179,6 +2236,28 @@ public final class ClojureLowering {
 		return ClojureLowerUtil.idSym(name);
 	}
 
+	/** Whether the bound value is a Clojure vector: a CL vector that is no string. */
+	static LispVal vectorRaw(LispVal bound) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("AND"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("VECTORP"), bound), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("NOT"), ClojureLowerUtil.list(ClojureLowerUtil.sym("STRINGP"), bound)));
+	}
+
+	/**
+	 * {@code not=} as a value: the negated {@code =} over every argument, answering
+	 * {@code T}-or-false.
+	 */
+	LispVal notEqualValue() {
+		LispSymbol values = new LispSymbol(mangle("not=-values"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(AMPERSAND_REST, values),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+										new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES")),
+								values),
+						TRUE_CONST), this.falseVariable, TRUE_CONST));
+	}
+
 	/** The Common Lisp function a core name names as a value, or null. */
 	static @Nullable String builtinValue(String name) {
 		return switch (name) {
@@ -2234,23 +2313,32 @@ public final class ClojureLowering {
 					|| !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%regex")) {
 				return ClojureCollectionLowering.regexForm(items);
 			}
+			// one constant when every element is one; a nested vector, map, set or
+			// regex literal is built at run time, so the list is too (its element
+			// forms in order) -- never the construction code as list data
+			List<LispVal> elements = new ArrayList<>();
+			boolean constant = true;
+			for (LispVal item : items) {
+				LispVal element = quote(item);
+				elements.add(element);
+				constant &= isQuoteForm(element);
+			}
+			if (!constant) {
+				return ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), elements);
+			}
 			LispVal tail = NIL_CONST;
-			for (int i = items.size() - 1; i >= 0; i--) {
-				tail = new LispCons(quotedConstant(items.get(i)), tail);
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				tail = new LispCons(((LispCons) ((LispCons) elements.get(i)).cdr()).car(), tail);
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), tail);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), datum);
 	}
 
-	/** One element of a quoted list: the constant, the per-element quote flattened. */
-	LispVal quotedConstant(LispVal datum) {
-		LispVal quoted = quote(datum);
-		if (quoted instanceof LispCons cell && cell.car() instanceof LispSymbol s && s.name().equals("QUOTE")
-				&& cell.cdr() instanceof LispCons inner) {
-			return inner.car();
-		}
-		return quoted;
+	/** Whether the form is {@code (QUOTE x)}: a constant a quoted list can hold as is. */
+	static boolean isQuoteForm(LispVal form) {
+		return form instanceof LispCons cell && cell.car() instanceof LispSymbol s && s.name().equals("QUOTE")
+				&& cell.cdr() instanceof LispCons;
 	}
 
 	/**
@@ -2271,16 +2359,15 @@ public final class ClojureLowering {
 
 	/**
 	 * One element of a quoted map or set construction: the construction RUNS, so its
-	 * elements are forms, not data -- a keyword travels as its construction (its datum in
-	 * a {@code (LIST ...)} element would call the tag as a function); anything else
-	 * quotes as usual.
+	 * elements are forms, not data -- each element's own quote form (a symbol or a list
+	 * stays data instead of being evaluated); a keyword travels as its construction.
 	 */
 	LispVal quotedElement(LispVal datum) {
 		if (datum instanceof LispSymbol s && s.name().startsWith(":")) {
 			return ClojureCollectionLowering
 				.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(this, s.name()));
 		}
-		return quotedConstant(datum);
+		return quote(datum);
 	}
 
 	// errors: try over handler-case and unwind-protect, throw over error

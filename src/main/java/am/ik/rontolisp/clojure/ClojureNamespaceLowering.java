@@ -42,7 +42,11 @@ final class ClojureNamespaceLowering {
 	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the core
 	 * string operations, {@code clojure.java.io} to the file-stream runtime.
 	 */
-	static LispVal namespaceCall(ClojureLowering ctx, ClojureLowering.VarRef ref, List<LispVal> items) {
+	static LispVal namespaceCall(ClojureLowering ctx, ClojureLowering.VarRef ref, List<LispVal> items,
+			@Nullable LispVal form) {
+		if (ref.ns().equals(ClojureTestLowering.NAMESPACE)) {
+			return ClojureTestLowering.testCall(ctx, ref.var(), items, form);
+		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioCall(ctx, ref.var(), items);
 		}
@@ -55,6 +59,9 @@ final class ClojureNamespaceLowering {
 	 * lambda over the same open.
 	 */
 	static LispVal namespaceValue(ClojureLowering ctx, ClojureLowering.VarRef ref) {
+		if (ref.ns().equals(ClojureTestLowering.NAMESPACE)) {
+			return ClojureTestLowering.testValue(ctx, ref.var());
+		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioValue(ctx, ref.var());
 		}
@@ -90,17 +97,18 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * The namespaces whose vars lower to core forms: {@code clojure.string} and
-	 * {@code clojure.java.io}.
+	 * The namespaces whose vars lower to core forms: {@code clojure.string},
+	 * {@code clojure.java.io} and {@code clojure.test}.
 	 */
 	static boolean isKnownNamespace(String ns) {
-		return ns.equals("clojure.string") || ns.equals("clojure.java.io");
+		return ns.equals("clojure.string") || ns.equals("clojure.java.io") || ns.equals(ClojureTestLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
 	static boolean isKnownVar(String ns, String var) {
 		return ns.equals("clojure.string") && STRING_VARS.contains(var)
-				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var);
+				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
+				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var);
 	}
 
 	/**
@@ -110,6 +118,9 @@ final class ClojureNamespaceLowering {
 	static Set<String> varsOf(String ns) {
 		if (ns.equals("clojure.java.io")) {
 			return JIO_VARS;
+		}
+		if (ns.equals(ClojureTestLowering.NAMESPACE)) {
+			return ClojureTestLowering.VARS;
 		}
 		return STRING_VARS;
 	}
@@ -207,19 +218,23 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The libspecs of a {@code :require} (or {@code :use}, which refers everything by
-	 * default): {@code [ns :as alias :refer [vars]/:all]} vectors, prefix symbols and
-	 * prefix lists -- each either bare or quoted ({@code 'spec}, the oracle's
+	 * default): {@code [ns :as alias :refer [vars]/:all]} vectors, bare library symbols
+	 * and prefix lists -- each either bare or quoted ({@code 'spec}, the oracle's
 	 * bare-{@code require} spelling; the {@code ns} clauses quote implicitly, so both
 	 * paths share this parser). An unquoted vector spec stays accepted too (a lenient
 	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). Requiring
 	 * an unknown namespace is an error, like the oracle's missing-library failure.
 	 */
 	static void requireSpecs(ClojureLowering ctx, List<LispVal> specs, boolean referAll) {
-		String prefix = null;
 		for (LispVal spec : specs) {
 			LispVal unwrapped = unwrapQuote(spec);
+			if (unwrapped instanceof LispSymbol flag && flag.name().startsWith(":")) {
+				continue; // :reload, :reload-all, :verbose: one load per program here
+			}
 			if (unwrapped instanceof LispSymbol bare) {
-				prefix = bare.name();
+				// a bare symbol names one library, like the oracle (a prefix
+				// takes the list form below): (:use clojure.test) refers it all
+				requireOne(ctx, null, List.of(bare), referAll, spec);
 				continue;
 			}
 			if (!ClojureBindingLowering.isVectorDatum(unwrapped)) {
@@ -259,7 +274,7 @@ final class ClojureNamespaceLowering {
 			if (parts == null || parts.size() < 2 || !(parts.get(1) instanceof LispSymbol)) {
 				throw new LispReadException("require takes library specs, not " + spec.print());
 			}
-			requireOne(ctx, prefix, parts.subList(1, parts.size()), referAll, spec);
+			requireOne(ctx, null, parts.subList(1, parts.size()), referAll, spec);
 		}
 	}
 
@@ -325,11 +340,13 @@ final class ClojureNamespaceLowering {
 
 	static List<String> referNames(LispVal arg, LispVal spec) {
 		List<LispVal> elements = ClojureLowerUtil.items(arg);
-		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
+		if (elements == null || elements.isEmpty()) {
 			throw new LispReadException("a :refer/:only/:exclude takes a vector of names, not " + spec.print());
 		}
+		// a vector, or a list like the oracle's (reader) spelling
+		int from = elements.get(0) == ClojureReader.VECTOR ? 1 : 0;
 		List<String> names = new ArrayList<>();
-		for (LispVal element : elements.subList(1, elements.size())) {
+		for (LispVal element : elements.subList(from, elements.size())) {
 			if (!(element instanceof LispSymbol named) || named.name().startsWith(":")) {
 				throw new LispReadException("a :refer/:only/:exclude takes a vector of names, not " + spec.print());
 			}
