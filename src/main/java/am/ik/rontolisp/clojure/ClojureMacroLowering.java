@@ -827,10 +827,11 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The macro runtime, spliced once behind the false binding when the program defines
-	 * or expands macros: the table lookup over the {@code c%name%macro} globals, the
-	 * demangler (mangled symbols back to readable ones for printing; everything else
-	 * travels untouched) and the once/fixpoint expanders. Pure lowering over the shared
-	 * primitives, so every backend runs it unchanged.
+	 * or expands macros: the table lookup over the {@code c%name%macro} globals and the
+	 * once/fixpoint expanders. The expanders answer the mangled data itself, so {@code =}
+	 * against a quoted form holds and the Clojure printer (which demangles {@code c%}
+	 * symbols) spells the oracle's lowercase. Pure lowering over the shared primitives,
+	 * so every backend runs it unchanged.
 	 */
 	static List<LispVal> macroRuntime(ClojureLowering ctx) {
 		List<LispVal> runtime = new ArrayList<>();
@@ -840,16 +841,6 @@ final class ClojureMacroLowering {
 		LispSymbol cell = new LispSymbol("cell");
 		LispSymbol form = new LispSymbol("form");
 		LispSymbol next = new LispSymbol("next");
-		LispSymbol value = new LispSymbol("x");
-		LispSymbol text = new LispSymbol("text");
-		LispSymbol at = new LispSymbol("at");
-		LispSymbol end = new LispSymbol("end");
-		LispSymbol chars = new LispSymbol("chars");
-		LispSymbol one = new LispSymbol("one");
-		LispSymbol two = new LispSymbol("two");
-		LispSymbol vec = new LispSymbol("vec");
-		LispSymbol index = new LispSymbol("index");
-		LispSymbol acc = new LispSymbol("acc");
 		LispSymbol scope = new LispSymbol("scope");
 		LispSymbol hit = new LispSymbol("hit");
 		// (defun C%MACRO-FN (op scope) ...): the expander for a macro call's head, or
@@ -895,99 +886,19 @@ final class ClojureMacroLowering {
 										ClojureLowerUtil.list(name, ClojureHierarchyLowering.hfn("SYMBOL-NAME", op))),
 								tabled),
 						ClojureLowering.NIL_CONST)));
-		// (defun C%UNMANGLE (text at end) ...): the demangled spelling as a string
-		LispVal step = ClojureHierarchyLowering.hfnDef("STEP", List.of(at, chars), ClojureHierarchyLowering.hfn("IF",
-				ClojureHierarchyLowering.hfn(">=", at, end),
-				ClojureHierarchyLowering.hfn("APPLY",
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("concatenate")),
-						ClojureLowerUtil.quoted("string"), ClojureHierarchyLowering.hfn("REVERSE", chars)),
-				ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil
-					.list(one, ClojureHierarchyLowering.hfn("CHAR", text, at))), ClojureHierarchyLowering.hfn(
-							"IF",
-							ClojureHierarchyLowering
-								.hfn("AND", ClojureHierarchyLowering.hfn("CHAR=", one, new LispChar('%')),
-										ClojureHierarchyLowering.hfn("<",
-												ClojureHierarchyLowering.hfn("+", at, new LispInteger(1)), end)),
-							ClojureHierarchyLowering.hlet(
-									List.of(ClojureLowerUtil.list(two,
-											ClojureHierarchyLowering.hfn("CHAR", text,
-													ClojureHierarchyLowering.hfn("+", at, new LispInteger(1))))),
-									ClojureHierarchyLowering.hfn("COND", ClojureLowerUtil.list(
-											ClojureHierarchyLowering.hfn("CHAR=", two, new LispChar('%')),
-											ClojureHierarchyLowering.hfn("STEP",
-													ClojureHierarchyLowering.hfn("+", at, new LispInteger(2)),
-													ClojureHierarchyLowering.hfn("CONS", LispString.literal("%"),
-															chars))),
-											ClojureLowerUtil.list(
-													ClojureHierarchyLowering.hfn("CHAR=", two, new LispChar('c')),
-													ClojureHierarchyLowering.hfn("STEP",
-															ClojureHierarchyLowering.hfn("+", at, new LispInteger(2)),
-															ClojureHierarchyLowering.hfn("CONS",
-																	LispString.literal(":"), chars))),
-											ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureHierarchyLowering
-												.hfn("STEP", ClojureHierarchyLowering.hfn("+", at, new LispInteger(1)),
-														ClojureHierarchyLowering.hfn("CONS",
-																ClojureHierarchyLowering.hfn("STRING", one), chars))))),
-							ClojureHierarchyLowering.hfn("STEP",
-									ClojureHierarchyLowering.hfn("+", at, new LispInteger(1)), ClojureHierarchyLowering
-										.hfn("CONS", ClojureHierarchyLowering.hfn("STRING", one), chars))))));
-		runtime.add(ClojureHierarchyLowering.hdefun("C%UNMANGLE", List.of(text, at, end), ClojureHierarchyLowering
-			.hlabels(List.of(step), ClojureHierarchyLowering.hfn("STEP", at, ClojureLowering.NIL_CONST))));
-		// (defun C%DEMANGLE-SYMBOL (s) ...): a mangled symbol back to its readable name,
-		// uppercased like every other symbol the printer spells (case folds, print-only)
-		runtime.add(ClojureHierarchyLowering.hdefun("C%DEMANGLE-SYMBOL", List.of(value), ClojureHierarchyLowering.hlet(
-				List.of(ClojureLowerUtil.list(text, ClojureHierarchyLowering.hfn("SYMBOL-NAME", value))),
-				ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("AND",
-						ClojureHierarchyLowering.hfn(">=", ClojureHierarchyLowering.hfn("LENGTH", text),
-								new LispInteger(2)),
-						ClojureHierarchyLowering.hfn("CHAR=",
-								ClojureHierarchyLowering.hfn("CHAR", text, new LispInteger(0)), new LispChar('c')),
-						ClojureHierarchyLowering.hfn("CHAR=",
-								ClojureHierarchyLowering.hfn("CHAR", text, new LispInteger(1)), new LispChar('%'))),
-						ClojureHierarchyLowering.hfn("INTERN",
-								ClojureHierarchyLowering.hfn("STRING-UPCASE", ClojureHierarchyLowering.hfn("C%UNMANGLE",
-										text, new LispInteger(2), ClojureHierarchyLowering.hfn("LENGTH", text)))),
-						value))));
-		// (defun C%DEMANGLE-VECTOR (v) ...): the elements demangled, in a fresh vector
-		LispVal walkVec = ClojureHierarchyLowering.hfnDef("WALK", List.of(index, acc),
-				ClojureHierarchyLowering
-					.hfn("IF", ClojureHierarchyLowering.hfn(">=", index, ClojureHierarchyLowering.hfn("LENGTH", vec)),
-							ClojureHierarchyLowering.hfn("COERCE", ClojureHierarchyLowering.hfn("REVERSE",
-									acc), ClojureLowerUtil.quoted("vector")),
-							ClojureHierarchyLowering.hfn("WALK",
-									ClojureHierarchyLowering.hfn("+", index, new LispInteger(1)),
-									ClojureHierarchyLowering.hfn("CONS", ClojureHierarchyLowering.hfn("C%DEMANGLE",
-											ClojureHierarchyLowering.hfn("AREF", vec, index)), acc))));
-		runtime.add(ClojureHierarchyLowering.hdefun("C%DEMANGLE-VECTOR", List.of(vec),
-				ClojureHierarchyLowering.hlabels(List.of(walkVec),
-						ClojureHierarchyLowering.hfn("WALK", new LispInteger(0), ClojureLowering.NIL_CONST))));
-		// (defun C%DEMANGLE (x) ...): lists and vectors demangled, anything else itself
-		// -- a string included: it is a vector here, and walking it would answer its
-		// characters (a keyword wrapper holds one, so it would print as a vector too)
-		runtime.add(ClojureHierarchyLowering.hdefun("C%DEMANGLE", List.of(value), ClojureHierarchyLowering.hfn("COND",
-				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("NULL", value), ClojureLowering.NIL_CONST),
-				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("SYMBOLP", value),
-						ClojureHierarchyLowering.hfn("C%DEMANGLE-SYMBOL", value)),
-				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("CONSP", value),
-						ClojureHierarchyLowering.hfn("CONS",
-								ClojureHierarchyLowering.hfn("C%DEMANGLE", ClojureHierarchyLowering.hfn("CAR", value)),
-								ClojureHierarchyLowering.hfn("C%DEMANGLE",
-										ClojureHierarchyLowering.hfn("CDR", value)))),
-				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("STRINGP", value), value),
-				ClojureLowerUtil.list(ClojureHierarchyLowering.hfn("VECTORP", value),
-						ClojureHierarchyLowering.hfn("C%DEMANGLE-VECTOR", value)),
-				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, value))));
-		// (defun C%MACROEXPAND-1 (form scope) ...): one expansion, demangled
-		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form, scope),
-				ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil.list(next,
+		// (defun C%MACROEXPAND-1 (form scope) ...): one expansion, answered as the
+		// mangled data itself; a non-macro head answers the form itself
+		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form, scope), ClojureHierarchyLowering.hlet(
+				List.of(ClojureLowerUtil.list(next,
 						ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
 								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", form),
 										scope),
 								ClojureLowering.NIL_CONST))),
-						ClojureHierarchyLowering.hfn("C%DEMANGLE",
-								ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("FUNCALL", next,
-										ClojureHierarchyLowering.hfn("CDR", form)), form)))));
-		// (defun C%MACROEXPAND (form scope) ...): to the fixpoint, demangled once
+				ClojureHierarchyLowering.hfn("IF", next,
+						ClojureHierarchyLowering.hfn("FUNCALL", next, ClojureHierarchyLowering.hfn("CDR", form)),
+						form))));
+		// (defun C%MACROEXPAND (form scope) ...): to the fixpoint, the mangled data
+		// itself
 		LispVal walkExpand = ClojureHierarchyLowering.hfnDef("WALK", List.of(form),
 				ClojureHierarchyLowering.hlet(List.of(ClojureLowerUtil.list(next,
 						ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
@@ -999,8 +910,7 @@ final class ClojureMacroLowering {
 										ClojureHierarchyLowering.hfn("CDR", form))),
 								form)));
 		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND, List.of(form, scope),
-				ClojureHierarchyLowering.hlabels(List.of(walkExpand),
-						ClojureHierarchyLowering.hfn("C%DEMANGLE", ClojureHierarchyLowering.hfn("WALK", form)))));
+				ClojureHierarchyLowering.hlabels(List.of(walkExpand), ClojureHierarchyLowering.hfn("WALK", form))));
 		return runtime;
 	}
 

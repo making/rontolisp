@@ -88,7 +88,8 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
 の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
 splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
-いずれも展開結果を表示用に demangle・大文字化したデータとして返します。`gensym` は
+いずれも展開結果を mangle されたデータそのものとして返すため、quote したフォームとの
+`=` が成り立ち、表示は oracle と同じ小文字綴りになります。`gensym` は
 評価ごとに新しい uninterned シンボルを返します。`var`/`#'` は拒否されたままです。
 本体ではシンボルを quote してください。
 

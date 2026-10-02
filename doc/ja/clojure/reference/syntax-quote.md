@@ -14,5 +14,5 @@
 
 ```clojure
 (defmacro doc-mwhen [c & body] `(if ~c (do ~@body)))
-(println (macroexpand-1 '(doc-mwhen true 1 2))) ; (IF true (DO 1 2))
+(println (macroexpand-1 '(doc-mwhen true 1 2))) ; (if true (do 1 2))
 ```

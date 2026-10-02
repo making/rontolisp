@@ -1844,8 +1844,9 @@ cases:
   - name: defmacro-unless-expands-before-backends
     # A defmacro is a compile-time expander plus its runtime table entry: call sites
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
-    # the same function at run time. Expansions print demangled and uppercased, like
-    # every other symbol spelling here.
+    # the same function at run time. The expanders answer the mangled data itself, so
+    # expansions print the oracle's lowercase spelling and = against a quoted form
+    # holds.
     source: |
       (defmacro sp-unless [c t] (list 'if c nil t))
       (println (macroexpand-1 '(sp-unless true 1)))
@@ -1853,12 +1854,16 @@ cases:
       (println (sp-unless false 42))
       (println (sp-unless true 1))
       (println (macroexpand-1 '(+ 1 2)))
+      (println (= (macroexpand-1 '(sp-unless true 1)) '(if true nil 1)))
+      (println (= (macroexpand-1 '(+ 1 2)) '(+ 1 2)))
     expected: |
-      (IF true nil 1)
-      (IF false nil 42)
+      (if true nil 1)
+      (if false nil 42)
       42
       nil
       (+ 1 2)
+      true
+      true
   - name: chain-macros-rebuild-dot-forms
     # The book's chain_1..5, ported: list/concat bodies, then syntax-quote bodies with
     # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
@@ -1883,13 +1888,13 @@ cases:
       (println (sp-chain1 "hi" toUpperCase))
       (println (sp-chain5 "hi" toUpperCase length))
     expected: |
-      (. A B)
-      (SP-CHAIN2 (. A B) C)
-      (. A B)
-      (B08LIT/SP-CHAIN4 (. A B) (C))
-      (B08LIT/SP-CHAIN5 (. A B) C)
-      (. (. A B) C)
-      (. (. (. A B) C) D)
+      (. a b)
+      (sp-chain2 (. a b) c)
+      (. a b)
+      (b08lit/sp-chain4 (. a b) (c))
+      (b08lit/sp-chain5 (. a b) c)
+      (. (. a b) c)
+      (. (. (. a b) c) d)
       HI
       2
   - name: bench-hygiene-through-gensyms
@@ -3996,23 +4001,21 @@ cases:
       6
       8 42 pt34
   - name: macroexpand-keeps-strings-and-keywords
-    # The run-time expansion answers its strings and keywords as themselves (it
-    # walked a string as a vector of characters and printed a keyword as its
-    # wrapper); only the symbols demangle and uppercase. The oracle prints
-    # (if :yes str :no) and (if :yes "str" :no).
+    # The run-time expansion answers the mangled data itself: strings and keywords
+    # travel as themselves, and the symbols print the oracle's lowercase. The oracle
+    # prints (if :yes str :no) and (if :yes "str" :no).
     source: |
       (defmacro b56-kw [k s] (list 'if k s :no))
       (println (macroexpand-1 '(b56-kw :yes "str")))
       (prn (macroexpand-1 '(b56-kw :yes "str")))
     expected: |
-      (IF :yes str :no)
-      (IF :yes "str" :no)
+      (if :yes str :no)
+      (if :yes "str" :no)
   - name: a-core-named-macro-shadows-the-lowering-below-its-definition
     # A defmacro of a name the lowering owns (with-out-str, when-not, inc, declare)
     # wins from its definition on; a call site above it, and a syntax-quote in a macro
     # defined above it, keep the core meaning (the oracle resolves form by form, a
-    # syntax-quoted symbol at read time: (clojure.core/with-out-str 1), uppercased
-    # here); clojure.core/name is the core var whatever the program defines. The
+    # syntax-quoted symbol at read time: (clojure.core/with-out-str 1)); clojure.core/name is the core var whatever the program defines. The
     # case runs in its own namespace and returns to the one before it.
     source: |
       (ns b63-shadow)
@@ -4038,7 +4041,7 @@ cases:
       "before" "w"
       "<after>" "before" "w"
       "x"
-      (CLOJURE.CORE/WITH-OUT-STR 1)
+      (clojure.core/with-out-str 1)
       1
       :no
       (2 3) 3

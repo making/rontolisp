@@ -10,7 +10,7 @@
 | 名前 | 例 | 結果 |
 |---|---|---|
 | `defmacro` | `(do (defmacro unless [c t] (list 'if c nil t)) (unless false 1))` | `1` |
-| `syntax-quote` | `(do (defmacro w [c & b] `(if ~c (do ~@b))) (macroexpand-1 '(w true 1)))` | `(IF true (DO 1))` |
+| `syntax-quote` | `(do (defmacro w [c & b] `(if ~c (do ~@b))) (macroexpand-1 '(w true 1)))` | `(if true (do 1))` |
 | `gensym` | `(= (gensym "g") (gensym "g"))` | `false` |
-| `macroexpand-1` | `(macroexpand-1 '(unless true 1))` | `(IF true nil 1)` |
-| `macroexpand` | `(macroexpand '(unless false 1))` | `(IF false nil 1)` |
+| `macroexpand-1` | `(macroexpand-1 '(unless true 1))` | `(if true nil 1)` |
+| `macroexpand` | `(macroexpand '(unless false 1))` | `(if false nil 1)` |

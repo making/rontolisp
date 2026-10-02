@@ -92,8 +92,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   earlier buffer keeps the bare spelling, so its expansion reaches a shadowing macro a
   later buffer defines. Each `x#` binds one gensym per expansion -- the oracle resolves one per
   compilation, so two expansions share its suffixes where ours differ (fresher, never
-  captured). `macroexpand-1`/`macroexpand` answers print demangled and uppercased
-  (case folds, print-only); their data takes bare operator names. Nested syntax-quote
+  captured). `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=`
+  against a quoted form holds and printing spells the oracle's lowercase. Nested syntax-quote
   evaluates its levels in the one expansion. `var`/`#'` stays refused everywhere:
   bodies quote symbols instead.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);

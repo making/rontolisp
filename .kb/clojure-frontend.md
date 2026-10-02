@@ -49,7 +49,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
 | `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; a core name shadows (b63, "Core-named macros" below); four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
 | syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | a symbol naming a var the defining namespace sees (own or referred; locals are no vars at read time, like the oracle) qualifies as `ns/name`, `user/` included (b56), so the expansion reaches it from any namespace; a core name and an unresolved symbol stay bare (the documented deviation: the oracle spells `clojure.core/let`, `user/x`); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
-| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals and the call site's macro scope | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only; strings and keyword wrappers stay themselves -- b56 fixed `C%DEMANGLE` walking a string as a character vector); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names; a head resolves through the call site's namespace (b56): the lowering hands a quoted alist of the spellings the table global cannot spell itself (a bare own macro outside `user`, a bare referred one, an alias-qualified one) to its table global, and a `user/m` spelling reads as `c%m%macro` |
+| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals and the call site's macro scope | once / to the fixpoint, each answering the expansion as the mangled data itself, so `=` against a quoted form holds and the Clojure printer (which demangles `c%` symbols) spells the oracle's lowercase; a non-macro head answers the form itself; each names a function value; a head resolves through the call site's namespace (b56): the lowering hands a quoted alist of the spellings the table global cannot spell itself (a bare own macro outside `user`, a bare referred one, an alias-qualified one) to its table global, and a `user/m` spelling reads as `c%m%macro` |
 | `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
 | `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it); the value lowers against the OLD binding first, so `(def p (memoize p))` after a `(defn p ...)` captures the function cell (`#'c%p`), not the still-unbound value cell (decided 2026-10-02, b52) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding, an anonymous one the same binding only when a `recur` reaches it | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites; a `recur` in any `fn` body (named or not) calls the enclosing clause directly, checked against its arity (decided 2026-10-01, b17) |
@@ -428,10 +428,14 @@ on); the JVM method mangle spells `/` and `.`. A local never carries a namespace
 
 Corpus (2026-10-02, the 27 `code/test/**` namespaces of shcloj4, each through a driver
 `(require 'ns) (clojure.test/run-tests 'ns)` read from `test/`, the project's own `deps.edn`
-naming `src`; no inlining any more): 10 print the oracle's bytes (`chat` -- its tests are
-named like the functions under test -- joins the b55 nine). `preface` fails on the hoisting
-above; the 7 `macros*` fail only on the uppercase `macroexpand` answer (.todo/b73: their
-expansions are otherwise the oracle's, `examples.macros.chain-4/chain` qualified); the rest
+naming `src`; no inlining any more): 16 print the oracle's bytes (`chat` -- its tests are
+named like the functions under test -- joins the b55 nine -- plus 6 of the 7 `macros*`
+since b73). `preface` fails on the hoisting
+above; of the 7 `macros*`, 6 print the oracle's bytes since b73 (the expander answers the
+mangled data itself, so `=` holds and printing spells the oracle's lowercase;
+`examples.macros.chain-4/chain` qualifies like it) while `macros/bench-1` still fails on
+the syntax-quote qualification deviation alone (the oracle spells `clojure.core/let`,
+`examples.macros.bench-1/start` and `java.lang.System/nanoTime`; b73's follow-up): the rest
 stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
 stack overflow, `clojure.set`, `proxy` over a class -- measured after b57/b59/b60 merged).
 The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
@@ -446,7 +450,7 @@ refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheForm
 `syntaxQuoteQualifiesTheVarsItsNamespaceSees`, `macroexpandCarriesTheCallSitesMacroScope`,
 over `MemoryClojureFiles`), `ClojureSessionTest` (a buffer's require, a later buffer's
 call), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
-`macroexpand-keeps-strings-and-keywords`, every line the oracle's but the expansion's case).
+`macroexpand-keeps-strings-and-keywords`, every line the oracle's).
 
 ## Core-named macros (b63)
 
@@ -657,7 +661,8 @@ datum-to-datum at lower time through the macro evaluator (`eval/ClojureMacroTime
 lazy, one per file or session), syntax-quote as `quote` with unquote splicing over the
 mangled namespace (`~` lowers as code, `~@` splices into lists, vectors, maps and sets,
 `x#` one gensym per expansion -- fresher than the oracle's per-compilation suffixes),
-`macroexpand-1`/`macroexpand` over the table plus a demangling printer, `gensym` as the
+`macroexpand-1`/`macroexpand` over the table answering the mangled data itself (b73:
+`=` against a quoted form holds, printing spells the oracle's lowercase), `gensym` as the
 ordinary uninterned symbol, `var`/`#'` still refused (bodies quote symbols instead),
 `&form`/`&env` refused -- each pinned in `clojure-spec.yaml` (`chain_1..5` plus
 `unless` plus `bench`, expansion answers and runtime answers, run on all four backends)
