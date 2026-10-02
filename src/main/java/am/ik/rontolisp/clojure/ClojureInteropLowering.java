@@ -345,6 +345,27 @@ final class ClojureInteropLowering {
 	}
 
 	/**
+	 * A bare class name in value position ({@code String}, an imported class, a dotted
+	 * name): the class object, the same {@code Class.forName} answer the oracle's class
+	 * literal prints and compares by. Null when the name is no loadable class (a typo
+	 * keeps the unknown-name refusal at compile time) or names a record or deftype.
+	 */
+	static @Nullable LispVal classValue(ClojureLowering ctx, String name) {
+		if (name.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, name) || ctx.typeKeyOf(name) != null) {
+			return null;
+		}
+		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
+		try {
+			Class.forName(cls, false, ClojureLowering.class.getClassLoader());
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			return null;
+		}
+		return ClojureLowerUtil.cons(JAVA_STATIC,
+				List.of(LispString.literal("java.lang.Class"), LispString.literal("forName"), LispString.literal(cls)));
+	}
+
+	/**
 	 * The member-as-value lambda: one {@code &rest} parameter dispatched per known fixed
 	 * arity onto the static call (the run-time overload selection picks among same-arity
 	 * overloads), any other count the wrong-argument-count error, like a multi-arity
@@ -1109,6 +1130,9 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), recv))) : null;
 			case "isBlank" -> args.isEmpty() ? ctx.booleanAnswer(ClojureStringLowering.blankForm(recv)) : null;
 			case "toString" -> args.isEmpty() ? recv : null;
+			case "getClass" ->
+				args.isEmpty() ? ClojureLowerUtil.cons(JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
+						LispString.literal("forName"), LispString.literal("java.lang.String"))) : null;
 			case "substring" -> switch (args.size()) {
 				case 1 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), recv, args.get(0));
 				case 2 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), recv, args.get(0), args.get(1));

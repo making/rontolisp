@@ -10,6 +10,10 @@
 `(every? Character/isWhitespace s)` が動きます。可変長のみのメンバーは拒否されます。
 オーバーロードがどれも真偽値を答える静的呼び出し・メンバー値は `true`/`false` を
 答えます。クラスはドット付き・インポート済み・`java.lang` のいずれでも解決されます。
+ロード可能なクラス名単体（`String`）はクラスオブジェクトで、
+`(Class/forName "java.lang.String")` と等しく、文字列への `.getClass` も同じものを答えます。
+クラスオブジェクト自体の表示は、クラス名ではなく `#<java java.lang.Class>` になります
+（クラス名には `.getName` を使います）。
 インタプリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。
 
 ```clojure
@@ -18,4 +22,6 @@
 (println KeyEvent/VK_LEFT) ; 37
 (println (every? Character/isWhitespace "   ")) ; true
 (println (> (System/currentTimeMillis) 0)) ; true
+(println (= String (.getClass "s"))) ; true
+(println (.getName String)) ; java.lang.String
 ```

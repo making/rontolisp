@@ -3205,6 +3205,10 @@ public final class ClojureLowering {
 				if (member != null) {
 					return member;
 				}
+				LispVal classValue = ClojureInteropLowering.classValue(this, name);
+				if (classValue != null) {
+					return classValue;
+				}
 				throw new LispReadException("unknown name: " + name);
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(cl));

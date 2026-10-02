@@ -60,6 +60,16 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	@Test
+	void classValueRefusesOnPreview1() throws Exception {
+		assertRefusal("(println String)", "JAVA:STATIC", false);
+	}
+
+	@Test
+	void classValueRefusesOnTheComponent() throws Exception {
+		assertRefusal("(println String)", "JAVA:STATIC", true);
+	}
+
+	@Test
 	void hostBooleanCallRefusesOnPreview1() throws Exception {
 		assertRefusal("(println (.isEmpty (java.util.ArrayList.)))", "JAVA:CALL", false);
 	}

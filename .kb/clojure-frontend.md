@@ -312,7 +312,14 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   when the host class has one, else the static field read (decided 2026-10-01, b20,
   lifting the b08 deviation that read the field and spelled the method
   `(. Class m)` -- the corpus spells `(System/currentTimeMillis)` and
-  `(System/nanoTime)`); a bare `Class/member` value reads the static field when the
+  `(System/nanoTime)`); a bare class name in value position (`String`, an imported
+  or dotted class that loads at lowering; a typo keeps `unknown name`) lowers to
+  `(java:static "java.lang.Class" "forName" "<fqn>")`, so it is the oracle's class
+  object (`=` and `.getName` agree with `(Class/forName ...)`), and `.getClass` on
+  a string answers the `String` class object (b83, 2026-10-02; interpreter and JVM,
+  wasm refuses at the `java:static` like every host call; `(class "a")` stays
+  `:string`; a class object PRINTS `#<java java.lang.Class>` where the oracle prints
+  the name, the printers being shared with Common Lisp); a bare `Class/member` value reads the static field when the
   host class has one (dotted, imported, or `java.lang`, like the call position),
   else answers a member-as-value lambda dispatching per known fixed arity over the
   static call (a variadic-only member is refused by name; an unknown class or member
@@ -456,7 +463,7 @@ oracle's lowercase; b77 qualifies the unresolved symbols too, so `macros/bench-1
 prints the oracle's bytes: `clojure.core/let`, `examples.macros.bench-1/start`,
 `java.lang.System/nanoTime`), plus `preface` since b72: its `(use :reload ...)` inside a `deftest` captures
 the file's print where the `require` runs); of the 7 `macros*`, `examples.macros.chain-4/chain` qualifies like the oracle; the rest
-stop at other gaps (`read`, `meta`/`#'` -- closed by b80, below --, `String` as a value, the lazy `for` input (b81 removed its 2 errors, the 2 `with-out-str` line-count failures are b82's strict `for`), the host
+stop at other gaps (`read`, `meta`/`#'` -- closed by b80, below --, `String` as a value (closed by b83), the lazy `for` input (b81 removed its 2 errors, the 2 `with-out-str` line-count failures are b82's strict `for`), the host
 stack overflow, `clojure.set` -- measured after b57/b59/b60 merged; `proxy` over a class
 joined them then and left with b71, unmeasured on the corpus here).
 The source files load too: `wallingford` beside its `examples.replace-symbol` (the two

@@ -74,6 +74,20 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void classNamesAnswerAsValuesAndStringsAnswerGetClass() throws Exception {
+		assertBothEqual("(println (= String (Class/forName \"java.lang.String\")))", "true\n");
+		assertBothEqual("(println (.getName String))", "java.lang.String\n");
+		assertBothEqual("(println (= String (.getClass \"s\")))", "true\n");
+		assertBothEqual("(ns b83 (:import (java.util ArrayList))) (println (.getName ArrayList))",
+				"java.util.ArrayList\n");
+		assertBothEqual("(println (.getName (.getClass \"s\")))", "java.lang.String\n");
+		assertBothEqual("(println (= java.util.ArrayList (.getClass (java.util.ArrayList.))))", "true\n");
+		assertBothEqual("(defmulti m class) (defmethod m String [_] :s) (println (m \"a\"))", ":s\n");
+		assertBothEqual("(println (instance? String \"a\"))", "true\n");
+		assertThatThrownBy(() -> interpret("(println NoSuchClassB83)")).hasMessageContaining("unknown name");
+	}
+
+	@Test
 	void staticFieldsAnswerAsValues() throws Exception {
 		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
 		// value, through an import

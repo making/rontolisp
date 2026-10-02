@@ -10,7 +10,10 @@ when the host class has one, else answers a member-as-value function dispatching
 per arity over the static call, so `(every? Character/isWhitespace s)` runs; a
 variadic-only member is refused. A static call or member value whose overloads
 all answer a boolean answers `true`/`false`. The class resolves dotted,
-imported, or `java.lang`. Runs on the interpreter and the JVM only -- the wasm
+imported, or `java.lang`. A bare loadable class name (`String`) is the class
+object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
+string answers it; printing the class object itself shows `#<java java.lang.Class>`,
+not the class name -- use `.getName`. Runs on the interpreter and the JVM only -- the wasm
 backends reject `java:`.
 
 ```clojure
@@ -19,4 +22,6 @@ backends reject `java:`.
 (println KeyEvent/VK_LEFT) ; 37
 (println (every? Character/isWhitespace "   ")) ; true
 (println (> (System/currentTimeMillis) 0)) ; true
+(println (= String (.getClass "s"))) ; true
+(println (.getName String)) ; java.lang.String
 ```
