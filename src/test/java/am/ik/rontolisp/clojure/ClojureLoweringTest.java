@@ -57,6 +57,32 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aRedefinedDefnGetsAFreshNamePerDefinition() {
+		// b65: a later defn of the same name wins everywhere on the compiled
+		// backends. Each definition lowers to its own defun (the first keeps the
+		// bare name, later ones take a %defN suffix no identifier spells), the
+		// call sites below each definition call the newest, and a value position
+		// captures the definition current at that point.
+		assertThat(lowered("(defn f [] 1) (def g f) (defn f [] 2) (g) (f)")).contains("(DEFUN |c%f| NIL 1)")
+			.contains("(SETQ |c%g| #'|c%f|)")
+			.contains("(DEFUN |c%f%def2| NIL 2)")
+			.contains("(FUNCALL |c%g|)")
+			.contains("(|c%f%def2|)");
+		// a top-level call between the definitions calls the older one
+		assertThat(lowered("(defn f [] 1) (f) (defn f [] 2) (f)")).contains("(|c%f|)").contains("(|c%f%def2|)");
+		// a redefined dynamic defn installs its fresh function cell, so the
+		// value cell always holds the newest
+		assertThat(lowered("(defn ^:dynamic d [] 1) (defn ^:dynamic d [] 2)")).contains("(DEFPARAMETER |c%d| #'|c%d|)")
+			.contains("(DEFUN |c%d%def2| NIL 2)")
+			.contains("(DEFPARAMETER |c%d| #'|c%d%def2|)");
+		// namespaces version their own names independently
+		assertThat(lowered("(ns b65a) (defn f [] 1) (ns b65b) (defn f [] 2) (b65a/f)"))
+			.contains("(DEFUN |c%b65a/f| NIL 1)")
+			.contains("(DEFUN |c%b65b/f| NIL 2)")
+			.contains("(|c%b65a/f|)");
+	}
+
+	@Test
 	void headPositionCallsToVariablesReachTheValueCell() {
 		// a parameter may hold a collection, so its call goes through the prelude
 		// dispatcher (which funcalls real functions); a let/def binding of a real

@@ -26,6 +26,13 @@ Redefining a `defn` with `def` captures the function: `(def p (memoize p))`
 evaluates its value against the OLD `FUNCTION` binding, so top-level calls hit
 the cache while the `defun`'s own recursion stays direct.
 
+Redefining a name with another `defn` gives each definition its own function: the
+call sites below each definition call the newest, while a `(def g f)` between two
+definitions keeps the older one (`(g)` answers the old value, `(f)` the new one).
+Each namespace versions its own names. A function defined above a redefinition
+still calls the older definition; only `^:dynamic` names (whose calls go through
+the var) see the newest from every call site.
+
 ```clojure
 (defn fact [n]
   (if (< n 2) 1 (* n (fact (- n 1)))))

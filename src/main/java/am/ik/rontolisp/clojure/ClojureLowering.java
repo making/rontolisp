@@ -187,6 +187,17 @@ public final class ClojureLowering {
 	final Map<String, Kind> globals = new HashMap<>();
 
 	/**
+	 * How many {@code defn}/{@code defn-} definitions each var key has lowered so far. A
+	 * redefined {@code defn} gets a fresh internal name per definition (see
+	 * {@link #defnSym}), so a {@code (def g f)} between two definitions captures the
+	 * definition current at that point while the call sites below each definition call
+	 * the newest -- the interpreter and the compiled backends lowering the same names.
+	 * Keyed by var key, so every namespace versions its own names; a session keeps the
+	 * counts across buffers, like the globals.
+	 */
+	final Map<String, Integer> defnCounts = new HashMap<>();
+
+	/**
 	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
 	 * the forms lower in.
 	 */
@@ -986,6 +997,33 @@ public final class ClojureLowering {
 				: ClojureLowerUtil.idSym(key);
 	}
 
+	/**
+	 * The function cell of a {@code defn} definition: the bare var symbol for its first
+	 * definition, a fresh internal name per redefinition. The single-{@code %} suffix
+	 * keeps the versions apart from user definitions (a lone {@code %} no mangled
+	 * identifier spells) and from the multi-arity helpers (whose suffix is a count or
+	 * {@code *}), so a redefined multi-arity {@code defn} never collides with its own
+	 * helpers.
+	 * @param key the var key
+	 * @param n the 1-based definition number
+	 * @return the function-cell symbol of that definition
+	 */
+	static LispSymbol defnSym(String key, int n) {
+		return n <= 1 ? varSym(key) : new LispSymbol(varSym(key).name() + "%def" + n);
+	}
+
+	/**
+	 * The function cell a {@code defn} name currently names: the latest definition's
+	 * symbol once the name is redefined, the bare var symbol otherwise (a forward
+	 * reference, a single definition, or any non-{@code defn} function, which never
+	 * versions).
+	 * @param key the var key
+	 * @return the current function-cell symbol
+	 */
+	LispSymbol currentDefnSym(String key) {
+		return defnSym(key, this.defnCounts.getOrDefault(key, 0));
+	}
+
 	/** The current namespace's state, made on first use. */
 	ClojureNsState ns() {
 		return this.namespaces.computeIfAbsent(this.currentNs, n -> new ClojureNsState());
@@ -1181,14 +1219,19 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The symbol a name reads as: a local's own mangled name, else the var it resolves
-	 * to, else the name mangled as written.
+	 * The symbol a name reads as: a local's own mangled name, else the var it resolves to
+	 * -- a redefined {@code defn}'s current definition (see {@link #currentDefnSym}), so
+	 * the call sites below each definition call the newest and a value position captures
+	 * the definition current at that point -- else the name mangled as written.
 	 */
 	LispSymbol symOf(String name) {
 		if (isLocal(name)) {
 			return ClojureLowerUtil.idSym(name);
 		}
 		String key = resolveVar(name);
+		if (key != null && this.globals.get(key) == Kind.FUNCTION && this.defnCounts.getOrDefault(key, 0) > 1) {
+			return currentDefnSym(key);
+		}
 		return key != null ? varSym(key) : ClojureLowerUtil.idSym(name);
 	}
 

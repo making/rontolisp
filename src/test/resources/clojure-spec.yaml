@@ -3447,6 +3447,41 @@ cases:
       [42 42 1]
       81/32
       81/32
+  - name: defn-redefinition-keeps-each-version
+    # b65 (oracle clj 1.12.6.1673): a later defn of the same name wins on every
+    # backend. Each definition lowers to its own defun, so a (def g f) captures
+    # the definition current at that point (g answers 1) while later call sites
+    # call the newest (f answers 2) -- the interpreter and the compiled backends
+    # lowering the same names. A top-level call between the definitions calls the
+    # older one. The my-print slice is the life_without_multi.clj shape: my-print
+    # redefined three times, each version kept through (def my-print-N my-print).
+    source: |
+      (defn b65-f [] 1)
+      (def b65-g b65-f)
+      (defn b65-f [] 2)
+      (println (b65-g) (b65-f))
+      (defn b65-h [] 1)
+      (println (b65-h))
+      (defn b65-h [] 2)
+      (println (b65-h))
+      (defn b65-my-print [x] (str "v1:" x))
+      (def b65-my-print-1 b65-my-print)
+      (defn b65-my-print [x] (str "v2:" x))
+      (def b65-my-print-2 b65-my-print)
+      (defn b65-my-print [x] (str "v3:" x))
+      (def b65-my-print-3 b65-my-print)
+      (println (b65-my-print-1 :a))
+      (println (b65-my-print-2 :a))
+      (println (b65-my-print-3 :a))
+      (println (b65-my-print :a))
+    expected: |
+      1 2
+      1
+      2
+      v1::a
+      v2::a
+      v3::a
+      v3::a
   - name: record-literals-read-and-print-like-the-oracle
     # b58: a record prints as its literal #ns.Name{...} (the namespace with - munged
     # to _, declared fields first); #ns.Name{...} / #ns.Name[...] read back as the

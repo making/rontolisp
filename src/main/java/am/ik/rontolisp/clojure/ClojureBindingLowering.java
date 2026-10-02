@@ -216,7 +216,12 @@ final class ClojureBindingLowering {
 			ctx.dynamicVars.add(key);
 			ctx.globalDirectFuns.add(key);
 		}
-		LispSymbol fn = ClojureLowering.varSym(key);
+		// a redefined defn gets a fresh internal name per definition: the call
+		// sites below it call the newest, and a value position captures the
+		// definition current at that point (b65). The first definition keeps the
+		// bare var symbol, so a single defn lowers exactly as before.
+		int definition = ctx.defnCounts.merge(key, 1, Integer::sum);
+		LispSymbol fn = ClojureLowering.defnSym(key, definition);
 		String callName = fn.name();
 		List<LispVal> fnParts = new ArrayList<>();
 		fnParts.add(new LispSymbol("fn"));
@@ -254,8 +259,9 @@ final class ClojureBindingLowering {
 			// (a funcall of it, like a def'd function); recur and the
 			// arity-dispatch helpers stay direct calls to the function cell;
 			// the binding-depth counter beside it lets set! test at run time
-			// whether the var is thread-bound
-			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), fn,
+			// whether the var is thread-bound. A redefined dynamic defn installs
+			// its fresh function cell, so the value cell always holds the newest
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
 					new LispInteger(0)));
