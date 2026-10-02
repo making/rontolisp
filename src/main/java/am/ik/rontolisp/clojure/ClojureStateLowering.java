@@ -177,9 +177,17 @@ final class ClojureStateLowering {
 		return derefForm(ctx, ctx.lower(items.get(1)));
 	}
 
-	/** The value inside the lowered atom. */
+	/**
+	 * The value inside the lowered atom; anything else goes to the spliced
+	 * {@code rontolisp::%clojure-deref-other}, which answers a reduced value's content
+	 * (the oracle's {@code Reduced} is an {@code IDeref}) and signals otherwise.
+	 */
 	static LispVal derefForm(ClojureLowering ctx, LispVal lowered) {
-		return withAtom(ctx, lowered, "deref", ClojureStateLowering::atomGet);
+		LispSymbol cell = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), atomGet(cell),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEREF-OTHER"), cell)));
 	}
 
 	static LispVal swapOf(ClojureLowering ctx, List<LispVal> items) {

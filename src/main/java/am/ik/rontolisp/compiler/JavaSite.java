@@ -169,7 +169,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 
 		private static String describe(JavaKind kind) {
 			if (kind instanceof JavaImplementationType implementation) {
-				return "an implementation of " + implementation.iface().name();
+				return "an " + implementation.name();
 			}
 			if (kind instanceof JavaType type) {
 				return "a " + type.name();

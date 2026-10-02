@@ -29,6 +29,11 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `merge-with` | `(merge-with + {:a 1} {:a 2})` | `{:a 3}` |
 | `into` | `(into [] [1 2])` | `[1 2]` |
 | `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |
+| `peek` | `(peek [1 2 3])` | `3` |
+| `pop` | `(pop [1 2 3])` | `[1 2]` |
+| `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |
+| `update-vals` | `(update-vals {:a 1} inc)` | `{:a 2}` |
+| `reduce-kv` | `(reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2})` | `3` |
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct-map` | `(do (defstruct s :a) (:a (struct-map s :a 1)))` | `1` |

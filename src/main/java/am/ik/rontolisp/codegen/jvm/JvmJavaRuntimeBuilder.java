@@ -104,7 +104,7 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("call", cp.methodRef(bridgeClass, "javaCall", callDesc));
 		ops.put("static", cp.methodRef(bridgeClass, "javaStatic", callDesc));
 		ops.put("field", cp.methodRef(bridgeClass, "javaField", twoArgDesc));
-		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", twoArgDesc));
+		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", newDesc));
 		ops.put("reify", cp.methodRef(bridgeClass, "javaReify", newDesc));
 
 		// --- _javaInit body ---

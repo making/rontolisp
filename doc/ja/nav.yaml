@@ -263,6 +263,8 @@ sections:
             title: "正規表現"
           - file: clojure/reference/higher-order.md
             title: "高階関数"
+          - file: clojure/reference/transducers.md
+            title: "トランスデューサー"
           - file: clojure/reference/io.md
             title: "入出力"
           - file: clojure/reference/interop.md

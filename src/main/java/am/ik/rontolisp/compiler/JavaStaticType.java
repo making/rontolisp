@@ -63,8 +63,18 @@ public sealed interface JavaStaticType {
 					if (host != null) {
 						return null;
 					}
-					// A java:reify / java:proxy object is called through its interface.
-					host = type instanceof JavaImplementationType implementation ? implementation.iface() : type;
+					// A java:reify / java:proxy object is called through its interface;
+					// one of
+					// several interfaces by its class when the call runs.
+					if (type instanceof JavaImplementationType implementation) {
+						host = implementation.single();
+						if (host == null) {
+							return null;
+						}
+					}
+					else {
+						host = type;
+					}
 				}
 				else if (kind != JavaKind.Lisp.NIL) {
 					return null;

@@ -387,15 +387,17 @@ final class ClojureSeqLowering {
 				ClojureLoopLowering.consForm(ctx, item, coll));
 	}
 
-	/** {@code map} as a value: over a function and one rest list of collections. */
+	/**
+	 * {@code map} as a value: over a function and one rest list of collections; of the
+	 * function alone, the transducer.
+	 */
 	static LispVal mapValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("map-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("map-colls"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-				LispString.literal("map takes a function and collections"));
 		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fn, colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls), arity, call);
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAP"), fn), call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, colls)), body);
 	}
@@ -416,11 +418,10 @@ final class ClojureSeqLowering {
 	static LispVal reduceValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("reduce-fn"));
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("reduce-args"));
-		LispVal two = reduceForm(ctx, fn, seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)), null);
+		LispVal two = reduceForm(ctx, fn, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), null);
 		LispVal three = reduceForm(ctx, fn,
-				seqForm(ctx,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("reduce takes a function, an optional value and a collection"));
@@ -516,32 +517,31 @@ final class ClojureSeqLowering {
 	}
 
 	/**
-	 * {@code reduce} over an already-lowered function, seq view and optional initial
-	 * value: direct for real functions, through the dispatcher otherwise.
+	 * {@code reduce} over an already-lowered function, collection and optional initial
+	 * value: one call to the spliced {@code rontolisp::%clojure-reduce} (2-arity) or
+	 * {@code -reduce-init} (3-arity), which walk the lazy-aware seq view one element at a
+	 * time (so a lazy input reduces whole) and stop at a {@code reduced} answer, like the
+	 * oracle. Arguments evaluate in the Clojure order: function, value, collection. The
+	 * runtime funcalls, so a function form that may hold a collection at run time is
+	 * wrapped in a lambda over the dispatcher here (the runtime never names it, so a
+	 * plain reduce carries no dispatcher).
 	 */
-	static LispVal reduceForm(ClojureLowering ctx, LispVal fun, LispVal seq, @Nullable LispVal init) {
-		if (ClojureLowerUtil.isDirectFun(fun)) {
-			if (init == null) {
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("reduce"), fun, seq);
-			}
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("reduce"), fun, seq,
-					ClojureLowerUtil.sym(":initial-value"), init);
+	static LispVal reduceForm(ClojureLowering ctx, LispVal fun, LispVal coll, @Nullable LispVal init) {
+		LispVal real = fun;
+		LispSymbol cell = null;
+		if (!ClojureLowerUtil.isDirectFun(fun)) {
+			cell = ctx.freshTemp();
+			LispSymbol args = ctx.freshTemp();
+			real = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+					ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), ctx.callableApply(cell, args));
 		}
-		LispSymbol cell = ctx.freshTemp();
-		LispSymbol acc = ctx.freshTemp();
-		LispSymbol one = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(acc, one)),
-				ctx.callableApply(cell, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(acc, one))));
-		List<LispVal> call = new ArrayList<>();
-		call.add(ClojureLowerUtil.sym("reduce"));
-		call.add(step);
-		call.add(seq);
-		if (init != null) {
-			call.add(ClojureLowerUtil.sym(":initial-value"));
-			call.add(init);
+		LispVal call = init == null ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE"), real, coll)
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE-INIT"), real, init, coll);
+		if (cell == null) {
+			return call;
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), ClojureLowerUtil.list(call));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), call);
 	}
 
 	/** {@code take}: the first {@code n} of the collection as a strict list. */

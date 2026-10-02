@@ -11,4 +11,4 @@ interop は java: サーフェスへ低下し、インタプリタと JVM での
 | `Class/member` (値) | `(every? Character/isWhitespace " ")` | `true` |
 | `new` | `(.length (new String "hi"))` | `2` |
 | `memfn` | `((memfn toUpperCase) "hi")` | `HI` |
-| `proxy` | `(.toString (proxy [java.lang.Object] [] (toString [] "p")))` | `p` |
+| `proxy` | `(.get (proxy [java.util.function.Supplier] [] (get [] "p")))` | `p` |

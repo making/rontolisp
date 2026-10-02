@@ -23,6 +23,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers; a repeated set-literal element is refused by spelling. `=` itself compares
   vectors, lists and lazy seqs element-wise like the oracle, and since `nil` is the empty
   list, `(= [] nil)` is `true` where the oracle answers `false`.
+- A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
+  core verb in the whole file, calls above the definition included (the oracle's calls
+  above it still reach the core verb); a local binding shadows it in its scope, like the
+  oracle.
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; map/set seq order is the table's walk
   order; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
@@ -100,8 +104,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
 - `sort` without a comparator orders numbers, strings, characters and keywords; anything
   else (or mixed kinds) signals.
-- `into` takes two collections (a transducer argument stays refused); `partition` takes
-  no pad.
+- `partition` takes no pad. `partition-all` with a non-positive size or step signals,
+  where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
+  calling thread. `take-nth` with a zero step signals, and its seq arity steps by the
+  magnitude of a negative one, where the oracle's repeats the first member forever.
+- Transducers are the oracle's functions over reducing functions, but an `eduction` is
+  the `sequence` of its input through them, computed once (strictly over a strict input,
+  lazily over a lazy one), where the oracle re-runs the transformation every time it is
+  reduced; `println` prints it as that seq where the oracle prints the object. A
+  `reduced` value prints as its wrapper list.
 - Transactions are single-threaded extents: `dosync` never retries, `commute`
   runs its function once (the oracle may run it twice), validators run on the
   write and a failed one leaves the old value; `alter` and friends outside

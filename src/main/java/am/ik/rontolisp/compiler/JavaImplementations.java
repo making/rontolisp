@@ -25,11 +25,12 @@ import org.jspecify.annotations.Nullable;
  * designator's function implements every return-type variant of the method. An abstract
  * method no designator names throws {@link UnsupportedOperationException}; a default
  * method keeps its body; {@code equals}/{@code hashCode} are {@code Object}'s.
- * {@code (java:proxy "I" f)}: every method, default ones too, calls {@code f} with the
- * method's name before its arguments; only {@code Object}'s three keep their identity
- * behavior.
+ * {@code (java:proxy "I" ... f)}: every method of every interface, default ones too,
+ * calls {@code f} with the method's name before its arguments -- one name the interfaces
+ * share is one call, whichever interface declares it; only {@code Object}'s three keep
+ * their identity behavior.
  * <p>
- * The methods are what {@link JavaType#publicMethods()} answers for the interface,
+ * The methods are what {@link JavaType#publicMethods()} answers for the interfaces,
  * ordered by name, parameters and return type, so the choice -- and a compiled program's
  * class -- does not depend on the order a lookup lists them in.
  */
@@ -37,6 +38,9 @@ public final class JavaImplementations {
 
 	/** The error a malformed {@code java:reify} call raises when it runs. */
 	public static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
+
+	/** The error a malformed {@code java:proxy} call raises when it runs. */
+	public static final String PROXY_USAGE = "java:proxy expects (java:proxy \"interface\"... callable)";
 
 	/**
 	 * How many throwables a thread holds between the function called back from Java that
@@ -97,15 +101,30 @@ public final class JavaImplementations {
 	}
 
 	/**
-	 * A form as a warning or a refusal names it: the operator and its interface literal.
+	 * A form as a warning or a refusal names it: the operator and its interface literals
+	 * -- a {@code java:proxy}'s each, up to the first that is not one.
 	 * @param form a {@code java:reify} or {@code java:proxy} form
 	 * @return e.g. {@code java:reify "java.lang.Runnable"}
 	 */
 	public static String describe(LispCons form) {
-		String operator = form.car() instanceof LispSymbol head && LispNames.JAVA_PROXY_QUALIFIED.equals(head.name())
-				? "java:proxy" : "java:reify";
-		return form.cdr() instanceof LispCons rest && rest.car() instanceof LispString iface
-				? operator + " " + iface.print() : operator;
+		boolean proxy = form.car() instanceof LispSymbol head && LispNames.JAVA_PROXY_QUALIFIED.equals(head.name());
+		StringBuilder text = new StringBuilder(proxy ? "java:proxy" : "java:reify");
+		LispVal rest = form.cdr();
+		while (rest instanceof LispCons cell && cell.car() instanceof LispString iface
+				&& (proxy ? cell.cdr() instanceof LispCons : text.length() == "java:reify".length())) {
+			text.append(' ').append(iface.print());
+			rest = cell.cdr();
+		}
+		return text.toString();
+	}
+
+	/**
+	 * The error a {@code java:proxy} that names one interface twice raises when it runs.
+	 * @param name the interface name
+	 * @return the message
+	 */
+	public static String repeatedInterface(String name) {
+		return "java:proxy names interface " + name + " twice";
 	}
 
 	/**
@@ -147,11 +166,18 @@ public final class JavaImplementations {
 			return unresolved(proxy, "the form is malformed");
 		}
 		List<LispVal> parts = form.toList();
-		if (proxy ? parts.size() != 3 : parts.size() < 2 || parts.size() % 2 != 0) {
+		if (proxy ? parts.size() < 3 : parts.size() < 2 || parts.size() % 2 != 0) {
 			return unresolved(proxy, "the form is malformed");
 		}
-		if (!(parts.get(1) instanceof LispString name)) {
-			return unresolved(proxy, "the interface name is not a literal string");
+		// A java:reify names one interface; a java:proxy every part before its callable.
+		int interfaceCount = proxy ? parts.size() - 2 : 1;
+		List<String> names = new ArrayList<>();
+		for (int i = 1; i <= interfaceCount; i++) {
+			if (!(parts.get(i) instanceof LispString name)) {
+				return unresolved(proxy, interfaceCount == 1 ? "the interface name is not a literal string"
+						: "interface name " + i + " is not a literal string");
+			}
+			names.add(name.value());
 		}
 		List<String> designators = new ArrayList<>();
 		for (int i = 2; !proxy && i < parts.size(); i += 2) {
@@ -161,24 +187,32 @@ public final class JavaImplementations {
 			designators.add(designator.value());
 		}
 		try {
-			JavaType type = lookup.find(name.value());
-			if (type == null) {
-				return unresolved(proxy, "class " + name.value() + " is not found");
+			List<JavaType> interfaces = new ArrayList<>();
+			for (String name : names) {
+				JavaType type = lookup.find(name);
+				if (type == null) {
+					return unresolved(proxy, "class " + name + " is not found");
+				}
+				if (!type.isInterface()) {
+					return unresolved(proxy, notAnInterface(proxy, name));
+				}
+				if (!type.isLinkable()) {
+					return unresolved(proxy,
+							"interface " + type.name() + " is not " + (type.isAccessible() ? "public" : "accessible"));
+				}
+				if (interfaces.contains(type)) {
+					return unresolved(proxy, repeatedInterface(name));
+				}
+				interfaces.add(type);
 			}
-			if (!type.isInterface()) {
-				return unresolved(proxy, notAnInterface(proxy, name.value()));
-			}
-			if (!type.isLinkable()) {
-				return unresolved(proxy,
-						"interface " + type.name() + " is not " + (type.isAccessible() ? "public" : "accessible"));
-			}
-			JavaImplementation implementation = proxy ? proxy(type, lookup) : reify(type, designators, lookup);
+			JavaImplementation implementation = proxy ? proxy(interfaces, lookup)
+					: reify(interfaces.get(0), designators, lookup);
 			for (JavaImplementation.Slot slot : implementation.slots()) {
 				// The generated class returns the method's type: it must be able to name
 				// it.
 				if (!slot.returnType().isLinkable()) {
-					return unresolved(proxy, "the return type " + slot.returnType().name() + " of " + type.name() + "."
-							+ slot.key() + " is not public");
+					return unresolved(proxy, "the return type " + slot.returnType().name() + " of "
+							+ implementation.interfaceNames() + "." + slot.key() + " is not public");
 				}
 			}
 			return implementation;
@@ -193,7 +227,7 @@ public final class JavaImplementations {
 	}
 
 	private static JavaImplementation unresolved(boolean proxy, String reason) {
-		return new JavaImplementation(proxy, null, List.of(), reason);
+		return new JavaImplementation(proxy, List.of(), List.of(), reason);
 	}
 
 	/**
@@ -264,7 +298,7 @@ public final class JavaImplementations {
 				}
 			}
 		}
-		return new JavaImplementation(false, iface, slots, null);
+		return new JavaImplementation(false, List.of(iface), slots, null);
 	}
 
 	/**
@@ -275,8 +309,22 @@ public final class JavaImplementations {
 	 * @return the implementation
 	 */
 	public static JavaImplementation proxy(JavaType iface, JavaClassLookup lookup) {
+		return proxy(List.of(iface), lookup);
+	}
+
+	/**
+	 * How {@code (java:proxy "I" "J" ... callable)} implements the interfaces: every
+	 * method of each but {@code Object}'s three calls the callable. A method two
+	 * interfaces both declare -- one name, parameter list and return type -- is one slot;
+	 * the same name with other parameters or another return type is a slot of its own,
+	 * calling the same callable.
+	 * @param interfaces the interfaces, distinct, in the form's order
+	 * @param lookup unused; for symmetry with {@link #reify}
+	 * @return the implementation
+	 */
+	public static JavaImplementation proxy(List<JavaType> interfaces, JavaClassLookup lookup) {
 		List<JavaImplementation.Slot> slots = new ArrayList<>();
-		for (Group group : groups(iface).values()) {
+		for (Group group : groups(interfaces).values()) {
 			if (OBJECT_METHODS.contains(group.key())) {
 				continue;
 			}
@@ -284,7 +332,7 @@ public final class JavaImplementations {
 				slots.add(slot(group, variant, 0));
 			}
 		}
-		return new JavaImplementation(true, iface, slots, null);
+		return new JavaImplementation(true, interfaces, slots, null);
 	}
 
 	private static JavaImplementation.Slot slot(Group group, Variant variant, int implementation) {
@@ -327,16 +375,22 @@ public final class JavaImplementations {
 	private record Variant(JavaType returnType, boolean mustImplement) {
 	}
 
-	// The interface's instance methods by key, in key order; each key's variants by
-	// return type name.
 	private static Map<String, Group> groups(JavaType iface) {
+		return groups(List.of(iface));
+	}
+
+	// The interfaces' instance methods by key, in key order; each key's variants by
+	// return type name.
+	private static Map<String, Group> groups(List<JavaType> interfaces) {
 		Map<String, List<JavaExecutable>> byKey = new TreeMap<>();
-		for (JavaExecutable method : iface.publicMethods()) {
-			if (!method.isStatic()) {
-				byKey
-					.computeIfAbsent(JavaImplementation.key(method.name(), method.parameterTypes()),
-							k -> new ArrayList<>())
-					.add(method);
+		for (JavaType iface : interfaces) {
+			for (JavaExecutable method : iface.publicMethods()) {
+				if (!method.isStatic()) {
+					byKey
+						.computeIfAbsent(JavaImplementation.key(method.name(), method.parameterTypes()),
+								k -> new ArrayList<>())
+						.add(method);
+				}
 			}
 		}
 		Map<String, Group> groups = new LinkedHashMap<>();

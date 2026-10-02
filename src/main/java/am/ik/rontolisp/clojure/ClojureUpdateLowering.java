@@ -463,34 +463,57 @@ final class ClojureUpdateLowering {
 	}
 
 	/**
-	 * {@code into}: the source conjoined onto the target, one member at a time. A
-	 * three-argument call names a transducer, which stays refused.
+	 * {@code into}: the source conjoined onto the target, one member at a time; with a
+	 * transducer between them, the source stepped through it first (the spliced
+	 * {@code rontolisp::%clojure-into-xf}, the oracle's {@code (transduce xform conj to
+	 * from)}).
 	 */
 	static LispVal intoOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
+		ClojureLowerUtil.isTrue(n == 2 || n == 3, "into takes a target, an optional transducer and a source");
 		if (n == 3) {
-			throw new LispReadException("transducers are not supported yet: into");
+			LispVal to = ctx.lower(items.get(1));
+			LispVal xf = ClojureBindingLowering.fnValue(ctx, items.get(2));
+			return intoXformForm(ctx, to, xf, ctx.lower(items.get(3)));
 		}
-		ClojureLowerUtil.isTrue(n == 2, "into takes a target and a source collection");
-		return intoForm(ctx, ctx.lower(items.get(1)), ClojureSeqLowering.seqForm(ctx, ctx.lower(items.get(2))));
+		return intoForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 	}
 
-	/** The conj fold over an already-lowered target and seq view. */
-	static LispVal intoForm(ClojureLowering ctx, LispVal to, LispVal from) {
+	/** The conj step over the accumulated collection and one member. */
+	private static LispVal conjStep(ClojureLowering ctx) {
 		LispSymbol acc = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(acc, one)),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(acc, one)),
 				ClojureCollectionLowering.conjTwoForm(ctx, acc, one));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("reduce"), step, from, ClojureLowerUtil.sym(":initial-value"),
-				to);
 	}
 
-	/** {@code into} as a value: a two-argument lambda over the same fold. */
+	/**
+	 * The conj fold over an already-lowered target and source, through the spliced reduce
+	 * (the lazy-aware walk, so a lazy source pours in whole).
+	 */
+	static LispVal intoForm(ClojureLowering ctx, LispVal to, LispVal from) {
+		return ClojureSeqLowering.reduceForm(ctx, conjStep(ctx), from, to);
+	}
+
+	/** The conj fold through an already-lowered transducer. */
+	static LispVal intoXformForm(ClojureLowering ctx, LispVal to, LispVal xf, LispVal from) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INTO-XF"), to, xf, from, conjStep(ctx));
+	}
+
+	/**
+	 * {@code into} as a value: a target and a source, or a target, a transducer and a
+	 * source.
+	 */
 	static LispVal intoValue(ClojureLowering ctx) {
 		LispSymbol to = new LispSymbol(ClojureLowering.mangle("into-to"));
 		LispSymbol from = new LispSymbol(ClojureLowering.mangle("into-from"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(to, from)),
-				intoForm(ctx, to, ClojureSeqLowering.seqForm(ctx, from)));
+		LispSymbol source = new LispSymbol(ClojureLowering.mangle("into-source"));
+		LispSymbol supplied = new LispSymbol(ClojureLowering.mangle("into-source-p"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(to, from, ClojureLowerUtil.sym("&optional"),
+						ClojureLowerUtil.list(source, ClojureLowering.NIL_CONST, supplied))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied, intoXformForm(ctx, to, from, source),
+						intoForm(ctx, to, from)));
 	}
 
 	/**

@@ -1828,12 +1828,16 @@ public final class ClojureLowering {
 		if (macro != null) {
 			return macro;
 		}
+		// a program's own definition or local binding shadows the core name, like
+		// the oracle (and like the value position below, which already looks the
+		// name up first)
+		boolean shadowed = known(name);
 		// the re-* names lower beside the big core switch (which stays under the
-		// method-size limit): same position, before any qualified or user name
-		if (ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
+		// method-size limit): same position, before any qualified name
+		if (!shadowed && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return ClojureStringLowering.reCall(this, name, items);
 		}
-		LispVal special = builtin(name, items);
+		LispVal special = shadowed ? null : builtin(name, items);
 		if (special != null) {
 			return special;
 		}
@@ -1896,6 +1900,10 @@ public final class ClojureLowering {
 	@Nullable LispVal builtin(String name, List<LispVal> items) {
 		if (!ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return null; // excluded by (:refer-clojure ...): a user definition wins
+		}
+		LispVal xform = ClojureTransducerLowering.xformCall(this, name, items);
+		if (xform != null) {
+			return xform;
 		}
 		int n = items.size() - 1;
 		switch (name) {
@@ -2026,10 +2034,11 @@ public final class ClojureLowering {
 						"reduce takes a function, an optional value and a collection");
 				if (n == 2) {
 					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-							ClojureSeqLowering.seqForm(this, lower(items.get(2))), null);
+							lower(items.get(2)), null);
 				}
-				return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(3))), lower(items.get(2)));
+				LispVal reduceFn = ClojureBindingLowering.fnValue(this, items.get(1));
+				LispVal reduceInit = lower(items.get(2));
+				return ClojureSeqLowering.reduceForm(this, reduceFn, lower(items.get(3)), reduceInit);
 			case "apply":
 				return ClojureSeqLowering.applyOf(this, items);
 			case "concat":
@@ -2314,7 +2323,8 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "fn? takes one argument");
 				return booleanAnswer(plain("functionp", items));
 			default:
-				return null;
+				LispVal core = ClojureCoreLowering.callOf(this, name, items);
+				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
 		}
 	}
 
@@ -2468,7 +2478,10 @@ public final class ClojureLowering {
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
-			default -> null;
+			default -> {
+				LispVal core = ClojureCoreLowering.valueOf(this, name);
+				yield core != null ? core : ClojureTransducerLowering.valueOf(name);
+			}
 		};
 	}
 
@@ -2596,7 +2609,7 @@ public final class ClojureLowering {
 			}
 			LispVal synth = valueOf(name);
 			if (synth != null) {
-				return synth;
+				return ClojureTransducerLowering.xformValue(this, name, synth);
 			}
 			String cl = builtinValue(name);
 			if (cl == null) {

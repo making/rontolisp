@@ -1,6 +1,6 @@
 # seq
 
-seq は任意のコレクション上のリストビューです:strict なコレクションは強制されます（リストはそのまま通り抜け、ベクターと文字列は変換され、マップはエントリごとに 2 要素ベクターを、セットは要素ごとに 1 メンバーを供給します。走査順はテーブルのもので、未規定）。lazy seq は同じビューを通じて1要素ずつ realize します。chunk 化はなく、全操作の空の結果は nil です。
+seq は任意のコレクション上のリストビューです:strict なコレクションは強制されます（リストはそのまま通り抜け、ベクターと文字列は変換され、マップはエントリごとに 2 要素ベクターを、セットは要素ごとに 1 メンバーを供給します。走査順はテーブルのもので、未規定）。lazy seq は同じビューを通じて1要素ずつ realize します。chunk 化はなく、全操作の空の結果は nil です。1引数形は[トランスデューサー](transducers.md)です。
 
 | Name | Example | Result |
 |---|---|---|
@@ -53,3 +53,15 @@ seq は任意のコレクション上のリストビューです:strict なコ�
 | `second` | `(second [1 2 3])` | `2` |
 | `ffirst` | `(ffirst [[1 2]])` | `1` |
 | `nfirst` | `(nfirst [[1 2 3]])` | `(2 3)` |
+| `drop-last` | `(drop-last [1 2 3])` | `(1 2)` |
+| `split-at` | `(split-at 2 [1 2 3 4])` | `[(1 2) (3 4)]` |
+| `split-with` | `(split-with odd? [1 3 4 5])` | `[(1 3) (4 5)]` |
+| `take-last` | `(take-last 2 [1 2 3])` | `(2 3)` |
+| `nthnext` | `(nthnext [1 2 3] 1)` | `(2 3)` |
+| `nthrest` | `(nthrest [1 2 3] 0)` | `[1 2 3]` |
+| `dedupe` | `(dedupe [1 1 2 1])` | `(1 2 1)` |
+| `partition-all` | `(partition-all 2 [1 2 3])` | `((1 2) (3))` |
+| `partition-by` | `(partition-by odd? [1 3 2])` | `((1 3) (2))` |
+| `take-nth` | `(take-nth 2 [1 2 3])` | `(1 3)` |
+| `not-empty` | `(not-empty [])` | `nil` |
+| `pmap` | `(pmap inc [1 2])` | `(2 3)` |

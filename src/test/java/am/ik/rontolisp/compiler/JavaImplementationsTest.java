@@ -207,4 +207,66 @@ class JavaImplementationsTest {
 			.isEqualTo(JavaOverloads.COST_WIDEN);
 	}
 
+	// A java:proxy of several interfaces declares every method of each: a name two
+	// interfaces declare with other parameters is a slot of its own, the same key is one
+	// slot; all call the one callable.
+	@Test
+	void aProxyOfSeveralInterfacesDeclaresEachMethodOfEach() {
+		JavaImplementation implementation = JavaImplementations
+			.proxy(List.of(type("java.util.function.Consumer"), type("java.util.function.IntConsumer")), CLASSES);
+		assertThat(slots(implementation)).containsExactly("accept(int)void=0", "accept(java.lang.Object)void=0",
+				"andThen(java.util.function.Consumer)java.util.function.Consumer=0",
+				"andThen(java.util.function.IntConsumer)java.util.function.IntConsumer=0");
+		assertThat(implementation.defaultToString())
+			.isEqualTo("#<java-proxy java.util.function.Consumer java.util.function.IntConsumer>");
+		assertThat(slots(
+				JavaImplementations.proxy(List.of(type("java.util.Collection"), type("java.util.List")), CLASSES)))
+			.contains("size()int=0")
+			.doesNotHaveDuplicates();
+	}
+
+	@Test
+	void aProxyFormOfSeveralInterfacesResolvesWhenEachDoes() {
+		JavaImplementation resolved = resolve("(java:proxy \"java.lang.Runnable\" \"java.util.function.Supplier\" f)");
+		assertThat(resolved.resolved()).isTrue();
+		assertThat(resolved.interfaceNames()).isEqualTo("java.lang.Runnable java.util.function.Supplier");
+		assertThat(resolve("(java:proxy \"java.lang.Runnable\" iface f)").reason())
+			.isEqualTo("interface name 2 is not a literal string");
+		assertThat(resolve("(java:proxy \"java.lang.Runnable\" \"java.lang.String\" f)").reason())
+			.isEqualTo("java:proxy expects an interface, got java.lang.String");
+		assertThat(resolve("(java:proxy \"java.lang.Runnable\" \"java.lang.Runnable\" f)").reason())
+			.isEqualTo("java:proxy names interface java.lang.Runnable twice");
+		assertThat(resolve("(java:proxy f)").reason()).isEqualTo("the form is malformed");
+		assertThat(JavaImplementations.describe((LispCons) LispReader
+			.readAllFromString("(java:proxy \"java.lang.Runnable\" \"java.util.function.Supplier\" f)")
+			.get(0))).isEqualTo("java:proxy \"java.lang.Runnable\" \"java.util.function.Supplier\"");
+		assertThat(JavaImplementations
+			.describe((LispCons) LispReader.readAllFromString("(java:reify \"java.lang.Runnable\" \"run\" f)").get(0)))
+			.isEqualTo("java:reify \"java.lang.Runnable\"");
+	}
+
+	// The object is assignable to each interface; a call on it resolves against its one
+	// interface only -- with several, by its class when the call runs -- and no
+	// specifier spells it.
+	@Test
+	void theObjectOfSeveralInterfacesIsAssignableToEach() {
+		JavaSiteResolver resolver = new JavaSiteResolver(CLASSES);
+		JavaStaticType type = resolver.typeOf(
+				LispReader.readAllFromString("(java:proxy \"java.lang.Runnable\" \"java.util.function.Supplier\" f)")
+					.get(0));
+		JavaImplementationType implementation = CLASSES
+			.implementationOf(List.of(type("java.lang.Runnable"), type("java.util.function.Supplier")));
+		assertThat(type).isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(implementation)));
+		assertThat(CLASSES.implementationOf(List.of(type("java.lang.Runnable"), type("java.util.function.Supplier"))))
+			.isSameAs(implementation);
+		assertThat(implementation).isNotSameAs(CLASSES.implementationOf(type("java.lang.Runnable")));
+		for (String name : List.of("java.lang.Object", "java.io.Serializable", "java.lang.Runnable",
+				"java.util.function.Supplier")) {
+			assertThat(type(name).isAssignableFrom(implementation)).as(name).isTrue();
+		}
+		assertThat(type("java.util.function.Function").isAssignableFrom(implementation)).isFalse();
+		assertThat(type.receiverClass()).isNull();
+		assertThat(resolver.specOf(type)).isNull();
+	}
+
 }
