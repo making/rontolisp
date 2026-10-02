@@ -138,7 +138,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 	 * @return the runtime refs and method body
 	 */
 	static HttpHandlerRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
-			MethodRefEntry stringLength, MethodRefEntry stringConcat, boolean bufferBody) {
+			MethodRefEntry stringLength, MethodRefEntry stringConcat, boolean bufferBody, boolean hasTr) {
 		ClassEntry handlerInterface = cp.classEntry(SUPPORT_CLASS + "$Handler");
 		ClassEntry requestClass = cp.classEntry(SUPPORT_CLASS + "$Request");
 		ClassEntry supportClass = cp.classEntry(SUPPORT_CLASS);
@@ -234,6 +234,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.getstatic(handlerField);
 		a.aload(3);
 		a.invokestatic(invoke1);
+		JvmTailBounce.unwrapRaw(a, cp, thisClass, objectArrayClass, hasTr);
 		a.invokestatic(awaitHelper);
 		// triple = %http-normalize-response(result)
 		a.invokestatic(normalizeResponse);

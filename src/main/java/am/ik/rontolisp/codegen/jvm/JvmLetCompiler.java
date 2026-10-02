@@ -310,18 +310,28 @@ final class JvmLetCompiler {
 					items.add(new JvmBodyOutliner.ValueForm(parts.get(i)));
 				}
 			}
-			items.add(new JvmBodyOutliner.Cleanup(afterBody));
+			// The Cleanup's runtime flag tells the tail-mark walk whether the restore
+			// emits code: a dynamic binding's restore must run inside the tail's extent,
+			// so the tail above it keeps a real call (JvmTailBounce).
+			items.add(new JvmBodyOutliner.Cleanup(afterBody, region != null || restores != null));
 			tail.pushFront(items, ctx);
 			return;
 		}
+		LispVal savedMark = ctx.tailMark;
 		for (int i = 2; i < parts.size(); i++) {
 			if (forEffect || i < parts.size() - 1) {
 				JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 			}
 			else {
+				// The last body form's value is this let's, so the trampoline's tail
+				// mark -- laid here when this let is the method's tail -- re-lays onto
+				// it; a let whose restore emits code keeps real calls, the restore
+				// belonging inside the tail's extent.
+				ctx.tailMark = savedMark == cons && region == null && restores == null ? parts.get(i) : null;
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
 		}
+		ctx.tailMark = savedMark;
 		if (!hasBody && !forEffect) {
 			// CLHS: a body-less let/let* returns nil (the loop above pushed nothing).
 			ctx.body.aconst_null();

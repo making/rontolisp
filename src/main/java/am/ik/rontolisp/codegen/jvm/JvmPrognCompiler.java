@@ -41,10 +41,15 @@ final class JvmPrognCompiler {
 			tail.pushFront(items, ctx);
 			return;
 		}
+		LispVal savedMark = ctx.tailMark;
 		for (int i = 1; i < parts.size() - 1; i++) {
 			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 		}
+		// The last form's value is this progn's: the trampoline's tail mark re-lays
+		// onto it when this progn is the method's tail (JvmTailBounce).
+		ctx.tailMark = savedMark == cons ? parts.get(parts.size() - 1) : null;
 		JvmExprCompiler.compileExpr(parts.get(parts.size() - 1), ctx, className);
+		ctx.tailMark = savedMark;
 	}
 
 }

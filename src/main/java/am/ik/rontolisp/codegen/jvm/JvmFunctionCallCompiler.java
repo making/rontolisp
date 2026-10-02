@@ -35,6 +35,13 @@ final class JvmFunctionCallCompiler {
 	static void compileFuncall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2;
+		if (ctx.tailBounce && ctx.tailMark == cons) {
+			// The method's true tail through a value: bounce instead of calling, and the
+			// trampoline loop above drives the call in its own frame
+			// (JvmTailBounce).
+			JvmTailBounce.emitBounce(parts.get(1), parts, 2, ctx, className);
+			return;
+		}
 		// A literal designator is called directly, anything else goes through the arity
 		// dispatcher.
 		JvmDesignatorCall call = JvmDesignatorCall.prepare(parts.get(1), arity, ctx, className);
@@ -52,6 +59,11 @@ final class JvmFunctionCallCompiler {
 	static void compileGeneralIndirect(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		int arity = args.size() - 1;
+		if (ctx.tailBounce && ctx.tailMark == cons) {
+			// The method's true tail through a value: bounce (JvmTailBounce).
+			JvmTailBounce.emitBounce(args.get(0), args, 1, ctx, className);
+			return;
+		}
 		ctx.indirectCallArities.add(arity);
 		JvmExprCompiler.compileExpr(args.get(0), ctx, className);
 		for (int i = 1; i < args.size(); i++) {
@@ -83,6 +95,11 @@ final class JvmFunctionCallCompiler {
 			}
 			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
 			ctx.body.invokestatic(fi.methodref());
+			if (fi.bounceVisible()) {
+				// The callee bounces its own value tail; its result here is the
+				// trampoline's answer (JvmTailBounce).
+				JvmTailBounce.emitUnwrap(ctx, className);
+			}
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -121,6 +138,10 @@ final class JvmFunctionCallCompiler {
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(dispatchDesc);
 		MethodRefEntry methodref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
 		ctx.body.invokestatic(methodref);
+		// The dispatcher answers the target's result, which is a trampoline bounce when
+		// the target's own tail was through a value: the value the caller sees is the
+		// loop's (JvmTailBounce).
+		JvmTailBounce.emitUnwrap(ctx, className);
 	}
 
 }

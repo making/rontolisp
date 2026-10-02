@@ -411,6 +411,24 @@ cases:
       (x y)(1 2 3)
       ((q ((((((z))))))) (q ((((w))))))
       (6 9 0)
+  - name: tail-call-through-a-value-jvm
+    source: |
+      (define (vt-self self n) (if (= n 0) 'self-done (self self (- n 1))))
+      (write (vt-self vt-self 100000))
+      (newline)
+      (define (vt-a n) (if (= n 0) 'a-done (vt-b (- n 1))))
+      (define (vt-b n) (if (= n 0) 'b-done (vt-a (- n 1))))
+      (define (vt-pick pick k) (if (= k 0) 'pick-done (pick (- k 1))))
+      (write (list (vt-a 100000) (vt-pick (if (= 1 1) vt-a vt-b) 100000)))
+      (newline)
+      (define (vt-count n acc) (if (= n 0) acc (vt-step n acc)))
+      (define (vt-step n acc) (vt-count (- n 1) (cons n acc)))
+      (write (length (vt-count 30000 '())))
+      (newline)
+    expected: |
+      self-done
+      (a-done b-done)
+      30000
   - name: a-loop-whose-body-closes-over-its-variables-rebinds-them-per-iteration
     source: |
       (define (thunks n)

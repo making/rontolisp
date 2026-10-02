@@ -108,6 +108,10 @@ final class JvmEvalRuntimeBuilder {
 
 		private final JvmArityOperators arityOperators;
 
+		private final ClassEntry thisClass;
+
+		private final boolean hasTrampoline;
+
 		private EvalConstants(Builder b) {
 			this.cp = Objects.requireNonNull(b.cp);
 			this.objectClass = Objects.requireNonNull(b.objectClass);
@@ -138,6 +142,8 @@ final class JvmEvalRuntimeBuilder {
 			this.hasComplexField = b.hasComplexField;
 			this.arityChkRef = b.arityChkRef;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
+			this.thisClass = Objects.requireNonNull(b.thisClass);
+			this.hasTrampoline = b.hasTrampoline;
 		}
 
 		ConstantPool cp() {
@@ -237,6 +243,14 @@ final class JvmEvalRuntimeBuilder {
 			return this.invokeSpread;
 		}
 
+		ClassEntry thisClass() {
+			return this.thisClass;
+		}
+
+		boolean hasTrampoline() {
+			return this.hasTrampoline;
+		}
+
 		Map<String, JvmLispCompiler.FunctionInfo> functions() {
 			return this.functions;
 		}
@@ -322,6 +336,20 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable Map<String, JvmLispCompiler.FunctionInfo> functions;
 
 			private boolean complexValues;
+
+			private @Nullable ClassEntry thisClass;
+
+			private boolean hasTrampoline = false;
+
+			Builder thisClass(ClassEntry thisClass) {
+				this.thisClass = thisClass;
+				return this;
+			}
+
+			Builder hasTrampoline(boolean hasTrampoline) {
+				this.hasTrampoline = hasTrampoline;
+				return this;
+			}
 
 			private @Nullable FieldRefEntry hasComplexField;
 
@@ -1145,6 +1173,12 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(FN);
 		a.aload(ARGLIST);
 		a.invokestatic(this.k.invokeSpread());
+		if (this.k.hasTrampoline()) {
+			// The case answered the target's result, a trampoline bounce when the
+			// target's own tail was through a value: _apply's answer is the loop's
+			// (JvmTailBounce), so every caller of _apply sees a real value.
+			JvmTailBounce.unwrapRaw(a, this.k.cp(), this.k.thisClass(), this.k.objectArrayClass(), true);
+		}
 		a.areturn();
 
 		a.labelBinding(notArr);

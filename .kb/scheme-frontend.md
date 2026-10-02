@@ -1699,7 +1699,17 @@ outside such a cycle changes: a program with none lowers byte-identically.
   (%scheme-ensure-procedure f) ..)` runs in constant stack there -- the check returns
   before the call. So is the interpreter's since `.todo/912`: `evalCons` applies the
   closure a `funcall`/`apply` names in its own loop frame (`.kb/interpreter-tail-calls.md`).
-  On the JVM it uses stack (depths below).
+  On the JVM the emitter trampolines them too (2026-10-03, `.todo/b69`): a tail call
+  whose target the compiler cannot name -- the lowering's `(funcall
+  (%scheme-ensure-procedure f) ...)` -- is emitted as a BOUNCE: the designator and the
+  arguments evaluate into `Object[]{Boolean.TRUE-marker, designator, arg...}` and that
+  array is the method's result. Every caller of a compiled function's result checks for
+  the array and, on the shape, drives the call it names in ITS OWN frame -- the shared
+  `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes back
+  (`JvmTailBounce`). One frame per tail chain plus the dispatcher's; the
+  state machine below runs 1,000,000 deep. A tail `apply` keeps a frame pair per hop,
+  and a call the Lisp-2 rewrite lowers to a fresh funcall cons (a Common Lisp variable
+  head) keeps a real frame -- the mark cannot survive the rewrite.
 - **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
   non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
   47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
@@ -1713,7 +1723,11 @@ outside such a cycle changes: a program with none lowers byte-identically.
   in `eval`, the non-trampoline shape, landed 2026-09-19 (`.todo/912`,
   `.kb/interpreter-tail-calls.md`): a tail call through a value is proper there too, and
   the loop is faster than the recursion it replaced (`fib 32` 4.72-5.26 -> 4.49-4.68 s,
-  `evalfib` on `(fib 24)` 32.6-38.6 -> 25.2-26.3 s).
+  `evalfib` on `(fib 24)` 32.6-38.6 -> 25.2-26.3 s). The same reader in miniature
+  landed on the JVM emitter 2026-10-03 (`.todo/b69`, above): a trampoline ONLY on the
+  value-tail edges, so every proved-direct call keeps its `invokestatic` and a class
+  whose tails are all direct compiles byte-identically to the pre-trampoline emitter
+  (pinned by `JvmLispCompilerTest.theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue`).
 
 Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel`,
 `#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
@@ -1835,7 +1849,8 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
 (self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
-compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`), wasm and
+compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`) -- unbounded
+(1,000,000, the probe here) since the value-tail trampoline of 2026-10-03 -- wasm and
 component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
 (`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497 before the loop in `eval` and
 5,000,000 after (`.kb/interpreter-tail-calls.md`). Top-level `ev?`/`od?` was JVM 3,516

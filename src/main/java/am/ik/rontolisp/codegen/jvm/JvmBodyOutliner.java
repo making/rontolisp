@@ -84,7 +84,7 @@ final class JvmBodyOutliner {
 	 * {@code let}'s dynamic-binding restores). Always a SUFFIX of the queue at a split
 	 * point, and always run by the method that opened the scope.
 	 */
-	record Cleanup(Runnable action) implements Item {
+	record Cleanup(Runnable action, boolean runtime) implements Item {
 
 	}
 
@@ -164,7 +164,24 @@ final class JvmBodyOutliner {
 				}
 				case ValueForm value -> {
 					ctx.tailBody = tail;
+					// The method's result is this form's value when nothing but
+					// run-time-free cleanups follows: the trampoline's mark
+					// (JvmTailBounce). A Cleanup with runtime code -- a dynamic-binding
+					// restore -- keeps a real call, its extent intact.
+					LispVal savedMark = ctx.tailMark;
+					boolean tailEnd = tail.queue.isEmpty();
+					if (!tailEnd) {
+						tailEnd = true;
+						for (Entry remaining : tail.queue) {
+							if (!(remaining.item() instanceof Cleanup cleanup) || cleanup.runtime()) {
+								tailEnd = false;
+								break;
+							}
+						}
+					}
+					ctx.tailMark = tailEnd && ctx.tailBounce ? value.form : null;
 					JvmExprCompiler.compileExpr(value.form(), ctx, className);
+					ctx.tailMark = savedMark;
 					ctx.tailBody = null;
 				}
 			}
@@ -260,8 +277,15 @@ final class JvmBodyOutliner {
 			}
 		}
 		ctx.body.invokestatic(ref);
+		// The continuation's result is this method's: unwrap a bounce it ends in.
+		if (ctx.hasTr) {
+			if (ctx.hasTr) {
+				JvmTailBounce.emitUnwrap(ctx, className);
+			}
+		}
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
+		cont.tailBounce = ctx.tailBounce;
 		// The continuation is the same function, part way through: the uncaught report
 		// names it and locates its code as it would the method it was split from.
 		cont.continueFunction(ctx);

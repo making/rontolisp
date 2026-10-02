@@ -57,6 +57,9 @@ final class JvmApplyCompiler {
 					ctx.body.aload(tailSlot);
 				}
 				ctx.body.invokestatic(fi.methodref());
+				if (fi.bounceVisible()) {
+					JvmTailBounce.emitUnwrap(ctx, className);
+				}
 				return;
 			}
 			if (fi != null) {
@@ -75,6 +78,9 @@ final class JvmApplyCompiler {
 				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
 				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
 				ctx.body.invokestatic(fi.methodref());
+				if (fi.bounceVisible()) {
+					JvmTailBounce.emitUnwrap(ctx, className);
+				}
 				return;
 			}
 		}
@@ -110,6 +116,9 @@ final class JvmApplyCompiler {
 		MethodRefEntry applyRef = ctx.cp.methodRef(ctx.cp.classEntry(className), "_apply",
 				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 		ctx.body.invokestatic(applyRef);
+		// _apply's own exit unwraps when the class has a trampoline; this belt keeps the
+		// direct-call arms above exact too (JvmTailBounce).
+		JvmTailBounce.emitUnwrap(ctx, className);
 	}
 
 	/**

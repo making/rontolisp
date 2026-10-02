@@ -17697,7 +17697,11 @@ class JvmLispCompilerTest {
 		// 11,035 since the quoted '(1 2 3) is a slot of the quoted-datum table
 		// (JvmQuotePool, .kb/quoted-data.md), not a field of its own: the table's two
 		// helpers and names, +355 B once per class, paid back past ~15 datums.
-		assertThat(classBytes.length).isLessThan(11_110);
+		// 16,431 since the value-tail trampoline (JvmTailBounce): a class with it keeps
+		// the two-argument complement closures and the arity-0/2 dispatchers reachable
+		// through _tramp, +5,321 B here; mapcar's per-element call makes this program
+		// trampolined while the &optional probe below stays direct.
+		assertThat(classBytes.length).isLessThan(16_500);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -22955,6 +22959,27 @@ class JvmLispCompilerTest {
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
 		assertThat(runClass(classBytes)).isEqualTo("(T NIL T)");
+	}
+
+	@Test
+	void theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue() throws Exception {
+		// A tail that stays direct -- a self call the lowering made a loop -- carries no
+		// trampoline at all: no _tramp, no unwrap, the class the pre-trampoline emitter
+		// wrote (.kb/scheme-frontend.md, "Not a trampoline"). One whose tail leaves
+		// through the variable the callee arrived in bounces, and the same program runs
+		// a depth the plain call chain overflows on the JVM's sized worker.
+		byte[] direct = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (n) (if (= n 0) 'done (f (- n 1))))
+				(print (f 100000))
+				"""));
+		assertThat(declaredMethodNames(direct)).doesNotContain("_tramp");
+		assertThat(runClass(direct)).isEqualTo("DONE");
+		byte[] bounced = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun g (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(print (g (function g) 300000))
+				"""));
+		assertThat(declaredMethodNames(bounced)).contains("_tramp");
+		assertThat(runClass(bounced)).isEqualTo("DONE");
 	}
 
 	/** Every method the class declares, in declaration order. */

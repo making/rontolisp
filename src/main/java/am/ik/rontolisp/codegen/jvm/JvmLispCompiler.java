@@ -1397,10 +1397,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
-		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
-				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
-						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program))
-				: null;
 		ClassEntry stringBuilderClass = cp.classEntry("java/lang/StringBuilder");
 		MethodRefEntry longToString = cp.methodRef(longClass, "toString", "()Ljava/lang/String;");
 		MethodRefEntry objectToString = cp.methodRef(objectClass, "toString", "()Ljava/lang/String;");
@@ -1900,16 +1896,36 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
 		Map<String, FunctionInfo> functions = new HashMap<>();
+		Set<String> defunNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			defunNames.add(defun.name);
+		}
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
 			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + ")Ljava/lang/Object;";
 			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(defun.name));
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
-			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
-					false, methodref, nameUtf8, descUtf8));
+			functions.put(defun.name,
+					new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals, false, methodref,
+							nameUtf8, descUtf8,
+							JvmTailBounce.bounceVisibleBody(defun.bodyExprs, defunNames::contains)));
 		}
 
+		// The trampoline exists when any defun's true tail ends in a call through a
+		// procedure value: it arms the unwrap checks and emits _tramp. A class whose
+		// tails are all direct -- every named-let/do loop, self and mutual tail-call
+		// group -- carries none and compiles byte-identically to the pre-trampoline
+		// emitter.
+		boolean hasTrampoline = false;
+		for (JvmLispCompiler.FunctionInfo fi : functions.values()) {
+			hasTrampoline |= fi.bounceVisible();
+		}
+
+		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
+				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
+						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program), hasTrampoline)
+				: null;
 		// Validate the jvm-export directives now that every defun (and its mangled
 		// method name) is known. Each names an existing, fixed-arity top-level defun;
 		// each wrapper's Java name must be new in the class — a duplicate method name
@@ -1966,7 +1982,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<Integer> arityGuardShapes = new HashSet<>();
 		// The built-in operators the wrong-count reports name (see Ctx.arityOperators).
 		JvmArityOperators arityOperators = new JvmArityOperators();
-
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
 				indirectCallArities.add(arity);
@@ -2331,6 +2346,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
+			.hasTr(hasTrampoline)
 			.valueFuncIds(valueFuncIds)
 			.arityGuardShapes(arityGuardShapes)
 			.arityOperators(arityOperators)
@@ -2438,6 +2454,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = ctxBuilder.build();
 			funcCtx.evalStoreRef = evalStoreRef;
+			funcCtx.tailBounce = hasTrampoline;
 			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), null, defun.bodyExprs);
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
@@ -2666,7 +2683,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic,
-					lambda.optionals, true, methodref, nameUtf8, descUtf8);
+					lambda.optionals, true, methodref, nameUtf8, descUtf8,
+					JvmTailBounce.bounceVisibleBody(lambda.bodyExprs(), n -> false));
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
@@ -2922,6 +2940,8 @@ public final class JvmLispCompiler implements LispCompiler {
 						? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME, JvmRuntimeBuilder.ARITY_CHK_DESC)
 						: null)
 				.arityOperators(arityOperators)
+				.thisClass(thisClass)
+				.hasTrampoline(hasTrampoline)
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
@@ -3454,7 +3474,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
 					recordsAsyncBoundaries ? cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_AWAITED_METHOD,
-							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null);
+							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null,
+					hasTrampoline);
 			runnableClass = cp.classEntry("java/lang/Runnable");
 		}
 		else {
@@ -3484,7 +3505,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			curThreadTlFieldRef = cp.fieldRef(thisClass, curThreadTlFieldName, curThreadTlFieldDesc);
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
-					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef);
+					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, hasTrampoline);
 			callableClass = cp.classEntry("java/util/concurrent/Callable");
 		}
 		else {
@@ -4001,6 +4022,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		for (DispatchMethod dm : dispatchMethods) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, dm.code);
+		}
+		if (hasTrampoline) {
+			// The trampoline loop the unwrap checks share: re-enters the dispatcher of
+			// the bounce's arity until a real value comes back (JvmTailBounce). Emitted
+			// only when a tail through a value exists, so every other artifact keeps its
+			// exact bytes.
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainCtx.trampName(),
+					mainCtx.trampDesc(), JvmTailBounce.trampBody(indirectCallArities, cp, thisClass));
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
@@ -5453,7 +5482,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * arguments.
 	 */
 	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
-			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8) {
+			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8, boolean bounceVisible) {
 
 		/**
 		 * {@return the arguments a call must pass at least}
@@ -6326,12 +6355,38 @@ public final class JvmLispCompiler implements LispCompiler {
 		final Map<String, MethodRefEntry> sharedHelpers;
 
 		/**
+		 * Whether the class carries the value-tail trampoline ({@code _tramp} and the
+		 * bounce shape): any defun's true tail ends in a call through a procedure value.
+		 * Every unwrap check keys on it, so a class whose tails are all direct compiles
+		 * byte-identically to the pre-trampoline emitter.
+		 */
+		final boolean hasTr;
+
+		/**
 		 * The tail spine this form belongs to, or null. Set by {@link JvmBodyOutliner}
 		 * immediately before a value-position form is compiled and cleared by
 		 * {@link JvmExprCompiler#compileExpr} on the way in, so only a construct that IS
 		 * the method's tail ever sees it.
 		 */
 		JvmBodyOutliner.@Nullable Tail tailBody;
+
+		/**
+		 * The form whose value is this method's result, when the trampoline
+		 * ({@link JvmTailBounce}) may turn its compilation into a bounce: laid by
+		 * {@link JvmBodyOutliner} on the final spine item and re-laid by the {@code if},
+		 * {@code progn} and plain {@code let} emitters on the arm or body form whose
+		 * value flows on unchanged. Matched by identity in the call emitters, so a form
+		 * compiled anywhere but the true tail sees no mark and emits exactly as before.
+		 */
+		@Nullable LispVal tailMark;
+
+		/**
+		 * Whether this method may bounce its true tail at all: a defun's body or a
+		 * continuation of one, in a class with a trampoline. A lambda's body keeps real
+		 * calls -- its result travels the dispatchers, whose callers' unwrap checks are
+		 * armed from the defuns' pre-pass alone.
+		 */
+		boolean tailBounce;
 
 		int nextLocal = 1;
 
@@ -6966,6 +7021,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.quotePool = builder.quotePool;
 			this.unsupplied = builder.unsupplied;
 			this.dynamic = builder.dynamic;
+			this.hasTr = builder.hasTr;
 			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
@@ -7431,6 +7487,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			private final Map<String, MethodRefEntry> sharedHelpers = new LinkedHashMap<>();
 
 			private boolean dynamic = false;
+
+			/**
+			 * Whether the class carries the value-tail trampoline: any defun's true tail
+			 * ends in a call through a procedure value. Arms every unwrap check and emits
+			 * {@code _tramp}; a class without one compiles byte-identically to the
+			 * pre-trampoline emitter.
+			 */
+			private boolean hasTr = false;
+
+			Builder hasTr(boolean hasTr) {
+				this.hasTr = hasTr;
+				return this;
+			}
 
 			private boolean servletMode = false;
 
@@ -8162,6 +8231,44 @@ public final class JvmLispCompiler implements LispCompiler {
 				return new Ctx(this);
 			}
 
+		}
+
+		/**
+		 * {@code java.lang.Boolean}, the class of the bounce marker in slot 0 of a
+		 * trampoline array: no compiled function value carries a there (its slot 0 is the
+		 * {@code Integer} funcId), so the marker test is one {@code instanceof}.
+		 * @return the class entry
+		 */
+		ClassEntry booleanClass() {
+			return this.cp.classEntry("java/lang/Boolean");
+		}
+
+		/**
+		 * The reference to the marker the bounce arrays carry in slot 0:
+		 * {@code Boolean.TRUE}, a host singleton no Lisp value is.
+		 * @return the field reference
+		 */
+		FieldRefEntry booleanMarker() {
+			return this.cp.fieldRef(this.booleanClass(), "TRUE", JvmTailBounce.MARKER_DESC);
+		}
+
+		/**
+		 * The trampoline loop {@code _tramp(Object)Object}: takes a possibly-bounced
+		 * result, and while it is a bounce array re-enters the dispatcher of the array's
+		 * argument count with its designator and arguments, until a real value comes
+		 * back.
+		 * @return the method reference
+		 */
+		MethodRefEntry trampRef(String className) {
+			return this.cp.methodRef(this.cp.classEntry(className), this.trampName(), this.trampDesc());
+		}
+
+		Utf8Entry trampName() {
+			return this.cp.utf8Entry("_tramp");
+		}
+
+		Utf8Entry trampDesc() {
+			return this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;");
 		}
 
 		MethodRefEntry numOp(String key) {

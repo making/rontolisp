@@ -107,6 +107,11 @@ final class JvmDesignatorCall {
 		// surplus linked into the rest list (JvmPhysicalArgs).
 		JvmPhysicalArgs.emit(ctx, className, this.target, args);
 		ctx.body.invokestatic(this.target.methodref());
+		if (this.target.bounceVisible()) {
+			// The callee bounces its own value tail; the value this call answers is the
+			// trampoline's (JvmTailBounce).
+			JvmTailBounce.emitUnwrap(ctx, className);
+		}
 	}
 
 }
