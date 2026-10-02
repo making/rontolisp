@@ -1048,3 +1048,37 @@ by name. Pinned by `set-bang-assigns-thread-bound-vars` in `clojure-spec.yaml`
 `ClojureLoweringTest` (`setBangRefusesEveryOtherTargetLikeTheOracle`,
 `bindingNeedsDynamicVars`); `instant.clj` advances past its line 13 to its next gap
 (`extend-protocol` over the host class `Instant`).
+
+## `clojure.spec` (b64, 2026-10-02): documented refusal, no subset
+
+Decided against `clj` 1.12.6.1673 (bundled spec.alpha; the todo's `1.3.4`
+coordinates do not exist -- latest on Central is `0.6.249`). Requiring
+`clojure.spec.alpha` stays `unknown namespace: clojure.spec.alpha`, pinned by
+`ClojureLoweringTest.foreignNamespacesStayRefused`. NO-GO, for three measured
+reasons:
+
+- **No in-scope demand.** Both known users (`examples/spec.clj`,
+  `hangman/specs.clj` in the shcloj4 inventory, `.todo/artefacts/b16-shcloj4-inventory/NOTES.md`)
+  are classified non-goals there; no pinned program waits on spec.
+- **The subset would not unblock its users anyway.** The corpus use is
+  speccing functions (`s/fdef`); its runtime value is `instrument`/`check`
+  (the test.check generative runner), already scoped as a separate
+  follow-up. A `def`/`valid?`/`conform`/`explain` core leaves both programs
+  failing at the same refusal.
+- **The honest core is a second matching engine, and `explain-data` is
+  unpinnable.** Probed: regex ops consume sequential collections exactly
+  (`cat` with leftover input is `:clojure.spec.alpha/invalid`, `+` on empty
+  is invalid, `*` on empty is `[]`, an absent `s/?` key is missing from the
+  conformed map, `alt`/`or` conform to `[tag val]`), and an `explain-data`
+  problem carries `:pred` as a fn object plus `:spec` as an identity-printed
+  reify object -- neither comparable as text across runs, let alone backends
+  (the todo's own fallback: drop `explain-data` and pin its refusal). By
+  analogy with the measured spliced runtimes (the b21 regex engine ~19.7 KB
+  raw when referenced, the b60 transducer deltas), the interpreter over spec
+  values plus the registry plus ~20 `s/` verbs is a multi-item build for a
+  subset that unblocks nothing: not worth its blast radius.
+
+Revisit condition: an in-scope corpus program needing `valid?`/`conform`
+shapes (not `instrument`) -- then `explain-data` stays out and pins its
+refusal. User docs need no change: `doc/*/clojure/reference/use.md` already
+say an unknown namespace is an error.
