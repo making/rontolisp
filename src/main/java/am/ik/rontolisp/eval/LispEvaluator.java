@@ -5048,10 +5048,17 @@ public final class LispEvaluator {
 		}));
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
 		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, args -> {
-			if (args.size() != 2 || !(args.get(0) instanceof LispString iface)) {
-				throw new LispEvalException(jproxy + " expects (java:proxy \"interface\" callable)");
+			if (args.size() < 2) {
+				throw new LispEvalException(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
 			}
-			return JavaInterop.proxy(iface.value(), args.get(1), caller);
+			List<String> interfaces = new ArrayList<>();
+			for (LispVal name : args.subList(0, args.size() - 1)) {
+				if (!(name instanceof LispString iface)) {
+					throw new LispEvalException(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
+				}
+				interfaces.add(iface.value());
+			}
+			return JavaInterop.proxy(interfaces, args.get(args.size() - 1), caller);
 		}));
 		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
 		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));

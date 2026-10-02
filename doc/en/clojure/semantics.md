@@ -196,6 +196,8 @@ Each refusal names the missing design, never `unknown name`:
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |
+| `proxy` over a class, constructor arguments | `proxy over a class is not supported yet: ...`, `proxy constructor arguments are not supported yet: ...` | `java:proxy` implements interfaces only; no subclass is generated |
+| `toString`/`equals`/`hashCode` in a `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run |
 | a variadic-only static member as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static` |
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |

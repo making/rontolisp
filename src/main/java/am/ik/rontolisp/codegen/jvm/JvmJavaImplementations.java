@@ -10,7 +10,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 import am.ik.jvm.AccessFlag;
@@ -29,10 +28,11 @@ import org.jspecify.annotations.Nullable;
  * time and shipped beside it -- no {@code java.lang.reflect.Proxy}, nothing defined at
  * run time, so a GraalVM native image needs no metadata for them
  * ({@code .kb/java-interop.md}, "Implementing interfaces"). One class per
- * {@code java:reify} shape ({@code <Program>$Reify<N>}) and per interface a
- * {@code java:proxy} or a function value passed where the interface is expected becomes
- * ({@code <Program>$Proxy<N>}), declaring exactly the slots {@link JavaImplementations}
- * chose -- the ones the interpreter's {@code Proxy} handler dispatches on:
+ * {@code java:reify} shape ({@code <Program>$Reify<N>}) and per interface list a
+ * {@code java:proxy} -- or a function value passed where an interface is expected --
+ * becomes ({@code <Program>$Proxy<N>}, implementing each interface of the list),
+ * declaring exactly the slots {@link JavaImplementations} chose -- the ones the
+ * interpreter's {@code Proxy} handler dispatches on:
  *
  * <pre>
  * abstract class Prog$Implementation implements java.io.Serializable {
@@ -214,8 +214,11 @@ final class JvmJavaImplementations {
 	}
 
 	private Shell shell(JavaImplementation implementation) {
-		JavaType iface = Objects.requireNonNull(implementation.iface(), "a resolved implementation");
-		StringBuilder key = new StringBuilder(implementation.proxy() ? "proxy|" : "reify|").append(iface.name());
+		if (!implementation.resolved()) {
+			throw new IllegalArgumentException("an unresolved implementation: " + implementation.reason());
+		}
+		String iface = implementation.interfaceNames();
+		StringBuilder key = new StringBuilder(implementation.proxy() ? "proxy|" : "reify|").append(iface);
 		for (JavaImplementation.Slot slot : implementation.slots()) {
 			key.append('|').append(slot.dispatchKey()).append('=').append(slot.implementation());
 		}
@@ -236,9 +239,9 @@ final class JvmJavaImplementations {
 	}
 
 	// The program-side method a slot calls, made the first time one of its shape asks:
-	// one per (proxy or not, interface, method, return type).
-	private String callback(boolean proxy, JavaType iface, JavaImplementation.Slot slot) {
-		String key = (proxy ? "proxy|" : "reify|") + iface.name() + "|" + slot.dispatchKey();
+	// one per (proxy or not, interfaces, method, return type).
+	private String callback(boolean proxy, String iface, JavaImplementation.Slot slot) {
+		String key = (proxy ? "proxy|" : "reify|") + iface + "|" + slot.dispatchKey();
 		String cached = this.callbacks.get(key);
 		if (cached != null) {
 			return cached;
@@ -266,7 +269,7 @@ final class JvmJavaImplementations {
 	// the value converted to R -- or the interpreter's error for one that does not. What
 	// leaves it thrown -- the function's exit or condition, that error -- is recorded on
 	// its way out to the Java caller (_jsig), for the site whose Java call it reaches.
-	private JvmJavaDirectSites.Method buildCallback(boolean proxy, JavaType iface, JavaImplementation.Slot slot,
+	private JvmJavaDirectSites.Method buildCallback(boolean proxy, String iface, JavaImplementation.Slot slot,
 			Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label start = a.newBoundLabel();
@@ -337,8 +340,7 @@ final class JvmJavaImplementations {
 			a.aload(4);
 			a.invokestatic(this.lispToString);
 			a.invokevirtual(concat);
-			a.ldc(this.cp
-				.stringEntry(JavaImplementation.returnMismatchSuffix(proxy, iface.name(), slot.name(), returnType)));
+			a.ldc(this.cp.stringEntry(JavaImplementation.returnMismatchSuffix(proxy, iface, slot.name(), returnType)));
 			a.invokevirtual(concat);
 			a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
 			a.athrow();
@@ -397,14 +399,16 @@ final class JvmJavaImplementations {
 
 	private ClassDefinition write(Shell shell) {
 		JavaImplementation implementation = shell.implementation();
-		JavaType iface = Objects.requireNonNull(implementation.iface());
+		String iface = implementation.interfaceNames();
 		ConstantPool pool = new ConstantPool();
 		ClassEntry selfClass = pool.classEntry(shell.internalName());
 		ClassEntry baseClass = pool.classEntry(this.programInternalName + "$Implementation");
 		ClassDefinition.Builder definition = ClassDefinition.builder(pool,
 				AccessFlag.ACC_FINAL | AccessFlag.ACC_SUPER | AccessFlag.ACC_SYNTHETIC, selfClass, baseClass,
 				pool.utf8Entry("Code"));
-		definition.addInterface(pool.classEntry(JvmJavaDirectSites.internalName(iface)));
+		for (JavaType each : implementation.interfaces()) {
+			definition.addInterface(pool.classEntry(JvmJavaDirectSites.internalName(each)));
+		}
 		ClassEntry self = selfClass;
 		ClassEntry base = baseClass;
 		FieldRefEntry fns = pool.fieldRef(base, "fns", "[Ljava/lang/Object;");
@@ -443,7 +447,7 @@ final class JvmJavaImplementations {
 	// public R m(P...): the callback over (this.fns[i], the boxed arguments), or the
 	// throw of an abstract method no function implements.
 	private static void writeSlot(ClassDefinition.Builder definition, ConstantPool pool, FieldRefEntry fns,
-			ClassEntry program, JavaType iface, JavaImplementation.Slot slot, @Nullable String callback) {
+			ClassEntry program, String iface, JavaImplementation.Slot slot, @Nullable String callback) {
 		StringBuilder desc = new StringBuilder("(");
 		for (JavaType param : slot.parameterTypes()) {
 			desc.append(JvmJavaDirectSites.descriptor(param));
@@ -454,7 +458,7 @@ final class JvmJavaImplementations {
 			ClassEntry unsupported = pool.classEntry("java/lang/UnsupportedOperationException");
 			a.new_(unsupported);
 			a.dup();
-			a.ldc(pool.stringEntry(JavaImplementation.noImplementation(iface.name(), slot.key())));
+			a.ldc(pool.stringEntry(JavaImplementation.noImplementation(iface, slot.key())));
 			a.invokespecial(pool.methodRef(unsupported, "<init>", "(Ljava/lang/String;)V"));
 			a.athrow();
 			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry(slot.name()), pool.utf8Entry(desc.toString()),

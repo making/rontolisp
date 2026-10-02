@@ -52,7 +52,7 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 	private final ConcurrentHashMap<String, Optional<JavaType>> types = new ConcurrentHashMap<>();
 
-	private final ConcurrentHashMap<JavaType, JavaImplementationType> implementations = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<List<JavaType>, JavaImplementationType> implementations = new ConcurrentHashMap<>();
 
 	private JvmClassFileLookup(JvmClassPath classPath, @Nullable Path ctSym, int release) {
 		this.classPath = classPath;
@@ -201,8 +201,8 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 	}
 
 	@Override
-	public JavaImplementationType implementationOf(JavaType iface) {
-		return this.implementations.computeIfAbsent(iface, JavaImplementationType::new);
+	public JavaImplementationType implementationOf(List<JavaType> interfaces) {
+		return this.implementations.computeIfAbsent(List.copyOf(interfaces), JavaImplementationType::new);
 	}
 
 	private @Nullable JavaType load(String name) {

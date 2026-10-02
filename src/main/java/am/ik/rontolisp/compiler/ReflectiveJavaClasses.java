@@ -34,9 +34,13 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 	private static final ClassValue<JavaImplementationType> IMPLEMENTATIONS = new ClassValue<>() {
 		@Override
 		protected JavaImplementationType computeValue(Class<?> iface) {
-			return new JavaImplementationType(of(iface));
+			return new JavaImplementationType(List.of(of(iface)));
 		}
 	};
+
+	// A java:proxy of several interfaces: canonical per list, never cleared (a kind
+	// compares by identity), as few as the program's distinct interface lists.
+	private static final ConcurrentHashMap<List<JavaType>, JavaImplementationType> SEVERAL = new ConcurrentHashMap<>();
 
 	private static final Map<String, Class<?>> PRIMITIVES = Map.of("boolean", boolean.class, "byte", byte.class, "char",
 			char.class, "short", short.class, "int", int.class, "long", long.class, "float", float.class, "double",
@@ -87,6 +91,14 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 	@Override
 	public JavaImplementationType implementationOf(JavaType iface) {
 		return IMPLEMENTATIONS.get(((Type) iface).type());
+	}
+
+	@Override
+	public JavaImplementationType implementationOf(List<JavaType> interfaces) {
+		if (interfaces.size() == 1) {
+			return implementationOf(interfaces.get(0));
+		}
+		return SEVERAL.computeIfAbsent(List.copyOf(interfaces), JavaImplementationType::new);
 	}
 
 	private static @Nullable Class<?> load(String name) {

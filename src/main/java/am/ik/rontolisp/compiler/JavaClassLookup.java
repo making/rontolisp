@@ -1,5 +1,7 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -26,6 +28,16 @@ public interface JavaClassLookup {
 	 * @param iface an interface this lookup found
 	 * @return its implementation type
 	 */
-	JavaImplementationType implementationOf(JavaType iface);
+	default JavaImplementationType implementationOf(JavaType iface) {
+		return implementationOf(List.of(iface));
+	}
+
+	/**
+	 * The kind of the object a {@code java:proxy} of several interfaces makes, canonical
+	 * within this lookup per interface list (kinds compare by identity).
+	 * @param interfaces interfaces this lookup found, in the form's order
+	 * @return their implementation type
+	 */
+	JavaImplementationType implementationOf(List<JavaType> interfaces);
 
 }

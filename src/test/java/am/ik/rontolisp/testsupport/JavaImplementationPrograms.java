@@ -86,6 +86,74 @@ public final class JavaImplementationPrograms {
 			T""";
 
 	/**
+	 * java:proxy of several interfaces: one object Java calls through each -- a name two
+	 * declare ({@code accept(Object)}, {@code accept(int)}) reaches the one callable --
+	 * and a method of a class-typed receiver resolved when it runs; interface names
+	 * computed at run time make the same object.
+	 */
+	public static final String PROXY_SEVERAL = """
+			(defvar *runnable* "java.lang.Runnable")
+			(let ((p (java:proxy "java.util.function.Consumer" "java.util.function.IntConsumer" "java.lang.Runnable"
+			           (lambda (m &rest args) (print (cons m args))))))
+			  (java:call (java:static "java.util.List" "of" "a" "b") "forEach" p)
+			  (java:call (java:static "java.util.stream.IntStream" "range" 0 2) "forEach" p)
+			  (java:call (java:new "java.lang.Thread" p) "run")
+			  (java:call p "run")
+			  (print (java:call p "toString"))
+			  (print (java:call p "equals" p)))
+			(let ((q (java:proxy "java.util.function.Supplier" *runnable*
+			           (lambda (m &rest args) (if (equal m "get") 42 (print m))))))
+			  (print (java:call q "get"))
+			  (java:call q "run")
+			  (print (java:call q "toString")))
+			""";
+
+	/**
+	 * A java:proxy of several interfaces passed where one of them is expected: the calls
+	 * resolve before they run (the object's kind is the interfaces' implementation).
+	 */
+	public static final String PROXY_SEVERAL_PASSED = """
+			(let ((p (java:proxy "java.util.function.Consumer" "java.util.function.IntConsumer"
+			           (lambda (m x) (print x)))))
+			  (java:call (java:static "java.util.List" "of" "a") "forEach" p)
+			  (java:call (java:static "java.util.stream.IntStream" "range" 0 1) "forEach" p))
+			""";
+
+	/** What {@link #PROXY_SEVERAL_PASSED} prints. */
+	public static final String PROXY_SEVERAL_PASSED_OUTPUT = """
+			"a"
+			0""";
+
+	/**
+	 * A declaration that a value is what a {@code java:proxy} of one interface makes,
+	 * holding a {@code java:proxy} of that interface and another: the kind is the
+	 * interface list, so the declaration lies.
+	 */
+	public static final String FALSE_SINGLE_IMPLEMENTATION = """
+			(java:new "java.lang.Thread"
+			  (the (java:object "java.lang.Runnable" :exact)
+			       (java:proxy "java.lang.Runnable" "java.util.function.Supplier" (lambda (m) nil))))
+			""";
+
+	/** The start of the error {@link #FALSE_SINGLE_IMPLEMENTATION} raises. */
+	public static final String FALSE_SINGLE_IMPLEMENTATION_ERROR = "java:new: argument 1 is not an implementation of"
+			+ " java.lang.Runnable, got #<java ";
+
+	/** What {@link #PROXY_SEVERAL} prints. */
+	public static final String PROXY_SEVERAL_OUTPUT = """
+			("accept" "a")
+			("accept" "b")
+			("accept" 0)
+			("accept" 1)
+			("run")
+			("run")
+			"#<java-proxy java.util.function.Consumer java.util.function.IntConsumer java.lang.Runnable>"
+			T
+			42
+			"run"
+			"#<java-proxy java.util.function.Supplier java.lang.Runnable>\"""";
+
+	/**
 	 * A listener held in a {@code let} keeps its kind, so the calls passing it resolve:
 	 * added, fired, removed, fired again.
 	 */

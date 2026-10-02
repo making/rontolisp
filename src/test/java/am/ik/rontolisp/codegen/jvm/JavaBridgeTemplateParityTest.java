@@ -203,14 +203,25 @@ class JavaBridgeTemplateParityTest {
 			}
 			assertThat(template).as("%s", row).isEqualTo(shared);
 		}
-		for (String name : List.of("java.util.Comparator", "java.util.function.Function", "java.lang.CharSequence",
-				"java.util.List")) {
-			Class<?> iface = Class.forName(name);
+		// A java:proxy of several interfaces too: a name two declare is one slot per
+		// parameter list and return type, whichever interface declares it.
+		for (List<String> names : List.of(List.of("java.util.Comparator"), List.of("java.util.function.Function"),
+				List.of("java.lang.CharSequence"), List.of("java.util.List"),
+				List.of("java.util.function.Consumer", "java.util.function.IntConsumer"),
+				List.of("java.awt.event.ActionListener", "java.awt.event.KeyListener"),
+				List.of("java.util.function.Supplier", "java.util.concurrent.Future", "java.lang.Runnable"),
+				List.of("java.util.Collection", "java.util.List"))) {
+			Class<?>[] interfaces = new Class<?>[names.size()];
+			List<am.ik.rontolisp.compiler.JavaType> types = new java.util.ArrayList<>();
+			for (int i = 0; i < interfaces.length; i++) {
+				interfaces[i] = Class.forName(names.get(i));
+				types.add(ReflectiveJavaClasses.of(interfaces[i]));
+			}
 			assertThat(String.valueOf(new java.util.TreeMap<>(
-					(java.util.Map<?, ?>) invoke("proxySlots", new Class<?>[] { Class.class }, iface))))
-				.as(name)
-				.isEqualTo(slots(am.ik.rontolisp.compiler.JavaImplementations.proxy(ReflectiveJavaClasses.of(iface),
-						ReflectiveJavaClasses.instance())));
+					(java.util.Map<?, ?>) invoke("proxySlots", new Class<?>[] { Class[].class }, (Object) interfaces))))
+				.as("%s", names)
+				.isEqualTo(slots(
+						am.ik.rontolisp.compiler.JavaImplementations.proxy(types, ReflectiveJavaClasses.instance())));
 		}
 	}
 

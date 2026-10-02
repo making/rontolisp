@@ -1,8 +1,9 @@
 # java:proxy
 
-`(java:proxy "fully.qualified.Interface" callable)`
+`(java:proxy "fully.qualified.Interface"... callable)`
 
-Creates a host instance of the given interface backed by a rontolisp callable.
+Creates a host instance of the given interfaces -- one or more -- backed by a rontolisp
+callable.
 Every interface method is dispatched to the callable as `(callable "method-name"
 arg...)` — so the callable's **first argument is the name of the invoked method**
 (a string) and the remaining arguments are the method's arguments. The callable's
@@ -81,6 +82,27 @@ available — call the single abstract method (`apply`/`test`/`accept`/`get`/
 
 To implement each method with a function of its own -- a default method then keeping
 its body -- use [`java:reify`](java-reify.md).
+
+## Several interfaces
+
+Every name before the callable is an interface the one object implements, so Java can
+hold it as any of them. A method name two interfaces declare reaches the callable as
+that one name, whichever interface Java calls it through:
+
+```lisp
+(let* ((seen nil)
+       (p (java:proxy "java.util.function.Consumer" "java.util.function.IntConsumer"
+            (lambda (method x) (push x seen)))))
+  (java:call (java:static "java.util.List" "of" "a") "forEach" p)                ; Consumer.accept
+  (java:call (java:static "java.util.stream.IntStream" "range" 0 1) "forEach" p) ; IntConsumer.accept
+  (reverse seen))
+; => ("a" 0)
+```
+
+Each name must be an interface, and named once (`java:proxy names interface I twice`).
+The object's `toString` is `#<java-proxy I J>`. A call on the object itself, such as
+`(java:call p "accept" 1)`, is resolved by its class when it runs; passing it where one of
+its interfaces is expected resolves before it runs.
 
 ## In a compiled program
 

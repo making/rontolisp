@@ -193,6 +193,8 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |
+| クラスを含む `proxy`、コンストラクタ引数 | `proxy over a class is not supported yet: ...`, `proxy constructor arguments are not supported yet: ...` | `java:proxy` はインターフェースだけを実装し、サブクラスを生成しない |
+| proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない |
 | 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |

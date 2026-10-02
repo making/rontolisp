@@ -110,7 +110,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | metadata (`^`, legacy `#^`) | the reader's `(with-meta form meta)`, parsed and dropped | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
-| `proxy` | `java:proxy` with a name-dispatching lambda | a single interface and no constructor arguments; each `(method [params...] body...)` becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`); a superclass, constructor arguments, several interfaces and multi-arity methods are refused by name; interpreter and JVM only, like all interop |
+| `proxy` | `java:proxy` over every interface of the vector, with a name-dispatching lambda | one or more interfaces (b59) and no constructor arguments; each `(method [params...] body...)` (an empty body answers `nil`) becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`), so a name several interfaces declare runs the one body, as the oracle's proxy does; a method left out raises `no proxy method: <name>` when called (the oracle: `UnsupportedOperationException` with the name); refused by name: a class in the vector (`isHostClass`, a lowering-time `Class.forName`; a name that does not load is left to `java:proxy`'s run-time error), constructor arguments, `toString`/`equals`/`hashCode` (`java:proxy` keeps `Object`'s three, so the body would never run -- the oracle runs it), multi-arity methods; all of the refused shapes are b71; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
 | `not` | an explicit null-or-false check answering `T`-or-false | |
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
@@ -412,7 +412,9 @@ oracle on the real project): 9 agree with the oracle's summary line (`fail`, `in
 `macros`), a lazy `for` input (`lazy-index-of-any`), and `chat`, whose test names equal the
 functions under test (a `deftest` redefines them in the flat namespace, b56); 9 stop at
 other gaps: `meta`/`#'` (`introduction`, `exploring`), `drop-last` (b57, `sequences`),
-multi-interface `proxy` (b59, `snake`), `String` as a value (`multimethods`, `interop`),
+`proxy` over a class (b71, `snake`: `[JPanel ActionListener KeyListener]`; since b59 it
+stops at `proxy over a class is not supported yet: javax.swing.JPanel`, not at the interface
+count), `String` as a value (`multimethods`, `interop`),
 `read` (`concurrency`), project-local namespaces (b56, `preface`), the host stack overflow
 (`functional`). The 153,129 B raw wasm of a one-test program
 (`(deftest a (is (= 1 1))) (run-tests)`) is the printer plus the EH-mode handlers.
@@ -531,13 +533,13 @@ the interop gaps lower the same way (b08): `derive`/`underive`/`isa?`/
 binding (the unified dispatcher searches `isa?` candidates on a miss, most
 specific wins, then preferences), `ex-info`/`ex-data`/`ex-message` over a
 condition with message and data slots (`throw` signals one as its own
-condition), `memfn` as a lambda over the instance call, single-interface
-`proxy` through `java:proxy`, and the literal-only string position beside the
+condition), `memfn` as a lambda over the instance call, `proxy` of one or
+more interfaces (b59) through `java:proxy`, and the literal-only string position beside the
 pattern arms -- each pinned in `clojure-spec.yaml` (run on all four backends)
 or, for the interop legs (`proxy`, host-object `memfn`, literal `String/split`),
 in `ClojureInteropTest`; what stays refused (`definterface`/`gen-class`/`gen-interface`,
 multi-arity protocol methods, `:extend-via-metadata`, `set!`,
-`var`/`#'`, metadata `^`, multi-interface `proxy`)
+`var`/`#'`, metadata `^`, `proxy` over a class or naming an `Object` method)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else
 through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
@@ -635,7 +637,7 @@ refusal), `ClojureInteropTest` (the corpus slices: `blank?` from `introduction`,
 `painstakingly-create-array` from `interop`, `take-guess` from `hangman` over a
 mocked `*in*`, interpreter and JVM) and `ClojureWasmInteropRefusalTest` (both wasm
 backends refuse the `java:` legs with the undefined-function call-time error);
-multi-interface `proxy` plus `proxy-super` stay refused (the snake GUI files stay
+`proxy` over a class plus `proxy-super` stay refused (b71; the snake GUI files stay
 non-goals, b16). The host-boolean slice lowers the same way (b29, oracle `clj`
 1.12.6.1673): an instance call on a construction literal -- on a `let` local bound to one, and since b34 on an `if-let`/`when-let` local bound to one or on a `..` step single declared return --
 whose overloads at that arity all answer a primitive boolean answers

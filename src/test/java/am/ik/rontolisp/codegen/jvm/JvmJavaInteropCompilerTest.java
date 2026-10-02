@@ -741,6 +741,47 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun(JavaImplementationPrograms.PROXY)).isEqualTo(JavaImplementationPrograms.PROXY_OUTPUT);
 	}
 
+	// Mirrors JavaInteropTest#aProxyOfSeveralInterfacesRoutesEachToItsCallable: a
+	// generated class implementing all three, and the bridge's Proxy for the names
+	// computed at run time.
+	@Test
+	void aProxyOfSeveralInterfacesRoutesEachToItsCallable() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY_SEVERAL))
+			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_OUTPUT);
+	}
+
+	// Passed where one of its interfaces is expected, a java:proxy of several resolves
+	// the call: no bridge, no warning; a declaration of one interface's implementation
+	// holding it is refused as the interpreter refuses it.
+	@Test
+	void aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo() throws Exception {
+		assertThat(compileWarnings(JavaImplementationPrograms.PROXY_SEVERAL_PASSED, true)).isEmpty();
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY_SEVERAL_PASSED))
+			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_PASSED_OUTPUT);
+		assertThat(javap(JavaImplementationPrograms.PROXY_SEVERAL_PASSED))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		assertThatThrownBy(() -> compileAndRun(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageStartingWith(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors JavaInteropTest#aProxyOfSeveralInterfacesRefusesAClassOrARepeat: the
+	// bridge raises what the interpreter raises.
+	@Test
+	void aProxyOfSeveralInterfacesRefusesAClassOrARepeat() {
+		assertThatThrownBy(
+				() -> compileAndRun("(java:proxy \"java.lang.Runnable\" \"java.lang.String\" (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy expects an interface, got java.lang.String");
+		assertThatThrownBy(
+				() -> compileAndRun("(java:proxy \"java.lang.Runnable\" \"java.lang.Runnable\" (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy names interface java.lang.Runnable twice");
+		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.Runnable\" 1 (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy expects (java:proxy \"interface\"... callable)");
+	}
+
 	// A reify passed where its interface is expected resolves the call before it runs:
 	// the object's kind is its interface's implementation, so the call is direct.
 	@Test

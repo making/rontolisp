@@ -432,6 +432,28 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `#<java-reify I>` unless named. `java:proxy`: every group but Object's three (default methods
   too -- java:proxy's meaning, unchanged) calls the callable with the name first; `toString` is
   `#<java-proxy I>`.
+- `(java:proxy "I" "J" ... callable)` (b59, 2026-10-02): every name before the callable is an
+  interface (each an interface, each once -- `repeatedInterface`); the groups are the union of
+  the interfaces' methods by key, so `Consumer.accept(Object)` and `IntConsumer.accept(int)`
+  are two slots and a key both declare one, all calling the one callable by name -- the
+  Clojure proxy's per-name body. `JavaImplementation.interfaces()` is the list (reify: one;
+  unresolved: empty); `interfaceNames()` (space-joined) is `toString`'s `#<java-proxy I J>`
+  and the messages' interface text. Interpreter: one `Proxy` over all of them, defined in the
+  first interface loader that sees every one (`proxyLoader`, the bridge's twin). JVM: one
+  `$Proxy<N>` implementing each; the bridge's `javaProxy(Object, Object[])` takes the first
+  name, then the rest and the callable (the `reify` descriptor). Kind:
+  `JavaImplementationType` holds the list, canonical per list in each lookup
+  (`implementationOf(List)`; the single-interface overload is the one-element list); it is
+  assignable to each interface, but `single()` is null for several, so
+  `JavaStaticType.receiverClass()` is null (a call ON the object is left to run time --
+  `--java-static` refuses it) and `specOf` spells nothing. A direct call's kind test is
+  `instanceof $Implementation`, `instanceof` each interface AND `getClass().getInterfaces().length
+  == n`, so a declared `(java:object "I" :exact)` holding a proxy of I and J is refused on the
+  JVM as the interpreter's identity kind check refuses it. Pinned:
+  `JavaImplementationPrograms.PROXY_SEVERAL` / `_PASSED` / `FALSE_SINGLE_IMPLEMENTATION` in
+  `JavaInteropTest` and `JvmJavaInteropCompilerTest`, `JavaImplementationsTest`, the parity
+  test's `proxySlots(Class[])` corpus. A superclass is not an interface: a proxy over a class
+  needs a generated subclass on the interpreter too (no `Proxy` can), b71.
 - Dispatch key is `name(params)return` (`Slot.dispatchKey`): a covariant default variant is never
   shadowed by an abstract sibling.
 - A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT

@@ -167,8 +167,10 @@ public final class JavaSiteResolver {
 		List<String> candidates = new ArrayList<>();
 		for (JavaKind kind : kinds) {
 			if (kind instanceof JavaImplementationType implementation) {
-				// What a java:reify / java:proxy of I makes: (java:object "I" :exact).
-				return kinds.size() == 1 ? javaObjectSpec(implementation.iface().name(), true) : null;
+				// What a java:reify / java:proxy of I makes: (java:object "I" :exact). No
+				// specifier spells a java:proxy of several interfaces.
+				JavaType single = implementation.single();
+				return kinds.size() == 1 && single != null ? javaObjectSpec(single.name(), true) : null;
 			}
 			if (kind instanceof JavaType host) {
 				if (kinds.size() == 1) {
@@ -794,8 +796,8 @@ public final class JavaSiteResolver {
 			// A java:reify / java:proxy whose interface resolves makes an object of a
 			// class no program names, whose kind is the interface's implementation type.
 			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
-			JavaType iface = implementation.iface();
-			return iface == null ? JavaStaticType.UNKNOWN : kinds(this.lookup.implementationOf(iface));
+			return implementation.resolved() ? kinds(this.lookup.implementationOf(implementation.interfaces()))
+					: JavaStaticType.UNKNOWN;
 		}
 		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
 			return JavaStaticType.UNKNOWN;

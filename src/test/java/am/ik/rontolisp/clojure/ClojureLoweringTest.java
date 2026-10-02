@@ -952,9 +952,26 @@ class ClojureLoweringTest {
 			.hasMessageContaining("memfn needs a plain name, not 1");
 		assertThat(lowered("(proxy [java.util.function.Supplier] [] (get [] 42))")).contains("JAVA:PROXY")
 			.contains("java.util.function.Supplier");
-		assertThatThrownBy(() -> Clojure.read("(proxy [A B] [] (get [] 1))", null))
+		// Several interfaces are one java:proxy, the callable last.
+		assertThat(lowered("(proxy [java.util.function.Supplier java.lang.Runnable] [] (get [] 42) (run []))"))
+			.contains("(JAVA:PROXY \"java.util.function.Supplier\" \"java.lang.Runnable\" (LAMBDA");
+		assertThatThrownBy(() -> Clojure.read("(proxy [] [] (get [] 1))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy takes at least one interface");
+		// A superclass (the book's snake.clj JPanel) is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure
+			.read("(proxy [javax.swing.JPanel java.awt.event.ActionListener] [] (actionPerformed [e] nil))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy takes a single interface");
+			.hasMessageContaining("proxy over a class is not supported yet: javax.swing.JPanel");
+		// java:proxy keeps Object's three, so a body for one would never run.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (run []) (toString [] \"p\"))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy cannot override toString yet");
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (equals [o] true))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy cannot override equals yet");
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (lastModified [] 0))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy over a class is not supported yet: java.io.File");
 		assertThatThrownBy(() -> Clojure.read("(set! x 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! is not supported yet");
 	}
