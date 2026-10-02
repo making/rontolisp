@@ -150,6 +150,10 @@ categories:
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
       - { slug: struct-map, name: "struct-map" }
+      - { slug: make-array, name: "make-array" }
+      - { slug: aget, name: "aget" }
+      - { slug: aset, name: "aset" }
+      - { slug: alength, name: "alength" }
   - title: "数値と述語"
     index_page: clojure/reference/numbers.md
     functions:
