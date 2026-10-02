@@ -3244,3 +3244,22 @@ cases:
       123
       a\"b
       a\nb
+  - name: def-after-defn-memoize-captures-function
+    # (def p (memoize p)) after a (defn p ...) captures the function cell: the
+    # value lowers against the OLD FUNCTION binding (#'c%p), not the
+    # still-unbound value cell. Top-level calls then hit the cache (the counter
+    # stays 1); the defun's own recursion stays a direct call, not a value
+    # lookup (use ^:dynamic for a fully memoized recursion).
+    source: |
+      (def b52-calls (atom 0))
+      (defn b52-f [x] (swap! b52-calls inc) (* x 2))
+      (def b52-f (memoize b52-f))
+      (println [(b52-f 21) (b52-f 21) @b52-calls])
+      (defn b52-p [n] (if (> n 2) (+ (/ (+ n 1) 4) (/ (b52-p (- n 1)) 2)) 5/4))
+      (def b52-p (memoize b52-p))
+      (println (b52-p 5))
+      (println (b52-p 5))
+    expected: |
+      [42 42 1]
+      81/32
+      81/32

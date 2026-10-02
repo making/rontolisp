@@ -46,6 +46,16 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void defAfterDefnCapturesTheFunctionCell() {
+		// (def p (memoize p)) after a (defn p ...) captures the function cell:
+		// the value lowers against the OLD FUNCTION binding (#'|c%p|), not the
+		// still-unbound value cell, and only then does the name become a VARIABLE.
+		assertThat(lowered("(defn p [x] x) (def p (memoize p))")).contains("#'|c%p|");
+		assertThat(lowered("(defn p [x] x) (def p p)")).contains("(SETQ |c%p| #'|c%p|)");
+		assertThat(lowered("(defn p [x] x) (defonce p (memoize p))")).contains("#'|c%p|");
+	}
+
+	@Test
 	void headPositionCallsToVariablesReachTheValueCell() {
 		// a parameter may hold a collection, so its call goes through the prelude
 		// dispatcher (which funcalls real functions); a let/def binding of a real

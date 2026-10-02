@@ -20,6 +20,20 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferMemoizesWhatAnEarlierOneDefined() {
+		// (def p (memoize p)) in a later buffer captures the earlier buffer's
+		// function cell, like the same two forms in one file.
+		ClojureSession session = new ClojureSession();
+		session.read("(defn b52sess [x] (* x 2))");
+		List<String> redefined = session.read("(def b52sess (memoize b52sess))")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(redefined).anyMatch(form -> form.contains("#'|c%b52sess|"));
+	}
+
+	@Test
 	void aLaterBufferExpandsAMacroAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		session.setMacroEvaluator(ClojureMacroTime.create());

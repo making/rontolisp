@@ -22,6 +22,10 @@ A definition may use a name defined below it: the file is pre-scanned for every 
 `def`/`defn` (and `declare`) name. Inside a body, `defn` works only in statement
 position, and a multi-arity one only at the top level.
 
+Redefining a `defn` with `def` captures the function: `(def p (memoize p))`
+evaluates its value against the OLD `FUNCTION` binding, so top-level calls hit
+the cache while the `defun`'s own recursion stays direct.
+
 ```clojure
 (defn fact [n]
   (if (< n 2) 1 (* n (fact (- n 1)))))

@@ -38,7 +38,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | every symbol qualifies behind `c%` (the documented deviation: no namespaces); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
 | `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names |
 | `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
-| `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it) |
+| `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it); the value lowers against the OLD binding first, so `(def p (memoize p))` after a `(defn p ...)` captures the function cell (`#'c%p`), not the still-unbound value cell (decided 2026-10-02, b52) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding, an anonymous one the same binding only when a `recur` reaches it | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites; a `recur` in any `fn` body (named or not) calls the enclosing clause directly, checked against its arity (decided 2026-10-01, b17) |
 | destructuring (`let`/`loop`/`fn`/`defn` patterns) | `let*` pairs over one temporary per pattern | a vector pattern binds positionally through the seq view (`nth`, past the end nil; `&` the rest as a seq, itself a pattern; `:as` the whole); a map pattern through the table-aware read (`:keys` binding the short name when qualified, `:syms` from quoted symbols, `:strs` from strings, explicit locals from key expressions, `:as`, `:or` defaults); nested patterns recurse. Malformed shapes are named refusals |
 | `let` | `let*` | Clojure's `let` is sequential |
@@ -343,7 +343,10 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 
 `ClojureSession` keeps the lowering across buffers: every buffer declares its own
 top-level `def`/`defn` names into the session's globals first, so a later buffer may
-call what an earlier one defined. `SourceSession` prompts `clojure> `, echoes through the spliced `clojure.lisp`
+call what an earlier one defined, but never clobbers what earlier buffers already
+defined for the pre-scan -- a buffer's inits evaluate against the OLD binding
+(decided 2026-10-02, b52: `(def p (memoize p))` in a later buffer captures the
+earlier `defn`'s function cell, like the same two forms in one file). `SourceSession` prompts `clojure> `, echoes through the spliced `clojure.lisp`
 printer (the `ECHO` shape, readable), and decides completeness by bracket counting over `()[]{}` 
 (outside strings and `;` comments) plus a reader probe for a trailing dispatch prefix
 (`'`, `` ` ``, `~`, `@`, `^`, `#'`, `#_`, `#(`).
@@ -499,7 +502,12 @@ in `clojure-spec.yaml` (run on all four backends; the corpus slices are
 `file-seq`/unknown-`clojure.java.io`-fn, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
 (interpreter and JVM in `ClojureInteropTest`, the wasm preopen case in `ClojureWasmFileIoTest`,
 the un-preopened refusal in `ClojureWasmFileRefusalTest`)
-plus the `keep`/`update` signals in `ClojureInteropTest`.
+plus the `keep`/`update` signals in `ClojureInteropTest`. A `def` after a `defn`
+lowers the same way (b52): the value against the OLD binding, so `(def p
+(memoize p))` captures the function cell -- pinned in `clojure-spec.yaml`
+(`def-after-defn-memoize-captures-function`, all four backends), the lowered
+`#'` shapes in `ClojureLoweringTest` and the cross-buffer shape in
+`ClojureSessionTest`.
 The reader-object IO slice lowers the same way (b22): `clojure.java.io` resolves
 for exactly `reader` (an `open` input stream over the file-stream runtime, so
 `line-seq` reads it and `with-open` closes it), `line-seq` takes a path or an

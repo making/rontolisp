@@ -668,7 +668,15 @@ public final class ClojureLowering {
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
 		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
+		// A buffer's pre-scan must not clobber what earlier buffers already
+		// defined: its inits evaluate against the OLD binding (e.g. (def p
+		// (memoize p)) after a (defn p ...) captures the function cell), while
+		// lowering updates in order to the new one.
+		Map<String, Kind> carried = new HashMap<>(this.globals);
 		declare(datums);
+		for (Map.Entry<String, Kind> kept : carried.entrySet()) {
+			this.globals.put(kept.getKey(), kept.getValue());
+		}
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
 			List<LispVal> forms = topLevels(datum);
@@ -1272,13 +1280,16 @@ public final class ClojureLowering {
 			at++; // the attr map (only with a value behind it: a lone map is the value)
 		}
 		isTrue(items.size() == at || items.size() == at + 1, "def takes a name and an optional value");
+		// The value lowers against the OLD binding, so (def p (memoize p)) after a
+		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
+		// the still-unbound value cell; only then does the name become a VARIABLE.
+		LispVal value = items.size() == at + 1 ? lower(items.get(at)) : NIL_CONST;
 		this.globals.put(name, Kind.VARIABLE);
 		this.macros.remove(name); // a definition wins over the macro it shadows
 		if (dynamic) {
 			this.dynamicVars.add(name);
 		}
 		recordClassDispatchFn(name, dynamic, items.size() == at + 1 ? items.get(at) : null);
-		LispVal value = items.size() == at + 1 ? lower(items.get(at)) : NIL_CONST;
 		if (isDirectFun(value)) {
 			this.globalDirectFuns.add(name);
 		}
@@ -8915,13 +8926,14 @@ public final class ClojureLowering {
 		LispVal nameDatum = items.get(1);
 		String name = plainName(nameDatum, "defonce");
 		boolean dynamic = nameIsDynamic(nameDatum);
+		// Like def: the value lowers against the OLD binding first.
+		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
 		this.globals.put(name, Kind.VARIABLE);
 		this.macros.remove(name); // a definition wins over the macro it shadows
 		if (dynamic) {
 			this.dynamicVars.add(name);
 		}
 		recordClassDispatchFn(name, dynamic, items.size() == 3 ? items.get(2) : null);
-		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
 		if (isDirectFun(value)) {
 			this.globalDirectFuns.add(name);
 		}
