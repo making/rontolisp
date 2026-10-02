@@ -984,12 +984,12 @@ class ClojureLoweringTest {
 				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");
 		// the constructor keeps the immutable field in the table, the mutable ones in
 		// a slot vector behind it; the method reads and writes the slots
-		assertThat(out).contains("(VECTOR c%x c%y)")
-			.contains("(SYMBOL-MACROLET ((c%x (AREF")
-			.contains("(SETF (AREF __clojure_");
+		assertThat(out).contains("(VECTOR |c%x| |c%y|)")
+			.contains("(SYMBOL-MACROLET ((|c%x| (AREF")
+			.contains("(SETF (AREF |__clojure_");
 		// a closure copies the field at creation: a let* around the lambda
 		assertThat(lowered("(defprotocol P (r [c])) (deftype T [^:unsynchronized-mutable x] P (r [_] (fn [] x)))"))
-			.containsPattern("\\(LET\\* \\(\\(c%x \\(AREF __clojure_\\d+ 0\\)\\)\\) \\(LAMBDA");
+			.containsPattern("\\(LET\\* \\(\\(\\|c%x\\| \\(AREF \\|__clojure_\\d+\\| 0\\)\\)\\) \\(LAMBDA");
 	}
 
 	@Test
