@@ -85,8 +85,9 @@ whatever the program defines under that name. A special form, or a head the read
 spells (`deref` for `@x`, `with-meta`, `fn` for `#(...)`), cannot name a macro.
 
 `` `form `` builds a form as data over the mangled namespace: a symbol naming a var the
-defining namespace sees qualifies with that var's namespace (a core name or an
-unresolved symbol stays bare), `~` inserts its form's value, `~@` splices a sequence into the enclosing
+defining namespace sees qualifies with that var's namespace like the oracle (a special
+form stays bare; a core name spells `clojure.core/name`, any other unresolved spelling
+the defining namespace), `~` inserts its form's value, `~@` splices a sequence into the enclosing
 list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
 one symbol per expansion, the same at every occurrence within it. An unquote outside
 any syntax-quote is an error, as is a splice outside a sequence. `macroexpand-1`
