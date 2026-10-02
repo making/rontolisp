@@ -42,6 +42,10 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 	// compares by identity), as few as the program's distinct interface lists.
 	private static final ConcurrentHashMap<List<JavaType>, JavaImplementationType> SEVERAL = new ConcurrentHashMap<>();
 
+	// A java:subclass of a superclass and extra interfaces: canonical per
+	// (superclass, interfaces), never cleared, like SEVERAL.
+	private static final ConcurrentHashMap<List<JavaType>, JavaImplementationType> SUBCLASSES = new ConcurrentHashMap<>();
+
 	private static final Map<String, Class<?>> PRIMITIVES = Map.of("boolean", boolean.class, "byte", byte.class, "char",
 			char.class, "short", short.class, "int", int.class, "long", long.class, "float", float.class, "double",
 			double.class, "void", void.class);
@@ -101,6 +105,15 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		return SEVERAL.computeIfAbsent(List.copyOf(interfaces), JavaImplementationType::new);
 	}
 
+	@Override
+	public JavaImplementationType subclassOf(JavaType superclass, List<JavaType> interfaces) {
+		List<JavaType> key = new ArrayList<>(interfaces.size() + 1);
+		key.add(superclass);
+		key.addAll(interfaces);
+		return SUBCLASSES.computeIfAbsent(List.copyOf(key),
+				types -> new JavaImplementationType(types.get(0), types.subList(1, types.size())));
+	}
+
 	private static @Nullable Class<?> load(String name) {
 		Class<?> primitive = PRIMITIVES.get(name);
 		if (primitive != null) {
@@ -124,6 +137,10 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		private volatile @Nullable List<Member> constructors;
 
 		private volatile @Nullable List<Member> publicMethods;
+
+		private volatile @Nullable List<Member> overridableMethods;
+
+		private volatile @Nullable List<Member> subclassConstructors;
 
 		private final ConcurrentHashMap<String, java.util.Optional<FieldMember>> fields = new ConcurrentHashMap<>();
 
@@ -243,6 +260,73 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 			return cached;
 		}
 
+		// Every public or protected non-final non-static instance method this class or
+		// one of its superclasses declares (bridge and synthetic ones never), the most
+		// derived declaration of a signature winning and covariant return-type variants
+		// all kept: what a generated subclass may override. Of an interface, nothing.
+		@Override
+		public List<Member> overridableMethods() {
+			List<Member> cached = this.overridableMethods;
+			if (cached == null) {
+				Map<OverridableKey, List<Member>> merged = new java.util.LinkedHashMap<>();
+				for (Class<?> current = this.type; current != null; current = current.getSuperclass()) {
+					for (Method method : current.getDeclaredMethods()) {
+						int modifiers = method.getModifiers();
+						if (method.isSynthetic() || method.isBridge() || Modifier.isStatic(modifiers)
+								|| Modifier.isFinal(modifiers) || Modifier.isPrivate(modifiers)
+								|| (!Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers))) {
+							continue;
+						}
+						OverridableKey key = new OverridableKey(method.getName(), List.of(method.getParameterTypes()),
+								method.getReturnType());
+						List<Member> list = merged.get(key);
+						if (list == null) {
+							merged.put(key, list = new ArrayList<>());
+						}
+						// The walk is subclass-first: an existing declaration is the
+						// same or more derived, so it shadows this one.
+						boolean shadowed = false;
+						for (Member existing : list) {
+							if (existing.executable() instanceof Method) {
+								shadowed = true;
+								break;
+							}
+						}
+						if (!shadowed) {
+							list.add(new Member(method));
+						}
+					}
+				}
+				List<Member> list = new ArrayList<>();
+				for (List<Member> group : merged.values()) {
+					list.addAll(group);
+				}
+				cached = List.copyOf(list);
+				this.overridableMethods = cached;
+			}
+			return cached;
+		}
+
+		// The public and the protected constructors: a subclass calls even a protected
+		// superclass constructor, through its own generated constructor (which needs no
+		// reflective access to it).
+		@Override
+		public List<Member> subclassConstructors() {
+			List<Member> cached = this.subclassConstructors;
+			if (cached == null) {
+				List<Member> list = new ArrayList<>();
+				for (Constructor<?> constructor : this.type.getDeclaredConstructors()) {
+					int modifiers = constructor.getModifiers();
+					if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers)) {
+						list.add(new Member(constructor));
+					}
+				}
+				cached = List.copyOf(list);
+				this.subclassConstructors = cached;
+			}
+			return cached;
+		}
+
 		@Override
 		public @Nullable FieldMember field(String name) {
 			java.util.Optional<FieldMember> cached = this.fields.get(name);
@@ -341,10 +425,24 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		}
 
 		@Override
+		public boolean isPublic() {
+			return Modifier.isPublic(this.executable.getModifiers());
+		}
+
+		@Override
+		public boolean isProtected() {
+			return Modifier.isProtected(this.executable.getModifiers());
+		}
+
+		@Override
 		public String toString() {
 			return this.executable.toString();
 		}
 
+	}
+
+	/** A (name, parameters, return type) key of the overridable-methods merge. */
+	private record OverridableKey(String name, List<Class<?>> params, Class<?> returns) {
 	}
 
 	/** A public field. */

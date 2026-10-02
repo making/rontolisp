@@ -106,6 +106,7 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("field", cp.methodRef(bridgeClass, "javaField", twoArgDesc));
 		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", newDesc));
 		ops.put("reify", cp.methodRef(bridgeClass, "javaReify", newDesc));
+		ops.put("subclass", cp.methodRef(bridgeClass, "javaSubclass", newDesc));
 
 		// --- _javaInit body ---
 		MethodCode code = new MethodCode();

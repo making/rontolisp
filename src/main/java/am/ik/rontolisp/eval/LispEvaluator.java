@@ -5067,6 +5067,9 @@ public final class LispEvaluator {
 		}));
 		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
 		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
+		String jsubclass = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_SUBCLASS);
+		this.globalEnv.defineFunction(jsubclass,
+				new LispFunction(jsubclass, args -> JavaInterop.subclass(args, caller)));
 	}
 
 	/**

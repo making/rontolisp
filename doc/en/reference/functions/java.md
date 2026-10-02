@@ -3,7 +3,7 @@
 The `java` package drives arbitrary Java APIs. It is
 **JVM-only** — it works on the interpreter (`java -jar rontolisp.jar`) and in
 JVM-compiled classes (a call resolved at compile time becomes a direct call, a
-`java:reify` or `java:proxy` a class generated for it, and the others go through
+`java:reify`, `java:proxy` or `java:subclass` a class generated for it, and the others go through
 a reflection bridge the compiler writes beside the generated `.class`), but not
 on the WASM backend, and the GraalVM native binary
 carries no reflection metadata to interpret it — and **not part of Common
@@ -19,6 +19,7 @@ limitations.
 | `java:static` | `(java:static "java.lang.Math" "max" 3 7)` | the marshalled static-method result |
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | the marshalled field value |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | an interface instance backed by the callable |
+| `java:subclass` | `(java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this m) ...))` | a class instance backed by the callable |
 | `java:reify` | `(java:reify "java.lang.Runnable" "run" (lambda () ...))` | an interface instance with one function per method |
 
 Two more symbols serve resolution before a call runs: the type specifier

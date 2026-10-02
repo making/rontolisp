@@ -15,6 +15,7 @@
 | `java:static` | 静的メソッドの呼び出し: `(java:static "fqcn" "method" args...)` |
 | `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")` |
 | `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
+| `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | インターフェースをメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
 
 生成・返却されたオブジェクトは `#<java <class-name>>` という不透明な形で表示され、`java:call`/`java:field` に再び渡せます。
@@ -263,6 +264,26 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
 ```
+
+## java:subclass によるクラスの proxy
+
+`java:subclass` は rontolisp の callable を背後に持つホストクラスのインスタンスを作ります。`java.lang.reflect.Proxy` はインターフェースしか実装できないため、`java:proxy` にはできないことです。このフォームはスーパークラス、追加のインターフェース、オーバーライドするメソッド、コンストラクタ引数を指定します。
+
+```lisp
+(java:subclass "java.io.File" '() '("lastModified") "recent"
+  (lambda (this method &rest args) 42))
+```
+
+callable は、名前を挙げた各メソッドに対して `(callable this "method-name" arg...)` の形で適用されます。最初が `this`、次がメソッド名です。コンストラクタ引数は、共有のオーバーロード規則でスーパークラスのコンストラクタを選びます。名前を挙げたメソッドは本体を実行します（`toString`/`equals`/`hashCode` を含みます）。名前を挙げなかったメソッドは、クラスに実装があれば継承し、実装がなければ呼ばれたときにメソッド名とともに `UnsupportedOperationException` を送出します。`proxy-super`（Clojure で書く場合）は、生成した `super$` アクセサーを通常のメソッドとして呼ぶことでスーパークラスの実装に届きます。
+
+```lisp
+(java:call (java:subclass "java.io.File" '() '("toString") "x"
+             (lambda (this method &rest args) "over!"))
+           "super$toString$0")
+; => "x"
+```
+
+名前がリテラル文字列である `java:subclass` はコンパイル時に生成するクラスになるため、構築は `--java-static` でコンパイルできます。実行時まで残るもの（実行時に計算する名前や、コンパイル時に見えないクラス。プロジェクトのクラスには `--java-classpath` が要ります）は名前を上げて拒否されます。インタープリターは実行時に解決します。さらなる例は[リファレンスページ](../reference/functions/java-subclass.md)にあります。
 
 ## エラーと非局所脱出
 

@@ -326,6 +326,25 @@ public final class ClojureLowering {
 	/** The enclosing recur targets, innermost last; empty outside any. */
 	final Deque<RecurTarget> recurTargets = new ArrayDeque<>();
 
+	/** The enclosing proxy methods' {@code this}, innermost last; empty outside any. */
+	final Deque<ProxyMethod> proxyMethods = new ArrayDeque<>();
+
+	/**
+	 * One enclosing proxy method body: a {@code proxy-super} lowers to a call of the
+	 * superclass implementation on this object.
+	 *
+	 * @param self the lowered {@code this} symbol the method body binds
+	 */
+	static final class ProxyMethod {
+
+		final LispSymbol self;
+
+		ProxyMethod(LispSymbol self) {
+			this.self = self;
+		}
+
+	}
+
 	/**
 	 * Whether the form being lowered sits in the tail position of the innermost enclosing
 	 * recur target's body: only there may a {@code recur} lower, like the oracle.
@@ -2142,8 +2161,7 @@ public final class ClojureLowering {
 			return capturingMutableFields(() -> ClojureInteropLowering.proxyOf(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "proxy-super")) {
-			throw new LispReadException(
-					"proxy-super is not supported yet: proxy methods take the Java arguments only, with no super handle");
+			return ClojureInteropLowering.proxySuperOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "new")) {
 			return ClojureInteropLowering.newOf(this, items);

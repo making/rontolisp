@@ -6,24 +6,31 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /**
- * How a {@code java:reify} or a {@code java:proxy} implements its interfaces -- a
- * {@code java:reify} one, a {@code java:proxy} one or more ({@link JavaImplementations}):
- * the methods an implementing class declares -- each {@link Slot} calls one of the form's
- * functions, or, for an abstract method no function implements, throws -- chosen before
- * the form runs, the same on every backend. The interpreter answers them from a
- * {@link java.lang.reflect.Proxy} handler that dispatches on exactly these slots; a
+ * How a {@code java:reify}, a {@code java:proxy} or a {@code java:subclass} implements
+ * its interfaces -- a {@code java:reify} one, a {@code java:proxy} one or more
+ * ({@link JavaImplementations}): the methods an implementing class declares -- each
+ * {@link Slot} calls one of the form's functions, or, for an abstract method no function
+ * implements, throws -- chosen before the form runs, the same on every backend. The
+ * interpreter answers them from a {@link java.lang.reflect.Proxy} handler that dispatches
+ * on exactly these slots (a {@code java:subclass} from a generated subclass instead); a
  * compiled program declares them in a generated class
  * ({@code codegen.jvm.JvmJavaImplementations}). A default method no slot overrides keeps
  * its body, and {@code equals}/{@code hashCode} not implemented are {@code Object}'s
- * (identity) -- on both.
+ * (identity) -- on both. A {@code java:subclass} overrides like any other class method,
+ * including {@code Object}'s three, and inherits what no slot overrides.
  *
  * @param proxy whether it is a {@code java:proxy}: every method, default ones too, calls
- * the one function with the method's name before its arguments
+ * the one function with the method's name before its arguments (a {@code java:subclass}'s
+ * callable takes the object first, then the name)
  * @param interfaces the interfaces, in the form's order; empty for an unresolved form
+ * (for a {@code java:subclass}, the extra interfaces beside its superclass)
  * @param slots the methods the implementing class declares, in a fixed order
  * @param reason why an unresolved form is resolved when it runs, or {@code null}
+ * @param superclass the superclass a {@code java:subclass} extends, or {@code null} for a
+ * {@code java:reify} / {@code java:proxy}
  */
-public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason) {
+public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason,
+		@Nullable JavaType superclass) {
 
 	/** The {@link Slot#implementation} of an abstract method no function implements. */
 	public static final int NONE = -1;
@@ -34,6 +41,24 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	public JavaImplementation {
 		interfaces = List.copyOf(interfaces);
 		slots = List.copyOf(slots);
+	}
+
+	/**
+	 * A {@code java:reify} / {@code java:proxy} implementation (no superclass).
+	 * @param proxy whether it is a {@code java:proxy}
+	 * @param interfaces the interfaces, in the form's order
+	 * @param slots the methods the implementing class declares
+	 * @param reason why an unresolved form is resolved when it runs, or {@code null}
+	 */
+	public JavaImplementation(boolean proxy, List<JavaType> interfaces, List<Slot> slots, @Nullable String reason) {
+		this(proxy, interfaces, slots, reason, null);
+	}
+
+	/**
+	 * @return whether this is a {@code java:subclass} (which extends a superclass)
+	 */
+	public boolean isSubclass() {
+		return this.superclass != null;
 	}
 
 	/**
@@ -169,6 +194,31 @@ public record JavaImplementation(boolean proxy, List<JavaType> interfaces, List<
 	 */
 	public static String returnMismatchPrefix(boolean proxy) {
 		return proxy ? "java:proxy: cannot return " : "java:reify: cannot return ";
+	}
+
+	/**
+	 * The text before the value in the error a {@code java:subclass} function's value
+	 * that does not convert to the method's return type raises:
+	 * {@code java:subclass: cannot return } -- the value follows, then
+	 * {@link #subclassReturnMismatchSuffix}.
+	 * @return the prefix
+	 */
+	public static String subclassReturnMismatchPrefix() {
+		return "java:subclass: cannot return ";
+	}
+
+	/**
+	 * The text after the value in that error: {@code  as class java.lang.String from S
+	 * I...}.
+	 * @param superclass the superclass
+	 * @param interfaces the extra interfaces
+	 * @param returnType the method's return type
+	 * @return the suffix
+	 */
+	public static String subclassReturnMismatchSuffix(JavaType superclass, List<JavaType> interfaces,
+			JavaType returnType) {
+		String ifaces = interfaces.isEmpty() ? "" : " " + interfaceNames(interfaces);
+		return " as " + classText(returnType) + " from " + superclass.name() + ifaces;
 	}
 
 	/**

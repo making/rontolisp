@@ -7554,8 +7554,17 @@ public final class LispNames {
 	/** {@code java:reify}, qualified. */
 	public static final String JAVA_REIFY_QUALIFIED = JAVA_PKG + ":" + JAVA_REIFY;
 
+	/**
+	 * {@code java:subclass} -- makes a host class instance from a rontolisp callable:
+	 * {@code (java:subclass "super" '("iface"...) '("method"...) ctor-args... callable)}.
+	 */
+	public static final String JAVA_SUBCLASS = "SUBCLASS";
+
 	/** {@code java:object}, qualified. */
 	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;
+
+	/** {@code java:subclass}, qualified. */
+	public static final String JAVA_SUBCLASS_QUALIFIED = JAVA_PKG + ":" + JAVA_SUBCLASS;
 
 	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
 	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;

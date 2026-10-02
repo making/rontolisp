@@ -102,6 +102,29 @@ public interface JavaType extends JavaKind {
 	List<? extends JavaExecutable> constructors();
 
 	/**
+	 * The instance methods a generated subclass ({@code java:subclass}) may override:
+	 * every public or protected non-final non-static instance method this class or one of
+	 * its superclasses declares -- bridge and synthetic ones never -- merged as
+	 * {@link Class#getMethods()} merges them (the most derived declaration of a signature
+	 * wins, covariant return-type variants are all kept). Of an interface, nothing: its
+	 * methods come through {@link #publicMethods()}.
+	 * @return the overridable methods, in no particular order
+	 */
+	default List<? extends JavaExecutable> overridableMethods() {
+		return List.of();
+	}
+
+	/**
+	 * The constructors a generated subclass ({@code java:subclass}) may call: the public
+	 * and the protected ones (a subclass calls even a protected superclass constructor),
+	 * as {@link #constructors()} answers the public ones.
+	 * @return the inheritable constructors, in no particular order
+	 */
+	default List<? extends JavaExecutable> subclassConstructors() {
+		return constructors();
+	}
+
+	/**
 	 * The public field of this name ({@link Class#getField(String)}: declared here, on a
 	 * superinterface, or on a superclass).
 	 * @param name the field name

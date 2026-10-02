@@ -354,6 +354,16 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
+	/**
+	 * {@code _jfail}: what a generated subclass's construction dispatcher calls with a
+	 * throwable its superclass constructor threw, beside the text. Built by
+	 * {@link #finishHelpers}.
+	 * @return {@code _jfail(Throwable,String)Throwable}
+	 */
+	MethodRefEntry failureHelper() {
+		return failure();
+	}
+
 	private MethodRefEntry failure() {
 		MethodRefEntry ref = this.failure;
 		if (ref == null) {
@@ -1369,6 +1379,32 @@ final class JvmJavaDirectSites {
 		 */
 		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, MethodCode.Label fail) {
 			MethodCode a = this.a;
+			if (kind instanceof JavaImplementationType implementation && implementation.superclass() != null) {
+				// An object a java:subclass of the superclass made: of a class generated
+				// for one (JvmJavaImplementations), extending the superclass and
+				// implementing exactly the extra interfaces -- as the interpreter
+				// compares the kind itself.
+				JavaType superclass = implementation.superclass();
+				a.aload(slot);
+				a.instanceOf(cls(superclass));
+				a.ifeq(fail);
+				a.aload(slot);
+				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+				a.ldc(cls(superclass));
+				a.if_acmpeq(fail);
+				for (JavaType iface : implementation.interfaces()) {
+					a.aload(slot);
+					a.instanceOf(cls(iface));
+					a.ifeq(fail);
+				}
+				a.aload(slot);
+				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
+				a.invokevirtual(method("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;"));
+				a.arraylength();
+				a.loadConstant(implementation.interfaces().size());
+				a.if_icmpne(fail);
+				return;
+			}
 			if (kind instanceof JavaImplementationType implementation) {
 				// An object a java:reify / java:proxy of the interfaces made: of a class
 				// generated for one (JvmJavaImplementations), implementing exactly them
@@ -1892,6 +1928,27 @@ final class JvmJavaDirectSites {
 			this.methods.add(buildSequence(name, desc));
 		}
 		return ref;
+	}
+
+	/**
+	 * The cost of a constructor argument for the parameter type: {@code _jcost$N} with
+	 * the function arm (a function becomes the interface's generated proxy), for a value
+	 * of no static kind.
+	 * @param target the parameter type
+	 * @return {@code _jcost$N(Object)I}
+	 */
+	MethodRefEntry argumentCost(JavaType target) {
+		return cost(target, true);
+	}
+
+	/**
+	 * The conversion of such an argument: {@code _jconv$N} with functions proxied and
+	 * sequences made arrays or lists.
+	 * @param target the parameter type
+	 * @return {@code _jconv$N(Object)T}
+	 */
+	MethodRefEntry argumentConvert(JavaType target) {
+		return convert(target, true, true);
 	}
 
 	/**

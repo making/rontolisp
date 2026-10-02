@@ -784,6 +784,7 @@ categories:
       - { slug: java-static, name: "java:static" }
       - { slug: java-field, name: "java:field" }
       - { slug: java-proxy, name: "java:proxy" }
+      - { slug: java-subclass, name: "java:subclass" }
       - { slug: java-reify, name: "java:reify" }
   - title: "ffi パッケージ (C ライブラリ)"
     index_page: reference/functions/ffi.md

@@ -14,12 +14,15 @@ import org.jspecify.annotations.Nullable;
  * class declares exactly these ({@code codegen.jvm.JvmJavaImplementations}).
  * <p>
  * It is the KIND of such an object ({@link JavaKind}), so a call that passes one resolves
- * before it runs: its cost against a parameter type depends on {@code I...} alone
- * ({@link #isAssignableTo}), never on which class made it. Canonical per interface list
- * within a lookup ({@link JavaClassLookup#implementationOf}); both lookups' types answer
+ * before it runs: its cost against a parameter type depends on {@code I...} (and, for a
+ * subclass, {@code S}) alone ({@link #isAssignableTo}), never on which class made it.
+ * Canonical per interface list (and per superclass and interface list) within a lookup
+ * ({@link JavaClassLookup#implementationOf}); both lookups' types answer
  * {@link JavaType#isAssignableFrom} for it through {@link #isAssignableTo}.
  */
 public final class JavaImplementationType implements JavaType {
+
+	private final @Nullable JavaType superclass;
 
 	private final List<JavaType> interfaces;
 
@@ -28,10 +31,29 @@ public final class JavaImplementationType implements JavaType {
 	 * more
 	 */
 	public JavaImplementationType(List<? extends JavaType> interfaces) {
-		if (interfaces.isEmpty()) {
+		this(null, interfaces);
+	}
+
+	/**
+	 * @param superclass the superclass the object extends, or {@code null} for a
+	 * {@code java:reify} / {@code java:proxy} object (which extends {@code Object})
+	 * @param interfaces the extra interfaces the object implements, in the form's order
+	 * (empty for a {@code java:subclass} of no extra interface)
+	 */
+	public JavaImplementationType(@Nullable JavaType superclass, List<? extends JavaType> interfaces) {
+		if (superclass == null && interfaces.isEmpty()) {
 			throw new IllegalArgumentException("an implementation implements an interface");
 		}
+		this.superclass = superclass;
 		this.interfaces = List.copyOf(interfaces);
+	}
+
+	/**
+	 * @return the superclass the object extends, or {@code null} for a {@code java:reify}
+	 * / {@code java:proxy} object
+	 */
+	public @Nullable JavaType superclass() {
+		return this.superclass;
 	}
 
 	/**
@@ -44,22 +66,27 @@ public final class JavaImplementationType implements JavaType {
 	/**
 	 * The one interface a call on the object resolves its method against, and a
 	 * {@code (java:object "I" :exact)} specifier spells.
-	 * @return the interface, or {@code null} when the object implements several: a call
-	 * on it is then resolved by the object's class when it runs
+	 * @return the interface, or {@code null} when the object implements several or
+	 * extends a superclass: a call on it is then resolved by the object's class when it
+	 * runs
 	 */
 	public @Nullable JavaType single() {
-		return this.interfaces.size() == 1 ? this.interfaces.get(0) : null;
+		return this.superclass == null && this.interfaces.size() == 1 ? this.interfaces.get(0) : null;
 	}
 
 	/**
 	 * Whether a value of this kind is assignable to {@code target}: {@code Object},
-	 * {@code java.io.Serializable}, each interface and its superinterfaces.
+	 * {@code java.io.Serializable}, each interface and its superinterfaces -- and, for a
+	 * subclass, the superclass and its supertypes.
 	 * @param target a type
 	 * @return whether {@code target.isAssignableFrom(this)}
 	 */
 	public boolean isAssignableTo(JavaType target) {
 		if (target == this || "java.lang.Object".equals(target.name())
 				|| "java.io.Serializable".equals(target.name())) {
+			return true;
+		}
+		if (this.superclass != null && target.isAssignableFrom(this.superclass)) {
 			return true;
 		}
 		for (JavaType iface : this.interfaces) {
@@ -72,7 +99,9 @@ public final class JavaImplementationType implements JavaType {
 
 	@Override
 	public String name() {
-		return "implementation of " + JavaImplementation.interfaceNames(this.interfaces);
+		return this.superclass == null ? "implementation of " + JavaImplementation.interfaceNames(this.interfaces)
+				: "subclass of " + this.superclass.name() + (this.interfaces.isEmpty() ? ""
+						: " implementing " + JavaImplementation.interfaceNames(this.interfaces));
 	}
 
 	@Override
