@@ -312,6 +312,9 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%SET")) {
 					return decodeSet(ctx, cons);
 				}
+				if (tag.name().equals(":C%RECORD")) {
+					return decodeRecord(ctx, cons);
+				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
 				}
@@ -360,6 +363,20 @@ final class ClojureMacroLowering {
 		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispString spelling
 				&& rest.cdr() instanceof LispNil) {
 			return new LispSymbol(":" + spelling.value());
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * A record answer back to its literal: {@code (%record ns.Name {entries})}, which
+	 * lowers through the map constructor like the source spelling.
+	 */
+	static LispVal decodeRecord(ClojureLowering ctx, LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 5 && parts.get(3) instanceof LispHashTable table
+				&& parts.get(4) instanceof LispString className) {
+			return ClojureLowerUtil.list(new LispSymbol("%record"), new LispSymbol(className.value()),
+					decodeDatum(ctx, table));
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
@@ -450,6 +467,10 @@ final class ClojureMacroLowering {
 		if (!marked.isEmpty()
 				&& (marked.get(0) == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(marked.get(0), "%regex"))) {
 			return ClojureCollectionLowering.regexForm(marked);
+		}
+		if (!marked.isEmpty() && ClojureLowerUtil.isSymbolNamed(marked.get(0), "%record")) {
+			// a record literal is already a value: syntax-quote leaves it alone
+			return ClojureProtocolLowering.recordLiteral(ctx, marked);
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> parts = ClojureLowerUtil.items(datum);

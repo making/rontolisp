@@ -161,7 +161,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 を上げます。各メソッドは1つのパラメータベクターを取ります（複数アリティは拒否のまま）。
 
 `defrecord` 値は型タグ付きのマップです。すべてのマップが使うエントリ表を
-`(:C%RECORD tag fields table)` で包むため、マップ動詞はそれを通して読みます
+`(:C%RECORD tag fields table class)` で包むため、マップ動詞はそれを通して読みます
 （`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` はエントリを読み、
 `assoc`/`update`/`conj`/`merge` は表を組み直してタグを保ち、`dissoc` は宣言
 フィールドが全部残る間はレコードを保ち、そうでなければオラクル同様プレーンな

@@ -2328,10 +2328,10 @@ cases:
     expected: |
       false
   - name: records-are-maps-with-a-type-tag
-    # b13: a record is a (:C%RECORD tag fields table) wrapper over the same equal
-    # table every map uses, so the map verbs read through it on all four backends
-    # (the oracle answers #user.R{...}; this prints the wrapper -- the documented
-    # record-printing deviation -- so cases read through get/class instead).
+    # b13: a record is a (:C%RECORD tag fields table class) wrapper over the same
+    # equal table every map uses, so the map verbs read through it on all four
+    # backends; it prints as its literal, #ns.R{...}, like the oracle (b58) --
+    # here #b15_str.B13Rock, the namespace an earlier case switched to.
     # (assoc b13-r :hard true) keeps the type; (dissoc r :hard) of the extension
     # key keeps it while (dissoc r :mass) of the base field drops to a plain map.
     source: |
@@ -2400,7 +2400,7 @@ cases:
       :B13Rock
       :red
       :gone
-      (:C%RECORD :B13Rock (:mass) {:mass 42})
+      #b15_str.B13Rock{:mass 42}
       :B13Rock
       :gone
       {}
@@ -3263,3 +3263,53 @@ cases:
       [42 42 1]
       81/32
       81/32
+  - name: record-literals-read-and-print-like-the-oracle
+    # b58: a record prints as its literal #ns.Name{...} (the namespace with - munged
+    # to _, declared fields first); #ns.Name{...} / #ns.Name[...] read back as the
+    # record over the UNEVALUATED body, = to the constructed one, quoted or
+    # syntax-quoted alike, and a macro may answer one. The legacy #^ metadata reads
+    # like ^, and ns takes metadata on its name plus a docstring and attr map.
+    # Every line matches the oracle (clj 1.12, 2026-10-02).
+    source: |
+      (ns ^{:doc "b58"} b58-recs "a docstring" {:author :b58})
+      (defn #^String b58-f [#^long x] (str x))
+      (def #^{:doc "x"} b58-a 1)
+      (println b58-a (b58-f 2))
+      (defrecord B58P [a b])
+      (prn (->B58P 1 "s"))
+      (println (->B58P 1 "s"))
+      (prn (assoc (->B58P 1 2) :z 3))
+      (prn (= (->B58P 1 2) #b58_recs.B58P{:a 1 :b 2}))
+      (prn (= (->B58P 1 2) #b58_recs.B58P[1 2]))
+      (prn (= (->B58P 1 2) #b58_recs.B58P{:a 1 :b 2 :c 3}))
+      (prn #b58_recs.B58P{:b (+ 1 2)})
+      (prn #b58_recs.B58P[x [1 {:k #{2}}]])
+      (prn (:b #b58_recs.B58P[x y]))
+      (prn '#b58_recs.B58P[1 2])
+      (prn `#b58_recs.B58P[1 2])
+      (prn [#b58_recs.B58P{:a "s" :b nil :c :d}])
+      (prn (dissoc #b58_recs.B58P{:a 1 :b 2 :c 3} :c))
+      (prn (dissoc #b58_recs.B58P{:a 1 :b 2} :a))
+      (prn (merge (->B58P 1 2) {:a 5}))
+      (prn (map->B58P {:b 1 :z 2}))
+      (defmacro b58-mk [] (assoc '#b58_recs.B58P[7 8] :z 1))
+      (prn (b58-mk))
+    expected: |
+      1 2
+      #b58_recs.B58P{:a 1, :b "s"}
+      #b58_recs.B58P{:a 1, :b s}
+      #b58_recs.B58P{:a 1, :b 2, :z 3}
+      true
+      true
+      false
+      #b58_recs.B58P{:a nil, :b (+ 1 2)}
+      #b58_recs.B58P{:a x, :b [1 {:k #{2}}]}
+      y
+      #b58_recs.B58P{:a 1, :b 2}
+      #b58_recs.B58P{:a 1, :b 2}
+      [#b58_recs.B58P{:a "s", :b nil, :c :d}]
+      #b58_recs.B58P{:a 1, :b 2}
+      {:b 2}
+      #b58_recs.B58P{:a 5, :b 2}
+      #b58_recs.B58P{:a nil, :b 1, :z 2}
+      #b58_recs.B58P{:a 7, :b 8, :z 1}

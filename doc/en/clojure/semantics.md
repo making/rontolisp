@@ -165,7 +165,7 @@ with no `Object` row signals, like the oracle. Each method takes one parameter
 vector (several arities stay refused).
 
 A `defrecord` value is a map with a type tag: the entry table every map uses,
-wrapped as `(:C%RECORD tag fields table)`, so the map verbs read through it
+wrapped as `(:C%RECORD tag fields table class)`, so the map verbs read through it
 (`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` read the entries;
 `assoc`/`update`/`conj`/`merge` rebuild the table and keep the tag; `dissoc`
 keeps the record while every declared field is still present and drops to a plain

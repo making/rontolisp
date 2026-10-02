@@ -1,6 +1,6 @@
 # Namespaces
 
-A namespace form wires its clauses and defines nothing: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core. `clojure.string` and `clojure.java.io` (`reader` only) resolve; requiring an unknown namespace is an error. The namespace itself stays flat.
+A namespace form wires its clauses and defines nothing: `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` class names for interop, `(:refer-clojure :only/:exclude ...)` narrows the visible core; metadata on the name (`^{...}`, `#^{...}`), a docstring and an attr map are skipped. `clojure.string` and `clojure.java.io` (`reader` only) resolve; requiring an unknown namespace is an error. The namespace itself stays flat.
 
 | Name | Example | Result |
 |---|---|---|

@@ -260,9 +260,7 @@ final class ClojureCollectionLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(done, tableForm))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
-						ClojureProtocolLowering.wrapRecord(ClojureProtocolLowering.typedTagOf(map),
-								ClojureProtocolLowering.typedFieldsOf(map), done),
-						done));
+						ClojureProtocolLowering.rewrapRecord(map, done), done));
 	}
 
 	static LispVal dissocOf(ClojureLowering ctx, List<LispVal> items) {
@@ -300,8 +298,8 @@ final class ClojureCollectionLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), field, copy, miss), miss),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), keep, ClojureLowering.NIL_CONST)));
-		LispVal rewrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), keep, ClojureProtocolLowering.wrapRecord(
-				ClojureProtocolLowering.typedTagOf(map), ClojureProtocolLowering.typedFieldsOf(map), copy), copy);
+		LispVal rewrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), keep,
+				ClojureProtocolLowering.rewrapRecord(map, copy), copy);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(keep, ClojureLowering.TRUE_CONST),
 						ClojureLowerUtil.list(miss,

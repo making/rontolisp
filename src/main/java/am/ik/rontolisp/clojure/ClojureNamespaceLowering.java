@@ -152,10 +152,10 @@ final class ClojureNamespaceLowering {
 		if (items == null || items.size() < 2) {
 			throw new LispReadException("ns takes a name: " + form.print());
 		}
-		if (!(items.get(1) instanceof LispSymbol)) {
+		if (!(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name)) {
 			throw new LispReadException("ns takes a name, not " + items.get(1).print());
 		}
-		ctx.currentNs = ((LispSymbol) items.get(1)).name();
+		ctx.currentNs = name.name();
 		for (int i = 2; i < items.size(); i++) {
 			LispVal clause = items.get(i);
 			if (clause instanceof LispString) {

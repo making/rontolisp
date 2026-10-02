@@ -535,9 +535,12 @@ public final class ClojureLowering {
 
 	/**
 	 * A record or deftype the program defines: whether it is map-like (a record) or
-	 * opaque (a deftype), its declared field names and its dispatch-tag spelling.
+	 * opaque (a deftype), its declared field names, its dispatch-tag spelling and its
+	 * host class name ({@code my_app.core.Name}: the defining namespace with {@code -}
+	 * munged to {@code _}, then the name verbatim, like the oracle's), which a record
+	 * prints and a record literal names.
 	 */
-	record TypeDef(boolean record, List<String> fields, String tagSpelling) {
+	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className) {
 	}
 
 	/** The protocols defined so far, by name (the whole-file pre-scan fills it first). */
@@ -727,14 +730,22 @@ public final class ClojureLowering {
 	}
 
 	void declare(List<LispVal> datums) {
-		// pass one: every top-level name, so a definition may use one below it
-		for (LispVal datum : datums) {
-			try {
-				declareOne(datum);
+		// pass one: every top-level name, so a definition may use one below it; an
+		// ns form moves the namespace a record's class name takes, and pass two
+		// starts over from the namespace this pass started in
+		String ns = this.currentNs;
+		try {
+			for (LispVal datum : datums) {
+				try {
+					declareOne(datum);
+				}
+				catch (LispReadException ex) {
+					throw positioned(ex, datum);
+				}
 			}
-			catch (LispReadException ex) {
-				throw positioned(ex, datum);
-			}
+		}
+		finally {
+			this.currentNs = ns;
 		}
 	}
 
@@ -743,7 +754,11 @@ public final class ClojureLowering {
 		if (items == null || items.size() < 2) {
 			return;
 		}
-		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "ns")
+				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) {
+			this.currentNs = name.name();
+		}
+		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
 			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "def"), Kind.VARIABLE);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
@@ -1236,6 +1251,9 @@ public final class ClojureLowering {
 		}
 		if (head == ClojureReader.REGEX || ClojureLowerUtil.isSymbolNamed(head, "%regex")) {
 			return ClojureCollectionLowering.regexForm(items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "%record")) {
+			return ClojureProtocolLowering.recordLiteral(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "if")) {
 			ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
@@ -2233,6 +2251,9 @@ public final class ClojureLowering {
 			if (!items.isEmpty() && items.get(0) == ClojureReader.REGEX
 					|| !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%regex")) {
 				return ClojureCollectionLowering.regexForm(items);
+			}
+			if (!items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%record")) {
+				return ClojureProtocolLowering.recordLiteral(this, items);
 			}
 			LispVal tail = NIL_CONST;
 			for (int i = items.size() - 1; i >= 0; i--) {

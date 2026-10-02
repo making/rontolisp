@@ -378,6 +378,43 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void nsSkipsMetadataOnItsNameLikeDefAndDefn() {
+		assertThat(lowered("(ns ^{:doc \"d\"} b58ns \"doc\" {:author :a}) ::foo"))
+			.contains("(LIST :C%KEYWORD \"b58ns/foo\")");
+		assertThat(lowered("(ns #^{:doc \"d\"} b58ns) ::foo")).contains("(LIST :C%KEYWORD \"b58ns/foo\")");
+		assertThat(lowered("(ns ^:no-doc b58ns (:require [clojure.string :as s])) (s/join \",\" [\"a\"])"))
+			.contains("CONCATENATE");
+		assertThat(lowered("(defn #^String f [#^long x] x)")).isEqualTo(lowered("(defn f [x] x)"));
+	}
+
+	@Test
+	void recordLiteralsBuildTheRecordOverTheQuotedBody() {
+		// the body is data: built in place over the quoted values (no constructor
+		// call), the declared fields first, nil until named
+		String map = lowered("(defrecord R [a b]) #user.R{:b x :c (f 1)}");
+		assertThat(map).contains("(LIST :C%RECORD (LIST :C%KEYWORD \"R\")")
+			.contains("'|c%x|")
+			.contains("'(|c%f| 1)")
+			.contains("\"user.R\"")
+			.doesNotContain("(|c%map->R|");
+		assertThat(lowered("(defrecord R [a b]) #user.R[1 x]")).contains("'|c%x|").doesNotContain("(|c%->R|");
+		// quoted and syntax-quoted literals are the same value
+		String plain = lowered("(defrecord R [a]) #user.R[1]");
+		assertThat(lowered("(defrecord R [a]) '#user.R[1]")).isEqualTo(plain);
+		assertThat(lowered("(defrecord R [a]) `#user.R[1]")).isEqualTo(plain);
+		// the class name is the one the record prints: namespace included
+		assertThat(lowered("(ns my-app.core) (defrecord R [a]) #my_app.core.R[1]")).contains("\"my_app.core.R\"");
+		assertThatThrownBy(() -> Clojure.read("(ns my-app.core) (defrecord R [a]) #user.R[1]", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a record literal needs a defined record class, not user.R");
+		assertThatThrownBy(() -> Clojure.read("(defrecord R [a b]) #user.R[1]", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unexpected number of constructor arguments to class user.R: got 1");
+		assertThatThrownBy(() -> Clojure.read("(deftype T [a]) #user.T[1]", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a deftype literal is not supported yet: user.T");
+	}
+
+	@Test
 	void keywordsInCallPositionAreMapLookups() {
 		String prelude = "(def m {:a 1}) ";
 		assertThat(lowered(prelude + "(:a m)")).contains("GETHASH").contains("COND");
@@ -748,6 +785,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(->R 1) (defrecord R [a])")).contains("(|c%->R| 1)");
 		assertThat(lowered("(defrecord R [a]) (R. 1)")).contains("(|c%->R| 1)");
 		assertThat(lowered("(defrecord R [a]) (map->R {:a 1})")).contains("|c%map->R|");
+		// the record carries its host class name, the namespace munged - to _
+		assertThat(lowered("(ns my-app.core) (defrecord R [a])")).contains("\"my_app.core.R\"");
+		assertThat(lowered("(defrecord R [a])")).contains("\"user.R\"");
 		assertThat(lowered("(T. 1)")).contains("JAVA:NEW");
 		// a deftype shares the shape with an opaque tag and no map constructor
 		assertThat(lowered("(deftype T [a])")).contains(":C%TYPE").contains("DEFUN |c%->T|");
