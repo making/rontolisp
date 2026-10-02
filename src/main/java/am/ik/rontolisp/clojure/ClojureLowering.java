@@ -1428,12 +1428,16 @@ public final class ClojureLowering {
 		if (macro != null) {
 			return macro;
 		}
+		// a program's own definition or local binding shadows the core name, like
+		// the oracle (and like the value position below, which already looks the
+		// name up first)
+		boolean shadowed = known(name);
 		// the re-* names lower beside the big core switch (which stays under the
-		// method-size limit): same position, before any qualified or user name
-		if (ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
+		// method-size limit): same position, before any qualified name
+		if (!shadowed && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return ClojureStringLowering.reCall(this, name, items);
 		}
-		LispVal special = builtin(name, items);
+		LispVal special = shadowed ? null : builtin(name, items);
 		if (special != null) {
 			return special;
 		}
@@ -1901,7 +1905,7 @@ public final class ClojureLowering {
 			case "vec":
 				return ClojureCollectionLowering.vecOf(this, items);
 			default:
-				return null;
+				return ClojureCoreLowering.callOf(this, name, items);
 		}
 	}
 
@@ -2049,7 +2053,7 @@ public final class ClojureLowering {
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
-			default -> null;
+			default -> ClojureCoreLowering.valueOf(this, name);
 		};
 	}
 

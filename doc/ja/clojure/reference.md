@@ -12,7 +12,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [seq](reference/seqs.md) | 取れば lazy、そうでなければ strict な seq 群 |
 | [反復](reference/iteration.md) | `doseq`/`dotimes`/`for` と strict な `dorun`/`doall` |
 | [マップ・セット・ベクター](reference/collections.md) | `equal` ハッシュテーブル上の永続コレクション操作 |
-| [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline` |
+| [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline`、`juxt`・`fnil`・`every-pred`・`some-fn`・`min-key`・`max-key` |
 | [数値と述語](reference/numbers.md) | 算術、比較、型述語 |
 | [状態](reference/state.md) | `atom`/`deref`/`swap!` と volatile 三兄弟 |
 | [マルチメソッドと階層](reference/multimethods.md) | `defmulti`/`defmethod`、`derive` と階層参照 |

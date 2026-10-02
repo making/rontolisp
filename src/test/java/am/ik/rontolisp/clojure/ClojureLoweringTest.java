@@ -294,7 +294,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(concat '(1 2) [3 4])")).contains("%CLOJURE-CONCAT");
 		assertThat(lowered("(concat)")).isEqualTo(FALSE_BINDING + "NIL");
-		assertThat(lowered("(= 1 1)")).contains("LABELS").contains("(EQUAL");
+		assertThat(lowered("(= 1 1)")).contains("(RONTOLISP::%CLOJURE-EQUAL ");
 		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":C%KEYWORD").contains("fallback");
 	}
@@ -361,7 +361,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void keywordsKeepTheirCaseAndPrintWithColon() {
-		assertThat(lowered("(= :a :A)")).contains("(EQUAL").contains(":C%KEYWORD");
+		assertThat(lowered("(= :a :A)")).contains("(RONTOLISP::%CLOJURE-EQUAL ").contains(":C%KEYWORD");
 		assertThat(lowered("(str :a)")).contains("RONTOLISP::%CLOJURE-STR-OF");
 		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
 		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
@@ -1518,6 +1518,61 @@ class ClojureLoweringTest {
 			.hasMessageContaining("deliver is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy-super is not supported yet");
+	}
+
+	@Test
+	void coreBacklogVerbsCallTheirSplicedWorkers() {
+		assertThat(lowered("(drop-last [1 2])")).contains("(RONTOLISP::%CLOJURE-DROP-LAST 1 (VECTOR 1 2))");
+		assertThat(lowered("(nthrest [1 2] 1)")).contains("(RONTOLISP::%CLOJURE-NTHREST (VECTOR 1 2) 1)");
+		assertThat(lowered("(split-with odd? [1])")).contains("RONTOLISP::%CLOJURE-SPLIT-WITH");
+		assertThat(lowered("(max-key :k {} {})")).contains("(RONTOLISP::%CLOJURE-EXTREME-KEY ").endsWith(" T)");
+		assertThat(lowered("(min-key :k {} {})")).endsWith(" NIL)");
+		assertThat(lowered("(juxt inc :a)")).contains("(RONTOLISP::%CLOJURE-JUXT (LIST ");
+		// a two-argument partition-all evaluates its size once, as size and step
+		assertThat(lowered("(partition-all (inc 1) [1 2 3])")).containsOnlyOnce("(+ 1 1)")
+			.contains("RONTOLISP::%CLOJURE-PARTITION-ALL");
+		// pmap is map: single-threaded, the same printed seq
+		assertThat(lowered("(pmap inc [1])")).contains("RONTOLISP::%CLOJURE-MAP").doesNotContain("PMAP");
+		// as values: the -v entries, which check the count with the oracle's wording
+		assertThat(lowered("(map peek [[1]])")).contains("#'RONTOLISP::%CLOJURE-PEEK-V");
+		assertThat(lowered("(map = [1] [1])")).contains("#'RONTOLISP::%CLOJURE-EQUAL-V");
+		assertThat(lowered("(map not= [1] [1])")).contains("#'RONTOLISP::%CLOJURE-NOT-EQUAL-V");
+	}
+
+	@Test
+	void coreBacklogArityAndTransducerRefusalsUseTheOracleWording() {
+		assertThatThrownBy(() -> Clojure.read("(drop-last 1 2 3)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/drop-last");
+		assertThatThrownBy(() -> Clojure.read("(split-at 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/split-at");
+		assertThatThrownBy(() -> Clojure.read("(min-key count)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/min-key");
+		assertThatThrownBy(() -> Clojure.read("(fnil inc 1 2 3 4)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (5) passed to: clojure.core/fnil");
+		assertThatThrownBy(() -> Clojure.read("(juxt)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/juxt");
+		assertThatThrownBy(() -> Clojure.read("(reduce-kv + 0)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/reduce-kv");
+		assertThatThrownBy(() -> Clojure.read("(pmap inc)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/pmap");
+		assertThatThrownBy(() -> Clojure.read("(dedupe)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transducers are not supported yet: dedupe");
+		assertThatThrownBy(() -> Clojure.read("(partition-all 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transducers are not supported yet: partition-all");
+		assertThatThrownBy(() -> Clojure.read("(partition-by odd?)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transducers are not supported yet: partition-by");
+	}
+
+	@Test
+	void aProgramDefinitionOrLocalShadowsACoreNameInCallPosition() {
+		// like the oracle (and like the value position): the program's own peek,
+		// second or local pop is what a call reaches, not the core verb
+		assertThat(lowered("(defn peek [x] x) (peek [1])")).contains("(|c%peek| (VECTOR 1))")
+			.doesNotContain("%CLOJURE-PEEK");
+		assertThat(lowered("(defn second [x] x) (second [1])")).contains("(|c%second| (VECTOR 1))")
+			.doesNotContain("CADR");
+		assertThat(lowered("(let [pop (fn [x] x)] (pop [1]))")).contains("(FUNCALL |c%pop| (VECTOR 1))");
+		assertThat(lowered("(defn f [re-find] (re-find 1))")).doesNotContain("%CLOJURE-RE-FIND");
 	}
 
 }

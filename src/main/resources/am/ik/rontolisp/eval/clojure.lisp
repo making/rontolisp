@@ -1790,3 +1790,512 @@
                   (write-string
                    (rontolisp::%clojure-re-subst rep s found ngroups) out)
                   (setq pos (car (cdr found))))))))))
+
+;;;; Clojure = and the core backlog (b57).
+;;
+;; %clojure-equal is the = lowering's comparison (sets by membership, maps and
+;; records entry by entry, deep; deftypes and reifies by identity; anything else
+;; equal). The backlog verbs follow the lazy rows above: a lazy input answers a
+;; lazy wrapper, a strict one a strict list (nil, never ()). Each verb has a
+;; fixed-parameter worker the call lowering calls after its own arity check and a
+;; -v entry the value lowering names, which checks the count at run time with the
+;; oracle's wording. pmap is map (single-threaded, no entry of its own).
+
+(defun rontolisp::%clojure-equal (a b)
+  "Whether A and B are = the Clojure way (see the section comment)."
+  (cond ((and (rontolisp::%clojure-set-p a) (rontolisp::%clojure-set-p b))
+         (rontolisp::%clojure-table-equal (car (cdr a)) (car (cdr b))))
+        ((and (rontolisp::%clojure-record-p a) (rontolisp::%clojure-record-p b))
+         (and (equal (car (cdr a)) (car (cdr b)))
+              (rontolisp::%clojure-table-equal (car (cdr (cdr (cdr a))))
+                                               (car (cdr (cdr (cdr b)))))))
+        ((or (and (rontolisp::%clojure-record-p a)
+                  (rontolisp::%clojure-typed-opaque-p b))
+             (rontolisp::%clojure-typed-opaque-p a)
+             (rontolisp::%clojure-typed-opaque-p b))
+         (eq a b))
+        ((and (hash-table-p a) (hash-table-p b))
+         (rontolisp::%clojure-table-equal a b))
+        ((and (rontolisp::%clojure-sequential-p a)
+              (rontolisp::%clojure-sequential-p b))
+         (rontolisp::%clojure-seq-equal a b))
+        (t (equal a b))))
+
+(defun rontolisp::%clojure-sequential-p (x)
+  "Whether X compares element-wise under =: a non-string vector, a plain list
+   (a cons headed by no wrapper tag; every wrapper starts with a keyword) or a
+   lazy seq. Nil is not: it IS the empty list here, and (= [] nil) is false."
+  (or (and (vectorp x) (not (stringp x)))
+      (and (consp x) (not (keywordp (car x)))) (rontolisp::%clojure-lazy-p x)))
+
+(defun rontolisp::%clojure-seq-equal (a b)
+  "Whether the seqs of A and B hold = members pairwise and end together, so a
+   vector and a list of the same members are =, like the oracle."
+  (let ((x (rontolisp::%clojure-seq a))
+        (y (rontolisp::%clojure-seq b))
+        (ok t)
+        (done nil))
+    (do ()
+        (done ok)
+      (cond ((and (null x) (null y)) (setq done t))
+            ((or (null x) (null y)
+                 (not (rontolisp::%clojure-equal (car x) (car y))))
+             (setq ok nil)
+             (setq done t))
+            (t
+             (setq x (rontolisp::%clojure-seq (cdr x)))
+             (setq y (rontolisp::%clojure-seq (cdr y))))))))
+
+(defun rontolisp::%clojure-table-equal (left right)
+  "Whether the tables LEFT and RIGHT hold the same count and every entry of
+   LEFT is in RIGHT with an = value (a set's members are their own values)."
+  (and (eql (hash-table-count left) (hash-table-count right))
+       (let ((ok t) (miss (list nil)))
+         (maphash (lambda (k v)
+                    (if (or (eq (gethash k right miss) miss)
+                         (not (rontolisp::%clojure-equal v (gethash k right))))
+                        (setq ok nil))) left)
+         ok)))
+
+(defun rontolisp::%clojure-equal-v (&rest xs)
+  "= as a value: T when every neighbour pair is =, else the false object."
+  (let ((ok t))
+    (do ((s xs (cdr s)))
+        ((or (null s) (null (cdr s))))
+      (if (not (rontolisp::%clojure-equal (car s) (car (cdr s))))
+          (setq ok nil)))
+    (if ok t rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-not-equal-v (&rest xs)
+  "not= as a value: the negation of =."
+  (if (eq (apply #'rontolisp::%clojure-equal-v xs) t)
+      rontolisp::%clojure-false
+      t))
+
+(defun rontolisp::%clojure-arity-error (n name)
+  "Signal the oracle's arity error for the core fn NAME called with N args."
+  (error "Wrong number of args (~D) passed to: clojure.core/~A" n name))
+
+(defun rontolisp::%clojure-check-arity (args min max name)
+  "The count of ARGS, or the oracle's arity error when it falls outside MIN..MAX
+   (a nil MAX has no upper bound)."
+  (let ((n (length args)))
+    (if (or (< n min) (and max (> n max)))
+        (rontolisp::%clojure-arity-error n name)
+        n)))
+
+(defun rontolisp::%clojure-truthy (v)
+  "Whether V is truthy the Clojure way: neither nil nor the false object."
+  (not (or (null v) (eq v rontolisp::%clojure-false))))
+
+(defun rontolisp::%clojure-lazy-or-strict (coll lazy)
+  "LAZY (a wrapper) when COLL is lazy, LAZY realized to a strict list otherwise."
+  (if (rontolisp::%clojure-lazy-p coll)
+      lazy
+      (rontolisp::%clojure-realize-all lazy)))
+
+(defun rontolisp::%clojure-transducer-refusal (name)
+  "Signal the refusal of NAME's transducer arity."
+  (error "transducers are not supported yet: ~A" name))
+
+(defun rontolisp::%clojure-drop-last (n coll)
+  "COLL without its last N members (the oracle's map over COLL and its drop)."
+  (rontolisp::%clojure-map (lambda (x y)
+                             (declare (ignore y))
+                             x) (list coll (rontolisp::%clojure-drop n coll))))
+
+(defun rontolisp::%clojure-drop-last-v (&rest args)
+  "drop-last as a value: [coll] or [n coll]."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "drop-last") 1)
+      (rontolisp::%clojure-drop-last 1 (car args))
+      (rontolisp::%clojure-drop-last (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-split-at (n coll)
+  "[(take n coll) (drop n coll)]."
+  (vector (rontolisp::%clojure-take n coll) (rontolisp::%clojure-drop n coll)))
+
+(defun rontolisp::%clojure-split-at-v (&rest args)
+  "split-at as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "split-at")
+  (rontolisp::%clojure-split-at (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-split-with (pred coll)
+  "[(take-while pred coll) (drop-while pred coll)] in one walk."
+  (let ((s (rontolisp::%clojure-seq coll)) (acc nil))
+    (do ()
+        ((or (null s) (not (rontolisp::%clojure-filter-test pred (car s))))
+         (vector (reverse acc) s))
+      (setq acc (cons (car s) acc))
+      (setq s (rontolisp::%clojure-seq (cdr s))))))
+
+(defun rontolisp::%clojure-split-with-v (&rest args)
+  "split-with as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "split-with")
+  (rontolisp::%clojure-split-with (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-take-last (n coll)
+  "The last N members of COLL as a strict list (nil when none), walking a
+   lead N ahead like the oracle."
+  (let ((s (rontolisp::%clojure-seq coll))
+        (lead (rontolisp::%clojure-seq (rontolisp::%clojure-drop n coll))))
+    (do ()
+        ((null lead) (rontolisp::%clojure-realize-all s))
+      (setq s (rontolisp::%clojure-seq (cdr s)))
+      (setq lead (rontolisp::%clojure-seq (cdr lead))))))
+
+(defun rontolisp::%clojure-take-last-v (&rest args)
+  "take-last as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "take-last")
+  (rontolisp::%clojure-take-last (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-nthnext (coll n)
+  "The seq of COLL past its first N members, nil when nothing is left."
+  (let ((s (rontolisp::%clojure-seq coll)) (left n))
+    (do ()
+        ((or (null s) (not (> left 0))) s)
+      (setq s (rontolisp::%clojure-seq (cdr s)))
+      (setq left (- left 1)))))
+
+(defun rontolisp::%clojure-nthnext-v (&rest args)
+  "nthnext as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "nthnext")
+  (rontolisp::%clojure-nthnext (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-nthrest (coll n)
+  "COLL itself for a non-positive N, else the rest past its first N members
+   (nil once it runs out, the oracle's ())."
+  (let ((xs coll) (left n) (done nil))
+    (do ()
+        (done xs)
+      (if (> left 0)
+          (let ((s (rontolisp::%clojure-seq xs)))
+            (if (null s)
+                (progn
+                  (setq xs nil)
+                  (setq done t))
+                (progn
+                  (setq xs (cdr s))
+                  (setq left (- left 1)))))
+          (setq done t)))))
+
+(defun rontolisp::%clojure-nthrest-v (&rest args)
+  "nthrest as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "nthrest")
+  (rontolisp::%clojure-nthrest (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-stack-p (x)
+  "Whether X is a stack for peek/pop: a non-string vector or a plain list (a
+   cons headed by no wrapper tag; every wrapper starts with a keyword)."
+  (or (and (vectorp x) (not (stringp x)))
+      (and (consp x) (not (keywordp (car x))))))
+
+(defun rontolisp::%clojure-peek (coll)
+  "A vector's last member, a list's first, nil of nil or an empty vector."
+  (cond ((null coll) nil)
+        ((not (rontolisp::%clojure-stack-p coll))
+         (error "peek needs a vector or a list"))
+        ((consp coll) (car coll))
+        ((= (length coll) 0) nil)
+        (t (aref coll (- (length coll) 1)))))
+
+(defun rontolisp::%clojure-peek-v (&rest args)
+  "peek as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "peek")
+  (rontolisp::%clojure-peek (car args)))
+
+(defun rontolisp::%clojure-pop (coll)
+  "A vector without its last member, a list without its first; nil of nil."
+  (cond ((null coll) nil)
+        ((not (rontolisp::%clojure-stack-p coll))
+         (error "pop needs a vector or a list"))
+        ((consp coll) (cdr coll))
+        ((= (length coll) 0) (error "Can't pop empty vector"))
+        (t (subseq coll 0 (- (length coll) 1)))))
+
+(defun rontolisp::%clojure-pop-v (&rest args)
+  "pop as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "pop")
+  (rontolisp::%clojure-pop (car args)))
+
+(defun rontolisp::%clojure-not-empty (coll)
+  "COLL itself when it has a member, else nil."
+  (if (rontolisp::%clojure-seq coll) coll nil))
+
+(defun rontolisp::%clojure-not-empty-v (&rest args)
+  "not-empty as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "not-empty")
+  (rontolisp::%clojure-not-empty (car args)))
+
+(defun rontolisp::%clojure-dedupe (coll)
+  "COLL without consecutive = duplicates."
+  (rontolisp::%clojure-lazy-or-strict coll
+   (rontolisp::%clojure-dedupe-lazy coll nil nil)))
+
+(defun rontolisp::%clojure-dedupe-lazy (coll have prev)
+  "The lazy arm of %clojure-dedupe: PREV is the last kept member when HAVE."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (do ()
+           ((or (null s) (not have)
+                (not (rontolisp::%clojure-equal prev (car s))))
+            (if (null s)
+                nil
+                (cons (car s)
+                      (rontolisp::%clojure-dedupe-lazy (cdr s) t (car s)))))
+         (setq s (rontolisp::%clojure-seq (cdr s))))))))
+
+(defun rontolisp::%clojure-dedupe-v (&rest args)
+  "dedupe as a value (the zero-argument transducer stays refused)."
+  (if (null args)
+      (rontolisp::%clojure-transducer-refusal "dedupe")
+      (progn
+        (rontolisp::%clojure-check-arity args 1 1 "dedupe")
+        (rontolisp::%clojure-dedupe (car args)))))
+
+(defun rontolisp::%clojure-partition-all (n step coll)
+  "COLL in runs of N every STEP members, the short tail kept. A non-positive
+   size or step signals (the oracle answers an endless seq of ())."
+  (if (and (> n 0) (> step 0))
+      (rontolisp::%clojure-lazy-or-strict coll
+       (rontolisp::%clojure-partition-all-lazy n step coll))
+      (error "partition-all needs a positive size and step")))
+
+(defun rontolisp::%clojure-partition-all-lazy (n step coll)
+  "The lazy arm of %clojure-partition-all."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (null s)
+           nil
+           (cons (rontolisp::%clojure-take n s)
+                 (rontolisp::%clojure-partition-all-lazy n step
+                  (rontolisp::%clojure-drop step s))))))))
+
+(defun rontolisp::%clojure-partition-all-v (&rest args)
+  "partition-all as a value: [n coll] or [n step coll] (the one-argument
+   transducer stays refused)."
+  (let ((n (rontolisp::%clojure-check-arity args 1 3 "partition-all")))
+    (cond ((= n 1) (rontolisp::%clojure-transducer-refusal "partition-all"))
+          ((= n 2)
+           (rontolisp::%clojure-partition-all (car args) (car args)
+                                              (car (cdr args))))
+          (t (rontolisp::%clojure-partition-all (car args) (car (cdr args))
+                                                (car (cdr (cdr args))))))))
+
+(defun rontolisp::%clojure-partition-by (f coll)
+  "COLL split into runs where (f member) stays =."
+  (rontolisp::%clojure-lazy-or-strict coll
+   (rontolisp::%clojure-partition-by-lazy f coll)))
+
+(defun rontolisp::%clojure-partition-by-lazy (f coll)
+  "The lazy arm of %clojure-partition-by: each run is strict."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (null s)
+           nil
+           (let ((v (rontolisp::%clojure-call f (list (car s))))
+                 (run (list (car s)))
+                 (more (rontolisp::%clojure-seq (cdr s))))
+             (do ()
+                 ((or (null more)
+                      (not
+                       (rontolisp::%clojure-equal v
+                        (rontolisp::%clojure-call f (list (car more))))))
+                  (cons (reverse run)
+                        (rontolisp::%clojure-partition-by-lazy f more)))
+               (setq run (cons (car more) run))
+               (setq more (rontolisp::%clojure-seq (cdr more))))))))))
+
+(defun rontolisp::%clojure-partition-by-v (&rest args)
+  "partition-by as a value (the one-argument transducer stays refused)."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "partition-by") 1)
+      (rontolisp::%clojure-transducer-refusal "partition-by")
+      (rontolisp::%clojure-partition-by (car args) (car (cdr args)))))
+
+(defun rontolisp::%clojure-extreme-key (k x more greatest)
+  "The member of X and the list MORE whose (k member) is the greatest (GREATEST
+   true) or the least, the last of equals winning, like the oracle: K runs once
+   per member, and not at all for X alone."
+  (if (null more)
+      x
+      (let ((v x) (kv (rontolisp::%clojure-call k (list x))))
+        (dolist (w more v)
+          (let ((kw (rontolisp::%clojure-call k (list w))))
+            (if (if greatest (>= kw kv) (<= kw kv))
+                (progn
+                  (setq v w)
+                  (setq kv kw))))))))
+
+(defun rontolisp::%clojure-max-key-v (&rest args)
+  "max-key as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "max-key")
+  (rontolisp::%clojure-extreme-key (car args) (car (cdr args)) (cdr (cdr args))
+                                   t))
+
+(defun rontolisp::%clojure-min-key-v (&rest args)
+  "min-key as a value."
+  (rontolisp::%clojure-check-arity args 2 nil "min-key")
+  (rontolisp::%clojure-extreme-key (car args) (car (cdr args)) (cdr (cdr args))
+                                   nil))
+
+(defun rontolisp::%clojure-juxt (fns)
+  "A function answering the vector of every member of FNS applied to its
+   arguments."
+  (lambda (&rest args)
+    (coerce (mapcar (lambda (f) (rontolisp::%clojure-call f args)) fns)
+            'vector)))
+
+(defun rontolisp::%clojure-juxt-v (&rest fns)
+  "juxt as a value."
+  (rontolisp::%clojure-check-arity fns 1 nil "juxt")
+  (rontolisp::%clojure-juxt fns))
+
+(defun rontolisp::%clojure-fnil-patch (args defaults)
+  "ARGS with each leading nil replaced by its member of DEFAULTS."
+  (if (null defaults)
+      args
+      (cons (if (null (car args)) (car defaults) (car args))
+            (rontolisp::%clojure-fnil-patch (cdr args) (cdr defaults)))))
+
+(defun rontolisp::%clojure-fnil (f defaults)
+  "F behind nil-patching of its leading arguments: at least as many arguments
+   as DEFAULTS, like the oracle's arities."
+  (lambda (&rest args)
+    (if (< (length args) (length defaults))
+        (error "Wrong number of args (~D) passed to: clojure.core/fnil/fn"
+               (length args))
+        (rontolisp::%clojure-call f
+         (rontolisp::%clojure-fnil-patch args defaults)))))
+
+(defun rontolisp::%clojure-fnil-v (&rest args)
+  "fnil as a value: a function and one to three defaults."
+  (rontolisp::%clojure-check-arity args 2 4 "fnil")
+  (rontolisp::%clojure-fnil (car args) (cdr args)))
+
+(defun rontolisp::%clojure-every-pred (preds)
+  "A predicate answering T when every member of PREDS holds for every argument
+   (of none, T), else the false object."
+  (lambda (&rest args)
+    (let ((ok t))
+      (dolist (p preds)
+        (dolist (x args)
+          (if (and ok (not (rontolisp::%clojure-filter-test p x)))
+              (setq ok nil))))
+      (if ok t rontolisp::%clojure-false))))
+
+(defun rontolisp::%clojure-every-pred-v (&rest preds)
+  "every-pred as a value."
+  (rontolisp::%clojure-check-arity preds 1 nil "every-pred")
+  (rontolisp::%clojure-every-pred preds))
+
+(defun rontolisp::%clojure-some-arg-major (preds args)
+  "The first truthy (p x) over ARGS, every member of PREDS per argument, else the
+   last (p x) tried (nil when none)."
+  (let ((last nil) (found nil))
+    (dolist (x args)
+      (dolist (p preds)
+        (if (not found)
+            (progn
+              (setq last (rontolisp::%clojure-call p (list x)))
+              (if (rontolisp::%clojure-truthy last) (setq found t))))))
+    last))
+
+(defun rontolisp::%clojure-some-pred-major (preds args)
+  "The first truthy (p x) over PREDS, every member of ARGS per predicate, else
+   nil."
+  (let ((found nil))
+    (dolist (p preds)
+      (dolist (x args)
+        (if (not found)
+            (let ((v (rontolisp::%clojure-call p (list x))))
+              (if (rontolisp::%clojure-truthy v) (setq found v))))))
+    found))
+
+(defun rontolisp::%clojure-some-fn-apply (preds args)
+  "The oracle's some-fn answer: one or two predicates walk the first three
+   arguments argument-major (failing with the last (p x)), three or more walk
+   them predicate-major (failing with nil); the arguments past three follow the
+   same order and fail with nil."
+  (let ((head nil) (tail args) (i 0))
+    (do ()
+        ((or (null tail) (= i 3)))
+      (setq head (cons (car tail) head))
+      (setq tail (cdr tail))
+      (setq i (+ i 1)))
+    (setq head (reverse head))
+    (if (cdr (cdr preds))
+        (let ((v (rontolisp::%clojure-some-pred-major preds head)))
+          (if v v (rontolisp::%clojure-some-pred-major preds tail)))
+        (let ((v (rontolisp::%clojure-some-arg-major preds head)))
+          (cond ((rontolisp::%clojure-truthy v) v)
+                ((null tail) v)
+                (t (let ((w (rontolisp::%clojure-some-arg-major preds tail)))
+                     (if (rontolisp::%clojure-truthy w) w nil))))))))
+
+(defun rontolisp::%clojure-some-fn (preds)
+  "A function answering the first truthy (p x) over PREDS and its arguments."
+  (lambda (&rest args) (rontolisp::%clojure-some-fn-apply preds args)))
+
+(defun rontolisp::%clojure-some-fn-v (&rest preds)
+  "some-fn as a value."
+  (rontolisp::%clojure-check-arity preds 1 nil "some-fn")
+  (rontolisp::%clojure-some-fn preds))
+
+(defun rontolisp::%clojure-kv-pairs (coll name)
+  "The (key . value) pairs NAME walks: a map's or record's entries in the
+   table's walk order, a vector's (index . member) pairs, none of nil; anything
+   else signals."
+  (cond ((null coll) nil)
+        ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
+         (let ((acc nil))
+           (maphash (lambda (k v) (setq acc (cons (cons k v) acc)))
+                    (if (hash-table-p coll) coll (car (cdr (cdr (cdr coll))))))
+           (reverse acc)))
+        ((and (vectorp coll) (not (stringp coll)))
+         (let ((acc nil))
+           (dotimes (i (length coll))
+             (setq acc (cons (cons i (aref coll i)) acc)))
+           (reverse acc)))
+        (t (error "~A needs a map or a vector" name))))
+
+(defun rontolisp::%clojure-reduce-kv (f init coll)
+  "(f acc k v) folded over COLL's pairs from INIT."
+  (let ((acc init))
+    (dolist (kv (rontolisp::%clojure-kv-pairs coll "reduce-kv") acc)
+      (setq acc (rontolisp::%clojure-call f (list acc (car kv) (cdr kv)))))))
+
+(defun rontolisp::%clojure-reduce-kv-v (&rest args)
+  "reduce-kv as a value."
+  (rontolisp::%clojure-check-arity args 3 3 "reduce-kv")
+  (rontolisp::%clojure-reduce-kv (car args) (car (cdr args))
+                                 (car (cdr (cdr args)))))
+
+(defun rontolisp::%clojure-update-keys (m f)
+  "A fresh map of M's entries under (f key) (a colliding key keeps one entry)."
+  (let ((out (make-hash-table :test 'equal)))
+    (dolist (kv (rontolisp::%clojure-kv-pairs m "update-keys") out)
+      (setf (gethash (rontolisp::%clojure-call f (list (car kv))) out)
+            (cdr kv)))))
+
+(defun rontolisp::%clojure-update-keys-v (&rest args)
+  "update-keys as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "update-keys")
+  (rontolisp::%clojure-update-keys (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-update-vals (m f)
+  "M with (f value) for every value: a vector stays a vector, a map or record
+   answers a fresh map, nil the empty map."
+  (if (and (vectorp m) (not (stringp m)))
+      (coerce (mapcar (lambda (x) (rontolisp::%clojure-call f (list x)))
+                      (coerce m 'list)) 'vector)
+      (let ((out (make-hash-table :test 'equal)))
+        (dolist (kv (rontolisp::%clojure-kv-pairs m "update-vals") out)
+          (setf (gethash (car kv) out)
+                (rontolisp::%clojure-call f (list (cdr kv))))))))
+
+(defun rontolisp::%clojure-update-vals-v (&rest args)
+  "update-vals as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "update-vals")
+  (rontolisp::%clojure-update-vals (car args) (car (cdr args))))

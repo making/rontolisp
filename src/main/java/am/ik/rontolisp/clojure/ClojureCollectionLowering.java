@@ -1085,111 +1085,13 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * Two values compared the Clojure way: two wrapped sets by membership both ways
-	 * (order-free, deep in the members), two tables entry by entry (deep in the values),
-	 * anything else with {@code equal}. The comparison is a labels self call, so nested
-	 * maps and sets compare all the way down.
+	 * Two values compared the Clojure way: one call to the spliced
+	 * {@code rontolisp::%clojure-equal} (two wrapped sets by membership, two tables or
+	 * two records entry by entry, deep; a deftype or reify by identity; anything else
+	 * {@code equal}), which the {@code =} value and the backlog verbs share.
 	 */
 	static LispVal equalityTwo(ClojureLowering ctx, LispVal first, LispVal second) {
-		LispSymbol eq = ctx.freshTemp();
-		LispSymbol left = ctx.freshTemp();
-		LispSymbol right = ctx.freshTemp();
-		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), isSetForm(left), isSetForm(right)),
-				setEquality(ctx, left, right, eq)));
-		// two records compare by tag plus entries (never equal to a plain map, like
-		// the oracle); a deftype or reify on either side is identity, like the oracle
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureProtocolLowering.isRecordForm(left),
-						ClojureProtocolLowering.isRecordForm(right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), ClojureProtocolLowering.typedTagOf(left),
-								ClojureProtocolLowering.typedTagOf(right)),
-						mapEquality(ctx, ClojureProtocolLowering.typedTableOf(left),
-								ClojureProtocolLowering.typedTableOf(right), eq))));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureProtocolLowering.isTypedForm(left),
-								ClojureProtocolLowering.isTypedForm(right)),
-						ClojureProtocolLowering.isDeftypeForm(left), ClojureProtocolLowering.isReifyForm(left),
-						ClojureProtocolLowering.isDeftypeForm(right), ClojureProtocolLowering.isReifyForm(right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), right)),
-				mapEquality(ctx, left, right, eq)));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), left, right)));
-		LispVal test = ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
-		LispVal binding = new LispCons(eq,
-				new LispCons(ClojureLowerUtil.list(List.of(left, right)), ClojureLowerUtil.cons(test, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-				new LispCons(eq, ClojureLowerUtil.list(List.of(first, second))));
-	}
-
-	/** Two tables are equal when they hold the same count and every entry agrees. */
-	static LispVal mapEquality(ClojureLowering ctx, LispVal left, LispVal right, LispVal eq) {
-		LispSymbol ok = ctx.freshTemp();
-		LispSymbol miss = ctx.freshTemp();
-		LispSymbol key = ctx.freshTemp();
-		LispSymbol val = ctx.freshTemp();
-		LispVal walk = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
-				ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("when"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, right, miss), miss),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-										ClojureLowerUtil.list(eq, val,
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, right)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ok, ClojureLowering.NIL_CONST))),
-				left);
-		return ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("and"), ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), left), ClojureLowerUtil
-						.list(ClojureLowerUtil.sym("hash-table-count"), right)),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-							ClojureLowerUtil.list(
-									List.of(ClojureLowerUtil.list(ok, ClojureLowering.TRUE_CONST),
-											ClojureLowerUtil.list(miss, ClojureLowerUtil
-												.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
-							walk, ok));
-	}
-
-	/**
-	 * Two wrapped sets are equal when they hold the same count and every member agrees.
-	 */
-	static LispVal setEquality(ClojureLowering ctx, LispVal left, LispVal right, LispVal eq) {
-		LispSymbol ok = ctx.freshTemp();
-		LispSymbol miss = ctx.freshTemp();
-		LispSymbol found = ctx.freshTemp();
-		LispSymbol key = ctx.freshTemp();
-		LispSymbol val = ctx.freshTemp();
-		LispVal walk = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
-				ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("declare"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("when"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, found, miss), miss),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-										ClojureLowerUtil.list(eq, key,
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, found)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ok, ClojureLowering.NIL_CONST))),
-				setInner(left));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(left)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(right))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ok, ClojureLowering.TRUE_CONST),
-								ClojureLowerUtil.list(miss,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-								ClojureLowerUtil.list(found, setInner(right)))),
-						walk, ok));
+		return ClojureCoreLowering.equalForm(first, second);
 	}
 
 }

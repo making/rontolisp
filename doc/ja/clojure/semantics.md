@@ -198,6 +198,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | 3引数 `into`（トランスデューサー） | `transducers are not supported yet: into` | トランスデューサー実装なし。2引数は conj |
+| `dedupe`・`partition-all`・`partition-by` のトランスデューサー形 | `transducers are not supported yet: NAME` | トランスデューサー実装なし。コレクションを渡す |
 | `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
 
 ## エラーと位置

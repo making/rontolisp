@@ -19,7 +19,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   `ClojureUpdateLowering`, `ClojureStringLowering`, `ClojureStateLowering`,
   `ClojureDispatchLowering` / `ClojureHierarchyLowering` /
   `ClojureProtocolLowering`, `ClojureMacroLowering`, `ClojureNamespaceLowering`,
-  `ClojureInteropLowering`, each taking the hub as its first argument and
+  `ClojureInteropLowering`, `ClojureCoreLowering` (the b57 backlog), each taking the hub as its first argument and
   re-entering it for subforms) and the stateless `ClojureLowerUtil`,
   `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
   (the REPL session). The hub is the named cycle root in `PackageCycleTest`
@@ -158,7 +158,10 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
 | `count` | a table-aware length | maps, sets and records answer `hash-table-count` (records their entries), a deftype or reify signals (a bare length would answer the wrapper's size), everything else `length` |
 | `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/record/vector/string are empty; a deftype or reify signals, like the oracle's `seq` throw |
-| `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; anything else is `equal` |
+| `=`/`not=` | one `RONTOLISP::%CLOJURE-EQUAL` call per neighbour pair (spliced `clojure.lisp`), answering `T`-or-false; as values the `%clojure-equal-v` / `%clojure-not-equal-v` rest entries | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; vectors, plain lists (a cons headed by no wrapper keyword) and lazy seqs compare element-wise across kinds (b57 -- they compared by identity before, so `(= [1] [1])` was false); nil is no sequential (`(= [] '())` is false, `'()` being nil); atoms stay identity; anything else is `equal`. Was an inlined labels form per site until b57: 36,790 -> 17,595 B of wasm for one `(println (= 1 2))`, 87,050 -> 34,004 B for ten sites (2026-10-02, x86-64, Java 25, raw totals); the value was CL `=` (numbers only) until then |
+| the b57 backlog: `drop-last`/`split-at`/`split-with`/`take-last`/`nthnext`/`nthrest`/`peek`/`pop`/`not-empty`/`dedupe`/`partition-all`/`partition-by`/`min-key`/`max-key`/`juxt`/`fnil`/`every-pred`/`some-fn`/`update-keys`/`update-vals`/`reduce-kv` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker (`min-key`/`max-key` share `%clojure-extreme-key`) after a lower-time arity check worded like the oracle (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, a `&rest` entry checking the count at run time with the same wording | `dedupe`/`partition-all`/`partition-by`/`drop-last` answer a lazy wrapper over a lazy input and a strict list otherwise (`%clojure-lazy-or-strict`); `split-at`/`split-with` a two-vector, `take-last` a realized strict list; `dedupe`/`partition-by` compare with `%clojure-equal`; the transducer arities (`(dedupe)`, one-argument `partition-all`/`partition-by`) are refused by name; a non-positive `partition-all` size or step signals (the oracle answers an endless seq of `()`); `peek`/`pop` take non-string vectors and plain lists (a strict seq is a list here, so it peeks where the oracle's LazySeq throws), `(pop [])` is the oracle's `Can't pop empty vector`; `some-fn` answers exactly the oracle's failing value (the last `(p x)` for one or two predicates over at most three arguments, else nil; argument-major for one or two predicates, predicate-major for three or more); `fnil`'s answer needs as many arguments as defaults (`.../fnil/fn`, no class-number suffix); `reduce-kv` walks maps/records/vectors (index keys), nil answers the init, no `reduced`; `update-vals` keeps a vector a vector, `update-keys` keys a vector by index; type errors signal with the CL wording, not the oracle's ClassCastException text (that names JVM classes) |
+| `pmap` | `map` (`ClojureSeqLowering.mapForm`, as a value `mapValue`) | decided 2026-10-02, b57: no thread pool on any backend, the printed seq is the oracle's; the arity refusal is the oracle's wording |
+| a call to a core name the program defines (`(defn peek ...)`) or binds locally | the program's own call | b57: `call` checks `known(name)` before the core switch (and before the `re-*` names), like the value position always did -- a `(defn second ...)` used to lose its call sites to the core verb; the whole-file pre-scan makes a definition shadow calls ABOVE it too, where the oracle's still reach the core verb (documented deviation) |
 | `{k v ..}` | `rontolisp:plist-hash-table` over the lowered pairs | an `equal` table, never mutated in place: every verb builds a fresh one |
 | `#{..}` | an `equal` table holding each member under itself, wrapped as `(:C%SET table)` | the wrapper tells verbs a set from a map; a repeated literal element is refused by spelling (`Duplicate key`) |
 | `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys, rewrapped in the record it came from | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused; `assoc` keeps the record's tag and fields, like the oracle; `dissoc` keeps the record while every declared field is still present and drops to a plain map otherwise (removing a base field drops the type, removing an extension key keeps it), like the oracle; as values a map plus a rest list of pairs/keys (an odd `assoc` rest count signals at run time) |
@@ -231,7 +234,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 - Vector and table keys compare by identity, not structurally: the runtime's `equal`
   on an array or a table IS identity (`.kb/hash-tables.md`), so
   `(get {[:a] 1} [:a])` misses here and answers `1` there, and a vector member never
-  finds its set. Lists, strings, numbers and keywords key structurally.
+  finds its set. Lists, strings, numbers and keywords key structurally. `=` itself is
+  structural (b57, `%clojure-equal`): only hash lookups keep the identity.
 - A set literal refuses a repeated element BY SPELLING (`Duplicate key: 1`): two
   differently-spelled elements that are equal at run time still dedupe silently, and
   the spelling names the datum as the reader prints it.
@@ -673,3 +677,18 @@ and record literals read and records print as `#ns.Name{...}`
 diffed against `clj` 1.12). The todo's premise that a simple `#Rec{...}` reads was
 overturned on the oracle: an undotted tag is a tagged literal (`No reader function
 for tag Rec`), so only the dotted class name is a record literal.
+
+b57 (2026-10-02) lowers the core backlog (the table rows above, oracle `clj`
+1.12.6.1673, every printed line diffed): pinned in `clojure-spec.yaml`
+(`b57-split-and-tail-verbs`, `b57-peek-pop-and-not-empty`,
+`b57-dedupe-partition-all-and-partition-by`,
+`b57-key-extremes-juxt-fnil-and-predicate-combinators`,
+`b57-update-keys-update-vals-and-reduce-kv`, `b57-backlog-verbs-as-values-and-pmap`,
+`b57-equality-is-sequential-and-deep`, all four backends) and `ClojureLoweringTest`
+(`coreBacklogVerbsCallTheirSplicedWorkers`,
+`coreBacklogArityAndTransducerRefusalsUseTheOracleWording`,
+`aProgramDefinitionOrLocalShadowsACoreNameInCallPosition`). The oracle's own traps
+for a probe: `(partition-all 0 ...)` prints forever, and `dedupe` over an infinite
+seq that repeats forever hangs there (its transducer realizes ahead) where the
+lazy wrapper here answers the `take`n prefix. `add-watch`/`remove-watch` stay
+refused (no corpus case).

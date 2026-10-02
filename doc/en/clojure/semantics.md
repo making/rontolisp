@@ -201,6 +201,7 @@ Each refusal names the missing design, never `unknown name`:
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | three-argument `into` (transducers) | `transducers are not supported yet: into` | no transducer runtime; two arguments conjoin |
+| the transducer arities of `dedupe`, `partition-all`, `partition-by` | `transducers are not supported yet: NAME` | no transducer runtime; give the collection |
 | `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
 
 ## Errors and positions

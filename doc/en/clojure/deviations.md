@@ -19,8 +19,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`).
 - `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
   Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
-- Vector and table keys compare by identity, so a vector key misses a lookup its oracle
-  answers; a repeated set-literal element is refused by spelling.
+- Vector and table keys compare by identity in a hash lookup, so a vector key misses a
+  lookup its oracle answers; a repeated set-literal element is refused by spelling. `=`
+  itself compares vectors, lists and lazy seqs element-wise and maps, sets and records
+  entry by entry, like the oracle -- except `(= [] '())`, which is `false` (`'()` is
+  `nil`).
+- A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
+  core verb in the whole file, calls above the definition included (the oracle's calls
+  above it still reach the core verb); a local binding shadows it in its scope, like the
+  oracle.
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; map/set seq order is the table's walk
   order; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
@@ -91,7 +98,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `sort` without a comparator orders numbers, strings, characters and keywords; anything
   else (or mixed kinds) signals.
 - `into` takes two collections (a transducer argument stays refused); `partition` takes
-  no pad.
+  no pad. `dedupe`, `partition-all` and `partition-by` refuse their transducer arities;
+  `partition-all` with a non-positive size or step signals, where the oracle answers an
+  endless seq of `()`. `pmap` is `map`, run in order on the calling thread.
 - Transactions are single-threaded extents: `dosync` never retries, `commute`
   runs its function once (the oracle may run it twice), validators run on the
   write and a failed one leaves the old value; `alter` and friends outside
