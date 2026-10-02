@@ -269,4 +269,110 @@ class JavaImplementationsTest {
 		assertThat(resolver.specOf(type)).isNull();
 	}
 
+	// A named method calls the callable; an unnamed concrete class method is
+	// inherited (no slot); an unnamed abstract one throws; Object's three override
+	// like any other class method.
+	@Test
+	void subclassSlotsNameInheritAndThrow() {
+		JavaImplementation file = JavaImplementations.subclass(type("java.io.File"), List.of(),
+				List.of("lastModified"));
+		assertThat(file.isSubclass()).isTrue();
+		assertThat(file.superclass()).isSameAs(type("java.io.File"));
+		assertThat(slots(file)).contains("lastModified()long=0");
+		assertThat(slots(file).stream().noneMatch(s -> s.startsWith("getName("))).as("inherited").isTrue();
+		assertThat(slots(file).stream().noneMatch(s -> s.startsWith("toString("))).as("inherited").isTrue();
+		JavaImplementation objects = JavaImplementations.subclass(type("java.io.File"), List.of(),
+				List.of("toString", "equals", "hashCode"));
+		assertThat(slots(objects)).contains("toString()java.lang.String=0", "equals(java.lang.Object)boolean=0",
+				"hashCode()int=0");
+		JavaImplementation abstractList = JavaImplementations.subclass(type("java.util.AbstractList"), List.of(),
+				List.of("size"));
+		assertThat(slots(abstractList)).contains("size()int=0", "get(int)java.lang.Object=-1");
+		// An extra interface's abstract method is a slot too.
+		JavaImplementation runnable = JavaImplementations.subclass(type("java.io.File"),
+				List.of(type("java.lang.Runnable")), List.of("run"));
+		assertThat(slots(runnable)).contains("run()void=0");
+		assertThat(runnable.interfaceNames()).isEqualTo("java.lang.Runnable");
+		assertThatThrownBy(() -> JavaImplementations.subclass(type("java.io.File"), List.of(), List.of("nope")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("java:subclass: java.io.File has no method nope");
+		assertThatThrownBy(() -> JavaImplementations.subclass(type("java.io.File"), List.of(), List.of("getClass")))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("java:subclass: java.io.File.getClass cannot be overridden");
+	}
+
+	// A java:subclass form resolves to its superclass and slots; anything else is
+	// the reason it is left to run time.
+	@Test
+	void subclassFormsResolveToTheirSuperclass() {
+		JavaImplementation resolved = resolve(
+				"(java:subclass \"java.io.File\" '(\"java.lang.Runnable\") '(\"run\" \"toString\") \"x\" f)");
+		assertThat(resolved.resolved()).isTrue();
+		assertThat(resolved.isSubclass()).isTrue();
+		assertThat(resolved.superclass()).isSameAs(type("java.io.File"));
+		assertThat(resolved.interfaceNames()).isEqualTo("java.lang.Runnable");
+		assertThat(slots(resolved)).contains("run()void=0", "toString()java.lang.String=0");
+		assertThat(resolve("(java:subclass \"java.io.File\" '() '(\"toString\") \"x\" f)").reason()).isNull();
+		assertThat(resolve("(java:subclass \"java.util.function.Supplier\" '() '() f)").reason())
+			.isEqualTo("java:subclass expects a class, got java.util.function.Supplier");
+		assertThat(resolve("(java:subclass \"java.lang.String\" '() '() \"x\" f)").reason())
+			.isEqualTo("java:subclass: class java.lang.String is final and cannot be extended");
+		assertThat(resolve("(java:subclass \"no.such.Class\" '() '() f)").reason())
+			.isEqualTo("class no.such.Class is not found");
+		assertThat(resolve("(java:subclass \"java.io.File\" '(\"java.lang.String\") '() \"x\" f)").reason())
+			.isEqualTo("java:subclass expects an interface, got java.lang.String");
+		assertThat(resolve("(java:subclass \"java.io.File\" '() '(\"nope\") \"x\" f)").reason())
+			.isEqualTo("java:subclass: java.io.File has no method nope");
+		assertThat(resolve("(java:subclass \"java.io.File\" '() '() 1 2 3 4 5 f)").reason())
+			.isEqualTo("No matching constructor for java.io.File with 5 argument(s)");
+		assertThat(resolve("(java:subclass \"java.io.File\" '() '(\"toString\"))").reason())
+			.isEqualTo("the form is malformed");
+		assertThat(JavaImplementations.describe(
+				(LispCons) LispReader.readAllFromString("(java:subclass \"java.io.File\" '() '() \"x\" f)").get(0)))
+			.isEqualTo("java:subclass \"java.io.File\"");
+	}
+
+	// A proxy-super reaches the most derived concrete declaration, else an
+	// interface default, else nothing; the accessor is one name per (name, arity).
+	@Test
+	void superAccessorsReachTheSuperclassImplementation() {
+		assertThat(JavaImplementations.superAccessor("paintComponent", 1)).isEqualTo("super$paintComponent$1");
+		JavaImplementations.SuperTarget fileToString = JavaImplementations.superTarget(type("java.io.File"), List.of(),
+				"toString", List.of());
+		assertThat(fileToString).isNotNull();
+		assertThat(fileToString.owner().name()).isEqualTo("java.io.File");
+		assertThat(
+				JavaImplementations.superTarget(type("java.util.AbstractList"), List.of(), "get", List.of(type("int"))))
+			.isNull();
+		assertThat(JavaImplementations.superTarget(type("java.util.AbstractList"), List.of(type("java.util.List")),
+				"get", List.of(type("int"))))
+			.isNull();
+	}
+
+	// The object is assignable to its superclass, its chain and the extra
+	// interfaces; a call on it is resolved by its class when it runs, and no
+	// specifier spells it.
+	@Test
+	void theObjectOfASuperclassIsAssignableToItsChain() {
+		JavaSiteResolver resolver = new JavaSiteResolver(CLASSES);
+		JavaStaticType type = resolver.typeOf(LispReader
+			.readAllFromString("(java:subclass \"java.io.File\" '(\"java.lang.Runnable\") '(\"run\") \"x\" f)")
+			.get(0));
+		JavaImplementationType implementation = CLASSES.subclassOf(type("java.io.File"),
+				List.of(type("java.lang.Runnable")));
+		assertThat(type).isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(implementation)));
+		assertThat(CLASSES.subclassOf(type("java.io.File"), List.of(type("java.lang.Runnable"))))
+			.isSameAs(implementation);
+		assertThat(implementation).isNotSameAs(CLASSES.implementationOf(List.of(type("java.lang.Runnable"))));
+		assertThat(implementation.superclass()).isSameAs(type("java.io.File"));
+		assertThat(implementation.single()).isNull();
+		for (String name : List.of("java.lang.Object", "java.io.Serializable", "java.io.File", "java.lang.Comparable",
+				"java.lang.Runnable")) {
+			assertThat(type(name).isAssignableFrom(implementation)).as(name).isTrue();
+		}
+		assertThat(type("java.util.function.Function").isAssignableFrom(implementation)).isFalse();
+		assertThat(type.receiverClass()).isNull();
+		assertThat(resolver.specOf(type)).isNull();
+	}
+
 }

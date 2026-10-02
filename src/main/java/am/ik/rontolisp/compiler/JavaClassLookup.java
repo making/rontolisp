@@ -40,4 +40,14 @@ public interface JavaClassLookup {
 	 */
 	JavaImplementationType implementationOf(List<JavaType> interfaces);
 
+	/**
+	 * The kind of the object a {@code java:subclass} of a superclass and extra interfaces
+	 * makes, canonical within this lookup per superclass and interface list (kinds
+	 * compare by identity).
+	 * @param superclass the superclass this lookup found
+	 * @param interfaces the extra interfaces this lookup found, in the form's order
+	 * @return their subclass type
+	 */
+	JavaImplementationType subclassOf(JavaType superclass, List<JavaType> interfaces);
+
 }

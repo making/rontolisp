@@ -775,4 +775,68 @@ class JavaInteropTest {
 			.doesNotContain("java:reify");
 	}
 
+	// java:subclass extends the superclass: the constructor arguments choose the
+	// superclass constructor, a named method runs its body (which sees the object as
+	// this), an unnamed one is inherited, and a proxy-super reaches the superclass
+	// implementation through the generated accessor. Mirrors
+	// JvmJavaInteropCompilerTest#aSubclassExtendsItsSuperclass.
+	@Test
+	void aSubclassExtendsItsSuperclass() {
+		assertThat(output(JavaImplementationPrograms.SUBCLASS)).isEqualTo(JavaImplementationPrograms.SUBCLASS_OUTPUT);
+	}
+
+	// What a java:subclass cannot do is an error: a superclass that is no class, a
+	// final one, an interface where an extra interface goes, a repeated interface, a
+	// method that names nothing, constructor arguments no constructor takes, and a
+	// function's value that does not convert to the method's return type. Mirrors
+	// JvmJavaInteropCompilerTest#whatASubclassCannotDoIsAnError.
+	@Test
+	void whatASubclassCannotDoIsAnError() {
+		assertThatThrownBy(() -> eval(
+				"(java:subclass \"java.util.function.Supplier\" '() '() (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass expects a class, got java.util.function.Supplier");
+		assertThatThrownBy(
+				() -> eval("(java:subclass \"java.lang.String\" '() '() \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass: class java.lang.String is final and cannot be extended");
+		assertThatThrownBy(() -> eval(
+				"(java:subclass \"java.io.File\" '(\"java.lang.String\") '() \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass expects an interface, got java.lang.String");
+		assertThatThrownBy(() -> eval(
+				"(java:subclass \"java.io.File\" '(\"java.io.Serializable\" \"java.io.Serializable\") '() \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass names interface java.io.Serializable twice");
+		assertThatThrownBy(() -> eval(
+				"(java:subclass \"java.io.File\" '() '(\"nope\") \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass: java.io.File has no method nope");
+		assertThatThrownBy(() -> eval(
+				"(java:subclass \"java.io.File\" '() '(\"getClass\") \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass: java.io.File.getClass cannot be overridden");
+		assertThatThrownBy(
+				() -> eval("(java:subclass \"java.io.File\" '() '() 1 2 3 4 5 (lambda (this name &rest args) nil))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("No matching constructor for java.io.File with 5 argument(s)");
+		assertThatThrownBy(() -> eval(
+				"""
+						(java:call (java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this name &rest args) "s")) "lastModified")
+						"""))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("java:subclass: cannot return \"s\" as long from java.io.File");
+		assertThatThrownBy(() -> eval("(java:subclass \"java.io.File\" '() '(\"lastModified\"))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:subclass expects (java:subclass \"superclass\""
+					+ " '(\"interface\"...) '(\"method\"...) constructor-args... callable)");
+		// An abstract method no body implements throws with the method's name.
+		assertThatThrownBy(() -> eval(
+				"""
+						(java:call (java:subclass "java.util.AbstractList" '() '("size") (lambda (this name &rest args) 0)) "get" 0)
+						"""))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("java.lang.UnsupportedOperationException: get");
+	}
+
 }

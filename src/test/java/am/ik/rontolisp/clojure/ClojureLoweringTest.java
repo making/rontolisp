@@ -994,11 +994,29 @@ class ClojureLoweringTest {
 			.contains("(JAVA:PROXY \"java.util.function.Supplier\" \"java.lang.Runnable\" (LAMBDA");
 		assertThatThrownBy(() -> Clojure.read("(proxy [] [] (get [] 1))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy takes at least one interface");
-		// A superclass (the book's snake.clj JPanel) is refused by name, before it runs.
-		assertThatThrownBy(() -> Clojure
-			.read("(proxy [javax.swing.JPanel java.awt.event.ActionListener] [] (actionPerformed [e] nil))", null))
+		// A superclass (the book's snake.clj JPanel) is a java:subclass: the
+		// superclass, the quoted interfaces and methods, the constructor arguments
+		// and the callable taking this first.
+		assertThat(lowered(
+				"(proxy [javax.swing.JPanel java.awt.event.ActionListener] [] (actionPerformed [e] nil) (toString [] \"p\"))"))
+			.contains("(JAVA:SUBCLASS \"javax.swing.JPanel\"")
+			.contains("'(\"java.awt.event.ActionListener\")")
+			.contains("'(\"actionPerformed\" \"toString\")");
+		// A class behind the first position is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File java.lang.String] [] (toString [] \"p\"))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy over a class is not supported yet: javax.swing.JPanel");
+			.hasMessageContaining("is a class, not an interface");
+		// A final superclass is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.String] [] (toString [] \"p\"))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		// A duplicate method is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (getName [] 1) (getName [] 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy defines method getName twice");
+		// A proxy-super outside a proxy method is refused by name, before it runs.
+		assertThatThrownBy(() -> Clojure.read("(proxy-super toString)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy-super outside a proxy method");
 		// java:proxy keeps Object's three, so a body for one would never run.
 		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (run []) (toString [] \"p\"))", null))
 			.isInstanceOf(LispReadException.class)
@@ -1006,9 +1024,12 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(proxy [java.lang.Runnable] [] (equals [o] true))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("proxy cannot override equals yet");
-		assertThatThrownBy(() -> Clojure.read("(proxy [java.io.File] [\"f\"] (lastModified [] 0))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy over a class is not supported yet: java.io.File");
+		// The sequences test's File proxy is a java:subclass with constructor
+		// arguments, this in its bodies and no refusal.
+		assertThat(lowered("(proxy [java.io.File] [\"f\"] (lastModified [] (str this)) (toString [] \"f!\"))"))
+			.contains("(JAVA:SUBCLASS \"java.io.File\"")
+			.contains("'(\"lastModified\" \"toString\")")
+			.contains("\"f\"");
 	}
 
 	@Test
@@ -1714,8 +1735,12 @@ class ClojureLoweringTest {
 			.hasMessageContaining("promise is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(deliver p 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("deliver is not supported yet");
+		// proxy-super lowers inside a proxy method body only.
 		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("proxy-super is not supported yet");
+			.hasMessageContaining("proxy-super outside a proxy method");
+		assertThat(lowered("(proxy [java.io.File] [\"f\"] (toString [] (proxy-super toString)))"))
+			.contains("JAVA:SUBCLASS")
+			.contains("super$toString$0");
 	}
 
 	@Test

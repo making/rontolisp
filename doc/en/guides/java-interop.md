@@ -37,6 +37,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:static` | Invoke a static method: `(java:static "fqcn" "method" args...)` |
 | `java:field` | Read a static or instance field: `(java:field class-or-obj "name")` |
 | `java:proxy` | Adapt a callable to one or more interfaces: `(java:proxy "iface"... callable)` |
+| `java:subclass` | Extend a class with a callable: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
 
 A constructed or returned object prints opaquely as `#<java <class-name>>` and
@@ -383,6 +384,41 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
 ```
+
+## Class proxies via java:subclass
+
+`java:subclass` makes a host class instance backed by a rontolisp callable --
+what `java:proxy` cannot do, since a `java.lang.reflect.Proxy` implements
+interfaces only. The form names the superclass, the extra interfaces, the
+overridden methods and the constructor arguments:
+
+```lisp
+(java:subclass "java.io.File" '() '("lastModified") "recent"
+  (lambda (this method &rest args) 42))
+```
+
+The callable is applied as `(callable this "method-name" arg...)` for every
+named method: `this` first, then the name. The constructor arguments choose the
+superclass constructor by the shared overload rule. A named method runs its body
+(`toString`/`equals`/`hashCode` included); a method left out is inherited when
+the class implements it, and throws `UnsupportedOperationException` with the
+method's name when it is called and nothing implements it. A `proxy-super`
+(written in Clojure) reaches the superclass implementation through the generated
+`super$` accessor, called as an ordinary method:
+
+```lisp
+(java:call (java:subclass "java.io.File" '() '("toString") "x"
+             (lambda (this method &rest args) "over!"))
+           "super$toString$0")
+; => "x"
+```
+
+A `java:subclass` whose names are literal strings is a class generated at
+compile time, so the construction compiles under `--java-static`. One left to
+run time -- a name computed at run time, or a class the compile cannot see (a
+project class needs `--java-classpath`) -- is refused by name; the interpreter
+resolves it when it runs. The [reference
+page](../reference/functions/java-subclass.md) has more examples.
 
 ## Errors and non-local exits
 

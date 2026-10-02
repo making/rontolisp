@@ -4876,7 +4876,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	// it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
 		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
-				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY)) {
+				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_SUBCLASS)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
 				return true;
 			}

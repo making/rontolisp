@@ -54,6 +54,20 @@ public record ClassFileInfo(int access, String name, @Nullable String superName,
 			return (this.access & AccessFlag.ACC_STATIC) != 0;
 		}
 
+		/**
+		 * @return whether the member is {@code protected}
+		 */
+		public boolean isProtected() {
+			return (this.access & AccessFlag.ACC_PROTECTED) != 0;
+		}
+
+		/**
+		 * @return whether the member is {@code final}
+		 */
+		public boolean isFinal() {
+			return (this.access & AccessFlag.ACC_FINAL) != 0;
+		}
+
 	}
 
 	/**

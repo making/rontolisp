@@ -572,6 +572,212 @@ final class JavaInterop {
 		return implement(dispatch, List.of(callable), caller);
 	}
 
+	// (java:subclass "super.Class" (iface...) (methods...) ctor-args... callable): one
+	// object extending the superclass (and the extra interfaces), each named method
+	// calling the callable with the object and the method's name before its arguments
+	// (compiler/JavaImplementations.subclass, which a compiled program's generated
+	// class declares).
+	static LispVal subclass(List<LispVal> args, Caller caller) {
+		if (args.size() < 4 || !(args.get(0) instanceof LispString superName)) {
+			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
+		}
+		List<String> interfaceNames = stringList(args.get(1));
+		List<String> methodNames = stringList(args.get(2));
+		if (interfaceNames == null || methodNames == null) {
+			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
+		}
+		List<LispVal> ctorArgs = args.subList(3, args.size() - 1);
+		LispVal callable = args.get(args.size() - 1);
+		ReflectiveJavaClasses.Type superclass = loadClass(superName.value());
+		if (superclass.isInterface()) {
+			throw new LispEvalException(JavaImplementations.notAClass(superName.value()));
+		}
+		if (superclass.isFinal()) {
+			throw new LispEvalException(JavaImplementations.finalSuperclass(superName.value()));
+		}
+		List<JavaType> interfaces = new ArrayList<>();
+		List<Class<?>> ifaceClasses = new ArrayList<>();
+		for (String interfaceName : interfaceNames) {
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.subclassNotAnInterface(interfaceName));
+			}
+			if (interfaces.contains(type)) {
+				throw new LispEvalException(JavaImplementations.subclassRepeatedInterface(interfaceName));
+			}
+			interfaces.add(type);
+			ifaceClasses.add(type.type());
+		}
+		List<Object> key = List.of(superclass.type(), ifaceClasses, methodNames);
+		SubclassDispatch dispatch = SUBCLASSES.get(key);
+		if (dispatch == null) {
+			JavaImplementation implementation;
+			try {
+				implementation = JavaImplementations.subclass(superclass, interfaces, methodNames);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			dispatch = new SubclassDispatch(implementation, CLASSES.subclassOf(superclass, interfaces));
+			remember(SUBCLASSES, key, dispatch);
+		}
+		JavaOverloads.Overload overload = selectConstructor(superclass, ctorArgs, caller);
+		if (overload == null) {
+			throw new LispEvalException(
+					"No matching constructor for " + superName.value() + " with " + ctorArgs.size() + " argument(s)");
+		}
+		Constructor<?> constructor = (Constructor<?>) ((ReflectiveJavaClasses.Member) overload.executable())
+			.executable();
+		Class<?> proxyClass = ClassProxyMaker.proxyClass(superclass.type(), ifaceClasses, dispatch.implementation,
+				constructor);
+		SUBCLASS_KINDS.putIfAbsent(proxyClass, dispatch.kind);
+		@Nullable Object[] javaArgs = marshalArguments(overload, ctorArgs, caller);
+		try {
+			Constructor<?> proxyConstructor = proxyConstructor(proxyClass, constructor);
+			Object[] withHandler = new Object[javaArgs.length + 1];
+			withHandler[0] = new SubclassHandler(dispatch, callable, caller);
+			System.arraycopy(javaArgs, 0, withHandler, 1, javaArgs.length);
+			return unmarshal(proxyConstructor.newInstance(withHandler));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("constructing " + superName.value(), ex);
+		}
+	}
+
+	// A proper list of strings as its values, or null when the value is not one.
+	private static @Nullable List<String> stringList(LispVal value) {
+		List<String> names = new ArrayList<>();
+		LispVal current = value;
+		while (current instanceof LispCons cons) {
+			if (!(cons.car() instanceof LispString name)) {
+				return null;
+			}
+			names.add(name.value());
+			current = cons.cdr();
+		}
+		return current instanceof LispNil ? names : null;
+	}
+
+	// The superclass constructor for these constructor arguments, over the public and
+	// the protected ones: never remembered (the candidates differ from java:new's
+	// public-only ones, and construction is rare).
+	private static JavaOverloads.@Nullable Overload selectConstructor(ReflectiveJavaClasses.Type superclass,
+			List<LispVal> args, Caller caller) {
+		List<ReflectiveJavaClasses.Member> candidates = new ArrayList<>();
+		for (JavaExecutable executable : superclass.subclassConstructors()) {
+			candidates.add((ReflectiveJavaClasses.Member) executable);
+		}
+		JavaKind[] kinds = kindsOf(args);
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			return JavaOverloads.select(candidates, args.size(),
+					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
+		}
+		return JavaOverloads.select(candidates, kinds.length,
+				(i, target) -> JavaOverloads.kindCost(kinds[i], target, CLASSES));
+	}
+
+	// The generated constructor matching this superclass constructor: the handler
+	// first, then the same parameters.
+	private static Constructor<?> proxyConstructor(Class<?> proxyClass, Constructor<?> constructor)
+			throws NoSuchMethodException {
+		Class<?>[] params = constructor.getParameterTypes();
+		Class<?>[] proxyParams = new Class<?>[params.length + 1];
+		proxyParams[0] = ClassProxyHandler.class;
+		System.arraycopy(params, 0, proxyParams, 1, params.length);
+		return proxyClass.getConstructor(proxyParams);
+	}
+
+	// How a java:subclass of (superclass, interfaces, methods) extends it: computed
+	// once, the kind canonical per (superclass, interfaces).
+	private static final class SubclassDispatch {
+
+		final JavaImplementation implementation;
+
+		final JavaImplementationType kind;
+
+		SubclassDispatch(JavaImplementation implementation, JavaImplementationType kind) {
+			this.implementation = implementation;
+			this.kind = kind;
+		}
+
+	}
+
+	private static final ConcurrentHashMap<List<Object>, SubclassDispatch> SUBCLASSES = new ConcurrentHashMap<>();
+
+	// The kind of a generated subclass, by its class.
+	private static final ConcurrentHashMap<Class<?>, JavaImplementationType> SUBCLASS_KINDS = new ConcurrentHashMap<>();
+
+	/**
+	 * The handler of a {@code java:subclass} object: a named method calls the callable
+	 * with the object and the method's name before its unmarshalled arguments, and its
+	 * value is marshalled to the method's return type (a function is never made a proxy
+	 * there). What the function raises -- or the refusal of its value -- is recorded on
+	 * its way out to the Java caller ({@link #raised}), so the site whose Java call it
+	 * reaches throws it on unchanged.
+	 */
+	private static final class SubclassHandler implements ClassProxyHandler {
+
+		private final SubclassDispatch dispatch;
+
+		private final LispVal callable;
+
+		private final Caller caller;
+
+		SubclassHandler(SubclassDispatch dispatch, LispVal callable, Caller caller) {
+			this.dispatch = dispatch;
+			this.callable = callable;
+			this.caller = caller;
+		}
+
+		@Override
+		public @Nullable Object invoke(int slot, Object self, Object[] methodArgs) throws Throwable {
+			JavaImplementation.Slot implemented = this.dispatch.implementation.slots().get(slot);
+			try {
+				List<LispVal> callArgs = new ArrayList<>(methodArgs.length + 2);
+				callArgs.add(new LispJavaObject(self));
+				callArgs.add(new LispString(implemented.name()));
+				for (Object argument : methodArgs) {
+					callArgs.add(unmarshal(argument));
+				}
+				LispVal result = this.caller.call(this.callable, callArgs);
+				Class<?> ret = returnClass(implemented);
+				if (ret == void.class) {
+					return null;
+				}
+				@Nullable Object[] boxed = new @Nullable Object[1];
+				ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
+				if (marshal(result, returnType, this.caller, boxed, 0, false) == NO_MATCH) {
+					JavaImplementation implementation = this.dispatch.implementation;
+					throw new LispEvalException(JavaImplementation.subclassReturnMismatchPrefix() + result.print()
+							+ JavaImplementation.subclassReturnMismatchSuffix(
+									java.util.Objects.requireNonNull(implementation.superclass()),
+									implementation.interfaces(), returnType));
+				}
+				return boxed[0];
+			}
+			catch (Throwable signal) {
+				throw raised(signal);
+			}
+		}
+
+		// The method's return class: the slot's return type is canonical in this
+		// lookup, so its class is read off it.
+		private static Class<?> returnClass(JavaImplementation.Slot slot) {
+			JavaType type = slot.returnType();
+			if (type instanceof ReflectiveJavaClasses.Type reflective) {
+				return reflective.type();
+			}
+			try {
+				return Class.forName(type.name(), false, JavaInterop.class.getClassLoader());
+			}
+			catch (ClassNotFoundException ex) {
+				throw new LispEvalException("No such class: " + type.name());
+			}
+		}
+
+	}
+
 	// (java:reify "fully.qualified.Interface" "method" function ...): each function
 	// implements the one method its designator names (compiler/JavaImplementations.reify
 	// -- the rule a compiled program's generated class follows).
@@ -804,11 +1010,17 @@ final class JavaInterop {
 
 	// The kind of a host object: a java:reify / java:proxy object's is its interface's
 	// implementation type, whatever Proxy class made it (as a compiled program's
-	// generated class is); any other object's its exact class.
+	// generated class is); a java:subclass object's its superclass and interfaces'
+	// subclass type, whatever generated subclass made it; any other object's its exact
+	// class.
 	private static JavaKind hostKind(Object ref) {
 		Class<?> type = ref.getClass();
 		if (Proxy.isProxyClass(type) && Proxy.getInvocationHandler(ref) instanceof ImplementationHandler handler) {
 			return handler.dispatch.kind;
+		}
+		JavaImplementationType subclass = SUBCLASS_KINDS.get(type);
+		if (subclass != null) {
+			return subclass;
 		}
 		return ReflectiveJavaClasses.of(type);
 	}
