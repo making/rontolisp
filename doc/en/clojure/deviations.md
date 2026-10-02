@@ -19,11 +19,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`).
 - `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
   Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
-- Vector and table keys compare by identity in a hash lookup, so a vector key misses a
-  lookup its oracle answers; a repeated set-literal element is refused by spelling. `=`
-  itself compares vectors, lists and lazy seqs element-wise and maps, sets and records
-  entry by entry, like the oracle -- except `(= [] '())`, which is `false` (`'()` is
-  `nil`).
+- Vector and table keys compare by identity, so a vector key misses a lookup its oracle
+  answers; a repeated set-literal element is refused by spelling. `=` itself compares
+  vectors, lists and lazy seqs element-wise like the oracle, and since `nil` is the empty
+  list, `(= [] nil)` is `true` where the oracle answers `false`.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
@@ -39,6 +38,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure
   signals. A threading step over a collection literal signals (collections are not
   functions here).
+- `clojure.test` runs the tests in definition order (the oracle's order is its
+  namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
+  names, like `catch`; an error report prints the condition's message (an `ex-info` the
+  oracle's way) with no stack trace, at the `is` form's line where the oracle names the
+  frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
+  oracle prints `#error {...}`; a host stack overflow is no condition and ends the
+  program. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
 - Multimethod dispatch values compare like `equal` table keys (vectors by identity --

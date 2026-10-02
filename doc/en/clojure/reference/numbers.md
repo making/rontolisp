@@ -36,6 +36,7 @@ The arithmetic and comparison core, plus the type predicates. The comparisons an
 | `coll?` | `(coll? [1])` | `true` |
 | `string?` | `(string? "a")` | `true` |
 | `symbol?` | `(symbol? 'a)` | `true` |
+| `fn?` | `(fn? inc)` | `true` |
 | `instance?` | `(instance? String "a")` | `true` |
 | `class` | `(class "a")` | `:string` |
 | `int` | `(int 2.7)` | `2` |

@@ -182,6 +182,7 @@ categories:
       - { slug: coll-p, name: "coll?" }
       - { slug: string-p, name: "string?" }
       - { slug: symbol-p, name: "symbol?" }
+      - { slug: fn-p, name: "fn?" }
       - { slug: instance-p, name: "instance?" }
       - { slug: class, name: "class" }
       - { slug: int, name: "int" }
@@ -333,6 +334,16 @@ categories:
       - { slug: new, name: "new" }
       - { slug: memfn, name: "memfn" }
       - { slug: proxy, name: "proxy" }
+  - title: "テスト (clojure.test)"
+    index_page: clojure/reference/test.md
+    functions:
+      - { slug: deftest, name: "deftest" }
+      - { slug: is, name: "is" }
+      - { slug: are, name: "are" }
+      - { slug: testing, name: "testing" }
+      - { slug: run-tests, name: "run-tests" }
+      - { slug: run-all-tests, name: "run-all-tests" }
+      - { slug: successful-p, name: "successful?" }
   - title: "マクロ"
     index_page: clojure/reference/macros.md
     functions:

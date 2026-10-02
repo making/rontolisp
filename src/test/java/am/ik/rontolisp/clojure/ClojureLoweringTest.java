@@ -294,7 +294,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(concat '(1 2) [3 4])")).contains("%CLOJURE-CONCAT");
 		assertThat(lowered("(concat)")).isEqualTo(FALSE_BINDING + "NIL");
-		assertThat(lowered("(= 1 1)")).contains("(RONTOLISP::%CLOJURE-EQUAL ");
+		assertThat(lowered("(= 1 1)")).contains("(RONTOLISP::%CLOJURE-EQUAL");
 		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":C%KEYWORD").contains("fallback");
 	}
@@ -361,7 +361,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void keywordsKeepTheirCaseAndPrintWithColon() {
-		assertThat(lowered("(= :a :A)")).contains("(RONTOLISP::%CLOJURE-EQUAL ").contains(":C%KEYWORD");
+		assertThat(lowered("(= :a :A)")).contains("(RONTOLISP::%CLOJURE-EQUAL").contains(":C%KEYWORD");
 		assertThat(lowered("(str :a)")).contains("RONTOLISP::%CLOJURE-STR-OF");
 		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
 		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
@@ -1535,8 +1535,6 @@ class ClojureLoweringTest {
 		assertThat(lowered("(pmap inc [1])")).contains("RONTOLISP::%CLOJURE-MAP").doesNotContain("PMAP");
 		// as values: the -v entries, which check the count with the oracle's wording
 		assertThat(lowered("(map peek [[1]])")).contains("#'RONTOLISP::%CLOJURE-PEEK-V");
-		assertThat(lowered("(map = [1] [1])")).contains("#'RONTOLISP::%CLOJURE-EQUAL-V");
-		assertThat(lowered("(map not= [1] [1])")).contains("#'RONTOLISP::%CLOJURE-NOT-EQUAL-V");
 	}
 
 	@Test
@@ -1573,6 +1571,64 @@ class ClojureLoweringTest {
 			.doesNotContain("CADR");
 		assertThat(lowered("(let [pop (fn [x] x)] (pop [1]))")).contains("(FUNCALL |c%pop| (VECTOR 1))");
 		assertThat(lowered("(defn f [re-find] (re-find 1))")).doesNotContain("%CLOJURE-RE-FIND");
+	}
+
+	private static String loweredFrom(String source, String file) {
+		List<LispVal> forms = Clojure.read(source, file);
+		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void clojureTestReportsNameTheFormsFileAndLine() {
+		// the oracle's (file:line): the last path segment of the file and the
+		// is form's line, the deftest's line for an uncaught error; no file is
+		// NO_SOURCE_FILE, like the oracle's eval
+		String source = "(ns t (:require [clojure.test :refer :all]))\n(deftest a\n  (is (= 1 2))\n  (are [x] (pos? x) 1))";
+		String out = loweredFrom(source, "dir/sub/x.clj");
+		assertThat(out).contains("\"(x.clj:3)\"").contains("\"(x.clj:4)\"").contains("\"(x.clj:2)\"");
+		assertThat(lowered(source)).contains("\"(NO_SOURCE_FILE:3)\"");
+	}
+
+	@Test
+	void clojureTestLowersToTheRuntimeShapes() {
+		String out = lowered(
+				"(ns t (:require [clojure.test :as t])) (t/deftest a (t/is (= 1 2)) (t/is (and true false)) (t/is (thrown? Exception (/ 1 0))) (t/testing \"c\" (t/is true)))");
+		// the test function, its body as a function of its own, the registration
+		// under the namespace, and the runtime start ahead of everything
+		assertThat(out).contains("RONTOLISP::%CLOJURE-TEST-INIT")
+			.contains("(DEFUN |c%a%body| NIL")
+			.contains("(DEFUN |c%a| NIL (RONTOLISP::%CLOJURE-TEST-VAR \"a\" #'|c%a%body|")
+			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%a|)");
+		// = is a predicate call, and is an any-form assertion (a macro)
+		assertThat(out).contains("RONTOLISP::%CLOJURE-TEST-PRED")
+			.contains("RONTOLISP::%CLOJURE-TEST-ANY")
+			.contains("RONTOLISP::%CLOJURE-TEST-THROWN")
+			.contains("RONTOLISP::%CLOJURE-TEST-TESTING");
+		// (:use clojure.test) refers every var, like the oracle's bare library symbol
+		assertThat(lowered("(ns t (:use clojure.test)) (deftest a (is true)) (run-tests)"))
+			.contains("RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"t\") '(\"user\" \"t\")");
+		// a test is a zero-argument function a later form may call
+		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%b|)");
+	}
+
+	@Test
+	void clojureTestRefusesWhatTheOracleRefuses() {
+		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (deftest a (are [x y] (= x y) 1 2 3))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("The number of args doesn't match are's argv.");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (map is [1])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can't take value of a macro: #'clojure.test/is");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:use clojure.test)) (use-fixtures :each identity)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("use-fixtures is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.test :as t])) (t/no-such 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.test/no-such");
+		assertThatThrownBy(() -> Clojure.read("(deftest a (is true))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: deftest");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:use no.such.lib))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: no.such.lib");
 	}
 
 }

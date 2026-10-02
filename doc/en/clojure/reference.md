@@ -25,4 +25,5 @@ has them.
 | [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
+| [Tests (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` and the `run-tests` summary runner |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

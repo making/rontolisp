@@ -834,18 +834,49 @@ final class ClojureStringLowering {
 		// newline as their own writes: no with-output-to-string ever reaches a
 		// compiled program (a literal one flips a WASM module into EH mode). The
 		// call answers nil, like the oracle.
-		List<LispVal> writes = new ArrayList<>();
+		return printWrites(ctx, items, newline, ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * The writes of one print-family call: each part through
+	 * {@code rontolisp::%clojure-write-datum}, single spaces between, the newline last,
+	 * answering nil. The parts evaluate before the first write, like the oracle's
+	 * argument evaluation -- a part that prints or throws never splits the line -- so
+	 * with several parts any computed one binds every part to a temporary first, in order
+	 * (a lone part, or constants only, need none).
+	 */
+	static LispVal printWrites(ClojureLowering ctx, List<LispVal> items, boolean newline, LispVal readable) {
+		List<LispVal> parts = new ArrayList<>();
+		boolean computed = false;
 		for (int i = 1; i < items.size(); i++) {
-			if (i > 1) {
+			LispVal part = ctx.lower(items.get(i));
+			parts.add(part);
+			computed |= part instanceof LispCons && !ClojureLowering.isQuoteForm(part);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		if (computed && parts.size() > 1) {
+			for (int i = 0; i < parts.size(); i++) {
+				LispSymbol temp = ctx.freshTemp();
+				bindings.add(ClojureLowerUtil.list(temp, parts.get(i)));
+				parts.set(i, temp);
+			}
+		}
+		List<LispVal> writes = new ArrayList<>();
+		for (int i = 0; i < parts.size(); i++) {
+			if (i > 0) {
 				writes.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("WRITE-CHAR"), new LispChar(32)));
 			}
-			writes.add(writeDatum(ctx, ctx.lower(items.get(i)), LispString.literal("nil"), ClojureLowering.NIL_CONST));
+			writes.add(writeDatum(ctx, parts.get(i), LispString.literal("nil"), readable));
 		}
 		if (newline) {
 			writes.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("TERPRI")));
 		}
 		writes.add(ClojureLowering.NIL_CONST);
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("PROGN"), writes);
+		LispVal progn = ClojureLowerUtil.cons(ClojureLowerUtil.sym("PROGN"), writes);
+		if (bindings.isEmpty()) {
+			return progn;
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET*"), ClojureLowerUtil.list(bindings), progn);
 	}
 
 	/**
@@ -854,18 +885,7 @@ final class ClojureStringLowering {
 	 * print quoted like the oracle's.
 	 */
 	static LispVal prCall(ClojureLowering ctx, List<LispVal> items, boolean newline) {
-		List<LispVal> writes = new ArrayList<>();
-		for (int i = 1; i < items.size(); i++) {
-			if (i > 1) {
-				writes.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("WRITE-CHAR"), new LispChar(32)));
-			}
-			writes.add(writeDatum(ctx, ctx.lower(items.get(i)), LispString.literal("nil"), ClojureLowering.TRUE_CONST));
-		}
-		if (newline) {
-			writes.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("TERPRI")));
-		}
-		writes.add(ClojureLowering.NIL_CONST);
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("PROGN"), writes);
+		return printWrites(ctx, items, newline, ClojureLowering.TRUE_CONST);
 	}
 
 	/**

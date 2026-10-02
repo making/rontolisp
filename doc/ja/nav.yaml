@@ -267,5 +267,7 @@ sections:
             title: "入出力"
           - file: clojure/reference/interop.md
             title: "Java interop"
+          - file: clojure/reference/test.md
+            title: "テスト (clojure.test)"
           - file: clojure/reference/macros.md
             title: "マクロ"

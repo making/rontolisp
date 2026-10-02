@@ -6,6 +6,9 @@
 # component. Divergences from real Clojure are the documented deviations in
 # .kb/clojure-frontend.md, not failures: what is pinned here is that every backend
 # agrees. Where the oracle (Clojure CLI 1.12) answers differently, a comment says so.
+# A clojure.test report's "FAIL in (...) (file:line)" suffix is compared as
+# (spec.clj:N): its file differs per leg and its line moves with every case above
+# it (ClojureLoweringTest pins the position itself).
 cases:
   - name: identifiers-keep-their-case-and-mangle-behind-the-prefix
     source: |
@@ -3486,10 +3489,10 @@ cases:
       (true true true false) (false true) true
   - name: b57-equality-is-sequential-and-deep
     # b57: = compares vectors, lists and lazy seqs element-wise across kinds and
-    # deep through maps, sets and records (it used to compare vectors by identity);
-    # nil is not the empty vector, strings are not character vectors, atoms stay
-    # identity, 1 and 1.0 differ. dedupe and partition-by share the comparison.
-    # Every line matches the oracle (clj 1.12, 2026-10-02).
+    # deep through maps, sets and records; strings are not character vectors, atoms
+    # stay identity, 1 and 1.0 differ. dedupe and partition-by share the comparison.
+    # Every line matches the oracle (clj 1.12, 2026-10-02) except (= [] nil), false
+    # there: nil is the empty list here, and (= [] '()) is true on both.
     source: |
       (prn (= [1 2] [1 2]) (= [1 2] '(1 2)) (= [[1] {:a [2]}] [[1] {:a [2]}]) (= [1] [1 2]) (= [] nil) (= "ab" [\a \b]))
       (prn (= (map inc [0 1]) [1 2]) (= (lazy-seq [1 2]) '(1 2)) (not= [1] [1]) (dedupe [[1] [1] [2]]) (partition-by (fn [x] [(odd? x)]) [1 3 2]))
@@ -3497,7 +3500,232 @@ cases:
       (defrecord B57EqR [a])
       (prn (= (->B57EqR [1]) (->B57EqR [1])) (= [(->B57EqR 1)] [(->B57EqR 1)]))
     expected: |
-      true true true false false false
+      true true true false true false
       true true false ([1] [2]) ((1 3) (2))
       false true true false
       true true
+  - name: quoted-list-keeps-nested-collection-literals
+    # A quoted list holding a vector, a map, a set or a regex literal builds each
+    # nested collection at run time, like the oracle reads them -- not the
+    # construction code as list data (the clojure.test expected-form shape); a
+    # quoted map or set keeps a symbol or a list element as data, not as a form
+    # to evaluate (oracle clj 1.12.6.1673).
+    source: |
+      (println '(1 [2 3] {:a 1} #{4} #"re"))
+      (println (second '(1 [2 3])))
+      (println (vector? (second '(1 [2 3]))))
+      (println '(= [1 (+ 1 1)] x))
+      (println (count '((a [b]) c)))
+      (println '{:a x})
+      (println '{:a (1 2)})
+      (println '#{y})
+      (println '[x (y z)])
+    expected: |
+      (1 [2 3] {:a 1} #{4} #"re")
+      [2 3]
+      true
+      (= [1 (+ 1 1)] x)
+      2
+      {:a x}
+      {:a (1 2)}
+      #{y}
+      [x (y z)]
+  - name: print-family-evaluates-every-part-before-writing
+    # println/print/prn/pr evaluate all their arguments first, then write, like
+    # the oracle: a part that prints (or throws) never splits the line.
+    source: |
+      (defn b55-noisy [x] (println "inner" x) x)
+      (println "outer" (b55-noisy 1) (b55-noisy 2))
+      (prn "outer" (b55-noisy 3))
+      (print "outer" (b55-noisy 4))
+      (println)
+      (println (try (println "never" (throw (ex-info "boom" {}))) (catch Exception e "caught")))
+    expected: |
+      inner 1
+      inner 2
+      outer 1 2
+      inner 3
+      "outer" 3
+      inner 4
+      outer 4
+      caught
+  - name: equality-compares-sequentials-structurally
+    # = compares vectors, lists and lazy seqs element by element (nested
+    # included), across kinds, like the oracle; a string is no sequential, and
+    # numbers keep their category. One deviation: nil is the empty list here,
+    # so (= [] nil) is true where the oracle answers false.
+    source: |
+      (println (= [1 2] [1 2]) (= [1 2] '(1 2)) (= '(1 2) [1 2]))
+      (println (= [1 [2 3]] [1 [2 3]]) (= [1 [2 3]] '(1 (2 3))) (= [1 2] [1 2 3]))
+      (println (= {:a [1 2]} {:a '(1 2)}) (= [1 {:a 1}] (list 1 {:a 1})))
+      (println (= [] '()) (= "ab" [\a \b]) (= 1 1.0) (not= [1 2] '(1 2)))
+      (println (= (map inc [0 1]) [1 2]) (= (take 2 (iterate inc 1)) [1 2]) (= [1 2] (range 1 3)))
+      (println (= [1 2] [1 2] '(1 2)) (= [1 2] [1 2] [2 1]))
+      (println (map = [[1] [2]] ['(1) [3]]))
+      (println (= [] nil))
+    expected: |
+      true true true
+      true true false
+      true true
+      true false false false
+      true true true
+      true false
+      (true false)
+      true
+  - name: vector-pred-excludes-strings-and-write-of-nil-signals
+    # A string is no vector (it is a CL vector underneath), and .write of nil on
+    # a stream signals like the oracle's NullPointerException -- the corpus
+    # life_without_multi.clj my-print shapes (oracle clj 1.12.6.1673).
+    source: |
+      (println (vector? "ab") (vector? [1]) (vector? '(1)) (map vector? ["a" [2]]))
+      (defn b55-write [x] (.write *out* x))
+      (println (try (b55-write nil) (catch Exception e "threw")))
+      (b55-write "ok")
+      (println)
+    expected: |
+      false true false (false true)
+      threw
+      ok
+  - name: fn-pred-list-refers-and-reload-flags
+    # fn? answers true for functions only; a :only/:refer list spells the names
+    # like a vector, and a :reload flag in a require is skipped -- the corpus
+    # test files' functional / concurrency / preface shapes (oracle clj
+    # 1.12.6.1673).
+    source: |
+      (defn b55-f [x] x)
+      (println (fn? b55-f) (fn? (fn [] 1)) (fn? +) (fn? :a) (fn? #{}) (fn? "s") (fn? nil))
+      (println (map fn? [inc 1 #(+ % 1)]))
+      (use '[clojure.string :only (upper-case)])
+      (println (upper-case "ok"))
+      (require :reload '[clojure.string :as b55s])
+      (println (b55s/lower-case "OK"))
+    expected: |
+      true true true false false false false
+      (true false true)
+      OK
+      ok
+  - name: clojure-test-deftest-is-are-testing-and-the-summary
+    # The oracle's report layout (clj 1.12.6.1673): FAIL/ERROR with the test name,
+    # the testing contexts, the message, the expected form and the actual value
+    # ((not (f values...)) for a predicate call, the value otherwise), an
+    # ex-info error spelled the oracle's way, the uncaught-exception report, and
+    # the Ran/failures summary plus its map. The oracle runs the tests in its
+    # namespace map's order; here they run in definition order.
+    source: |
+      (ns b55-test (:require [clojure.test :refer :all]))
+      (deftest b55-pass (is (= [1 2] '(1 2))) (is true))
+      (deftest b55-fail (is (= 1 2)) (is (= "a" "b") "with msg") (is nil) (is (nil? 1)) (is (:a {:a false})))
+      (deftest b55-error (is (= 1 (throw (ex-info "boom" {:a 1})))))
+      (deftest b55-thrown (is (thrown? Exception (throw (ex-info "x" {})))) (is (thrown? Exception (+ 1 1))))
+      (deftest b55-msg (is (thrown-with-msg? Exception #"bo" (throw (ex-info "boom" {})))) (is (thrown-with-msg? Exception #"bo" (+ 1 1))))
+      (deftest b55-ctx (testing "outer" (testing "inner" (is (= [2] [3])))))
+      (deftest b55-are (are [x y] (= x y) 1 1 2 3 (+ 1 1) 2))
+      (deftest b55-uncaught (throw (ex-info "boom" {})))
+      (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (:type s) (successful? s)))
+    expected: |
+
+      Testing b55-test
+
+      FAIL in (b55-fail) (spec.clj:N)
+      expected: (= 1 2)
+        actual: (not (= 1 2))
+
+      FAIL in (b55-fail) (spec.clj:N)
+      with msg
+      expected: (= "a" "b")
+        actual: (not (= "a" "b"))
+
+      FAIL in (b55-fail) (spec.clj:N)
+      expected: nil
+        actual: nil
+
+      FAIL in (b55-fail) (spec.clj:N)
+      expected: (nil? 1)
+        actual: (not (nil? 1))
+
+      FAIL in (b55-fail) (spec.clj:N)
+      expected: (:a {:a false})
+        actual: false
+
+      ERROR in (b55-error) (spec.clj:N)
+      expected: (= 1 (throw (ex-info "boom" {:a 1})))
+        actual: clojure.lang.ExceptionInfo: boom
+      {:a 1}
+
+      FAIL in (b55-thrown) (spec.clj:N)
+      expected: (thrown? Exception (+ 1 1))
+        actual: nil
+
+      FAIL in (b55-msg) (spec.clj:N)
+      expected: (thrown-with-msg? Exception #"bo" (+ 1 1))
+        actual: nil
+
+      FAIL in (b55-ctx) (spec.clj:N)
+      outer inner
+      expected: (= [2] [3])
+        actual: (not (= [2] [3]))
+
+      FAIL in (b55-are) (spec.clj:N)
+      expected: (= 2 3)
+        actual: (not (= 2 3))
+
+      ERROR in (b55-uncaught) (spec.clj:N)
+      Uncaught exception, not in assertion.
+      expected: nil
+        actual: clojure.lang.ExceptionInfo: boom
+      {}
+
+      Ran 8 tests containing 17 assertions.
+      9 failures, 2 errors.
+      8 6 9 2 :summary false
+  - name: clojure-test-is-answers-and-reports-outside-run-tests
+    # is answers the assertion's value and reports even outside run-tests (no
+    # counting there); a test is a zero-argument function, a nested test call
+    # names both tests, and a report goes to the stream *out* was when the
+    # runtime started (the oracle's *test-out*), so with-out-str never captures
+    # it (oracle clj 1.12.6.1673).
+    source: |
+      (println (is (= 1 1)) (is 5))
+      (println (is (= 1 2)))
+      (deftest b55-inner (is (= 1 2)))
+      (deftest b55-outer (b55-inner) (is (= "x\n" (with-out-str (println "x") (is (= 1 3))))))
+      (println (b55-outer))
+    expected: |
+      true 5
+
+      FAIL in () (spec.clj:N)
+      expected: (= 1 2)
+        actual: (not (= 1 2))
+      false
+
+      FAIL in (b55-outer b55-inner) (spec.clj:N)
+      expected: (= 1 2)
+        actual: (not (= 1 2))
+
+      FAIL in (b55-outer) (spec.clj:N)
+      expected: (= 1 3)
+        actual: (not (= 1 3))
+      nil
+  - name: clojure-test-aliased-namespace-and-run-all-tests
+    # clojure.test through an alias, tests registered per namespace, run-tests
+    # over a named namespace and run-all-tests narrowed by a pattern (the oracle
+    # also lists every loaded namespace without one).
+    source: |
+      (ns b55-other (:require [clojure.test :as t]))
+      (t/deftest b55-o1 (t/is (= 1 1)))
+      (t/deftest b55-o2 (t/is (= #{1} #{1})) (t/is (= {:a [1]} {:a '(1)})))
+      (println (:test (t/run-all-tests #"b55-oth.*")))
+      (println (t/successful? (t/run-tests 'b55-other)))
+    expected: |
+
+      Testing b55-other
+
+      Ran 2 tests containing 3 assertions.
+      0 failures, 0 errors.
+      2
+
+      Testing b55-other
+
+      Ran 2 tests containing 3 assertions.
+      0 failures, 0 errors.
+      true

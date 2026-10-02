@@ -790,7 +790,15 @@ final class ClojureInteropLowering {
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), args.get(0), recv);
+			// nil signals, like the oracle's NullPointerException out of Writer.write
+			LispSymbol value = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+									LispString.literal("NullPointerException: write takes a value, not nil")),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv)));
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("finish-output"), recv);

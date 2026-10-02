@@ -109,16 +109,9 @@ final class ClojureCoreLowering {
 					"dedupe", "partition-all", "partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred",
 					"some-fn", "update-keys", "update-vals", "reduce-kv" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
-			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("equal-v"));
-			case "not=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("not-equal-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			default -> null;
 		};
-	}
-
-	/** {@code (RONTOLISP::%CLOJURE-EQUAL a b)}: the {@code =} comparison of two forms. */
-	static LispVal equalForm(LispVal first, LispVal second) {
-		return ClojureLowerUtil.list(runtime("equal"), first, second);
 	}
 
 	private static LispVal worker(String name, LispVal... args) {

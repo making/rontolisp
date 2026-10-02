@@ -1085,13 +1085,15 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * Two values compared the Clojure way: one call to the spliced
-	 * {@code rontolisp::%clojure-equal} (two wrapped sets by membership, two tables or
-	 * two records entry by entry, deep; a deftype or reify by identity; anything else
-	 * {@code equal}), which the {@code =} value and the backlog verbs share.
+	 * Two values compared the Clojure way, through the spliced
+	 * {@code rontolisp::%clojure-equal}: two wrapped sets by membership both ways
+	 * (order-free, deep in the members), two tables (or two records with the same tag)
+	 * entry by entry, two sequentials (lists, non-string vectors, lazy seqs, nil as the
+	 * empty list) element by element, a deftype or reify by identity, anything else with
+	 * {@code equal}. The answer is raw ({@code T} or {@code NIL}).
 	 */
 	static LispVal equalityTwo(ClojureLowering ctx, LispVal first, LispVal second) {
-		return ClojureCoreLowering.equalForm(first, second);
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-EQUAL"), first, second);
 	}
 
 }

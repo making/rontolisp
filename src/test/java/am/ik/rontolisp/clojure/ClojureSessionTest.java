@@ -71,6 +71,29 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
+		// clojure.test in a session: the runtime start travels ahead of the
+		// buffer that first uses it, the test registers under the session's
+		// namespace, and a later buffer runs it
+		ClojureSession session = new ClojureSession();
+		session.read("(ns b55sess (:require [clojure.test :refer :all]))");
+		List<String> defined = session.read("(deftest b55-s (is (= 1 1)))")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(defined).filteredOn(form -> form.contains("%CLOJURE-TEST-INIT")).hasSize(1);
+		assertThat(defined).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"b55sess\" \"b55-s\""));
+		List<String> run = session.read("(run-tests)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(run).noneMatch(form -> form.contains("%CLOJURE-TEST-INIT"));
+		assertThat(run).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"b55sess\")"));
+	}
+
+	@Test
 	void isCompleteCountsBracketsStringsAndComments() {
 		assertThat(ClojureSession.isComplete("(defn f [x] x)")).isTrue();
 		assertThat(ClojureSession.isComplete("(defn f [x]")).isFalse();
