@@ -16,6 +16,20 @@ public final class ClojureSession {
 
 	private final ClojureLowering lowering = new ClojureLowering();
 
+	/** A session that reads no files: a project {@code require} is refused by name. */
+	public ClojureSession() {
+		this(ClojureFiles.NONE);
+	}
+
+	/**
+	 * A session whose {@code require}s load project namespaces through the files, from
+	 * the source path of the working directory.
+	 * @param files where the namespace files are read from
+	 */
+	public ClojureSession(ClojureFiles files) {
+		this.lowering.sourcePath = new ClojureSourcePath(files, null);
+	}
+
 	/**
 	 * Reads and lowers one buffer.
 	 * @param source the typed text: any number of datums

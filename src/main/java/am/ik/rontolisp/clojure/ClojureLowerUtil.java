@@ -86,35 +86,50 @@ final class ClojureLowerUtil {
 	}
 
 	/**
-	 * Whether a {@code ^...} metadata datum declares {@code ^:dynamic}: either the bare
-	 * keyword or an attr map holding it, so {@code ^:dynamic} and {@code ^{:dynamic
-	 * true}} agree.
+	 * Whether a name datum carries {@code ^:dynamic} metadata (or {@code ^{:dynamic
+	 * true}}), under any wrapping.
 	 */
-	static boolean isDynamicMeta(LispVal meta) {
+	static boolean nameIsDynamic(LispVal nameDatum) {
+		return nameHasFlag(nameDatum, ":dynamic");
+	}
+
+	/**
+	 * Whether a name datum carries {@code ^:private} metadata (or {@code ^{:private
+	 * true}}), under any wrapping.
+	 */
+	static boolean nameIsPrivate(LispVal nameDatum) {
+		return nameHasFlag(nameDatum, ":private");
+	}
+
+	private static boolean nameHasFlag(LispVal nameDatum, String flag) {
+		List<LispVal> parts = items(nameDatum);
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+			if (metaHasFlag(parts.get(2), flag)) {
+				return true;
+			}
+			nameDatum = parts.get(1);
+			parts = items(nameDatum);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a {@code ^...} metadata datum sets a flag: the bare keyword, or an attr map
+	 * holding it with a value other than {@code false}/{@code nil}.
+	 */
+	private static boolean metaHasFlag(LispVal meta, String flag) {
 		if (meta instanceof LispSymbol s) {
-			return s.name().equals(":dynamic");
+			return s.name().equals(flag);
 		}
 		List<LispVal> parts = items(meta);
 		if (parts == null || parts.isEmpty() || !isSymbolNamed(parts.get(0), "%hash-map")) {
 			return false;
 		}
-		for (int i = 1; i < parts.size(); i++) {
-			if (parts.get(i) instanceof LispSymbol k && k.name().equals(":dynamic")) {
-				return true;
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol k && k.name().equals(flag)) {
+				LispVal value = parts.get(i + 1);
+				return !(isSymbolNamed(value, "false") || isSymbolNamed(value, "nil"));
 			}
-		}
-		return false;
-	}
-
-	/** Whether a name datum carries {@code ^:dynamic} metadata, under any wrapping. */
-	static boolean nameIsDynamic(LispVal nameDatum) {
-		List<LispVal> parts = items(nameDatum);
-		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
-			if (isDynamicMeta(parts.get(2))) {
-				return true;
-			}
-			nameDatum = parts.get(1);
-			parts = items(nameDatum);
 		}
 		return false;
 	}

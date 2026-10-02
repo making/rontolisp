@@ -651,17 +651,24 @@ final class ClojureStateLowering {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
-				if (!name.equals("*out*") && !name.equals("*in*") && !ctx.dynamicVars.contains(name)) {
+				boolean stream = name.equals("*out*") || name.equals("*in*") || name.equals("*agent*");
+				// a project var (own, referred, or qualified) rebinds its own special;
+				// the body reads it through the var, so no local shadows it
+				String key = stream ? null : ctx.resolveVar(name);
+				if (!stream && (key == null || !ctx.dynamicVars.contains(key))) {
 					throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
 				}
 				if (name.equals("*agent*")) {
 					ctx.usedStm = true;
 				}
 				LispVal init = ctx.lower(bindings.get(i + 1));
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), init));
-				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				if (ClojureLowerUtil.isDirectFun(init)) {
-					ctx.markDirect(name);
+				pairs.add(ClojureLowerUtil
+					.list(key == null ? ClojureLowerUtil.idSym(name) : ClojureLowering.varSym(key), init));
+				if (key == null) {
+					scope.put(name, ClojureLowering.Kind.VARIABLE);
+					if (ClojureLowerUtil.isDirectFun(init)) {
+						ctx.markDirect(name);
+					}
 				}
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
@@ -783,25 +790,24 @@ final class ClojureStateLowering {
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		// Like def: the value lowers against the OLD binding first.
 		LispVal value = items.size() == 3 ? ctx.lower(items.get(2)) : ClojureLowering.NIL_CONST;
-		ctx.globals.put(name, ClojureLowering.Kind.VARIABLE);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
+		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		if (dynamic) {
-			ctx.dynamicVars.add(name);
+			ctx.dynamicVars.add(key);
 		}
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, name, dynamic, items.size() == 3 ? items.get(2) : null);
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == 3 ? items.get(2) : null);
 		if (ClojureLowerUtil.isDirectFun(value)) {
-			ctx.globalDirectFuns.add(name);
+			ctx.globalDirectFuns.add(key);
 		}
 		else {
-			ctx.globalDirectFuns.remove(name);
+			ctx.globalDirectFuns.remove(key);
 		}
-		LispVal set = dynamic
-				? ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowerUtil.idSym(name), value)
-				: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowerUtil.idSym(name), value);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.idSym(name))),
-				ClojureLowerUtil.idSym(name), set);
+		LispSymbol var = ClojureLowering.varSym(key);
+		LispVal set = dynamic ? ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), var, value)
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)), var, set);
 	}
 
 	/**
@@ -811,8 +817,9 @@ final class ClojureStateLowering {
 	static LispVal defstructForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defstruct takes a name and keys");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defstruct");
-		ctx.globals.put(name, ClojureLowering.Kind.VARIABLE);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
+		String struct = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ctx.globals.put(struct, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(struct); // a definition wins over the macro it shadows
 		List<LispVal> keys = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
 			LispVal key = items.get(i);
@@ -822,7 +829,7 @@ final class ClojureStateLowering {
 			keys.add(ClojureCollectionLowering
 				.keywordForm(ClojureCollectionLowering.resolveKeywordSpelling(ctx, s.name())));
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowerUtil.idSym(name),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(struct),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), keys));
 	}
 

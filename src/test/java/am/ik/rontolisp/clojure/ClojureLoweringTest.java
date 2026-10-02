@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
@@ -544,9 +545,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void nsDefinesNothing() {
-		assertThat(lowered("(ns foo) (def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+		// the ns form lowers to nothing; what follows defines into the namespace,
+		// whose vars carry its name (user's keep the bare mangled name)
+		assertThat(lowered("(ns foo) (def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
 		assertThat(lowered("(ns foo (:require [clojure.string :as s])) (def x 1) x"))
-			.isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
+			.isEqualTo(FALSE_BINDING + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
+		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
 	}
 
 	@Test
@@ -864,7 +868,7 @@ class ClojureLoweringTest {
 			.contains("CONCATENATE");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [no.such.lib :as n]))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: no.such.lib");
+			.hasMessageContaining("Could not locate no/such/lib.clj");
 		assertThatThrownBy(() -> Clojure.read("(s/join \",\" [\"a\"])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: s/join");
 	}
@@ -882,9 +886,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(use '[clojure.string :only [upper-case]]) (upper-case \"hi\")")).contains("STRING-UPCASE");
 		assertThatThrownBy(() -> Clojure.read("(require '[no.such.lib :as n])", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: no.such.lib");
+			.hasMessageContaining("Could not locate no/such/lib.clj");
 		assertThatThrownBy(() -> Clojure.read("(use '[no.such.lib :as n])", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: no.such.lib");
+			.hasMessageContaining("Could not locate no/such/lib.clj");
 	}
 
 	@Test
@@ -1543,9 +1547,9 @@ class ClojureLoweringTest {
 		// the test function, its body as a function of its own, the registration
 		// under the namespace, and the runtime start ahead of everything
 		assertThat(out).contains("RONTOLISP::%CLOJURE-TEST-INIT")
-			.contains("(DEFUN |c%a%body| NIL")
-			.contains("(DEFUN |c%a| NIL (RONTOLISP::%CLOJURE-TEST-VAR \"a\" #'|c%a%body|")
-			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%a|)");
+			.contains("(DEFUN |c%t/a%body| NIL")
+			.contains("(DEFUN |c%t/a| NIL (RONTOLISP::%CLOJURE-TEST-VAR \"a\" #'|c%t/a%body|")
+			.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"t\" \"a\" #'|c%t/a|)");
 		// = is a predicate call, and is an any-form assertion (a macro)
 		assertThat(out).contains("RONTOLISP::%CLOJURE-TEST-PRED")
 			.contains("RONTOLISP::%CLOJURE-TEST-ANY")
@@ -1555,7 +1559,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(ns t (:use clojure.test)) (deftest a (is true)) (run-tests)"))
 			.contains("RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"t\") '(\"user\" \"t\")");
 		// a test is a zero-argument function a later form may call
-		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%b|)");
+		assertThat(lowered("(ns t (:use clojure.test)) (b) (deftest b (is true))")).contains("(|c%t/b|)");
 	}
 
 	@Test
@@ -1575,7 +1579,83 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(deftest a (is true))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: deftest");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:use no.such.lib))", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: no.such.lib");
+			.hasMessageContaining("Could not locate no/such/lib.clj");
+	}
+
+	private static String loweredWithFiles(String source, Map<String, String> files) {
+		List<LispVal> forms = Clojure.read(source, null, ClojureMacroTime.create(), new MemoryClojureFiles(files));
+		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce() {
+		// the file from src (the default root without a deps.edn), its vars
+		// qualified by its namespace, emitted once ahead of the requiring form
+		String out = loweredWithFiles(
+				"(ns m (:require [app.lib :as l])) (require 'app.lib) (println (l/f 1) (app.lib/f 2))",
+				Map.of("src/app/lib.clj", "(ns app.lib) (defn f [x] (inc x))"));
+		assertThat(out).containsOnlyOnce("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))")
+			.contains("(|c%app.lib/f| 1)")
+			.contains("(|c%app.lib/f| 2)");
+		assertThat(out.indexOf("DEFUN |c%app.lib/f|")).isLessThan(out.indexOf("(|c%app.lib/f| 1)"));
+		// a deps.edn's :paths name the roots, beside the entry's own
+		assertThat(loweredWithFiles("(require 'app.lib) (app.lib/f 1)",
+				Map.of("deps.edn", "{:paths [\"lib\"]}", "lib/app/lib.clj", "(ns app.lib) (defn f [x] x)")))
+			.contains("(|c%app.lib/f| 1)");
+	}
+
+	@Test
+	void eachNamespaceHasItsOwnVars() {
+		// two namespaces define one name; user's vars keep the bare mangled name
+		String out = lowered(
+				"(defn f [] 0) (ns a) (defn f [] 1) (ns b (:require [a])) (defn f [] 2) (a/f) (f) (user/f)");
+		assertThat(out).contains("(DEFUN |c%f| NIL 0)")
+			.contains("(DEFUN |c%a/f| NIL 1)")
+			.contains("(DEFUN |c%b/f| NIL 2)")
+			.contains("(|c%a/f|)\n(|c%b/f|)\n(|c%f|)");
+		// a name another namespace defines is no name here
+		assertThatThrownBy(() -> Clojure.read("(ns a) (defn g [] 1) (ns b) (g)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: g");
+	}
+
+	@Test
+	void requireRefersOnlyThroughReferOrUse() {
+		// the oracle's load-lib: a bare :only under require refers nothing
+		assertThatThrownBy(() -> Clojure.read("(require '[clojure.string :only [join]]) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+		assertThat(lowered("(ns a) (defn f [] 1) (defn- p [] 2) (ns b (:use a)) (f)")).contains("(|c%a/f|)");
+		assertThatThrownBy(() -> Clojure.read("(ns a) (defn- p [] 2) (ns b (:use a)) (p)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: p");
+		assertThatThrownBy(() -> Clojure.read("(ns a) (defn- p [] 2) (ns b (:require [a :as x])) (x/p)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var: #'a/p is not public");
+		assertThatThrownBy(() -> Clojure.read("(ns a) (ns b (:require [a :as x])) (x/nope)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such var: x/nope");
+	}
+
+	@Test
+	void syntaxQuoteQualifiesTheVarsItsNamespaceSees() {
+		// like the oracle's read-time resolution: an own or referred var carries its
+		// namespace (user's included); core names and unresolved symbols stay bare
+		assertThat(loweredWithMacros("(ns s.a) (defn h [] 1) (defmacro m [] `(h ~'x nope))")).contains("'|c%s.a/h|")
+			.contains("'|c%nope|");
+		assertThat(loweredWithMacros("(defn h [] 1) (defmacro m [] `(h))")).contains("'|c%user/h|");
+	}
+
+	@Test
+	void macroexpandCarriesTheCallSitesMacroScope() {
+		// a bare head of a namespace other than user, and an alias-qualified one,
+		// reach the table through the call site's scope; nothing else needs one
+		assertThat(loweredWithMacros("(ns s.a) (defmacro m [] 1) (macroexpand-1 '(m))"))
+			.contains("(C%MACROEXPAND-1 '(|c%m|) '((|c%m| . |c%s.a/m%macro|)))");
+		assertThat(loweredWithMacros("(ns s.a) (defmacro m [] 1) (ns s.b (:require [s.a :as x])) (macroexpand '(x/m))"))
+			.contains("(C%MACROEXPAND '(|c%x/m|) '((|c%x/m| . |c%s.a/m%macro|)))");
+		assertThat(loweredWithMacros("(defmacro m [] 1) (macroexpand-1 '(m))"))
+			.contains("(C%MACROEXPAND-1 '(|c%m|) NIL)");
 	}
 
 }

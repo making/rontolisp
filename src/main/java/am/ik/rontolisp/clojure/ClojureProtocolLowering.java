@@ -211,22 +211,33 @@ final class ClojureProtocolLowering {
 	 */
 	static ClojureLowering.ProtocolDef declareProtocol(ClojureLowering ctx, List<LispVal> items) {
 		String name = ClojureLowerUtil.plainName(items.get(1), "defprotocol");
-		ClojureLowering.ProtocolDef def = parseProtocol(ctx, name, items);
-		ctx.protocols.put(name, def);
-		ctx.globals.put(name, ClojureLowering.Kind.VARIABLE);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ClojureLowering.ProtocolDef def = parseProtocol(ctx, key, name, items);
+		ctx.protocols.put(key, def);
+		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		for (String method : def.methods()) {
-			ctx.globals.put(method, ClojureLowering.Kind.FUNCTION);
-			ctx.macros.remove(method); // a definition wins over the macro it shadows
+			String methodKey = ctx.intern(method, false);
+			ctx.globals.put(methodKey, ClojureLowering.Kind.FUNCTION);
+			ctx.macros.remove(methodKey); // a definition wins over the macro it shadows
 		}
 		return def;
 	}
 
 	/**
+	 * The protocol a name resolves to: the current namespace's own, a referred one, or
+	 * one reached through an alias or its namespace's full name; null when it names none.
+	 */
+	static ClojureLowering.@Nullable ProtocolDef protocolOf(ClojureLowering ctx, String name) {
+		String key = ctx.isLocal(name) ? null : ctx.resolveVar(name);
+		return key == null ? null : ctx.protocols.get(key);
+	}
+
+	/**
 	 * The pre-scan half of {@code defrecord}/{@code deftype}: registers the type plus its
-	 * constructors, so a constructor call may stand above the definition, like
-	 * {@code defn}. The type name itself is no value (the oracle answers a host class,
-	 * which no wasm backend has).
+	 * constructors in the current namespace, so a constructor call may stand above the
+	 * definition, like {@code defn}. The type name itself is no value (the oracle answers
+	 * a host class, which no wasm backend has).
 	 */
 	static ClojureLowering.TypeDef declareRecordType(ClojureLowering ctx, List<LispVal> items) {
 		boolean record = ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord");
@@ -234,10 +245,10 @@ final class ClojureProtocolLowering {
 		List<String> fields = recordFields(ctx, items);
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
 				ctx.currentNs.replace('-', '_') + "." + name);
-		ctx.types.put(name, def);
-		ctx.globals.put("->" + name, ClojureLowering.Kind.FUNCTION);
+		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
+		ctx.globals.put(ctx.intern("->" + name, false), ClojureLowering.Kind.FUNCTION);
 		if (record) {
-			ctx.globals.put("map->" + name, ClojureLowering.Kind.FUNCTION);
+			ctx.globals.put(ctx.intern("map->" + name, false), ClojureLowering.Kind.FUNCTION);
 		}
 		return def;
 	}
@@ -248,7 +259,8 @@ final class ClojureProtocolLowering {
 	 * skipped, like {@code defn} and {@code defmulti}; a signature is one parameter
 	 * vector per method (several arities stay refused).
 	 */
-	static ClojureLowering.ProtocolDef parseProtocol(ClojureLowering ctx, String name, List<LispVal> items) {
+	static ClojureLowering.ProtocolDef parseProtocol(ClojureLowering ctx, String key, String name,
+			List<LispVal> items) {
 		int at = 2;
 		if (at < items.size() && items.get(at) instanceof LispString) {
 			at++; // the docstring
@@ -292,8 +304,9 @@ final class ClojureProtocolLowering {
 			ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
 		}
 		ClojureLowerUtil.isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
-		return new ClojureLowering.ProtocolDef(methods, new LispSymbol(ClojureLowering.mangle(name) + "%methods"),
-				new LispSymbol(ClojureLowering.mangle(name) + "%default"));
+		String var = ClojureLowering.varSym(key).name();
+		return new ClojureLowering.ProtocolDef(methods, new LispSymbol(var + "%methods"),
+				new LispSymbol(var + "%default"));
 	}
 
 	/**
@@ -314,7 +327,8 @@ final class ClojureProtocolLowering {
 		for (String method : def.methods()) {
 			forms.add(dispatcherDefun(ctx, name, method, def));
 		}
-		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowerUtil.idSym(name), def.methodsVar()));
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"),
+				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, name)), def.methodsVar()));
 		ctx.usedProtocols = true;
 		return forms;
 	}
@@ -359,7 +373,8 @@ final class ClojureProtocolLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 						LispString.literal("wrong number of arguments passed to: " + method)),
 				lookup);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym(method),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
+				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, method)),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), body);
 	}
 
@@ -427,7 +442,7 @@ final class ClojureProtocolLowering {
 					groups.add(new ClojureLowering.ImplGroup(protocol, methods));
 				}
 				protocol = s.name();
-				def = ctx.protocols.get(protocol);
+				def = protocolOf(ctx, protocol);
 				if (def == null) {
 					throw new LispReadException("No such protocol: " + protocol);
 				}
@@ -472,7 +487,7 @@ final class ClojureProtocolLowering {
 	 */
 	static LispVal methodRow(ClojureLowering ctx, String protocol, LispVal key, ClojureLowering.TypeMethod impl,
 			@Nullable List<String> fields) {
-		ClojureLowering.ProtocolDef def = ctx.protocols.get(protocol);
+		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
@@ -573,7 +588,8 @@ final class ClojureProtocolLowering {
 				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()))
 				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym("->" + name),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
+				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "->" + name)),
 				ClojureLowerUtil.list(params), value);
 	}
 
@@ -617,7 +633,8 @@ final class ClojureProtocolLowering {
 							ClojureLowerUtil.list(List
 								.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.tableFromPlist(pairs)))),
 							ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym("map->" + name),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
+				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "map->" + name)),
 				ClojureLowerUtil.list(List.of(src)), whole);
 	}
 
@@ -699,8 +716,9 @@ final class ClojureProtocolLowering {
 		if (typeName.equals("nil")) {
 			return ClojureCollectionLowering.keywordForm("nil");
 		}
-		if (ctx.types.containsKey(typeName)) {
-			return typeTagForm(typeName);
+		ClojureLowering.TypeDef type = ctx.typeDefOf(typeName);
+		if (type != null) {
+			return typeTagForm(type.tagSpelling());
 		}
 		String kind = switch (typeName) {
 			case "String", "CharSequence" -> "string";
@@ -730,7 +748,7 @@ final class ClojureProtocolLowering {
 	 */
 	static LispVal extendRow(ClojureLowering ctx, String protocol, @Nullable LispVal key,
 			ClojureLowering.TypeMethod impl, String what) {
-		ClojureLowering.ProtocolDef def = ctx.protocols.get(protocol);
+		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
@@ -752,7 +770,7 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "extend-protocol takes a protocol, a type and methods");
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-protocol takes a protocol name");
 		String protocol = ((LispSymbol) items.get(1)).name();
-		if (!ctx.protocols.containsKey(protocol)) {
+		if (protocolOf(ctx, protocol) == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		List<LispVal> rows = new ArrayList<>();
@@ -822,7 +840,7 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.get(2) instanceof LispSymbol, "extend takes a protocol name");
 		String target = ((LispSymbol) items.get(1)).name();
 		String protocol = ((LispSymbol) items.get(2)).name();
-		ClojureLowering.ProtocolDef def = ctx.protocols.get(protocol);
+		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
@@ -859,7 +877,7 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(items.size() == 3, "satisfies? takes a protocol and a value");
 		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "satisfies? takes a protocol name");
 		String protocol = ((LispSymbol) items.get(1)).name();
-		ClojureLowering.ProtocolDef def = ctx.protocols.get(protocol);
+		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
@@ -899,7 +917,7 @@ final class ClojureProtocolLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("gensym"), LispString.literal("reify")))));
 		List<LispVal> body = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : groups) {
-			ClojureLowering.ProtocolDef def = ctx.protocols.get(group.protocol());
+			ClojureLowering.ProtocolDef def = protocolOf(ctx, group.protocol());
 			if (def == null) {
 				throw new LispReadException("No such protocol: " + group.protocol());
 			}

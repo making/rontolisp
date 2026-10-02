@@ -2,8 +2,9 @@
 
 コードを書くコードです。`defmacro` はコンパイル時 expander を定義します。呼び出し
 位置は lower 中に展開され、バックエンドが動くより前に済みます。同じ expander が
-実行時の `macroexpand-1` にも答えます。テンプレートは `c%` 名前空間上の
-syntax-quote で、`~`/`~@` と展開ごとの `x#` gensym を伴います。下の `unless` は
+実行時の `macroexpand-1` にも答えます。テンプレートは syntax-quote で、定義側の
+名前空間から見える var はその名前空間で限定され、`~`/`~@` と展開ごとの `x#` gensym を
+伴います。下の `unless` は
 `(defmacro unless [c t] (list 'if c nil t))` です。
 
 | 名前 | 例 | 結果 |

@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.ClojureMacroTime;
@@ -91,6 +92,29 @@ class ClojureSessionTest {
 			.toList();
 		assertThat(run).noneMatch(form -> form.contains("%CLOJURE-TEST-INIT"));
 		assertThat(run).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"b55sess\")"));
+	}
+
+	@Test
+	void aBufferRequiresAProjectNamespaceAndALaterOneCallsIt() {
+		// the session reads from the working directory's source path (src without a
+		// deps.edn); the namespace loads once, with the buffer that first requires it
+		ClojureSession session = new ClojureSession(
+				new MemoryClojureFiles(Map.of("src/app/lib.clj", "(ns app.lib) (defn f [x] (inc x))")));
+		session.setMacroEvaluator(ClojureMacroTime.create());
+		List<String> required = session.read("(require '[app.lib :as l])")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(required).contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))");
+		assertThat(session.read("(l/f 1)").get(0).forms().stream().map(LispVal::print).toList())
+			.containsExactly("(|c%app.lib/f| 1)");
+		List<String> again = session.read("(require 'app.lib)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(again).noneMatch(form -> form.contains("DEFUN"));
 	}
 
 	@Test

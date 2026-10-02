@@ -56,25 +56,25 @@ final class ClojureBindingLowering {
 		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
 		// the still-unbound value cell; only then does the name become a VARIABLE.
 		LispVal value = items.size() == at + 1 ? ctx.lower(items.get(at)) : ClojureLowering.NIL_CONST;
-		ctx.globals.put(name, ClojureLowering.Kind.VARIABLE);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
+		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		if (dynamic) {
-			ctx.dynamicVars.add(name);
+			ctx.dynamicVars.add(key);
 		}
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, name, dynamic,
-				items.size() == at + 1 ? items.get(at) : null);
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == at + 1 ? items.get(at) : null);
 		if (ClojureLowerUtil.isDirectFun(value)) {
-			ctx.globalDirectFuns.add(name);
+			ctx.globalDirectFuns.add(key);
 		}
 		else {
-			ctx.globalDirectFuns.remove(name);
+			ctx.globalDirectFuns.remove(key);
 		}
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
 			// and proclaims it, so binding rebinds it with dynamic extent
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowerUtil.idSym(name), value);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowerUtil.idSym(name), value);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value);
 	}
 
 	/** Whether the datum is an attr map (its marker head), not a value. */
@@ -85,7 +85,9 @@ final class ClojureBindingLowering {
 
 	static LispVal declareForm(ClojureLowering ctx, List<LispVal> items) {
 		for (int i = 1; i < items.size(); i++) {
-			ctx.globals.putIfAbsent(ClojureLowerUtil.plainName(items.get(i), "declare"), ClojureLowering.Kind.FUNCTION);
+			String key = ctx.internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
+					ClojureLowerUtil.nameIsPrivate(items.get(i)));
+			ctx.globals.putIfAbsent(key, ClojureLowering.Kind.FUNCTION);
 		}
 		return ClojureLowering.NIL_CONST;
 	}
@@ -188,20 +190,23 @@ final class ClojureBindingLowering {
 				"defn needs a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defn");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(items.get(1));
-		ctx.globals.put(name, dynamic ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
+		String key = ctx.intern(name,
+				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-") || ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ctx.globals.put(key, dynamic ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		if (dynamic) {
 			// a dynamic var is rebindable: the value cell holds the function
 			// (proclaimed special, so binding rebinds it with dynamic extent)
 			// while the function cell keeps the definition
-			ctx.dynamicVars.add(name);
-			ctx.globalDirectFuns.add(name);
+			ctx.dynamicVars.add(key);
+			ctx.globalDirectFuns.add(key);
 		}
-		String callName = ClojureLowerUtil.idSym(name).name();
+		LispSymbol fn = ClojureLowering.varSym(key);
+		String callName = fn.name();
 		List<LispVal> fnParts = new ArrayList<>();
 		fnParts.add(new LispSymbol("fn"));
 		fnParts.addAll(items.subList(at, items.size()));
-		ClojureDispatchLowering.recordClassDispatchFn(ctx, name, dynamic, ClojureLowerUtil.list(fnParts));
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
 		List<LispVal> forms;
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
 			forms = multiDefun(ctx, name, items.subList(at, items.size()), callName);
@@ -221,20 +226,20 @@ final class ClojureBindingLowering {
 				forms = new ArrayList<>(List.of(
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(worker),
 								ClojureLowerUtil.list(workerParams), clause.wrapped()),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym(name),
-								ClojureLowerUtil.list(clause.params()), workerCall(worker, clause))));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn, ClojureLowerUtil.list(clause.params()),
+								workerCall(worker, clause))));
 			}
 			else {
-				forms = new ArrayList<>(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
-						ClojureLowerUtil.idSym(name), ClojureLowerUtil.list(clause.params()), clause.wrapped())));
+				forms = new ArrayList<>(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
+						ClojureLowerUtil.list(clause.params()), clause.wrapped())));
 			}
 		}
 		if (dynamic) {
 			// the value cell carries the function for calls and value carries
 			// (a funcall of it, like a def'd function); recur and the
 			// arity-dispatch helpers stay direct calls to the function cell
-			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowerUtil.idSym(name),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(name))));
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), fn,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
 		}
 		return forms;
 	}
@@ -272,7 +277,7 @@ final class ClojureBindingLowering {
 		List<String> helperNames = new ArrayList<>();
 		List<ClojureLowering.RecurTarget> targets = new ArrayList<>();
 		for (ClojureLowering.ParamShape shape : shapes) {
-			String helperName = ClojureLowering.PREFIX + name + "%" + (shape.variadic() ? "*" : shape.fixed());
+			String helperName = callName + "%" + (shape.variadic() ? "*" : shape.fixed());
 			helperNames.add(helperName);
 			targets.add(new ClojureLowering.RecurTarget(shape.variadic() ? helperName : callName, true));
 		}
@@ -311,7 +316,7 @@ final class ClojureBindingLowering {
 		}
 		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("wrong number of arguments passed to: " + name))));
-		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym(name),
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(callName),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(count,
@@ -835,9 +840,9 @@ final class ClojureBindingLowering {
 				throw new LispReadException(s.name() + " is a macro, not a function");
 			}
 			if (ctx.isFunction(s.name())) {
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(s.name()));
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.symOf(s.name()));
 			}
-			return ClojureLowerUtil.idSym(s.name());
+			return ctx.symOf(s.name());
 		}
 		if (form instanceof LispSymbol s) {
 			LispVal predicate = ClojureFnLowering.predicateValue(ctx, s.name());
@@ -848,7 +853,7 @@ final class ClojureBindingLowering {
 		if (form instanceof LispSymbol s) {
 			ClojureLowering.VarRef qualified = ClojureNamespaceLowering.resolveQualified(ctx, s.name());
 			if (qualified == null) {
-				qualified = ctx.refers.get(s.name());
+				qualified = ClojureNamespaceLowering.libraryRefer(ctx, s.name());
 			}
 			if (qualified != null) {
 				return ClojureNamespaceLowering.namespaceValue(ctx, qualified);

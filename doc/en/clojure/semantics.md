@@ -23,6 +23,32 @@ and a named `fn` binds itself for self-calls; `#(...)` is a `lambda` whose argum
 travel as one rest list (`%`..`%9`, `%&`), its body forms wrapped as one call. `declare`
 names what is defined below, so a definition may use one.
 
+## Namespaces and files
+
+Every namespace has its own vars. A definition belongs to the current namespace (`user`
+until an `ns` or `in-ns` switches it); a name resolves to a local, then to the current
+namespace's own var, then to a referred one, and `alias/name` or `full.name/name` reaches
+another namespace's var -- a private one (`defn-`, `^:private`) is refused, like the
+oracle's compiler. A var of `user` lowers to `c%name`, any other to `c%ns/name`, which is
+what a Common Lisp file loading the program calls.
+
+A `require`, `use` or `ns` clause naming a namespace the program has not declared loads its
+file: `my-app.core` is `my_app/core.clj`, read from the first source root holding it --
+the directory the entry file's own namespace names (`src` for `src/demo/main.clj` declaring
+`demo.main`, the file's directory without an `ns`), then the `:paths` of the nearest
+`deps.edn` at or above the entry file (`["src"]` when it names none), or `src` under the
+working directory when there is no `deps.edn`. A file lowers once per program, ahead of the
+form that required it; a second `require` loads nothing, and a file without an `ns` form
+defines into the requiring namespace. `use` and `:refer :all` bring in every public var; a
+file no root holds, a cycle of requires and a refer of a missing or private var are errors
+in the oracle's words.
+
+```bash
+# deps.edn holds {:paths ["src"]}; demo.main and demo.main-test require demo.lib
+rontolisp src/demo/main.clj          # roots: src (its ns), src (deps.edn)
+rontolisp test/demo/main_test.clj    # roots: test (its ns), src (deps.edn)
+```
+
 ## Binding
 
 `let` is a `let*` (Clojure's `let` is sequential); `letfn` is one `labels` over
@@ -51,8 +77,9 @@ its definition is an error, a macro has no function value, and a later `def`/`de
 the same name wins back the call sites. A `defmacro` shadows a core function at call
 sites (never a special form, which intercepts first).
 
-`` `form `` builds a form as data over the mangled namespace: every symbol qualifies
-behind `c%`, `~` inserts its form's value, `~@` splices a sequence into the enclosing
+`` `form `` builds a form as data over the mangled namespace: a symbol naming a var the
+defining namespace sees qualifies with that var's namespace (a core name or an
+unresolved symbol stays bare), `~` inserts its form's value, `~@` splices a sequence into the enclosing
 list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
 one symbol per expansion, the same at every occurrence within it. An unquote outside
 any syntax-quote is an error, as is a splice outside a sequence. `macroexpand-1`

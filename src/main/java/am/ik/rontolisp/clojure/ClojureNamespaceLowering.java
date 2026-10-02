@@ -26,7 +26,11 @@ import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Namespace forms of the Clojure lowering: ns/require/use/import and name resolution.
+ * Namespace forms of the Clojure lowering: ns/require/use/import, the loading of project
+ * namespaces from the source path ({@link ClojureSourcePath}) and the libraries that are
+ * lowerings ({@code clojure.string}, {@code clojure.java.io}, {@code clojure.test}).
+ * Which var a name names is the hub's ({@link ClojureLowering#resolveVar}); this slice
+ * wires the aliases and refers it reads.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -146,17 +150,21 @@ final class ClojureNamespaceLowering {
 	 * invisible name is not a builtin, so a user definition of it wins.
 	 */
 	static boolean coreAllowed(ClojureLowering ctx, String name) {
-		if (ctx.referClojureOnly != null && !ctx.referClojureOnly.contains(name)) {
+		ClojureNsState here = ctx.ns();
+		if (here.referClojureOnly != null && !here.referClojureOnly.contains(name)) {
 			return false;
 		}
-		return !ctx.referClojureExclude.contains(name);
+		return !here.referClojureExclude.contains(name);
 	}
 
 	/**
-	 * One {@code (ns name doc? attr-map? clause...)} form: wires the {@code :require} /
-	 * {@code :use} aliases and refers, the {@code :import} class names and the
-	 * {@code :refer-clojure} filter, and defines nothing. Metadata, the docstring and the
-	 * attr map are ignored, like the declaration itself.
+	 * One {@code (ns name doc? attr-map? clause...)} form: switches to the namespace
+	 * (creating it, and marking it loaded like the oracle's {@code ns}, so a later
+	 * {@code require} of it reads no file), wires the {@code :require} / {@code :use}
+	 * aliases and refers -- loading each project namespace they name -- the
+	 * {@code :import} class names and the {@code :refer-clojure} filter, and defines
+	 * nothing. Metadata, the docstring and the attr map are ignored, like the declaration
+	 * itself.
 	 */
 	static void processNs(ClojureLowering ctx, LispVal form) {
 		List<LispVal> items = ClojureLowerUtil.items(form);
@@ -167,6 +175,14 @@ final class ClojureNamespaceLowering {
 			throw new LispReadException("ns takes a name, not " + items.get(1).print());
 		}
 		ctx.currentNs = name.name();
+		ctx.createdNamespaces.add(name.name());
+		nsClauses(ctx, items);
+		// loaded once its clauses ran, like the oracle's ns: a require of it from a
+		// namespace its own clauses load is a cycle, not a no-op
+		ctx.loadedNamespaces.add(name.name());
+	}
+
+	private static void nsClauses(ClojureLowering ctx, List<LispVal> items) {
 		for (int i = 2; i < items.size(); i++) {
 			LispVal clause = items.get(i);
 			if (clause instanceof LispString) {
@@ -190,30 +206,39 @@ final class ClojureNamespaceLowering {
 	}
 
 	/**
-	 * {@code (in-ns 'name)}: switches the session's {@code *ns*} for the
-	 * {@code ::}-keywords below it, answering nil. The namespace stays flat -- every
-	 * definition is still global -- so only the auto-resolve moves. A quoted symbol, a
-	 * bare symbol or a string names it directly (never evaluated); anything else leaves
-	 * it alone.
+	 * {@code (in-ns 'name)}: switches to the namespace (creating it, but not marking it
+	 * loaded -- the oracle's {@code in-ns} loads nothing), so the definitions and the
+	 * {@code ::}-keywords below it belong there, answering nil. A quoted symbol, a bare
+	 * symbol or a string names it directly (never evaluated); anything else leaves it
+	 * alone.
 	 */
 	static LispVal inNsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "in-ns takes a namespace");
-		LispVal arg = items.get(1);
+		String name = inNsName(items.get(1));
+		if (name != null) {
+			ctx.currentNs = name;
+			ctx.createdNamespaces.add(name);
+		}
+		return ClojureLowering.NIL_CONST;
+	}
+
+	/**
+	 * The namespace an {@code in-ns} argument names: a quoted symbol, a bare symbol or a
+	 * string, never evaluated; null for anything else.
+	 */
+	static @Nullable String inNsName(LispVal arg) {
 		if (arg instanceof LispSymbol sym) {
-			ctx.currentNs = sym.name();
+			return sym.name();
 		}
-		else if (arg instanceof LispString text) {
-			ctx.currentNs = text.value();
+		if (arg instanceof LispString text) {
+			return text.value();
 		}
-		else {
-			List<LispVal> quoted = ClojureLowerUtil.items(arg);
-			if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
-					&& quoted.get(1) instanceof LispSymbol sym) {
-				ctx.currentNs = sym.name();
-			}
+		List<LispVal> quoted = ClojureLowerUtil.items(arg);
+		if (quoted != null && quoted.size() == 2 && ClojureLowerUtil.isSymbolNamed(quoted.get(0), "quote")
+				&& quoted.get(1) instanceof LispSymbol sym) {
+			return sym.name();
 		}
-		return ClojureLowering.NIL_CONST; // the namespace is flat: every definition is
-											// global
+		return null;
 	}
 
 	/**
@@ -222,8 +247,10 @@ final class ClojureNamespaceLowering {
 	 * and prefix lists -- each either bare or quoted ({@code 'spec}, the oracle's
 	 * bare-{@code require} spelling; the {@code ns} clauses quote implicitly, so both
 	 * paths share this parser). An unquoted vector spec stays accepted too (a lenient
-	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). Requiring
-	 * an unknown namespace is an error, like the oracle's missing-library failure.
+	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). A project
+	 * namespace loads from its file ({@link #loadNamespace}); one no root holds is the
+	 * oracle's missing-library failure, and an unknown {@code clojure.*} library is
+	 * refused by name.
 	 */
 	static void requireSpecs(ClojureLowering ctx, List<LispVal> specs, boolean referAll) {
 		for (LispVal spec : specs) {
@@ -278,17 +305,24 @@ final class ClojureNamespaceLowering {
 		}
 	}
 
-	static void requireOne(ClojureLowering ctx, @Nullable String prefix, List<LispVal> parts, boolean referAll,
+	/**
+	 * One libspec: the namespace loaded (a known library is a lowering, a project
+	 * namespace its file, once per program read), then its {@code :as} alias and its
+	 * refers wired into the current namespace. Like the oracle's {@code load-lib}, names
+	 * are referred only by {@code use} or a {@code :refer} option -- a {@code require}
+	 * with a bare {@code :only} or {@code :exclude} refers nothing -- and {@code :only}
+	 * narrows the refer-all default of {@code use}, {@code :exclude} subtracting either
+	 * way.
+	 */
+	static void requireOne(ClojureLowering ctx, @Nullable String prefix, List<LispVal> parts, boolean use,
 			LispVal spec) {
 		String ns = ((LispSymbol) parts.get(0)).name();
 		if (prefix != null) {
 			ns = prefix + "." + ns;
 		}
-		if (!isKnownNamespace(ns)) {
-			throw new LispReadException("unknown namespace: " + ns);
-		}
-		ctx.aliases.putIfAbsent(ns, ns); // the fully-qualified spelling always resolves
-		boolean all = referAll;
+		String alias = null;
+		boolean all = use;
+		boolean refer = use;
 		List<String> only = null;
 		Set<String> exclude = new HashSet<>();
 		for (int i = 1; i < parts.size(); i += 2) {
@@ -298,12 +332,13 @@ final class ClojureNamespaceLowering {
 			LispVal arg = parts.get(i + 1);
 			switch (opt.name()) {
 				case ":as" -> {
-					if (!(arg instanceof LispSymbol alias)) {
+					if (!(arg instanceof LispSymbol named)) {
 						throw new LispReadException(":as takes an alias, not " + arg.print());
 					}
-					ctx.aliases.put(alias.name(), ns);
+					alias = named.name();
 				}
 				case ":refer" -> {
+					refer = true;
 					if (arg instanceof LispSymbol every && every.name().equals(":all")) {
 						all = true;
 					}
@@ -317,24 +352,148 @@ final class ClojureNamespaceLowering {
 				default -> throw new LispReadException("require option " + opt.name() + " is not supported yet");
 			}
 		}
+		boolean library = isKnownNamespace(ns);
+		if (library) {
+			ctx.ns().aliases.putIfAbsent(ns, ns); // the fully-qualified spelling always
+													// resolves
+		}
+		else {
+			if (ns.startsWith("clojure.")) {
+				// the language's own libraries are lowerings, never project files
+				throw new LispReadException("unknown namespace: " + ns);
+			}
+			loadNamespace(ctx, ns);
+			if ((alias != null || refer) && !ctx.createdNamespaces.contains(ns)) {
+				// the file defined no such namespace (its forms went into the
+				// requiring one, like the oracle's load)
+				throw new LispReadException(
+						"namespace '" + ns + "' not found after loading '" + rootResource(ns) + "'");
+			}
+		}
+		if (alias != null) {
+			ctx.ns().aliases.put(alias, ns);
+		}
+		if (!refer) {
+			return;
+		}
 		if (only != null) {
-			// :only narrows in both modes: under use (:refer :all) it wins over
-			// the refer-all default, and :exclude subtracts from it either way.
 			for (String var : only) {
 				if (!exclude.contains(var)) {
-					if (!isKnownVar(ns, var)) {
-						throw new LispReadException("unknown name: " + ns + "/" + var);
-					}
-					ctx.refers.put(var, new ClojureLowering.VarRef(ns, var));
+					checkReferable(ctx, ns, var, library);
+					ctx.ns().refers.put(var, new ClojureLowering.VarRef(ns, var));
 				}
 			}
 		}
 		else if (all) {
-			for (String var : varsOf(ns)) {
+			for (String var : library ? varsOf(ns) : publicVarsOf(ctx, ns)) {
 				if (!exclude.contains(var)) {
-					ctx.refers.put(var, new ClojureLowering.VarRef(ns, var));
+					ctx.ns().refers.put(var, new ClojureLowering.VarRef(ns, var));
 				}
 			}
+		}
+	}
+
+	/**
+	 * Refuses a refer of a name the namespace does not export: a known library's unknown
+	 * var by name, a project namespace's missing or private var with the oracle's words.
+	 */
+	static void checkReferable(ClojureLowering ctx, String ns, String var, boolean library) {
+		if (library) {
+			if (!isKnownVar(ns, var)) {
+				throw new LispReadException("unknown name: " + ns + "/" + var);
+			}
+			return;
+		}
+		ClojureNsState state = ctx.namespaces.get(ns);
+		Boolean isPrivate = state == null ? null : state.interns.get(var);
+		if (isPrivate == null) {
+			throw new LispReadException(var + " does not exist");
+		}
+		if (isPrivate) {
+			throw new LispReadException(var + " is not public");
+		}
+	}
+
+	/**
+	 * What {@code use} and {@code :refer :all} bring in from a project namespace: every
+	 * public var it interns ({@code def}, {@code defn}, {@code defmacro},
+	 * {@code defmulti}, a protocol and its methods, record constructors, {@code deftest},
+	 * ...), in definition order; private vars stay out, like the oracle's
+	 * {@code ns-publics}.
+	 */
+	static List<String> publicVarsOf(ClojureLowering ctx, String ns) {
+		ClojureNsState state = ctx.namespaces.get(ns);
+		List<String> out = new ArrayList<>();
+		if (state != null) {
+			for (Map.Entry<String, Boolean> intern : state.interns.entrySet()) {
+				if (!intern.getValue()) {
+					out.add(intern.getKey());
+				}
+			}
+		}
+		return out;
+	}
+
+	/** The oracle's root resource of a namespace: {@code /demo/cyc_a}. */
+	static String rootResource(String ns) {
+		String file = ClojureSourcePath.resourceOf(ns);
+		return "/" + file.substring(0, file.length() - ".clj".length());
+	}
+
+	/**
+	 * Loads a project namespace once per program read: nothing when it is already loaded
+	 * (an {@code ns} form of the program, or an earlier {@code require}), else its file
+	 * from the source path, lowered in place ahead of the requiring form. A namespace
+	 * already loading is the oracle's cyclic-load refusal; one no root holds is named
+	 * with the roots searched.
+	 */
+	static void loadNamespace(ClojureLowering ctx, String ns) {
+		if (ctx.loadedNamespaces.contains(ns)) {
+			return;
+		}
+		if (ctx.loadingNamespaces.contains(ns)) {
+			// the oracle's chain: the new request, then the pending loads innermost
+			// first, the repeated one bracketed at both ends
+			List<String> chain = new ArrayList<>();
+			chain.add(ns);
+			chain.addAll(ctx.loadingNamespaces);
+			StringBuilder text = new StringBuilder();
+			for (String pending : chain) {
+				if (!text.isEmpty()) {
+					text.append("->");
+				}
+				String resource = rootResource(pending);
+				text.append(pending.equals(ns) ? "[ " + resource + " ]" : resource);
+			}
+			throw new LispReadException("Cyclic load dependency: " + text);
+		}
+		ClojureSourcePath.Found found = ctx.sourcePath.find(ns);
+		if (found == null) {
+			throw new LispReadException("Could not locate " + ClojureSourcePath.resourceOf(ns) + " on the source path"
+					+ ctx.sourcePath.describeRoots());
+		}
+		ctx.loadFile(ns, found);
+	}
+
+	/**
+	 * A refer of the current namespace into a known library ({@code clojure.string},
+	 * ...): the var it lowers through, or null (no refer, or a project var's, which
+	 * resolves as a var instead).
+	 */
+	static ClojureLowering.@Nullable VarRef libraryRefer(ClojureLowering ctx, String name) {
+		ClojureLowering.VarRef referred = ctx.ns().refers.get(name);
+		return referred != null && isKnownNamespace(referred.ns()) ? referred : null;
+	}
+
+	/**
+	 * Refuses a qualified name whose head names a project namespace but whose var it does
+	 * not define, with the oracle's words ({@code No such var: l/nope}) -- such a name is
+	 * never a class.
+	 */
+	static void refuseMissingVar(ClojureLowering ctx, String name) {
+		int slash = ClojureLowering.qualifierSlash(name);
+		if (slash > 0 && ctx.projectNamespaceOf(name.substring(0, slash)) != null && ctx.lookupVar(name) == null) {
+			throw new LispReadException("No such var: " + name);
 		}
 	}
 
@@ -381,7 +540,7 @@ final class ClojureNamespaceLowering {
 
 	static void importClass(ClojureLowering ctx, String fqn) {
 		int dot = fqn.lastIndexOf('.');
-		ctx.classNames.put(dot < 0 ? fqn : fqn.substring(dot + 1), fqn);
+		ctx.ns().classNames.put(dot < 0 ? fqn : fqn.substring(dot + 1), fqn);
 	}
 
 	/**
@@ -394,8 +553,8 @@ final class ClojureNamespaceLowering {
 				throw new LispReadException(":refer-clojure takes option/value pairs");
 			}
 			switch (opt.name()) {
-				case ":only" -> ctx.referClojureOnly = new HashSet<>(referNames(opts.get(i + 1), opts.get(i + 1)));
-				case ":exclude" -> ctx.referClojureExclude.addAll(referNames(opts.get(i + 1), opts.get(i + 1)));
+				case ":only" -> ctx.ns().referClojureOnly = new HashSet<>(referNames(opts.get(i + 1), opts.get(i + 1)));
+				case ":exclude" -> ctx.ns().referClojureExclude.addAll(referNames(opts.get(i + 1), opts.get(i + 1)));
 				case ":rename" -> throw new LispReadException(":rename is not supported yet in :refer-clojure");
 				default -> throw new LispReadException(":refer-clojure option " + opt.name() + " is not supported yet");
 			}
@@ -441,7 +600,7 @@ final class ClojureNamespaceLowering {
 		if (tail.isEmpty() || tail.indexOf('/') >= 0) {
 			return null;
 		}
-		String ns = ctx.aliases.get(head);
+		String ns = ctx.ns().aliases.get(head);
 		if (ns == null && isKnownNamespace(head)) {
 			ns = head;
 		}
@@ -462,7 +621,7 @@ final class ClojureNamespaceLowering {
 		if (name.indexOf('.') >= 0) {
 			return name;
 		}
-		String imported = ctx.classNames.get(name);
+		String imported = ctx.ns().classNames.get(name);
 		if (imported != null) {
 			return imported;
 		}
@@ -477,7 +636,7 @@ final class ClojureNamespaceLowering {
 	 * capitalized.
 	 */
 	static boolean isClasslike(ClojureLowering ctx, String head) {
-		return ctx.classNames.containsKey(head) || JAVA_LANG.contains(head) || head.indexOf('.') >= 0
+		return ctx.ns().classNames.containsKey(head) || JAVA_LANG.contains(head) || head.indexOf('.') >= 0
 				|| (!head.isEmpty() && Character.isUpperCase(head.charAt(0)));
 	}
 
