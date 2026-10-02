@@ -3866,3 +3866,40 @@ cases:
     expected: |
       (IF :yes str :no)
       (IF :yes "str" :no)
+  - name: a-core-named-macro-shadows-the-lowering-below-its-definition
+    # A defmacro of a name the lowering owns (with-out-str, when-not, inc, declare)
+    # wins from its definition on; a call site above it, and a syntax-quote in a macro
+    # defined above it, keep the core meaning (the oracle resolves form by form, a
+    # syntax-quoted symbol at read time: (clojure.core/with-out-str 1), uppercased
+    # here); clojure.core/name is the core var whatever the program defines. The
+    # case runs in its own namespace and returns to the one before it.
+    source: |
+      (ns b63-shadow)
+      (defmacro wrap [& body] `(with-out-str ~@body))
+      (defn before [] (with-out-str (print "before")))
+      (println (pr-str (before)) (pr-str (wrap (print "w"))))
+      (defmacro with-out-str [& body]
+        `(str "<" (clojure.core/with-out-str ~@body) ">"))
+      (println (pr-str (with-out-str (print "after"))) (pr-str (before)) (pr-str (wrap (print "w"))))
+      (println (pr-str (clojure.core/with-out-str (print "x"))))
+      (println (macroexpand-1 '(wrap 1)))
+      (println (when-not false 1))
+      (defmacro when-not [c & body] `(if ~c (do ~@body) :no))
+      (println (when-not false 1))
+      (println (map clojure.core/inc [1 2]) (clojure.core/+ 1 2))
+      (defmacro inc [x] `(+ ~x 10))
+      (println (inc 1) (map clojure.core/inc [1 2]))
+      (defmacro declare [& names] `(do ~@(map (fn [n] (list 'def n :declared)) names)))
+      (declare d1 d2)
+      (println d1 d2)
+      (in-ns 'b56.other)
+    expected: |
+      "before" "w"
+      "<after>" "before" "w"
+      "x"
+      (CLOJURE.CORE/WITH-OUT-STR 1)
+      1
+      :no
+      (2 3) 3
+      11 (2 3)
+      :declared :declared

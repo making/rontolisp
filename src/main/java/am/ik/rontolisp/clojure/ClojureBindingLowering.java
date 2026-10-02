@@ -822,7 +822,7 @@ final class ClojureBindingLowering {
 
 	/** The datum {@code (let [name init] body)}. */
 	static LispVal letDatum(String name, LispVal init, LispVal body) {
-		return ClojureLowerUtil.list(List.of(new LispSymbol("let"),
+		return ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "let"),
 				new LispCons(ClojureReader.VECTOR, ClojureLowerUtil.list(List.of(new LispSymbol(name), init))), body));
 	}
 

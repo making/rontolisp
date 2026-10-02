@@ -821,6 +821,11 @@ public final class ClojureLowering {
 		if (items == null || items.size() < 2) {
 			return;
 		}
+		if (items.get(0) instanceof LispSymbol head && scannedMacro(head.name())) {
+			// a program macro defined above shadows a definition head like declare
+			// or defstruct: what it defines is its expansion's business
+			return;
+		}
 		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "ns")
 				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) {
 			this.currentNs = name.name();
@@ -861,8 +866,13 @@ public final class ClojureLowering {
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
 			// a macro name, so a call above its definition names the missing
 			// expander instead of an unknown name; the definition still runs in
-			// order, like the oracle's compile
-			preDeclare(items.get(1), "defmacro", Kind.MACRO, false);
+			// order, like the oracle's compile (a core-named one stays invisible
+			// until then, see pendingCoreMacro); a name the definition refuses
+			// registers nothing, so the refusal is what the program reports
+			if (!(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name)
+					|| !ClojureMacroLowering.isReservedHead(name.name())) {
+				preDeclare(items.get(1), "defmacro", Kind.MACRO, false);
+			}
 		}
 		else if (ClojureTestLowering.isDeftestSpelling(items.get(0))) {
 			// a clojure.test definition is a zero-argument function: (name) runs
@@ -878,6 +888,21 @@ public final class ClojureLowering {
 				this.globals.putIfAbsent(key, Kind.FUNCTION);
 			}
 		}
+	}
+
+	/**
+	 * Whether the pre-scan has met a macro of this unqualified name above the current
+	 * form: the current namespace's own, or one it refers.
+	 */
+	private boolean scannedMacro(String name) {
+		if (qualifierSlash(name) >= 0) {
+			return false;
+		}
+		if (this.globals.get(varKey(this.currentNs, name)) == Kind.MACRO) {
+			return true;
+		}
+		VarRef referred = ns().refers.get(name);
+		return referred != null && this.globals.get(varKey(referred.ns(), referred.var())) == Kind.MACRO;
 	}
 
 	/**
@@ -1005,12 +1030,12 @@ public final class ClojureLowering {
 		if (slash < 0) {
 			String own = varKey(this.currentNs, name);
 			if (this.globals.containsKey(own)) {
-				return own;
+				return pendingCoreMacro(own, name) ? null : own;
 			}
 			VarRef referred = ns().refers.get(name);
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
 				String key = varKey(referred.ns(), referred.var());
-				return this.globals.containsKey(key) ? key : null;
+				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
 			}
 			return null;
 		}
@@ -1020,6 +1045,34 @@ public final class ClojureLowering {
 		}
 		String key = varKey(target, name.substring(slash + 1));
 		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * Whether an unqualified name's var is a macro of a {@code clojure.core} name that
+	 * the pre-scan registered but the lowering has not defined yet: invisible until its
+	 * definition, so a form above it keeps the core meaning, like the oracle's
+	 * form-by-form compile (where the macro's var does not exist yet).
+	 */
+	boolean pendingCoreMacro(String key, String name) {
+		return this.globals.get(key) == Kind.MACRO && !this.macros.containsKey(key) && ClojureCoreNames.contains(name);
+	}
+
+	/**
+	 * Whether an unqualified name resolves to a {@link #pendingCoreMacro}: the core var
+	 * here, a program macro below -- so a syntax-quote spells it
+	 * {@code clojure.core/name}, like the oracle's read-time resolution, and its
+	 * expansion keeps the core meaning after the macro is defined.
+	 */
+	boolean shadowedCoreName(String name) {
+		if (qualifierSlash(name) >= 0) {
+			return false;
+		}
+		String own = varKey(this.currentNs, name);
+		if (this.globals.containsKey(own)) {
+			return pendingCoreMacro(own, name);
+		}
+		VarRef referred = ns().refers.get(name);
+		return referred != null && pendingCoreMacro(varKey(referred.ns(), referred.var()), name);
 	}
 
 	/**
@@ -1327,6 +1380,37 @@ public final class ClojureLowering {
 		if (items.isEmpty()) {
 			return NIL_CONST;
 		}
+		if (items.get(0) instanceof LispSymbol op) {
+			String core = ClojureCoreNames.coreSpelling(op.name());
+			if (core != null) {
+				// clojure.core/name: the core meaning whatever the program defines
+				// under that name, like the oracle's qualified var
+				List<LispVal> coreItems = new ArrayList<>(items);
+				coreItems.set(0, new LispSymbol(core));
+				return lowerRow(form, coreItems, true);
+			}
+			if (!ClojureMacroLowering.isReservedHead(op.name())) {
+				// a program macro wins over every lowering row of its name once
+				// defined (a core-named one above its definition is not visible
+				// yet, so the row lowers there, like the oracle's per-form compile)
+				LispVal macro = ClojureMacroLowering.macroCall(this, op.name(), items);
+				if (macro != null) {
+					return macro;
+				}
+			}
+		}
+		return lowerRow(form, items, false);
+	}
+
+	/**
+	 * A form whose head names no program macro: the lowering rows, then a call.
+	 * @param form the form
+	 * @param items its items
+	 * @param coreOnly whether the head was spelled {@code clojure.core/name}, so no
+	 * program definition of the name is consulted
+	 * @return the lowered form
+	 */
+	LispVal lowerRow(LispVal form, List<LispVal> items, boolean coreOnly) {
 		LispVal head = items.get(0);
 		if (ClojureLowerUtil.isSymbolNamed(head, "quote")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "quote takes one form");
@@ -1692,7 +1776,7 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "recur")) {
 			return ClojureBindingLowering.recurOf(this, form, items);
 		}
-		return call(form, items);
+		return call(form, items, coreOnly);
 	}
 
 	/**
@@ -1816,7 +1900,7 @@ public final class ClojureLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), raw, TRUE_CONST, this.falseVariable);
 	}
 
-	LispVal call(LispVal form, List<LispVal> items) {
+	LispVal call(LispVal form, List<LispVal> items, boolean coreOnly) {
 		if (!(items.get(0) instanceof LispSymbol op)) {
 			throw new LispReadException("a call's head must be a name: " + items.get(0).print());
 		}
@@ -1824,24 +1908,24 @@ public final class ClojureLowering {
 		if (name.startsWith(":")) {
 			return ClojureCollectionLowering.keywordCall(this, name, items);
 		}
-		LispVal macro = ClojureMacroLowering.macroCall(this, name, items);
-		if (macro != null) {
-			return macro;
-		}
 		// a program's own definition or local binding shadows the core name, like
 		// the oracle (and like the value position below, which already looks the
 		// name up first) -- the current namespace's own or referred var, since
-		// every namespace has its own
-		boolean known = known(name);
+		// every namespace has its own; a clojure.core/ spelling consults none
+		boolean known = !coreOnly && known(name);
 		// the re-* names lower beside the big core switch (which stays under the
 		// method-size limit): same position, before any qualified name
-		if (!known && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
+		// a name excluded by (:refer-clojure ...) is no core call unless spelled
+		// clojure.core/name
+		boolean core = coreOnly || ClojureNamespaceLowering.coreAllowed(this, name);
+		if (!known && ClojureStringLowering.isReName(name) && core) {
 			return ClojureStringLowering.reCall(this, name, items);
 		}
-		LispVal special = known ? null : builtin(name, items);
+		LispVal special = known || !core ? null : builtin(name, items);
 		if (special != null) {
 			return special;
 		}
+		ClojureLowerUtil.isTrue(!coreOnly, "unknown name: " + ClojureCoreNames.PREFIX + name);
 		VarRef qualified = ClojureNamespaceLowering.resolveQualified(this, name);
 		if (qualified != null) {
 			return ClojureNamespaceLowering.namespaceCall(this, qualified, items, form);
@@ -1898,9 +1982,6 @@ public final class ClojureLowering {
 
 	/** The core names, spelled as the Common Lisp operation they lower to. */
 	@Nullable LispVal builtin(String name, List<LispVal> items) {
-		if (!ClojureNamespaceLowering.coreAllowed(this, name)) {
-			return null; // excluded by (:refer-clojure ...): a user definition wins
-		}
 		LispVal xform = ClojureTransducerLowering.xformCall(this, name, items);
 		if (xform != null) {
 			return xform;
@@ -2546,6 +2627,35 @@ public final class ClojureLowering {
 	record VarRef(String ns, String var) {
 	}
 
+	/**
+	 * A {@code clojure.core/name} in value position: the core value of the name, never a
+	 * program definition, library refer or class member of that spelling.
+	 */
+	LispVal coreValue(String name) {
+		switch (name) {
+			case "nth":
+				return ClojureSeqLowering.nthValue(this);
+			case "quot":
+				return ClojureSeqLowering.quotValue(this);
+			case "*out*", "*in*":
+				return ClojureLowerUtil.idSym(name);
+			case "*agent*":
+				this.usedStm = true;
+				return ClojureLowerUtil.idSym(name);
+			default:
+				break;
+		}
+		LispVal synth = valueOf(name);
+		if (synth != null) {
+			return ClojureTransducerLowering.xformValue(this, name, synth);
+		}
+		String cl = builtinValue(name);
+		if (cl == null) {
+			throw new LispReadException("unknown name: " + ClojureCoreNames.PREFIX + name);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(cl));
+	}
+
 	LispVal atom(LispVal form) {
 		if (!(form instanceof LispSymbol s)) {
 			return form; // numbers, strings, characters are self-evaluating
@@ -2584,6 +2694,12 @@ public final class ClojureLowering {
 			ClojureLowerUtil.isTrue(oneBased <= 9, "the anon form #(...) takes at most 9 arguments");
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(oneBased - 1),
 					new LispSymbol(args));
+		}
+		String core = ClojureCoreNames.coreSpelling(name);
+		if (core != null) {
+			// clojure.core/name: the core value whatever the program defines under
+			// that name
+			return coreValue(core);
 		}
 		if (name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) {
 			// dynamic aliases, not mangled names (see idSym): always resolvable
@@ -2687,7 +2803,7 @@ public final class ClojureLowering {
 				// a gensym a macro expansion returned: it quotes to itself
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), s);
 			}
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.idSym(name));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(name));
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> items = ClojureLowerUtil.items(datum, List.of());

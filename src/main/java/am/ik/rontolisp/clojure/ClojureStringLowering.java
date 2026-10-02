@@ -202,7 +202,8 @@ final class ClojureStringLowering {
 				List<LispVal> callItems = new ArrayList<>();
 				callItems.add(new LispSymbol(name));
 				for (int i = 0; i < arity; i++) {
-					callItems.add(ClojureLowerUtil.list(new LispSymbol("nth"), ref, new LispInteger(i)));
+					callItems.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "nth"), ref,
+							new LispInteger(i)));
 				}
 				arms.add(
 						ClojureLowerUtil.list(
@@ -237,7 +238,8 @@ final class ClojureStringLowering {
 				List<LispVal> callItems = new ArrayList<>();
 				callItems.add(new LispSymbol(var));
 				for (int i = 0; i < arity; i++) {
-					callItems.add(ClojureLowerUtil.list(new LispSymbol("nth"), ref, new LispInteger(i)));
+					callItems.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "nth"), ref,
+							new LispInteger(i)));
 				}
 				arms.add(
 						ClojureLowerUtil.list(

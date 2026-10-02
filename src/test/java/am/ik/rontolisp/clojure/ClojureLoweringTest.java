@@ -1106,10 +1106,10 @@ class ClojureLoweringTest {
 	void defmacroRefusesCoreFormsAndEnvironments() {
 		assertThatThrownBy(() -> Clojure.read("(defmacro if [x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("cannot name a macro");
-		assertThatThrownBy(() -> Clojure.read("(defmacro gensym [x] x)", null, ClojureMacroTime.create()))
+			.hasMessageContaining("if cannot name a macro: it names a special form");
+		assertThatThrownBy(() -> Clojure.read("(defmacro deref [x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("cannot name a macro");
+			.hasMessageContaining("deref cannot name a macro: the reader spells its own forms with it");
 		assertThatThrownBy(() -> Clojure.read("(defmacro s/m [x] x)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("cannot name a macro");
@@ -1125,6 +1125,65 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defmacro mu-short)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("defmacro needs a parameter vector and a body");
+	}
+
+	@Test
+	void aCoreNamedMacroShadowsTheLoweringBelowItsDefinitionOnly() {
+		String out = loweredWithMacros("""
+				(defn f [] (with-out-str (print 1)))
+				(defmacro with-out-str [& body] `(str "<" (clojure.core/with-out-str ~@body) ">"))
+				(defn g [] (with-out-str (print 2)))
+				(defn h [] (clojure.core/with-out-str (print 3)))""");
+		String f = out.substring(out.indexOf("(DEFUN |c%f|"), out.indexOf("(PROGN (SETQ |c%with-out-str%macro|"));
+		String g = out.substring(out.indexOf("(DEFUN |c%g|"), out.indexOf("(DEFUN |c%h|"));
+		String h = out.substring(out.indexOf("(DEFUN |c%h|"));
+		// above the definition the core row lowers; below it the macro expands
+		// (its expansion reaching the core row through clojure.core/), and the
+		// qualified spelling is the core row whatever the program defines
+		assertThat(f).contains("MAKE-STRING-OUTPUT-STREAM").doesNotContain("\"<\"");
+		assertThat(g).contains("MAKE-STRING-OUTPUT-STREAM").contains("\"<\"").contains("\">\"");
+		assertThat(h).contains("MAKE-STRING-OUTPUT-STREAM").doesNotContain("\"<\"");
+	}
+
+	@Test
+	void aCoreNamedMacroBelowAMacroKeepsTheCoreMeaningInItsSyntaxQuote() {
+		// the oracle resolves a syntax-quoted symbol at read time: with-out-str is
+		// clojure.core's until the program's macro is defined
+		String out = loweredWithMacros("""
+				(defmacro wrap [& body] `(with-out-str ~@body))
+				(defmacro with-out-str [& body] `(do ~@body))
+				(defmacro wrap2 [& body] `(with-out-str ~@body))""");
+		String wrap = out.substring(0, out.indexOf("(PROGN (SETQ |c%with-out-str%macro|"));
+		String wrap2 = out.substring(out.indexOf("(PROGN (SETQ |c%wrap2%macro|"));
+		assertThat(wrap).contains("'|c%clojure.core/with-out-str|");
+		assertThat(wrap2).contains("'|c%user/with-out-str|").doesNotContain("clojure.core");
+	}
+
+	@Test
+	void aMacroShadowsADefinitionHeadForThePreScanBelowIt() {
+		// declare above the macro forward-declares; below it the expansion defines
+		String out = loweredWithMacros("""
+				(declare d0)
+				(defmacro declare [& names] `(do ~@(map (fn [n] (list 'def n :declared)) names)))
+				(declare d1)
+				(println d0 d1)""");
+		assertThat(out).contains("(SETQ |c%d1| ");
+	}
+
+	@Test
+	void clojureCoreSpellingsNameTheCoreVar() {
+		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)")).contains("(+ 1 1)");
+		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])")).doesNotContain("#'|c%inc|");
+		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("*STANDARD-OUTPUT*");
+		assertThatThrownBy(() -> Clojure.read("(clojure.core/nope 1)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such var: clojure.core/nope");
+		assertThatThrownBy(() -> Clojure.read("clojure.core/nope", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such var: clojure.core/nope");
+		assertThatThrownBy(() -> Clojure.read("(clojure.core/bit-shift-left 1 2)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.core/bit-shift-left");
 	}
 
 	@Test
@@ -1445,7 +1504,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
 		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
 		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");
-		assertThatThrownBy(() -> Clojure.read("(defmacro ref [x] x)", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(defmacro with-meta [x] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("cannot name a macro");
 	}
 

@@ -47,7 +47,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | identifier `foo` | symbol `c%foo`, always prefixed; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace ("Namespaces and project files" below) |
 | `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name holding a real function (a `let` binding of one, a `def`'d one) is a `funcall` of the value cell instead, while any other variable goes through the prelude dispatcher (`rontolisp::%clojure-call`: functions through `apply`, collections through their lookup, like `IFn`), so higher-order `defn` parameters run on collections too; a `declare`d-but-never-defined name keeps its direct-call error; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position). A `^:dynamic` one keeps its `defun`(s) and installs the function in the value cell behind a `defparameter` of it, so calls route through the value cell (a `funcall`, like a `def`'d function) and `binding` rebinds it with dynamic extent; `recur` and the arity-dispatch helpers stay direct calls to the function cell. The pre-scan registers a `^:dynamic` `defn` name as a variable, so even a forward call routes through the value cell |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
-| `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
+| `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; a core name shadows (b63, "Core-named macros" below); four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
 | syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | a symbol naming a var the defining namespace sees (own or referred; locals are no vars at read time, like the oracle) qualifies as `ns/name`, `user/` included (b56), so the expansion reaches it from any namespace; a core name and an unresolved symbol stay bare (the documented deviation: the oracle spells `clojure.core/let`, `user/x`); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
 | `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals and the call site's macro scope | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only; strings and keyword wrappers stay themselves -- b56 fixed `C%DEMANGLE` walking a string as a character vector); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names; a head resolves through the call site's namespace (b56): the lowering hands a quoted alist of the spellings the table global cannot spell itself (a bare own macro outside `user`, a bare referred one, an alias-qualified one) to its table global, and a `user/m` spelling reads as `c%m%macro` |
 | `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
@@ -444,6 +444,50 @@ refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheForm
 over `MemoryClojureFiles`), `ClojureSessionTest` (a buffer's require, a later buffer's
 call), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
 `macroexpand-keeps-strings-and-keywords`, every line the oracle's but the expansion's case).
+
+## Core-named macros (b63)
+
+Decided 2026-10-02 against `clj` 1.12.6.1673. **A program macro wins over every lowering
+row of its name from its definition on; above the definition the core meaning holds**, like
+the oracle's form-by-form compile.
+
+- **Dispatch**: `lowerInner` tries `ClojureMacroLowering.macroCall` before any row (it used
+  to sit in `call`, after the rows, so a `when-not` macro was silently ignored). Never for
+  `isReservedHead`: the oracle's `Compiler.specials` (`SPECIAL_FORMS`; `if`/`do`/`let*`/`new`
+  ...) and `READER_HEADS` (`syntax-quote`/`unquote*`/`deref`/`with-meta`/`fn` -- the reader
+  spells `@x`, `^m x`, `#(...)` with them, where the oracle reads `clojure.core/deref` -- plus
+  `ns`/`in-ns`, which the pre-scan reads). A `defmacro` of one is refused by name (the oracle
+  accepts and, for a special form, ignores it).
+- **Above the definition**: the pre-scan still registers every macro, but `lookupVar` hides a
+  `pendingCoreMacro` -- MACRO kind, no expander yet, a name in `ClojureCoreNames` (the
+  oracle's 679 `ns-publics` of `clojure.core`, a static list) -- so every resolution site
+  (`call`, `atom`, `fnValue`, the `is` predicate test) takes the core path. A non-core macro
+  above its definition stays `macro ... used before its definition`.
+- **Syntax-quote**: a name `shadowedCoreName` reports (pending, so defined further down)
+  spells `clojure.core/name`, the oracle's read-time resolution; every other core name
+  stays bare (qualifying them all would change every expansion's printed form and every
+  structural head check). Session gap: a macro lowered in an earlier buffer keeps the bare
+  spelling, so its expansion reaches a shadow a later buffer defines.
+- **`clojure.core/name`** (`ClojureCoreNames.coreSpelling`): head position lowers the row
+  or builtin with `coreOnly` (no macro, no program var, no `:refer-clojure` filter), value
+  position goes through `coreValue`; a name outside the list is the oracle's `No such var`,
+  a listed one the lowering lacks `unknown name: clojure.core/x`. The lowering's own datum
+  rewrites (`letDatum`, `some->`'s `nil?`, `lazy-cat`'s `concat`/`lazy-seq`, the `re-*`
+  value's `nth`) spell their heads this way, so a program macro never captures them.
+- **Pre-scan**: a definition head (`declare`, `defstruct`, `defn`, ...) whose name a macro
+  defined above shadows (`scannedMacro`) pre-declares nothing; the expansion defines.
+- **Quoted data**: `quote` and syntax-quote build data symbols with `dataSym`, so `'*out*`
+  is the symbol `*out*`, never the `*STANDARD-OUTPUT*` alias `idSym` gives code (a
+  syntax-quoted `*out*` used to decode as an unreadable symbol).
+- `(new java.io.StringWriter)` in an expansion lowers at the call site (`java:new`), but
+  binding `*out*` to a host `Writer` fails on every backend: .todo/b76.
+
+Corpus (the 27 shcloj4 drivers, interpreter): byte-identical before and after. Pinned by
+`ClojureLoweringTest` (`aCoreNamedMacroShadowsTheLoweringBelowItsDefinitionOnly`,
+`aCoreNamedMacroBelowAMacroKeepsTheCoreMeaningInItsSyntaxQuote`,
+`aMacroShadowsADefinitionHeadForThePreScanBelowIt`, `clojureCoreSpellingsNameTheCoreVar`,
+the refusals in `defmacroRefusesCoreFormsAndEnvironments`) and `clojure-spec.yaml`
+(`a-core-named-macro-shadows-the-lowering-below-its-definition`, all four backends).
 
 ## clojure.test (b55)
 

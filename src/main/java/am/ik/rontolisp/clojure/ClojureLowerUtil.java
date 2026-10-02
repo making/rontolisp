@@ -213,6 +213,18 @@ final class ClojureLowerUtil {
 		return new LispSymbol(ClojureLowering.mangle(identifier));
 	}
 
+	/**
+	 * A quoted identifier as a symbol: {@link #idSym} without the dynamic aliases, so
+	 * {@code '*out*} is a symbol that prints and decodes back as {@code *out*}, never the
+	 * stream variable it names in code.
+	 */
+	static LispSymbol dataSym(String identifier) {
+		if (identifier.startsWith("#:")) {
+			return new LispSymbol(identifier);
+		}
+		return new LispSymbol(ClojureLowering.mangle(identifier));
+	}
+
 	static LispVal list(List<LispVal> items) {
 		LispVal tail = LispNil.INSTANCE;
 		for (int i = items.size() - 1; i >= 0; i--) {

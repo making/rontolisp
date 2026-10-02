@@ -173,8 +173,8 @@ final class ClojureLoopLowering {
 			for (int i = 2; i < items.size(); i++) {
 				acc = ClojureBindingLowering.letDatum(temp, acc,
 						ClojureLowerUtil.list(List.of(new LispSymbol("if"),
-								ClojureLowerUtil.list(List.of(new LispSymbol("nil?"), ref)), LispNil.INSTANCE,
-								threadInsert(items.get(i), ref, last))));
+								ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "nil?"), ref)),
+								LispNil.INSTANCE, threadInsert(items.get(i), ref, last))));
 			}
 			return ctx.lower(acc);
 		});

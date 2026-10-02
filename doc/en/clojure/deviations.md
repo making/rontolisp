@@ -78,11 +78,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - Macros expand while lowering, so every backend runs expanded code; the interpreter's
   `eval` of a macro call expands the same way. A macro body sees the core builtins and
   the `clojure.lisp` library, not the program's own definitions; a call above its
-  definition is refused, and a macro has no function value. A `defmacro` shadows a core
-  function at call sites, never a special form.
+  definition is refused, and a macro has no function value. A `defmacro` of a special
+  form (`if`, `do`, `let*`, `new`, ...) or of a head the reader spells (`deref`,
+  `with-meta`, `fn`, `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
+  accepts it (and ignores it at call sites, for a special form).
 - Syntax-quote qualifies a symbol naming a var the namespace sees; a core name or an
   unresolved symbol stays bare, where the oracle spells `clojure.core/let` and
-  `user/x`. Each `x#` binds one gensym per expansion -- the oracle resolves one per
+  `user/x` -- except a core name a program macro defined further down shadows, which
+  spells `clojure.core/name` like the oracle. In a REPL session a macro defined in an
+  earlier buffer keeps the bare spelling, so its expansion reaches a shadowing macro a
+  later buffer defines. Each `x#` binds one gensym per expansion -- the oracle resolves one per
   compilation, so two expansions share its suffixes where ours differ (fresher, never
   captured). `macroexpand-1`/`macroexpand` answers print demangled and uppercased
   (case folds, print-only); their data takes bare operator names. Nested syntax-quote

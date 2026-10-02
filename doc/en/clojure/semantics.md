@@ -74,8 +74,12 @@ and several arities like `defn`; a docstring and an attr map are skipped);
 library, not the program's own definitions. The definition also registers a runtime
 table entry of the same expander, answers `nil`, and works session-wide; a call above
 its definition is an error, a macro has no function value, and a later `def`/`defn` of
-the same name wins back the call sites. A `defmacro` shadows a core function at call
-sites (never a special form, which intercepts first).
+the same name wins back the call sites. A `defmacro` of a core name (`with-out-str`,
+`when-not`, `inc`, `declare`, ...) shadows it from its definition on, like the oracle's
+form-by-form compile: a call site above the definition, and a syntax-quote in a macro
+defined above it, keep the core meaning. `clojure.core/name` always names the core var,
+whatever the program defines under that name. A special form, or a head the reader
+spells (`deref` for `@x`, `with-meta`, `fn` for `#(...)`), cannot name a macro.
 
 `` `form `` builds a form as data over the mangled namespace: a symbol naming a var the
 defining namespace sees qualifies with that var's namespace (a core name or an

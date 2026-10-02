@@ -47,24 +47,32 @@ final class ClojureMacroLowering {
 	static final String MACROEXPAND = "C%MACROEXPAND";
 
 	/**
-	 * The names a {@code defmacro} cannot take: every special form a call site could
-	 * never reach through the macro table (the form intercepts first), the three new
-	 * builtins below (whose value paths would disagree with the macro), the two dot-heads
-	 * (instance-call position) and, by rule in {@link #defmacroForms}, anything dotted,
-	 * suffixed or qualified.
+	 * The oracle's special forms ({@code Compiler.specials}): a call site never reaches a
+	 * macro of one of these names, so a {@code defmacro} of one is refused by name (the
+	 * oracle accepts it and ignores it).
 	 */
-	static final Set<String> MACRO_RESERVED = Set.of("quote", "def", "defn", "defn-", "defonce", "defstruct", "struct",
-			"struct-map", "defmacro", "fn", "let", "letfn", "loop", "declare", "->", "->>", "as->", "doto", "cond->",
-			"cond->>", "some->", "some->>", "list*", "doseq", "dotimes", "for", "defmulti", "defmethod",
-			"remove-method", "get-method", "prefer-method", "derive", "underive", "isa?", "parents", "ancestors",
-			"descendants", "make-hierarchy", "defprotocol", "defrecord", "deftype", "definterface", "reify",
-			"extend-protocol", "extend-type", "extend", "satisfies?", "gen-class", "gen-interface", "try", "throw",
-			"ex-info", "ex-data", "ex-message", "atom", "deref", "swap!", "reset!", "compare-and-set!", "volatile!",
-			"vreset!", "vswap!", "add-watch", "remove-watch", "ref", "dosync", "alter", "commute", "ref-set", "ensure",
-			"agent", "send", "send-off", "await", "shutdown-agents", "binding", "with-open", "with-out-str", "time",
-			"comment", "require", "use", "import", "in-ns", "set!", "memfn", "proxy", "new", "syntax-quote", "unquote",
-			"unquote-splicing", "var", "with-meta", "if", "when", "cond", "do", "recur", ".", "..", "gensym",
-			"macroexpand-1", "macroexpand");
+	static final Set<String> SPECIAL_FORMS = Set.of("def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do",
+			"fn*", "quote", "var", "import*", ".", "set!", "deftype*", "reify*", "try", "throw", "monitor-enter",
+			"monitor-exit", "catch", "finally", "new", "&");
+
+	/**
+	 * The heads the reader itself spells ({@code `x}, {@code ~x}, {@code ~@x},
+	 * {@code @x}, {@code ^m x}, {@code #(...)}) plus the two the pre-scan reads a
+	 * namespace from: a macro of one would capture the reader's own forms (the oracle
+	 * reads {@code @x} as {@code clojure.core/deref}, which no program macro shadows), so
+	 * a {@code defmacro} of one is refused by name.
+	 */
+	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "with-meta",
+			"fn", "ns", "in-ns");
+
+	/**
+	 * Whether a head never reaches the macro table: a special form or a reader head. Any
+	 * other name -- a lowering row like {@code with-out-str} or {@code when} included --
+	 * expands through a program macro of that name once the macro is defined.
+	 */
+	static boolean isReservedHead(String name) {
+		return SPECIAL_FORMS.contains(name) || READER_HEADS.contains(name) || name.startsWith("%");
+	}
 
 	/**
 	 * {@code (defmacro name doc? attr? ([params] body...)+)}: a compile-time expander
@@ -79,14 +87,17 @@ final class ClojureMacroLowering {
 	 * {@code (progn (setq c%name%macro expander) nil)} -- a lone {@code %} no mangled
 	 * identifier spells, so the table stays apart from user definitions, like the
 	 * multi-arity helpers -- and registers the expander for the call sites below it; a
-	 * call above the definition names the missing expander instead of an unknown name.
+	 * call above the definition names the missing expander instead of an unknown name,
+	 * unless the name is a {@code clojure.core} one, whose core meaning holds there.
 	 */
 	static List<LispVal> defmacroForms(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
-		ClojureLowerUtil.isTrue(
-				!MACRO_RESERVED.contains(name) && !name.startsWith(".") && !name.endsWith(".") && name.indexOf('/') < 0,
-				name + " cannot name a macro: it names a core form");
+		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
+		ClojureLowerUtil.isTrue(!isReservedHead(name),
+				name + " cannot name a macro: the reader spells its own forms with it");
+		ClojureLowerUtil.isTrue(!name.startsWith(".") && !name.endsWith(".") && name.indexOf('/') < 0,
+				name + " cannot name a macro: it names an interop or qualified form");
 		int at = 2;
 		if (items.size() > at && items.get(at) instanceof LispString) {
 			at++; // the docstring
@@ -532,9 +543,18 @@ final class ClojureMacroLowering {
 		}
 		// a var of a project namespace qualifies with its namespace, like the
 		// oracle's read-time resolution, so the expansion reaches it from any
-		// namespace it expands in; core names and unresolved symbols stay bare
+		// namespace it expands in; core names and unresolved symbols stay bare --
+		// except a core name a program macro below shadows, which keeps the core
+		// meaning as clojure.core/name
+		if (SPECIAL_FORMS.contains(name)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(name));
+		}
+		if (ctx.shadowedCoreName(name)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+					ClojureLowerUtil.dataSym(ClojureCoreNames.PREFIX + name));
+		}
 		String key = ctx.lookupVar(name);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.idSym(key != null ? key : name));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.dataSym(key != null ? key : name));
 	}
 
 	/**

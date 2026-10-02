@@ -177,9 +177,9 @@ final class ClojureLazyLowering {
 			return ClojureLowering.NIL_CONST;
 		}
 		List<LispVal> form = new ArrayList<>();
-		form.add(new LispSymbol("concat"));
+		form.add(new LispSymbol(ClojureCoreNames.PREFIX + "concat"));
 		for (int i = 1; i < items.size(); i++) {
-			form.add(ClojureLowerUtil.list(new LispSymbol("lazy-seq"), items.get(i)));
+			form.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "lazy-seq"), items.get(i)));
 		}
 		return ctx.lower(ClojureLowerUtil.list(form));
 	}
