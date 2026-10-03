@@ -246,22 +246,31 @@ final class ClojureFnLowering {
 	/**
 	 * {@code assert} over a test and an optional message: nil when the test is truthy
 	 * (nil and the false object are falsey), else a signal. The message evaluates only on
-	 * failure (it sits in the else branch), like the oracle's lazy message form.
+	 * failure (it sits in the else branch), like the oracle's lazy message form. The
+	 * failure text carries the failed form as quoted data through the readable string
+	 * conversion: {@code Assert failed: (nil? 1)}, or
+	 * {@code Assert failed: msg\n(nil? 1)} with a message.
 	 */
 	static LispVal assertOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 1 || n == 2, "assert takes a test and an optional message");
 		LispVal test = ctx.lower(items.get(1));
-		LispVal failure;
+		String rendered = ClojureStringLowering.prSource(items.get(1));
+		LispVal form = rendered != null ? LispString.literal(rendered) : ClojureStringLowering.strOf(ctx,
+				ctx.quote(items.get(1)), LispString.literal("nil"), ClojureLowering.TRUE_CONST);
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(LispString.literal("Assert failed: "));
 		if (n == 2) {
-			LispVal text = ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
-					LispString.literal("Assert failed: "), ClojureStringLowering.strOf(ctx, ctx.lower(items.get(2)),
-							LispString.literal(""), ClojureLowering.NIL_CONST));
-			failure = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), text);
+			parts.add(ClojureStringLowering.strOf(ctx, ctx.lower(items.get(2)), LispString.literal(""),
+					ClojureLowering.NIL_CONST));
+			parts.add(LispString.literal("\n"));
 		}
-		else {
-			failure = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("Assert failed"));
-		}
+		parts.add(form);
+		// No message and a rendered form: one literal, so no string-building code is
+		// linked.
+		LispVal text = n == 1 && rendered != null ? LispString.literal("Assert failed: " + rendered)
+				: ClojureStringLowering.concat(ctx, parts);
+		LispVal failure = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), text);
 		return ctx.ifFalsey(test, ClojureLowering.NIL_CONST, failure);
 	}
 
