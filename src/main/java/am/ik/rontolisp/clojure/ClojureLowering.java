@@ -2451,7 +2451,7 @@ public final class ClojureLowering {
 	private LispVal computedHeadCall(List<LispVal> items) {
 		LispVal fun = lower(items.get(0));
 		List<LispVal> args = lowers(items, 1);
-		if (ClojureLowerUtil.isDirectFun(fun)) {
+		if (ClojureLowerUtil.yieldsFun(fun)) {
 			List<LispVal> call = new ArrayList<>();
 			call.add(ClojureLowerUtil.sym("funcall"));
 			call.add(fun);
@@ -2479,7 +2479,7 @@ public final class ClojureLowering {
 	 * @return the invocation
 	 */
 	LispVal callFun(LispVal funForm, LispVal bound, List<LispVal> args) {
-		if (ClojureLowerUtil.isDirectFun(funForm)) {
+		if (ClojureLowerUtil.yieldsFun(funForm)) {
 			List<LispVal> call = new ArrayList<>();
 			call.add(ClojureLowerUtil.sym("funcall"));
 			call.add(bound);
@@ -2490,16 +2490,35 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A one-argument function over the dispatcher: for the sequence operators that take a
-	 * Common Lisp function designator ({@code mapcar}, {@code remove-if}), so a variable
-	 * holding a collection still answers element by element.
-	 * @param bound the bound function value (a symbol)
-	 * @param arg the element (a symbol)
-	 * @return the lambda
+	 * The function form applied to an argument-list form over its bound value: CL
+	 * {@code apply} for real functions, through the prelude dispatcher otherwise -- the
+	 * {@link #callFun} of a computed argument list.
+	 * @param funForm the function form, as bound
+	 * @param bound the bound value (a symbol)
+	 * @param argList the argument-list form
+	 * @return the invocation
 	 */
-	LispVal dispatchLambda(LispVal bound, LispVal arg) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(arg),
-				callableApply(bound, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), arg)));
+	LispVal applyFun(LispVal funForm, LispVal bound, LispVal argList) {
+		if (ClojureLowerUtil.yieldsFun(funForm)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), bound, argList);
+		}
+		return callableApply(bound, argList);
+	}
+
+	/**
+	 * A function form a spliced runtime worker funcalls: the form itself when it is a
+	 * real function form, else {@code rontolisp::%clojure-as-fn} of it, which answers a
+	 * real function as itself and wraps any other value (a set, map, vector, keyword or
+	 * var) in the IFn dispatcher. The wrap sits at the call site, never in the worker, so
+	 * a program passing only real functions carries no dispatcher (about 26 KB of wasm).
+	 * @param fun the lowered function form
+	 * @return the form, wrapped when it may hold another value
+	 */
+	static LispVal realFun(LispVal fun) {
+		if (ClojureLowerUtil.yieldsFun(fun)) {
+			return fun;
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-AS-FN"), fun);
 	}
 
 	/**
@@ -2778,20 +2797,20 @@ public final class ClojureLowering {
 		switch (name) {
 			case "map":
 				ClojureLowerUtil.isTrue(n >= 2, "map takes a function and collections");
-				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lowers(items, 2));
 			case "filter":
 				ClojureLowerUtil.isTrue(n == 2, "filter takes a predicate and a collection");
-				return ClojureSeqLowering.filterForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureSeqLowering.filterForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "reduce":
 				ClojureLowerUtil.isTrue(n == 2 || n == 3,
 						"reduce takes a function, an optional value and a collection");
 				if (n == 2) {
-					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 							lower(items.get(2)), null);
 				}
-				LispVal reduceFn = ClojureBindingLowering.fnValue(this, items.get(1));
+				LispVal reduceFn = ClojureBindingLowering.realFnValue(this, items.get(1));
 				LispVal reduceInit = lower(items.get(2));
 				return ClojureSeqLowering.reduceForm(this, reduceFn, lower(items.get(3)), reduceInit);
 			case "apply":
@@ -2834,15 +2853,15 @@ public final class ClojureLowering {
 				return ClojureStringLowering.subsOf(this, items);
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
-				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
-				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)), true);
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
-				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)), false);
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
@@ -2854,7 +2873,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
-				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
@@ -3014,7 +3033,7 @@ public final class ClojureLowering {
 			case "iterate":
 				ClojureLowerUtil.isTrue(n == 2, "iterate takes a function and a value");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"),
-						ClojureBindingLowering.fnValue(this, items.get(1)), lower(items.get(2)));
+						ClojureBindingLowering.realFnValue(this, items.get(1)), lower(items.get(2)));
 			case "future":
 				throw new LispReadException("future is not supported yet: there is no thread pool on any backend");
 			case "delay":
@@ -3042,7 +3061,7 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.mapvOf(this, items);
 			case "filterv":
 				ClojureLowerUtil.isTrue(n == 2, "filterv takes a predicate and a collection");
-				return ClojureFilterLowering.filtervForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.filtervForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "mapcat":
 				return ClojureFilterLowering.mapcatOf(this, items);

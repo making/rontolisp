@@ -430,7 +430,7 @@ final class ClojureFnLowering {
 			bindings.add(ClojureLowerUtil.list(one, fn));
 			names.add(one);
 		}
-		LispVal inner = ctx.callableApply(names.get(names.size() - 1), args);
+		LispVal inner = ctx.applyFun(fns.get(fns.size() - 1), names.get(names.size() - 1), args);
 		for (int i = names.size() - 2; i >= 0; i--) {
 			inner = ctx.callFun(fns.get(i), names.get(i), List.of(inner));
 		}
@@ -500,7 +500,7 @@ final class ClojureFnLowering {
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), names), more);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, more), ctx.callableApply(fn, tail)));
+						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, more), ctx.applyFun(fun, fn, tail)));
 	}
 
 	/** {@code partial} as a value: the function, then the fixed arguments. */
@@ -524,7 +524,7 @@ final class ClojureFnLowering {
 		LispSymbol args = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
 		LispVal neg = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, ctx.callableApply(fn, args)))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, ctx.applyFun(fun, fn, args)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
@@ -599,7 +599,7 @@ final class ClojureFnLowering {
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), hit, miss),
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 											ClojureLowerUtil
-												.list(List.of(ClojureLowerUtil.list(val, ctx.callableApply(fn, args)))),
+												.list(List.of(ClojureLowerUtil.list(val, ctx.applyFun(fun, fn, args)))),
 											ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 													ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
 													val),
@@ -637,7 +637,7 @@ final class ClojureFnLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fn, fun))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ctx.callableApply(fn, argList))));
+						ClojureLowerUtil.list(self, ctx.applyFun(fun, fn, argList))));
 	}
 
 	/** {@code trampoline} as a value: the function, then any arguments. */

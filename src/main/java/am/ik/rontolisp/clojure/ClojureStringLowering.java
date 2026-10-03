@@ -598,7 +598,12 @@ final class ClojureStringLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), mat, LispString.literal("")), interposed,
 						looped));
-		LispVal regex = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-REPLACE"), str, rawMatch, rawRep,
+		// the regex runtime funcalls a replacement that is no string: a literal string or
+		// a function form passes as itself, anything else is wrapped here, so a plain
+		// replace never carries the IFn dispatcher
+		LispVal regexRep = replacement instanceof LispString || ClojureLowerUtil.yieldsFun(replacement) ? rawRep
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-REPLACEMENT"), rawRep);
+		LispVal regex = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-REPLACE"), str, rawMatch, regexRep,
 				first ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(str, text), ClojureLowerUtil.list(rawMatch, match),

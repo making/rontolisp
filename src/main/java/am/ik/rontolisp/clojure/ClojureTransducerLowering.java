@@ -82,7 +82,7 @@ final class ClojureTransducerLowering {
 		}
 		List<LispVal> args = new ArrayList<>();
 		if (xform.arg() == Arg.FN) {
-			args.add(ClojureBindingLowering.fnValue(ctx, items.get(1)));
+			args.add(ClojureBindingLowering.realFnValue(ctx, items.get(1)));
 		}
 		else if (xform.arg() == Arg.VALUE) {
 			args.add(ctx.lower(items.get(1)));
@@ -121,7 +121,7 @@ final class ClojureTransducerLowering {
 			LispSymbol first = ctx.freshTemp();
 			params.add(first);
 			seqCall.add(first);
-			xfArgs.add(first);
+			xfArgs.add(xform.arg() == Arg.FN ? ClojureLowering.realFun(first) : first);
 		}
 		params.add(ClojureLowerUtil.sym("&optional"));
 		params.add(optional);
@@ -209,10 +209,15 @@ final class ClojureTransducerLowering {
 		return worker == null ? null : ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(worker));
 	}
 
+	/**
+	 * The function arguments {@code from..to}, each as the real function the runtime
+	 * funcalls ({@link ClojureLowering#realFun}): transducers and reducing functions
+	 * alike, so the transducer runtime never names the IFn dispatcher.
+	 */
 	private static List<LispVal> fnArgs(ClojureLowering ctx, List<LispVal> items, int from, int to) {
 		List<LispVal> out = new ArrayList<>();
 		for (int i = from; i <= to; i++) {
-			out.add(ClojureBindingLowering.fnValue(ctx, items.get(i)));
+			out.add(ClojureBindingLowering.realFnValue(ctx, items.get(i)));
 		}
 		return out;
 	}

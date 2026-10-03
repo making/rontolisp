@@ -4982,3 +4982,34 @@ cases:
       (true false) (true false) (false true)
       (false true) (true false) true false true false
       (false) (true false true false) true
+  - name: a-collection-as-the-function-of-a-seq-worker-answers-like-ifn
+    # map, filter, mapv, mapcat, iterate, max-key, juxt, fnil, every-pred,
+    # some-fn, update-vals/-keys, partition-by, split-with, the transducers,
+    # update, comp, partial, complement and a regex replace take a set, map or
+    # keyword like any function; the runtime workers funcall, so the IFn wrap of
+    # such a value sits at the call site (a program passing only real functions
+    # carries no dispatcher). The oracle (clj 1.12.6.1673, 2026-10-03) prints
+    # exactly these lines.
+    source: |
+      (def ifn-s #{1 3})
+      (def ifn-m {1 :one 2 :two})
+      (defn ifn-hof [f xs] (map f xs))
+      (println (map ifn-s [1 2 3]) (map ifn-m [1 2]) (ifn-hof ifn-s [1 2]) (map ifn-m [1 2] [:x :y]) (take 2 (map ifn-s (iterate inc 1))))
+      (println (filter ifn-s [1 2 3]) (filterv ifn-m [1 3]) (mapv ifn-m [2]) (mapcat {1 [7 8]} [1]) (take 2 (iterate ifn-m 1)))
+      (println (max-key {1 5 2 3} 1 2) ((juxt ifn-s ifn-m) 1) ((fnil ifn-m 2) nil) ((every-pred ifn-s) 1 3) ((some-fn ifn-s) 2 3))
+      (println (update-vals {:a 1} ifn-m) (update-keys {1 2} ifn-m) (partition-by ifn-s [1 3 2 2 3]) (split-with ifn-s [1 3 2 1]))
+      (println (into [] (map ifn-s) [1 2]) (transduce (map ifn-m) conj [] [1 2]) (sequence (filter ifn-s) [1 2 3]) (into [] (comp (map inc) (filter ifn-s)) [0 1 2]))
+      (println (update {:a 1} :a ifn-m) (update-in {:a {:b 2}} [:a :b] ifn-m) ((comp ifn-s inc) 0) ((partial ifn-m) 1) (filter (complement ifn-s) [1 2 3]))
+      (println (clojure.string/replace "abc" #"b" {"b" "X"}) (let [r {"b" "Y"}] (clojure.string/replace "abc" #"b" r)))
+      (let [g inc h ifn-s xf (map inc)] (println (map g [1]) (map h [1 2]) (update {:a 1} :a g) (into [] xf [1 2]) (transduce xf + [1 2])))
+      (println (apply map [ifn-s [1 2]]) (apply filter [ifn-s [1 2 3]]) (apply mapv [ifn-m [1]]) (apply transduce [(map ifn-m) conj [1]]))
+    expected: |
+      (1 nil 3) (:one :two) (1 nil) (:one :two) (1 nil)
+      (1 3) [1] [:two] (7 8) (1 :one)
+      1 [1 :one] :two true 3
+      {:a :one} {:one 2} ((1) (3) (2 2) (3)) [(1 3) (2 1)]
+      [1 nil] [:one :two] (1 3) [1 3]
+      {:a :one} {:a {:b :two}} 1 :one (2)
+      aXc aYc
+      (2) (1 nil) {:a 2} [2 3] 5
+      (1 nil) (1 3) [:one] [:one]

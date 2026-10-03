@@ -59,25 +59,39 @@ final class ClojureUpdateLowering {
 		ClojureLowerUtil.isTrue(n >= 3, "update takes a map, a key, a function and arguments");
 		LispSymbol map = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
-		LispSymbol fun = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
 		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
 		bindings.add(ClojureLowerUtil.list(key, ctx.lower(items.get(2))));
-		bindings.add(ClojureLowerUtil.list(fun, ClojureBindingLowering.fnValue(ctx, items.get(3))));
+		// the function form is bound by updateForm right behind the map and key, before
+		// the extra arguments: the oracle's order
+		LispVal fun = ClojureBindingLowering.fnValue(ctx, items.get(3));
+		boolean real = ClojureBindingLowering.holdsRealFun(ctx, items.get(3), fun);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), updateForm(ctx, map,
-				key, fun, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
+				key, fun, real, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
 	}
 
 	/**
 	 * The update over already-lowered map, key, function and the extra-arguments tail
-	 * list: {@code (apply f (cons current tail))} associated back, copy-on-write.
+	 * list: {@code (apply f (cons current tail))} associated back, copy-on-write. A real
+	 * function form applies directly, anything else through the IFn dispatcher.
 	 */
 	static LispVal updateForm(ClojureLowering ctx, LispVal map, LispVal key, LispVal fun, LispVal tail) {
+		return updateForm(ctx, map, key, fun, ClojureLowerUtil.yieldsFun(fun), tail);
+	}
+
+	/**
+	 * {@link #updateForm(ClojureLowering, LispVal, LispVal, LispVal, LispVal)} over a
+	 * function form already known to hold a real function ({@code real}) or not.
+	 */
+	private static LispVal updateForm(ClojureLowering ctx, LispVal map, LispVal key, LispVal fun, boolean real,
+			LispVal tail) {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol at = ctx.freshTemp();
 		LispSymbol fn = ctx.freshTemp();
-		LispVal next = ctx.callableApply(fn, ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-				ClojureCollectionLowering.getForm(ctx, one, at, ClojureLowering.NIL_CONST), tail));
+		LispVal args = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
+				ClojureCollectionLowering.getForm(ctx, one, at, ClojureLowering.NIL_CONST), tail);
+		LispVal next = real ? ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fn, args)
+				: ctx.callableApply(fn, args);
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTableOf(one), one);
 		LispVal grown = ClojureCollectionLowering.grownTable(
@@ -117,9 +131,11 @@ final class ClojureUpdateLowering {
 		ClojureLowerUtil.isTrue(!keyData.isEmpty(), "update-in takes a non-empty vector of keys");
 		LispSymbol map = ctx.freshTemp();
 		LispSymbol fun = ctx.freshTemp();
+		LispVal fnForm = ClojureBindingLowering.fnValue(ctx, items.get(3));
+		boolean real = ClojureBindingLowering.holdsRealFun(ctx, items.get(3), fnForm);
 		List<LispVal> bindings = new ArrayList<>();
 		bindings.add(ClojureLowerUtil.list(map, ctx.lower(items.get(1))));
-		bindings.add(ClojureLowerUtil.list(fun, ClojureBindingLowering.fnValue(ctx, items.get(3))));
+		bindings.add(ClojureLowerUtil.list(fun, fnForm));
 		List<LispVal> keys = new ArrayList<>();
 		for (LispVal keyDatum : keyData) {
 			LispSymbol key = ctx.freshTemp();
@@ -127,20 +143,21 @@ final class ClojureUpdateLowering {
 			keys.add(key);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), updateInForm(ctx,
-				map, keys, fun, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
+				map, keys, fun, real, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 4))));
 	}
 
 	/**
 	 * The nested update over already-lowered map, keys, function and extra-arguments
 	 * tail: the leaf updates, outer levels re-associate through a one-argument lambda.
 	 */
-	static LispVal updateInForm(ClojureLowering ctx, LispVal map, List<LispVal> keys, LispVal fun, LispVal tail) {
+	static LispVal updateInForm(ClojureLowering ctx, LispVal map, List<LispVal> keys, LispVal fun, boolean real,
+			LispVal tail) {
 		if (keys.size() == 1) {
-			return updateForm(ctx, map, keys.get(0), fun, tail);
+			return updateForm(ctx, map, keys.get(0), fun, real, tail);
 		}
 		LispSymbol inner = ctx.freshTemp();
 		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(inner),
-				updateInForm(ctx, inner, keys.subList(1, keys.size()), fun, tail));
+				updateInForm(ctx, inner, keys.subList(1, keys.size()), fun, real, tail));
 		return updateForm(ctx, map, keys.get(0), step, ClojureLowering.NIL_CONST);
 	}
 
@@ -483,7 +500,7 @@ final class ClojureUpdateLowering {
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "into takes a target, an optional transducer and a source");
 		if (n == 3) {
 			LispVal to = ctx.lower(items.get(1));
-			LispVal xf = ClojureBindingLowering.fnValue(ctx, items.get(2));
+			LispVal xf = ClojureBindingLowering.realFnValue(ctx, items.get(2));
 			return intoXformForm(ctx, to, xf, ctx.lower(items.get(3)));
 		}
 		return intoForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
@@ -505,7 +522,7 @@ final class ClojureUpdateLowering {
 		return ClojureSeqLowering.reduceForm(ctx, conjStep(ctx), from, to);
 	}
 
-	/** The conj fold through an already-lowered transducer. */
+	/** The conj fold through an already-lowered real transducer function. */
 	static LispVal intoXformForm(ClojureLowering ctx, LispVal to, LispVal xf, LispVal from) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INTO-XF"), to, xf, from, conjStep(ctx));
 	}
@@ -522,8 +539,8 @@ final class ClojureUpdateLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(to, from, ClojureLowerUtil.sym("&optional"),
 						ClojureLowerUtil.list(source, ClojureLowering.NIL_CONST, supplied))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied, intoXformForm(ctx, to, from, source),
-						intoForm(ctx, to, from)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied,
+						intoXformForm(ctx, to, ClojureLowering.realFun(from), source), intoForm(ctx, to, from)));
 	}
 
 	/**

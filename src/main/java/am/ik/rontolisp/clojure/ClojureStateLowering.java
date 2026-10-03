@@ -716,7 +716,7 @@ final class ClojureStateLowering {
 				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
 				names.add(name);
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				if (ClojureLowerUtil.isDirectFun(init)) {
+				if (ClojureLowerUtil.yieldsFun(init)) {
 					ctx.markDirect(name);
 				}
 			}
@@ -844,7 +844,7 @@ final class ClojureStateLowering {
 			ctx.dynamicVars.add(key);
 		}
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == 3 ? items.get(2) : null);
-		if (ClojureLowerUtil.isDirectFun(value)) {
+		if (ClojureLowerUtil.yieldsFun(value)) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {

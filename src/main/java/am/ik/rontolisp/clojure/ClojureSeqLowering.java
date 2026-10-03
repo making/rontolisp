@@ -8,7 +8,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.function.Function;
 import java.util.Map;
 import java.util.Set;
 import am.ik.rontolisp.LispChar;
@@ -417,10 +416,11 @@ final class ClojureSeqLowering {
 	static LispVal mapValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("map-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("map-colls"));
-		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fn, colls);
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), ClojureLowering.realFun(fn),
+				colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAP"), fn), call);
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAP"), ClojureLowering.realFun(fn)), call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, colls)), body);
 	}
@@ -430,7 +430,7 @@ final class ClojureSeqLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("filter-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("filter-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				filterForm(ctx, pred, coll));
+				filterForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -441,8 +441,9 @@ final class ClojureSeqLowering {
 	static LispVal reduceValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("reduce-fn"));
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("reduce-args"));
-		LispVal two = reduceForm(ctx, fn, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), null);
-		LispVal three = reduceForm(ctx, fn,
+		LispVal two = reduceForm(ctx, ClojureLowering.realFun(fn),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), null);
+		LispVal three = reduceForm(ctx, ClojureLowering.realFun(fn),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
@@ -498,7 +499,7 @@ final class ClojureSeqLowering {
 			pres.add(ctx.lower(items.get(i)));
 		}
 		LispVal last = seqAllForm(ctx, ctx.lower(items.get(items.size() - 1)));
-		if (ClojureLowerUtil.isDirectFun(fun)) {
+		if (ClojureBindingLowering.holdsRealFun(ctx, items.get(1), fun)) {
 			List<LispVal> out = new ArrayList<>();
 			out.add(ClojureLowerUtil.sym("apply"));
 			out.add(fun);
@@ -518,11 +519,11 @@ final class ClojureSeqLowering {
 	 * functions, through the dispatcher for values that may hold collections.
 	 */
 	/**
-	 * {@code map} over an already-lowered function and already-lowered collections (one
-	 * or more): one call to the spliced {@code rontolisp::%clojure-map}, which applies
-	 * through the IFn dispatcher (real functions and collection values alike) and answers
-	 * a lazy wrapper when any input is lazy, the strict list otherwise. Stops at the
-	 * shortest input, like the oracle.
+	 * {@code map} over an already-lowered real function ({@link ClojureLowering#realFun})
+	 * and already-lowered collections (one or more): one call to the spliced
+	 * {@code rontolisp::%clojure-map}, which applies it and answers a lazy wrapper when
+	 * any input is lazy, the strict list otherwise. Stops at the shortest input, like the
+	 * oracle.
 	 */
 	static LispVal mapForm(ClojureLowering ctx, LispVal fun, List<LispVal> colls) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fun,
@@ -530,10 +531,11 @@ final class ClojureSeqLowering {
 	}
 
 	/**
-	 * {@code filter} over an already-lowered predicate and collection: one call to the
-	 * spliced {@code rontolisp::%clojure-filter}, which tests Clojure truthiness (a false
-	 * object drops like nil) and answers a lazy wrapper when the input is lazy, the
-	 * strict list otherwise.
+	 * {@code filter} over an already-lowered real predicate
+	 * ({@link ClojureLowering#realFun}) and collection: one call to the spliced
+	 * {@code rontolisp::%clojure-filter}, which tests Clojure truthiness (a false object
+	 * drops like nil) and answers a lazy wrapper when the input is lazy, the strict list
+	 * otherwise.
 	 */
 	static LispVal filterForm(ClojureLowering ctx, LispVal fun, LispVal coll) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-FILTER"), fun, coll);
@@ -545,36 +547,11 @@ final class ClojureSeqLowering {
 	 * {@code -reduce-init} (3-arity), which walk the lazy-aware seq view one element at a
 	 * time (so a lazy input reduces whole) and stop at a {@code reduced} answer, like the
 	 * oracle. Arguments evaluate in the Clojure order: function, value, collection. The
-	 * runtime funcalls, so a function form that may hold a collection at run time is
-	 * wrapped in a lambda over the dispatcher here (the runtime never names it, so a
-	 * plain reduce carries no dispatcher).
+	 * function is a real one the runtime funcalls ({@link ClojureLowering#realFun}).
 	 */
 	static LispVal reduceForm(ClojureLowering ctx, LispVal fun, LispVal coll, @Nullable LispVal init) {
-		return withRealFun(ctx, fun,
-				real -> init == null ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE"), real, coll)
-						: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE-INIT"), real, init, coll));
-	}
-
-	/**
-	 * A runtime worker's call over an already-lowered function value it funcalls: the
-	 * value itself when it is a real function form, else a rest lambda through the IFn
-	 * dispatcher over the value bound once in front of the call (so a set, map or keyword
-	 * still answers). The dispatcher wrap sits at the call site, not in the runtime: a
-	 * program passing a function never carries the dispatcher (about 20 KB of wasm).
-	 * @param fun the lowered function value
-	 * @param call the worker's call over the real function form
-	 * @return the call, bound when wrapped
-	 */
-	static LispVal withRealFun(ClojureLowering ctx, LispVal fun, Function<LispVal, LispVal> call) {
-		if (ClojureLowerUtil.isDirectFun(fun)) {
-			return call.apply(fun);
-		}
-		LispSymbol cell = ctx.freshTemp();
-		LispSymbol args = ctx.freshTemp();
-		LispVal real = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), ctx.callableApply(cell, args));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), call.apply(real));
+		return init == null ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE"), fun, coll)
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE-INIT"), fun, init, coll);
 	}
 
 	/** {@code take}: the first {@code n} of the collection as a strict list. */

@@ -56,6 +56,42 @@ final class ClojureLowerUtil {
 		return head.name().equals("FUNCTION") || head.name().equals("LAMBDA");
 	}
 
+	/**
+	 * The spliced runtime workers whose every answer is a real function (each body is a
+	 * {@code lambda}): the function builders and the transducer constructors.
+	 */
+	private static final Set<String> FUNCTION_WORKERS = Set.of("AS-FN", "JUXT", "FNIL", "EVERY-PRED", "SOME-FN",
+			"COMPLETING", "XF-MAP", "XF-FILTER", "XF-KEEP", "XF-INDEXED", "XF-TAKE", "XF-DROP", "XF-TAKE-WHILE",
+			"XF-DROP-WHILE", "XF-TAKE-NTH", "XF-MAPCAT", "XF-PARTITION-ALL", "XF-PARTITION-BY", "XF-INTERPOSE",
+			"XF-DEDUPE", "XF-DISTINCT", "XF-COMP", "XF-CAT");
+
+	/**
+	 * Whether the lowered form always evaluates to a real function, so it can be
+	 * funcalled without the IFn dispatcher: a {@link #isDirectFun direct} form, a
+	 * {@code let}/{@code let*}/{@code labels}/{@code flet}/{@code progn} whose last form
+	 * does ({@code comp}, {@code partial}, {@code complement}, a named {@code fn}), or a
+	 * call to a function-answering runtime worker ({@code juxt}, a transducer). Unlike a
+	 * direct form, evaluating one may have effects, so it is never moved.
+	 */
+	static boolean yieldsFun(LispVal form) {
+		if (isDirectFun(form)) {
+			return true;
+		}
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		String name = head.name();
+		if (name.equals("LET") || name.equals("LET*") || name.equals("LABELS") || name.equals("FLET")
+				|| name.equals("PROGN")) {
+			List<LispVal> parts = items(form);
+			int minimum = name.equals("PROGN") ? 2 : 3;
+			return parts != null && parts.size() >= minimum && yieldsFun(parts.get(parts.size() - 1));
+		}
+		return name.startsWith(WORKER_PREFIX) && FUNCTION_WORKERS.contains(name.substring(WORKER_PREFIX.length()));
+	}
+
+	private static final String WORKER_PREFIX = "RONTOLISP::%CLOJURE-";
+
 	/** {@code (LET bindings body...)}: a let over a computed body, spliced flat. */
 	static LispVal letForm(List<LispVal> bindings, List<LispVal> body) {
 		List<LispVal> forms = new ArrayList<>();

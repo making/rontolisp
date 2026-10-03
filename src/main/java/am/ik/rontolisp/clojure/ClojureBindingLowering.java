@@ -84,7 +84,7 @@ final class ClojureBindingLowering {
 			ctx.dynamicVars.add(key);
 		}
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == at + 1 ? items.get(at) : null);
-		if (ClojureLowerUtil.isDirectFun(value)) {
+		if (ClojureLowerUtil.yieldsFun(value)) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {
@@ -704,7 +704,7 @@ final class ClojureBindingLowering {
 					LispVal init = ctx.lower(bindings.get(i + 1));
 					pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
 					scope.put(name, ClojureLowering.Kind.VARIABLE);
-					if (ClojureLowerUtil.isDirectFun(init)) {
+					if (ClojureLowerUtil.yieldsFun(init)) {
 						ctx.markDirect(name);
 					}
 					noteHostClass(ctx, name, init);
@@ -835,7 +835,7 @@ final class ClojureBindingLowering {
 					paramSyms.add(ctx.localSym(binding));
 					inits.add(init);
 					scope.put(binding, ClojureLowering.Kind.VARIABLE);
-					if (ClojureLowerUtil.isDirectFun(init)) {
+					if (ClojureLowerUtil.yieldsFun(init)) {
 						ctx.markDirect(binding);
 					}
 					continue;
@@ -944,6 +944,29 @@ final class ClojureBindingLowering {
 	static LispVal letDatum(String name, LispVal init, LispVal body) {
 		return ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "let"),
 				new LispCons(ClojureReader.VECTOR, ClojureLowerUtil.list(List.of(new LispSymbol(name), init))), body));
+	}
+
+	/**
+	 * A function argument a spliced runtime worker funcalls: {@link #fnValue}, passed as
+	 * itself when it is a real function (a function form, or a variable bound to one),
+	 * else wrapped by {@link ClojureLowering#realFun}.
+	 */
+	static LispVal realFnValue(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return holdsRealFun(ctx, form, fun) ? fun : ClojureLowering.realFun(fun);
+	}
+
+	/**
+	 * Whether the {@link #fnValue} of the datum always evaluates to a real function: a
+	 * form that {@link ClojureLowerUtil#yieldsFun yields one}, or a variable bound to
+	 * one.
+	 * @param form the function datum
+	 * @param fun its {@link #fnValue}
+	 * @return whether it can be funcalled without the IFn dispatcher
+	 */
+	static boolean holdsRealFun(ClojureLowering ctx, LispVal form, LispVal fun) {
+		return ClojureLowerUtil.yieldsFun(fun)
+				|| form instanceof LispSymbol s && fun instanceof LispSymbol && ctx.isDirectVar(s.name());
 	}
 
 	/**

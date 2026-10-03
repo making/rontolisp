@@ -129,7 +129,7 @@ answered `2 5 3` before).
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
-| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; a function form that may hold a collection is wrapped over the dispatcher at the call site, so a plain `reduce` carries no dispatcher |
+| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; its function is a real one ("The IFn dispatcher stays at the call site") |
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil and false are empty, anything else signals; `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` | a vector or string indexed directly, anything else stepped; past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
@@ -359,6 +359,55 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   passes an alist of the spellings the table cannot spell itself). `gensym` is the
   ordinary uninterned symbol.
 
+## The IFn dispatcher stays at the call site
+
+**A spliced runtime worker funcalls its function argument; the lowering hands it a real
+function.** `rontolisp::%clojure-call` (the IFn dispatcher: sets, maps, vectors, keywords,
+vars) drags the structural-key runtime behind it, about 26 KB of raw wasm, so one worker
+naming it put it in every program that used the verb. The workers: `map` `filter` `mapv`
+`filterv` `mapcat` `iterate` `repeatedly` `keep` `keep-indexed` `map-indexed` `remove`
+`reduce` `reduce-kv` `min-key`/`max-key` `juxt` `fnil` `every-pred` `some-fn`
+`update-keys` `update-vals` `partition-by` `split-with` `vary-meta`, every transducer
+constructor and consumer, and a regex `replace` with a function replacement.
+
+- `ClojureBindingLowering.realFnValue` passes a function argument as itself when
+  `holdsRealFun`: a form `ClojureLowerUtil.yieldsFun` (a `function`/`lambda`; a
+  `let`/`let*`/`labels`/`flet`/`progn` ending in one -- `comp`, `partial`, `complement`,
+  `memoize`, a named `fn`; a call to a worker in `FUNCTION_WORKERS` -- `juxt`, `fnil`,
+  `every-pred`, `some-fn`, `completing`, the `%clojure-xf-*` constructors), or a variable
+  bound to one (`isDirectVar`). Anything else goes through `ClojureLowering.realFun`:
+  `(rontolisp::%clojure-as-fn x)`, which answers a function as itself and wraps any other
+  value in a rest lambda over the dispatcher. A worker added to `FUNCTION_WORKERS` must
+  answer a `lambda` on every path.
+- A verb's VALUE (`(apply map ...)`, the `-v` entries) wraps its parameter at run time
+  through `%clojure-as-fn`, so using a verb as a value carries the dispatcher.
+- The same test makes a call-site invocation direct: `callFun`/`applyFun` (`comp`,
+  `partial`, `complement`, `memoize`, `trampoline`, `update`/`update-in`/`assoc-in`, a
+  computed head like `((comp f g) x)`), CL `apply`, and a `let`/`def` binding marked
+  direct. `update` lowers its function form in place (it has no effect to order against
+  the map and key before it); `update-in` binds it and threads `holdsRealFun`.
+- A regex `replace` with a replacement that is neither a literal string nor a real
+  function form wraps it in `%clojure-re-replacement` (a string stays a string).
+- Kept on the dispatcher: `test` (the `:test` metadata value), a `defn` parameter used as
+  a function anywhere (`(defn f [g xs] (map g xs))` carries it), and the inline call-site
+  loops built by `callFun` (`every?`, `some`, `sort-by`, `group-by`, ...) over a variable
+  bound to a function: they see only the lowered symbol, not `isDirectVar`.
+- Measured 2026-10-03, raw wasm of a one-line program, default / `--optimize=size`, before
+  -> after: `(map inc v)` 65,808 -> 43,452 / 51,352 -> 32,699; `(filter odd? v)` 65,593 ->
+  38,555 / 51,339 -> 30,515 (`remove` was already 38,987); `mapv` 65,222 -> 42,880;
+  `iterate` 64,137 -> 36,868; `reduce-kv` 64,263 -> 37,928; `update-vals` 67,192 ->
+  38,412; `(transduce (map inc) + v)` 62,461 -> 34,498; `(map (comp inc dec) v)` 66,128 ->
+  43,751; `(map (partial + 1) v)` 66,518 -> 44,189; `(filter (complement odd?) v)` 65,950
+  -> 44,093; `((comp inc dec) 1)` 61,024 -> 38,873; a regex `replace` with a string
+  117,361 -> 100,157; `(update m :a inc)` 62,265 -> 60,333 (it keeps the structural keys
+  `get` needs). Interpreter, 100,000-element strict vector, steady state of three runs on
+  a loaded host: `map inc` ~430 -> ~390 ms, `filter odd?` ~530 -> ~480 ms, `map` over a
+  `defn` parameter holding `inc` unchanged within the noise (~450 ms: `%clojure-as-fn`
+  answers the function itself).
+- Pins: `ClojureLoweringTest.aRuntimeWorkerTakesARealFunctionWrappedAtTheCallSite`,
+  `aProgramPassingRealFunctionsSplicesNoDispatcher` (the pruned IR); clojure-spec
+  `a-collection-as-the-function-of-a-seq-worker-answers-like-ifn` (every backend).
+
 ## Dispatch
 
 - `defmulti`: four globals (`equal` method table, default value, prefers table, `Object`
@@ -525,10 +574,8 @@ oracle's `Cons`).
   interpreter). The first five share one lazy arm, `%clojure-keep-lazy`, whose adapter
   answers `:C%SKIP` to drop; `interleave`/`interpose` emit one wrapper per element, so
   `rest` never exposes a strict cons holding a wrapper. The function argument is a real
-  function -- `ClojureSeqLowering.withRealFun` wraps any other value in the dispatcher
-  at the call site, as `reduce` does; calling `%clojure-call` from the runtime spliced
-  the dispatcher into every program (`(remove odd? [...])` 59,367 B against 39,262 B;
-  `map`/`filter` still do, c00). Raw wasm of a one-verb strict program, before -> after
+  function ("The IFn dispatcher stays at the call site"). Raw wasm of a one-verb strict
+  program, before -> after
   (default / `--optimize=size`): `remove` 38,534 -> 39,262 / 30,965 -> 31,471, `keep`
   38,916 -> 38,989 / 31,323 -> 31,222, `keep-indexed` 38,462 -> 38,910, `map-indexed`
   37,336 -> 37,894, `distinct` 50,767 -> 50,941 / 40,361 -> 40,343, `interpose`
@@ -558,8 +605,12 @@ tail after an early `take` stop).
   `reduced`; `deref` reads it.
 - `sequence`/`eduction` step inputs one element at a time behind a lazy wrapper
   (`%clojure-xf-puller`), lazy-or-strict; several collections step in lockstep.
-- The IFn dispatcher wrap sits at the call site, not in the runtime: calling it from the
-  runtime cost every `reduce` 7 KB of wasm.
+- Every transducer, reducing function and `completing` argument is a real function
+  ("The IFn dispatcher stays at the call site"), so the transducer runtime funcalls and
+  never names the dispatcher. A transducer a program calls BY HAND with a set, map or
+  keyword as the reducing function signals (`funcall` of a non-function) where the oracle
+  invokes it; every consumer (`transduce` `into` `sequence` `eduction` `completing`, as
+  calls and values) wraps such an argument first.
 - Deviations: an `eduction` is a seq computed once (the oracle re-runs it per reduction and
   `println` prints the object); `take-nth` of the seq arity signals on a zero step and
   steps by the magnitude of a negative one; `halt-when`/`random-sample` are absent.

@@ -42,10 +42,11 @@ final class ClojureFilterLowering {
 	 * {@code keep}: the non-nil results of the function over the collection, through the
 	 * spliced {@code rontolisp::%clojure-keep}. {@code false} is kept (only nil drops),
 	 * and a signalling function signals -- {@code (keep inc [1 nil 2])} throws, like the
-	 * oracle, instead of skipping. Lazy-or-strict, like {@code map}.
+	 * oracle, instead of skipping. Lazy-or-strict, like {@code map}. The function is a
+	 * real one ({@link ClojureLowering#realFun}).
 	 */
 	static LispVal keepForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("KEEP", real, coll));
+		return runtimeCall("KEEP", fn, coll);
 	}
 
 	/** {@code keep} as a value: a two-argument lambda over the same call. */
@@ -53,7 +54,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("keep-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("keep-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				keepForm(ctx, fun, coll));
+				keepForm(ctx, ClojureLowering.realFun(fun), coll));
 	}
 
 	/**
@@ -63,8 +64,7 @@ final class ClojureFilterLowering {
 	 * Lazy-or-strict, like {@code map}.
 	 */
 	static LispVal indexedForm(ClojureLowering ctx, LispVal fn, LispVal coll, boolean keep) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("INDEXED", real, coll,
-				keep ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST));
+		return runtimeCall("INDEXED", fn, coll, keep ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
 	}
 
 	/** {@code keep-indexed} or {@code map-indexed} as a value: a two-argument lambda. */
@@ -72,7 +72,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("indexed-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("indexed-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				indexedForm(ctx, fun, coll, keep));
+				indexedForm(ctx, ClojureLowering.realFun(fun), coll, keep));
 	}
 
 	/** The call {@code (rontolisp::%clojure-NAME args...)}. */
@@ -163,10 +163,11 @@ final class ClojureFilterLowering {
 	/**
 	 * {@code remove}: the members the predicate rejects, through the spliced
 	 * {@code rontolisp::%clojure-remove} ({@code filter} over the complement), so it is
-	 * lazy-or-strict like {@code filter}.
+	 * lazy-or-strict like {@code filter}. The predicate is a real function
+	 * ({@link ClojureLowering#realFun}).
 	 */
 	static LispVal removeForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("REMOVE", real, coll));
+		return runtimeCall("REMOVE", fn, coll);
 	}
 
 	/** {@code remove} as a value: a two-argument lambda over the same call. */
@@ -174,7 +175,7 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("remove-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("remove-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				removeForm(ctx, pred, coll));
+				removeForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -647,10 +648,13 @@ final class ClojureFilterLowering {
 	static LispVal mapvOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 2, "mapv takes a function and collections");
-		return mapvForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lowers(items, 2));
+		return mapvForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lowers(items, 2));
 	}
 
-	/** {@code mapv} over an already-lowered function and collections. */
+	/**
+	 * {@code mapv} over an already-lowered real function
+	 * ({@link ClojureLowering#realFun}) and collections.
+	 */
 	static LispVal mapvForm(ClojureLowering ctx, LispVal fun, List<LispVal> colls) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fun,
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), colls));
@@ -662,7 +666,8 @@ final class ClojureFilterLowering {
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapv-colls"));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("mapv takes a function and collections"));
-		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fn, colls);
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), ClojureLowering.realFun(fn),
+				colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls), arity, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
@@ -670,8 +675,8 @@ final class ClojureFilterLowering {
 	}
 
 	/**
-	 * {@code filterv} over an already-lowered predicate and collection: one call to the
-	 * spliced {@code rontolisp::%clojure-filterv}, the strict vector arm of
+	 * {@code filterv} over an already-lowered real predicate and collection: one call to
+	 * the spliced {@code rontolisp::%clojure-filterv}, the strict vector arm of
 	 * {@code filter}.
 	 */
 	static LispVal filtervForm(ClojureLowering ctx, LispVal fun, LispVal coll) {
@@ -683,7 +688,7 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("filterv-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("filterv-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				filtervForm(ctx, pred, coll));
+				filtervForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -695,10 +700,13 @@ final class ClojureFilterLowering {
 	static LispVal mapcatOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 2, "mapcat takes a function and collections");
-		return mapcatForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lowers(items, 2));
+		return mapcatForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lowers(items, 2));
 	}
 
-	/** {@code mapcat} over an already-lowered function and collections. */
+	/**
+	 * {@code mapcat} over an already-lowered real function
+	 * ({@link ClojureLowering#realFun}) and collections.
+	 */
 	static LispVal mapcatForm(ClojureLowering ctx, LispVal fun, List<LispVal> colls) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fun,
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), colls));
@@ -711,10 +719,12 @@ final class ClojureFilterLowering {
 	static LispVal mapcatValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("mapcat-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapcat-colls"));
-		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fn, colls);
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), ClojureLowering.realFun(fn),
+				colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAPCAT"), fn), call);
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAPCAT"), ClojureLowering.realFun(fn)),
+				call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, colls)), body);
 	}

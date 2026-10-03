@@ -1544,15 +1544,71 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aRuntimeWorkerTakesARealFunctionWrappedAtTheCallSite() {
+		// A function form, a form yielding one (comp, partial, juxt, a transducer) or a
+		// variable bound to one passes to a spliced worker as itself; any other value (a
+		// set, map, parameter) is wrapped in the IFn dispatcher at the call site, so a
+		// program passing only real functions never carries the dispatcher
+		List<String> real = List.of("(map inc [1])", "(map + [1] [2])", "(filter odd? [1])", "(mapv inc [1])",
+				"(filterv odd? [1])", "(mapcat list [1])", "(iterate inc 0)", "(repeatedly 2 (fn [] 1))",
+				"(max-key inc 1 2)", "(juxt inc dec)", "(fnil inc 0)", "(every-pred odd?)", "(some-fn odd?)",
+				"(reduce-kv assoc {} {})", "(update-vals {} inc)", "(update-keys {} inc)", "(partition-by odd? [1])",
+				"(vary-meta [] assoc :a 1)", "(split-with odd? [1])", "(keep inc [1])", "(remove odd? [1])",
+				"(map :a [{}])", "(into [] (map inc) [1])", "(transduce (map inc) + [1])",
+				"(sequence (filter odd?) [1])", "(eduction (map inc) (filter odd?) [1])", "(completing + inc)",
+				"(map (comp inc dec) [1])", "(map (partial + 1) [1])", "(filter (complement odd?) [1])",
+				"(map (juxt inc) [1])", "(let [f (fn [x] x)] (map f [1]))", "(def g (comp inc)) (map g [1])",
+				"(update {:a 1} :a (partial + 1))", "(assoc-in {} [:a :b] 1)", "((comp inc dec) 1)",
+				"(clojure.string/replace \"a\" #\"a\" \"b\")", "(clojure.string/replace \"a\" #\"a\" (fn [m] m))");
+		for (String source : real) {
+			assertThat(lowered(source)).as(source)
+				.doesNotContain("%CLOJURE-AS-FN")
+				.doesNotContain("%CLOJURE-CALL")
+				.doesNotContain("%CLOJURE-RE-REPLACEMENT");
+		}
+		assertThat(lowered("(def s #{1}) (map s [1])"))
+			.contains("(RONTOLISP::%CLOJURE-MAP (RONTOLISP::%CLOJURE-AS-FN |c%s|)");
+		assertThat(lowered("(def m {1 2}) (filter m [1])"))
+			.contains("(RONTOLISP::%CLOJURE-FILTER (RONTOLISP::%CLOJURE-AS-FN |c%m|)");
+		assertThat(lowered("(defn f [g xs] (mapv g xs))")).contains("(RONTOLISP::%CLOJURE-AS-FN |c%g|)");
+		assertThat(lowered("(def s #{1}) (juxt s inc)")).contains("(RONTOLISP::%CLOJURE-AS-FN |c%s|)");
+		assertThat(lowered("(defn f [xf] (transduce xf + [1]))")).contains("(RONTOLISP::%CLOJURE-AS-FN |c%xf|)");
+		assertThat(lowered("(defn f [xf] (into [] xf [1]))")).contains("(RONTOLISP::%CLOJURE-AS-FN |c%xf|)");
+		assertThat(lowered("(defn f [r] (clojure.string/replace \"a\" #\"a\" r))"))
+			.contains("(RONTOLISP::%CLOJURE-RE-REPLACEMENT ");
+		// as values, the verbs wrap their function parameter at run time
+		assertThat(lowered("(apply map [inc [1]])")).contains("%CLOJURE-AS-FN");
+	}
+
+	@Test
+	void aProgramPassingRealFunctionsSplicesNoDispatcher() {
+		// end to end: the pruned program carries the dispatcher only once a value that
+		// may hold a collection is called
+		String plain = "(println (map inc [1]) (filter odd? [1]) (mapv (comp inc dec) [1])"
+				+ " (into [] (map inc) [1]) (update {:a 1} :a inc) (reduce-kv (fn [a k v] v) 0 {:a 1})"
+				+ " (clojure.string/replace \"ab\" #\"b\" \"c\"))";
+		assertThat(splicesDispatcher(plain)).isFalse();
+		assertThat(splicesDispatcher(plain + " (def s #{1}) (println (map s [1]))")).isTrue();
+	}
+
+	private static boolean splicesDispatcher(String source) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false)
+			.forms()
+			.stream()
+			.map(LispVal::print)
+			.anyMatch(text -> text.contains("(DEFUN RONTOLISP::%CLOJURE-CALL "));
+	}
+
+	@Test
 	void seqVerbsLowerOverTheSeqView() {
 		// The dropping verbs are one call to a lazy-or-strict runtime worker, a
 		// function passed as itself and any other value wrapped in the dispatcher at the
 		// call site (so a program passing a function never carries it)
 		assertThat(lowered("(keep inc [1])")).contains("(RONTOLISP::%CLOJURE-KEEP ").doesNotContain("%CLOJURE-CALL");
 		assertThat(lowered("(def m {1 2}) (keep m [1])")).contains("(RONTOLISP::%CLOJURE-KEEP ")
-			.contains("%CLOJURE-CALL");
+			.contains("(RONTOLISP::%CLOJURE-AS-FN |c%m|)");
 		assertThat(lowered("(def s #{1}) (remove s [1])")).contains("(RONTOLISP::%CLOJURE-REMOVE ")
-			.contains("%CLOJURE-CALL");
+			.contains("(RONTOLISP::%CLOJURE-AS-FN |c%s|)");
 		assertThat(lowered("(keep-indexed odd? [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" T)");
 		assertThat(lowered("(map-indexed vector [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" NIL)");
 		assertThat(lowered("(every? odd? [1])")).contains("LABELS").contains("RONTOLISP::%CLOJURE-FALSE");
@@ -1646,8 +1702,13 @@ class ClojureLoweringTest {
 
 	@Test
 	void mapVerbsBuildFreshTables() {
-		assertThat(lowered("(update {:a 1} :a inc)")).contains("RONTOLISP::%CLOJURE-CALL").contains("HASH-TABLE");
-		assertThat(lowered("(update-in {:a 1} [:a] inc)")).contains("RONTOLISP::%CLOJURE-CALL");
+		// a real function applies directly, any other value through the dispatcher
+		assertThat(lowered("(update {:a 1} :a inc)")).contains("(APPLY ")
+			.doesNotContain("RONTOLISP::%CLOJURE-CALL")
+			.contains("HASH-TABLE");
+		assertThat(lowered("(update-in {:a 1} [:a] inc)")).doesNotContain("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(def m {1 2}) (update {:a 1} :a m)")).contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(def m {1 2}) (update-in {:a 1} [:a] m)")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("(assoc-in {} [:a] 1)")).contains("HASH-TABLE");
 		assertThat(lowered("(get-in {:a 1} [:a])")).contains("GETHASH");
 		assertThat(lowered("(select-keys {:a 1} [:a])")).contains("GETHASH");
@@ -1664,7 +1725,8 @@ class ClojureLoweringTest {
 	@Test
 	void higherOrderFormsComposeAndCache() {
 		assertThat(lowered("((comp inc inc) 5)")).contains("LAMBDA").contains("FUNCALL");
-		assertThat(lowered("((partial + 1) 2)")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("((partial + 1) 2)")).contains("LAMBDA").doesNotContain("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(def m {1 2}) ((partial m) 1)")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("((complement odd?) 1)")).contains("LAMBDA");
 		assertThat(lowered("((constantly 1) 2)")).contains("LAMBDA");
 		assertThat(lowered("(memoize inc)")).contains("HASH-TABLE");
@@ -2034,7 +2096,8 @@ class ClojureLoweringTest {
 		// hold a collection is wrapped over the dispatcher at the call site
 		assertThat(lowered("(reduce + [1])")).contains("(RONTOLISP::%CLOJURE-REDUCE #'+ (VECTOR 1))");
 		assertThat(lowered("(reduce + 0 [1])")).contains("(RONTOLISP::%CLOJURE-REDUCE-INIT #'+ 0 (VECTOR 1))");
-		assertThat(lowered("(defn f [g] (reduce g [1]))")).contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(defn f [g] (reduce g [1]))"))
+			.contains("(RONTOLISP::%CLOJURE-REDUCE (RONTOLISP::%CLOJURE-AS-FN |c%g|) (VECTOR 1))");
 		// as values: the fixed-arity seq verbs widen to the transducer arity
 		assertThat(lowered("(map filter [odd?])")).contains("&OPTIONAL").contains("%CLOJURE-XF-FILTER");
 		assertThat(lowered("(map take-nth [2])")).contains("#'RONTOLISP::%CLOJURE-TAKE-NTH-V");
