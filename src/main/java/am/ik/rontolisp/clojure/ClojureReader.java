@@ -647,7 +647,7 @@ final class ClojureReader {
 				// following `8`/`9` -- or any other non-octal char the reader would
 				// not stop at -- is the oracle's `Invalid digit` refusal, and a
 				// value past `\377` the oracle's range refusal. `\'` is refused
-				// below with the other unknown escapes (b44: the oracle signals
+				// below with the other unknown escapes (the oracle signals
 				// `Unsupported escape character: \'`, so the old lenient read as
 				// `'` goes).
 				case '0', '1', '2', '3', '4', '5', '6', '7' -> {

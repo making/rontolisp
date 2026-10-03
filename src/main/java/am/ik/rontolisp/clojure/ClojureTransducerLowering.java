@@ -97,7 +97,7 @@ final class ClojureTransducerLowering {
 	 * A seq verb's function value widened by its transducer arity, so
 	 * {@code (apply filter [odd?])} answers the transducer like the call: the verb's own
 	 * value is bound once and called for the collection arity. {@code map} and
-	 * {@code mapcat} (rest lambdas) and the b57 {@code -v} entries answer the transducer
+	 * {@code mapcat} (rest lambdas) and the {@code -v} entries answer the transducer
 	 * themselves, so they pass through.
 	 * @param ctx the hub
 	 * @param name the Clojure name

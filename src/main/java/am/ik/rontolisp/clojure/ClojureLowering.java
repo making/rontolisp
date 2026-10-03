@@ -78,9 +78,9 @@ import org.jspecify.annotations.Nullable;
  * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
- * stays a no-copy identity. Laziness is the memoized-thunk wrapper {@code (:C%LAZY cell)}
- * (b11): {@code lazy-seq} builds one over its body (run at most once per object),
- * {@code lazy-cat} nests {@code concat} over per-member wrappers, and
+ * stays a no-copy identity. Laziness is the memoized-thunk wrapper
+ * {@code (:C%LAZY cell)}: {@code lazy-seq} builds one over its body (run at most once per
+ * object), {@code lazy-cat} nests {@code concat} over per-member wrappers, and
  * {@code repeat}/{@code cycle}/{@code iterate}/{@code repeatedly} build wrapper chains
  * (their finite arities answer strict lists); an end-less {@code range} stays refused by
  * name, and {@code range} with an end builds the strict list. {@code take} steps through
@@ -2921,7 +2921,7 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The b18 core convenience fns, sliced out of {@link #builtin}: that dispatcher had
+	 * The core convenience fns, sliced out of {@link #builtin}: that dispatcher had
 	 * crossed HotSpot's {@code HugeMethodLimit} (like the backend
 	 * {@code compileConsLocated} slices before it), so these names dispatch through one
 	 * more call -- null when the name is none of them, like {@code builtin} itself.

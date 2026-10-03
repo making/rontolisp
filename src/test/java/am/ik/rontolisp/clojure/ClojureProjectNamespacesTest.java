@@ -256,7 +256,7 @@ class ClojureProjectNamespacesTest {
 	void anEntryLoadsItsNamespacesOnTheInterpreterAndTheJvm() throws Exception {
 		Path entry = entry("main_test.clj", MAIN);
 		assertThat(interpret(entry)).isEqualTo(MAIN_OUT);
-		assertThat(runOnJvm(entry, "B56Main")).isEqualTo(MAIN_OUT);
+		assertThat(runOnJvm(entry, "ProjMain")).isEqualTo(MAIN_OUT);
 	}
 
 	@Test
@@ -271,7 +271,7 @@ class ClojureProjectNamespacesTest {
 	void testsNamedLikeTheFunctionsUnderTestStayApart() throws Exception {
 		Path entry = entry("inbox_test.clj", INBOX_TEST);
 		assertThat(interpret(entry)).isEqualTo(INBOX_OUT);
-		assertThat(runOnJvm(entry, "B56Inbox")).isEqualTo(INBOX_OUT);
+		assertThat(runOnJvm(entry, "ProjInbox")).isEqualTo(INBOX_OUT);
 		if (HostWasmtime.isAvailable()) {
 			assertThat(runOnWasm(entry, false)).isEqualTo(INBOX_OUT);
 		}
@@ -283,7 +283,7 @@ class ClojureProjectNamespacesTest {
 	 * the capture, like the oracle.
 	 */
 	private static final String PREFACE_DRIVER = """
-			(ns b72.preface-driver (:use clojure.test))
+			(ns preface-driver (:use clojure.test))
 			(require 'examples.test.preface)
 			(run-tests 'examples.test.preface)
 			""";
@@ -301,7 +301,7 @@ class ClojureProjectNamespacesTest {
 		Path entry = project.resolve("test").resolve("preface_driver.clj");
 		Files.writeString(entry, PREFACE_DRIVER);
 		assertThat(interpret(entry)).isEqualTo(PREFACE_OUT);
-		assertThat(runOnJvm(entry, "B72Preface")).isEqualTo(PREFACE_OUT);
+		assertThat(runOnJvm(entry, "Preface")).isEqualTo(PREFACE_OUT);
 	}
 
 	@Test
@@ -432,7 +432,7 @@ class ClojureProjectNamespacesTest {
 	void reloadRerunsTheNamespaceKeepingDefonce() throws Exception {
 		Path entry = entry("reload_test.clj", RELOAD_MAIN);
 		assertThat(interpret(entry)).isEqualTo(RELOAD_OUT);
-		assertThat(runOnJvm(entry, "B72Reload")).isEqualTo(RELOAD_OUT);
+		assertThat(runOnJvm(entry, "Reload")).isEqualTo(RELOAD_OUT);
 	}
 
 	@Test
@@ -467,7 +467,7 @@ class ClojureProjectNamespacesTest {
 	void reloadAllRerunsDependenciesFirst() throws Exception {
 		Path entry = entry("dep_test.clj", RELOAD_ALL_MAIN);
 		assertThat(interpret(entry)).isEqualTo(RELOAD_ALL_OUT);
-		assertThat(runOnJvm(entry, "B72ReloadAll")).isEqualTo(RELOAD_ALL_OUT);
+		assertThat(runOnJvm(entry, "ReloadAll")).isEqualTo(RELOAD_ALL_OUT);
 	}
 
 	@Test
@@ -499,7 +499,7 @@ class ClojureProjectNamespacesTest {
 	void aRequireInsideABodyLoadsWhenTheBodyRuns() throws Exception {
 		Path entry = entry("late_test.clj", LATE_MAIN);
 		assertThat(interpret(entry)).isEqualTo(LATE_OUT);
-		assertThat(runOnJvm(entry, "B72Late")).isEqualTo(LATE_OUT);
+		assertThat(runOnJvm(entry, "Late")).isEqualTo(LATE_OUT);
 	}
 
 	@Test
@@ -531,7 +531,7 @@ class ClojureProjectNamespacesTest {
 	void aDynamicVarOfARequiredNamespaceRebinds() throws Exception {
 		Path entry = entry("dyn_test.clj", DYN_MAIN);
 		assertThat(interpret(entry)).isEqualTo(DYN_OUT);
-		assertThat(runOnJvm(entry, "B72Dyn")).isEqualTo(DYN_OUT);
+		assertThat(runOnJvm(entry, "Dyn")).isEqualTo(DYN_OUT);
 	}
 
 	@Test
@@ -557,7 +557,7 @@ class ClojureProjectNamespacesTest {
 	void aNamespaceTwoSeparatelyLoweredFilesRequireRunsOnce() throws Exception {
 		Path entry = twiceEntry();
 		assertThat(interpretLoads(entry)).isEqualTo(TWICE_OUT);
-		assertThat(runLoadsOnJvm(entry, "B72Twice")).isEqualTo(TWICE_OUT);
+		assertThat(runLoadsOnJvm(entry, "Twice")).isEqualTo(TWICE_OUT);
 	}
 
 	@Test
@@ -716,7 +716,7 @@ class ClojureProjectNamespacesTest {
 			.runtimeFeatures(frontend.features().names())
 			.build()
 			.compile(frontend.forms());
-		Path path = Files.createTempFile(project, "b56", component ? "-c.wasm" : ".wasm");
+		Path path = Files.createTempFile(project, "proj", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
 		return HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 				path.toString());

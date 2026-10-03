@@ -65,11 +65,11 @@ cases:
     # recur (and call each other); entries close over the outer scope, and nested
     # letfn sees its own names first.
     source: |
-      (println (letfn [(b17-fact [x] (if (zero? x) 1 (* x (b17-fact (dec x)))))] (b17-fact 5)))
-      (println (letfn [(b17-even? [n] (if (zero? n) true (b17-odd? (dec n)))) (b17-odd? [n] (if (zero? n) false (b17-even? (dec n))))] (b17-even? 10)))
-      (let [b17-y 7] (println (letfn [(b17-g [x] (+ x b17-y))] (b17-g 3))))
-      (println (letfn [(b17-z [] 1)] [(b17-z) (letfn [(b17-w [] 2)] (b17-w))]))
-      (println (letfn [(b17-f [x] (+ x 1))] (map b17-f [1 2 3])))
+      (println (letfn [(fact [x] (if (zero? x) 1 (* x (fact (dec x)))))] (fact 5)))
+      (println (letfn [(my-even? [n] (if (zero? n) true (my-odd? (dec n)))) (my-odd? [n] (if (zero? n) false (my-even? (dec n))))] (my-even? 10)))
+      (let [y 7] (println (letfn [(g [x] (+ x y))] (g 3))))
+      (println (letfn [(z [] 1)] [(z) (letfn [(w [] 2)] (w))]))
+      (println (letfn [(f [x] (+ x 1))] (map f [1 2 3])))
     expected: |
       120
       true
@@ -82,18 +82,18 @@ cases:
     # (multi-arity too), and a zero-arity defn recurring with no arguments (the
     # book's hangman take-guess shape).
     source: |
-      (println (let [b17-sum (fn b17-f [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))] (b17-sum 5 0)))
-      (println ((fn b17-g [n] (if (zero? n) :zero (recur (dec n)))) 3))
+      (println (let [sum (fn f [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))] (sum 5 0)))
+      (println ((fn g [n] (if (zero? n) :zero (recur (dec n)))) 3))
       (println ((fn [n] (if (zero? n) :anon (recur (dec n)))) 3))
-      (println ((fn b17-m ([n] (if (zero? n) :multi (recur (dec n)))) ([a b] (+ a b))) 3))
-      (defn b17-countdown [n] (if (zero? n) :done (recur (dec n))))
-      (println (b17-countdown 3))
-      (defn b17-md ([n] (if (zero? n) :multi-defn (recur (dec n)))) ([a b] (+ a b)))
-      (println (b17-md 3))
-      (println (b17-md 4 5))
-      (def b17-tries (atom 3))
-      (defn b17-take-guess [] (if (zero? @b17-tries) :got-it (do (swap! b17-tries dec) (recur))))
-      (println (b17-take-guess))
+      (println ((fn m ([n] (if (zero? n) :multi (recur (dec n)))) ([a b] (+ a b))) 3))
+      (defn countdown [n] (if (zero? n) :done (recur (dec n))))
+      (println (countdown 3))
+      (defn md ([n] (if (zero? n) :multi-defn (recur (dec n)))) ([a b] (+ a b)))
+      (println (md 3))
+      (println (md 4 5))
+      (def tries (atom 3))
+      (defn take-guess [] (if (zero? @tries) :got-it (do (swap! tries dec) (recur))))
+      (println (take-guess))
     expected: |
       15
       :zero
@@ -107,10 +107,10 @@ cases:
     # The book's functional.clj fibs (a letfn tail-fibo mapped over 0..10) and
     # primes.clj prefix (a named fn recurring with its found vector to 25 primes).
     source: |
-      (letfn [(b17-fib [n a b] (if (zero? n) a (recur (dec n) b (+ a b))))]
-        (println (map (fn [n] (b17-fib n 0 1)) [0 1 2 3 4 5 6 7 8 9 10])))
-      (let [b17-primes-from (fn b17-pf [n found] (if (= (count found) 25) found (recur (inc n) (if (some (fn [d] (= (mod n d) 0)) found) found (conj found n)))))]
-        (println (b17-primes-from 2 [])))
+      (letfn [(fib [n a b] (if (zero? n) a (recur (dec n) b (+ a b))))]
+        (println (map (fn [n] (fib n 0 1)) [0 1 2 3 4 5 6 7 8 9 10])))
+      (let [primes-from (fn pf [n found] (if (= (count found) 25) found (recur (inc n) (if (some (fn [d] (= (mod n d) 0)) found) found (conj found n)))))]
+        (println (primes-from 2 [])))
     expected: |
       (0 1 1 2 3 5 8 13 21 34 55)
       [2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97]
@@ -123,8 +123,8 @@ cases:
     # the JVM overflowed each before (the loop near 150,000, a defn near
     # 200,000). Oracle clj 1.12.6.1673 prints the same.
     source: |
-      (defn b17-bigsum [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
-      (println (b17-bigsum 5000 0))
+      (defn bigsum [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
+      (println (bigsum 5000 0))
       (println (loop [n 1000000] (if (zero? n) :done (recur (dec n)))))
       (defn deep-down [n] (if (zero? n) :defn (recur (dec n))))
       (println (deep-down 300000))
@@ -159,19 +159,19 @@ cases:
     # normal calls; single-arity defn, named fn, multi-arity defn, letfn entry
     # and anonymous fn alike.
     source: |
-      (defn b27-vr [a & r] (if (empty? r) a (recur (first r) (rest r))))
-      (println (b27-vr :start [1]))
-      (println (b27-vr :start nil))
-      (println (b27-vr :only))
-      (println ((fn b27-g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start [1]))
-      (println ((fn b27-g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start nil))
-      (defn b27-vm ([a] a) ([a & r] (if (empty? r) a (recur (first r) (rest r)))))
-      (println (b27-vm :x))
-      (println (b27-vm :start [1]))
-      (println (b27-vm :start nil))
-      (letfn [(b27-w [a & r] (if (empty? r) a (recur (first r) (rest r))))]
-        (println (b27-w :start [1]))
-        (println (b27-w :start nil)))
+      (defn vr [a & r] (if (empty? r) a (recur (first r) (rest r))))
+      (println (vr :start [1]))
+      (println (vr :start nil))
+      (println (vr :only))
+      (println ((fn g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start [1]))
+      (println ((fn g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start nil))
+      (defn vm ([a] a) ([a & r] (if (empty? r) a (recur (first r) (rest r)))))
+      (println (vm :x))
+      (println (vm :start [1]))
+      (println (vm :start nil))
+      (letfn [(w [a & r] (if (empty? r) a (recur (first r) (rest r))))]
+        (println (w :start [1]))
+        (println (w :start nil)))
       (println ((fn [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start [1]))
       (println ((fn [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start nil))
     expected: |
@@ -190,7 +190,7 @@ cases:
   - name: recur-to-variadic-method-splits-a-worker
     # Oracle clj 1.12.6.1673: a recur to a variadic defmethod body binds the
     # rest parameter to the last recur argument itself, like every other
-    # variadic clause (b27): (b36-walk {:shape :go :v :start} [1]) is [1] and
+    # variadic clause: (walk {:shape :go :v :start} [1]) is [1] and
     # with nil is nil (a plain &rest self call would wrap the rest in a
     # one-list and loop forever on the second probe). The stored lambda splits
     # into a worker (the rest as an ordinary parameter, so recur assigns
@@ -200,24 +200,24 @@ cases:
     # so those rows pin our lenient reading, green on all four backends by the
     # same construction). The dispatch function takes the call's full argument
     # list (the dispatcher applies it to every argument), so it spells its own
-    # &r; a keyword dispatch takes the lookup plus an optional default (b39),
+    # &r; a keyword dispatch takes the lookup plus an optional default,
     # like (:k m dflt).
     source: |
-      (defmulti b36-walk (fn [m & r] (:shape m)))
-      (defmethod b36-walk :go [m & r] (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
-      (println (b36-walk {:shape :go :v :start} [1]))
-      (println (b36-walk {:shape :go :v :start} nil))
-      (println (b36-walk {:shape :go :v :only}))
-      (defmethod b36-walk :pt [{[a b] :pt} & r] (if (empty? r) [a b] (recur {:pt (first r)} (rest r))))
-      (println (b36-walk {:shape :pt :pt [1 2]} [3 4]))
-      (println (b36-walk {:shape :pt :pt [1 2]} nil))
-      (defprotocol B36P (b36-step [t a & r]))
-      (defrecord B36R [f] B36P (b36-step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
-      (println (b36-step (B36R. "f") :start [1]))
-      (println (b36-step (B36R. "f") :start nil))
-      (extend-protocol B36P String (b36-step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
-      (println (b36-step "s" :start [1]))
-      (println (b36-step "s" :start nil))
+      (defmulti walk (fn [m & r] (:shape m)))
+      (defmethod walk :go [m & r] (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
+      (println (walk {:shape :go :v :start} [1]))
+      (println (walk {:shape :go :v :start} nil))
+      (println (walk {:shape :go :v :only}))
+      (defmethod walk :pt [{[a b] :pt} & r] (if (empty? r) [a b] (recur {:pt (first r)} (rest r))))
+      (println (walk {:shape :pt :pt [1 2]} [3 4]))
+      (println (walk {:shape :pt :pt [1 2]} nil))
+      (defprotocol StepP (step [t a & r]))
+      (defrecord StepR [f] StepP (step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
+      (println (step (StepR. "f") :start [1]))
+      (println (step (StepR. "f") :start nil))
+      (extend-protocol StepP String (step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
+      (println (step "s" :start [1]))
+      (println (step "s" :start nil))
     expected: |
       [1]
       nil
@@ -232,7 +232,7 @@ cases:
     # Oracle clj 1.12.6.1673: the dispatcher applies the dispatch function to
     # every call argument, and a keyword over two arguments is the lookup with
     # the second as the default -- so a keyword-dispatched multimethod takes
-    # several call arguments (b39: the keyword value was a one-argument lookup
+    # several call arguments (the keyword value was a one-argument lookup
     # and signalled). A miss reads the extra argument as its dispatch value,
     # like the oracle. Set and vector dispatch values share the rest-tolerant
     # shape, so their multi-argument calls run too (a lenient superset past one
@@ -381,7 +381,7 @@ cases:
   - name: finite-range-take-and-drop
     # range with an end builds the strict list; an over-long take/drop answers the
     # whole/empty seq as nil, where the oracle prints (). An end-less (range) is
-    # refused by name (ClojureLoweringTest); lazy seqs terminate behind take (b11).
+    # refused by name (ClojureLoweringTest); lazy seqs terminate behind take.
     source: |
       (println (range 5))
       (println (range 2 8))
@@ -408,12 +408,12 @@ cases:
     # A lazy-seq body runs at most once per seq object, however often it is
     # realized; first/rest/take all answer through the memoized seq.
     source: |
-      (def b11-memo-calls (atom 0))
-      (def b11-memo-seq (lazy-seq (do (swap! b11-memo-calls inc) (cons 1 (cons 2 nil)))))
-      (println (first b11-memo-seq))
-      (println (first b11-memo-seq))
-      (println (take 5 b11-memo-seq))
-      (println @b11-memo-calls)
+      (def memo-calls (atom 0))
+      (def memo-seq (lazy-seq (do (swap! memo-calls inc) (cons 1 (cons 2 nil)))))
+      (println (first memo-seq))
+      (println (first memo-seq))
+      (println (take 5 memo-seq))
+      (println @memo-calls)
     expected: |
       1
       1
@@ -426,10 +426,10 @@ cases:
     # recur in the body's tail position re-runs the thunk itself: the counter
     # climbs to 3 and the seq bottoms out at nil.
     source: |
-      (def b28-calls (atom 0))
-      (def b28-draining (lazy-seq (swap! b28-calls inc) (when (< @b28-calls 3) (recur))))
-      (println (first b28-draining))
-      (println @b28-calls)
+      (def drain-calls (atom 0))
+      (def draining (lazy-seq (swap! drain-calls inc) (when (< @drain-calls 3) (recur))))
+      (println (first draining))
+      (println @drain-calls)
     expected: |
       nil
       3
@@ -438,8 +438,8 @@ cases:
     # fibs (the book's introduction.clj shape) terminates behind take; map runs
     # over two collections to the shortest.
     source: |
-      (def b11-fibs (lazy-cat [0 1] (map + b11-fibs (rest b11-fibs))))
-      (println (take 10 b11-fibs))
+      (def fibs (lazy-cat [0 1] (map + fibs (rest fibs))))
+      (println (take 10 fibs))
       (println (take 6 (lazy-cat [0 1] [2 3] (iterate inc 4))))
       (println (map + [1 2 3] [10 20]))
     expected: |
@@ -482,14 +482,14 @@ cases:
     # Laziness is observable: the logging seq (the book's lazy_index_of_any.clj
     # shape) runs its body only for what take realizes -- exactly two elements.
     source: |
-      (def b11-log (atom []))
-      (defn b11-logging-seq [coll]
+      (def visit-log (atom []))
+      (defn logging-seq [coll]
         (lazy-seq
           (when-let [s (seq coll)]
-            (do (swap! b11-log (fn [v x] (conj v x)) (first s))
-                (cons (first s) (b11-logging-seq (rest s)))))))
-      (println (take 2 (b11-logging-seq [10 20 30 40])))
-      (println @b11-log)
+            (do (swap! visit-log (fn [v x] (conj v x)) (first s))
+                (cons (first s) (logging-seq (rest s)))))))
+      (println (take 2 (logging-seq [10 20 30 40])))
+      (println @visit-log)
     expected: |
       (10 20)
       [10 20]
@@ -497,12 +497,12 @@ cases:
     # The book's primes.clj shape: a lazy sieve over (iterate inc 2); only the
     # taken prefix realizes, and it prints through take alone.
     source: |
-      (defn b11-sieve [s]
+      (defn sieve [s]
         (lazy-seq
           (when-let [p (first s)]
-            (cons p (b11-sieve (filter (fn [x] (not (= (mod x p) 0))) (rest s)))))))
-      (def b11-primes (b11-sieve (iterate inc 2)))
-      (println (take 10 b11-primes))
+            (cons p (sieve (filter (fn [x] (not (= (mod x p) 0))) (rest s)))))))
+      (def primes (sieve (iterate inc 2)))
+      (println (take 10 primes))
     expected: |
       (2 3 5 7 11 13 17 19 23 29)
   - name: long-skips-and-wrapper-chains-run-in-constant-stack
@@ -515,34 +515,34 @@ cases:
     # down a chain leaves the seq empty without re-running a body, like the oracle.
     source: |
       (println (first (filter #(> % 50000) (iterate inc 0))))
-      (defn b93-chain [n] (lazy-seq (if (< n 50000) (b93-chain (inc n)) (list n))))
-      (println (first (b93-chain 0)))
+      (defn chain [n] (lazy-seq (if (< n 50000) (chain (inc n)) (list n))))
+      (println (first (chain 0)))
       (println (first (filter #(> % 20000) (map inc (iterate inc 0)))))
-      (defn b93-filter [p s]
+      (defn skip-filter [p s]
         (lazy-seq
           (when-let [s (seq s)]
             (if (p (first s))
-              (cons (first s) (b93-filter p (rest s)))
-              (b93-filter p (rest s))))))
-      (println (first (b93-filter #(> % 20000) (iterate inc 0))))
+              (cons (first s) (skip-filter p (rest s)))
+              (skip-filter p (rest s))))))
+      (println (first (skip-filter #(> % 20000) (iterate inc 0))))
       (println (first (apply concat (concat (repeat 20000 (lazy-seq nil)) [[7]]))))
       (println (take 2 (dedupe (concat (repeat 20000 1) (iterate inc 2)))))
       (println (count (first (partition-by #(< % 20000) (iterate inc 0)))))
       (println (first (for [x (iterate inc 0) :when (> x 20000)] x)))
       (println (first (sequence (filter #(> % 20000)) (iterate inc 0))))
-      (def b93-inner (lazy-seq (list 1 2)))
-      (def b93-outer (lazy-seq b93-inner))
-      (println (seq b93-outer) (seq b93-inner))
-      (def b93-self (lazy-seq b93-self))
-      (println (seq b93-self))
-      (def b93-calls (atom 0))
-      (def b93-throws
+      (def inner (lazy-seq (list 1 2)))
+      (def outer (lazy-seq inner))
+      (println (seq outer) (seq inner))
+      (def self (lazy-seq self))
+      (println (seq self))
+      (def chain-calls (atom 0))
+      (def throws
         (lazy-seq
           (lazy-seq
-            (swap! b93-calls inc)
-            (if (= @b93-calls 1) (throw (ex-info "boom" {})) (list :ok)))))
-      (println (try (seq b93-throws) (catch Exception e (ex-message e))))
-      (println (seq b93-throws) @b93-calls)
+            (swap! chain-calls inc)
+            (if (= @chain-calls 1) (throw (ex-info "boom" {})) (list :ok)))))
+      (println (try (seq throws) (catch Exception e (ex-message e))))
+      (println (seq throws) @chain-calls)
     expected: |
       50001
       50000
@@ -605,8 +605,8 @@ cases:
     source: |
       (println (apply quot [7 2]))
       (println (apply nth [[10 20] 1]))
-      (def b03-qv quot)
-      (println (apply b03-qv [7 2]))
+      (def qv quot)
+      (println (apply qv [7 2]))
       (println (map (fn [v] (nth v 0)) [[1 2] [3 4]]))
     expected: |
       3
@@ -819,17 +819,17 @@ cases:
       42
   - name: def-lone-string-is-the-value-not-a-docstring
     # A docstring only counts with a value behind it: (def g "hello") binds
-    # "hello" (b50: the old read ate the string as a docstring and bound nil,
+    # "hello" (the old read ate the string as a docstring and bound nil,
     # which blanked the examples/clojure/demo.clj greeting). With a value the
     # string is the docstring, and a lone map stays the value.
     source: |
-      (def b50-greeting "hello")
-      (println b50-greeting)
-      (println (str b50-greeting "X"))
-      (def b50-with-doc "a docstring" "the value")
-      (println b50-with-doc)
-      (def b50-plain-map {:a 1})
-      (println b50-plain-map)
+      (def greeting "hello")
+      (println greeting)
+      (println (str greeting "X"))
+      (def with-doc "a docstring" "the value")
+      (println with-doc)
+      (def plain-map {:a 1})
+      (println plain-map)
     expected: |
       hello
       helloX
@@ -1245,7 +1245,7 @@ cases:
     # referred var; every verb runs over the core string operations. split takes
     # a string pattern (regex literals are refused at the reader).
     source: |
-      (ns b05-str (:require [clojure.string :as s :refer [join]]))
+      (ns req-ns (:require [clojure.string :as s :refer [join]]))
       (println (s/join "," ["a" "b"]))
       (println (join "-" ["x" "y"]))
       (println (clojure.string/upper-case "hi"))
@@ -1343,7 +1343,7 @@ cases:
       (println (deref a05))
       (println @(volatile! 5))
       (println (map deref [(atom 1) (atom 2)]))
-      (println (let [b05 (atom 0)] (reset! b05 41) (swap! b05 inc)))
+      (println (let [cell (atom 0)] (reset! cell 41) (swap! cell inc)))
     expected: |
       1
       2
@@ -1461,36 +1461,36 @@ cases:
     # :a/b stays opaque. The corpus shapes: interest-rate/account-level over :tag,
     # service-charge2 vector pairs, derive plus service-charge3 over the parent.
     source: |
-      (ns b19auto (:require [clojure.string :as str]))
+      (ns auto (:require [clojure.string :as str]))
       (println ::checking)
       (println ::str/join)
       (println (name ::str/join))
       (println (namespace ::str/join))
-      (println (= ::checking :b19auto/checking))
-      (println (::checking {:b19auto/checking 7}))
-      (println (::missing {:b19auto/checking 7} :dflt))
-      (defmulti b19rate :tag)
-      (defmethod b19rate ::checking [_] 0)
-      (defmethod b19rate ::savings [_] 5)
-      (println (b19rate {:tag ::checking}))
-      (println (b19rate {:tag ::savings}))
+      (println (= ::checking :auto/checking))
+      (println (::checking {:auto/checking 7}))
+      (println (::missing {:auto/checking 7} :dflt))
+      (defmulti rate :tag)
+      (defmethod rate ::checking [_] 0)
+      (defmethod rate ::savings [_] 5)
+      (println (rate {:tag ::checking}))
+      (println (rate {:tag ::savings}))
       (derive ::savings ::account)
       (derive ::checking ::account)
       (println (isa? ::savings ::account))
       (println (parents ::savings))
-      (defmulti b19level :tag)
-      (defmethod b19level ::checking [a] (if (>= (:balance a) 5000) ::premium ::basic))
-      (defmethod b19level ::savings [a] (if (>= (:balance a) 1000) ::premium ::basic))
-      (defmulti b19charge (fn [a] [(b19level a) (:tag a)]))
-      (defmethod b19charge [::basic ::checking] [_] 25)
-      (defmethod b19charge [::basic ::savings] [_] 10)
-      (defmethod b19charge [::premium ::account] [_] 0)
-      (println (b19charge {:tag ::checking :balance 100}))
-      (println (b19charge {:tag ::savings :balance 100}))
-      (println (b19charge {:tag ::checking :balance 9000}))
-      (println (b19charge {:tag ::savings :balance 9000}))
+      (defmulti level :tag)
+      (defmethod level ::checking [a] (if (>= (:balance a) 5000) ::premium ::basic))
+      (defmethod level ::savings [a] (if (>= (:balance a) 1000) ::premium ::basic))
+      (defmulti charge (fn [a] [(level a) (:tag a)]))
+      (defmethod charge [::basic ::checking] [_] 25)
+      (defmethod charge [::basic ::savings] [_] 10)
+      (defmethod charge [::premium ::account] [_] 0)
+      (println (charge {:tag ::checking :balance 100}))
+      (println (charge {:tag ::savings :balance 100}))
+      (println (charge {:tag ::checking :balance 9000}))
+      (println (charge {:tag ::savings :balance 9000}))
     expected: |
-      :b19auto/checking
+      :auto/checking
       :clojure.string/join
       join
       clojure.string
@@ -1500,7 +1500,7 @@ cases:
       0
       5
       true
-      #{:b19auto/account}
+      #{:auto/account}
       25
       10
       0
@@ -1512,46 +1512,46 @@ cases:
     # identity nil; Object catches past the search but ahead of the default; the
     # pi.clj run-simulation shape dispatches [Map Number] pairs element-wise.
     source: |
-      (defmulti b19print class)
-      (defmethod b19print String [s] (str "str:" s))
-      (defmethod b19print Number [n] (str "num:" n))
-      (defmethod b19print nil [_] "was-nil")
-      (defmethod b19print :default [x] "dflt")
-      (println (b19print "a"))
-      (println (b19print 1))
-      (println (b19print 1.5))
-      (println (b19print nil))
-      (println (b19print :k))
-      (println (b19print [1 2]))
-      (defmethod b19print java.util.Map [m] "map!")
-      (println (b19print {:a 1}))
-      (defmethod b19print clojure.lang.IPersistentVector [v] "vec!")
-      (println (b19print [1 2]))
-      (defmethod b19print java.util.Collection [c] "coll!")
-      (println (b19print (list 1)))
-      (prefer-method b19print clojure.lang.IPersistentVector java.util.Collection)
-      (println (b19print [1 2]))
-      (defmulti b19id identity)
-      (defmethod b19id nil [_] "was-nil")
-      (defmethod b19id :default [x] "dflt")
-      (println (b19id nil))
-      (println (b19id 1))
-      (println ((get-method b19id nil) nil))
-      (remove-method b19id nil)
-      (println (b19id nil))
-      (defmulti b19obj class :default :dflt)
-      (defmethod b19obj Object [x] "obj!")
-      (defmethod b19obj :dflt [x] "d!")
-      (println (b19obj "a"))
-      (println (b19obj :k))
-      (defmulti b19sim (fn [& args] (into [] (map class args))))
-      (defmethod b19sim [Number] [n] (str "n:" n))
-      (defmethod b19sim [java.util.Map] [m] "m")
-      (defmethod b19sim [java.util.Map Number] [m n] "mn")
-      (println (b19sim 5))
-      (println (b19sim {:a 1}))
-      (println (b19sim {:a 1} 2))
-      (println (try (b19sim [1] 2) (catch Exception e "miss")))
+      (defmulti print-mm class)
+      (defmethod print-mm String [s] (str "str:" s))
+      (defmethod print-mm Number [n] (str "num:" n))
+      (defmethod print-mm nil [_] "was-nil")
+      (defmethod print-mm :default [x] "dflt")
+      (println (print-mm "a"))
+      (println (print-mm 1))
+      (println (print-mm 1.5))
+      (println (print-mm nil))
+      (println (print-mm :k))
+      (println (print-mm [1 2]))
+      (defmethod print-mm java.util.Map [m] "map!")
+      (println (print-mm {:a 1}))
+      (defmethod print-mm clojure.lang.IPersistentVector [v] "vec!")
+      (println (print-mm [1 2]))
+      (defmethod print-mm java.util.Collection [c] "coll!")
+      (println (print-mm (list 1)))
+      (prefer-method print-mm clojure.lang.IPersistentVector java.util.Collection)
+      (println (print-mm [1 2]))
+      (defmulti id-nil-mm identity)
+      (defmethod id-nil-mm nil [_] "was-nil")
+      (defmethod id-nil-mm :default [x] "dflt")
+      (println (id-nil-mm nil))
+      (println (id-nil-mm 1))
+      (println ((get-method id-nil-mm nil) nil))
+      (remove-method id-nil-mm nil)
+      (println (id-nil-mm nil))
+      (defmulti obj class :default :dflt)
+      (defmethod obj Object [x] "obj!")
+      (defmethod obj :dflt [x] "d!")
+      (println (obj "a"))
+      (println (obj :k))
+      (defmulti sim (fn [& args] (into [] (map class args))))
+      (defmethod sim [Number] [n] (str "n:" n))
+      (defmethod sim [java.util.Map] [m] "m")
+      (defmethod sim [java.util.Map Number] [m n] "mn")
+      (println (sim 5))
+      (println (sim {:a 1}))
+      (println (sim {:a 1} 2))
+      (println (try (sim [1] 2) (catch Exception e "miss")))
     expected: |
       str:a
       num:1
@@ -1579,25 +1579,25 @@ cases:
     # while a bare class dispatch still answers the nil method for nil (and the
     # default for :nil, whose class is Keyword). Oracle: clj 1.12.6.1673.
     source: |
-      (defmulti b32id identity)
-      (defmethod b32id nil [_] "was-nil")
-      (defmethod b32id :default [x] "dflt")
-      (println (b32id nil))
-      (println (b32id :nil))
-      (defmulti b32both identity)
-      (defmethod b32both nil [_] "was-nil")
-      (defmethod b32both :nil [_] "was-kw")
-      (defmethod b32both :default [x] "dflt")
-      (println (b32both nil))
-      (println (b32both :nil))
-      (println (b32both :other))
-      (defmulti b32c class)
-      (defmethod b32c nil [_] "was-nil")
-      (defmethod b32c :default [x] "dflt")
-      (println (b32c nil))
-      (println (b32c :nil))
-      (println ((get-method b32both nil) nil))
-      (println ((get-method b32both :nil) :nil))
+      (defmulti id-mm identity)
+      (defmethod id-mm nil [_] "was-nil")
+      (defmethod id-mm :default [x] "dflt")
+      (println (id-mm nil))
+      (println (id-mm :nil))
+      (defmulti both identity)
+      (defmethod both nil [_] "was-nil")
+      (defmethod both :nil [_] "was-kw")
+      (defmethod both :default [x] "dflt")
+      (println (both nil))
+      (println (both :nil))
+      (println (both :other))
+      (defmulti by-class class)
+      (defmethod by-class nil [_] "was-nil")
+      (defmethod by-class :default [x] "dflt")
+      (println (by-class nil))
+      (println (by-class :nil))
+      (println ((get-method both nil) nil))
+      (println ((get-method both :nil) :nil))
     expected: |
       was-nil
       dflt
@@ -1615,19 +1615,19 @@ cases:
     # `:nil` out of a class-wrapped dispatch keeps its keyword row. Oracle: clj
     # 1.12.6.1673.
     source: |
-      (defmulti b38w (fn [x] (class x)))
-      (defmethod b38w nil [_] "was-nil")
-      (defmethod b38w :default [x] "dflt")
-      (println (b38w nil))
-      (println (b38w :nil))
-      (defmulti b38m (fn [x] (if (= x :foo) :nil (class x))))
-      (defmethod b38m nil [_] "was-nil")
-      (defmethod b38m :nil [_] "was-kw")
-      (defmethod b38m :default [x] "dflt")
-      (println (b38m nil))
-      (println (b38m :foo))
-      (println (b38m :nil))
-      (println (b38m "a"))
+      (defmulti inline-class-mm (fn [x] (class x)))
+      (defmethod inline-class-mm nil [_] "was-nil")
+      (defmethod inline-class-mm :default [x] "dflt")
+      (println (inline-class-mm nil))
+      (println (inline-class-mm :nil))
+      (defmulti inline-kw-mm (fn [x] (if (= x :foo) :nil (class x))))
+      (defmethod inline-kw-mm nil [_] "was-nil")
+      (defmethod inline-kw-mm :nil [_] "was-kw")
+      (defmethod inline-kw-mm :default [x] "dflt")
+      (println (inline-kw-mm nil))
+      (println (inline-kw-mm :foo))
+      (println (inline-kw-mm :nil))
+      (println (inline-kw-mm "a"))
     expected: |
       was-nil
       dflt
@@ -1643,28 +1643,28 @@ cases:
     # direct call to the definition keeps answering :nil, and an explicit :nil
     # out of a named dispatch keeps its keyword row. Oracle: clj 1.12.6.1673.
     source: |
-      (defn b40class [x] (class x))
-      (defmulti b40w b40class)
-      (defmethod b40w nil [_] "was-nil")
-      (defmethod b40w :default [x] "dflt")
-      (println (b40w nil))
-      (println (b40w :nil))
-      (println (b40class nil))
-      (def b40fn (fn [x] (class x)))
-      (defmulti b40v b40fn)
-      (defmethod b40v nil [_] "was-nil")
-      (defmethod b40v :default [x] "dflt")
-      (println (b40v nil))
-      (println (b40v :nil))
-      (defn b40m [x] (if (= x :foo) :nil (class x)))
-      (defmulti b40u b40m)
-      (defmethod b40u nil [_] "was-nil")
-      (defmethod b40u :nil [_] "was-kw")
-      (defmethod b40u :default [x] "dflt")
-      (println (b40u nil))
-      (println (b40u :foo))
-      (println (b40u :nil))
-      (println (b40u "a"))
+      (defn class-fn [x] (class x))
+      (defmulti named-class-mm class-fn)
+      (defmethod named-class-mm nil [_] "was-nil")
+      (defmethod named-class-mm :default [x] "dflt")
+      (println (named-class-mm nil))
+      (println (named-class-mm :nil))
+      (println (class-fn nil))
+      (def class-value (fn [x] (class x)))
+      (defmulti value-class-mm class-value)
+      (defmethod value-class-mm nil [_] "was-nil")
+      (defmethod value-class-mm :default [x] "dflt")
+      (println (value-class-mm nil))
+      (println (value-class-mm :nil))
+      (defn kw-class-fn [x] (if (= x :foo) :nil (class x)))
+      (defmulti kw-class-mm kw-class-fn)
+      (defmethod kw-class-mm nil [_] "was-nil")
+      (defmethod kw-class-mm :nil [_] "was-kw")
+      (defmethod kw-class-mm :default [x] "dflt")
+      (println (kw-class-mm nil))
+      (println (kw-class-mm :foo))
+      (println (kw-class-mm :nil))
+      (println (kw-class-mm "a"))
     expected: |
       was-nil
       dflt
@@ -1683,28 +1683,28 @@ cases:
     # call to the definition keeps answering :nil, and an explicit :nil out of
     # a named dispatch keeps its keyword row. Oracle: clj 1.12.6.1673.
     source: |
-      (defn b46class [x] (class x))
-      (defmulti b46w (fn [x] (b46class x)))
-      (defmethod b46w nil [_] "was-nil")
-      (defmethod b46w :default [x] "dflt")
-      (println (b46w nil))
-      (println (b46w :nil))
-      (println (b46class nil))
-      (def b46fn (fn [x] (class x)))
-      (defmulti b46v (fn [x] (b46fn x)))
-      (defmethod b46v nil [_] "was-nil")
-      (defmethod b46v :default [x] "dflt")
-      (println (b46v nil))
-      (println (b46v :nil))
-      (defn b46m [x] (if (= x :foo) :nil (class x)))
-      (defmulti b46u (fn [x] (b46m x)))
-      (defmethod b46u nil [_] "was-nil")
-      (defmethod b46u :nil [_] "was-kw")
-      (defmethod b46u :default [x] "dflt")
-      (println (b46u nil))
-      (println (b46u :foo))
-      (println (b46u :nil))
-      (println (b46u "a"))
+      (defn nested-class-fn [x] (class x))
+      (defmulti nested-class-mm (fn [x] (nested-class-fn x)))
+      (defmethod nested-class-mm nil [_] "was-nil")
+      (defmethod nested-class-mm :default [x] "dflt")
+      (println (nested-class-mm nil))
+      (println (nested-class-mm :nil))
+      (println (nested-class-fn nil))
+      (def nested-class-value (fn [x] (class x)))
+      (defmulti nested-value-mm (fn [x] (nested-class-value x)))
+      (defmethod nested-value-mm nil [_] "was-nil")
+      (defmethod nested-value-mm :default [x] "dflt")
+      (println (nested-value-mm nil))
+      (println (nested-value-mm :nil))
+      (defn nested-kw-fn [x] (if (= x :foo) :nil (class x)))
+      (defmulti nested-kw-mm (fn [x] (nested-kw-fn x)))
+      (defmethod nested-kw-mm nil [_] "was-nil")
+      (defmethod nested-kw-mm :nil [_] "was-kw")
+      (defmethod nested-kw-mm :default [x] "dflt")
+      (println (nested-kw-mm nil))
+      (println (nested-kw-mm :foo))
+      (println (nested-kw-mm :nil))
+      (println (nested-kw-mm "a"))
     expected: |
       was-nil
       dflt
@@ -1756,7 +1756,7 @@ cases:
     # pattern that is special in regex syntax matches only itself. Regex
     # literals (#"...") stay refused at the reader.
     source: |
-      (ns b08lit (:require [clojure.string :as s]))
+      (ns lit (:require [clojure.string :as s]))
       (println (s/replace "aaa" "." "b"))
       (println (s/split "aaa" "."))
       (println (s/replace-first "aaa" "a+" "b"))
@@ -1832,13 +1832,13 @@ cases:
     source: |
       (println (try (throw {:a 1}) (catch Exception e (ex-message e))))
       (println (try (throw [1 :a]) (catch Exception e (str "got-" e))))
-      (defmulti b07m :t)
-      (defmethod b07m :a [x] 1)
-      (println (try (b07m {:t :zzz}) (catch Exception e (ex-message e))))
+      (defmulti by-tag :t)
+      (defmethod by-tag :a [x] 1)
+      (println (try (by-tag {:t :zzz}) (catch Exception e (ex-message e))))
     expected: |
       {:a 1}
       got-[1 :a]
-      No method in b07m for dispatch value: :zzz
+      No method in by-tag for dispatch value: :zzz
   - name: doseq-prints-and-answers-nil
     # doseq iterates the seq view for side effects and answers nil: nested pairs
     # cross like for, patterns destructure, :when skips, :while ends its level,
@@ -1848,17 +1848,17 @@ cases:
       (println (doseq [x [1 2] :let [y (* x 10)]] (print y)))
       (println (doseq [x [1 2 3] :when (odd? x)] (print x)))
       (println (doseq [x [1 2 3 4] :while (< x 3)] (print x)))
-      (def b10-log (atom []))
-      (defn b10-push [v e] (conj v e))
-      (doseq [x [1 2 3]] (swap! b10-log b10-push x))
-      (println @b10-log)
+      (def log (atom []))
+      (defn push [v e] (conj v e))
+      (doseq [x [1 2 3]] (swap! log push x))
+      (println @log)
       (println (doseq [x [1 2 3]] x))
-      (doseq [x [1 2] y [3 4]] (swap! b10-log b10-push [x y]))
-      (println @b10-log)
-      (doseq [c "ab"] (swap! b10-log b10-push c))
-      (println @b10-log)
-      (doseq [e {:k 9}] (swap! b10-log b10-push e))
-      (println @b10-log)
+      (doseq [x [1 2] y [3 4]] (swap! log push [x y]))
+      (println @log)
+      (doseq [c "ab"] (swap! log push c))
+      (println @log)
+      (doseq [e {:k 9}] (swap! log push e))
+      (println @log)
       (println (doseq [x [1]]))
       (println (doseq [] (print 9)))
       (println (doseq [x nil] 1))
@@ -1879,17 +1879,17 @@ cases:
     # truncate first (the oracle's intCast): 2.5 counts 0 1, and a non-number
     # signals there.
     source: |
-      (def b10-n (atom []))
-      (dotimes [i 3] (swap! b10-n b10-push i))
-      (println @b10-n)
+      (def tick-n (atom []))
+      (dotimes [i 3] (swap! tick-n push i))
+      (println @tick-n)
       (println (dotimes [i 3] i))
       (println (dotimes [i 0] 1))
-      (dotimes [i 2] (swap! b10-n b10-push (* i 10)))
-      (println @b10-n)
-      (dotimes [i 2.5] (swap! b10-n b10-push i))
-      (println @b10-n)
-      (println (dotimes [i 2] (dotimes [j 2] (swap! b10-n b10-push [i j]))))
-      (println @b10-n)
+      (dotimes [i 2] (swap! tick-n push (* i 10)))
+      (println @tick-n)
+      (dotimes [i 2.5] (swap! tick-n push i))
+      (println @tick-n)
+      (println (dotimes [i 2] (dotimes [j 2] (swap! tick-n push [i j]))))
+      (println @tick-n)
     expected: |
       [0 1 2]
       nil
@@ -2010,9 +2010,9 @@ cases:
       (doseq [[idx elt] (map vector (iterate inc 0) "zzab") :when (not= elt \z) :let [k (str idx elt)]] (println k))
       (println (doseq [x (concat [1 2] (lazy-seq [3]))] (print x)))
       (println (doseq [x (iterate inc 0) :while (< x 3)] (print x)))
-      (def b81-log (atom []))
-      (doseq [x (map inc (lazy-seq [1 2])) y (filter even? (concat [1 2] (lazy-seq [3 4])))] (swap! b81-log b10-push [x y]))
-      (println @b81-log)
+      (def pairs-log (atom []))
+      (doseq [x (map inc (lazy-seq [1 2])) y (filter even? (concat [1 2] (lazy-seq [3 4])))] (swap! pairs-log push [x y]))
+      (println @pairs-log)
     expected: |
       2a
       3b
@@ -2062,9 +2062,9 @@ cases:
       (println (dorun 2 [1 2 3]))
       (println (doall 2 [1 2 3]))
       (println (doall nil))
-      (def b10-seen (atom []))
-      (println (dorun (map #(swap! b10-seen b10-push %) [1 2])))
-      (println @b10-seen)
+      (def seen (atom []))
+      (println (dorun (map #(swap! seen push %) [1 2])))
+      (println @seen)
       (println (doall (map inc [1 2])))
       (println (map dorun [[1] [2]]))
       (println (map doall [[1] [2]]))
@@ -2117,8 +2117,8 @@ cases:
     # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
     # book's). Expansions print; the runnable ones run through the string-method
     # mapping, so every backend agrees. A syntax-quoted macro name qualifies with its
-    # namespace (this case runs in b08lit), like the oracle's
-    # (b08lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
+    # namespace (this case runs in lit), like the oracle's
+    # (lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
     # bare head through the call site's namespace (sp-chain2's plain quote).
     source: |
       (defmacro sp-chain1 [x form] (list '. x form))
@@ -2139,8 +2139,8 @@ cases:
       (. a b)
       (sp-chain2 (. a b) c)
       (. a b)
-      (b08lit/sp-chain4 (. a b) (c))
-      (b08lit/sp-chain5 (. a b) c)
+      (lit/sp-chain4 (. a b) (c))
+      (lit/sp-chain5 (. a b) c)
       (. (. a b) c)
       (. (. (. a b) c) d)
       HI
@@ -2176,12 +2176,12 @@ cases:
     # so the signal (not a silent skip) is pinned in ClojureInteropTest.
     # keep-indexed threads the index (the index_of_any.clj shape).
     source: |
-      (defn b15-index-filter [pred coll]
+      (defn index-filter [pred coll]
         (keep-indexed (fn [idx item] (when (pred item) idx)) coll))
-      (defn b15-index-of-any [pred coll]
-        (first (b15-index-filter pred coll)))
-      (println (b15-index-of-any #{:a} [:b :a :c]))
-      (println (b15-index-of-any #{:z} [:b :a]))
+      (defn index-of-any [pred coll]
+        (first (index-filter pred coll)))
+      (println (index-of-any #{:a} [:b :a :c]))
+      (println (index-of-any #{:z} [:b :a]))
       (println (keep inc [1 2 3]))
       (println (keep (fn [x] x) [1 nil 2 false]))
       (println (map-indexed vector [:a :b]))
@@ -2195,9 +2195,9 @@ cases:
     # The exploring.clj shapes without regex: indexed over map-indexed, and a
     # join over a literal split (regex stays refused at the reader).
     source: |
-      (ns b15-str (:require [clojure.string :as s]))
-      (defn b15-indexed [coll] (map-indexed vector coll))
-      (println (b15-indexed [:a :b]))
+      (ns runs-ns (:require [clojure.string :as s]))
+      (defn indexed [coll] (map-indexed vector coll))
+      (println (indexed [:a :b]))
       (println (s/join "-" (conj (into [] (s/split "a b c" " ")) "...")))
       (println (format "Hello, %s" "world"))
     expected: |
@@ -2208,12 +2208,12 @@ cases:
     # The functional.clj shape: count-if over comp, runs over partition, heads
     # over partial applied to a set predicate.
     source: |
-      (def b15-count-if (comp count filter))
-      (defn b15-count-runs [n pred coll]
-        (b15-count-if (fn [run] (every? pred run)) (partition n 1 coll)))
-      (println (b15-count-runs 2 #{:h} [:h :t :h :h]))
-      (def b15-count-heads-pairs (partial b15-count-runs 2 #{:h}))
-      (println (b15-count-heads-pairs [:h :h :t]))
+      (def count-if (comp count filter))
+      (defn count-runs [n pred coll]
+        (count-if (fn [run] (every? pred run)) (partition n 1 coll)))
+      (println (count-runs 2 #{:h} [:h :t :h :h]))
+      (def count-heads-pairs (partial count-runs 2 #{:h}))
+      (println (count-heads-pairs [:h :h :t]))
       (println (partition 2 [1 2 3]))
     expected: |
       1
@@ -2227,41 +2227,41 @@ cases:
     # faux-curry over partial, and the three count-heads shapes (loop, by-pairs
     # lazy-seq, partition runs). Oracle clj 1.12.6.1673 prints the same lines.
     source: |
-      (defn b87-recur-fibo [n]
+      (defn recur-fibo [n]
         (letfn [(fib [current next n]
                   (if (zero? n)
                     current
                     (recur next (+ current next) (dec n))))]
           (fib 0N 1N n)))
-      (defn b87-fibo []
+      (defn fibo []
         (map first (iterate (fn [[a b]] [b (+ a b)]) [0N 1N])))
-      (def b87-head-fibo (lazy-cat [0N 1N] (map + b87-head-fibo (rest b87-head-fibo))))
-      (defn b87-faux-curry [& args] (apply partial partial args))
-      (def b87-ten-fibs [0 1 1 2 3 5 8 13 21 34])
-      (println (= b87-ten-fibs (map b87-recur-fibo (range 0 10))))
-      (println (= b87-ten-fibs (take 10 (b87-fibo))))
-      (println (= b87-ten-fibs (take 10 b87-head-fibo)))
-      (println (str (b87-recur-fibo 90)))
-      (println (fn? (b87-faux-curry + 1)) (fn? ((b87-faux-curry + 1) 1)))
-      (println (((b87-faux-curry + 1) 1)))
-      (defn b87-count-heads-loop [coll]
+      (def head-fibo (lazy-cat [0N 1N] (map + head-fibo (rest head-fibo))))
+      (defn faux-curry [& args] (apply partial partial args))
+      (def ten-fibs [0 1 1 2 3 5 8 13 21 34])
+      (println (= ten-fibs (map recur-fibo (range 0 10))))
+      (println (= ten-fibs (take 10 (fibo))))
+      (println (= ten-fibs (take 10 head-fibo)))
+      (println (str (recur-fibo 90)))
+      (println (fn? (faux-curry + 1)) (fn? ((faux-curry + 1) 1)))
+      (println (((faux-curry + 1) 1)))
+      (defn count-heads-loop [coll]
         (loop [cnt 0 coll coll]
           (if (empty? coll)
             cnt
             (recur (if (= :h (first coll) (second coll)) (inc cnt) cnt)
                    (rest coll)))))
-      (defn b87-by-pairs [coll]
+      (defn by-pairs [coll]
         (let [take-pair (fn [c] (when (next c) (take 2 c)))]
           (lazy-seq
            (when-let [pair (seq (take-pair coll))]
-             (cons pair (b87-by-pairs (rest coll)))))))
-      (defn b87-count-heads-by-pairs [coll]
-        (count (filter (fn [pair] (every? #{:h} pair)) (b87-by-pairs coll))))
-      (def b87-count-if (comp count filter))
-      (defn b87-count-runs [n pred coll]
-        (b87-count-if #(every? pred %) (partition n 1 coll)))
-      (def b87-count-heads-by-runs (partial b87-count-runs 2 #{:h}))
-      (doseq [f [b87-count-heads-loop b87-count-heads-by-pairs b87-count-heads-by-runs]]
+             (cons pair (by-pairs (rest coll)))))))
+      (defn count-heads-by-pairs [coll]
+        (count (filter (fn [pair] (every? #{:h} pair)) (by-pairs coll))))
+      (def fs-count-if (comp count filter))
+      (defn fs-count-runs [n pred coll]
+        (fs-count-if #(every? pred %) (partition n 1 coll)))
+      (def count-heads-by-runs (partial fs-count-runs 2 #{:h}))
+      (doseq [f [count-heads-loop count-heads-by-pairs count-heads-by-runs]]
         (println (f [:h :t]) (f [:t :h :h :t]) (f [:h :h :h])))
     expected: |
       true
@@ -2352,8 +2352,8 @@ cases:
       (println (map (complement odd?) [1 2]))
       (println ((constantly 7) 1 2 3))
       (println (map identity [1 2]))
-      (defn b15-blast [x] (if (zero? x) :done (fn [] (b15-blast (dec x)))))
-      (println (trampoline b15-blast 50))
+      (defn blast [x] (if (zero? x) :done (fn [] (blast (dec x)))))
+      (println (trampoline blast 50))
       (println (let [c (atom 0) f (memoize (fn [x] (swap! c inc) (* x 2)))] [(f 21) (f 21) @c]))
     expected: |
       7
@@ -2444,16 +2444,16 @@ cases:
     # on a name or a local never affects dispatch, so every shape below answers
     # its bare value; with-meta answers a copy that prints like the original.
     source: |
-      (defn- b14-double [x] (* x 2))
-      (println (b14-double 21))
-      (def ^:private b14-secret 7)
-      (println b14-secret)
-      (def ^{:doc "kept"} b14-kept 11)
-      (println b14-kept)
-      (defn b14-hint [^String s] s)
-      (println (b14-hint "s"))
+      (defn- double-it [x] (* x 2))
+      (println (double-it 21))
+      (def ^:private secret 7)
+      (println secret)
+      (def ^{:doc "kept"} kept 11)
+      (println kept)
+      (defn hint [^String s] s)
+      (println (hint "s"))
       (println (with-meta [1 2] {:tag :x}))
-      (println (b14-hint ^String (str "a" "b")))
+      (println (hint ^String (str "a" "b")))
     expected: |
       42
       7
@@ -2466,12 +2466,12 @@ cases:
     # values are nil, too many signal), struct-map seeds the same keys. Only
     # single-key reads print: multi-entry map order is unspecified.
     source: |
-      (defstruct b14-acct :id :balance)
-      (println (:id (struct b14-acct 1 100)))
-      (println (:balance (struct b14-acct 2)))
-      (println (:balance (struct-map b14-acct :id 9)))
-      (println (:id (struct-map b14-acct :id 9)))
-      (println (try (struct b14-acct 1 2 3) (catch Exception e :too-many)))
+      (defstruct acct :id :balance)
+      (println (:id (struct acct 1 100)))
+      (println (:balance (struct acct 2)))
+      (println (:balance (struct-map acct :id 9)))
+      (println (:id (struct-map acct :id 9)))
+      (println (try (struct acct 1 2 3) (catch Exception e :too-many)))
     expected: |
       1
       nil
@@ -2481,15 +2481,15 @@ cases:
   - name: defonce-keeps-its-root
     # defonce is def unless bound: the first evaluation wins, a reload keeps it.
     source: |
-      (defonce b14-dict ["a" "b"])
-      (println b14-dict)
-      (defonce b14-dict ["c"])
-      (println b14-dict)
-      (def b14-red 1)
-      (defonce b14-red 2)
-      (println b14-red)
-      (defonce b14-fresh)
-      (println b14-fresh)
+      (defonce dict ["a" "b"])
+      (println dict)
+      (defonce dict ["c"])
+      (println dict)
+      (def red 1)
+      (defonce red 2)
+      (println red)
+      (defonce fresh)
+      (println fresh)
     expected: |
       [a b]
       [a b]
@@ -2501,20 +2501,20 @@ cases:
     # once here (the oracle may run its function twice); Validators run, retries
     # do not -- the documented single-threaded deviation.
     source: |
-      (def b14-room (ref [] :validator (fn [msgs] (<= (count msgs) 3))))
-      (dosync (alter b14-room (fn [m x] (conj m x)) :hi))
-      (println @b14-room)
-      (dosync (commute b14-room (fn [m x] (conj m x)) :yo) (alter b14-room (fn [m x] (conj m x)) :bye))
-      (println @b14-room)
-      (println (try (dosync (alter b14-room (fn [m x] (conj m x)) :full)) (catch Exception e :rejected)))
-      (println @b14-room)
-      (def b14-count (ref 0))
-      (dosync (alter b14-count inc) (ref-set b14-count 41) (ensure b14-count))
-      (println @b14-count)
-      (println (try (alter b14-count inc) (catch Exception e :no-txn)))
-      (println (try (ref-set b14-count 0) (catch Exception e :no-txn)))
-      (println (try (ensure b14-count) (catch Exception e :no-txn)))
-      (println (dosync (ensure b14-count) :ok))
+      (def room (ref [] :validator (fn [msgs] (<= (count msgs) 3))))
+      (dosync (alter room (fn [m x] (conj m x)) :hi))
+      (println @room)
+      (dosync (commute room (fn [m x] (conj m x)) :yo) (alter room (fn [m x] (conj m x)) :bye))
+      (println @room)
+      (println (try (dosync (alter room (fn [m x] (conj m x)) :full)) (catch Exception e :rejected)))
+      (println @room)
+      (def ref-count (ref 0))
+      (dosync (alter ref-count inc) (ref-set ref-count 41) (ensure ref-count))
+      (println @ref-count)
+      (println (try (alter ref-count inc) (catch Exception e :no-txn)))
+      (println (try (ref-set ref-count 0) (catch Exception e :no-txn)))
+      (println (try (ensure ref-count) (catch Exception e :no-txn)))
+      (println (dosync (ensure ref-count) :ok))
     expected: |
       [:hi]
       [:hi :yo :bye]
@@ -2530,18 +2530,18 @@ cases:
     # dynamic extent -- a callee sees the binding, the root returns after -- while
     # inits run sequentially like let.
     source: |
-      (def ^:dynamic *b14-verbose* false)
-      (def ^:dynamic *b14-tag* :a)
-      (def ^:dynamic *b14-level* 0)
-      (defn b14-status [] (if *b14-verbose* :loud :quiet))
-      (println (b14-status))
-      (println (binding [*b14-verbose* true] (b14-status)))
-      (println (b14-status))
-      (println (binding [*b14-verbose* true] (binding [*b14-verbose* false] (b14-status))))
-      (println (binding [*b14-verbose* true *b14-tag* :b] (list (b14-status) *b14-tag*)))
-      (println (list (b14-status) *b14-tag*))
-      (println (binding [*b14-level* 1 *b14-tag* *b14-level*] *b14-tag*))
-      (println *b14-tag*)
+      (def ^:dynamic *verbose* false)
+      (def ^:dynamic *tag* :a)
+      (def ^:dynamic *level* 0)
+      (defn status [] (if *verbose* :loud :quiet))
+      (println (status))
+      (println (binding [*verbose* true] (status)))
+      (println (status))
+      (println (binding [*verbose* true] (binding [*verbose* false] (status))))
+      (println (binding [*verbose* true *tag* :b] (list (status) *tag*)))
+      (println (list (status) *tag*))
+      (println (binding [*level* 1 *tag* *level*] *tag*))
+      (println *tag*)
     expected: |
       :quiet
       :loud
@@ -2559,16 +2559,16 @@ cases:
     # A defn without the marker stays refused (ClojureLoweringTest pins the
     # refusal: the oracle reports it at run time, here it is a named refusal).
     source: |
-      (defn ^:dynamic b25-slow-double [n] (* n 2))
-      (defn b25-calls-slow-double [] (b25-slow-double 21))
-      (println (b25-calls-slow-double))
-      (println (binding [b25-slow-double (memoize b25-slow-double)] (b25-calls-slow-double)))
-      (println (b25-calls-slow-double))
-      (println (binding [b25-slow-double (fn [n] 7)] (b25-slow-double 21)))
-      (println (binding [b25-slow-double (memoize b25-slow-double)] [(b25-slow-double 21) (b25-slow-double 21)]))
-      (defn ^:dynamic b25-madd ([x] (b25-madd x 1)) ([x y] (+ x y)))
-      (println (b25-madd 5))
-      (println (binding [b25-madd (memoize b25-madd)] (b25-madd 5 6)))
+      (defn ^:dynamic slow-double [n] (* n 2))
+      (defn calls-slow-double [] (slow-double 21))
+      (println (calls-slow-double))
+      (println (binding [slow-double (memoize slow-double)] (calls-slow-double)))
+      (println (calls-slow-double))
+      (println (binding [slow-double (fn [n] 7)] (slow-double 21)))
+      (println (binding [slow-double (memoize slow-double)] [(slow-double 21) (slow-double 21)]))
+      (defn ^:dynamic madd ([x] (madd x 1)) ([x y] (+ x y)))
+      (println (madd 5))
+      (println (binding [madd (memoize madd)] (madd 5 6)))
     expected: |
       42
       42
@@ -2578,7 +2578,7 @@ cases:
       6
       11
   - name: set-bang-assigns-thread-bound-vars
-    # b75: set! of a ^:dynamic var sets the thread-local value inside an
+    # set! of a ^:dynamic var sets the thread-local value inside an
     # enclosing binding (the binding-depth counter beside the var says whether
     # it is bound, so a callee outside the binding's lexical extent still sets
     # it) and signals Can't change/establish root binding outside one, after
@@ -2587,16 +2587,16 @@ cases:
     # (the instant.clj line-13 shape). Every line matches the oracle (Clojure
     # CLI 1.12) byte for byte.
     source: |
-      (def ^:dynamic *b75-d* 1)
-      (println (binding [*b75-d* 5] (set! *b75-d* 2)))
-      (println *b75-d*)
-      (println (binding [*b75-d* 5] (set! *b75-d* 2) *b75-d*))
-      (println (try (set! *b75-d* 9) (catch Exception e :root-binding)) *b75-d*)
-      (defn b75-read [] *b75-d*)
-      (defn b75-write [v] (set! *b75-d* v))
-      (println (binding [*b75-d* 5] (b75-write 6) (b75-read)))
-      (println (b75-read))
-      (println (binding [*b75-d* 5] (binding [*b75-d* 6] (b75-write 7)) (b75-read)))
+      (def ^:dynamic *d* 1)
+      (println (binding [*d* 5] (set! *d* 2)))
+      (println *d*)
+      (println (binding [*d* 5] (set! *d* 2) *d*))
+      (println (try (set! *d* 9) (catch Exception e :root-binding)) *d*)
+      (defn read-dyn [] *d*)
+      (defn write-dyn [v] (set! *d* v))
+      (println (binding [*d* 5] (write-dyn 6) (read-dyn)))
+      (println (read-dyn))
+      (println (binding [*d* 5] (binding [*d* 6] (write-dyn 7)) (read-dyn)))
       (println (set! *warn-on-reflection* true))
       (println (set! *unchecked-math* false))
     expected: |
@@ -2614,19 +2614,19 @@ cases:
     # and the estimate combines deterministically. Sends apply at once (there is
     # no thread pool, so async ordering is out); *agent* is bound while one runs.
     source: |
-      (defn b14-inside? [[x y]] (<= (+ (* x x) (* y y)) 1))
-      (def b14-left (agent 0))
-      (def b14-right (agent 0))
-      (send b14-left (fn [n] (+ n (count (filter b14-inside? [[0 0] [1 1] [0 1]])))))
-      (send-off b14-right (fn [n] (+ n (count (filter b14-inside? [[1 0] [2 2]])))))
-      (await b14-left b14-right)
-      (println (list @b14-left @b14-right (/ (* 4 (+ @b14-left @b14-right)) 5)))
-      (def b14-seen (atom nil))
-      (def b14-probe (agent 0))
-      (println @(send b14-probe + 41))
-      (send b14-probe (fn [_] (reset! b14-seen *agent*) 1))
-      (println (list @b14-probe (if @b14-seen :bound :unbound) (= @b14-seen b14-probe)))
-      (println (list (await b14-probe) (shutdown-agents)))
+      (defn inside? [[x y]] (<= (+ (* x x) (* y y)) 1))
+      (def left (agent 0))
+      (def right (agent 0))
+      (send left (fn [n] (+ n (count (filter inside? [[0 0] [1 1] [0 1]])))))
+      (send-off right (fn [n] (+ n (count (filter inside? [[1 0] [2 2]])))))
+      (await left right)
+      (println (list @left @right (/ (* 4 (+ @left @right)) 5)))
+      (def agent-seen (atom nil))
+      (def probe (agent 0))
+      (println @(send probe + 41))
+      (send probe (fn [_] (reset! agent-seen *agent*) 1))
+      (println (list @probe (if @agent-seen :bound :unbound) (= @agent-seen probe)))
+      (println (list (await probe) (shutdown-agents)))
     expected: |
       (2 1 12/5)
       41
@@ -2639,8 +2639,8 @@ cases:
     source: |
       (println (with-out-str (print 1) (pr :a)))
       (println (subs (with-out-str (time (+ 1 2))) 0 13))
-      (with-out-str (def b14-timed (time (+ 40 2))))
-      (println b14-timed)
+      (with-out-str (def timed (time (+ 40 2))))
+      (println timed)
     expected: |
       1:a
       Elapsed time:
@@ -2659,8 +2659,8 @@ cases:
     # element type and is ignored -- every array here is general. Only the Clojure
     # spellings are new, so this case runs on all four backends.
     source: |
-      (let [b20-a (make-array String 3)] (aset b20-a 0 "x") (println (aget b20-a 0)) (println (alength b20-a)))
-      (let [b20-b (make-array String 2 2)] (aset b20-b 0 1 "y") (println (aget b20-b 0 1)) (println (alength b20-b)))
+      (let [a (make-array String 3)] (aset a 0 "x") (println (aget a 0)) (println (alength a)))
+      (let [b (make-array String 2 2)] (aset b 0 1 "y") (println (aget b 0 1)) (println (alength b)))
     expected: |
       x
       3
@@ -2674,62 +2674,62 @@ cases:
     expected: |
       false
   - name: records-are-maps-with-a-type-tag
-    # b13: a record is a (:C%RECORD tag fields table class) wrapper over the same
+    # a record is a (:C%RECORD tag fields table class) wrapper over the same
     # equal table every map uses, so the map verbs read through it on all four
-    # backends; it prints as its literal, #ns.R{...}, like the oracle (b58) --
-    # here #b15_str.B13Rock, the namespace an earlier case switched to.
-    # (assoc b13-r :hard true) keeps the type; (dissoc r :hard) of the extension
+    # backends; it prints as its literal, #ns.R{...}, like the oracle --
+    # here #runs_ns.Rock, the namespace an earlier case switched to.
+    # (assoc rock :hard true) keeps the type; (dissoc r :hard) of the extension
     # key keeps it while (dissoc r :mass) of the base field drops to a plain map.
     source: |
-      (defrecord B13Rock [mass])
-      (def b13-r (->B13Rock 7))
-      (println (= b13-r (->B13Rock 7)))
-      (println (= b13-r {:mass 7}))
-      (println (get b13-r :mass))
-      (println (:mass b13-r))
-      (println (contains? b13-r :mass))
-      (println (count b13-r))
-      (println (keys b13-r))
-      (println (vals b13-r))
-      (println (class b13-r))
-      (println (instance? B13Rock b13-r))
-      (println (instance? B13Rock {:mass 7}))
-      (println (get (assoc b13-r :hard true) :hard))
-      (println (class (assoc b13-r :hard true)))
-      (println (get (map->B13Rock {:mass 1 :color :red}) :color))
-      (println (get (map->B13Rock {:mass 1}) :color :gone))
-      (println (B13Rock. 42))
-      (def b13-r2 (dissoc (assoc b13-r :hard true) :hard))
-      (println (class b13-r2))
-      (println (get b13-r2 :hard :gone))
-      (def b13-r3 (dissoc b13-r :mass))
-      (println b13-r3)
-      (println (get (merge b13-r {:hard true}) :hard))
-      (println (class (merge b13-r {:hard true})))
-      (println (class (merge {:hard true} b13-r)))
-      (println (get (merge-with + b13-r {:mass 10}) :mass))
-      (println (class (merge-with + b13-r {:mass 10})))
-      (println (get ((fn [b33-f] (b33-f + b13-r {:mass 10})) merge-with) :mass))
-      (println (class ((fn [b33-f] (b33-f + b13-r {:mass 10})) merge-with)))
-      (println (class ((fn [b33-f] (b33-f + {:mass 10} b13-r)) merge-with)))
-      (println (class (merge nil b13-r)))
-      (println (get (merge nil b13-r) :mass))
-      (println (class ((fn [b23-f] (b23-f nil b13-r)) merge)))
-      (println (class (merge-with + nil b13-r {:mass 10})))
-      (println (get (merge-with + nil b13-r {:mass 10}) :mass))
-      (println (class ((fn [b33-f] (b33-f + nil b13-r {:mass 10})) merge-with)))
+      (defrecord Rock [mass])
+      (def rock (->Rock 7))
+      (println (= rock (->Rock 7)))
+      (println (= rock {:mass 7}))
+      (println (get rock :mass))
+      (println (:mass rock))
+      (println (contains? rock :mass))
+      (println (count rock))
+      (println (keys rock))
+      (println (vals rock))
+      (println (class rock))
+      (println (instance? Rock rock))
+      (println (instance? Rock {:mass 7}))
+      (println (get (assoc rock :hard true) :hard))
+      (println (class (assoc rock :hard true)))
+      (println (get (map->Rock {:mass 1 :color :red}) :color))
+      (println (get (map->Rock {:mass 1}) :color :gone))
+      (println (Rock. 42))
+      (def r2 (dissoc (assoc rock :hard true) :hard))
+      (println (class r2))
+      (println (get r2 :hard :gone))
+      (def r3 (dissoc rock :mass))
+      (println r3)
+      (println (get (merge rock {:hard true}) :hard))
+      (println (class (merge rock {:hard true})))
+      (println (class (merge {:hard true} rock)))
+      (println (get (merge-with + rock {:mass 10}) :mass))
+      (println (class (merge-with + rock {:mass 10})))
+      (println (get ((fn [f] (f + rock {:mass 10})) merge-with) :mass))
+      (println (class ((fn [f] (f + rock {:mass 10})) merge-with)))
+      (println (class ((fn [f] (f + {:mass 10} rock)) merge-with)))
+      (println (class (merge nil rock)))
+      (println (get (merge nil rock) :mass))
+      (println (class ((fn [f] (f nil rock)) merge)))
+      (println (class (merge-with + nil rock {:mass 10})))
+      (println (get (merge-with + nil rock {:mass 10}) :mass))
+      (println (class ((fn [f] (f + nil rock {:mass 10})) merge-with)))
       (println (merge-with + nil nil))
-      (println ((fn [b33-f] (b33-f + nil nil)) merge-with))
-      (println (get (update b13-r :mass inc) :mass))
-      (println (select-keys (assoc b13-r :hard true) [:mass]))
-      (println (into {} b13-r))
-      (println (empty? b13-r))
-      (println (empty? (B13Rock. nil)))
-      (println (seq b13-r))
-      (println (get (conj b13-r [:hard true]) :hard))
-      (println (get-in b13-r [:mass]))
-      (println (get (assoc-in b13-r [:mass] 8) :mass))
-      (println (get (update-in b13-r [:mass] inc) :mass))
+      (println ((fn [f] (f + nil nil)) merge-with))
+      (println (get (update rock :mass inc) :mass))
+      (println (select-keys (assoc rock :hard true) [:mass]))
+      (println (into {} rock))
+      (println (empty? rock))
+      (println (empty? (Rock. nil)))
+      (println (seq rock))
+      (println (get (conj rock [:hard true]) :hard))
+      (println (get-in rock [:mass]))
+      (println (get (assoc-in rock [:mass] 8) :mass))
+      (println (get (update-in rock [:mass] inc) :mass))
     expected: |
       true
       false
@@ -2739,24 +2739,24 @@ cases:
       1
       (:mass)
       (7)
-      :B13Rock
+      :Rock
       true
       false
       true
-      :B13Rock
+      :Rock
       :red
       :gone
-      #b15_str.B13Rock{:mass 42}
-      :B13Rock
+      #runs_ns.Rock{:mass 42}
+      :Rock
       :gone
       {}
       true
-      :B13Rock
+      :Rock
       :map
       17
-      :B13Rock
+      :Rock
       17
-      :B13Rock
+      :Rock
       :map
       :map
       7
@@ -2777,46 +2777,46 @@ cases:
       8
       8
   - name: protocols-dispatch-over-the-type-tag
-    # b13: the InstantProvider/SimClock slice of instant.clj, adapted (the oracle
+    # the InstantProvider/SimClock slice of instant.clj, adapted (the oracle
     # extends to the Instant/Date host classes, which no wasm backend has; the
     # kinds class answers stand in). extend-protocol rows dispatch nil/String/
     # Number separately with Object as the catch-all; the deftype body sees its
     # fields as locals, so (swap! tick inc) advances the simulated clock.
     source: |
-      (defprotocol B13Time (b13-to-ms [source]))
-      (extend-protocol B13Time
-        nil (b13-to-ms [src] :b13-nil)
-        Object (b13-to-ms [src] :b13-object)
-        String (b13-to-ms [s] :b13-string)
-        Number (b13-to-ms [n] n))
-      (println (b13-to-ms nil))
-      (println (b13-to-ms "oops"))
-      (println (b13-to-ms 42))
-      (println (b13-to-ms 4.5))
-      (println (b13-to-ms :k))
-      (println (satisfies? B13Time nil))
-      (println (satisfies? B13Time "s"))
-      (defprotocol B13Sim (b13-advance! [s]))
-      (deftype B13Clock [start granularity tick]
-        B13Sim (b13-advance! [_] (swap! tick inc))
-        B13Time (b13-to-ms [_] (+ start (* granularity @tick))))
-      (def b13-clock (->B13Clock 1000 100 (atom 0)))
-      (println (b13-to-ms b13-clock))
-      (b13-advance! b13-clock)
-      (b13-advance! b13-clock)
-      (println (b13-to-ms b13-clock))
-      (println (satisfies? B13Sim b13-clock))
-      (println (satisfies? B13Time b13-clock))
-      (println (instance? B13Clock b13-clock))
-      (println (class b13-clock))
-      (println (get b13-clock :start))
-      (println (.-granularity b13-clock))
+      (defprotocol Time (to-ms [source]))
+      (extend-protocol Time
+        nil (to-ms [src] :nil-slot)
+        Object (to-ms [src] :object)
+        String (to-ms [s] :string)
+        Number (to-ms [n] n))
+      (println (to-ms nil))
+      (println (to-ms "oops"))
+      (println (to-ms 42))
+      (println (to-ms 4.5))
+      (println (to-ms :k))
+      (println (satisfies? Time nil))
+      (println (satisfies? Time "s"))
+      (defprotocol Sim (advance! [s]))
+      (deftype Clock [start granularity tick]
+        Sim (advance! [_] (swap! tick inc))
+        Time (to-ms [_] (+ start (* granularity @tick))))
+      (def clock (->Clock 1000 100 (atom 0)))
+      (println (to-ms clock))
+      (advance! clock)
+      (advance! clock)
+      (println (to-ms clock))
+      (println (satisfies? Sim clock))
+      (println (satisfies? Time clock))
+      (println (instance? Clock clock))
+      (println (class clock))
+      (println (get clock :start))
+      (println (.-granularity clock))
     expected: |
-      :b13-nil
-      :b13-string
+      :nil-slot
+      :string
       42
       4.5
-      :b13-object
+      :object
       true
       true
       1000
@@ -2824,7 +2824,7 @@ cases:
       true
       true
       true
-      :B13Clock
+      :Clock
       nil
       100
   - name: object-extension-keeps-a-row-per-method
@@ -2913,48 +2913,48 @@ cases:
       2 {:doc inc} true
       :not-iobj :not-iobj
   - name: hangman-players-guess-through-the-protocol
-    # b13: the Player slice of hangman/core.clj (random-player/interactive-player
+    # the Player slice of hangman/core.clj (random-player/interactive-player
     # via reify, ChoicesPlayer via defrecord, the pure game loop). Letters are
     # strings (the char-coercion helpers are outside the subset); the two games
     # below differ by one wrong guess, like the oracle's 2 and 3.
     source: |
-      (defprotocol B13Player (b13-next-guess [player progress]))
-      (def b13-letters ["e" "t" "a" "o" "i" "n" "h" "x"])
-      (def b13-random-player (reify B13Player (b13-next-guess [_ progress] :rand)))
-      (def b13-interactive-player (reify B13Player (b13-next-guess [_ progress] :human)))
-      (println (b13-next-guess b13-random-player nil))
-      (println (b13-next-guess b13-interactive-player nil))
-      (println (satisfies? B13Player b13-random-player))
-      (println (= b13-random-player b13-random-player))
-      (println (= b13-random-player b13-interactive-player))
-      (defrecord B13Choices [choices]
-        B13Player
-        (b13-next-guess [_ progress]
+      (defprotocol Player (next-guess [player progress]))
+      (def letters ["e" "t" "a" "o" "i" "n" "h" "x"])
+      (def random-player (reify Player (next-guess [_ progress] :rand)))
+      (def interactive-player (reify Player (next-guess [_ progress] :human)))
+      (println (next-guess random-player nil))
+      (println (next-guess interactive-player nil))
+      (println (satisfies? Player random-player))
+      (println (= random-player random-player))
+      (println (= random-player interactive-player))
+      (defrecord Choices [choices]
+        Player
+        (next-guess [_ progress]
           (let [guess (first @choices)]
             (swap! choices rest)
             guess)))
-      (defn b13-choices-player [choices] (->B13Choices (atom choices)))
-      (def b13-alpha (b13-choices-player b13-letters))
-      (println (b13-next-guess b13-alpha nil))
-      (println (b13-next-guess b13-alpha nil))
-      (println (satisfies? B13Player b13-alpha))
-      (println (satisfies? B13Player {}))
-      (println (instance? B13Choices b13-alpha))
-      (extend-type String B13Player (b13-next-guess [s progress] :str-player))
-      (println (b13-next-guess "x" nil))
-      (extend String B13Player {:b13-next-guess (fn [s progress] :ext-fn)})
-      (println (b13-next-guess "y" nil))
-      (defn b13-new-progress [word] (repeat (count word) "_"))
-      (defn b13-update-progress [progress word guess]
+      (defn choices-player [choices] (->Choices (atom choices)))
+      (def alpha (choices-player letters))
+      (println (next-guess alpha nil))
+      (println (next-guess alpha nil))
+      (println (satisfies? Player alpha))
+      (println (satisfies? Player {}))
+      (println (instance? Choices alpha))
+      (extend-type String Player (next-guess [s progress] :str-player))
+      (println (next-guess "x" nil))
+      (extend String Player {:next-guess (fn [s progress] :ext-fn)})
+      (println (next-guess "y" nil))
+      (defn new-progress [word] (repeat (count word) "_"))
+      (defn update-progress [progress word guess]
         (map #(if (= %1 guess) guess %2) word progress))
-      (defn b13-complete? [progress word] (= progress (seq word)))
-      (defn b13-game [word player]
-        (loop [progress (b13-new-progress word) guesses 1]
-          (let [guess (b13-next-guess player progress)
-                progress2 (b13-update-progress progress word guess)]
-            (if (b13-complete? progress2 word) guesses (recur progress2 (inc guesses))))))
-      (println (b13-game ["h" "i"] (b13-choices-player ["h" "i" "x"])))
-      (println (b13-game ["h" "i"] (b13-choices-player ["x" "h" "i"])))
+      (defn complete? [progress word] (= progress (seq word)))
+      (defn game [word player]
+        (loop [progress (new-progress word) guesses 1]
+          (let [guess (next-guess player progress)
+                progress2 (update-progress progress word guess)]
+            (if (complete? progress2 word) guesses (recur progress2 (inc guesses))))))
+      (println (game ["h" "i"] (choices-player ["h" "i" "x"])))
+      (println (game ["h" "i"] (choices-player ["x" "h" "i"])))
     expected: |
       :rand
       :human
@@ -2971,35 +2971,35 @@ cases:
       2
       3
   - name: reify-values-dispatch-and-deftypes-stay-opaque
-    # b13: each reify is a distinct dispatch value (= is identity); a deftype is
+    # each reify is a distinct dispatch value (= is identity); a deftype is
     # opaque to the map verbs (reads miss, writers and seq/count/empty? signal,
     # caught here) while instance?/class still see its tag.
     source: |
-      (defprotocol B13Greet (b13-hello [g]))
-      (def b13-ga (reify B13Greet (b13-hello [_] :a)))
-      (def b13-gb (reify B13Greet (b13-hello [_] :b)))
-      (println (b13-hello b13-ga))
-      (println (b13-hello b13-gb))
-      (println (satisfies? B13Greet b13-ga))
-      (println (= b13-ga b13-ga))
-      (println (= b13-ga b13-gb))
-      (deftype B13Box [v])
-      (def b13-box (B13Box. 1))
-      (println (= b13-box b13-box))
-      (println (= b13-box (B13Box. 1)))
-      (println (get b13-box :v))
-      (println (contains? b13-box :v))
-      (println (try (keys b13-box) (catch Exception e :threw)))
-      (println (try (count b13-box) (catch Exception e :threw)))
-      (println (try (seq b13-box) (catch Exception e :threw)))
-      (println (try (assoc b13-box :w 2) (catch Exception e :threw)))
-      (println (try (b13-hello 1.5) (catch Exception e :threw)))
-      (println (class b13-box))
-      (println (instance? B13Box b13-box))
-      (extend-type String B13Greet (b13-hello [s] :str))
-      (println (b13-hello "x"))
-      (extend String B13Greet {:b13-hello (fn [s] :fn)})
-      (println (b13-hello "y"))
+      (defprotocol Greet (hello [g]))
+      (def ga (reify Greet (hello [_] :a)))
+      (def gb (reify Greet (hello [_] :b)))
+      (println (hello ga))
+      (println (hello gb))
+      (println (satisfies? Greet ga))
+      (println (= ga ga))
+      (println (= ga gb))
+      (deftype Box [v])
+      (def box (Box. 1))
+      (println (= box box))
+      (println (= box (Box. 1)))
+      (println (get box :v))
+      (println (contains? box :v))
+      (println (try (keys box) (catch Exception e :threw)))
+      (println (try (count box) (catch Exception e :threw)))
+      (println (try (seq box) (catch Exception e :threw)))
+      (println (try (assoc box :w 2) (catch Exception e :threw)))
+      (println (try (hello 1.5) (catch Exception e :threw)))
+      (println (class box))
+      (println (instance? Box box))
+      (extend-type String Greet (hello [s] :str))
+      (println (hello "x"))
+      (extend String Greet {:hello (fn [s] :fn)})
+      (println (hello "y"))
     expected: |
       :a
       :b
@@ -3015,53 +3015,53 @@ cases:
       :threw
       :threw
       :threw
-      :B13Box
+      :Box
       true
       :str
       :fn
   - name: deftype-mutable-fields-assign-through-set
-    # b61: ^:unsynchronized-mutable / ^:volatile-mutable fields are assignable with
+    # ^:unsynchronized-mutable / ^:volatile-mutable fields are assignable with
     # set! inside the type's own methods (set! answers the value); a read after
     # another method's write sees it; a closure (fn, #(), letfn, reify, lazy-seq,
     # for) copies the field at creation; a parameter shadows a mutable or an
-    # immutable field (before b61 the immutable field shadowed it back); the field is
+    # immutable field (the immutable field used to shadow it back); the field is
     # private to .-field; a non-dynamic global's set! signals at run time. Every
     # line matches the oracle (Clojure CLI 1.12) byte for byte.
     source: |
-      (defprotocol B61Counter
-        (b61-bump! [c]) (b61-peek [c]) (b61-via-self [c]) (b61-reader [c])
-        (b61-shadow [c x]) (b61-captures [c]))
-      (deftype B61Box [^:unsynchronized-mutable x ^:volatile-mutable n label]
-        B61Counter
-        (b61-bump! [_] (set! n (+ n 10)) (set! x (inc x)))
-        (b61-peek [_] [x n label])
-        (b61-via-self [this] (b61-bump! this) x)
-        (b61-reader [_] (fn [] x))
-        (b61-shadow [_ x] x)
-        (b61-captures [_]
-          (let [r (reify B61Counter (b61-peek [_] x))
+      (defprotocol Counter
+        (bump! [c]) (peek-it [c]) (via-self [c]) (counter-reader [c])
+        (shadow [c x]) (captures [c]))
+      (deftype MutBox [^:unsynchronized-mutable x ^:volatile-mutable n label]
+        Counter
+        (bump! [_] (set! n (+ n 10)) (set! x (inc x)))
+        (peek-it [_] [x n label])
+        (via-self [this] (bump! this) x)
+        (counter-reader [_] (fn [] x))
+        (shadow [_ x] x)
+        (captures [_]
+          (let [r (reify Counter (peek-it [_] x))
                 s (lazy-seq (list x))]
             (letfn [(g [] x)]
               (loop [i 0] (when (< i 3) (set! x (+ x i)) (recur (inc i))))
-              [(b61-peek r) (first s) (g) (vec (for [i [1]] x)) (#(+ x %) 100) x]))))
-      (def b61-a (B61Box. 1 0 :a))
-      (println (b61-bump! b61-a))
-      (println (b61-peek b61-a))
-      (println (b61-via-self b61-a))
-      (def b61-r (b61-reader b61-a))
-      (b61-bump! b61-a)
-      (println (b61-r) (b61-peek b61-a))
-      (println (b61-shadow b61-a 42))
-      (deftype B61Pair [x] B61Counter (b61-shadow [_ x] x))
-      (println (b61-shadow (B61Pair. 1) 43))
-      (println (b61-captures b61-a))
-      (def b61-b (->B61Box 10 0 :b))
-      (b61-bump! b61-b)
-      (println (b61-peek b61-a) (b61-peek b61-b))
-      (println (.-label b61-a))
-      (println (try (.-x b61-a) (catch Exception e :private)))
-      (def b61-y 1)
-      (println (try (set! b61-y 2) (catch Exception e :root-binding)) b61-y)
+              [(peek-it r) (first s) (g) (vec (for [i [1]] x)) (#(+ x %) 100) x]))))
+      (def counter-a (MutBox. 1 0 :a))
+      (println (bump! counter-a))
+      (println (peek-it counter-a))
+      (println (via-self counter-a))
+      (def read-counter (counter-reader counter-a))
+      (bump! counter-a)
+      (println (read-counter) (peek-it counter-a))
+      (println (shadow counter-a 42))
+      (deftype Pair [x] Counter (shadow [_ x] x))
+      (println (shadow (Pair. 1) 43))
+      (println (captures counter-a))
+      (def counter-b (->MutBox 10 0 :b))
+      (bump! counter-b)
+      (println (peek-it counter-a) (peek-it counter-b))
+      (println (.-label counter-a))
+      (println (try (.-x counter-a) (catch Exception e :private)))
+      (def root-y 1)
+      (println (try (set! root-y 2) (catch Exception e :root-binding)) root-y)
     expected: |
       2
       [2 10 :a]
@@ -3085,7 +3085,7 @@ cases:
     # (ClojureWasmFileRefusalTest); an unknown jio fn is a lowering refusal
     # (ClojureLoweringTest).
     source: |
-      (ns b22jio (:require [clojure.java.io :as jio :refer [reader]]))
+      (ns jio (:require [clojure.java.io :as jio :refer [reader]]))
       (println jio/reader)
       (println reader)
       (println clojure.java.io/reader)
@@ -3108,7 +3108,7 @@ cases:
       (println (mapv inc nil))
       (println (class (mapv inc [1])))
       (println (mapv char (range 97 101)))
-      (let [b18-letters (mapv char (range 97 123))] (println (count b18-letters) (first b18-letters) (last b18-letters)))
+      (let [letters (mapv char (range 97 123))] (println (count letters) (first letters) (last letters)))
       (println (mapv inc (concat (lazy-seq [1 2]) [3])))
       (println (map mapv [inc] [[1 2]]))
     expected: |
@@ -3321,7 +3321,7 @@ cases:
     source: |
       (println (assert (= 1 1)))
       (println (assert (= 1 1) "msg"))
-      (let [b18-evaluated (atom false)] (assert true (do (reset! b18-evaluated true) "x")) (println @b18-evaluated))
+      (let [evaluated (atom false)] (assert true (do (reset! evaluated true) "x")) (println @evaluated))
       (println (try (assert (= 1 2)) (catch Exception e :failed)))
       (println (try (assert (= 1 2) "oops") (catch Exception e (ex-message e))))
       (println (try (assert false (str "m" "sg")) (catch Exception e :failed-with-msg)))
@@ -3360,11 +3360,11 @@ cases:
     # domain check: a negative bound answers a negative double, like the oracle's
     # multiply); only predicates pin, never values.
     source: |
-      (println (let [b18-r (rand)] (and (<= 0.0 b18-r) (< b18-r 1.0))))
-      (println (let [b18-r (rand 5)] (and (<= 0.0 b18-r) (< b18-r 5))))
-      (println (let [b18-r (rand -5)] (and (< -5.0 b18-r) (<= b18-r 0.0))))
-      (println (let [b18-r ((fn [b18-f] (b18-f)) rand)] (and (<= 0.0 b18-r) (< b18-r 1.0))))
-      (println (every? (fn [b18-r] (and (<= 0.0 b18-r) (< b18-r 5))) (map rand [5 5 5])))
+      (println (let [r (rand)] (and (<= 0.0 r) (< r 1.0))))
+      (println (let [r (rand 5)] (and (<= 0.0 r) (< r 5))))
+      (println (let [r (rand -5)] (and (< -5.0 r) (<= r 0.0))))
+      (println (let [r ((fn [f] (f)) rand)] (and (<= 0.0 r) (< r 1.0))))
+      (println (every? (fn [r] (and (<= 0.0 r) (< r 5))) (map rand [5 5 5])))
     expected: |
       true
       true
@@ -3379,7 +3379,7 @@ cases:
       (println (contains? #{0 1 2 3 4} (rand-int 5)))
       (println (rand-int 1))
       (println (rand-int 0))
-      (println (let [b18-r (rand-int -5)] (and (< -5 b18-r) (<= b18-r 0))))
+      (println (let [r (rand-int -5)] (and (< -5 r) (<= r 0))))
       (println (map rand-int [1 1]))
     expected: |
       true
@@ -3398,7 +3398,7 @@ cases:
       (println (rand-nth nil))
       (println (try (rand-nth []) (catch Exception e :signalled)))
       (println (try (rand-nth '()) (catch Exception e :signalled)))
-      (println ((fn [b18-f] (contains? #{1 2} (b18-f [1 2]))) rand-nth))
+      (println ((fn [f] (contains? #{1 2} (f [1 2]))) rand-nth))
       (println (try (rand-nth #{:a}) (catch Exception e :signalled)))
     expected: |
       true
@@ -3412,10 +3412,10 @@ cases:
     # shuffle Fisher-Yates over a fresh vector (membership and count pin, never
     # order); nil, strings and maps signal, like the oracle.
     source: |
-      (println (let [b18-s (shuffle [1 2 3])] [(= (set b18-s) #{1 2 3}) (= (count b18-s) 3) (vector? b18-s)]))
+      (println (let [s (shuffle [1 2 3])] [(= (set s) #{1 2 3}) (= (count s) 3) (vector? s)]))
       (println (shuffle []))
       (println (shuffle [1]))
-      (println (let [b18-s ((fn [b18-f] (b18-f [1 2])) shuffle)] [(= (set b18-s) #{1 2}) (vector? b18-s)]))
+      (println (let [s ((fn [f] (f [1 2])) shuffle)] [(= (set s) #{1 2}) (vector? s)]))
       (println (try (shuffle nil) (catch Exception e :refused)))
       (println (try (shuffle "ab") (catch Exception e :refused)))
       (println (try (shuffle {:a 1}) (catch Exception e :refused)))
@@ -3516,13 +3516,13 @@ cases:
     # onto nil from empty); an odd rest count signals at run time. dissoc as a
     # value drops each rest key (of nil, nil).
     source: |
-      (println (get ((fn [b23-f] (b23-f {:a 1} :b 2 :c 3)) assoc) :c))
+      (println (get ((fn [f] (f {:a 1} :b 2 :c 3)) assoc) :c))
       (println (map #(get % :b) (map assoc [{:a 1} {:x 0}] [:b :b] [2 3])))
-      (println (get ((fn [b23-f] (b23-f nil :a 1)) assoc) :a))
-      (println (try ((fn [b23-f] (b23-f {:a 1} :b)) assoc) (catch Exception e :signalled)))
+      (println (get ((fn [f] (f nil :a 1)) assoc) :a))
+      (println (try ((fn [f] (f {:a 1} :b)) assoc) (catch Exception e :signalled)))
       (println (map dissoc [{:a 1 :b 2} {:x 1}] [:a :x]))
-      (println ((fn [b23-f] (b23-f {:a 1 :b 2} :a :b)) dissoc))
-      (println ((fn [b23-f] (b23-f nil :a)) dissoc))
+      (println ((fn [f] (f {:a 1 :b 2} :a :b)) dissoc))
+      (println ((fn [f] (f nil :a)) dissoc))
     expected: |
       3
       (2 3)
@@ -3538,11 +3538,11 @@ cases:
     source: |
       (println (map get [{:a 1} {:b 2}] [:a :b]))
       (println (map get [{:a 1}] [:b] [:d]))
-      (println ((fn [b23-f] (b23-f {:a 1} :b :dflt)) get))
-      (println ((fn [b23-f] (b23-f [10 20] 5 :d)) get))
+      (println ((fn [f] (f {:a 1} :b :dflt)) get))
+      (println ((fn [f] (f [10 20] 5 :d)) get))
       (println (map contains? [{:a 1} #{1}] [:a 1]))
-      (println ((fn [b23-f] (b23-f [1 2] 5)) contains?))
-      (println (try ((fn [b23-f] (b23-f {:a 1} :a :x :y)) get) (catch Exception e :signalled)))
+      (println ((fn [f] (f [1 2] 5)) contains?))
+      (println (try ((fn [f] (f {:a 1} :a :x :y)) get) (catch Exception e :signalled)))
     expected: |
       (1 2)
       (:d)
@@ -3559,15 +3559,15 @@ cases:
     # (of nil, nil).
     source: |
       (println (map #(get % :b) (map merge [{:a 1} nil] [{:b 2} {:c 3}])))
-      (println (count ((fn [b23-f] (b23-f {:a 1} {:b 2} {:c 3})) merge)))
-      (println ((fn [b23-f] (b23-f)) merge))
+      (println (count ((fn [f] (f {:a 1} {:b 2} {:c 3})) merge)))
+      (println ((fn [f] (f)) merge))
       (println (map conj [[1] [2]] [3]))
-      (println ((fn [b23-f] (b23-f [1] 2 3)) conj))
-      (println (get ((fn [b23-f] (b23-f {:a 1} [:b 2])) conj) :b))
+      (println ((fn [f] (f [1] 2 3)) conj))
+      (println (get ((fn [f] (f {:a 1} [:b 2])) conj) :b))
       (println (map disj [#{1 2} #{3}] [1 3]))
-      (println ((fn [b23-f] (b23-f #{1 2} 1 2)) disj))
-      (println (let [b23-a (atom [1])] (swap! b23-a conj 2) @b23-a))
-      (println (dosync (let [b23-r (ref [1])] (alter b23-r conj 2) (commute b23-r conj 3) @b23-r)))
+      (println ((fn [f] (f #{1 2} 1 2)) disj))
+      (println (let [a (atom [1])] (swap! a conj 2) @a))
+      (println (dosync (let [r (ref [1])] (alter r conj 2) (commute r conj 3) @r)))
     expected: |
       (2 nil)
       3
@@ -3586,11 +3586,11 @@ cases:
     source: |
       (println (map set [[1]]))
       (println (map count (map set [[1 1 2] nil])))
-      (println (get ((fn [b23-f] (b23-f :a 1)) hash-map) :a))
-      (println (get ((fn [b23-f] (b23-f :a 1)) array-map) :a))
-      (println (count ((fn [b23-f] (b23-f)) hash-map)))
-      (println (try ((fn [b23-f] (b23-f :a)) hash-map) (catch Exception e :signalled)))
-      (println (get ((fn [b23-f] (apply b23-f [:a 1 :b 2])) hash-map) :b))
+      (println (get ((fn [f] (f :a 1)) hash-map) :a))
+      (println (get ((fn [f] (f :a 1)) array-map) :a))
+      (println (count ((fn [f] (f)) hash-map)))
+      (println (try ((fn [f] (f :a)) hash-map) (catch Exception e :signalled)))
+      (println (get ((fn [f] (apply f [:a 1 :b 2])) hash-map) :b))
     expected: |
       (#{1})
       (2 0)
@@ -3605,19 +3605,19 @@ cases:
     # snake add-points (vec over an applied map), chat add-message (alter and
     # commute over conj, dereferenced back).
     source: |
-      (defn b23-square [x] (* x x))
-      (defn b23-squares-seq [n] (vec (map b23-square (range n))))
-      (println (b23-squares-seq 4))
-      (println (vec (filter (fn [b23-w] (not (contains? #{\a} (first b23-w)))) ["apple" "avocado" "berry"])))
+      (defn square [x] (* x x))
+      (defn squares-seq [n] (vec (map square (range n))))
+      (println (squares-seq 4))
+      (println (vec (filter (fn [w] (not (contains? #{\a} (first w)))) ["apple" "avocado" "berry"])))
       (println (vec (apply map + [[1 2] [10 20]])))
-      (println (dosync (let [b23-msgs (ref [])] (alter b23-msgs conj "hi") (commute b23-msgs conj "yo") @b23-msgs)))
+      (println (dosync (let [msgs (ref [])] (alter msgs conj "hi") (commute msgs conj "yo") @msgs)))
     expected: |
       [0 1 4 9]
       [berry]
       [11 22]
       [hi yo]
   - name: regex-literals-compile-and-round-trip
-    # #"..." lowers to a pattern value over the spliced regex runtime (b21):
+    # #"..." lowers to a pattern value over the spliced regex runtime:
     # re-pattern compiles strings and answers patterns back, str spells the
     # source, and patterns compare by identity (like the oracle).
     source: |
@@ -3691,7 +3691,7 @@ cases:
     # literal, per string-replace-and-split-stay-literal). A string
     # replacement interpolates $ groups; a function applies to the match.
     source: |
-      (ns b21-re (:require [clojure.string :as s]))
+      (ns re (:require [clojure.string :as s]))
       (println (s/split "a,b,c" #","))
       (println (s/split "a,b," #","))
       (println (s/split "a,b," #"," -1))
@@ -3734,7 +3734,7 @@ cases:
       false
       #<Matcher a+>
   - name: regex-literal-backslashes-stay-verbatim
-    # The reader keeps backslashes verbatim like the oracle (b50: the old read
+    # The reader keeps backslashes verbatim like the oracle (the old read
     # halved every run, so #"\\d" answered the digit class). A single-backslash
     # class agrees on both sides, and \" and \n stay two characters for str.
     source: |
@@ -3760,20 +3760,20 @@ cases:
     # stays 1); the defun's own recursion stays a direct call, not a value
     # lookup (use ^:dynamic for a fully memoized recursion).
     source: |
-      (def b52-calls (atom 0))
-      (defn b52-f [x] (swap! b52-calls inc) (* x 2))
-      (def b52-f (memoize b52-f))
-      (println [(b52-f 21) (b52-f 21) @b52-calls])
-      (defn b52-p [n] (if (> n 2) (+ (/ (+ n 1) 4) (/ (b52-p (- n 1)) 2)) 5/4))
-      (def b52-p (memoize b52-p))
-      (println (b52-p 5))
-      (println (b52-p 5))
+      (def memoize-calls (atom 0))
+      (defn twice [x] (swap! memoize-calls inc) (* x 2))
+      (def twice (memoize twice))
+      (println [(twice 21) (twice 21) @memoize-calls])
+      (defn p [n] (if (> n 2) (+ (/ (+ n 1) 4) (/ (p (- n 1)) 2)) 5/4))
+      (def p (memoize p))
+      (println (p 5))
+      (println (p 5))
     expected: |
       [42 42 1]
       81/32
       81/32
   - name: defn-redefinition-keeps-each-version
-    # b65 (oracle clj 1.12.6.1673): a later defn of the same name wins on every
+    # Oracle clj 1.12.6.1673: a later defn of the same name wins on every
     # backend. Each definition lowers to its own defun, so a (def g f) captures
     # the definition current at that point (g answers 1) while later call sites
     # call the newest (f answers 2) -- the interpreter and the compiled backends
@@ -3781,24 +3781,24 @@ cases:
     # older one. The my-print slice is the life_without_multi.clj shape: my-print
     # redefined three times, each version kept through (def my-print-N my-print).
     source: |
-      (defn b65-f [] 1)
-      (def b65-g b65-f)
-      (defn b65-f [] 2)
-      (println (b65-g) (b65-f))
-      (defn b65-h [] 1)
-      (println (b65-h))
-      (defn b65-h [] 2)
-      (println (b65-h))
-      (defn b65-my-print [x] (str "v1:" x))
-      (def b65-my-print-1 b65-my-print)
-      (defn b65-my-print [x] (str "v2:" x))
-      (def b65-my-print-2 b65-my-print)
-      (defn b65-my-print [x] (str "v3:" x))
-      (def b65-my-print-3 b65-my-print)
-      (println (b65-my-print-1 :a))
-      (println (b65-my-print-2 :a))
-      (println (b65-my-print-3 :a))
-      (println (b65-my-print :a))
+      (defn redefined [] 1)
+      (def captured redefined)
+      (defn redefined [] 2)
+      (println (captured) (redefined))
+      (defn redefined-twice [] 1)
+      (println (redefined-twice))
+      (defn redefined-twice [] 2)
+      (println (redefined-twice))
+      (defn my-print [x] (str "v1:" x))
+      (def my-print-1 my-print)
+      (defn my-print [x] (str "v2:" x))
+      (def my-print-2 my-print)
+      (defn my-print [x] (str "v3:" x))
+      (def my-print-3 my-print)
+      (println (my-print-1 :a))
+      (println (my-print-2 :a))
+      (println (my-print-3 :a))
+      (println (my-print :a))
     expected: |
       1 2
       1
@@ -3808,57 +3808,57 @@ cases:
       v3::a
       v3::a
   - name: record-literals-read-and-print-like-the-oracle
-    # b58: a record prints as its literal #ns.Name{...} (the namespace with - munged
+    # a record prints as its literal #ns.Name{...} (the namespace with - munged
     # to _, declared fields first); #ns.Name{...} / #ns.Name[...] read back as the
     # record over the UNEVALUATED body, = to the constructed one, quoted or
     # syntax-quoted alike, and a macro may answer one. The legacy #^ metadata reads
     # like ^, and ns takes metadata on its name plus a docstring and attr map.
     # Every line matches the oracle (clj 1.12, 2026-10-02).
     source: |
-      (ns ^{:doc "b58"} b58-recs "a docstring" {:author :b58})
-      (defn #^String b58-f [#^long x] (str x))
-      (def #^{:doc "x"} b58-a 1)
-      (println b58-a (b58-f 2))
-      (defrecord B58P [a b])
-      (prn (->B58P 1 "s"))
-      (println (->B58P 1 "s"))
-      (prn (assoc (->B58P 1 2) :z 3))
-      (prn (= (->B58P 1 2) #b58_recs.B58P{:a 1 :b 2}))
-      (prn (= (->B58P 1 2) #b58_recs.B58P[1 2]))
-      (prn (= (->B58P 1 2) #b58_recs.B58P{:a 1 :b 2 :c 3}))
-      (prn #b58_recs.B58P{:b (+ 1 2)})
-      (prn #b58_recs.B58P[x [1 {:k #{2}}]])
-      (prn (:b #b58_recs.B58P[x y]))
-      (prn '#b58_recs.B58P[1 2])
-      (prn `#b58_recs.B58P[1 2])
-      (prn [#b58_recs.B58P{:a "s" :b nil :c :d}])
-      (prn (dissoc #b58_recs.B58P{:a 1 :b 2 :c 3} :c))
-      (prn (dissoc #b58_recs.B58P{:a 1 :b 2} :a))
-      (prn (merge (->B58P 1 2) {:a 5}))
-      (prn (map->B58P {:b 1 :z 2}))
-      (defmacro b58-mk [] (assoc '#b58_recs.B58P[7 8] :z 1))
-      (prn (b58-mk))
+      (ns ^{:doc "recs"} recs "a docstring" {:author :recs})
+      (defn #^String typed-f [#^long x] (str x))
+      (def #^{:doc "x"} doc-a 1)
+      (println doc-a (typed-f 2))
+      (defrecord Pt [a b])
+      (prn (->Pt 1 "s"))
+      (println (->Pt 1 "s"))
+      (prn (assoc (->Pt 1 2) :z 3))
+      (prn (= (->Pt 1 2) #recs.Pt{:a 1 :b 2}))
+      (prn (= (->Pt 1 2) #recs.Pt[1 2]))
+      (prn (= (->Pt 1 2) #recs.Pt{:a 1 :b 2 :c 3}))
+      (prn #recs.Pt{:b (+ 1 2)})
+      (prn #recs.Pt[x [1 {:k #{2}}]])
+      (prn (:b #recs.Pt[x y]))
+      (prn '#recs.Pt[1 2])
+      (prn `#recs.Pt[1 2])
+      (prn [#recs.Pt{:a "s" :b nil :c :d}])
+      (prn (dissoc #recs.Pt{:a 1 :b 2 :c 3} :c))
+      (prn (dissoc #recs.Pt{:a 1 :b 2} :a))
+      (prn (merge (->Pt 1 2) {:a 5}))
+      (prn (map->Pt {:b 1 :z 2}))
+      (defmacro mk [] (assoc '#recs.Pt[7 8] :z 1))
+      (prn (mk))
     expected: |
       1 2
-      #b58_recs.B58P{:a 1, :b "s"}
-      #b58_recs.B58P{:a 1, :b s}
-      #b58_recs.B58P{:a 1, :b 2, :z 3}
+      #recs.Pt{:a 1, :b "s"}
+      #recs.Pt{:a 1, :b s}
+      #recs.Pt{:a 1, :b 2, :z 3}
       true
       true
       false
-      #b58_recs.B58P{:a nil, :b (+ 1 2)}
-      #b58_recs.B58P{:a x, :b [1 {:k #{2}}]}
+      #recs.Pt{:a nil, :b (+ 1 2)}
+      #recs.Pt{:a x, :b [1 {:k #{2}}]}
       y
-      #b58_recs.B58P{:a 1, :b 2}
-      #b58_recs.B58P{:a 1, :b 2}
-      [#b58_recs.B58P{:a "s", :b nil, :c :d}]
-      #b58_recs.B58P{:a 1, :b 2}
+      #recs.Pt{:a 1, :b 2}
+      #recs.Pt{:a 1, :b 2}
+      [#recs.Pt{:a "s", :b nil, :c :d}]
+      #recs.Pt{:a 1, :b 2}
       {:b 2}
-      #b58_recs.B58P{:a 5, :b 2}
-      #b58_recs.B58P{:a nil, :b 1, :z 2}
-      #b58_recs.B58P{:a 7, :b 8, :z 1}
-  - name: b57-split-and-tail-verbs
-    # b57: drop-last/split-at/split-with/take-last/nthnext/nthrest over vectors,
+      #recs.Pt{:a 5, :b 2}
+      #recs.Pt{:a nil, :b 1, :z 2}
+      #recs.Pt{:a 7, :b 8, :z 1}
+  - name: split-and-tail-verbs
+    # drop-last/split-at/split-with/take-last/nthnext/nthrest over vectors,
     # strings, nil and lazy inputs. Every line matches the oracle (clj 1.12,
     # 2026-10-02) except that an empty seq prints nil where the oracle prints ()
     # (the documented rest-of-empty deviation).
@@ -3886,8 +3886,8 @@ cases:
       (2 3) [1 2 3] nil "abc"
       :signalled
       :signalled
-  - name: b57-peek-pop-and-not-empty
-    # b57: peek/pop read a vector at its end and a list at its head; nil answers
+  - name: peek-pop-and-not-empty
+    # peek/pop read a vector at its end and a list at its head; nil answers
     # nil; an empty vector pops with the oracle's message; strings, sets, maps and
     # keywords signal (the oracle's ClassCastException). not-empty answers the
     # collection itself or nil. Every line matches the oracle (clj 1.12,
@@ -3908,8 +3908,8 @@ cases:
       [1] nil nil "a" {:a 1} nil nil
       (0 1)
       :signalled
-  - name: b57-dedupe-partition-all-and-partition-by
-    # b57: dedupe drops consecutive = duplicates (1 and 1.0 stay apart, maps and
+  - name: dedupe-partition-all-and-partition-by
+    # dedupe drops consecutive = duplicates (1 and 1.0 stay apart, maps and
     # sets compare structurally); partition-all keeps the short tail;
     # partition-by splits where (f x) changes under =. A lazy input answers a lazy
     # seq (the take lines), a strict one a strict list. A non-positive
@@ -3938,8 +3938,8 @@ cases:
       ((1 3) (2 4) (5)) ((nil nil) (false false) (1))
       ((\a \a) (\b \b) (\c)) (("a" "b") ("cc")) nil
       ((0 1 2) (3 4 5))
-  - name: b57-key-extremes-juxt-fnil-and-predicate-combinators
-    # b57: min-key/max-key keep the last of equal keys (and never call k for a lone
+  - name: key-extremes-juxt-fnil-and-predicate-combinators
+    # min-key/max-key keep the last of equal keys (and never call k for a lone
     # value); juxt answers a vector; fnil patches leading nils only (false stays,
     # so inc signals on it); every-pred answers a boolean; some-fn answers the
     # first truthy value -- or, failing, the last (p x) for one or two predicates
@@ -3965,19 +3965,19 @@ cases:
       true false true false true
       true false 2 false
       nil 3 nil nil 3
-  - name: b57-update-keys-update-vals-and-reduce-kv
-    # b57: update-keys/update-vals over maps, records, vectors and nil (a vector
+  - name: update-keys-update-vals-and-reduce-kv
+    # update-keys/update-vals over maps, records, vectors and nil (a vector
     # stays a vector under update-vals and keys by index under update-keys; a
     # record answers a plain map); reduce-kv folds a map's or record's entries or
     # a vector's index pairs, nil answers the init, and a list or set signals.
     # Single-entry maps only where the walk order would show. Every line matches
     # the oracle (clj 1.12, 2026-10-02).
     source: |
-      (defrecord B57R [a])
+      (defrecord Rec [a])
       (prn (update-keys {:a 1} name) (update-keys nil name) (update-keys [5] inc))
-      (prn (update-vals {:a 1} inc) (update-vals [1 2] inc) (update-vals nil inc) (update-vals (->B57R 1) inc))
+      (prn (update-vals {:a 1} inc) (update-vals [1 2] inc) (update-vals nil inc) (update-vals (->Rec 1) inc))
       (prn (reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2}) (reduce-kv (fn [acc k v] (conj acc k)) [] [:x :y]) (reduce-kv (fn [acc k v] (+ acc v)) 0 nil))
-      (prn (reduce-kv (fn [acc k v] (conj acc [k v])) [] (->B57R 7)))
+      (prn (reduce-kv (fn [acc k v] (conj acc [k v])) [] (->Rec 7)))
       (println (try (reduce-kv (fn [acc k v] acc) 0 '(1 2)) (catch Exception e :signalled)) (try (reduce-kv (fn [acc k v] acc) 0 #{1}) (catch Exception e :signalled)))
     expected: |
       {"a" 1} {} {1 5}
@@ -3985,10 +3985,10 @@ cases:
       3 [0 1] 0
       [[:a 7]]
       :signalled :signalled
-  - name: b57-backlog-verbs-as-values-and-pmap
-    # b57: every backlog verb is a function value with the oracle's arity check
+  - name: backlog-verbs-as-values-and-pmap
+    # every backlog verb is a function value with the oracle's arity check
     # (the message is the oracle's, the count included); the transducer arities
-    # answer transducers (b60); pmap is map (single-threaded, the same printed
+    # answer transducers; pmap is map (single-threaded, the same printed
     # seq); = and not= as values compare the Clojure way (1 and 1.0 differ, maps
     # and sets structurally). Every line matches the oracle (clj 1.12,
     # 2026-10-02) except the fnil/fn message (the oracle suffixes a compiled
@@ -4025,14 +4025,14 @@ cases:
       Wrong number of args (2) passed to: clojure.core/reduce-kv
       (2 3 4) (11 22) nil (2 3)
       (true true true false) (false true) true
-  - name: b60-into-transduce-and-composition
-    # b60: a transducer is the oracle's function from a reducing function to a
+  - name: into-transduce-and-composition
+    # a transducer is the oracle's function from a reducing function to a
     # reducing function, so comp composes left to right, a program's own
     # transducer runs beside the core ones, and into/transduce consume them
     # (completing, the 0-arity init through (conj)/(+), take's early stop over an
     # infinite input). The eager.clj squares-into shape is the corpus slice; the
     # apply-comp line also pins the comp value's composition (it called the inner
-    # result as a function before b60). Every line matches the oracle (clj 1.12,
+    # result as a function). Every line matches the oracle (clj 1.12,
     # 2026-10-02).
     source: |
       (prn (into [] (map inc) [1 2 3]) (into #{} (map inc) [1 1]) (into {} (map (fn [x] [x (* x x)])) [3]) (into '(0) (map inc) [1 2]))
@@ -4041,9 +4041,9 @@ cases:
       (prn (transduce (comp (take 2) (map inc)) (completing + str) [1 2 3]) (transduce (take 0) + [1 2 3]))
       (prn (into [] (take 3) (iterate inc 0)) (into [] (comp (map inc) (take 2) (map str)) (range 100)))
       (prn (into [] (map inc) nil) (into [] (partition-all 2) []))
-      (defn b60-square [x] (* x x))
-      (defn b60-xf [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (* 10 x)))))
-      (prn (into [] (map b60-square) (range 5)) (into [] b60-xf [1 2]) (into [] (comp b60-xf (map inc)) [1 2]) (into [] (apply comp [(map inc) (filter odd?)]) [1 2 3 4]))
+      (defn squared [x] (* x x))
+      (defn xf [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (* 10 x)))))
+      (prn (into [] (map squared) (range 5)) (into [] xf [1 2]) (into [] (comp xf (map inc)) [1 2]) (into [] (apply comp [(map inc) (filter odd?)]) [1 2 3 4]))
       (prn ((apply comp [inc inc]) 1) (conj) ((fn [f] (f)) conj) ((fn [f] (f [] (map inc) [1])) into))
     expected: |
       [2 3 4] #{2} {3 9} (3 2 0)
@@ -4054,8 +4054,8 @@ cases:
       [] []
       [0 1 4 9 16] [10 20] [11 21] [3 5]
       3 [] [] [2]
-  - name: b60-seq-verbs-have-transducer-arities
-    # b60: the one-argument (zero for distinct/dedupe) arity of every seq verb
+  - name: seq-verbs-have-transducer-arities
+    # the one-argument (zero for distinct/dedupe) arity of every seq verb
     # with one is its transducer, in call position and as a value; take-nth
     # joins with both arities; mapcat is (comp (map f) cat); partition-all and
     # partition-by flush their tail on completion, after an early take stop too.
@@ -4078,12 +4078,12 @@ cases:
       [1 3] [1 2] [1 3] [2] [1]
       [1 2] [[1 2] [3]] [[1 3] [2]]
       (1 3 5) ((1 3))
-  - name: b60-sequence-eduction-and-reduced
-    # b60: sequence and eduction step their inputs through the transducer (a
+  - name: sequence-eduction-and-reduced
+    # sequence and eduction step their inputs through the transducer (a
     # lazy input stays lazy, so take of an infinite one terminates; several
     # collections step in lockstep); reduce, reduce-kv and transduce stop at a
     # reduced answer; reduce walks a lazy input whole (it folded the wrapper's
-    # own cells before b60). Every line matches the oracle (clj 1.12,
+    # own cells). Every line matches the oracle (clj 1.12,
     # 2026-10-02): prn prints an eduction as its seq there too.
     source: |
       (prn (sequence (map inc) [1 2 3]) (take 3 (sequence (map inc) (iterate inc 0))) (sequence (map vector) [1 2] [3 4]) (sequence (comp (map inc) (partition-all 2)) [1 2 3]))
@@ -4101,8 +4101,8 @@ cases:
       9 [2 3 4] 0 7
       5
       (false) 2 (2) (1) 3
-  - name: b57-equality-is-sequential-and-deep
-    # b57: = compares vectors, lists and lazy seqs element-wise across kinds and
+  - name: equality-is-sequential-and-deep
+    # = compares vectors, lists and lazy seqs element-wise across kinds and
     # deep through maps, sets and records; strings are not character vectors, atoms
     # stay identity, 1 and 1.0 differ. dedupe and partition-by share the comparison.
     # Every line matches the oracle (clj 1.12, 2026-10-02) except (= [] nil), false
@@ -4111,8 +4111,8 @@ cases:
       (prn (= [1 2] [1 2]) (= [1 2] '(1 2)) (= [[1] {:a [2]}] [[1] {:a [2]}]) (= [1] [1 2]) (= [] nil) (= "ab" [\a \b]))
       (prn (= (map inc [0 1]) [1 2]) (= (lazy-seq [1 2]) '(1 2)) (not= [1] [1]) (dedupe [[1] [1] [2]]) (partition-by (fn [x] [(odd? x)]) [1 3 2]))
       (prn (= (atom 1) (atom 1)) (= :a :a) (= '(:a "s") [:a "s"]) (= {:a 1} {:a 1.0}))
-      (defrecord B57EqR [a])
-      (prn (= (->B57EqR [1]) (->B57EqR [1])) (= [(->B57EqR 1)] [(->B57EqR 1)]))
+      (defrecord EqRec [a])
+      (prn (= (->EqRec [1]) (->EqRec [1])) (= [(->EqRec 1)] [(->EqRec 1)]))
     expected: |
       true true true false true false
       true true false ([1] [2]) ((1 3) (2))
@@ -4148,10 +4148,10 @@ cases:
     # println/print/prn/pr evaluate all their arguments first, then write, like
     # the oracle: a part that prints (or throws) never splits the line.
     source: |
-      (defn b55-noisy [x] (println "inner" x) x)
-      (println "outer" (b55-noisy 1) (b55-noisy 2))
-      (prn "outer" (b55-noisy 3))
-      (print "outer" (b55-noisy 4))
+      (defn noisy [x] (println "inner" x) x)
+      (println "outer" (noisy 1) (noisy 2))
+      (prn "outer" (noisy 3))
+      (print "outer" (noisy 4))
       (println)
       (println (try (println "never" (throw (ex-info "boom" {}))) (catch Exception e "caught")))
     expected: |
@@ -4192,9 +4192,9 @@ cases:
     # life_without_multi.clj my-print shapes (oracle clj 1.12.6.1673).
     source: |
       (println (vector? "ab") (vector? [1]) (vector? '(1)) (map vector? ["a" [2]]))
-      (defn b55-write [x] (.write *out* x))
-      (println (try (b55-write nil) (catch Exception e "threw")))
-      (b55-write "ok")
+      (defn write [x] (.write *out* x))
+      (println (try (write nil) (catch Exception e "threw")))
+      (write "ok")
       (println)
     expected: |
       false true false (false true)
@@ -4205,13 +4205,13 @@ cases:
     # like a vector, and a :reload flag over a lowering library loads nothing new
     # (a project namespace re-runs under it -- the corpus preface shape).
     source: |
-      (defn b55-f [x] x)
-      (println (fn? b55-f) (fn? (fn [] 1)) (fn? +) (fn? :a) (fn? #{}) (fn? "s") (fn? nil))
+      (defn plain-fn [x] x)
+      (println (fn? plain-fn) (fn? (fn [] 1)) (fn? +) (fn? :a) (fn? #{}) (fn? "s") (fn? nil))
       (println (map fn? [inc 1 #(+ % 1)]))
       (use '[clojure.string :only (upper-case)])
       (println (upper-case "ok"))
-      (require :reload '[clojure.string :as b55s])
-      (println (b55s/lower-case "OK"))
+      (require :reload '[clojure.string :as s])
+      (println (s/lower-case "OK"))
     expected: |
       true true true false false false false
       (true false true)
@@ -4225,64 +4225,64 @@ cases:
     # the Ran/failures summary plus its map. The oracle runs the tests in its
     # namespace map's order; here they run in definition order.
     source: |
-      (ns b55-test (:require [clojure.test :refer :all]))
-      (deftest b55-pass (is (= [1 2] '(1 2))) (is true))
-      (deftest b55-fail (is (= 1 2)) (is (= "a" "b") "with msg") (is nil) (is (nil? 1)) (is (:a {:a false})))
-      (deftest b55-error (is (= 1 (throw (ex-info "boom" {:a 1})))))
-      (deftest b55-thrown (is (thrown? Exception (throw (ex-info "x" {})))) (is (thrown? Exception (+ 1 1))))
-      (deftest b55-msg (is (thrown-with-msg? Exception #"bo" (throw (ex-info "boom" {})))) (is (thrown-with-msg? Exception #"bo" (+ 1 1))))
-      (deftest b55-ctx (testing "outer" (testing "inner" (is (= [2] [3])))))
-      (deftest b55-are (are [x y] (= x y) 1 1 2 3 (+ 1 1) 2))
-      (deftest b55-uncaught (throw (ex-info "boom" {})))
+      (ns a-test (:require [clojure.test :refer :all]))
+      (deftest pass (is (= [1 2] '(1 2))) (is true))
+      (deftest fail (is (= 1 2)) (is (= "a" "b") "with msg") (is nil) (is (nil? 1)) (is (:a {:a false})))
+      (deftest error (is (= 1 (throw (ex-info "boom" {:a 1})))))
+      (deftest thrown (is (thrown? Exception (throw (ex-info "x" {})))) (is (thrown? Exception (+ 1 1))))
+      (deftest msg (is (thrown-with-msg? Exception #"bo" (throw (ex-info "boom" {})))) (is (thrown-with-msg? Exception #"bo" (+ 1 1))))
+      (deftest ctx (testing "outer" (testing "inner" (is (= [2] [3])))))
+      (deftest are-test (are [x y] (= x y) 1 1 2 3 (+ 1 1) 2))
+      (deftest uncaught (throw (ex-info "boom" {})))
       (let [s (run-tests)] (println (:test s) (:pass s) (:fail s) (:error s) (:type s) (successful? s)))
     expected: |
 
-      Testing b55-test
+      Testing a-test
 
-      FAIL in (b55-fail) (spec.clj:N)
+      FAIL in (fail) (spec.clj:N)
       expected: (= 1 2)
         actual: (not (= 1 2))
 
-      FAIL in (b55-fail) (spec.clj:N)
+      FAIL in (fail) (spec.clj:N)
       with msg
       expected: (= "a" "b")
         actual: (not (= "a" "b"))
 
-      FAIL in (b55-fail) (spec.clj:N)
+      FAIL in (fail) (spec.clj:N)
       expected: nil
         actual: nil
 
-      FAIL in (b55-fail) (spec.clj:N)
+      FAIL in (fail) (spec.clj:N)
       expected: (nil? 1)
         actual: (not (nil? 1))
 
-      FAIL in (b55-fail) (spec.clj:N)
+      FAIL in (fail) (spec.clj:N)
       expected: (:a {:a false})
         actual: false
 
-      ERROR in (b55-error) (spec.clj:N)
+      ERROR in (error) (spec.clj:N)
       expected: (= 1 (throw (ex-info "boom" {:a 1})))
         actual: clojure.lang.ExceptionInfo: boom
       {:a 1}
 
-      FAIL in (b55-thrown) (spec.clj:N)
+      FAIL in (thrown) (spec.clj:N)
       expected: (thrown? Exception (+ 1 1))
         actual: nil
 
-      FAIL in (b55-msg) (spec.clj:N)
+      FAIL in (msg) (spec.clj:N)
       expected: (thrown-with-msg? Exception #"bo" (+ 1 1))
         actual: nil
 
-      FAIL in (b55-ctx) (spec.clj:N)
+      FAIL in (ctx) (spec.clj:N)
       outer inner
       expected: (= [2] [3])
         actual: (not (= [2] [3]))
 
-      FAIL in (b55-are) (spec.clj:N)
+      FAIL in (are-test) (spec.clj:N)
       expected: (= 2 3)
         actual: (not (= 2 3))
 
-      ERROR in (b55-uncaught) (spec.clj:N)
+      ERROR in (uncaught) (spec.clj:N)
       Uncaught exception, not in assertion.
       expected: nil
         actual: clojure.lang.ExceptionInfo: boom
@@ -4300,9 +4300,9 @@ cases:
     source: |
       (println (is (= 1 1)) (is 5))
       (println (is (= 1 2)))
-      (deftest b55-inner (is (= 1 2)))
-      (deftest b55-outer (b55-inner) (is (= "x\n" (with-out-str (println "x") (is (= 1 3))))))
-      (println (b55-outer))
+      (deftest inner-test (is (= 1 2)))
+      (deftest outer-test (inner-test) (is (= "x\n" (with-out-str (println "x") (is (= 1 3))))))
+      (println (outer-test))
     expected: |
       true 5
 
@@ -4311,11 +4311,11 @@ cases:
         actual: (not (= 1 2))
       false
 
-      FAIL in (b55-outer b55-inner) (spec.clj:N)
+      FAIL in (outer-test inner-test) (spec.clj:N)
       expected: (= 1 2)
         actual: (not (= 1 2))
 
-      FAIL in (b55-outer) (spec.clj:N)
+      FAIL in (outer-test) (spec.clj:N)
       expected: (= 1 3)
         actual: (not (= 1 3))
       nil
@@ -4324,26 +4324,26 @@ cases:
     # over a named namespace and run-all-tests narrowed by a pattern (the oracle
     # also lists every loaded namespace without one).
     source: |
-      (ns b55-other (:require [clojure.test :as t]))
-      (t/deftest b55-o1 (t/is (= 1 1)))
-      (t/deftest b55-o2 (t/is (= #{1} #{1})) (t/is (= {:a [1]} {:a '(1)})))
-      (println (:test (t/run-all-tests #"b55-oth.*")))
-      (println (t/successful? (t/run-tests 'b55-other)))
+      (ns other-test-ns (:require [clojure.test :as t]))
+      (t/deftest o1 (t/is (= 1 1)))
+      (t/deftest o2 (t/is (= #{1} #{1})) (t/is (= {:a [1]} {:a '(1)})))
+      (println (:test (t/run-all-tests #"oth.*")))
+      (println (t/successful? (t/run-tests 'other-test-ns)))
     expected: |
 
-      Testing b55-other
+      Testing other-test-ns
 
       Ran 2 tests containing 3 assertions.
       0 failures, 0 errors.
       2
 
-      Testing b55-other
+      Testing other-test-ns
 
       Ran 2 tests containing 3 assertions.
       0 failures, 0 errors.
       true
   - name: namespaces-in-one-program-resolve-qualified-and-referred
-    # b56: every namespace has its own vars (the vars of user keep the bare mangled
+    # every namespace has its own vars (the vars of user keep the bare mangled
     # name). An ns form marks its namespace loaded, like the oracle's, so a later
     # require of it reads no file and the shape is backend-clean: an alias call, a
     # full-name call, a referred var, a var as a value, a macro through an alias, a
@@ -4353,7 +4353,7 @@ cases:
     # qualifying with the defining namespace, in-ns switching where a name resolves,
     # and use referring every public var. Every line is the oracle's (clj 1.12).
     source: |
-      (ns b56.lib)
+      (ns lib)
       (defn f [x] (inc x))
       (defn- hidden [x] (* 10 x))
       (def v 42)
@@ -4365,8 +4365,8 @@ cases:
       (defn helper [] :helper)
       (defmacro call-helper [] `(helper))
       (defn uses-hidden [x] (hidden x))
-      (ns b56.main (:require [b56.lib :as l :refer [v]]))
-      (println (l/f 1) (b56.lib/f 2) v)
+      (ns main (:require [lib :as l :refer [v]]))
+      (println (l/f 1) (lib/f 2) v)
       (println (map l/f [1 2]))
       (println (l/twice 21))
       (defmethod l/area :rect [m] (* (:w m) (:h m)))
@@ -4376,9 +4376,9 @@ cases:
       (defn f [x] (* 100 x))
       (println (f 1) (l/f 1))
       (println `f `l/f `v)
-      (in-ns 'b56.lib)
+      (in-ns 'lib)
       (println (f 5))
-      (ns b56.other (:use b56.lib))
+      (ns other (:use lib))
       (println (f 7) v (nm (->Pt 3 4)))
     expected: |
       2 3 42
@@ -4388,7 +4388,7 @@ cases:
       pt12
       :helper 40
       100 2
-      b56.main/f b56.lib/f b56.lib/v
+      main/f lib/f lib/v
       6
       8 42 pt34
   - name: macroexpand-keeps-strings-and-keywords
@@ -4396,9 +4396,9 @@ cases:
     # travel as themselves, and the symbols print the oracle's lowercase. The oracle
     # prints (if :yes str :no) and (if :yes "str" :no).
     source: |
-      (defmacro b56-kw [k s] (list 'if k s :no))
-      (println (macroexpand-1 '(b56-kw :yes "str")))
-      (prn (macroexpand-1 '(b56-kw :yes "str")))
+      (defmacro kw [k s] (list 'if k s :no))
+      (println (macroexpand-1 '(kw :yes "str")))
+      (prn (macroexpand-1 '(kw :yes "str")))
     expected: |
       (if :yes str :no)
       (if :yes "str" :no)
@@ -4409,7 +4409,7 @@ cases:
     # syntax-quoted symbol at read time: (clojure.core/with-out-str 1)); clojure.core/name is the core var whatever the program defines. The
     # case runs in its own namespace and returns to the one before it.
     source: |
-      (ns b63-shadow)
+      (ns shadow-ns)
       (defmacro wrap [& body] `(with-out-str ~@body))
       (defn before [] (with-out-str (print "before")))
       (println (pr-str (before)) (pr-str (wrap (print "w"))))
@@ -4427,7 +4427,7 @@ cases:
       (defmacro declare [& names] `(do ~@(map (fn [n] (list 'def n :declared)) names)))
       (declare d1 d2)
       (println d1 d2)
-      (in-ns 'b56.other)
+      (in-ns 'other)
     expected: |
       "before" "w"
       "<after>" "before" "w"
@@ -4438,8 +4438,8 @@ cases:
       (2 3) 3
       11 (2 3)
       :declared :declared
-  - name: b76-string-writer-binds-to-out-and-str-answers-without-clearing
-    # b76: a zero-argument (new java.io.StringWriter) lowers to a Common Lisp
+  - name: string-writer-binds-to-out-and-str-answers-without-clearing
+    # a zero-argument (new java.io.StringWriter) lowers to a Common Lisp
     # string output stream on every backend (never a host Writer, which no backend
     # writes to and wasm refuses outright), so the oracle's own with-out-str macro
     # -- a defmacro of the core name rebinding *out* around the body and reading
@@ -4452,36 +4452,36 @@ cases:
         `(let [s# (new java.io.StringWriter)]
            (binding [*out* s#] ~@body (str s#))))
       (println (with-out-str (print 1) (print 2)))
-      (let [b76-s (new java.io.StringWriter)]
-        (binding [*out* b76-s] (print 1) (print 2))
-        (println (str b76-s) (str b76-s) (.toString b76-s)))
-      (let [b76-w (new java.io.StringWriter)]
-        (. b76-w write "ab")
-        (. b76-w flush)
-        (println (str b76-w))
-        (. b76-w close))
+      (let [s (new java.io.StringWriter)]
+        (binding [*out* s] (print 1) (print 2))
+        (println (str s) (str s) (.toString s)))
+      (let [w (new java.io.StringWriter)]
+        (. w write "ab")
+        (. w flush)
+        (println (str w))
+        (. w close))
     expected: |
       12
       12 12 12
       ab
   - name: binding-accepts-qualified-stream-specials
-    # b79: a syntax-quote qualifies *out* with its namespace (b77: `*out*
+    # a syntax-quote qualifies *out* with its namespace (`*out*
     # reads clojure.core/*out*), and the oracle binds the qualified spelling
-    # like the bare one -- the b76 with-out-str macro reaches binding this way.
+    # like the bare one -- the with-out-str macro over a StringWriter reaches binding this way.
     # Every line matches the oracle.
     source: |
-      (defmacro b79-with-out-str [& body]
+      (defmacro capture-out [& body]
         `(let [s# (new java.io.StringWriter)]
            (binding [clojure.core/*out* s#] ~@body (str s#))))
-      (println (b79-with-out-str (print 1) (print 2)))
-      (let [b79-s (new java.io.StringWriter)]
-        (binding [clojure.core/*out* b79-s] (print 1) (print 2))
-        (println (str b79-s) (str b79-s)))
+      (println (capture-out (print 1) (print 2)))
+      (let [s (new java.io.StringWriter)]
+        (binding [clojure.core/*out* s] (print 1) (print 2))
+        (println (str s) (str s)))
     expected: |
       12
       12 12
   - name: syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace
-    # b77: like the oracle, a syntax-quoted symbol qualifies even when it resolves
+    # like the oracle, a syntax-quoted symbol qualifies even when it resolves
     # to nothing: a core name the namespace sees spells clojure.core/name, any other
     # unresolved spelling the defining namespace, an alias head its namespace (no var
     # check) and a class head its fully qualified name (imported or java.lang); a
@@ -4491,60 +4491,60 @@ cases:
     # the mangled data, so = against the quoted oracle spelling holds). Every line
     # is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
-      (ns b77.sq (:require [clojure.string :as s]))
-      (defmacro b77-bench [expr]
-        `(let [b77-start (System/nanoTime) b77-result ~expr]
-           {:result b77-result :elapsed (- (System/nanoTime) b77-start)}))
-      (println (= (macroexpand-1 '(b77-bench 1))
-                  '(clojure.core/let [b77.sq/b77-start (java.lang.System/nanoTime) b77.sq/b77-result 1]
-                     {:result b77.sq/b77-result :elapsed (clojure.core/- (java.lang.System/nanoTime) b77.sq/b77-start)})))
-      (println `b77-loose `let `s/join `s/nope `System/nanoTime `foo/bar)
-      (ns b77.excl (:refer-clojure :exclude [map]))
+      (ns sq (:require [clojure.string :as s]))
+      (defmacro bench [expr]
+        `(let [start (System/nanoTime) result ~expr]
+           {:result result :elapsed (- (System/nanoTime) start)}))
+      (println (= (macroexpand-1 '(bench 1))
+                  '(clojure.core/let [sq/start (java.lang.System/nanoTime) sq/result 1]
+                     {:result sq/result :elapsed (clojure.core/- (java.lang.System/nanoTime) sq/start)})))
+      (println `loose `let `s/join `s/nope `System/nanoTime `foo/bar)
+      (ns excl (:refer-clojure :exclude [map]))
       (println `map `filter)
       (println `java.io.StringWriter `String)
     expected: |
       true
-      b77.sq/b77-loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
-      b77.excl/map clojure.core/filter
+      sq/loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
+      excl/map clojure.core/filter
       java.io.StringWriter java.lang.String
   - name: var-quote-metadata-and-test
-    # b80: #'x is the interned var (one object per name, printing #'ns/name); its
+    # #'x is the interned var (one object per name, printing #'ns/name); its
     # metadata is what the newest definition recorded -- :arglists, the docstring
     # as :doc, the name's metadata (an evaluated :test fn), :line/:column/:file,
-    # :name and :ns -- so the redefined b80-hello shows the second docstring while
-    # b80-first keeps calling the first definition. clojure.core/test calls the
+    # :name and :ns -- so the redefined var-hello shows the second docstring while
+    # first-var keeps calling the first definition. clojure.core/test calls the
     # :test fn (its AssertionError passes through) and answers :ok or :no-test; a
     # var derefs and invokes through its root. Keys print sorted: map order is
     # unspecified. Every line is the oracle's (clj 1.12.6.1673), on all four backends.
     source: |
-      (ns b80.vars)
-      (defn b80-hello
+      (ns vars)
+      (defn var-hello
         "Writes hello.
         Knows more."
         [username] (str "Hello, " username))
-      (def b80-first b80-hello)
-      (defn b80-hello
+      (def first-var var-hello)
+      (defn var-hello
         "Writes hello message to *out*. Calls you by username.
         Knows if you have been here before."
         [a b] (str a b))
-      (defn ^{:test (fn [] (assert (nil? (b80-busted))))} b80-busted [] "busted")
-      (defn ^{:test (fn [] (assert (= 1 1)))} b80-fine [] 1)
-      (def b80-x 1)
-      (println #'b80-x (var b80-hello))
-      (prn (str #'b80-x) (= #'b80-x #'b80-x))
-      (prn (sort (keys (meta #'b80-hello))))
-      (prn (:doc (meta #'b80-hello)) (:arglists (meta #'b80-hello)) (:name (meta #'b80-hello)))
-      (prn (sort (keys (meta #'b80-busted))))
-      (prn (:doc (meta #'b80-x)) (sort (keys (meta #'b80-x))))
-      (prn (test #'b80-x) (test #'b80-fine) (test b80-hello))
-      (prn (try (test #'b80-busted) :passed (catch AssertionError e :assert-failed)))
-      (prn (b80-first "Ann") (b80-hello "a" "b"))
-      (prn @#'b80-x (#'b80-hello "c" "d") (map #'b80-first ["x"]) (map test [#'b80-x]))
+      (defn ^{:test (fn [] (assert (nil? (busted))))} busted [] "busted")
+      (defn ^{:test (fn [] (assert (= 1 1)))} fine [] 1)
+      (def var-x 1)
+      (println #'var-x (var var-hello))
+      (prn (str #'var-x) (= #'var-x #'var-x))
+      (prn (sort (keys (meta #'var-hello))))
+      (prn (:doc (meta #'var-hello)) (:arglists (meta #'var-hello)) (:name (meta #'var-hello)))
+      (prn (sort (keys (meta #'busted))))
+      (prn (:doc (meta #'var-x)) (sort (keys (meta #'var-x))))
+      (prn (test #'var-x) (test #'fine) (test var-hello))
+      (prn (try (test #'busted) :passed (catch AssertionError e :assert-failed)))
+      (prn (first-var "Ann") (var-hello "a" "b"))
+      (prn @#'var-x (#'var-hello "c" "d") (map #'first-var ["x"]) (map test [#'var-x]))
     expected: |
-      #'b80.vars/b80-x #'b80.vars/b80-hello
-      "#'b80.vars/b80-x" true
+      #'vars/var-x #'vars/var-hello
+      "#'vars/var-x" true
       (:arglists :column :doc :file :line :name :ns)
-      "Writes hello message to *out*. Calls you by username.\n  Knows if you have been here before." ([a b]) b80-hello
+      "Writes hello message to *out*. Calls you by username.\n  Knows if you have been here before." ([a b]) var-hello
       (:arglists :column :file :line :name :ns :test)
       nil (:column :file :line :name :ns)
       :no-test :ok :no-test
@@ -4641,7 +4641,7 @@ cases:
       #{[1 2]} #{[3]} #{{:a [1]}}
       "Wrong number of args (1) passed to: clojure.set/select"
   - name: read-string-reads-what-a-quote-reads
-    # read-string (b85) is a run-time reader over the source reader's language:
+    # read-string is a run-time reader over the source reader's language:
     # the first datum of the string, answering what a quote of the same text
     # answers (so the = line holds), ::kw in the calling namespace, a record
     # literal of a class the program defines as that record (over its unevaluated
@@ -4650,17 +4650,17 @@ cases:
     # literal's. Every line is the oracle's (clj 1.12.6.1673) except @x, which
     # reads (deref x) like '@x does here (the oracle: clojure.core/deref).
     source: |
-      (ns b85.read)
-      (defrecord B85R [a b])
+      (ns reading)
+      (defrecord ReadRec [a b])
       (prn (read-string "(4 5)"))
       (prn (read-string "1 2"))
-      (prn (read-string "[1 :k b85-sym \"s\\n\" \\c \\( nil true false 1/2 1.5 0x10 2r101]"))
+      (prn (read-string "[1 :k sym \"s\\n\" \\c \\( nil true false 1/2 1.5 0x10 2r101]"))
       (prn (read-string "{:a [1 2]}") (read-string "#{:x}") (read-string "::kw"))
       (prn (= (read-string "(a :b [1] {:c 2} #{3} \"s\" \\c nil true false 1.5 1/2)")
               '(a :b [1] {:c 2} #{3} "s" \c nil true false 1.5 1/2)))
-      (prn (read-string "#b85.read.B85R{:a 1 :b [2]}"))
-      (prn (read-string "#b85.read.B85R{:a 1 :c \"x\"}"))
-      (prn (= (read-string "#b85.read.B85R[1 2]") (->B85R 1 2)))
+      (prn (read-string "#reading.ReadRec{:a 1 :b [2]}"))
+      (prn (read-string "#reading.ReadRec{:a 1 :c \"x\"}"))
+      (prn (= (read-string "#reading.ReadRec[1 2]") (->ReadRec 1 2)))
       (prn (read-string "; note\n #_ skipped [1 #_ 2]"))
       (prn (map read-string ["'x" "@x" "#'x" "-7"]))
       (prn (read-string {:eof :none} "  "))
@@ -4668,11 +4668,11 @@ cases:
     expected: |
       (4 5)
       1
-      [1 :k b85-sym "s\n" \c \( nil true false 1/2 1.5 16 5]
-      {:a [1 2]} #{:x} :b85.read/kw
+      [1 :k sym "s\n" \c \( nil true false 1/2 1.5 16 5]
+      {:a [1 2]} #{:x} :reading/kw
       true
-      #b85.read.B85R{:a 1, :b [2]}
-      #b85.read.B85R{:a 1, :b nil, :c "x"}
+      #reading.ReadRec{:a 1, :b [2]}
+      #reading.ReadRec{:a 1, :b nil, :c "x"}
       true
       [1]
       ((quote x) (deref x) (var x) -7)
@@ -4711,7 +4711,7 @@ cases:
       (prn (try (read-string "\\xyz") (catch Exception e (ex-message e))))
       (prn (try (read-string "1a") (catch Exception e (ex-message e))))
       (prn (try (read-string "]") (catch Exception e (ex-message e))))
-      (prn (try (read-string "#b85.read.Nope{}") (catch Exception e (ex-message e))))
+      (prn (try (read-string "#reading.Nope{}") (catch Exception e (ex-message e))))
     expected: |
       "EOF while reading"
       "EOF while reading"
@@ -4720,7 +4720,7 @@ cases:
       "Unsupported character: \\xyz"
       "Invalid number: 1a"
       "Unmatched delimiter: ]"
-      "a record literal needs a defined record class, not b85.read.Nope"
+      "a record literal needs a defined record class, not reading.Nope"
   - name: read-takes-one-form-from-a-reader
     # read takes one datum from a reader and leaves it right after the datum, like
     # the oracle's PushbackReader: a PushbackReader over a StringReader is a
@@ -4798,16 +4798,16 @@ cases:
     source: |
       (println (.toString 42) (.toString :k) (.toString [1 "a"]))
       (println (.toString 1.5) (.toString \c) (.toString '(1 "b")) (.toString {:a "s"}) (.toString #{\x}))
-      (println (.toString true) (.toString false) (.toString 'b99-sym) (.toString 1/2) (.toString (.toString 7)))
+      (println (.toString true) (.toString false) (.toString 'sym) (.toString 1/2) (.toString (.toString 7)))
       (println (.toString [nil \c "s"]))
-      (defmulti b99-print class)
-      (defmethod b99-print Number [n] (str "n:" (.toString n)))
-      (println (b99-print 42))
+      (defmulti tostr-mm class)
+      (defmethod tostr-mm Number [n] (str "n:" (.toString n)))
+      (println (tostr-mm 42))
       (println (try (.toString (let [x nil] x)) (catch Exception e "caught")))
     expected: |
       42 :k [1 "a"]
       1.5 c (1 "b") {:a "s"} #{\x}
-      true false b99-sym 1/2 7
+      true false sym 1/2 7
       [nil \c "s"]
       n:42
       caught
@@ -4818,17 +4818,17 @@ cases:
     # after it still registers. A definition of another kind in between makes the
     # next defmulti define again.
     source: |
-      (defmulti b99-mm class)
-      (defmethod b99-mm Number [n] (str "n" n))
-      (defmethod b99-mm :default [x] "dflt")
-      (defmulti b99-mm :k :default :other)
-      (defmethod b99-mm :other [x] "other")
-      (defmethod b99-mm String [x] "s")
-      (println (b99-mm 1) (b99-mm :k) (b99-mm "a"))
-      (defn b99-mm2 [x] x)
-      (defmulti b99-mm2 :k :default :other)
-      (defmethod b99-mm2 :other [x] "other")
-      (println (b99-mm2 {:k 1}))
+      (defmulti mm class)
+      (defmethod mm Number [n] (str "n" n))
+      (defmethod mm :default [x] "dflt")
+      (defmulti mm :k :default :other)
+      (defmethod mm :other [x] "other")
+      (defmethod mm String [x] "s")
+      (println (mm 1) (mm :k) (mm "a"))
+      (defn mm2 [x] x)
+      (defmulti mm2 :k :default :other)
+      (defmethod mm2 :other [x] "other")
+      (println (mm2 {:k 1}))
     expected: |
       n1 dflt s
       other
@@ -4918,8 +4918,8 @@ cases:
       "[##Inf \"a\"]" "{:a ##NaN}"
       ##Inf ##NaN
       ##Inf :le :le ##NaN
-  - name: c12-comparison-names-as-values-answer-false-not-nil
-    # c12: < > <= >= as function values answer true or false (they answered nil for
+  - name: comparison-names-as-values-answer-false-not-nil
+    # < > <= >= as function values answer true or false (they answered nil for
     # false); the oracle (clj 1.12, 2026-10-03) prints exactly these lines.
     source: |
       (prn (map < [1 2] [2 1]) (map zero? [0 1]) (map >= [1 2] [2 1]))

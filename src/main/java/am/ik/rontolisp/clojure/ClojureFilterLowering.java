@@ -637,7 +637,7 @@ final class ClojureFilterLowering {
 				ClojureSeqLowering.nthForm(ctx, coll, new LispInteger(1), ClojureLowering.NIL_CONST));
 	}
 
-	// b18 core convenience fns: strict vectors, head pairs, names, randomness
+	// Core convenience fns: strict vectors, head pairs, names, randomness
 
 	/**
 	 * {@code mapv} over an already-lowered function and collections (one or more): one

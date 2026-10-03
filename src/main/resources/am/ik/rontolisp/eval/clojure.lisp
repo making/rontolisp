@@ -17,8 +17,8 @@
 ;; - rontolisp::%clojure-str-of answers one part's string (str/pr-str, the REPL
 ;;   echo), written to a string stream and read back.
 ;; Neither is with-output-to-string: a literal one flips a WASM module into EH
-;; mode (measured gate, see .todo/artefacts/b07-clojure-print/NOTES.md finding 6),
-;; while make-string-output-stream/get-output-stream-string compile without it
+;; mode (measured gate), while make-string-output-stream/get-output-stream-string
+;; compile without it
 ;; (measured 2026-09-30: 6,429 B vs 11,948 B of wasm for the same writes).
 ;;
 ;; Cycles print with Scheme-scale datum labels (#0=(...) . #0#), copied from
@@ -833,7 +833,7 @@
         ((hash-table-p coll) (gethash k coll dflt))
         (t dflt)))
 
-;;;; Lazy seqs (b11): memoized-thunk wrappers over the strict seq view.
+;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
 ;;
 ;; A lazy seq is (LIST :C%LAZY cell) where CELL is (CONS thunk-or-nil
 ;; realized-seq), beside the (:C%SET table) and (:C%KEYWORD spelling) wrappers.
@@ -863,7 +863,7 @@
   (list :C%LAZY (cons thunk nil)))
 
 (defun rontolisp::%clojure-strict-seq (coll)
-  "The strict list view of COLL: the b03 cond, now shared by every backend
+  "The strict list view of COLL: the original cond, now shared by every backend
    through this one defun instead of inline in the lowering."
   (cond ((null coll) nil)
    ((rontolisp::%clojure-set-p coll)
@@ -882,7 +882,7 @@
         (rontolisp::%clojure-re-matcher-p coll))
     (error "seq needs a collection"))
    ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-   ;; too, so the oracle signals instead of seqing (b45, the b42 conj-guard
+   ;; too, so the oracle signals instead of seqing (the conj-guard
    ;; precedent)
    ((rontolisp::%clojure-atom-p coll) (error "seq needs a collection"))
    ((consp coll) coll)
@@ -1331,7 +1331,7 @@
       (setq acc (cons (rontolisp::%clojure-call f nil) acc))
       (setq left (- left 1)))))
 
-;;;; Core convenience fns (b18): strict vector answers, names and randomness.
+;;;; Core convenience fns: strict vector answers, names and randomness.
 ;;
 ;; mapv/filterv answer vectors (never lazy wrappers); mapcat concats the mapped
 ;; seq views strictly (nil-safe, like concat); shuffle Fisher-Yates over a fresh
@@ -1625,7 +1625,7 @@
         ((numberp x) (code-char (truncate x)))
         (t (error "char needs a character or a number"))))
 
-;;;; Regular expressions (b21): patterns, matchers, and the pattern arms of
+;;;; Regular expressions: patterns, matchers, and the pattern arms of
 ;;;; split/replace.
 ;;
 ;; A pattern is (LIST :C%PATTERN stamp source ops ngroups): STAMP a fresh
@@ -2571,7 +2571,7 @@
                    (rontolisp::%clojure-re-subst rep s found ngroups) out)
                   (setq pos (car (cdr found))))))))))
 
-;;;; The core backlog (b57).
+;;;; The core backlog.
 ;;
 ;; The backlog verbs follow the lazy rows above: a lazy input answers a lazy
 ;; wrapper, a strict one a strict list (nil, never ()); dedupe and partition-by
@@ -3525,7 +3525,7 @@
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
 
-;;;; Vars: #'x as a value (b80).
+;;;; Vars: #'x as a value.
 ;;
 ;; A var is (:C%VAR "ns/name" getter), interned per name in
 ;; rontolisp::%clojure-var-table (made on first use), so #'x answers the same
@@ -3579,7 +3579,7 @@
   (rontolisp::%clojure-check-arity args 1 1 "test")
   (rontolisp::%clojure-var-test (car args)))
 
-;;;; Reduction and transducers (b60).
+;;;; Reduction and transducers.
 ;;
 ;; A transducer is what the oracle's is: a function from a reducing function to
 ;; a reducing function, so comp composes them left to right with no help and a
@@ -4093,7 +4093,7 @@
   (if (= (rontolisp::%clojure-check-arity args 1 2 "completing") 1)
       (rontolisp::%clojure-completing (car args) #'identity)
       (rontolisp::%clojure-completing (car args) (car (cdr args)))))
-;;;; clojure.test (b55): the run-time half of deftest/is/are/testing and the
+;;;; clojure.test: the run-time half of deftest/is/are/testing and the
 ;;;; run-tests summary runner.
 ;;
 ;; The lowering keeps the shapes the oracle's macros expand to: a deftest is a
@@ -4435,7 +4435,7 @@
       t
       rontolisp::%clojure-false))
 
-;;;; Reading (b85): read-string and read over one run-time reader.
+;;;; Reading: read-string and read over one run-time reader.
 ;;
 ;; The reader reads the language the source reader (ClojureReader) reads and
 ;; answers what a quote of the same text answers, so (= (read-string s) 's)

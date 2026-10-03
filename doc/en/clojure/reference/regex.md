@@ -26,8 +26,8 @@ quotes them), a function applies to the match through `str`. Anything else --
 lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` -- signals
 `unsupported regex` instead of answering wrongly.
 
-Deviations: the reader keeps backslashes verbatim, like the oracle (b50;
-`#"\\d"` reads a literal backslash followed by `d`, so classes spell with
+Deviations: the reader keeps backslashes verbatim, like the oracle
+(`#"\\d"` reads a literal backslash followed by `d`, so classes spell with
 single backslashes); unknown alphabetic escapes, a short or non-hex `\u`/`\x`,
 a `\0` with no octal digit behind it and a lone `\E` are read-time refusals;
 `re-seq` answers a strict list (the oracle's lazy prints

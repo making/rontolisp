@@ -160,7 +160,7 @@ final class JvmSetqCompiler {
 			// its
 			// dedicated static field. Works from any method body, so a defun/lambda can
 			// assign a global. The eval mirror runs everywhere the eval runtime does
-			// (b78: an assignment nested in a lambda never reached it, so a runtime
+			// (an assignment nested in a lambda never reached it, so a runtime
 			// boundp/symbol-value read a stale mirror).
 			// A dynamically-bound special assigns this thread's active binding instead
 			// when one exists (emitGlobalStore).
@@ -223,7 +223,7 @@ final class JvmSetqCompiler {
 	 * defined via {@code setq}/{@code defvar} (the compiled value otherwise lives only in
 	 * a {@code main()} local the interpreter cannot see). Runs wherever the eval runtime
 	 * does -- a store inside a defun/lambda body mirrors too, so a runtime
-	 * {@code boundp}/{@code symbol-value} sees what the body assigned (b78). No-op unless
+	 * {@code boundp}/{@code symbol-value} sees what the body assigned. No-op unless
 	 * {@link #mirrorsGlobal} holds. Expects the assigned value on the stack and leaves it
 	 * there (the {@code _store} call returns it).
 	 */

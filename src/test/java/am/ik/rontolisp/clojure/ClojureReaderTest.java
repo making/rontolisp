@@ -84,7 +84,7 @@ class ClojureReaderTest {
 	@Test
 	void regexLiteralsReadAsMarkedSourceStrings() {
 		assertThat(printed("#\"a+\"")).isEqualTo("[(|%regex| \"a+\")]");
-		// backslashes stay verbatim for the pattern parser (b50, oracle `clj`
+		// backslashes stay verbatim for the pattern parser (oracle `clj`
 		// 1.12.6.1673): `#"\\d"` reads two characters, not the digit class
 		assertThat(printed("#\"\\\\d\"")).isEqualTo("[(|%regex| \"\\\\\\\\d\")]");
 		assertThat(printed("#\"\\d\"")).isEqualTo("[(|%regex| \"\\\\d\")]");
@@ -171,7 +171,7 @@ class ClojureReaderTest {
 
 	@Test
 	void unicodeStringEscapesMatchTheOracle() {
-		// measured on `clj` 1.12.6.1673 (b47): exactly four hex digits read, the
+		// measured on `clj` 1.12.6.1673: exactly four hex digits read, the
 		// rest stays string body
 		assertThat(read("\"\\u0041\"")).isEqualTo(List.of(new LispString("A")));
 		assertThat(read("\"\\u00419\"")).isEqualTo(List.of(new LispString("A9")));
@@ -208,7 +208,7 @@ class ClojureReaderTest {
 	@Test
 	void singleQuoteEscapeSignalsLikeTheOracle() {
 		// `\'` read as `'` here but the oracle (clj 1.12.6.1673) signals
-		// `Unsupported escape character: \'`: refused to match it (b44) instead
+		// `Unsupported escape character: \'`: refused to match it instead
 		// of keeping the lenient read (a `'` needs no escaping in `"..."`).
 		assertThatThrownBy(() -> read("\"a\\'b\"")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unsupported escape character: \\'");

@@ -182,7 +182,7 @@ final class WasmSetqCompiler {
 		// A top-level global variable (not shadowed by a lexical here): store into its
 		// module-level wasm global. Works from any function body, so a defun/lambda can
 		// assign a global. The eval mirror runs everywhere the eval runtime does
-		// (b78: an assignment nested in a lambda never reached it, so a runtime
+		// (an assignment nested in a lambda never reached it, so a runtime
 		// boundp/symbol-value read a stale mirror).
 		// --reentrant: a dynamically-bound special's setq assigns the ACTIVE binding in
 		// this call's task record when there is one -- the CL rule -- and the global
@@ -250,7 +250,7 @@ final class WasmSetqCompiler {
 	 * otherwise lives only in a {@code _start} local the interpreter cannot see). Runs
 	 * wherever the eval runtime does -- a store inside a defun/lambda body mirrors too,
 	 * so a runtime {@code boundp}/{@code
-	 * symbol-value} sees what the body assigned (b78). No-op unless the program uses
+	 * symbol-value} sees what the body assigned. No-op unless the program uses
 	 * {@code eval}. Reads the assigned value back from {@code slot}; the value already on
 	 * the stack (left there by the {@code local.tee}) is preserved as the form's result.
 	 */

@@ -174,7 +174,7 @@ final class ClojureDispatchLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), first, second));
 	}
 
-	// b15 IO entry points: spit/slurp/line-seq over the eval IO layer (b22 adds the
+	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
 
 	/**
@@ -567,7 +567,7 @@ final class ClojureDispatchLowering {
 	 * {@code recur} reaches its body (like an anonymous {@code fn}): a stored method has
 	 * no callable name of its own, so without a {@code recur} it stays a bare lambda,
 	 * exactly as before. A used variadic target splits into a worker plus its
-	 * {@code &rest} head, like every other {@code fn} shape (decided 2026-10-01, b36).
+	 * {@code &rest} head, like every other {@code fn} shape (decided 2026-10-01).
 	 */
 	static LispVal methodLambda(ClojureLowering ctx, LispVal params, List<LispVal> bodyForms) {
 		String fresh = ctx.freshRecurName();

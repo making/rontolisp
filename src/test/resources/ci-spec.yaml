@@ -12063,7 +12063,7 @@ cases:
       (print (symbol-value :sym-api-kw))
       ;; A global assigned only inside a lambda is unbound until the body runs:
       ;; every store feeds the eval mirror the runtime boundp/symbol-value read
-      ;; (b78 -- the mirror used to see top-level stores only and read stale).
+      ;; (the mirror used to see top-level stores only and read stale).
       (setq sym-api-init (lambda () (setq sym-api-lam 7) nil))
       (print (boundp (intern "SYM-API-LAM")))
       (print (boundp 'sym-api-lam))
@@ -17788,24 +17788,24 @@ cases:
     # wrote answers t and evaluates its forms -- three backends used to answer
     # the integer 1 here.
     source: |
-      (defun ci439-wr (path text dir ie)
+      (defun lopt-wr (path text dir ie)
         (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
-      (defun ci439-rd (path et)
+      (defun lopt-rd (path et)
         (with-open-file (in path :element-type et) (read-line in)))
-      (defun ci439-rd1 (path et)
+      (defun lopt-rd1 (path et)
         (with-open-file (in path :element-type et) (read-byte in)))
-      (ci439-wr "c439.dat" "one" :output :supersede)
-      (ci439-wr "c439.dat" "two" :output :append)
-      (print (ci439-rd "c439.dat" 'character))
-      (print (ci439-rd1 "c439.dat" (list 'unsigned-byte 8)))
+      (lopt-wr "lopt.dat" "one" :output :supersede)
+      (lopt-wr "lopt.dat" "two" :output :append)
+      (print (lopt-rd "lopt.dat" 'character))
+      (print (lopt-rd1 "lopt.dat" (list 'unsigned-byte 8)))
       (print (load "no-such-439.lisp" :if-does-not-exist nil))
-      (ci439-wr "c439-ok.lisp" "(print 'ci439-loaded)" :output :supersede)
-      (print (load "c439-ok.lisp"))
+      (lopt-wr "lopt-ok.lisp" "(print 'lopt-loaded)" :output :supersede)
+      (print (load "lopt-ok.lisp"))
     expected: |
       "onetwo"
       111
       NIL
-      CI439-LOADED
+      LOPT-LOADED
       T
 
   - name: string-designators
@@ -17820,7 +17820,7 @@ cases:
     # total princ coercion, so a symbol reached the trim intrinsic as its bare
     # runtime spelling and answered a silently wrong substring.
     source: |
-      (defun ci440-id (x) x)
+      (defun computed-id (x) x)
       (print (string-trim "*" '*foo*))
       (print (string-left-trim "F" '|FOO|))
       (print (string-right-trim "O" '|FOO|))
@@ -17828,18 +17828,18 @@ cases:
       (print (string-trim "T" t))
       (print (string-trim "K" :key))
       (print (string-trim "A" #\a))
-      (print (string-trim "*" (ci440-id '*foo*)))
-      (print (string-upcase (ci440-id #\a)))
-      (print (string-downcase (ci440-id '|FOO|)))
-      (print (string-capitalize (ci440-id nil)))
-      (print (string< (ci440-id 'abc) "abd"))
-      (print (string-lessp (ci440-id #\a) 'b))
-      (print (string= (ci440-id 'foo) "FOO"))
-      (print (handler-case (string-trim "*" (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string-upcase (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string< (ci440-id 'abc) (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string-trim (ci440-id #\*) "*x*") (error () :signalled)))
-      (print (string-trim (ci440-id (vector #\x)) "xhellox"))
+      (print (string-trim "*" (computed-id '*foo*)))
+      (print (string-upcase (computed-id #\a)))
+      (print (string-downcase (computed-id '|FOO|)))
+      (print (string-capitalize (computed-id nil)))
+      (print (string< (computed-id 'abc) "abd"))
+      (print (string-lessp (computed-id #\a) 'b))
+      (print (string= (computed-id 'foo) "FOO"))
+      (print (handler-case (string-trim "*" (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string-upcase (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string< (computed-id 'abc) (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string-trim (computed-id #\*) "*x*") (error () :signalled)))
+      (print (string-trim (computed-id (vector #\x)) "xhellox"))
     expected: |
       "FOO"
       "OO"

@@ -46,7 +46,7 @@ class ClojureInteropTest {
 		assertBothEqual("(println (new String \"hi\"))", "hi\n");
 		assertBothEqual("(println (Integer/MAX_VALUE))", "2147483647\n");
 		assertBothEqual("(println (.-x (java.awt.Point. 1 2)))", "1\n");
-		assertBothEqual("(ns b05-imp (:import (java.awt Point))) (println (Point. 3 4))", "#<java java.awt.Point>\n");
+		assertBothEqual("(ns pointns (:import (java.awt Point))) (println (Point. 3 4))", "#<java java.awt.Point>\n");
 	}
 
 	@Test
@@ -57,16 +57,17 @@ class ClojureInteropTest {
 
 	@Test
 	void stringWriterBindsToOutAndStrAnswersWithoutClearing() throws Exception {
-		// b76: a zero-argument (new java.io.StringWriter) lowers to a string
+		// A zero-argument (new java.io.StringWriter) lowers to a string
 		// output stream (never a host Writer), so binding *out* to it captures
 		// printing, and str/.toString answer the text so far WITHOUT clearing it
 		// (the oracle prints 12 12 12). The all-four-backend pin is the
 		// clojure-spec.yaml case; the (Class.) spelling and the excerpt macro live
 		// here with the other interop pins.
-		assertBothEqual("(let [b76-s (new java.io.StringWriter)] (binding [*out* b76-s] (print 1) (print 2))"
-				+ " (println (str b76-s) (str b76-s) (.toString b76-s)))", "12 12 12\n");
-		assertBothEqual("(let [b76-w (java.io.StringWriter.)] (. b76-w write \"ab\") (. b76-w flush)"
-				+ " (println (str b76-w)) (. b76-w close))", "ab\n");
+		assertBothEqual("(let [s (new java.io.StringWriter)] (binding [*out* s] (print 1) (print 2))"
+				+ " (println (str s) (str s) (.toString s)))", "12 12 12\n");
+		assertBothEqual(
+				"(let [w (java.io.StringWriter.)] (. w write \"ab\") (. w flush)" + " (println (str w)) (. w close))",
+				"ab\n");
 		assertBothEqual(
 				"(defmacro with-out-str [& body] `(let [s# (new java.io.StringWriter)]"
 						+ " (binding [*out* s#] ~@body (str s#)))) (println (with-out-str (print 1) (print 2)))",
@@ -78,13 +79,13 @@ class ClojureInteropTest {
 		assertBothEqual("(println (= String (Class/forName \"java.lang.String\")))", "true\n");
 		assertBothEqual("(println (.getName String))", "java.lang.String\n");
 		assertBothEqual("(println (= String (.getClass \"s\")))", "true\n");
-		assertBothEqual("(ns b83 (:import (java.util ArrayList))) (println (.getName ArrayList))",
+		assertBothEqual("(ns importsns (:import (java.util ArrayList))) (println (.getName ArrayList))",
 				"java.util.ArrayList\n");
 		assertBothEqual("(println (.getName (.getClass \"s\")))", "java.lang.String\n");
 		assertBothEqual("(println (= java.util.ArrayList (.getClass (java.util.ArrayList.))))", "true\n");
 		assertBothEqual("(defmulti m class) (defmethod m String [_] :s) (println (m \"a\"))", ":s\n");
 		assertBothEqual("(println (instance? String \"a\"))", "true\n");
-		assertThatThrownBy(() -> interpret("(println NoSuchClassB83)")).hasMessageContaining("unknown name");
+		assertThatThrownBy(() -> interpret("(println NoSuchClass)")).hasMessageContaining("unknown name");
 	}
 
 	@Test
@@ -103,7 +104,7 @@ class ClojureInteropTest {
 	void strOfAHostObjectIsItsToStringWhilePrintingStaysUnreadable() throws Exception {
 		assertBothEqual("(println (str (StringBuilder. \"ab\") \"|\" (java.io.File. \"foo\")))", "ab|foo\n");
 		assertBothEqual("(println (str (java.util.ArrayList. [1 2])))", "[1, 2]\n");
-		assertBothEqual("(println (str 1 :k [1 \"a\"] nil 'b92-s))", "1:k[1 \"a\"]b92-s\n");
+		assertBothEqual("(println (str 1 :k [1 \"a\"] nil 's))", "1:k[1 \"a\"]s\n");
 		assertBothEqual("(println (java.io.File. \"foo\"))", "#<java java.io.File>\n");
 	}
 
@@ -114,12 +115,13 @@ class ClojureInteropTest {
 		assertBothEqual("(println (.getName ((comp class identity) (java.io.File. \"foo\"))))", "java.io.File\n");
 		// the book's my-print: a host object misses every class row and lands on
 		// :default, whose .toString reaches the host method (oracle #<foo>)
-		assertBothEqual("(defmulti b99-mp class) (defmethod b99-mp String [s] s)"
-				+ " (defmethod b99-mp Number [n] (str \"n\" (.toString n)))"
-				+ " (defmethod b99-mp :default [x] (str \"#<\" (.toString x) \">\"))"
-				+ " (println (b99-mp 42) (b99-mp (java.io.File. \"foo\")))", "n42 #<foo>\n");
-		assertBothEqual("(defmulti b99-mo class) (defmethod b99-mo Object [x] :object)"
-				+ " (println (b99-mo (java.io.File. \"foo\")))", ":object\n");
+		assertBothEqual("(defmulti mp class) (defmethod mp String [s] s)"
+				+ " (defmethod mp Number [n] (str \"n\" (.toString n)))"
+				+ " (defmethod mp :default [x] (str \"#<\" (.toString x) \">\"))"
+				+ " (println (mp 42) (mp (java.io.File. \"foo\")))", "n42 #<foo>\n");
+		assertBothEqual(
+				"(defmulti mo class) (defmethod mo Object [x] :object)" + " (println (mo (java.io.File. \"foo\")))",
+				":object\n");
 	}
 
 	@Test
@@ -139,8 +141,8 @@ class ClojureInteropTest {
 		// where the program has one; the java:-free stand-ins take their names
 		for (boolean wasm : new boolean[] { false, true }) {
 			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
-				.clojure("(defmulti b99-k class) (defmethod b99-k :default [x] x)"
-						+ " (println (b99-k 1) (class [1]) (str [1] 2) (pr-str 3))", wasm, false)
+				.clojure("(defmulti k class) (defmethod k :default [x] x)"
+						+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3))", wasm, false)
 				.forms()
 				.stream()
 				.map(LispVal::print)
@@ -155,10 +157,10 @@ class ClojureInteropTest {
 	void staticFieldsAnswerAsValues() throws Exception {
 		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
 		// value, through an import
-		assertBothEqual("(ns b20snake (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "37\n");
+		assertBothEqual("(ns awtns (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "37\n");
 		assertBothEqual("(println Math/PI)", "3.141592653589793\n");
 		assertBothEqual("(println java.lang.Math/PI)", "3.141592653589793\n");
-		assertBothEqual("(ns b20imp (:import java.lang.Math)) (println Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(ns mathns (:import java.lang.Math)) (println Math/PI)", "3.141592653589793\n");
 		assertBothEqual("(println (Math/PI))", "3.141592653589793\n");
 		assertBothEqual("(println (. Math PI))", "3.141592653589793\n");
 	}
@@ -177,13 +179,12 @@ class ClojureInteropTest {
 	@Test
 	void staticMembersAnswerAsValues() throws Exception {
 		// the book's introduction.clj blank? shape: the member over every?
-		assertBothEqual("(defn b20-blank? [s] (every? Character/isWhitespace s)) (println (b20-blank? \"   \"))",
-				"true\n");
+		assertBothEqual("(defn all-ws? [s] (every? Character/isWhitespace s)) (println (all-ws? \"   \"))", "true\n");
 		assertBothEqual("(println (every? Character/isWhitespace \"   \"))", "true\n");
 		assertBothEqual("(println (every? Character/isWhitespace \" a \"))", "false\n");
 		assertBothEqual("(println (map Integer/toString [1 2]))", "(1 2)\n");
 		assertBothEqual("(println (map Character/isWhitespace \" a\"))", "(true false)\n");
-		assertBothEqual("(let [b20-isws Character/isWhitespace] (println (b20-isws \\space)))", "true\n");
+		assertBothEqual("(let [isws Character/isWhitespace] (println (isws \\space)))", "true\n");
 	}
 
 	@Test
@@ -225,10 +226,10 @@ class ClojureInteropTest {
 		assertBothEqual("(println (.contains (java.util.ArrayList. [1]) 2))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList. [1])))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList.)))", "true\n");
-		assertBothEqual("(let [b29-list (java.util.ArrayList. [1])] (println (.contains b29-list 2)))", "false\n");
-		assertBothEqual("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))", "true\n");
-		assertBothEqual("(println (if-let [b34-list (java.util.ArrayList. [1])] (.isEmpty b34-list) :e))", "false\n");
-		assertBothEqual("(println (when-let [b34-list (java.util.ArrayList. [1])] (.contains b34-list 2)))", "false\n");
+		assertBothEqual("(let [al (java.util.ArrayList. [1])] (println (.contains al 2)))", "false\n");
+		assertBothEqual("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))", "true\n");
+		assertBothEqual("(println (if-let [al (java.util.ArrayList. [1])] (.isEmpty al) :e))", "false\n");
+		assertBothEqual("(println (when-let [al (java.util.ArrayList. [1])] (.contains al 2)))", "false\n");
 		assertBothEqual("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))", "false\n");
 		assertBothEqual("(println (.. (java.util.ArrayList.) (subList 0 0) (isEmpty)))", "true\n");
 		// if/eq/str see the false object, like the oracle
@@ -268,7 +269,7 @@ class ClojureInteropTest {
 				(.forEach (java.util.stream.IntStream/range 3 4) p)
 				""", ":got s\n:got 3\n");
 		assertBothEqual("""
-				(ns b59 (:import (java.awt.event ActionListener KeyListener)))
+				(ns listenersns (:import (java.awt.event ActionListener KeyListener)))
 				(def q (proxy [ActionListener KeyListener] []
 				         (actionPerformed [e] (println :clicked e))
 				         (keyTyped [e])))
@@ -297,7 +298,7 @@ class ClojureInteropTest {
 	@Test
 	void proxyOverAClassSeesThisAndSuper() throws Exception {
 		assertBothEqual("""
-				(ns b71this (:import (java.io File)))
+				(ns thisns (:import (java.io File)))
 				(def p (proxy [File] ["x"]
 				         (toString [] (str "super-was:" (proxy-super toString)))
 				         (equals [o] true)
@@ -314,7 +315,7 @@ class ClojureInteropTest {
 	@Test
 	void proxyOverAClassOverridesProtectedMethods() throws Exception {
 		assertBothEqual("""
-				(ns b71paint (:import (javax.swing JPanel)))
+				(ns paintns (:import (javax.swing JPanel)))
 				(def seen (atom []))
 				(def p (proxy [JPanel] [] (paintComponent [g] (swap! seen conj :painted))))
 				(.paintComponent p nil)
@@ -328,7 +329,7 @@ class ClojureInteropTest {
 	@Test
 	void proxyOverAClassWithInterfacesRunsSnakeShapes() throws Exception {
 		assertBothEqual("""
-				(ns b71snake (:import (javax.swing JPanel) (java.awt.event ActionListener KeyListener)))
+				(ns snakens (:import (javax.swing JPanel) (java.awt.event ActionListener KeyListener)))
 				(def p (proxy [JPanel ActionListener KeyListener] []
 				         (actionPerformed [e] (.repaint ^JPanel this))
 				         (keyPressed [e] nil)
@@ -345,11 +346,11 @@ class ClojureInteropTest {
 	// The book's interop.clj shape: a SAX handler proxy receives parser callbacks.
 	@Test
 	void proxyOverAClassHandlesSaxCallbacks() throws Exception {
-		java.nio.file.Path fixture = workDir.resolve("b71-sax.xml");
+		java.nio.file.Path fixture = workDir.resolve("sax.xml");
 		java.nio.file.Files.writeString(fixture, "<a><b/></a>");
 		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
 		assertBothEqual(
-				"(ns b71sax (:import (org.xml.sax.helpers DefaultHandler)))" + "(def seen (atom []))"
+				"(ns saxns (:import (org.xml.sax.helpers DefaultHandler)))" + "(def seen (atom []))"
 						+ "(def h (proxy [DefaultHandler] []"
 						+ " (startElement [uri local qname attrs] (swap! seen conj qname))"
 						+ " (endElement [uri local qname] (swap! seen conj (str \"/\" qname)))))"
@@ -365,18 +366,18 @@ class ClojureInteropTest {
 	@Test
 	void proxyOverAClassRefusals() throws Exception {
 		assertBothEqual("""
-				(ns b71uoe (:import (java.util AbstractList)) (:require [clojure.string :as s]))
+				(ns uoens (:import (java.util AbstractList)) (:require [clojure.string :as s]))
 				(def a (proxy [AbstractList] [] (size [] 0)))
 				(println (.size a))
 				(println (try (.get a 0)
 				           (catch Exception e (s/includes? (ex-message e) "UnsupportedOperationException: get"))))
 				""", "0\ntrue\n");
 		assertThatThrownBy(
-				() -> interpret("(ns b71r1 (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+				() -> interpret("(ns proxyns (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
 			.isInstanceOf(Exception.class)
 			.hasMessageContaining("proxy cannot extend final class java.lang.String");
 		assertThatThrownBy(
-				() -> runOnJvm("(ns b71r1 (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+				() -> runOnJvm("(ns proxyns (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
 			.isInstanceOf(Exception.class)
 			.hasMessageContaining("proxy cannot extend final class java.lang.String");
 		assertThatThrownBy(() -> interpret("(proxy [java.io.File] [\"x\"] (nope [] 1))")).isInstanceOf(Exception.class)
@@ -406,7 +407,7 @@ class ClojureInteropTest {
 		// File IO lives here with the interop cases for the interpreter and the
 		// JVM; the wasm legs (a --dir preopen) live in ClojureWasmFileIoTest and
 		// the un-preopened refusal in ClojureWasmFileRefusalTest.
-		String path = "\"" + workDir.resolve("b15-io.txt").toString().replace("\\", "\\\\") + "\"";
+		String path = "\"" + workDir.resolve("io.txt").toString().replace("\\", "\\\\") + "\"";
 		assertBothEqual("(spit " + path + " \"a\\nb\") (println (slurp " + path + "))", "a\nb\n");
 		assertBothEqual("(spit " + path + " \"a\\nb\") (println (line-seq " + path + "))", "(a b)\n");
 		assertBothEqual(
@@ -417,11 +418,11 @@ class ClojureInteropTest {
 
 	@Test
 	void spitWritesStrSpellingOfNonStrings() throws Exception {
-		// b74: spit writes (str content): a list, vector, map, number and record
+		// spit writes (str content): a list, vector, map, number and record
 		// go through the str spelling, nil writes nothing, a string is written
 		// as before; :append included. The wasm legs (a --dir preopen) live in
 		// ClojureWasmFileIoTest.
-		String path = "\"" + workDir.resolve("b74-spit.txt").toString().replace("\\", "\\\\") + "\"";
+		String path = "\"" + workDir.resolve("spit.txt").toString().replace("\\", "\\\\") + "\"";
 		assertBothEqual("(spit " + path + " '(1 2)) (println (slurp " + path + "))", "(1 2)\n");
 		assertBothEqual("(spit " + path + " [1 2]) (println (slurp " + path + "))", "[1 2]\n");
 		assertBothEqual("(spit " + path + " {:a 1}) (println (slurp " + path + "))", "{:a 1}\n");
@@ -430,25 +431,25 @@ class ClojureInteropTest {
 		assertBothEqual(
 				"(spit " + path + " \"s\") (spit " + path + " '(9) :append true) (println (slurp " + path + "))",
 				"s(9)\n");
-		assertBothEqual("(defrecord B74R [a b]) (spit " + path + " (->B74R 1 2)) (println (slurp " + path + "))",
-				"#user.B74R{:a 1, :b 2}\n");
-		assertBothEqual("(defrecord B74S [a b]) (spit " + path + " \"s\") (spit " + path + " (->B74S 1 2) :append true)"
-				+ " (println (slurp " + path + "))", "s#user.B74S{:a 1, :b 2}\n");
+		assertBothEqual("(defrecord SpitR [a b]) (spit " + path + " (->SpitR 1 2)) (println (slurp " + path + "))",
+				"#user.SpitR{:a 1, :b 2}\n");
+		assertBothEqual("(defrecord SpitS [a b]) (spit " + path + " \"s\") (spit " + path
+				+ " (->SpitS 1 2) :append true)" + " (println (slurp " + path + "))", "s#user.SpitS{:a 1, :b 2}\n");
 	}
 
 	@Test
 	void readTakesBackWhatSpitWrote() throws Exception {
-		// b85: the book's concurrency.clj backup shape -- spit a list of records, read
+		// the book's concurrency.clj backup shape -- spit a list of records, read
 		// it back through a PushbackReader over clojure.java.io/reader -- answers = to
 		// what was written, like the oracle; read leaves the reader right after the
 		// datum. The wasm legs (a --dir preopen) live in ClojureWasmFileIoTest.
-		String path = "\"" + workDir.resolve("b85-backup.clj").toString().replace("\\", "\\\\") + "\"";
-		String prelude = "(ns b85io (:require [clojure.java.io :refer [reader]]))"
+		String path = "\"" + workDir.resolve("backup.clj").toString().replace("\\", "\\\\") + "\"";
+		String prelude = "(ns backupio (:require [clojure.java.io :refer [reader]]))"
 				+ " (defrecord Message [sender text]) (def msg (->Message \"unit test\" \"test message\"))";
 		assertBothEqual(
 				prelude + " (spit " + path + " (list msg)) (println (slurp " + path + "))"
 						+ " (println (= (read (java.io.PushbackReader. (reader " + path + "))) (list msg)))",
-				"(#b85io.Message{:sender \"unit test\", :text \"test message\"})\ntrue\n");
+				"(#backupio.Message{:sender \"unit test\", :text \"test message\"})\ntrue\n");
 		assertBothEqual(prelude + " (spit " + path + " \"[1 2] :k\\nnext line\")"
 				+ " (with-open [r (java.io.PushbackReader. (reader " + path + "))]"
 				+ " (prn (read r) (read r) (.readLine r) (read r false :eof)))", "[1 2] :k \"\" next\n");
@@ -464,13 +465,13 @@ class ClojureInteropTest {
 		// it without closing (with-open owns closing, like the oracle), over the
 		// vendored words fixture rather than the book's 32k corpus. Interpreter and
 		// JVM here; the wasm preopen leg is in ClojureWasmFileIoTest.
-		java.nio.file.Path fixture = workDir.resolve("b22-words.txt");
-		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+		java.nio.file.Path fixture = workDir.resolve("reader-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-words.txt")) {
 			assertThat(in).isNotNull();
 			java.nio.file.Files.copy(in, fixture);
 		}
 		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		String prelude = "(ns b22io (:require [clojure.java.io :as jio] [clojure.string :as s])) ";
+		String prelude = "(ns wordsio (:require [clojure.java.io :as jio] [clojure.string :as s])) ";
 		// the hangman available-words shape: lowercase-only words survive, like the
 		// oracle
 		assertBothEqual(
@@ -479,21 +480,22 @@ class ClojureInteropTest {
 				"[apple fig cherry kiwi ]\n");
 		// the eager.clj non-blank-lines count over the same fixture
 		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))", "6\n");
-		// the eager.clj transducer shapes (b60): non-blank-lines pours the lines
+		// the eager.clj transducer shapes: non-blank-lines pours the lines
 		// through (filter non-blank?) into a vector, line-count reduces an eduction
-		String eager = prelude + "(defn b60-non-blank? [s] (not (s/blank? s)))";
+		String eager = prelude + "(defn non-blank? [s] (not (s/blank? s)))";
 		assertBothEqual(eager + "(with-open [r (jio/reader " + path + ")]"
-				+ " (println (count (into [] (filter b60-non-blank?) (line-seq r)))))", "6\n");
-		assertBothEqual(eager + "(with-open [r (jio/reader " + path + ")]"
-				+ " (println (reduce (fn [cnt el] (inc cnt)) 0 (eduction (filter b60-non-blank?) (line-seq r)))))",
+				+ " (println (count (into [] (filter non-blank?) (line-seq r)))))", "6\n");
+		assertBothEqual(
+				eager + "(with-open [r (jio/reader " + path + ")]"
+						+ " (println (reduce (fn [cnt el] (inc cnt)) 0 (eduction (filter non-blank?) (line-seq r)))))",
 				"6\n");
 		// the sequences.clj with-open shape over a referred reader, answering the line
 		// count
-		assertBothEqual("(ns b22ref (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path
+		assertBothEqual("(ns refns (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path
 				+ ")] (println (count (line-seq r))))", "7\n");
 		// with-open closes: reading after the close signals, like the oracle
-		assertBothEqual(prelude + "(def b22closed (jio/reader " + path + "))" + "(with-open [r b22closed] (line-seq r))"
-				+ "(println (try (line-seq b22closed) (catch Exception e :closed)))", ":closed\n");
+		assertBothEqual(prelude + "(def closed (jio/reader " + path + "))" + "(with-open [r closed] (line-seq r))"
+				+ "(println (try (line-seq closed) (catch Exception e :closed)))", ":closed\n");
 		// the line-seq path form keeps answering strictly
 		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");
 	}
@@ -501,23 +503,24 @@ class ClojureInteropTest {
 	@Test
 	void quotedRequiresWireTheBookShapes() throws Exception {
 		// life_without_multi.clj's my-print-vector and sequences.clj's non-blank?
-		// spell their libspecs quoted (the oracle's bare-require spelling, b24): a
+		// spell their libspecs quoted (the oracle's bare-require spelling): a
 		// quoted :as over .write/str-join, and quoted :refer of reader/blank? over
 		// with-open/line-seq and the vendored fixture. Interpreter and JVM only
 		// (files), like the pins above; the wasm preopen leg is in
 		// ClojureWasmFileIoTest.
-		java.nio.file.Path fixture = workDir.resolve("b24-words.txt");
-		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+		java.nio.file.Path fixture = workDir.resolve("libspec-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-words.txt")) {
 			assertThat(in).isNotNull();
 			java.nio.file.Files.copy(in, fixture);
 		}
 		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		assertBothEqual("(require '[clojure.string :as b24str])" + "(defn b24-my-print-vector [ob] (.write *out* \"[\")"
-				+ " (.write *out* (b24str/join \" \" ob)) (.write *out* \"]\"))"
-				+ "(b24-my-print-vector [\"a\" \"b\"])", "[a b]");
+		assertBothEqual(
+				"(require '[clojure.string :as s])" + "(defn my-print-vector [ob] (.write *out* \"[\")"
+						+ " (.write *out* (s/join \" \" ob)) (.write *out* \"]\"))" + "(my-print-vector [\"a\" \"b\"])",
+				"[a b]");
 		assertBothEqual("(require '[clojure.java.io :refer [reader]])" + "(require '[clojure.string :refer [blank?]])"
-				+ "(defn b24-non-blank? [line] (not (blank? line)))" + "(with-open [r (reader " + path + ")]"
-				+ " (println (count (filter b24-non-blank? (line-seq r)))))", "6\n");
+				+ "(defn non-blank? [line] (not (blank? line)))" + "(with-open [r (reader " + path + ")]"
+				+ " (println (count (filter non-blank? (line-seq r)))))", "6\n");
 	}
 
 	@Test

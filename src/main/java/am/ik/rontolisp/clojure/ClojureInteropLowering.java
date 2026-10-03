@@ -52,7 +52,7 @@ final class ClojureInteropLowering {
 	/**
 	 * The one host class the lowering builds itself: a zero-argument
 	 * {@code java.io.StringWriter} is a Common Lisp string output stream on every backend
-	 * (b76) -- never a host {@code Writer}, which no backend writes to and wasm refuses
+	 * -- never a host {@code Writer}, which no backend writes to and wasm refuses
 	 * outright.
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
@@ -1191,8 +1191,8 @@ final class ClojureInteropLowering {
 	 * and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
 	 * without reaching {@code java:call}. {@code toString} answers a string output
-	 * stream's text so far without clearing it (b76). Null when the method maps to
-	 * nothing, so the call goes to {@code java:call}.
+	 * stream's text so far without clearing it. Null when the method maps to nothing, so
+	 * the call goes to {@code java:call}.
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -1228,7 +1228,7 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), c), new LispInteger(-1)));
 		}
 		if (method.equals("toString") && args.isEmpty()) {
-			// A StringWriter lowered to a string output stream (b76) answers the
+			// A StringWriter lowered to a string output stream answers the
 			// text so far without clearing it; anything else takes the value path
 			// (t is a stream to streamp, as the terminal's designator, and also
 			// Clojure's true).
