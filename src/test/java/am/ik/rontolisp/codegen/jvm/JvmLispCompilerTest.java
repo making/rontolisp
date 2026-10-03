@@ -23017,6 +23017,149 @@ class JvmLispCompilerTest {
 		assertThat(runClass(trampolined)).isEqualTo("200\nDONE");
 	}
 
+	@Test
+	void aSelfTailCallJumpsBackToTheMethodsFirstInstruction() throws Exception {
+		// A defun's tail call of itself and a labels function's tail call through its
+		// own variable store the arguments into the parameter slots and jump back to the
+		// method's first instruction (.kb/jvm-self-tail-calls.md): no call is left, and
+		// a depth the frame-per-call chain overflowed on the 16 MiB worker runs.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun down (n) (if (= n 0) 'done (down (- n 1))))
+				(print (down 1000000))
+				(print (labels ((step (n acc) (if (= n 0) acc (step (- n 1) (+ acc 1))))) (step 1000000 0)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "DOWN", "DOWN")).isZero();
+		assertThat(jumpsToEntry(classBytes, "DOWN")).isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) == 1)
+			.count()).as("the labels function's method loops").isEqualTo(1);
+		assertThat(compileAndRun(forms)).isEqualTo("DONE\n1000000");
+	}
+
+	@Test
+	void everyTailTransparentFormHandsTheJumpOnAndADynamicExtentKeepsItsCall() throws Exception {
+		// The jump re-enters ahead of the prologue that boxes a captured parameter, so a
+		// closure keeps its own round's binding; every argument reads the round it was
+		// written in; a lambda list's defaults, keys and rest list are re-derived from
+		// the physical arguments a call would pass. The tail mark passes block,
+		// return-from, labels, let*, the, a literal #'name and a values tail. A call
+		// inside a special binding, an unwind-protect, a handler-case or a catch is no
+		// tail: the restore, the cleanup and the handler belong to its extent, so it
+		// stays a call.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+				"""
+						(defun collect (n acc) (if (= n 0) acc (collect (- n 1) (cons (lambda () n) acc))))
+						(print (mapcar #'funcall (collect 3 nil)))
+						(defun swap-loop (a b n) (if (= n 0) (list a b) (swap-loop b a (- n 1))))
+						(print (swap-loop 1 2 1000001))
+						(defun opt (n &optional (k 1)) (if (<= n 0) k (opt (- n k))))
+						(print (opt 1000000))
+						(defun key (n &key (k 1) acc) (if (<= n 0) (length acc) (key (- n k) :acc (cons n acc))))
+						(print (key 1000000))
+						(defun rst (n &rest r) (if (= n 0) r (rst (- n 1) n)))
+						(print (rst 1000000))
+						(defun ret (n) (if (= n 0) 'ret (return-from ret (ret (- n 1)))))
+						(print (ret 1000000))
+						(defun inner (n) (labels ((dec (x) (- x 1))) (let* ((m (dec n))) (the t (if (< m 0) 'inner (inner m))))))
+						(print (inner 1000000))
+						(defun fc (n) (block b (if (= n 0) (return-from b 'funcall)) (funcall #'fc (- n 1))))
+						(print (fc 1000000))
+						(defun mv (n) (if (= n 0) (values 1 2) (mv (- n 1))))
+						(print (multiple-value-list (mv 1000000)))
+						(defvar *depth* 'outer)
+						(defun show () *depth*)
+						(defun spec (n) (if (= n 0) (show) (let ((*depth* n)) (spec (- n 1)))))
+						(print (list (spec 3) *depth*))
+						(defvar *cleanups* 0)
+						(defun up (n) (if (= n 0) 'up (unwind-protect (up (- n 1)) (setq *cleanups* (+ *cleanups* 1)))))
+						(print (list (up 3) *cleanups*))
+						(defun hc (n) (if (= n 0) (error "boom") (handler-case (hc (- n 1)) (error () n))))
+						(print (hc 3))
+						(defun ct (n) (if (= n 0) (throw 'tag 'thrown) (catch 'tag (ct (- n 1)))))
+						(print (ct 3))
+						"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String looping : List.of("COLLECT", "SWAP-LOOP", "OPT", "KEY", "RST", "RET", "INNER", "FC", "MV")) {
+			assertThat(jumpsToEntry(classBytes, looping)).as(looping).isEqualTo(1);
+			assertThat(ownCallsIn(classBytes, looping, looping)).as(looping).isZero();
+		}
+		for (String calling : List.of("SPEC", "UP", "HC", "CT")) {
+			assertThat(jumpsToEntry(classBytes, calling)).as(calling).isZero();
+			assertThat(ownCallsIn(classBytes, calling, calling)).as(calling).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(1 2 3)
+				(2 1)
+				1
+				1000000
+				(1)
+				RET
+				INNER
+				FUNCALL
+				(1 2)
+				(1 OUTER)
+				(UP 3)
+				1
+				THROWN""");
+	}
+
+	@Test
+	void aSelfTailCallInASplitOffContinuationStaysACall() throws Exception {
+		// A body past the method-size budget moves its tail into a _k$N continuation
+		// (JvmBodyOutliner): a different method, which cannot jump to the defun's
+		// first instruction, so the tail call there stays a call -- correct, one frame
+		// a round. The defun's own method has no jump either.
+		StringBuilder sb = new StringBuilder("(defun big (n acc)\n  (let ((a 0))\n");
+		for (int k = 0; k < 400; k++) {
+			sb.append("    (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+		}
+		sb.append("    (if (= n 0) (+ acc a) (big (- n 1) (+ acc a)))))\n(print (big 50 0))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(declaredMethodNames(classBytes)).as("the split actually happened").contains("_k$0");
+		assertThat(jumpsToEntry(classBytes, "BIG")).isZero();
+		assertThat(compileAndRun(forms)).isEqualTo(String.valueOf(51 * 400));
+	}
+
+	/** The calls method {@code method} makes to the class's own method {@code callee}. */
+	private static int ownCallsIn(byte[] classBytes, String method, String callee) {
+		int calls = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString(callee)) {
+					calls++;
+				}
+			}
+		}
+		return calls;
+	}
+
+	/** The branches of method {@code method} that jump back to its first instruction. */
+	private static int jumpsToEntry(byte[] classBytes, String method) {
+		int jumps = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			java.lang.classfile.attribute.CodeAttribute code = (java.lang.classfile.attribute.CodeAttribute) model
+				.code()
+				.orElseThrow();
+			for (java.lang.classfile.CodeElement element : code) {
+				if (element instanceof java.lang.classfile.instruction.BranchInstruction branch
+						&& code.labelToBci(branch.target()) == 0) {
+					jumps++;
+				}
+			}
+		}
+		return jumps;
+	}
+
 	/** The code length summed over {@code main} and the {@code _top$N} chunks. */
 	private static int topLevelCodeLength(byte[] classBytes) {
 		int total = 0;

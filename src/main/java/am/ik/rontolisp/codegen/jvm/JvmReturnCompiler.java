@@ -39,7 +39,7 @@ final class JvmReturnCompiler {
 			throw new IllegalStateException("Cannot compile return outside of a loop block");
 		}
 		List<LispVal> parts = cons.toList();
-		emitExit(parts.size() > 1 ? parts.get(1) : null, ctx, className, targetDepth);
+		emitExit(parts.size() > 1 ? parts.get(1) : null, ctx, className, targetDepth, ctx.tailMark == cons);
 	}
 
 	/**
@@ -63,11 +63,19 @@ final class JvmReturnCompiler {
 	 * stored into the target's slot, the cleanups of every escaped {@code unwind-protect}
 	 * scope run inline, the operand stack is unwound to the target's entry shape and a
 	 * {@code goto} jumps to the target's exit label (bound by {@link JvmBlockCompiler}).
+	 * @param tail whether the exit form carries the tail mark: every form between it and
+	 * the method's result -- its target block among them -- hands its value on unchanged
+	 * and opens no dynamic extent, so the value form is the method's tail too
+	 * ({@link JvmSelfTailCall}, {@link JvmTailBounce})
 	 */
-	static void emitExit(@Nullable LispVal valueForm, JvmLispCompiler.Ctx ctx, String className, int targetDepth) {
+	static void emitExit(@Nullable LispVal valueForm, JvmLispCompiler.Ctx ctx, String className, int targetDepth,
+			boolean tail) {
 		JvmLispCompiler.BlockTarget target = targetAt(ctx, targetDepth);
 		if (valueForm != null) {
+			LispVal savedMark = ctx.tailMark;
+			ctx.tailMark = tail ? valueForm : null;
 			JvmExprCompiler.compileExpr(valueForm, ctx, className);
+			ctx.tailMark = savedMark;
 		}
 		else {
 			ctx.body.aconst_null();

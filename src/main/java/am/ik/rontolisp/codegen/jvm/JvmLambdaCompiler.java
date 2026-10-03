@@ -58,7 +58,7 @@ final class JvmLambdaCompiler {
 		String asyncHead = ctx.asyncBodyHeads.get(cons);
 		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
 				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
-				asyncHead == null ? ctx.writtenIn : null));
+				asyncHead == null ? ctx.writtenIn : null, ctx.lambdaSelfVars.get(cons)));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();

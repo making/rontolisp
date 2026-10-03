@@ -93,6 +93,13 @@ A program that uses `objc:` or `appkit:` stays on the launcher's first thread, w
 requires, and so does a class whose top level runs when it is initialized (one with a
 `rontolisp:jvm-export`).
 
+A function that calls itself in tail position -- a `defun` by name or through `#'name`, a
+`labels` function, Clojure's `recur` -- jumps back to its own start instead of calling, so a
+loop written as tail recursion runs at any depth, whatever its lambda list. A `defun` whose
+tail calls through a function value runs in constant stack too. A tail call to another
+function -- two `defun`s or two `labels` functions calling each other -- takes a frame per
+call here, where the interpreter and WebAssembly take none.
+
 ## Optimize (Dead-Code Elimination)
 
 Compilation drops every method unreachable from `main`, along with any static field

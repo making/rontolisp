@@ -37400,7 +37400,7 @@ public final class LispMacroExpander {
 			if (PackageRegistry.specialOperatorNames().contains(name.name())) {
 				throw new IllegalArgumentException(op + " cannot bind the special operator " + name.name());
 			}
-			if (fnVars.put(name.name(), new LispSymbol("__" + op + id + "_" + name.name().replace(':', '_'))) != null) {
+			if (fnVars.put(name.name(), new LispSymbol(localFunctionVariable(op, id, name.name()))) != null) {
 				throw new IllegalArgumentException(op + " defines " + name.name() + " more than once");
 			}
 			defParts.add(dp);
@@ -37515,6 +37515,36 @@ public final class LispMacroExpander {
 		// The expansion stands where the flet/labels form stood (.kb/source-positions.md,
 		// "Half 2").
 		return inheriting(cons, listToCons(letParts));
+	}
+
+	/**
+	 * The variable an {@code flet}/{@code labels} expansion binds a local function to:
+	 * {@code __<op><id>_<name>}, unique per expansion.
+	 */
+	private static String localFunctionVariable(String op, int id, String name) {
+		return "__" + op + id + "_" + name.replace(':', '_');
+	}
+
+	/**
+	 * Whether {@code name} is the variable a {@code labels} expansion binds one of its
+	 * functions to ({@link #expandLabels}). Nothing but the expansion's own
+	 * {@code (setq var (lambda ...))} assigns it -- the rewrite turns every other mention
+	 * into a read, {@code (funcall var ...)} or {@code var} -- so inside that lambda the
+	 * variable always holds the lambda itself: a call through it is a self call.
+	 * @param name a variable name
+	 * @return true for a {@code labels} function variable
+	 */
+	public static boolean isLabelsFunctionVariable(String name) {
+		String prefix = "__" + LispNames.LABELS;
+		if (!name.startsWith(prefix)) {
+			return false;
+		}
+		int i = prefix.length();
+		int digits = i;
+		while (i < name.length() && Character.isDigit(name.charAt(i))) {
+			i++;
+		}
+		return i > digits && i < name.length() && name.charAt(i) == '_';
 	}
 
 	/** Records which of the given names occur as a symbol anywhere in the tree. */

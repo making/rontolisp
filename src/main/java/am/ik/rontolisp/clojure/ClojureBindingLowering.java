@@ -358,18 +358,18 @@ final class ClojureBindingLowering {
 	 * clause keeps its own parameters (a variadic clause its {@code &rest}); the dispatch
 	 * hands each its arguments positionally. A name no identifier mangles to (a single
 	 * {@code %} outside the {@code :} escape) keeps the helpers apart from user
-	 * definitions. A {@code recur} in a fixed clause body is checked against that
-	 * clause's arity and calls the dispatch, which routes by count back to the same
-	 * clause (every fixed count names exactly one clause, so the routing is exact except
-	 * where a variadic clause listed before a fixed one also matches the count); a
-	 * {@code recur} in a used variadic clause calls its helper directly, which takes the
-	 * rest as an ordinary parameter, so the call assigns exactly.
+	 * definitions. A {@code recur} in a clause body is checked against that clause's
+	 * arity and calls the clause's own helper -- a variadic one takes the rest as an
+	 * ordinary parameter, so the call assigns exactly -- never the dispatch: the oracle's
+	 * {@code recur} re-enters its own arity, and a direct self call is what a backend
+	 * runs in constant stack (the JVM's jump, {@code .kb/jvm-self-tail-calls.md}) where a
+	 * round trip through the dispatch was a mutual recursion of two functions.
 	 */
 	static List<LispVal> multiDefun(ClojureLowering ctx, String name, List<LispVal> clauses, String callName) {
-		// the shapes first, without lowering: a used variadic clause recurs to its
-		// helper (which takes the rest as an ordinary parameter, so the recur call
-		// assigns exactly) rather than the dispatch (whose NTHCDR rest would wrap
-		// it in a list); every fixed clause still recurs through the dispatch
+		// the shapes first, without lowering: each clause recurs to its own helper
+		// (a variadic one's takes the rest as an ordinary parameter, so the recur
+		// call assigns exactly, where the dispatch's NTHCDR rest would wrap it in a
+		// list)
 		List<ClojureLowering.ParamShape> shapes = new ArrayList<>();
 		for (LispVal clauseDatum : clauses) {
 			List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
@@ -381,7 +381,7 @@ final class ClojureBindingLowering {
 		for (ClojureLowering.ParamShape shape : shapes) {
 			String helperName = callName + "%" + (shape.variadic() ? "*" : shape.fixed());
 			helperNames.add(helperName);
-			targets.add(new ClojureLowering.RecurTarget(shape.variadic() ? helperName : callName, true));
+			targets.add(new ClojureLowering.RecurTarget(helperName, true));
 		}
 		List<ClojureLowering.Clause> parsed = arityClauses(ctx, clauses, "defn", targets::get);
 		List<LispVal> forms = new ArrayList<>();
@@ -616,16 +616,17 @@ final class ClojureBindingLowering {
 	 * arity through {@code let*} argument bindings -- no local functions, so a clause
 	 * body closes over the outer scope like any lambda body. A {@code recur} in a fixed
 	 * clause body is checked against that clause's arity and calls the dispatch, which
-	 * routes by count back to the same clause (same routing caveat as a multi-arity
-	 * {@code defn}); a {@code recur} in a used variadic clause calls the worker instead,
-	 * which takes the rest as an ordinary parameter.
+	 * routes by count back to the same clause (every fixed count names exactly one
+	 * clause, so the routing is exact except where a variadic clause listed before a
+	 * fixed one also matches the count); a {@code recur} in a used variadic clause calls
+	 * the worker instead, which takes the rest as an ordinary parameter.
 	 */
 	static ClojureLowering.SplitLambda multiFn(ClojureLowering ctx, List<LispVal> clauses, String owner,
 			String headName, String worker) {
 		// the shapes first, without lowering: a used variadic clause recurs to its
 		// worker (which takes the rest as an ordinary parameter) while the dispatch
-		// arm hands it the rest pre-built; every fixed clause still recurs through
-		// the dispatch (the same routing caveat as a multi-arity defn)
+		// arm hands it the rest pre-built; every fixed clause recurs through the
+		// dispatch, its own arm of this lambda
 		List<ClojureLowering.RecurTarget> made = new ArrayList<>();
 		for (LispVal clauseDatum : clauses) {
 			List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);

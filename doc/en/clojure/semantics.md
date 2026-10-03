@@ -56,7 +56,7 @@ rontolisp test/demo/main_test.clj    # roots: test (its ns), src (deps.edn)
 
 `let` is a `let*` (Clojure's `let` is sequential); `letfn` is one `labels` over
 pre-scanned entries, so siblings call each other; `loop`/`recur` is a `labels` self call,
-constant-stack on the interpreter, with sequential inits. `recur` also reaches a named or
+constant-stack on every backend, with sequential inits. `recur` also reaches a named or
 anonymous `fn`, a `defn` clause, a `letfn` entry or a `lazy-seq` body of arity 0
 (each multi-arity clause its own target); a wrong count is a named refusal. Parameters and bindings
 destructure: a vector pattern binds positionally through the seq view (`&` the rest as a

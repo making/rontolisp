@@ -133,6 +133,13 @@ final class JvmSetqCompiler {
 			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
 			return;
 		}
+		if (valueExpr instanceof LispCons lambda && lambda.car() instanceof LispSymbol head
+				&& am.ik.rontolisp.LispNames.LAMBDA.equals(head.name())
+				&& am.ik.rontolisp.macro.LispMacroExpander.isLabelsFunctionVariable(name)) {
+			// A labels expansion's one assignment: inside the lambda the variable is the
+			// lambda itself, so a tail call through it is a jump (JvmSelfTailCall).
+			ctx.lambdaSelfVars.put(lambda, name);
+		}
 		JvmExprCompiler.compileExpr(valueExpr, ctx, className);
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {

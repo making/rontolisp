@@ -2473,6 +2473,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(defun.bodyExprs, closRegistry));
 			funcDeclaredDoubles.removeAll(specialVars);
 			funcCtx.declaredDoubles = funcDeclaredDoubles.isEmpty() ? Set.of() : funcDeclaredDoubles;
+			// The head a self tail call jumps back to, ahead of the boxing below so each
+			// round boxes its own cells; it costs nothing unless one does
+			// (JvmSelfTailCall).
+			funcCtx.selfLoop = JvmSelfTailCall.defun(funcCtx, Objects.requireNonNull(functions.get(defun.name)));
 			// Box captured params
 			for (String paramName : defun.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -2715,6 +2719,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(lambda.bodyExprs, closRegistry));
 			lambdaDeclaredDoubles.removeAll(specialVars);
 			lambdaCtx.declaredDoubles = lambdaDeclaredDoubles.isEmpty() ? Set.of() : lambdaDeclaredDoubles;
+			if (lambda.selfVar() != null) {
+				// A labels function: its calls through its own variable are self calls,
+				// and the tail ones jump back here, ahead of the boxing below
+				// (JvmSelfTailCall).
+				lambdaCtx.selfLoop = JvmSelfTailCall.labels(lambdaCtx, lambda);
+			}
 			// Box captured params of this lambda
 			for (String paramName : lambda.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -5525,10 +5535,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param asyncHead the report head of an {@code %async-run} thunk, or {@code null}
 	 * @param writtenIn the name the report calls the program function its code is written
 	 * in, or {@code null} for none (the top level, an async body)
+	 * @param selfVar the {@code labels} variable this lambda is the value of, through
+	 * which a call is a self call ({@link JvmSelfTailCall}), or {@code null}
 	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
 			List<LispVal> bodyExprs, List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
-			@Nullable String writtenIn) {
+			@Nullable String writtenIn, @Nullable String selfVar) {
 	}
 
 	record DispatchMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
@@ -6373,12 +6385,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmBodyOutliner.@Nullable Tail tailBody;
 
 		/**
-		 * The form whose value is this method's result, when the trampoline
-		 * ({@link JvmTailBounce}) may turn its compilation into a bounce: laid by
-		 * {@link JvmBodyOutliner} on the final spine item and re-laid by the {@code if},
-		 * {@code progn} and plain {@code let} emitters on the arm or body form whose
-		 * value flows on unchanged. Matched by identity in the call emitters, so a form
-		 * compiled anywhere but the true tail sees no mark and emits exactly as before.
+		 * The form whose value is this method's result, when a call there may compile to
+		 * something other than a call: a bounce of the trampoline ({@link JvmTailBounce})
+		 * or a self tail call's jump ({@link JvmSelfTailCall}). Laid by
+		 * {@link JvmBodyOutliner} on the final spine item and re-laid, on the arm or body
+		 * form whose value flows on unchanged, by the emitters of the forms that open no
+		 * dynamic extent: {@code if}, {@code progn}, a plain {@code let}, the blocks, a
+		 * tail {@code return}/{@code return-from}'s value, and the pass-through lowerings
+		 * ({@link JvmExprCompiler#compileExpansion}). Matched by identity in the call
+		 * emitters, so a form compiled anywhere but the true tail sees no mark and emits
+		 * exactly as before.
 		 */
 		@Nullable LispVal tailMark;
 
@@ -6963,6 +6979,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final Map<LispCons, String> asyncBodyHeads;
 
+		/**
+		 * The {@code labels} variable each lambda form is assigned to, by identity;
+		 * shared per compilation ({@link LambdaInfo#selfVar}).
+		 */
+		final Map<LispCons, String> lambdaSelfVars;
+
+		/**
+		 * The function this method is, as the target of its own tail calls: a defun's
+		 * body or a {@code labels} function's, never a continuation or any other method
+		 * ({@link JvmSelfTailCall}).
+		 */
+		JvmSelfTailCall.@Nullable Loop selfLoop;
+
 		/** The owner code ({@link JvmSourceSites#owner}) of {@link #writtenIn}. */
 		int siteOwner;
 
@@ -7158,6 +7187,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.sites = builder.sites;
 			this.lambdaReportNames = builder.lambdaReportNames;
 			this.asyncBodyHeads = builder.asyncBodyHeads;
+			this.lambdaSelfVars = builder.lambdaSelfVars;
 		}
 
 		/**
@@ -7339,6 +7369,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * per compilation like {@link #lambdaReportNames}.
 			 */
 			private final Map<LispCons, String> asyncBodyHeads = new java.util.IdentityHashMap<>();
+
+			/**
+			 * The {@code labels} variable each lambda FORM is assigned to, by identity,
+			 * shared per compilation like {@link #lambdaReportNames}: set where the
+			 * expansion's {@code setq} is compiled, read by {@link JvmLambdaCompiler}.
+			 */
+			private final Map<LispCons, String> lambdaSelfVars = new java.util.IdentityHashMap<>();
 
 			private @Nullable ConstantPool cp;
 

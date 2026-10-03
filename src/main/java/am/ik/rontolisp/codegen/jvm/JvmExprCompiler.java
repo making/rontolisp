@@ -277,6 +277,24 @@ final class JvmExprCompiler {
 		}
 	}
 
+	/**
+	 * Compiles the expansion a pass-through lowering answers for {@code cons}, where the
+	 * form stood: the expansion's value is the form's, so when the form is the method's
+	 * tail, the expansion is ({@link JvmSelfTailCall}, {@link JvmTailBounce}).
+	 * @param cons the form
+	 * @param expansion what it lowers to
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 */
+	static void compileExpansion(LispCons cons, LispVal expansion, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal savedMark = ctx.tailMark;
+		if (savedMark == cons) {
+			ctx.tailMark = expansion;
+		}
+		compileExpr(expansion, ctx, className);
+		ctx.tailMark = savedMark;
+	}
+
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
 		if (ctx.mvChannel == null && LispNames.MV_SPILL.equals(name)) {
@@ -1556,9 +1574,9 @@ final class JvmExprCompiler {
 			case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);
 			case LispNames.LET_STAR -> {
 				// A pass-through lowering: the expansion sits where this form sat, so
-				// it inherits the tail spine (JvmBodyOutliner).
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
 				ctx.tailBody = tail;
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandLetStar(cons), ctx, className);
 			}
 			case LispNames.DOLIST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
 			case LispNames.DO -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx, className);
@@ -1973,9 +1991,9 @@ final class JvmExprCompiler {
 			}
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandFFamily(cons), ctx, className);
-			case LispNames.COND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx, className);
-			case LispNames.CASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx, className);
-			case LispNames.ECASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx, className);
+			case LispNames.COND -> compileExpansion(cons, LispMacroExpander.expandCond(cons), ctx, className);
+			case LispNames.CASE -> compileExpansion(cons, LispMacroExpander.expandCase(cons), ctx, className);
+			case LispNames.ECASE -> compileExpansion(cons, LispMacroExpander.expandEcase(cons), ctx, className);
 			case LispNames.CCASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx, className);
 			case LispNames.ERROR -> JvmExprCompiler.compileExpr(
 					LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx, className);
@@ -2005,9 +2023,9 @@ final class JvmExprCompiler {
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
 			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);
-			case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
-			case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
-			case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
+			case LispNames.AND -> compileExpansion(cons, LispMacroExpander.expandAnd(cons), ctx, className);
+			case LispNames.OR -> compileExpansion(cons, LispMacroExpander.expandOr(cons), ctx, className);
+			case LispNames.WHEN -> compileExpansion(cons, LispMacroExpander.expandWhen(cons), ctx, className);
 			default -> {
 				return false;
 			}
@@ -2044,7 +2062,7 @@ final class JvmExprCompiler {
 			}
 			case LispNames.PROG1 -> JvmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx, className);
 			case LispNames.TIME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandTime(cons), ctx, className);
-			case LispNames.UNLESS -> JvmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx, className);
+			case LispNames.UNLESS -> compileExpansion(cons, LispMacroExpander.expandUnless(cons), ctx, className);
 			case LispNames.ONE_PLUS ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx, className);
 			case LispNames.ONE_MINUS ->
@@ -2187,9 +2205,9 @@ final class JvmExprCompiler {
 			case LispNames.PSETQ -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
 			case LispNames.PSETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetf(cons), ctx, className);
 			case LispNames.TYPECASE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
 			case LispNames.ETYPECASE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
 			case LispNames.CTYPECASE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx, className);
 			case LispNames.TYPEP -> JvmExprCompiler
@@ -2209,16 +2227,16 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeclaim(cons), ctx, className);
 			case LispNames.PROCLAIM ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx, className);
-			case LispNames.THE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx, className);
+			case LispNames.THE -> compileExpansion(cons, LispMacroExpander.expandThe(cons), ctx, className);
 			case LispNames.EVAL_WHEN ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
 			case LispNames.WITH_COMPILATION_UNIT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx, className);
 			case LispNames.LOCALLY -> {
 				// A pass-through lowering: the expansion sits where this form sat, so
-				// it inherits the tail spine (JvmBodyOutliner).
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
 				ctx.tailBody = tail;
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandLocally(cons), ctx, className);
 			}
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, className);
@@ -2226,15 +2244,15 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
 			case LispNames.FLET -> {
 				// A pass-through lowering: the expansion sits where this form sat, so
-				// it inherits the tail spine (JvmBodyOutliner).
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
 				ctx.tailBody = tail;
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandFlet(cons), ctx, className);
 			}
 			case LispNames.LABELS -> {
 				// A pass-through lowering: the expansion sits where this form sat, so
-				// it inherits the tail spine (JvmBodyOutliner).
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
 				ctx.tailBody = tail;
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandLabels(cons), ctx, className);
 			}
 			case LispNames.VALUES -> JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_BIND ->
