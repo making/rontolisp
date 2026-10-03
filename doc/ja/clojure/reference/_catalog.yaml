@@ -133,6 +133,9 @@ categories:
       - { slug: core-find, name: "find" }
       - { slug: keys, name: "keys" }
       - { slug: vals, name: "vals" }
+      - { slug: key, name: "key" }
+      - { slug: val, name: "val" }
+      - { slug: map-entry-p, name: "map-entry?" }
       - { slug: merge, name: "merge" }
       - { slug: conj, name: "conj" }
       - { slug: disj, name: "disj" }
@@ -147,6 +150,7 @@ categories:
       - { slug: into, name: "into" }
       - { slug: frequencies, name: "frequencies" }
       - { slug: peek, name: "peek" }
+      - { slug: rseq, name: "rseq" }
       - { slug: pop, name: "pop" }
       - { slug: subvec, name: "subvec" }
       - { slug: update-keys, name: "update-keys" }
@@ -277,6 +281,7 @@ categories:
       - { slug: name, name: "name" }
       - { slug: namespace, name: "namespace" }
       - { slug: keyword, name: "keyword" }
+      - { slug: find-keyword, name: "find-keyword" }
       - { slug: symbol, name: "symbol" }
   - title: "(clojure.string)"
     index_page: clojure/reference/string.md

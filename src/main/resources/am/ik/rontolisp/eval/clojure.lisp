@@ -2884,6 +2884,76 @@
   (rontolisp::%clojure-check-arity args 2 2 "find")
   (rontolisp::%clojure-find (car args) (car (cdr args))))
 
+;; A map entry is a plain two-member vector here (what first/seq of a map and find
+;; answer), so key/val read a pair and map-entry? cannot tell one from a [k v] vector.
+(defun rontolisp::%clojure-entry-p (x)
+  "Whether X is a two-member non-string vector, the shape of a map entry."
+  (and (vectorp x) (not (stringp x)) (= (length x) 2)))
+
+(defun rontolisp::%clojure-key (e)
+  "The key of the map entry E; anything but a two-member vector signals."
+  (if (rontolisp::%clojure-entry-p e)
+      (aref e 0)
+      (error "key needs a map entry")))
+
+(defun rontolisp::%clojure-key-v (&rest args)
+  "key as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "key")
+  (rontolisp::%clojure-key (car args)))
+
+(defun rontolisp::%clojure-val (e)
+  "The value of the map entry E; anything but a two-member vector signals."
+  (if (rontolisp::%clojure-entry-p e)
+      (aref e 1)
+      (error "val needs a map entry")))
+
+(defun rontolisp::%clojure-val-v (&rest args)
+  "val as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "val")
+  (rontolisp::%clojure-val (car args)))
+
+(defun rontolisp::%clojure-map-entry-p (x)
+  "(map-entry? X): true of any two-member vector (a deviation: the oracle's
+   answer is false for a plain [k v])."
+  (if (rontolisp::%clojure-entry-p x) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-map-entry-p-v (&rest args)
+  "map-entry? as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "map-entry?")
+  (rontolisp::%clojure-map-entry-p (car args)))
+
+(defun rontolisp::%clojure-rseq (v)
+  "(rseq V): the members of the vector V, last first, as a list; nil when V is
+   empty. Anything but a vector (nil, a list, a seq, a string, a map) signals,
+   like the oracle."
+  (if (or (not (vectorp v)) (stringp v)) (error "rseq needs a vector"))
+  (let ((out nil))
+    (dotimes (i (length v) out) (setq out (cons (aref v i) out)))))
+
+(defun rontolisp::%clojure-rseq-v (&rest args)
+  "rseq as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "rseq")
+  (rontolisp::%clojure-rseq (car args)))
+
+(defun rontolisp::%clojure-find-keyword (x)
+  "(find-keyword X): the keyword for a keyword, symbol or string, nil for
+   anything else. Keywords are not interned, so a never-seen spelling answers
+   its keyword where the oracle answers nil (a deviation)."
+  (rontolisp::%clojure-keyword-1 x))
+
+(defun rontolisp::%clojure-find-keyword-2 (ns nm)
+  "(find-keyword NS NM): the keyword NS/NM; a nil NS drops, a nil NM or a
+   non-string part signals, like the oracle."
+  (cond ((not (or (null ns) (stringp ns))) (error "find-keyword needs strings"))
+        ((not (stringp nm)) (error "find-keyword needs strings"))
+        (t (rontolisp::%clojure-keyword-2 ns nm))))
+
+(defun rontolisp::%clojure-find-keyword-v (&rest args)
+  "find-keyword as a value: a name, or a namespace and a name."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "find-keyword") 1)
+      (rontolisp::%clojure-find-keyword (car args))
+      (rontolisp::%clojure-find-keyword-2 (car args) (car (cdr args)))))
+
 (defun rontolisp::%clojure-partition-all (n step coll)
   "COLL in runs of N every STEP members, the short tail kept. A non-positive
    size or step signals (the oracle answers an endless seq of ())."

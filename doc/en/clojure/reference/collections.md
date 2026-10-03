@@ -18,6 +18,9 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `find` | `(find {:a 1} :a)` | `[:a 1]` |
 | `keys` | `(keys (hash-map :a 1))` | `(:a)` |
 | `vals` | `(vals (hash-map :a 1))` | `(1)` |
+| `key` | `(key (first {:a 1}))` | `:a` |
+| `val` | `(val (first {:a 1}))` | `1` |
+| `map-entry?` | `(map-entry? (first {:a 1}))` | `true` |
 | `merge` | `(merge {:a 1} {:b 2})` | `{:a 1, :b 2}` |
 | `conj` | `(conj [1 2] 3)` | `[1 2 3]` |
 | `disj` | `(disj #{1 2} 1)` | `#{2}` |
@@ -33,6 +36,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |
 | `peek` | `(peek [1 2 3])` | `3` |
 | `pop` | `(pop [1 2 3])` | `[1 2]` |
+| `rseq` | `(rseq [1 2 3])` | `(3 2 1)` |
 | `subvec` | `(subvec [1 2 3 4] 1 3)` | `[2 3]` |
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |
 | `update-vals` | `(update-vals {:a 1} inc)` | `{:a 2}` |
