@@ -3,7 +3,8 @@
 `(count coll)`
 
 Answers the number of elements of `coll`. Table-aware: maps and sets answer their
-`hash-table-count` directly (no seq built), everything else the length of the seq view.
+`hash-table-count` directly (no seq built), everything else the length of the seq view
+(a lazy seq realizes whole first).
 
 ```clojure
 (println (count '(1 2 3)))   ; 3

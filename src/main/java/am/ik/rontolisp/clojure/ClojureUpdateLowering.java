@@ -174,7 +174,7 @@ final class ClojureUpdateLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(map, keys, fun, ClojureLowering.AMPERSAND_REST, rest)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ClojureSeqLowering.seqForm(ctx, keys), map)));
+						ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map)));
 	}
 
 	/** {@code assoc-in}: the nested association, building missing levels. */
@@ -237,7 +237,7 @@ final class ClojureUpdateLowering {
 				new LispCons(ClojureLowerUtil.list(List.of(left, whole)), ClojureLowerUtil.cons(go, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(map, keys, val)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ClojureSeqLowering.seqForm(ctx, keys), map)));
+						ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map)));
 	}
 
 	/**
@@ -280,7 +280,7 @@ final class ClojureUpdateLowering {
 								ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
 								ClojureLowering.NIL_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest))))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-								ClojureLowerUtil.list(self, ClojureSeqLowering.seqForm(ctx, keys), map))));
+								ClojureLowerUtil.list(self, ClojureSeqLowering.seqAllForm(ctx, keys), map))));
 	}
 
 	/**
@@ -329,7 +329,7 @@ final class ClojureUpdateLowering {
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("select-keys-map"));
 		LispSymbol keys = new LispSymbol(ClojureLowering.mangle("select-keys-keys"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(map, keys)),
-				selectKeysForm(ctx, map, ClojureSeqLowering.seqForm(ctx, keys)));
+				selectKeysForm(ctx, map, ClojureSeqLowering.seqAllForm(ctx, keys)));
 	}
 
 	/** {@code merge-with}: every map merged, conflicts resolved through the function. */
@@ -548,7 +548,7 @@ final class ClojureUpdateLowering {
 	static LispVal frequenciesValue(ClojureLowering ctx) {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("frequencies-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
-				frequenciesForm(ctx, ClojureSeqLowering.seqForm(ctx, coll)));
+				frequenciesForm(ctx, ClojureSeqLowering.seqAllForm(ctx, coll)));
 	}
 
 	// b15 higher-order functions: closures, no new runtime

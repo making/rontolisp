@@ -152,9 +152,12 @@ of hanging. There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` 
 and structurally); `get` takes an optional default and reads maps, sets, vectors,
 strings and nil.
 
-`doseq`/`for`/`reduce`/`into` walk a lazy input whole (`for` still answers a strict
-list). Lazy inputs to the other seq verbs (`keep` and friends) consume one level through
-the seq view: pass a `take`n prefix first.
+A lazy input reaches every seq verb. The verbs that walk the whole collection (`count`,
+`last`, `sort`, `apply`, `reverse`, `set`, `frequencies`, `keep` and friends, `reduce`,
+`into`) realize it first -- an infinite one never answers, like the oracle's -- and the
+ones that stop early (`second`, `nth`, `some`, `every?`, `take-while`, `drop-while`,
+`zipmap`, `interleave`, positional destructuring, `doseq`/`for`) step through it, so an
+infinite input still answers. `for` still answers a strict list.
 
 ## State and dynamic scope
 

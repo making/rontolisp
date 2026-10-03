@@ -282,7 +282,7 @@ final class ClojureStringLowering {
 		LispVal strings = ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
 						strOf(ctx, one, LispString.literal(""), ClojureLowering.NIL_CONST)),
-				ClojureSeqLowering.seqForm(ctx, coll));
+				ClojureSeqLowering.seqAllForm(ctx, coll));
 		LispVal interposed = ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(
 				ClojureLowerUtil.sym("mapcan"), ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 						ClojureLowerUtil.list(one), ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), sepSym, one)),

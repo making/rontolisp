@@ -2,7 +2,9 @@
 
 `(nth coll i)` / `(nth coll i default)`
 
-Answers the `i`th element of `coll`'s seq view. Past the end the 3-arity answers
+Answers the `i`th element of `coll`: a vector or string indexes directly, any other
+collection steps through its seq view one element at a time, so a lazy input realizes
+only up to `i` and an infinite one answers. Past either end the 3-arity answers
 `default` and the 2-arity `nil`.
 
 Deviation: `nth` past the end answers the default (nil without one), where the oracle

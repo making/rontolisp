@@ -903,8 +903,11 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
 						setInner(coll))));
+		// a seq walks its whole-collection view (a lazy one realizes -- its own cells
+		// are no members)
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, coll)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
+						ClojureLowerUtil.list(List.of(one, ClojureSeqLowering.seqAllForm(ctx, coll))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -993,9 +996,13 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), coll)));
-		// the false object counts as empty, like the oracle; anything else takes length
+		// the false object counts as empty, like the oracle; a seq counts its
+		// whole-collection view (a lazy one realizes -- its own cells are no
+		// members); anything else takes length
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), coll, ctx.falseVariable),
 				new LispInteger(0)));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -1037,6 +1044,9 @@ final class ClojureCollectionLowering {
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), coll), ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("zerop"), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll))));
+		// a lazy seq is empty when it realizes to nothing: one level answers
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LAZY-P"), coll),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),

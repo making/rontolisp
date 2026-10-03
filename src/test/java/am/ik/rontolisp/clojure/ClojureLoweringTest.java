@@ -581,9 +581,12 @@ class ClojureLoweringTest {
 
 	@Test
 	void nthIndexesTheSeqViewWithAnOptionalDefault() {
-		assertThat(lowered("(nth '(1 2 3) 1)")).contains("(NTH").contains("LENGTH");
-		assertThat(lowered("(nth [10 20] 5 :nf)")).contains("(NTH").contains(":C%KEYWORD");
-		assertThat(lowered("nth")).contains("(LAMBDA").contains("(NTH");
+		// one spliced stepper: a vector indexes directly, a seq steps one realized level
+		// at a time, so an infinite input answers
+		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH '(1 2 3) 1 NIL)");
+		assertThat(lowered("(nth [10 20] 5 :nf)")).contains("(RONTOLISP::%CLOJURE-NTH (VECTOR 10 20) 5")
+			.contains(":C%KEYWORD");
+		assertThat(lowered("nth")).contains("(LAMBDA").contains("(RONTOLISP::%CLOJURE-NTH");
 		assertThatThrownBy(() -> Clojure.read("(nth '(1 2 3))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("nth takes a collection, an index and an optional default");
 	}
@@ -649,15 +652,19 @@ class ClojureLoweringTest {
 
 	@Test
 	void destructuringBindsSequentialPatterns() {
-		assertThat(lowered("(let [[a b] [1 2]] a)")).contains("LET*").contains("(NTH").contains("|c%a|");
-		assertThat(lowered("(let [[a & r] [1 2 3]] r)")).contains("NTHCDR");
+		assertThat(lowered("(let [[a b] [1 2]] a)")).contains("LET*")
+			.contains("(RONTOLISP::%CLOJURE-NTH")
+			.contains("|c%a|");
+		// the rest past the positions steps too, so a lazy rest stays lazy
+		assertThat(lowered("(let [[a & r] [1 2 3]] r)")).contains("(RONTOLISP::%CLOJURE-DROP 1 ")
+			.doesNotContain("NTHCDR");
 		assertThat(lowered("(let [[a :as v] [1 2]] v)")).contains("LET*");
 		assertThat(lowered("(let [{:keys [a b] :as m :or {a 9}} {:a 1}] a)")).contains("GETHASH")
 			.contains(":C%KEYWORD");
 		assertThat(lowered("(let [{s :s} {:s 1}] s)")).contains("GETHASH");
 		assertThat(lowered("(let [{:strs [s]} {:s 1}] s)")).contains("GETHASH");
-		assertThat(lowered("(loop [[a b] [1 2]] a)")).contains("LABELS").contains("(NTH");
-		assertThat(lowered("((fn [[a b]] a) [1 2])")).contains("(NTH");
+		assertThat(lowered("(loop [[a b] [1 2]] a)")).contains("LABELS").contains("(RONTOLISP::%CLOJURE-NTH");
+		assertThat(lowered("((fn [[a b]] a) [1 2])")).contains("(RONTOLISP::%CLOJURE-NTH");
 		assertThat(lowered("((fn [{:keys [a]}] a) {:a 1})")).contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(let [[a &] [1]] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
@@ -1470,7 +1477,7 @@ class ClojureLoweringTest {
 	@Test
 	void conditionalBindingFormsLowerOverLet() {
 		assertThat(lowered("(when-let [x 1] x)")).contains("LET*").contains("RONTOLISP::%CLOJURE-FALSE");
-		assertThat(lowered("(when-let [[a b] [1 2]] (+ a b))")).contains("LET*").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(when-let [[a b] [1 2]] (+ a b))")).contains("LET*").contains("%CLOJURE-NTH");
 		assertThat(lowered("(if-let [x 1] x :e)")).contains("LET*").contains(":C%KEYWORD");
 		assertThat(lowered("(when-not false 1)")).contains("IF");
 		assertThat(lowered("(if-not nil 1 2)")).contains("IF");
@@ -1510,6 +1517,30 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void wholeCollectionConsumersRealizeAndPrefixConsumersStep() {
+		// a realized lazy seq's tail is another wrapper: a consumer walking the list with
+		// a Common Lisp list operation takes the whole-collection view (a strict list is
+		// never copied), one that stops early steps with %clojure-seq-rest
+		String all = "(RONTOLISP::%CLOJURE-SEQ-ALL ";
+		for (String form : List.of("(last [1])", "(butlast [1])", "(keep inc [1])", "(remove odd? [1])",
+				"(distinct [1])", "(sort [1])", "(sort-by - [1])", "(group-by odd? [1])", "(frequencies [1])",
+				"(interpose 0 [1])", "(partition 1 [1])", "(map-indexed vector [1])", "(keep-indexed vector [1])",
+				"(apply + [1])", "(select-keys {} [1])", "(clojure.string/join [1])", "(reverse [1])", "(count x)",
+				"(set x)")) {
+			assertThat(lowered("(def x [1]) " + form)).as(form).contains(all);
+		}
+		String step = "(RONTOLISP::%CLOJURE-SEQ-REST ";
+		for (String form : List.of("(some odd? [1])", "(every? odd? [1])", "(take-while odd? [1])",
+				"(drop-while odd? [1])", "(zipmap [1] [2])")) {
+			assertThat(lowered(form)).as(form).contains(step).doesNotContain(all);
+		}
+		assertThat(lowered("(interleave [1] [2])")).contains("#'RONTOLISP::%CLOJURE-SEQ-REST");
+		assertThat(lowered("(second [1 2])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH (VECTOR 1 2) 1 NIL)");
+		// a lazy seq is empty when it realizes to nothing
+		assertThat(lowered("(def x [1]) (empty? x)")).contains("(RONTOLISP::%CLOJURE-LAZY-P ");
+	}
+
+	@Test
 	void convenienceFnsLowerOverCoreAndHelpers() {
 		assertThat(lowered("(mapv inc [1 2 3])")).contains("RONTOLISP::%CLOJURE-MAPV");
 		assertThat(lowered("(filterv odd? [1])")).contains("RONTOLISP::%CLOJURE-FILTERV");
@@ -1532,7 +1563,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map mapv [inc] [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map rand-nth [[1]])")).contains("LAMBDA");
 		assertThat(lowered("(map vals [{:a 1}])")).contains("LAMBDA").contains("MAPHASH");
-		assertThat(lowered("(mapcat reverse)")).contains("(RONTOLISP::%CLOJURE-XF-MAPCAT #'REVERSE)");
+		assertThat(lowered("(mapcat reverse)")).contains(
+				"(RONTOLISP::%CLOJURE-XF-MAPCAT (LAMBDA (|c%reverse-coll|) (REVERSE (RONTOLISP::%CLOJURE-SEQ-ALL |c%reverse-coll|))))");
 		assertThatThrownBy(() -> Clojure.read("(mapv inc)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("mapv takes a function and collections");
 	}

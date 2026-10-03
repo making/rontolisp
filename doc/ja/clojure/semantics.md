@@ -198,9 +198,12 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
 `read-line` 越しに読みます（末尾越しはオラクル同様 `nil`）。
-`doseq`/`for`/`reduce`/`into` は lazy 入力を最後まで辿ります（`for` の答えは strict な
-リストのまま）。他の seq 動詞（`keep` 群）への lazy 入力は seq ビューを1レベル
-だけ消費します。先に `take` した prefix を渡してください。
+lazy 入力はどの seq 動詞にも届きます。コレクション全体を辿る動詞（`count`、`last`、
+`sort`、`apply`、`reverse`、`set`、`frequencies`、`keep` 群、`reduce`、`into`）は先に
+すべて realize します（無限の入力はオラクル同様に答えを返しません）。途中で止まる動詞
+（`second`、`nth`、`some`、`every?`、`take-while`、`drop-while`、`zipmap`、
+`interleave`、位置による分配束縛、`doseq`/`for`）は1要素ずつ辿るため、無限の入力でも
+答えます。`for` の答えは strict なリストのままです。
 
 ## プロトコル、レコード、型
 

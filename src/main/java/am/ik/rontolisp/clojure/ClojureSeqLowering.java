@@ -296,17 +296,18 @@ final class ClojureSeqLowering {
 	// clojure.string: each verb over the core string operations
 
 	/**
-	 * The seq view of an already-lowered collection: one call to the spliced
+	 * The one-level seq view of an already-lowered collection: one call to the spliced
 	 * {@code rontolisp::%clojure-seq}, which realizes a lazy wrapper one level and
 	 * otherwise answers the strict LIST every backend already shares (lists pass through
 	 * untouched; vectors and strings coerce; maps contribute one two-vector per entry and
 	 * sets one member per element, both in the table's walk order, unspecified like the
 	 * oracle's; nil and the false object are empty; anything else signals, like the
-	 * oracle's). The collection runs once, as the call's argument. Non-listed verbs
-	 * consume one level through this view; only
-	 * {@code take}/{@code drop}/{@code first}/{@code rest}/{@code next}/{@code seq}/
-	 * {@code map}/{@code filter}/{@code concat}/{@code cons} preserve laziness past it
-	 * (b11).
+	 * oracle's). The collection runs once, as the call's argument. A realized lazy seq's
+	 * tail is another wrapper, so only a consumer that reads the head
+	 * ({@code first}/{@code seq}/{@code when-first}) or steps on with
+	 * {@code %clojure-seq-rest} ({@code some}, {@code take-while}, {@code doseq}, ...)
+	 * takes this view; every consumer that walks the list with a Common Lisp list
+	 * operation takes {@link #seqAllForm}.
 	 * @param lowered the lowered collection
 	 * @return the form answering the list view
 	 */
@@ -315,20 +316,37 @@ final class ClojureSeqLowering {
 	}
 
 	/**
-	 * {@code nth} over any collection: the seq view indexed, past the end the default
-	 * (nil without one) instead of the oracle's throw. The collection and the index run
-	 * once each.
+	 * The whole-collection view of an already-lowered collection: one call to the spliced
+	 * {@code rontolisp::%clojure-seq-all}, the {@link #seqForm} view with every lazy tail
+	 * realized -- the view itself when its spine holds no wrapper, so a strict input is
+	 * never copied. The consumers that walk the list with Common Lisp list operations
+	 * ({@code count}, {@code last}, {@code sort}, {@code apply}, ...) take it; an
+	 * infinite input never answers, like the oracle's.
+	 * @param lowered the lowered collection
+	 * @return the form answering the realized list view
+	 */
+	static LispVal seqAllForm(ClojureLowering ctx, LispVal lowered) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ALL"), lowered);
+	}
+
+	/**
+	 * The step past the head of an already-realized seq: {@code %clojure-seq-rest},
+	 * realizing the tail one level when it is a lazy wrapper (a strict tail is already a
+	 * seq). The loops over a {@link #seqForm} view step with it instead of {@code cdr}.
+	 */
+	static LispVal seqRestForm(LispVal seq) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-REST"), seq);
+	}
+
+	/**
+	 * {@code nth} over any collection: the spliced {@code %clojure-nth} -- a vector or
+	 * string indexed directly, anything else stepped through one realized level at a
+	 * time, so an infinite input answers -- past either end the default (nil without one)
+	 * instead of the oracle's throw. The collection, the index and the default run once
+	 * each, in order.
 	 */
 	static LispVal nthForm(ClojureLowering ctx, LispVal coll, LispVal index, LispVal dflt) {
-		LispSymbol seq = ctx.freshTemp();
-		LispSymbol at = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil
-					.list(List.of(ClojureLowerUtil.list(seq, seqForm(ctx, coll)), ClojureLowerUtil.list(at, index))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), at,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), seq)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), at, seq), dflt));
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NTH"), coll, index, dflt);
 	}
 
 	static LispVal nthOf(ClojureLowering ctx, List<LispVal> items) {
@@ -464,8 +482,8 @@ final class ClojureSeqLowering {
 
 	/**
 	 * {@code apply} over any leading arguments: each but the last passes through, the
-	 * last answers its seq view -- CL {@code apply}'s own shape, so
-	 * {@code (apply f x args)} spreads like the oracle's.
+	 * last answers its whole-collection view (a lazy seq realizes) -- CL {@code apply}'s
+	 * own shape, so {@code (apply f x args)} spreads like the oracle's.
 	 */
 	static LispVal applyOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "apply takes a function and an argument list");
@@ -474,7 +492,7 @@ final class ClojureSeqLowering {
 		for (int i = 2; i < items.size() - 1; i++) {
 			pres.add(ctx.lower(items.get(i)));
 		}
-		LispVal last = seqForm(ctx, ctx.lower(items.get(items.size() - 1)));
+		LispVal last = seqAllForm(ctx, ctx.lower(items.get(items.size() - 1)));
 		if (ClojureLowerUtil.isDirectFun(fun)) {
 			List<LispVal> out = new ArrayList<>();
 			out.add(ClojureLowerUtil.sym("apply"));

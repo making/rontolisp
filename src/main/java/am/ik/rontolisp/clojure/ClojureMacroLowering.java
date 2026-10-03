@@ -670,7 +670,7 @@ final class ClojureMacroLowering {
 					segments.add(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), run));
 					run = new ArrayList<>();
 				}
-				segments.add(ClojureSeqLowering.seqForm(ctx, ctx.lower(spliced.get(1))));
+				segments.add(ClojureSeqLowering.seqAllForm(ctx, ctx.lower(spliced.get(1))));
 				continue;
 			}
 			List<LispVal> single = unquoteOf(element, level);
@@ -726,7 +726,7 @@ final class ClojureMacroLowering {
 					segments.add(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), run));
 					run = new ArrayList<>();
 				}
-				segments.add(ClojureSeqLowering.seqForm(ctx, ctx.lower(splice.get(1))));
+				segments.add(ClojureSeqLowering.seqAllForm(ctx, ctx.lower(splice.get(1))));
 				spliced = true;
 				continue;
 			}
@@ -758,7 +758,7 @@ final class ClojureMacroLowering {
 				}
 				// a flat sequence of alternating keys and values, like the
 				// literal pairs around it
-				segments.add(ClojureSeqLowering.seqForm(ctx, ctx.lower(splice.get(1))));
+				segments.add(ClojureSeqLowering.seqAllForm(ctx, ctx.lower(splice.get(1))));
 				spliced = true;
 				continue;
 			}
@@ -803,7 +803,7 @@ final class ClojureMacroLowering {
 					inits.add(setSplice(ctx, table, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), run)));
 					run = new ArrayList<>();
 				}
-				inits.add(setSplice(ctx, table, ClojureSeqLowering.seqForm(ctx, ctx.lower(splice.get(1)))));
+				inits.add(setSplice(ctx, table, ClojureSeqLowering.seqAllForm(ctx, ctx.lower(splice.get(1)))));
 				continue;
 			}
 			List<LispVal> single = unquoteOf(element, level);

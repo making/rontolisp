@@ -2461,8 +2461,14 @@ public final class ClojureLowering {
 		}
 		int n = items.size() - 1;
 		switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt", "reverse":
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt":
 				return plain(name, items);
+			case "reverse":
+				// over the whole-collection view: a vector or string reverses into a
+				// list like the oracle, and a lazy seq realizes first
+				ClojureLowerUtil.isTrue(n == 1, "reverse takes one collection");
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"),
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "quot":
 				ClojureLowerUtil.isTrue(n == 2, "quot takes two arguments");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("truncate"), lower(items.get(1)),
@@ -2634,15 +2640,15 @@ public final class ClojureLowering {
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
 				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
 				return ClojureFilterLowering.keepIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
 				return ClojureFilterLowering.mapIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
 				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
@@ -2654,10 +2660,11 @@ public final class ClojureLowering {
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
 				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
-				return ClojureFilterLowering.distinctForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+				return ClojureFilterLowering.distinctForm(this,
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "partition":
 				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
@@ -2673,7 +2680,7 @@ public final class ClojureLowering {
 			case "interpose":
 				ClojureLowerUtil.isTrue(n == 2, "interpose takes a separator and a collection");
 				return ClojureFilterLowering.interposeForm(this, lower(items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "zipmap":
 				ClojureLowerUtil.isTrue(n == 2, "zipmap takes keys and values");
 				return ClojureFilterLowering.zipmapForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))),
@@ -2681,7 +2688,7 @@ public final class ClojureLowering {
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
 				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "sort":
 				return ClojureFilterLowering.sortOf(this, items);
 			case "sort-by":
@@ -2689,15 +2696,14 @@ public final class ClojureLowering {
 			case "last":
 				ClojureLowerUtil.isTrue(n == 1, "last takes one collection");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("last"), ClojureSeqLowering.seqForm(this, lower(items.get(1)))));
+					.list(ClojureLowerUtil.sym("last"), ClojureSeqLowering.seqAllForm(this, lower(items.get(1)))));
 			case "butlast":
 				ClojureLowerUtil.isTrue(n == 1, "butlast takes one collection");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("butlast"),
-						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "second":
 				ClojureLowerUtil.isTrue(n == 1, "second takes one collection");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"),
-						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+				return ClojureSeqLowering.nthForm(this, lower(items.get(1)), new LispInteger(1), NIL_CONST);
 			case "update":
 				return ClojureUpdateLowering.updateOf(this, items);
 			case "update-in":
@@ -2709,7 +2715,7 @@ public final class ClojureLowering {
 			case "select-keys":
 				ClojureLowerUtil.isTrue(n == 2, "select-keys takes a map and keys");
 				return ClojureUpdateLowering.selectKeysForm(this, lower(items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "merge-with":
 				return ClojureUpdateLowering.mergeWithOf(this, items);
 			case "into":
@@ -2717,7 +2723,7 @@ public final class ClojureLowering {
 			case "frequencies":
 				ClojureLowerUtil.isTrue(n == 1, "frequencies takes one collection");
 				return ClojureUpdateLowering.frequenciesForm(this,
-						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "comp":
 				return ClojureFnLowering.compOf(this, items);
 			case "partial":
@@ -2907,6 +2913,12 @@ public final class ClojureLowering {
 			case "rest", "next" -> ClojureSeqLowering.restValue(this);
 			case "cons" -> ClojureSeqLowering.consValue(this);
 			case "count" -> ClojureCollectionLowering.countValue(this);
+			case "reverse" -> {
+				LispSymbol coll = new LispSymbol(mangle("reverse-coll"));
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"),
+								ClojureSeqLowering.seqAllForm(this, coll)));
+			}
 			case "empty?" -> ClojureCollectionLowering.emptyValue(this);
 			case "map" -> ClojureSeqLowering.mapValue(this);
 			case "filter" -> ClojureSeqLowering.filterValue(this);
@@ -3247,9 +3259,9 @@ public final class ClojureLowering {
 	/** The Common Lisp function a core name names as a value, or null. */
 	static @Nullable String builtinValue(String name) {
 		return switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "reverse", "apply", "=",
-					"<", ">", "<=", ">=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp",
-					"vector", "vectorp", "identity" ->
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "<", ">",
+					"<=", ">=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector",
+					"vectorp", "identity" ->
 				name;
 			case "gensym" -> "gensym";
 			case "count" -> "length";
