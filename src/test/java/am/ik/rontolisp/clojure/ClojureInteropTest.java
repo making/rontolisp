@@ -38,6 +38,22 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject() throws Exception {
+		// answers measured against clj 1.12.6
+		assertBothEqual("(println (.codePointAt \"abc\" 0))", "97\n");
+		assertBothEqual("(println (.compareTo \"a\" \"b\"))", "-1\n");
+		assertBothEqual("(println (String/.compareToIgnoreCase \"a\" \"B\"))", "-1\n");
+		assertBothEqual("(println (.matches \"abc\" \"a.c\") (.matches \"abc\" \"x\"))", "true false\n");
+		assertBothEqual("(println (.regionMatches \"abc\" 1 \"bc\" 0 2) (.hashCode \"ab\") (.repeat \"ab\" 2))",
+				"true 3105 abab\n");
+		assertBothEqual("(println (.codePointAt (str \"a\" \"b\") 1) (let [s \"hello\"] (.codePointAt s 1))"
+				+ " (map #(.codePointAt % 0) [\"a\" \"b\"]))", "98 101 (97 98)\n");
+		assertBothEqual("(println (.compareTo 1 2) (.doubleValue 3) (.isNaN 1.5) (.compareTo \\a \\b))",
+				"-1 3.0 false -1\n");
+		assertBothEqual("(println (.equals 1 1) (.equals 1 2) (.intValue 2.7) (.toString \\a))", "true false 2 a\n");
+	}
+
+	@Test
 	void staticsConstructorsAndFields() throws Exception {
 		assertBothEqual("(println (Integer/parseInt \"42\"))", "42\n");
 		assertBothEqual("(println (Math/max 3 7))", "7\n");

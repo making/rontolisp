@@ -625,8 +625,15 @@ class JavaInteropTest {
 
 	@Test
 	void callOnNonObjectSignals() {
-		assertThatThrownBy(() -> eval("(java:call 42 \"toString\")")).isInstanceOf(LispEvalException.class)
+		assertThatThrownBy(() -> eval("(java:call 'foo \"toString\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects a java object");
+	}
+
+	// Mirrors JvmJavaInteropCompilerTest#aLispValueIsCalledAsTheObjectItConvertsTo.
+	@Test
+	void aLispValueIsCalledAsTheObjectItConvertsTo() {
+		assertThat(output(JavaInteropPrograms.LISP_RECEIVER_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.LISP_RECEIVER_OUTPUT);
 	}
 
 	@Test

@@ -19,6 +19,14 @@ guide](../../guides/java-interop.md).
 A `java.util.ArrayList` is created, one element is added, and `size` returns the
 element count.
 
+`object` may also be a Lisp string, number, character or `t`, called as the Java object it
+becomes for an `Object` parameter (a string as a `String`, `42` as an `Integer`):
+
+```lisp
+(java:call "abc" "codePointAt" 0)
+; => 97
+```
+
 The method name may carry the parameter types (`"append(CharSequence)"`). A call whose
 receiver class is known from the text -- `(java:new ...)`, a declared return type,
 `(the (java:object "C") x)` or `(declare (type (java:object "C") v))` -- is resolved once,

@@ -76,7 +76,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   subclass) is {integer, bignum, nil}, a constructed one {integer, bignum}; its supertypes stay
   UNKNOWN. Decided 2026-09-26: the compiled representation cannot hold a
   host `BigInteger` apart from a bignum, so the interpreter gave up calling its methods
-  (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` now refuses `5` on both).
+  (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` refused `5` on both; since
+  2026-10-03 the fixnum `5` is called as an `Integer`, which has no `add` -- "A Lisp value as a
+  `java:call` receiver" below).
 - Measured 2026-09-26 before the rule, `(defun f (x) (java:call x "size"))` compiled: a list /
   struct / function / stream / condition was described `#<java [Ljava.lang.Object;>`, a ratio
   `#<java [Ljava.math.BigInteger;>`, a bignum `#<java java.math.BigInteger>`, `1.0e10` as
@@ -106,6 +108,32 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `EQUAL`, `length` / `aref` / `hash-table-count` threw Java exceptions
   (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends; its rows print the message
   too since 2026-09-27).
+
+## A Lisp value as a `java:call` receiver (one rule, three copies)
+- A receiver that is no host object but a Lisp value of a receiver kind
+  (`JavaOverloads.isReceiverKind`: every kind but NIL and FUNCTION) is called as what `convert`
+  makes of it for an `Object` parameter: string `String` (a mutable one rendered first), fixnum
+  the narrowest box (`Integer`, else `Long` -- the argument rule, so `(java:call 5 "equals" 5)`
+  is `Integer.equals(Integer)`, T), float `Double`, bignum `BigInteger`, BMP char `Character`,
+  supplementary char `Integer`, `t` `Boolean.TRUE`. Anything else keeps `java:call expects a
+  java object ..., got X`. `java:field` is unchanged (a string there is a class name).
+- Copies: interpreter `JavaInterop.receiverObject` (run-time `callInstance` and
+  `invokeResolved`), bridge `receiverObject`, direct sites `_jrecv` (`JvmJavaDirectSites.
+  RECEIVER`, called only after `_jhost` refused, so a host receiver pays nothing new; the
+  converted object replaces the receiver slot, the messages show the value handed in).
+  `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays` pins
+  the three against `JavaOverloads.receiverClassName`.
+- Resolver: `JavaSiteResolver.callReceiverClass` -- a receiver whose non-nil kinds all name
+  one class (`receiverClassName`; INTEGER names none, its box is the value's) resolves among
+  that class's methods: `(java:call "abc" "codePointAt" 0)` is a direct call, also under
+  `--java-static`. A resolved site whose class no receiver kind converts to answers `the
+  receiver is not a C, got 5` (before: `expects a java object`).
+- Decided 2026-10-03 (Clojure `(.codePointAt "abc" 0)` was refused): a string answered by Java
+  was a Lisp string no further call could take. Supersedes, for receivers, the 2026-09-26
+  BigInteger note above: a bignum is callable as a `BigInteger`; a host BigInteger fitting a
+  fixnum is a fixnum, called as an `Integer`/`Long`. Pins: `JavaInteropPrograms.
+  LISP_RECEIVER_PROGRAM` (both backends), `HOST_OBJECT_OUTPUT` (`No matching method
+  java.lang.Double.size`), `JavaSiteResolverTest#aLispValueReceiverResolvesAsTheClassItConvertsTo`.
 
 ## Bignums and specialized vectors
 - BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype

@@ -393,7 +393,7 @@ public final class JavaSiteResolver {
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispString methodName)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the method name is not a literal string");
 		}
-		JavaType type = typeOf(parts.get(1)).receiverClass();
+		JavaType type = callReceiverClass(typeOf(parts.get(1)));
 		if (type == null) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the receiver's class is not known");
 		}
@@ -405,6 +405,32 @@ public final class JavaSiteResolver {
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(callableMethods(type, member.name()),
 				member.tag());
 		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
+	}
+
+	/**
+	 * The class a {@code java:call} receiver of this static type is called as: a host
+	 * object's ({@link JavaStaticType#receiverClass()}), or the one class every Lisp kind
+	 * it can have is called as ({@link JavaOverloads#receiverClassName}) -- a string's
+	 * {@code String}; {@code nil} is refused when the call runs, as for a host object. An
+	 * integer's box depends on its value, so it leaves the class unknown.
+	 */
+	private @Nullable JavaType callReceiverClass(JavaStaticType type) {
+		JavaType host = type.receiverClass();
+		if (host != null || !(type instanceof JavaStaticType.Kinds known)) {
+			return host;
+		}
+		String name = null;
+		for (JavaKind kind : known.kinds()) {
+			if (kind == JavaKind.Lisp.NIL) {
+				continue;
+			}
+			String className = kind instanceof JavaKind.Lisp lisp ? JavaOverloads.receiverClassName(lisp) : null;
+			if (className == null || (name != null && !name.equals(className))) {
+				return null;
+			}
+			name = className;
+		}
+		return name == null ? null : this.lookup.find(name);
 	}
 
 	/**

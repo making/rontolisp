@@ -519,7 +519,16 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   to the cost rule (user doc deviation).
 - A bare class name in value position is `(java:static "java.lang.Class" "forName"
   "<fqn>")`, the oracle's class object.
-- A string receiver answers the mapped core operation (a Lisp string is no host object).
+- A string receiver answers the mapped core operation (`stringMethod`, every backend); any
+  other method reaches `java:call`, which calls a string / number / character as its
+  `String` / narrowest box / `Character` (`.kb/java-interop.md`, "A Lisp value as a
+  `java:call` receiver"; measured 2026-10-03 vs `clj` 1.12.6, `(.codePointAt "abc" 0)` 97,
+  `(.compareTo 1 2)` -1; before: `java:call expects a java object ..., got "abc"`). With the
+  receiver class unknown at lowering, a method whose overloads at that arity all answer a
+  primitive boolean on `String` (`(if (stringp r) ...)` arm) or on `Integer`+`Long` / `Double` /
+  `Character` (`valuePredicate`) answers T-or-false (`(.matches "abc" "x")` false, not nil).
+  Deviation: an int-sized integer is an `Integer` (`(.getClass 1)`; the oracle's `Long`).
+  Pins: `ClojureInteropTest#unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject`.
   `.toString` of a number, character, symbol (booleans too), cons, array, table or
   function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
   backend (`ClojureInteropLowering.valueToString`); nil signals (the oracle's NPE); only
@@ -806,7 +815,8 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   condition (measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
   17 assertions. 0 failures, 0 errors.` on the interpreter and the JVM, as the oracle --
   its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` catch
-  `java:call`'s refusal of a string receiver, since the `#^Class` hint is dropped; a
+  `No matching method java.lang.String.getName` (before 2026-10-03: `java:call`'s refusal of
+  a string receiver), since the `#^Class` hint is dropped; a
   class-typed match needs the host exception as a condition, the `catch` deviation above);
   error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL

@@ -178,8 +178,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - A host-object boolean answers `false` only when the receiver's class is known
   at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound
   to one, or a `..` step's declared return) and every
-  overload at that arity answers a primitive boolean; any other host boolean
+  overload at that arity answers a primitive boolean, or when the receiver is a
+  string, number or character and every overload at that arity of its class answers
+  one (`(.matches "abc" "x")`); any other host boolean
   keeps the shared `java:` unmarshal and prints `nil` for `false`.
+- An integer receiver is called as an `Integer` when it fits one, else as a `Long`
+  (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.

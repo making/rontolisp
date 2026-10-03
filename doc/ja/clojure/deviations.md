@@ -172,9 +172,14 @@
 - ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
   （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または
   `..` ステップの宣言戻り値型）、その引数個数の
-  オーバーロードがすべてプリミティブ boolean を答える場合だけ `false` を答えます。
+  オーバーロードがすべてプリミティブ boolean を答える場合と、receiver が文字列・数値・
+  文字で、そのクラスのその引数個数のオーバーロードがすべてプリミティブ boolean を答える
+  場合（`(.matches "abc" "x")`）だけ `false` を答えます。
   それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
   `nil` と表示されます。
+- 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
+  呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
+  `java.lang.Integer` を答えます。
 - パラメータタグの `_` はその引数を `java:` サーフェスのコスト規則に任せるため、
   `(^[_] Math/abs -2)` は `2` を答えます。オラクルは複数のオーバーロードが残るタグを
   拒否します。

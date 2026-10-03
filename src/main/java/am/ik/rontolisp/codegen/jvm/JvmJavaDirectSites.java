@@ -103,6 +103,13 @@ final class JvmJavaDirectSites {
 	 */
 	static final String TABLE_GUARD = "_jcktab";
 
+	/**
+	 * {@code _jrecv(Object)Object}: the object a {@code java:call} on a value that is no
+	 * host object is made on -- what a Lisp value of a receiver kind converts to for an
+	 * {@code Object} parameter (the bridge's {@code receiverObject}) -- or null.
+	 */
+	static final String RECEIVER = "_jrecv";
+
 	/** {@code _junm(Object)Object}: a Java value as the Lisp value it stands for. */
 	static final String UNMARSHAL = "_junm";
 
@@ -212,6 +219,8 @@ final class JvmJavaDirectSites {
 	private @Nullable MethodRefEntry arrayToList;
 
 	private @Nullable MethodRefEntry kind;
+
+	private @Nullable MethodRefEntry receiver;
 
 	private @Nullable MethodRefEntry sequence;
 
@@ -966,25 +975,53 @@ final class JvmJavaDirectSites {
 		}
 
 		// java:call / java:field on an object: a host object (the bridge's
-		// isJavaObject), then an instance of the site's class.
+		// isJavaObject) -- or, for java:call, the object a Lisp value of a receiver kind
+		// converts to (_jrecv), which then takes the receiver's place -- then an instance
+		// of the site's class. A message shows the value the site was handed.
 		private void emitReceiverChecks(MethodCode.Label classMissing) {
 			int receiver = this.valueSlots[0];
 			boolean call = this.site.operator() == JavaSite.Operator.CALL;
+			String notAnObject = call ? "java:call expects a java object as the first argument, got "
+					: "java:field expects a class-name string or a java object, got ";
+			String notAnInstance = this.operator + ": the " + (call ? "receiver" : "object") + " is not a "
+					+ this.type.name() + ", got ";
 			MethodCode.Label hostObject = this.a.newLabel();
+			MethodCode.Label instance = this.a.newLabel();
 			this.a.aload(receiver);
 			this.a.invokestatic(host());
 			this.a.ifne(hostObject);
-			throwDescribing(this.a, call ? "java:call expects a java object as the first argument, got "
-					: "java:field expects a class-name string or a java object, got ", receiver);
+			if (call) {
+				int converted = this.nextSlot++;
+				MethodCode.Label lispValue = this.a.newLabel();
+				MethodCode.Label convertedInstance = this.a.newLabel();
+				this.a.aload(receiver);
+				this.a.invokestatic(receiver());
+				this.a.astore(converted);
+				this.a.aload(converted);
+				this.a.ifnonnull(lispValue);
+				throwDescribing(this.a, notAnObject, receiver);
+				this.a.labelBinding(lispValue);
+				MethodCode.Label start = this.a.newBoundLabel();
+				this.a.aload(converted);
+				this.a.instanceOf(this.owner);
+				handle(start, this.a.newBoundLabel(), classMissing, "java/lang/NoClassDefFoundError");
+				this.a.ifne(convertedInstance);
+				throwDescribing(this.a, notAnInstance, receiver);
+				this.a.labelBinding(convertedInstance);
+				this.a.aload(converted);
+				this.a.astore(receiver);
+				this.a.goto_(instance);
+			}
+			else {
+				throwDescribing(this.a, notAnObject, receiver);
+			}
 			this.a.labelBinding(hostObject);
-			MethodCode.Label instance = this.a.newLabel();
 			MethodCode.Label start = this.a.newBoundLabel();
 			this.a.aload(receiver);
 			this.a.instanceOf(this.owner);
 			handle(start, this.a.newBoundLabel(), classMissing, "java/lang/NoClassDefFoundError");
 			this.a.ifne(instance);
-			throwDescribing(this.a, this.operator + ": the " + (call ? "receiver" : "object") + " is not a "
-					+ this.type.name() + ", got ", receiver);
+			throwDescribing(this.a, notAnInstance, receiver);
 			this.a.labelBinding(instance);
 		}
 
@@ -1918,6 +1955,18 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
+	private MethodRefEntry receiver() {
+		MethodRefEntry ref = this.receiver;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(RECEIVER);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.receiver = ref;
+			this.methods.add(buildReceiver(name, desc));
+		}
+		return ref;
+	}
+
 	private MethodRefEntry sequence() {
 		MethodRefEntry ref = this.sequence;
 		if (ref == null) {
@@ -2640,6 +2689,36 @@ final class JvmJavaDirectSites {
 		a.loadConstant(JavaOverloads.NO_MATCH);
 		a.ireturn();
 		return new Method(name, desc, a);
+	}
+
+	// _jrecv(Object)Object: the value rendered, then the bridge's convert arm of its kind
+	// for an Object parameter when the kind is a receiver kind
+	// (JavaOverloads.isReceiverKind), else null. A site calls it only for a value _jhost
+	// refused.
+	private Method buildReceiver(Utf8Entry name, Utf8Entry desc) {
+		Body body = new Body(2);
+		MethodCode a = body.a;
+		int code = 1;
+		JavaType object = Objects.requireNonNull(this.lookup.find("java.lang.Object"), "java.lang.Object");
+		render(a, 0);
+		a.aload(0);
+		a.invokestatic(kind());
+		a.istore(code);
+		for (int c = 0; c < LISP_KINDS.length; c++) {
+			if (!JavaOverloads.isReceiverKind(LISP_KINDS[c])) {
+				continue;
+			}
+			MethodCode.Label next = a.newLabel();
+			a.iload(code);
+			a.loadConstant(c);
+			a.if_icmpne(next);
+			body.emitConvert(0, LISP_KINDS[c], object);
+			a.areturn();
+			a.labelBinding(next);
+		}
+		a.aconst_null();
+		a.areturn();
+		return body.finish(name, desc);
 	}
 
 	// _jconv$N(Object)T for one type: the bridge's convert arm of the value's kind, a

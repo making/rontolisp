@@ -10,15 +10,19 @@ host class has one, else the field read, like `(Class/m)`. `(. obj -field)` and
 literal -- `(.isEmpty (java.util.ArrayList.))` -- a `let`/`if-let`/`when-let` local bound to one,
 or a `..` step's declared return -- `(.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty))` --
 and whose overloads at that arity all answer a primitive boolean, answers
-`true`/`false` like the oracle. Any other host boolean keeps the shared `java:`
+`true`/`false` like the oracle; so does one on a string, number or character when every
+overload at that arity of its class does. Any other host boolean keeps the shared `java:`
 unmarshal and prints `nil` for `false`. The receiver decides the path: a string takes the mapped
-core operation (a Lisp string is no host object), anything else goes to `java:call`.
+core operation, which runs on every backend; anything else goes to `java:call`, which calls a
+string as a `String`, a number as its box and a character as a `Character`
+(`(.codePointAt "abc" 0)`, `(.compareTo 1 2)`).
 Classes resolve dotted as written, through `:import`, or through `java.lang`. Runs on the
 interpreter and the JVM only -- the wasm backends reject `java:`.
 
 ```clojure
 (println (. "hi" length)) ; 2
 (println (.toUpperCase "hi")) ; HI
+(println (.codePointAt "abc" 0)) ; 97
 (println (Integer/parseInt "42")) ; 42
 (println (.isEmpty (java.util.ArrayList.))) ; true
 (println (.contains (java.util.ArrayList. [1]) 2)) ; false
