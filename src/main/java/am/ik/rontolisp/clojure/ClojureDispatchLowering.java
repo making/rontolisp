@@ -538,16 +538,19 @@ final class ClojureDispatchLowering {
 		// nil onto the marker while an explicit `:nil` keyword keeps its keyword row,
 		// like the oracle; a shadowed `class` is the caller's own function.
 		LispVal nilTest = ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), raw);
-		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List.of(
-				ClojureLowerUtil.list(raw, ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), dispatchFn, args)),
-				ClojureLowerUtil.list(disp,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
-								ClojureCollectionLowering.nilMarkerForm(), raw)),
-				ClojureLowerUtil.list(miss,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-				ClojureLowerUtil.list(found,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureCollectionLowering.lookupKey(disp, methods), methods, miss)))),
+		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(
+						ClojureLowerUtil.list(raw,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
+										ClojureLowering.realFun(dispatchFn), args)),
+						ClojureLowerUtil.list(disp,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
+										ClojureCollectionLowering.nilMarkerForm(), raw)),
+						ClojureLowerUtil.list(miss,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
+						ClojureLowerUtil.list(found,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+										ClojureCollectionLowering.lookupKey(disp, methods), methods, miss)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), missForm,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), found, args)));

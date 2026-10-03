@@ -4350,6 +4350,34 @@ cases:
       Wrong number of args (3) passed to: :b
       Wrong number of args (0) passed to: :a
       1 7
+  - name: a-keyword-or-symbol-dispatch-function-checks-its-argument-count
+    # a defmulti whose dispatch function is a keyword or a quoted symbol is
+    # called with every argument of the multimethod call, so it takes one or
+    # two; any other count signals the oracle's message (the keyword's own
+    # spelling, clojure.lang.Symbol for a symbol). Every line matches the
+    # oracle (clj 1.12.6, 2026-10-03).
+    source: |
+      (defmulti ka :shape)
+      (defmethod ka :sq [m & r] [:sq (count r)])
+      (defmethod ka :default [m & r] [:dflt (count r)])
+      (defmulti sa 'shape)
+      (defmethod sa 1 [m & r] [:one (count r)])
+      (defmethod sa :default [m & r] [:dflt (count r)])
+      (prn (ka {:shape :sq}) (ka {:shape :sq} 1) (ka {:shape :zz} 1))
+      (prn (sa {'shape 1}) (sa {'shape 1} 1) (sa {} 7))
+      (println (try (ka {:shape :sq} 1 2) (catch Exception e (ex-message e))))
+      (println (try (ka) (catch Exception e (ex-message e))))
+      (println (try (sa {'shape 1} 1 2) (catch Exception e (ex-message e))))
+      (println (try (sa) (catch Exception e (ex-message e))))
+      (println (try (map :a [{:a 1}] [{:a 2}]) (catch Exception e (ex-message e))))
+    expected: |
+      [:sq 0] [:sq 1] [:dflt 1]
+      [:one 0] [:one 1] [:dflt 1]
+      Wrong number of args (3) passed to: :shape
+      Wrong number of args (0) passed to: :shape
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      (1)
   - name: into-transduce-and-composition
     # a transducer is the oracle's function from a reducing function to a
     # reducing function, so comp composes left to right, a program's own

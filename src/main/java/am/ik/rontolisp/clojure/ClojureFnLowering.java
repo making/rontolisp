@@ -50,28 +50,39 @@ final class ClojureFnLowering {
 	 * default, so {@code (map :k coll)} reads the key out of each member and a
 	 * keyword-dispatched multimethod called with several arguments dispatches on the
 	 * lookup with the second call argument as the default, like the oracle (the
-	 * dispatcher applies the dispatch function to every call argument). The key lowers
-	 * once, behind a temporary; the collection is the lambda's first parameter and the
-	 * default reads the rest list once -- the same rest-tolerant shape the map/vector/set
-	 * siblings lower to. Trailing arguments past the default are ignored, like those
-	 * siblings (a lenient superset: the oracle signals past two).
+	 * dispatcher applies the dispatch function to every call argument). Any other
+	 * argument count signals the oracle's {@code Wrong number of args} error, like a
+	 * keyword reaching the call dispatcher. The key lowers once, behind a temporary; the
+	 * argument list is read once for the collection and the default.
 	 * @param keyDatum the keyword datum
 	 * @return the form
 	 */
 	static LispVal keywordFn(ClojureLowering ctx, LispVal keyDatum) {
+		LispSymbol args = ctx.freshTemp();
 		LispSymbol coll = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(List.of(coll, ClojureLowering.AMPERSAND_REST, rest)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
-						ClojureLowerUtil.list(key, ctx.lower(keyDatum)),
-						ClojureLowerUtil.list(dflt, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest))))),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
-								ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))));
+		LispVal arityError = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+				LispString.literal("Wrong number of args (~D) passed to: :~A"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)));
+		LispVal badCount = ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List
+			.of(ClojureLowering.AMPERSAND_REST, args)), ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(key, ctx.lower(keyDatum)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), badCount, arityError, ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
+								ClojureLowerUtil.list(coll, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+								ClojureLowerUtil.list(dflt,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+														ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
+												ClojureLowering.NIL_CONST)))),
+								ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
+										ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))))));
 	}
 
 	/**
