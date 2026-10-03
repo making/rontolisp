@@ -2997,7 +2997,8 @@ public final class ClojureLowering {
 			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
 			case "not=" -> notEqualValue();
-			case "==" -> numericEqualValue();
+			case "==" -> comparisonValue("=");
+			case "<", ">", "<=", ">=" -> comparisonValue(name);
 			case "vector?" -> ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw);
 			case "fn?" ->
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
@@ -3352,22 +3353,26 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code ==} as a value: CL {@code =} over every argument, answering
+	 * A numeric comparison as a value ({@code ==}, {@code <}, {@code >}, {@code <=},
+	 * {@code >=}): the Common Lisp function over every argument, answering
 	 * {@code T}-or-false.
+	 * @param clName the Common Lisp function
+	 * @return the lambda
 	 */
-	LispVal numericEqualValue() {
-		LispSymbol values = new LispSymbol(mangle("==-values"));
+	LispVal comparisonValue(String clName) {
+		LispSymbol values = new LispSymbol(mangle(clName + "-values"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(AMPERSAND_REST, values),
 				booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("=")), values)));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(clName)),
+						values)));
 	}
 
 	/** The Common Lisp function a core name names as a value, or null. */
 	static @Nullable String builtinValue(String name) {
 		return switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "<", ">",
-					"<=", ">=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector",
-					"vectorp", "identity" ->
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "length",
+					"car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector", "vectorp",
+					"identity" ->
 				name;
 			case "gensym" -> "gensym";
 			case "count" -> "length";

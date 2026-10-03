@@ -4918,3 +4918,14 @@ cases:
       "[##Inf \"a\"]" "{:a ##NaN}"
       ##Inf ##NaN
       ##Inf :le :le ##NaN
+  - name: c12-comparison-names-as-values-answer-false-not-nil
+    # c12: < > <= >= as function values answer true or false (they answered nil for
+    # false); the oracle (clj 1.12, 2026-10-03) prints exactly these lines.
+    source: |
+      (prn (map < [1 2] [2 1]) (map zero? [0 1]) (map >= [1 2] [2 1]))
+      (prn (map > [1 2] [2 1]) (map <= [1 2] [2 1]) (apply < [1 2 3]) (apply < [1 3 2]) (apply >= [3 3 2]) (apply <= [3 2]))
+      (prn (filter false? (map > [1 2] [2 1])) (map (fn [f] (f 1 2)) [< > <= >=]) ((fn [f] (f 1)) <))
+    expected: |
+      (true false) (true false) (false true)
+      (false true) (true false) true false true false
+      (false) (true false true false) true
