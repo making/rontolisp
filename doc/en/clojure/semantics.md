@@ -149,19 +149,20 @@ are empty; anything else signals like the oracle. Strict collections coerce up f
 while a lazy seq (`lazy-seq`, `lazy-cat`, `repeat`, `cycle`, `iterate`, `repeatedly`)
 realizes one element at a time through the same view: `take` steps through it and
 terminates on infinite seqs, `drop`/`first`/`rest`/`next`/`seq` realize through it, and
-`cons`/`concat`/`map`/`filter` answer lazy again when any input is lazy (strict lists
-otherwise). A `lazy-seq` body runs at most once per seq object; printing realizes a
-lazy seq like the oracle (an empty one prints `()`, an infinite one without end). There
-is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
+`cons`/`concat`/`map`/`filter`, `remove`, `keep`, `keep-indexed`, `map-indexed`,
+`distinct`, `interpose`, `partition` and `interleave` answer lazy again when any input
+is lazy (strict lists otherwise). A `lazy-seq` body runs at most once per seq object;
+printing realizes a lazy seq like the oracle (an empty one prints `()`, an infinite one
+without end). There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
 and structurally); `get` takes an optional default and reads maps, sets, vectors,
 strings and nil.
 
 A lazy input reaches every seq verb. The verbs that walk the whole collection (`count`,
-`last`, `sort`, `apply`, `reverse`, `set`, `frequencies`, `keep` and friends, `reduce`,
-`into`) realize it first -- an infinite one never answers, like the oracle's -- and the
-ones that stop early (`second`, `nth`, `some`, `every?`, `take-while`, `drop-while`,
-`zipmap`, `interleave`, positional destructuring, `doseq`/`for`) step through it, so an
-infinite input still answers.
+`last`, `sort`, `apply`, `reverse`, `set`, `frequencies`, `reduce`, `into`) realize it
+first -- an infinite one never answers, like the oracle's -- and the ones that stop
+early (`second`, `nth`, `some`, `every?`, `take-while`, `drop-while`, `zipmap`,
+positional destructuring, `doseq`/`for`) step through it, so an infinite input still
+answers.
 
 ## State and dynamic scope
 

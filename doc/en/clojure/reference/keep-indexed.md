@@ -3,8 +3,8 @@
 `(keep-indexed f coll)` / `(keep-indexed f)`
 
 Like `keep`, but `f` takes the index and the item; the non-`nil` results answer
-in order. Indexing starts at `0`, over the seq view. As a value a two-argument
-lambda.
+in order. Indexing starts at `0`, over the seq view. A lazy input answers a lazy
+seq, a strict one a strict list. As a value a two-argument lambda.
 
 `(keep-indexed f)` is its [transducer](transducers.md), as a value too.
 

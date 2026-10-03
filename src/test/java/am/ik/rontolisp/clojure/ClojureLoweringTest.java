@@ -1531,15 +1531,26 @@ class ClojureLoweringTest {
 
 	@Test
 	void seqVerbsLowerOverTheSeqView() {
-		assertThat(lowered("(keep inc [1])")).contains("REMOVE-IF").contains("MAPCAR");
-		assertThat(lowered("(keep-indexed odd? [1])")).contains("LABELS");
-		assertThat(lowered("(map-indexed vector [1])")).contains("LABELS");
+		// b94: the dropping verbs are one call to a lazy-or-strict runtime worker, a
+		// function passed as itself and any other value wrapped in the dispatcher at the
+		// call site (so a program passing a function never carries it)
+		assertThat(lowered("(keep inc [1])")).contains("(RONTOLISP::%CLOJURE-KEEP ").doesNotContain("%CLOJURE-CALL");
+		assertThat(lowered("(def m {1 2}) (keep m [1])")).contains("(RONTOLISP::%CLOJURE-KEEP ")
+			.contains("%CLOJURE-CALL");
+		assertThat(lowered("(def s #{1}) (remove s [1])")).contains("(RONTOLISP::%CLOJURE-REMOVE ")
+			.contains("%CLOJURE-CALL");
+		assertThat(lowered("(keep-indexed odd? [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" T)");
+		assertThat(lowered("(map-indexed vector [1])")).contains("(RONTOLISP::%CLOJURE-INDEXED ").endsWith(" NIL)");
 		assertThat(lowered("(every? odd? [1])")).contains("LABELS").contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(some odd? [1])")).contains("LABELS");
-		assertThat(lowered("(distinct [1])")).contains("HASH-TABLE");
-		assertThat(lowered("(partition 2 [1])")).contains("LABELS");
+		assertThat(lowered("(distinct [1])")).contains("(RONTOLISP::%CLOJURE-DISTINCT (VECTOR 1))");
+		// a two-argument partition evaluates its size once, as size and step
+		assertThat(lowered("(partition (inc 1) [1])")).containsOnlyOnce("(+ 1 1)")
+			.contains("(RONTOLISP::%CLOJURE-PARTITION ");
 		assertThat(lowered("(take-while odd? [1])")).contains("LABELS");
-		assertThat(lowered("(interleave [1] [2])")).contains("APPEND");
+		assertThat(lowered("(interleave [1] [2])"))
+			.contains("(RONTOLISP::%CLOJURE-INTERLEAVE (LIST (VECTOR 1) (VECTOR 2)))");
+		assertThat(lowered("(interpose 0 [1])")).contains("(RONTOLISP::%CLOJURE-INTERPOSE 0 (VECTOR 1))");
 		assertThat(lowered("(zipmap [1] [2])")).contains("GETHASH");
 		assertThat(lowered("(sort [2 1])")).contains("SORT").contains("COPY-LIST");
 		assertThat(lowered("(group-by odd? [1])")).contains("GETHASH");
@@ -1553,11 +1564,9 @@ class ClojureLoweringTest {
 		// a Common Lisp list operation takes the whole-collection view (a strict list is
 		// never copied), one that stops early steps with %clojure-seq-rest
 		String all = "(RONTOLISP::%CLOJURE-SEQ-ALL ";
-		for (String form : List.of("(last [1])", "(butlast [1])", "(keep inc [1])", "(remove odd? [1])",
-				"(distinct [1])", "(sort [1])", "(sort-by - [1])", "(group-by odd? [1])", "(frequencies [1])",
-				"(interpose 0 [1])", "(partition 1 [1])", "(map-indexed vector [1])", "(keep-indexed vector [1])",
-				"(apply + [1])", "(select-keys {} [1])", "(clojure.string/join [1])", "(reverse [1])", "(count x)",
-				"(set x)")) {
+		for (String form : List.of("(last [1])", "(butlast [1])", "(sort [1])", "(sort-by - [1])",
+				"(group-by odd? [1])", "(frequencies [1])", "(apply + [1])", "(select-keys {} [1])",
+				"(clojure.string/join [1])", "(reverse [1])", "(count x)", "(set x)")) {
 			assertThat(lowered("(def x [1]) " + form)).as(form).contains(all);
 		}
 		String step = "(RONTOLISP::%CLOJURE-SEQ-REST ";
@@ -1565,7 +1574,6 @@ class ClojureLoweringTest {
 				"(drop-while odd? [1])", "(zipmap [1] [2])")) {
 			assertThat(lowered(form)).as(form).contains(step).doesNotContain(all);
 		}
-		assertThat(lowered("(interleave [1] [2])")).contains("#'RONTOLISP::%CLOJURE-SEQ-REST");
 		assertThat(lowered("(second [1 2])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH (VECTOR 1 2) 1 NIL)");
 		// a lazy seq is empty when it realizes to nothing
 		assertThat(lowered("(def x [1]) (empty? x)")).contains("(RONTOLISP::%CLOJURE-LAZY-P ");

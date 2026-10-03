@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.function.Function;
 import java.util.Map;
 import java.util.Set;
 import am.ik.rontolisp.LispChar;
@@ -549,21 +550,31 @@ final class ClojureSeqLowering {
 	 * plain reduce carries no dispatcher).
 	 */
 	static LispVal reduceForm(ClojureLowering ctx, LispVal fun, LispVal coll, @Nullable LispVal init) {
-		LispVal real = fun;
-		LispSymbol cell = null;
-		if (!ClojureLowerUtil.isDirectFun(fun)) {
-			cell = ctx.freshTemp();
-			LispSymbol args = ctx.freshTemp();
-			real = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-					ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), ctx.callableApply(cell, args));
+		return withRealFun(ctx, fun,
+				real -> init == null ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE"), real, coll)
+						: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE-INIT"), real, init, coll));
+	}
+
+	/**
+	 * A runtime worker's call over an already-lowered function value it funcalls: the
+	 * value itself when it is a real function form, else a rest lambda through the IFn
+	 * dispatcher over the value bound once in front of the call (so a set, map or keyword
+	 * still answers). The dispatcher wrap sits at the call site, not in the runtime: a
+	 * program passing a function never carries the dispatcher (about 20 KB of wasm).
+	 * @param fun the lowered function value
+	 * @param call the worker's call over the real function form
+	 * @return the call, bound when wrapped
+	 */
+	static LispVal withRealFun(ClojureLowering ctx, LispVal fun, Function<LispVal, LispVal> call) {
+		if (ClojureLowerUtil.isDirectFun(fun)) {
+			return call.apply(fun);
 		}
-		LispVal call = init == null ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE"), real, coll)
-				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REDUCE-INIT"), real, init, coll);
-		if (cell == null) {
-			return call;
-		}
+		LispSymbol cell = ctx.freshTemp();
+		LispSymbol args = ctx.freshTemp();
+		LispVal real = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), ctx.callableApply(cell, args));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), call);
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, fun))), call.apply(real));
 	}
 
 	/** {@code take}: the first {@code n} of the collection as a strict list. */

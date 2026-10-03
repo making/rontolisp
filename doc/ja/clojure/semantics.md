@@ -149,7 +149,9 @@ seq 群はすべてのコレクションのリストビュー上で動きます:
 lazy seq（`lazy-seq`、`lazy-cat`、`repeat`、`cycle`、`iterate`、`repeatedly`）は同じ
 ビューを通じて1要素ずつ realize します。`take` は辿って進み無限 seq でも終了します。
 `drop`/`first`/`rest`/`next`/`seq` はそれを通じて realize し、`cons`/`concat`/`map`/
-`filter` は入力が lazy なら再び lazy を答えます（そうでなければ strict なリスト）。
+`filter`、`remove`、`keep`、`keep-indexed`、`map-indexed`、`distinct`、`interpose`、
+`partition`、`interleave` は入力が lazy なら再び lazy を答えます（そうでなければ strict
+なリスト）。
 `lazy-seq` の本体は seq オブジェクトごとに最大1回だけ実行されます。表示はオラクル同様に
 lazy seq を realize します（空のものは `()`、無限のものは終わりなく表示されます）。chunk
 化はありません。`count`/`empty?`/`=`
@@ -205,10 +207,10 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 `read-line` 越しに読み（末尾越しはオラクル同様 `nil`）、`(.read stream)` は次の
 文字のコードを答えます（末尾越しは `-1`）。
 lazy 入力はどの seq 動詞にも届きます。コレクション全体を辿る動詞（`count`、`last`、
-`sort`、`apply`、`reverse`、`set`、`frequencies`、`keep` 群、`reduce`、`into`）は先に
+`sort`、`apply`、`reverse`、`set`、`frequencies`、`reduce`、`into`）は先に
 すべて realize します（無限の入力はオラクル同様に答えを返しません）。途中で止まる動詞
 （`second`、`nth`、`some`、`every?`、`take-while`、`drop-while`、`zipmap`、
-`interleave`、位置による分配束縛、`doseq`/`for`）は1要素ずつ辿るため、無限の入力でも
+位置による分配束縛、`doseq`/`for`）は1要素ずつ辿るため、無限の入力でも
 答えます。
 
 ## プロトコル、レコード、型

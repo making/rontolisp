@@ -39,107 +39,53 @@ final class ClojureFilterLowering {
 	}
 
 	/**
-	 * {@code keep}: the non-nil results of the function over the seq view. {@code false}
-	 * is kept (only nil drops), and a signalling function signals --
-	 * {@code (keep inc [1 nil 2])} throws, like the oracle, instead of skipping.
+	 * {@code keep}: the non-nil results of the function over the collection, through the
+	 * spliced {@code rontolisp::%clojure-keep}. {@code false} is kept (only nil drops),
+	 * and a signalling function signals -- {@code (keep inc [1 nil 2])} throws, like the
+	 * oracle, instead of skipping. Lazy-or-strict, like {@code map}.
 	 */
-	static LispVal keepForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
-		LispSymbol fun = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		LispSymbol one = ctx.freshTemp();
-		LispVal mapped = ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"), ClojureLowerUtil.list(
-				ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), ctx.callFun(fn, fun, List.of(one))), coll);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn), ClojureLowerUtil.list(coll, seq))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remove-if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("null")), mapped));
+	static LispVal keepForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
+		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("KEEP", real, coll));
 	}
 
-	/** {@code keep} as a value: a two-argument lambda over the same removal. */
+	/** {@code keep} as a value: a two-argument lambda over the same call. */
 	static LispVal keepValue(ClojureLowering ctx) {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("keep-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("keep-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				keepForm(ctx, fun, ClojureSeqLowering.seqAllForm(ctx, coll)));
+				keepForm(ctx, fun, coll));
 	}
 
 	/**
-	 * {@code keep-indexed}: like {@code keep}, but the function takes the index and the
-	 * item. A labels self call accumulating in reverse, so it stays tail-recursive.
+	 * {@code keep-indexed} ({@code keep} true) or {@code map-indexed}: the function of
+	 * index and member over the collection, through the spliced
+	 * {@code rontolisp::%clojure-indexed}; {@code keep-indexed} drops a nil answer.
+	 * Lazy-or-strict, like {@code map}.
 	 */
-	static LispVal keepIndexedForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
-		String name = ClojureLowering.mangle("keep-indexed-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol fun = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		LispSymbol at = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol acc = ctx.freshTemp();
-		LispSymbol got = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn, fun, List.of(at, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-								ClojureLowerUtil.list(self,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), at, new LispInteger(1)),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest), acc),
-								ClojureLowerUtil.list(self,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), at, new LispInteger(1)),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), got, acc)))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(at, rest, acc)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn), ClojureLowerUtil.list(coll, seq))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, new LispInteger(0), coll, ClojureLowering.NIL_CONST)));
+	static LispVal indexedForm(ClojureLowering ctx, LispVal fn, LispVal coll, boolean keep) {
+		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("INDEXED", real, coll,
+				keep ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST));
 	}
 
-	/** {@code keep-indexed} as a value: a two-argument lambda over the same loop. */
-	static LispVal keepIndexedValue(ClojureLowering ctx) {
-		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("keep-indexed-fn"));
-		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("keep-indexed-coll"));
+	/** {@code keep-indexed} or {@code map-indexed} as a value: a two-argument lambda. */
+	static LispVal indexedValue(ClojureLowering ctx, boolean keep) {
+		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("indexed-fn"));
+		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("indexed-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				keepIndexedForm(ctx, fun, ClojureSeqLowering.seqAllForm(ctx, coll)));
+				indexedForm(ctx, fun, coll, keep));
 	}
 
-	/**
-	 * {@code map-indexed}: the function of index and item over the seq view, strictly.
-	 * Same loop as {@link #keepIndexedForm}, keeping every result.
-	 */
-	static LispVal mapIndexedForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
-		String name = ClojureLowering.mangle("map-indexed-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol fun = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		LispSymbol at = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol acc = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn, fun, List.of(at, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
-				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), at, new LispInteger(1)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), invoked, acc)));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(at, rest, acc)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn), ClojureLowerUtil.list(coll, seq))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, new LispInteger(0), coll, ClojureLowering.NIL_CONST)));
+	/** The call {@code (rontolisp::%clojure-NAME args...)}. */
+	private static LispVal runtimeCall(String name, LispVal... args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol("RONTOLISP::%CLOJURE-" + name));
+		call.addAll(List.of(args));
+		return ClojureLowerUtil.list(call);
 	}
 
-	/** {@code map-indexed} as a value: a two-argument lambda over the same loop. */
-	static LispVal mapIndexedValue(ClojureLowering ctx) {
-		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("map-indexed-fn"));
-		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("map-indexed-coll"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				mapIndexedForm(ctx, fun, ClojureSeqLowering.seqAllForm(ctx, coll)));
+	/** The function value {@code #'rontolisp::%clojure-NAME}. */
+	private static LispVal runtimeFunction(String name) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-" + name));
 	}
 
 	/**
@@ -214,160 +160,58 @@ final class ClojureFilterLowering {
 				someForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
-	/** {@code remove}: the members the predicate rejects, over the seq view. */
-	static LispVal removeForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
-		LispSymbol pred = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		LispSymbol one = ctx.freshTemp();
-		LispSymbol got = ctx.freshTemp();
-		LispVal invoke = ClojureLowerUtil.isDirectFun(fn)
-				? ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), pred, one)
-				: ctx.callableApply(pred, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), one));
-		LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoke))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable))));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn), ClojureLowerUtil.list(coll, seq))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remove-if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), test), coll));
+	/**
+	 * {@code remove}: the members the predicate rejects, through the spliced
+	 * {@code rontolisp::%clojure-remove} ({@code filter} over the complement), so it is
+	 * lazy-or-strict like {@code filter}.
+	 */
+	static LispVal removeForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
+		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("REMOVE", real, coll));
 	}
 
-	/** {@code remove} as a value: a two-argument lambda over the same removal. */
+	/** {@code remove} as a value: a two-argument lambda over the same call. */
 	static LispVal removeValue(ClojureLowering ctx) {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("remove-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("remove-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				removeForm(ctx, pred, ClojureSeqLowering.seqAllForm(ctx, coll)));
+				removeForm(ctx, pred, coll));
 	}
 
 	/**
-	 * {@code distinct}: the seq view with later duplicates dropped, first occurrences
-	 * kept in order. Membership is {@code =}, through the structural-key runtime like a
-	 * set's.
+	 * {@code distinct}: later duplicates dropped, first occurrences kept in order,
+	 * through the spliced {@code rontolisp::%clojure-distinct}. Membership is {@code =},
+	 * through the structural-key runtime like a set's. Lazy-or-strict.
 	 */
-	static LispVal distinctForm(ClojureLowering ctx, LispVal seq) {
-		String name = ClojureLowering.mangle("distinct-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol table = ctx.freshTemp();
-		LispSymbol miss = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol acc = ctx.freshTemp();
-		LispSymbol one = ctx.freshTemp();
-		LispSymbol stored = ctx.freshTemp();
-		LispVal keep = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table),
-						ClojureLowering.TRUE_CONST),
-				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), one, acc)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-			.sym("null"), rest), ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc), ClojureLowerUtil.list(
-					ClojureLowerUtil.sym("let*"),
-					ClojureLowerUtil.list(List
-						.of(ClojureLowerUtil.list(one, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)),
-								ClojureLowerUtil.list(stored, ClojureCollectionLowering.storeKey(one, table)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table, miss), miss),
-							keep, ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
-									acc))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(rest, acc)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()),
-						ClojureLowerUtil.list(miss,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, seq, ClojureLowering.NIL_CONST)));
+	static LispVal distinctForm(LispVal coll) {
+		return runtimeCall("DISTINCT", coll);
 	}
 
-	/** {@code distinct} as a value: a one-argument lambda over the same loop. */
-	static LispVal distinctValue(ClojureLowering ctx) {
-		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("distinct-coll"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
-				distinctForm(ctx, ClojureSeqLowering.seqAllForm(ctx, coll)));
+	/** {@code distinct} as a value: the runtime worker itself. */
+	static LispVal distinctValue() {
+		return runtimeFunction("DISTINCT");
 	}
 
-	/** {@code partition}: size, optional step (defaulting to the size), collection. */
+	/**
+	 * {@code partition}: size, optional step (defaulting to the size, evaluated once),
+	 * collection, through the spliced {@code rontolisp::%clojure-partition}: full groups,
+	 * an incomplete tail dropped, like the oracle; a non-positive size signals.
+	 * Lazy-or-strict.
+	 */
 	static LispVal partitionOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "partition takes a size, an optional step and a collection");
+		if (n == 3) {
+			return runtimeCall("PARTITION", ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+		}
 		LispSymbol size = ctx.freshTemp();
-		LispSymbol step = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(ClojureLowerUtil.list(size, ctx.lower(items.get(1))));
-		bindings.add(ClojureLowerUtil.list(step, n == 3 ? ctx.lower(items.get(2)) : size));
-		bindings.add(ClojureLowerUtil.list(coll, ClojureSeqLowering.seqAllForm(ctx, ctx.lower(items.get(n)))));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
-				partitionForm(ctx, size, step, coll));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(size, ctx.lower(items.get(1))))),
+				runtimeCall("PARTITION", size, size, ctx.lower(items.get(2))));
 	}
 
-	/**
-	 * The partition loop over already-bound size, step and seq: full groups consed, an
-	 * incomplete tail dropped, like the oracle. A non-positive size signals.
-	 */
-	static LispVal partitionForm(ClojureLowering ctx, LispVal size, LispVal step, LispVal seq) {
-		String name = ClojureLowering.mangle("partition-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol part = ctx.freshTemp();
-		LispVal stepBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil
-							.list(List.of(ClojureLowerUtil.list(part, ClojureSeqLowering.takeForm(ctx, size, rest)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("<"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), part), size),
-								ClojureLowering.NIL_CONST,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), part, ClojureLowerUtil.list(self,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("nthcdr"), step, rest))))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(stepBody, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("<="), size, new LispInteger(0)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-						LispString.literal("partition takes a positive size")),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, seq)));
-	}
-
-	/** {@code partition} as a value: a one- or two-rest lambda over the same loop. */
-	static LispVal partitionValue(ClojureLowering ctx) {
-		LispSymbol args = new LispSymbol(ClojureLowering.mangle("partition-args"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-				LispString.literal("partition takes a size, an optional step and a collection"));
-		LispVal one = partitionForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
-				ClojureSeqLowering.seqAllForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))));
-		LispVal two = partitionForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
-				ClojureSeqLowering.seqAllForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)))));
-		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
-				ClojureLowerUtil.list(
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
-								one, arity)),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)))),
-						two),
-				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
+	/** {@code partition} as a value: the runtime's arity-checking entry. */
+	static LispVal partitionValue() {
+		return runtimeFunction("PARTITION-V");
 	}
 
 	/**
@@ -444,81 +288,34 @@ final class ClojureFilterLowering {
 				dropWhileForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
-	/** {@code interleave}: round-robin over the seq views, stopping at the shortest. */
-	static LispVal interleaveOf(ClojureLowering ctx, List<LispVal> items) {
-		int n = items.size() - 1;
-		if (n == 0) {
-			return ClojureLowering.NIL_CONST;
-		}
-		List<LispVal> seqs = new ArrayList<>();
-		for (int i = 1; i < items.size(); i++) {
-			seqs.add(ClojureSeqLowering.seqForm(ctx, ctx.lower(items.get(i))));
-		}
-		return interleaveGo(ctx, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), seqs));
-	}
-
 	/**
-	 * The interleave loop over an already-lowered list of seq views: heads appended while
-	 * every view is non-empty.
+	 * {@code interleave}: round-robin over the collections, stopping at the shortest,
+	 * through the spliced {@code rontolisp::%clojure-interleave}. Lazy when any input is
+	 * lazy, like {@code map}.
 	 */
-	static LispVal interleaveGo(ClojureLowering ctx, LispVal lists) {
-		String name = ClojureLowering.mangle("interleave-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol rest = ctx.freshTemp();
-		LispVal stop = ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureLowerUtil.list(ClojureLowerUtil.sym("every"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("identity")),
-						rest)));
-		LispVal step = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("if"), stop, ClojureLowering.NIL_CONST, ClojureLowerUtil.list(
-					ClojureLowerUtil.sym("append"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("car")), rest),
-					ClojureLowerUtil.list(self,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"), ClojureLowerUtil
-								.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-SEQ-REST")),
-									rest))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-				ClojureLowerUtil.list(self, lists));
+	static LispVal interleaveOf(ClojureLowering ctx, List<LispVal> items) {
+		return runtimeCall("INTERLEAVE", ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 	}
 
-	/** {@code interleave} as a value: every argument's seq view interleaved. */
-	static LispVal interleaveValue(ClojureLowering ctx) {
+	/** {@code interleave} as a value: every argument interleaved. */
+	static LispVal interleaveValue() {
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("interleave-colls"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, colls), interleaveGo(ctx, ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("mapcar"), ClojureSeqLowering.seqValue(ctx), colls)));
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, colls), runtimeCall("INTERLEAVE", colls));
 	}
 
 	/**
-	 * {@code interpose}: the separator between every two members, strictly. The head
-	 * answers bare, so a one-member collection never shows the separator.
+	 * {@code interpose}: the separator between every two members, through the spliced
+	 * {@code rontolisp::%clojure-interpose}, so a one-member collection never shows it.
+	 * Lazy-or-strict.
 	 */
-	static LispVal interposeForm(ClojureLowering ctx, LispVal sep, LispVal seq) {
-		LispSymbol gap = ctx.freshTemp();
-		LispSymbol coll = ctx.freshTemp();
-		LispSymbol one = ctx.freshTemp();
-		LispVal looped = ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcan"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), gap, one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), coll));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(gap, sep), ClojureLowerUtil.list(coll, seq))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), coll), ClojureLowering.NIL_CONST,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), coll), looped)));
+	static LispVal interposeForm(LispVal sep, LispVal coll) {
+		return runtimeCall("INTERPOSE", sep, coll);
 	}
 
-	/** {@code interpose} as a value: a two-argument lambda over the same shape. */
-	static LispVal interposeValue(ClojureLowering ctx) {
-		LispSymbol gap = new LispSymbol(ClojureLowering.mangle("interpose-sep"));
-		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("interpose-coll"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(gap, coll)),
-				interposeForm(ctx, gap, ClojureSeqLowering.seqAllForm(ctx, coll)));
+	/** {@code interpose} as a value: the runtime worker itself. */
+	static LispVal interposeValue() {
+		return runtimeFunction("INTERPOSE");
 	}
 
 	/**

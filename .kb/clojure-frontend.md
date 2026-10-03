@@ -117,8 +117,9 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil and false are empty, anything else signals; `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` | a vector or string indexed directly, anything else stepped; past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
-| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `sort` orders numbers, strings, chars and keywords (else signals), a comparator runs on truthiness |
-| `some` `every?` `take-while` `drop-while` `zipmap` `interleave` | stepping, so an infinite input answers | `some` answers the predicate's value |
+| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `sort` orders numbers, strings, chars and keywords (else signals), a comparator runs on truthiness |
+| `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
+| `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
 | `ffirst` `nfirst` | `car`/`cdr` of the seq of the head | each level seqs |
 | `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
@@ -162,9 +163,7 @@ Each is a real work item unless the reason says otherwise.
 - `(= [] nil)` is true (the oracle: false). `(empty? false)` is false (the oracle signals).
 - Seqs: `rest`/`next` of empty is `nil` (the oracle prints `()`); `nth` past the end
   answers `nil` where the oracle throws; a strict input to `for`
-  and to the lazy-or-strict verbs realizes at once; no chunking; `keep`, `remove`,
-  `distinct`, `interpose`, `partition`, `map-indexed`, `interleave` answer strict lists, so
-  an infinite input never answers there.
+  and to the lazy-or-strict verbs realizes at once; no chunking.
 - Verbs assume the right collection kind; misuse may signal the CL type error instead of
   the oracle's.
 - The whole-file pre-scan makes a definition shadow calls ABOVE it (the oracle's reach the
@@ -423,7 +422,7 @@ the one-level view walks wrapper cells as members. Each consumer takes the view 
   `last`, `sort`, `apply`, `~@`, the strict arms of `map`/`filter`/`concat`, ...).
 - **Stepping** with `%clojure-seq-rest`, so an infinite input answers: `some`, `every?`,
   `take(-while)`, `drop(-while)`, `nth`/`second`, positional destructuring, `zipmap`,
-  `interleave`, `cycle`, `doseq`, `dorun`.
+  `cycle`, `doseq`, `dorun`.
 - **One level**: `first`/`rest`/`next`/`seq`/`when-first`/`ffirst`/`nfirst`/`list*`.
 
 A verb answering a seq follows the lazy-or-strict rule (`%clojure-lazy-or-strict`): a lazy
@@ -444,6 +443,38 @@ oracle's `Cons`).
   `for` on the interpreter 8.95 s vs 4.18 s).
 - `%clojure-concat-step` lets its last member answer its own seq: re-wrapping it made a
   lazy multi-level `for` walk each element through one layer per outer element.
+- **A skip never nests a realization** (b93). `%clojure-realize` hands a thunk's wrapper
+  answer to `%clojure-realize-chain`, which forces the chain in a loop (the oracle's
+  `LazySeq.seq`) and memoizes the final seq into every cell it forced; a cell reads
+  realized-and-empty from the moment its thunk answers, so a self-answering body and a
+  throw further down the chain leave `nil`, both the oracle's answers. The runtime
+  producers skip in a loop inside one realization: `filter`, `concat` over empty members,
+  `for` (`%clojure-for-next`), `dedupe`, `partition-by`, the transducer puller. Before:
+  `(first (filter #(> % 100000) (iterate inc 0)))` overflowed every backend (50,000 the
+  interpreter and wasm, 20,000 wasm). Raw wasm (2026-10-03): the chain loop is its own
+  defun (256 B) because inlining it into `%clojure-realize` widened the analysis of
+  `%clojure-strict-seq`'s argument (+688 B in a vector-free program); `concat-step`
+  113 -> 206 B; a lazy program +255..362 B. Pin: clojure-spec
+  `long-skips-and-wrapper-chains-run-in-constant-stack`.
+- **The dropping and round-robin verbs** (b94): `remove` `keep` `keep-indexed`
+  `map-indexed` `distinct` `interpose` `partition` `interleave` are one call each to a
+  spliced lazy-or-strict worker (they answered strict lists over the whole-collection
+  view, so an infinite input never answered and `interleave` recursed per element). A
+  strict input keeps a direct loop: through `%clojure-lazy-or-strict` (a thunk per
+  group) a strict `partition` took 10.1 s against 5.1 s (3 x 100,000 members,
+  interpreter). The first five share one lazy arm, `%clojure-keep-lazy`, whose adapter
+  answers `:C%SKIP` to drop; `interleave`/`interpose` emit one wrapper per element, so
+  `rest` never exposes a strict cons holding a wrapper. The function argument is a real
+  function -- `ClojureSeqLowering.withRealFun` wraps any other value in the dispatcher
+  at the call site, as `reduce` does; calling `%clojure-call` from the runtime spliced
+  the dispatcher into every program (`(remove odd? [...])` 59,367 B against 39,262 B;
+  `map`/`filter` still do, c00). Raw wasm of a one-verb strict program, before -> after
+  (default / `--optimize=size`): `remove` 38,534 -> 39,262 / 30,965 -> 31,471, `keep`
+  38,916 -> 38,989 / 31,323 -> 31,222, `keep-indexed` 38,462 -> 38,910, `map-indexed`
+  37,336 -> 37,894, `distinct` 50,767 -> 50,941 / 40,361 -> 40,343, `interpose`
+  36,674 -> 37,292, `partition` 37,661 -> 38,298, `interleave` 33,960 -> 37,663 (its
+  lazy arm and closures; it had no lazy machinery), all eight 58,869 -> 59,733. Pin:
+  clojure-spec `dropping-and-stepping-verbs-answer-over-infinite-inputs`.
 - The printer realizes a wrapper where it stands and steps its tail, so an infinite seq
   prints without end like the oracle's; the cycle walk keeps a wrapper a leaf.
 
