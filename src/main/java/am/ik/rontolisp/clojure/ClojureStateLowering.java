@@ -301,8 +301,8 @@ final class ClojureStateLowering {
 	}
 
 	/**
-	 * {@code ex-data}/{@code ex-message} as a value: a one-argument lambda over the
-	 * helper.
+	 * {@code ex-data}/{@code ex-message}/{@code ex-cause} as a value: a one-argument
+	 * lambda over the library reader.
 	 */
 	static LispVal exHelperValue(ClojureLowering ctx, String helper) {
 		ctx.usedExInfo = true;
@@ -311,15 +311,57 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(new LispSymbol(helper), ex));
 	}
 
-	/** {@code ex-info} as a value: a two-argument lambda over the constructor. */
+	/**
+	 * {@code ex-info} as a value: a lambda of a message, data and an optional cause over
+	 * the library constructor.
+	 */
 	static LispVal exInfoValue(ClojureLowering ctx) {
 		ctx.usedExInfo = true;
 		LispSymbol message = new LispSymbol(ClojureLowering.mangle("ex-message"));
 		LispSymbol data = new LispSymbol(ClojureLowering.mangle("ex-data"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(message, data)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("make-condition"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), new LispSymbol("C%E-EX-INFO")),
-						ClojureLowerUtil.sym(":message"), message, ClojureLowerUtil.sym(":data"), data));
+		LispSymbol cause = new LispSymbol(ClojureLowering.mangle("ex-cause"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(message, data, ClojureLowerUtil.sym("&optional"), cause)),
+				ClojureLowerUtil.list(new LispSymbol(EX_INFO), message, data, cause));
+	}
+
+	/** The library functions behind the exception verbs ({@code clojure.lisp}). */
+	static final String EX_INFO = "RONTOLISP::%CLOJURE-EX-INFO";
+
+	static final String EX_MESSAGE = "RONTOLISP::%CLOJURE-EX-MESSAGE";
+
+	static final String EX_DATA = "RONTOLISP::%CLOJURE-EX-DATA";
+
+	static final String EX_CAUSE = "RONTOLISP::%CLOJURE-EX-CAUSE";
+
+	static final String THROW = "RONTOLISP::%CLOJURE-THROW";
+
+	static final String EXCEPTION_NEW = "RONTOLISP::%CLOJURE-EXCEPTION-NEW";
+
+	static final String EXCEPTION_NEW_1 = "RONTOLISP::%CLOJURE-EXCEPTION-NEW-1";
+
+	static final String EXCEPTION_METHOD = "RONTOLISP::%CLOJURE-EXCEPTION-METHOD";
+
+	/**
+	 * {@code (ex-info message data cause?)}: an ExceptionInfo through the library
+	 * constructor.
+	 */
+	static LispVal exInfoOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
+				"ex-info takes a message, a data map and an optional cause");
+		ctx.usedExInfo = true;
+		return ClojureLowerUtil.list(new LispSymbol(EX_INFO), ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+				items.size() == 4 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * {@code (ex-message e)}, {@code (ex-data e)}, {@code (ex-cause e)} and
+	 * {@code (throw e)}: one call to the library function.
+	 */
+	static LispVal exReaderOf(ClojureLowering ctx, List<LispVal> items, String helper) {
+		ClojureLowerUtil.isTrue(items.size() == 2, ((LispSymbol) items.get(0)).name() + " takes one exception");
+		ctx.usedExInfo = true;
+		return ClojureLowerUtil.list(new LispSymbol(helper), ctx.lower(items.get(1)));
 	}
 
 	/** {@code compare-and-set!} as a value: a three-argument lambda over the swap. */
@@ -1028,54 +1070,63 @@ final class ClojureStateLowering {
 	// dispatch: multimethods over a method table and a dispatcher defun
 
 	/**
-	 * The ex-info runtime, spliced once behind the false binding when the program throws
-	 * or carries exception data: a condition with message and data slots (whose report
-	 * prints the message), a predicate over it, and the throw/data/message helpers. Pure
-	 * lowering over the shared condition runtime, so every backend runs it unchanged.
+	 * The exception runtime, spliced once behind the false binding when the program
+	 * throws, builds or reads an exception: the one condition class every exception of
+	 * the program is (ex-info, a throwable construction, a thrown host
+	 * {@code Throwable}), carrying a class name, a message, data and a cause, whose
+	 * report is the oracle's {@code toString}; {@code C%E-NEW} builds one and
+	 * {@code C%E-PARTS} answers the four slots of one (NIL for any other value). The
+	 * readers and builders over them are library functions ({@code clojure.lisp},
+	 * "Exceptions"), which only a program carrying this runtime reaches. Pure lowering
+	 * over the shared condition runtime, so every backend runs it unchanged.
 	 */
 	static List<LispVal> exInfoRuntime(ClojureLowering ctx) {
 		List<LispVal> runtime = new ArrayList<>();
-		LispSymbol cls = new LispSymbol("C%E-EX-INFO");
+		LispSymbol cls = new LispSymbol("C%E-EXCEPTION");
 		LispSymbol cond = new LispSymbol("c");
 		LispSymbol stream = new LispSymbol("s");
-		LispSymbol value = new LispSymbol("v");
 		LispSymbol ex = new LispSymbol("e");
-		List<LispVal> slots = List.of(
-				ClojureLowerUtil.list(new LispSymbol("C%E-MESSAGE"), ClojureLowerUtil.sym(":initarg"),
-						ClojureLowerUtil.sym(":message"), ClojureLowerUtil.sym(":reader"),
-						new LispSymbol("C%E-EX-INFO-MESSAGE")),
-				ClojureLowerUtil.list(new LispSymbol("C%E-DATA"), ClojureLowerUtil.sym(":initarg"),
-						ClojureLowerUtil.sym(":data"), ClojureLowerUtil.sym(":reader"),
-						new LispSymbol("C%E-EX-INFO-DATA")));
-		LispVal report = ClojureLowerUtil.list(ClojureLowerUtil.sym(":report"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cond, stream)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("format"), stream, LispString.literal("~a"),
-								ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO-MESSAGE"), cond))));
+		String[] slots = { "CLASS", "MESSAGE", "DATA", "CAUSE" };
+		List<LispVal> slotSpecs = new ArrayList<>();
+		List<LispVal> readers = new ArrayList<>();
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> initargs = new ArrayList<>();
+		initargs.add(ClojureLowerUtil.sym("make-condition"));
+		initargs.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), cls));
+		for (String slot : slots) {
+			LispSymbol reader = new LispSymbol("C%E-EXCEPTION-" + slot);
+			LispSymbol param = new LispSymbol(slot);
+			LispSymbol initarg = ClojureLowerUtil.sym(":" + slot);
+			slotSpecs.add(ClojureLowerUtil.list(new LispSymbol("C%E-" + slot), ClojureLowerUtil.sym(":initarg"),
+					initarg, ClojureLowerUtil.sym(":reader"), reader));
+			readers.add(reader);
+			params.add(param);
+			initargs.add(initarg);
+			initargs.add(param);
+		}
+		LispVal report = ClojureLowerUtil.list(ClojureLowerUtil.sym(":report"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cond, stream)), ClojureLowerUtil.list(
+					ClojureLowerUtil.sym("write-string"),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-EXCEPTION-STRING"),
+							ClojureLowerUtil.list(readers.get(0), cond), ClojureLowerUtil.list(readers.get(1), cond),
+							ClojureLowerUtil.list(readers.get(2), cond)),
+					stream)));
 		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("define-condition"), cls,
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.sym("error"))), ClojureLowerUtil.list(slots), report));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-EX-INFO?"),
-				ClojureLowerUtil.list(List.of(value)), ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), value,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), cls))));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-THROW"),
-				ClojureLowerUtil.list(List.of(value)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO?"), value),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), value),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-								ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, value, LispString.literal("nil"),
-										ClojureLowering.NIL_CONST)))));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-DATA"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.sym("error"))), ClojureLowerUtil.list(slotSpecs),
+				report));
+		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-NEW"),
+				ClojureLowerUtil.list(params), ClojureLowerUtil.list(initargs)));
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(ClojureLowerUtil.sym("list"));
+		for (LispVal reader : readers) {
+			parts.add(ClojureLowerUtil.list(reader, ex));
+		}
+		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-PARTS"),
 				ClojureLowerUtil.list(List.of(ex)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO?"), ex),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO-DATA"), ex), ClojureLowering.NIL_CONST)));
-		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-MESSAGE"),
-				ClojureLowerUtil.list(List.of(ex)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO?"), ex),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO-MESSAGE"), ex),
-						ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, ex, LispString.literal("nil"),
-								ClojureLowering.NIL_CONST))));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), ex,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), cls)),
+						ClojureLowerUtil.list(parts), ClojureLowering.NIL_CONST)));
 		return runtime;
 	}
 

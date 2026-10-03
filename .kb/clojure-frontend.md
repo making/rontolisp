@@ -105,8 +105,8 @@ answered `2 5 3` before).
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
 | `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
-| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch clause is catch-all, first wins, binding the CL condition; `throw` signals an `ex-info` as itself, anything else through its Clojure rendering, so strings keep their message |
-| `ex-info` `ex-data` `ex-message` | `make-condition` of the spliced class | `ex-data` of any other condition is `nil`; `ex-message` renders anything else |
+| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | every catch clause is catch-all, first wins, binding the CL condition; `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` converts), anything else `(error "~a" rendering)`, so strings keep their message |
+| `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around `error` | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
@@ -201,8 +201,7 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- `catch` is catch-all; a thrown host `Throwable` reaches handlers as an opaque host object,
-  so its message is lost (b66).
+- `catch` is catch-all. Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
   tag; `class` answers a kind keyword (host classes exist on no wasm backend), a host
@@ -211,6 +210,55 @@ Each is a real work item unless the reason says otherwise.
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
   odd trailing `cond` arm.
+
+## Exceptions
+
+An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10-03).
+
+- One class per program, `C%E-EXCEPTION` (`ClojureStateLowering.exInfoRuntime`, spliced behind
+  `usedExInfo`): class name, message, data, cause. Its report IS the oracle's `toString`
+  (`%clojure-exception-string`: `clojure.lang.ExceptionInfo: m {data}`, `C: m`, `C`), so `str`,
+  `.toString` (`valueToString`'s `(typep x 'condition)` disjunct), printing, the uncaught report
+  and clojure.test's error line need no reader of their own. The runtime defines only
+  `C%E-NEW` (class message data cause) and `C%E-PARTS` (the four, or NIL); every verb is a
+  `clojure.lisp` function calling them by name, so only a program whose lowering set
+  `usedExInfo` may reach one (a kept library function reaching them otherwise compiles as an
+  undefined call). A `define-condition` stays in the program because the library pruner keeps
+  every non-defun definition.
+- `%clojure-exception-of`: a condition is itself, a host `Throwable` (`%clojure-host-throwable`,
+  a host arm: NIL stand-in without `java:`) a new exception of its class name, message and
+  cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
+  `C%E-PARTS` (a host throwable has no data). `ex-message` of a non-exception is `nil` (was the
+  rendering before 2026-10-03); of a CL condition its report (`Division by zero`, the oracle's
+  `Divide by zero`; wasm-GC traps on division by zero, so the spec uses `(assoc [0 1] :a :x)`).
+- `ex-info` takes an optional cause; nil data is `{}` (the oracle's); a non-exception cause is
+  refused.
+- A construction is an exception (`ClojureInteropLowering.throwableConstruction`, untagged
+  `(C. ...)`/`new`/`C/new`, value too) when `plainThrowable`: public concrete `Throwable`, no
+  public field, every public method `Throwable`'s/`Object`'s or an override of `Throwable`'s --
+  so the condition answers every member a program can call. Per arity, only where the class has
+  the constructor: 0 `()`; 1 exactly `(String)`+`(Throwable)` -> `%clojure-exception-new-1`
+  (an exception argument is the cause, its toString the message), `(String)` alone or a literal
+  string to any string-accepting one-argument constructor (`AssertionError(Object)`) -> the
+  message; 2 exactly `(String, Throwable)`. Anything else keeps `java:new`. A class with
+  members (`java.net.URISyntaxException`) stays a host object until thrown.
+- `.getMessage`/`.getLocalizedMessage`/`.getCause` with no argument on a receiver of unknown
+  class or a plain throwable class is `%clojure-exception-method`: a condition answers from its
+  exception, anything else `%clojure-host-method` (host arm; the stand-in refuses with
+  `No matching field found: m`), so the lowering carries no `java:` operator and wasm compiles
+  it without the `JAVA:CALL` warning.
+- Deviations: `class`/`instance?`/other methods (`.printStackTrace`) of an exception are refused
+  (before, a construction was a host object on the interpreter and the JVM); a runtime error's
+  `str` has no class prefix; `throw` of a non-exception signals its rendering (the oracle's
+  `ClassCastException`).
+- Size, wasm P1, measured 2026-10-03 against the tree before: `(try (throw (ex-info ..)) (catch
+  Exception e (ex-message e)))` 145,619 -> 146,474 B; a `try` reading no exception 83,311 B
+  unchanged; `(.toString 5)` 51,108 -> 51,192 B (the condition disjunct);
+  `(throw (Exception. "boom"))` + `.getMessage` 147,067 B (before: a 3,588 B module failing on
+  `JAVA:CALL`).
+- Pins: clojure-spec `get-message-reads-a-caught-runtime-error`,
+  `throwable-constructions-are-exceptions-on-every-backend`, `ex-info-carries-data-through-throw`;
+  `ClojureInteropTest.aThrownHostThrowableKeepsItsClassAndMessage` (interpreter and JVM).
 
 ## Sorted collections
 
@@ -651,8 +699,8 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   resolve dotted, imported or `java.lang` (`ClojureNamespaceLowering.JAVA_LANG` is the oracle's
   fixed default-import list read off `(ns-imports 'user)` on clj 1.12.6, 2026-10-03: the common
   throwables included, `AutoCloseable`/`Record`/`Module` not -- the oracle does not resolve them
-  either). A throwable construction (`Exception.` included) is `java:new`, so wasm refuses it
-  like every host class (measured 2026-10-03: `JAVA:NEW is undefined`). A zero-argument `(Class/m)` is the static method
+  either). A construction of a plain throwable (`Exception.` included) is an exception
+  condition on every backend ("Exceptions"); any other is `java:new`, refused on wasm. A zero-argument `(Class/m)` is the static method
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).

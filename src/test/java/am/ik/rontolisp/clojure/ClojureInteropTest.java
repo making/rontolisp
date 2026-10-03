@@ -85,6 +85,26 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aThrownHostThrowableKeepsItsClassAndMessage() throws Exception {
+		// answers measured against clj 1.12.6: a throwable with members of its own
+		// stays a host object, and throw hands catch an exception carrying its
+		// class, message and cause
+		assertBothEqual(
+				"(prn (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (catch Exception e [(.getMessage e) (ex-message e) (str e) (ex-data e)])))",
+				"[\"bad: in\" \"bad: in\" \"java.net.URISyntaxException: bad: in\" nil]\n");
+		assertBothEqual(
+				"(prn (ex-message (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (ex-message (ex-cause (Exception. \"o\" (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"\"bad: in\" \"bad: in\"\n");
+		assertBothEqual("(require '[clojure.test :refer [is]])"
+				+ " (prn (ex-message (is (thrown-with-msg? Exception #\"bad\" (throw (java.net.URISyntaxException. \"in\" \"bad\"))))))",
+				"\"bad: in\"\n");
+		// a host object of another kind keeps its own getMessage
+		assertBothEqual("(prn (try (.getMessage (java.io.File. \"x\")) (catch Exception e :refused)))", ":refused\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");

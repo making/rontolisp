@@ -1796,8 +1796,56 @@ cases:
       nil
       got-plain
       (1 nil)
-      (m nope)
+      (m nil)
       2
+  - name: get-message-reads-a-caught-runtime-error
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a caught runtime error is a
+    # condition, and .getMessage/.getLocalizedMessage answer its message like
+    # ex-message; .toString and str answer an exception's toString.
+    source: |
+      (println (try (assoc [0 1] :a :x) (catch Exception e (.getMessage e))))
+      (println (try (assoc [0 1] :a :x) (catch Exception e (.getLocalizedMessage e))))
+      (println (try (throw (ex-info "boom" {})) (catch Exception e (. e getMessage))))
+      (println (map #(.getMessage %) [(ex-info "a" {}) (ex-info "b" {})]))
+      (prn (str (ex-info "x" {:a 1})) (.toString (ex-info "y" {})))
+      (prn (ex-cause (ex-info "a" {})) (.getCause (ex-info "a" {})))
+    expected: |
+      Key must be integer
+      Key must be integer
+      boom
+      (a b)
+      "clojure.lang.ExceptionInfo: x {:a 1}" "clojure.lang.ExceptionInfo: y {}"
+      nil nil
+  - name: throwable-constructions-are-exceptions-on-every-backend
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a java.lang throwable built with
+    # a message, a cause or both is an exception ex-message, ex-data, ex-cause,
+    # .getMessage, .getCause, str and throw read the oracle's way.
+    source: |
+      (prn (ex-message (Exception. "boo")) (ex-data (Exception. "boo")) (.getMessage (Exception.)))
+      (prn (try (throw (Exception. "boo")) (catch Exception e (ex-message e))))
+      (prn (try (throw (IllegalArgumentException. "bad arg")) (catch IllegalArgumentException e (.getMessage e))))
+      (prn (str (Exception. "boo")) (str (Exception.)) (.toString (RuntimeException. "r")))
+      (prn (.getMessage (Exception. (IllegalStateException. "inner"))))
+      (prn (ex-message (ex-cause (Exception. "outer" (IllegalStateException. "inner")))))
+      (prn (ex-message (.getCause (new RuntimeException "o" (Exception. "i")))))
+      (prn (ex-message (ex-cause (ex-info "a" {} (Exception. "c")))) (ex-data (ex-info "x" nil)))
+      (prn (map ex-cause [(Exception. "x") "s" nil]))
+      (prn (.getMessage (Throwable. "th")) (ex-message (Error. "er")) (str (ArithmeticException. "ar")))
+      (prn (try (throw (try (throw (Exception. "inner")) (catch Exception e e))) (catch Exception f (str f))))
+      (prn (try (Exception. 5) (catch Exception e (ex-message e))))
+    expected: |
+      "boo" nil nil
+      "boo"
+      "bad arg"
+      "java.lang.Exception: boo" "java.lang.Exception" "java.lang.RuntimeException: r"
+      "java.lang.IllegalStateException: inner"
+      "inner"
+      "i"
+      "c" {}
+      (nil nil nil)
+      "th" "er" "java.lang.ArithmeticException: ar"
+      "java.lang.Exception: inner"
+      "No matching ctor found for class java.lang.Exception"
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance

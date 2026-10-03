@@ -58,8 +58,10 @@ public final class ClojureLibrary {
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
 	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-string}
-	 * ({@code str}) and {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
-	 * {@code uri?}, {@code class?}) answer NIL.
+	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
+	 * {@code uri?}, {@code class?}) and {@code %clojure-host-throwable} (an exception's
+	 * view of a value) answer NIL, and {@code %clojure-host-method} ({@code .getMessage}
+	 * of a value that is no exception) refuses.
 	 */
 	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
@@ -74,6 +76,12 @@ public final class ClojureLibrary {
 			(defun rontolisp::%clojure-host-instance-p (x class-name)
 			  (declare (ignore x class-name))
 			  nil)
+			(defun rontolisp::%clojure-host-throwable (x)
+			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-method (x method)
+			  (declare (ignore x))
+			  (error (concatenate 'string "No matching field found: " method)))
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;

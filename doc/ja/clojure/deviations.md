@@ -18,8 +18,8 @@
  （`keys`/`vals` と同じ）なので、1 エントリの map と 1 メンバーの set だけが決定的に
  印字されます。循環を閉じる値は Scheme の `write` と同様のデータラベル
  （`#0=(1 . #0#)`）で印字され、循環なしの共有は 2 度印字されます。atom は可読でない
- 形（`#<Atom value>`）、関数は `#<procedure>`、`ex-info` は条件オブジェクトのまま
- （`#<C%E-EX-INFO ...>`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
+ 形（`#<Atom value>`）、関数は `#<procedure>`、例外はその `toString`
+ （`clojure.lang.ExceptionInfo: m {}`。オラクルは `#error {...}`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
  `#object` はハッシュを含みます）と印字されます。
 - `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
  付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
@@ -71,7 +71,7 @@
   は失敗します。
 - `clojure.test` はテストを定義順に実行します（本家の順序は名前空間のマップの順です）。
   `thrown?`/`thrown-with-msg?` は `catch` と同じく、クラス名に関わらずどのコンディションにも
-  一致します。エラー報告はコンディションのメッセージ（`ex-info` は本家の形）を表示し、
+  一致します。エラー報告は例外の `toString`（実行時エラーはその report）を表示し、
   スタックトレースは表示しません。位置は `is` 式の行で、本家は例外を投げたフレームを示します。
   失敗した `thrown-with-msg?` はコンディションのメッセージを表示し、本家は `#error {...}` を
   表示します。ホストのスタックオーバーフロー（`catch StackOverflowError`、
@@ -80,6 +80,16 @@
   JVM バックエンドだけです。`use-fixtures` は名前を挙げて拒否します。
 - `try` の catch 節は順に catch-all です:最初の節がどの条件も扱います（オラクルは
  クラスでディスパッチ）。catch 変数は Common Lisp の条件を束縛します。
+- 例外はクラス名、メッセージ、データ、cause を持つコンディションです。実行時エラーは
+  ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の
+  report（失敗した `(inc nil)` の `(.getMessage e)` は `+: The value NIL is not of type
+  NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
+  接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
+  cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
+  （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
+  例外の `class`、`instance?`、その他のメソッド（`.printStackTrace`、`.getStackTrace`）は
+  拒否され、例外でない値の `throw` はオラクルが拒否するところでそのレンダリングを
+  シグナルします。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
  `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える

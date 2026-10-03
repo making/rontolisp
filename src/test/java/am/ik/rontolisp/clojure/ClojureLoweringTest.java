@@ -852,11 +852,19 @@ class ClojureLoweringTest {
 			.hasMessageContaining("defmethod needs a core class, not Instant");
 		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("isa? takes a child and a parent");
-		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("MAKE-CONDITION").contains("C%E-EX-INFO");
-		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("C%E-DATA");
-		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("C%E-MESSAGE");
+		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("RONTOLISP::%CLOJURE-EX-INFO")
+			.contains("(DEFINE-CONDITION C%E-EXCEPTION")
+			.contains("MAKE-CONDITION");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("RONTOLISP::%CLOJURE-EX-DATA");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("RONTOLISP::%CLOJURE-EX-MESSAGE");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-cause e)")).contains("RONTOLISP::%CLOJURE-EX-CAUSE");
+		assertThat(lowered("(Exception. \"m\")"))
+			.contains("(RONTOLISP::%CLOJURE-EXCEPTION-NEW-1 \"java.lang.Exception\" \"m\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(.getMessage (ex-info \"m\" {}))")).contains("RONTOLISP::%CLOJURE-EXCEPTION-METHOD")
+			.doesNotContain("JAVA:CALL");
 		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\")", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("ex-info takes a message and a data map");
+			.hasMessageContaining("ex-info takes a message, a data map and an optional cause");
 	}
 
 	@Test
@@ -945,7 +953,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(try 1 (catch Exception e 2) (finally 3))")).contains("HANDLER-CASE")
 			.contains("UNWIND-PROTECT")
 			.contains("(ERROR (|c%e|)");
-		assertThat(lowered("(throw \"boom\")")).contains("C%E-THROW");
+		assertThat(lowered("(throw \"boom\")")).contains("RONTOLISP::%CLOJURE-THROW");
 	}
 
 	@Test

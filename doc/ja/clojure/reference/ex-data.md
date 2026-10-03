@@ -1,8 +1,8 @@
 # ex-data
 
-`(ex-data cond)`
+`(ex-data ex)`
 
-`ex-info` のコンディションのデータマップを返し、それ以外のコンディションには `nil` を返します -- throw された文字列やマップはデータスロットを持ちません。関数値として動くため、`map` を渡れます。
+`ex-info` のデータマップを返し、それ以外の値には `nil` を返します -- throwable の構築、実行時エラー、throw された文字列やマップはデータを持ちません。`nil` のデータで作った `ex-info` はオラクルと同じく `{}` を返します。関数値として動くため、`map` を渡れます。
 
 ```clojure
 (println (ex-data (ex-info "m" {:code 7}))) ; {:code 7}

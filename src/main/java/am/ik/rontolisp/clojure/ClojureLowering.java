@@ -121,15 +121,16 @@ import org.jspecify.annotations.Nullable;
  * one-vector cell ({@code atom} builds it, {@code deref} reads it,
  * {@code swap!}/{@code reset!}/ {@code compare-and-set!} rewrite it); errors are
  * {@code handler-case} inside {@code unwind-protect} ({@code try}, every catch class
- * catch-all) with {@code throw} over {@code error} -- an {@code ex-info} value signals as
- * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
- * anything else through its printed rendering; dispatch is a method table plus a
- * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * and refers ({@code clojure.string} over the core string operations, {@code clojure.set}
- * over its spliced runtime, {@code clojure.java.io} for {@code reader} only, a project
- * namespace's file lowered once ahead of the form that requires it); interop lowers to
- * the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
- * over the call's argument list, the same function the runtime table entry holds for
+ * catch-all) with {@code throw} over {@code error} -- an exception (an {@code ex-info}, a
+ * throwable construction, a caught condition, a host {@code Throwable}) signals as a
+ * condition carrying its class, message, data and cause, anything else through its
+ * printed rendering; dispatch is a method table plus a dispatcher {@code defun}
+ * ({@code defmulti}/{@code defmethod}); namespaces wire aliases and refers
+ * ({@code clojure.string} over the core string operations, {@code clojure.set} over its
+ * spliced runtime, {@code clojure.java.io} for {@code reader} only, a project namespace's
+ * file lowered once ahead of the form that requires it); interop lowers to the
+ * {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda over
+ * the call's argument list, the same function the runtime table entry holds for
  * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
  * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
  * splicing over the mangled namespace ({@code x#} one gensym per expansion);
@@ -163,8 +164,7 @@ public final class ClojureLowering {
 
 	/**
 	 * The library string builder behind {@code str}/{@code pr-str} parts, the
-	 * {@code clojure.string/join} elements, {@code throw} of a non-{@code ex-info} value,
-	 * {@code ex-message} of one, and the multimethod miss messages: the value's
+	 * {@code clojure.string/join} elements and the multimethod miss messages: the value's
 	 * Clojure-notation string, so no backend prints the wrappers.
 	 */
 	static final LispSymbol CLOJURE_STR_OF = new LispSymbol("RONTOLISP::%CLOJURE-STR-OF");
@@ -2307,31 +2307,19 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "throw")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "throw takes one form");
-			// an ex-info value signals as its own condition (carrying the data);
-			// anything else signals through its printed rendering, like before
-			this.usedExInfo = true;
-			LispSymbol thrown = freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(thrown, lower(items.get(1))))),
-					ClojureLowerUtil.list(new LispSymbol("C%E-THROW"), thrown));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.THROW);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-info")) {
-			ClojureLowerUtil.isTrue(items.size() == 3, "ex-info takes a message and a data map");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-condition"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), new LispSymbol("C%E-EX-INFO")),
-					ClojureLowerUtil.sym(":message"), lower(items.get(1)), ClojureLowerUtil.sym(":data"),
-					lower(items.get(2)));
+			return ClojureStateLowering.exInfoOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-data")) {
-			ClojureLowerUtil.isTrue(items.size() == 2, "ex-data takes one exception");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(new LispSymbol("C%E-DATA"), lower(items.get(1)));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_DATA);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-message")) {
-			ClojureLowerUtil.isTrue(items.size() == 2, "ex-message takes one exception");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(new LispSymbol("C%E-MESSAGE"), lower(items.get(1)));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_MESSAGE);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "ex-cause")) {
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_CAUSE);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "atom")) {
 			return ClojureStateLowering.atomOf(this, items);
@@ -3422,8 +3410,9 @@ public final class ClojureLowering {
 			case "some?" -> ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
 			case "not" -> ClojureFnLowering.notValue(this);
-			case "ex-data" -> ClojureStateLowering.exHelperValue(this, "C%E-DATA");
-			case "ex-message" -> ClojureStateLowering.exHelperValue(this, "C%E-MESSAGE");
+			case "ex-data" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_DATA);
+			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
+			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);

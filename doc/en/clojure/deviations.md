@@ -18,8 +18,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   single-entry maps and single-member sets print deterministically. A value that closes a
   cycle prints with a datum label (`#0=(1 . #0#)`), like Scheme's `write`; sharing
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
-  as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`), an
-  unbound var's root as `#<Unbound: #'user/x>` (the oracle's `#object` carries a hash).
+  as `#<procedure>`, an exception as its `toString` (`clojure.lang.ExceptionInfo: m {}`;
+  the oracle prints `#error {...}`), an unbound var's root as `#<Unbound: #'user/x>` (the
+  oracle's `#object` carries a hash).
 - `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
   read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
   `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
@@ -71,8 +72,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   fails.
 - `clojure.test` runs the tests in definition order (the oracle's order is its
   namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
-  names, like `catch`; an error report prints the condition's message (an `ex-info` the
-  oracle's way) with no stack trace, at the `is` form's line where the oracle names the
+  names, like `catch`; an error report prints the exception's `toString` (a runtime error
+  its report) with no stack trace, at the `is` form's line where the oracle names the
   frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
@@ -80,6 +81,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   like the oracle. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
+- An exception is a condition carrying a class name, a message, data and a cause. A runtime
+  error is the Common Lisp condition the runtime signals, whose message is the Common Lisp
+  report (`(.getMessage e)` of a failed `(inc nil)` is `+: The value NIL is not of type
+  NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
+  without the oracle's class prefix. A throwable construction is an exception only
+  for a class that carries nothing but a message and a cause; one with members of its own
+  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class`,
+  `instance?` and every other method of an exception (`.printStackTrace`, `.getStackTrace`)
+  are refused, and `throw` of a value that is no exception signals its rendering where the
+  oracle refuses it.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword

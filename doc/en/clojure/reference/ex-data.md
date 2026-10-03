@@ -1,9 +1,10 @@
 # ex-data
 
-`(ex-data cond)`
+`(ex-data ex)`
 
-Answers the data map of an `ex-info` condition, `nil` for any other condition -- a thrown string
-or map carries no data slot. Works as a function value, so it travels through `map`.
+Answers the data map of an `ex-info`, `nil` for any other value -- a throwable construction, a
+runtime error, a thrown string or map carries no data. An `ex-info` built with `nil` data
+answers `{}`, like the oracle. Works as a function value, so it travels through `map`.
 
 ```clojure
 (println (ex-data (ex-info "m" {:code 7}))) ; {:code 7}

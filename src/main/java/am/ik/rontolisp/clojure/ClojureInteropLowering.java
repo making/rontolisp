@@ -58,6 +58,13 @@ final class ClojureInteropLowering {
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
 
 	/**
+	 * The zero-argument {@code Throwable} methods an exception condition answers
+	 * ({@link #instanceCallLoweredWithClass}); {@code toString} is
+	 * {@link #valueToString}'s.
+	 */
+	static final Set<String> EXCEPTION_METHODS = Set.of("getMessage", "getLocalizedMessage", "getCause");
+
+	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
 	 * {@code (Class. ...)} construction and {@code (Class/member ...)} statics. Null when
@@ -242,8 +249,9 @@ final class ClojureInteropLowering {
 	/**
 	 * A host construction over argument datums, shared by {@code (Class. ...)},
 	 * {@code (new Class ...)} and {@code (Class/new ...)}: the reader wrappers and the
-	 * zero-argument {@code java.io.StringWriter} as streams, anything else
-	 * {@code java:new}, under the param-tag designator when tagged.
+	 * zero-argument {@code java.io.StringWriter} as streams, an untagged plain throwable
+	 * as an exception ({@link #throwableConstruction}), anything else {@code java:new},
+	 * under the param-tag designator when tagged.
 	 */
 	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
 			@Nullable List<String> types) {
@@ -257,10 +265,150 @@ final class ClojureInteropLowering {
 		if (stringWriter != null) {
 			return stringWriter;
 		}
+		List<LispVal> lowered = ctx.lowers(argDatums, 0);
+		if (types == null) {
+			LispVal exception = throwableConstruction(ctx, cls, lowered);
+			if (exception != null) {
+				return exception;
+			}
+		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(designator(cls, types)));
-		args.addAll(ctx.lowers(argDatums, 0));
+		args.addAll(lowered);
 		return ClojureLowerUtil.cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * A construction of a plain throwable class ({@link #plainThrowable}) as an exception
+	 * condition of the program, so it runs on every backend: no argument, a message, a
+	 * message or a cause (decided at run time when the class takes either), or a message
+	 * and a cause, each only where the class has that public constructor -- a call the
+	 * class has no constructor for keeps {@code java:new} and its host refusal. Null when
+	 * the class is no plain throwable or the arity has no such constructor.
+	 */
+	static @Nullable LispVal throwableConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
+		Class<?> type = plainThrowable(cls);
+		if (type == null) {
+			return null;
+		}
+		LispVal name = LispString.literal(type.getName());
+		LispVal call = switch (args.size()) {
+			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
+					name, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
+			case 1 -> messageOrCauseConstruction(type, name, args.get(0));
+			case 2 -> onlyConstructorsAtArity(type, 2, List.of(String.class, Throwable.class)) ? ClojureLowerUtil
+				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, args.get(0), args.get(1)) : null;
+			default -> null;
+		};
+		if (call != null) {
+			ctx.usedExInfo = true;
+		}
+		return call;
+	}
+
+	/**
+	 * {@code (Class. x)}: a run-time choice between the message and the cause when the
+	 * class's one-argument constructors are exactly {@code (String)} and
+	 * {@code (Throwable)}, the message alone when {@code (String)} is the only one, and a
+	 * literal string the message wherever a one-argument constructor takes a string (the
+	 * oracle resolves a literal at compile time: {@code (AssertionError. "m")} is its
+	 * {@code (Object)} constructor). Anything else is null.
+	 */
+	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal name, LispVal arg) {
+		if (onlyConstructorsAtArity(type, 1, List.of(String.class, Throwable.class))) {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), name, arg);
+		}
+		boolean literal = arg instanceof LispString;
+		if (onlyConstructorsAtArity(type, 1, List.of(String.class)) || (literal && takesAString(type))) {
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, arg,
+					ClojureLowering.NIL_CONST);
+		}
+		return null;
+	}
+
+	/**
+	 * The class a throwable construction may build as an exception condition: a public,
+	 * concrete {@code Throwable} that carries nothing beyond a message and a cause -- no
+	 * public field, and no public method but {@code Throwable}'s and {@code Object}'s (an
+	 * override counts as {@code Throwable}'s) -- so the condition answers every member a
+	 * program can call on it. Null for any other class, or none.
+	 */
+	static @Nullable Class<?> plainThrowable(String cls) {
+		Class<?> type;
+		try {
+			type = Class.forName(cls, false, ClojureLowering.class.getClassLoader());
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			return null;
+		}
+		if (!Throwable.class.isAssignableFrom(type) || !java.lang.reflect.Modifier.isPublic(type.getModifiers())
+				|| java.lang.reflect.Modifier.isAbstract(type.getModifiers()) || type.getFields().length > 0) {
+			return null;
+		}
+		for (java.lang.reflect.Method method : type.getMethods()) {
+			Class<?> owner = method.getDeclaringClass();
+			if (owner != Throwable.class && owner != Object.class && !overridesThrowable(method)) {
+				return null;
+			}
+		}
+		return type;
+	}
+
+	private static boolean overridesThrowable(java.lang.reflect.Method method) {
+		if (java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+			return false;
+		}
+		try {
+			Throwable.class.getMethod(method.getName(), method.getParameterTypes());
+			return true;
+		}
+		catch (NoSuchMethodException _) {
+			return false;
+		}
+	}
+
+	private static boolean hasConstructor(Class<?> type, Class<?>... parameters) {
+		try {
+			type.getConstructor(parameters);
+			return true;
+		}
+		catch (NoSuchMethodException _) {
+			return false;
+		}
+	}
+
+	/**
+	 * Whether the public constructors of {@code arity} parameters are exactly the given
+	 * ones: each single parameter type of {@code shapes} at arity one, or the one
+	 * parameter list {@code shapes} at arity two.
+	 */
+	private static boolean onlyConstructorsAtArity(Class<?> type, int arity, List<Class<?>> shapes) {
+		Set<List<Class<?>>> wanted = new HashSet<>();
+		if (arity == 1) {
+			for (Class<?> shape : shapes) {
+				wanted.add(List.of(shape));
+			}
+		}
+		else {
+			wanted.add(shapes);
+		}
+		Set<List<Class<?>>> found = new HashSet<>();
+		for (java.lang.reflect.Constructor<?> constructor : type.getConstructors()) {
+			if (constructor.getParameterCount() == arity) {
+				found.add(List.of(constructor.getParameterTypes()));
+			}
+		}
+		return found.equals(wanted);
+	}
+
+	private static boolean takesAString(Class<?> type) {
+		for (java.lang.reflect.Constructor<?> constructor : type.getConstructors()) {
+			if (constructor.getParameterCount() == 1
+					&& constructor.getParameterTypes()[0].isAssignableFrom(String.class)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -499,7 +647,7 @@ final class ClojureInteropLowering {
 		@Nullable List<String> types = tags == null ? null : tagTypes(ctx, tags);
 		if (member.equals("new")) {
 			List<Integer> arities = types != null ? List.of(types.size()) : constructorArities(cls, name);
-			return arityLambda(ctx, arities, name, args -> hostConstructionLowered(cls, args, types));
+			return arityLambda(ctx, arities, name, args -> hostConstructionLowered(ctx, cls, args, types));
 		}
 		if (member.startsWith(".")) {
 			String method = member.substring(1);
@@ -589,13 +737,20 @@ final class ClojureInteropLowering {
 
 	/**
 	 * {@link #hostConstruction} over already-lowered arguments: the zero-argument
-	 * {@code java.io.StringWriter} a string output stream, anything else
-	 * {@code java:new}.
+	 * {@code java.io.StringWriter} a string output stream, an untagged plain throwable an
+	 * exception, anything else {@code java:new}.
 	 */
-	static LispVal hostConstructionLowered(String cls, List<LispVal> args, @Nullable List<String> types) {
+	static LispVal hostConstructionLowered(ClojureLowering ctx, String cls, List<LispVal> args,
+			@Nullable List<String> types) {
 		LispVal stringWriter = stringWriterConstruction(cls, args.size());
 		if (stringWriter != null) {
 			return stringWriter;
+		}
+		if (types == null) {
+			LispVal exception = throwableConstruction(ctx, cls, args);
+			if (exception != null) {
+				return exception;
+			}
 		}
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(designator(cls, types)));
@@ -1214,6 +1369,14 @@ final class ClojureInteropLowering {
 				cls = hostClassOf(ctx, ref);
 			}
 		}
+		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {
+			// a caught runtime error, an ex-info and a throwable construction are
+			// conditions: the library answers from the exception, and calls the host
+			// method on anything else
+			ctx.usedExInfo = true;
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_METHOD), receiver,
+					LispString.literal(method));
+		}
 		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
 			call = ctx.booleanAnswer(call);
 		}
@@ -1273,8 +1436,9 @@ final class ClojureInteropLowering {
 	 * stream (both arms of the stream test reach here, since {@code streamp} also answers
 	 * true for {@code t}, Clojure's {@code true}): a value of a Lisp kind -- number,
 	 * character, symbol (keywords and booleans included), cons (lists, keywords, records,
-	 * lazy seqs), array, table, function -- answers its {@code str} spelling, the
-	 * oracle's {@code toString}, on every backend; nil signals, like the oracle's
+	 * lazy seqs), array, table, function, condition (an exception's report is its
+	 * {@code toString}) -- answers its {@code str} spelling, the oracle's
+	 * {@code toString}, on every backend; nil signals, like the oracle's
 	 * {@code NullPointerException}; anything else is a host object and keeps the
 	 * {@code java:call}. No predicate here answers true for a host object (a host
 	 * collection is no Lisp array or table on the JVM either), so the host path is
@@ -1292,7 +1456,9 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), recv),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("arrayp"), recv),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), recv),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), recv));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("condition"))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
