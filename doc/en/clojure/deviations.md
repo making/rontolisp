@@ -144,7 +144,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
 - `sort` without a comparator orders numbers, strings, characters and keywords; anything
-  else (or mixed kinds) signals.
+  else (or mixed kinds) signals, where the oracle sorts by `compare` (which orders `nil`,
+  booleans, symbols and vectors too).
+- A sorted map or set orders, prints and finds keys like the oracle's, but every verb
+  copies it (an association costs the collection's size, like a hash map's); `nth` steps
+  through one where the oracle refuses; `class` answers `:map`/`:set`; a `subseq` or
+  `rsubseq` walking from the first member that finds nothing answers `nil` (the oracle
+  `()`); a test passed to `subseq` as a value is recognized by how it answers `(1 0)`,
+  `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
+  orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
+- `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
+  given, where the oracle's keeps casting, and `:float` holds doubles.
 - `partition` takes no pad. `partition-all` with a non-positive size or step signals,
   where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
   calling thread. `take-nth` with a zero step signals, and its seq arity steps by the

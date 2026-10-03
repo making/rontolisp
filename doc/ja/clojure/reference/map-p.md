@@ -2,7 +2,7 @@
 
 `(map? x)`
 
-`clojure.core/map?`: マップまたはレコードなら `true` を返します。値としては1引数の関数です。
+`clojure.core/map?`: マップ（ソート済みのものも含む）またはレコードなら `true` を返します。値としては1引数の関数です。
 
 ```clojure
 (defrecord MpR [a])

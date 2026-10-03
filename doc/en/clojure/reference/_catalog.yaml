@@ -156,6 +156,14 @@ categories:
       - { slug: update-keys, name: "update-keys" }
       - { slug: update-vals, name: "update-vals" }
       - { slug: reduce-kv, name: "reduce-kv" }
+      - { slug: sorted-map, name: "sorted-map" }
+      - { slug: sorted-map-by, name: "sorted-map-by" }
+      - { slug: sorted-set, name: "sorted-set" }
+      - { slug: sorted-set-by, name: "sorted-set-by" }
+      - { slug: subseq, name: "subseq" }
+      - { slug: rsubseq, name: "rsubseq" }
+      - { slug: compare, name: "compare" }
+      - { slug: vector-of, name: "vector-of" }
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
       - { slug: struct-map, name: "struct-map" }

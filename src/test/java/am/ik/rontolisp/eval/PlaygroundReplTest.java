@@ -69,6 +69,15 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void aClojureSessionKeepsTheSortedArmsOfWhatAnEarlierBufferDefined() {
+		// a buffer lowered before any sorted collection existed still reads one a later
+		// buffer builds: the interpreter's forms keep their sorted-collection arms
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("(defn look [m k] [(get m k) (count m) (first m)])")).isEqualTo("#'user/look");
+		assertThat(repl.eval("(look (sorted-map :b 2 :a 1) :b)")).isEqualTo("[2 2 [:a 1]]");
+	}
+
+	@Test
 	void theClojureRunPrintsAndItsTranscriptEchoesEveryForm() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
 		assertThat(repl.run("""

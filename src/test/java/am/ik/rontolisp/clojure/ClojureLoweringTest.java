@@ -2123,9 +2123,75 @@ class ClojureLoweringTest {
 			.contains("\"java.util.UUID\"");
 		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
 		// a kind no value here has: false, the argument still evaluated
-		assertThat(lowered("(sorted? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(delay? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		// the sorted-aware tests: sorted? its own, set? and reversible? the helpers a
+		// program building no sorted collection calls as the plain ones
+		assertThat(lowered("(fn [x] (sorted? x))")).contains("(RONTOLISP::%CLOJURE-IS-SORTED ");
+		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET ");
+		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE ");
 		assertThat(lowered("(volatile! 1)")).contains(":C%VOLATILE");
 		assertThat(lowered("(atom 1)")).doesNotContain(":C%VOLATILE");
+	}
+
+	@Test
+	void sortedVerbsAreOneWorkerCallEach() {
+		assertThat(lowered("(sorted-map :b 1 :a 2)"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE NIL NIL (LIST (LIST :C%KEYWORD \"b\") 1");
+		assertThat(lowered("(sorted-set-by > 3 1)")).contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (LAMBDA");
+		// a literal core test is its keyword, which picks the oracle's path the way its
+		// identity check does; anything else is a real function
+		assertThat(lowered("(def s (sorted-set 1)) (subseq s > 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ |c%s| :> 1 T)");
+		assertThat(lowered("(def s (sorted-set 1)) (rsubseq s >= 1 clojure.core/< 3)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ-5 |c%s| :>= 1 :< 3 NIL)");
+		assertThat(lowered("(def s (sorted-set 1)) (defn t [a b] true) (subseq s t 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ |c%s| #'|c%t| 1 T)");
+		assertThat(lowered("(compare 1 2)")).contains("(RONTOLISP::%CLOJURE-COMPARE 1 2)");
+		assertThat(lowered("(vector-of :int 1 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VECTOR-OF (LIST :C%KEYWORD \"int\") (LIST 1 2))");
+		assertThat(lowered("(map compare [1] [2])")).contains("#'RONTOLISP::%CLOJURE-COMPARE-V");
+		assertThat(lowered("(apply sorted-map-by [> 1 2])")).contains("#'RONTOLISP::%CLOJURE-SORTED-MAP-BY-V");
+		for (String[] call : new String[][] { { "(subseq (sorted-set) > 1 <)", "4", "subseq" },
+				{ "(rsubseq (sorted-set) >)", "2", "rsubseq" }, { "(compare 1)", "1", "compare" },
+				{ "(sorted-map-by)", "0", "sorted-map-by" }, { "(sorted-set-by)", "0", "sorted-set-by" },
+				{ "(vector-of)", "0", "vector-of" } }) {
+			assertThatThrownBy(() -> Clojure.read(call[0], null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (" + call[1] + ") passed to: clojure.core/" + call[2]);
+		}
+	}
+
+	@Test
+	void aProgramBuildingNoSortedCollectionCarriesNoneOfItsArms() {
+		// the map and set verbs carry an arm for a sorted collection; a program that
+		// builds none has them stripped before the splice, so neither its own forms nor
+		// the library it splices name the sorted runtime
+		String plain = "(def m {:a 1}) (def s #{1}) (println (get m :a) (m :a) (:a m) (contains? m :a) (count m)"
+				+ " (empty? s) (assoc m :b 2) (dissoc m :a) (conj s 2) (disj s 1) (keys m) (vals m) (merge m {:c 3})"
+				+ " (merge-with + m m) (select-keys m [:a]) (into {} m) (= m {:a 1}) (rseq [1 2]) (set? s)"
+				+ " (reversible? []) (class m) (seq s) (first m) (rand-nth [1]) (shuffle [1]) (find m :a)"
+				+ " (reduce-kv (fn [a k v] v) 0 m) (clojure.set/union s #{2}) (sort > [1 2]))"
+				+ " (println (apply dissoc m [:a]) (apply disj s [1]) (apply merge [m]) (apply merge-with + [m m]))";
+		String pruned = prunedForms(plain);
+		assertThat(pruned).doesNotContain("%CLOJURE-SORTED")
+			.doesNotContain("%CLOJURE-IS-SET")
+			.doesNotContain("%CLOJURE-IS-REVERSIBLE")
+			.contains("(RONTOLISP::%CLOJURE-SET-P ")
+			.contains("(RONTOLISP::%CLOJURE-IS-VECTOR ");
+		// one sorted collection and every arm stays, the runtime with them
+		assertThat(prunedForms(plain + " (println (sorted-set 1))")).contains("(DEFUN RONTOLISP::%CLOJURE-SORTED-MAKE ")
+			.contains("(RONTOLISP::%CLOJURE-SORTED-P ")
+			.contains("(RONTOLISP::%CLOJURE-IS-SET ");
+		// a value form of a constructor counts too
+		assertThat(prunedForms("(println (apply sorted-set [1]))")).contains("(DEFUN RONTOLISP::%CLOJURE-SORTED-SET-V ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-WRITE-SORTED ");
+	}
+
+	private static String prunedForms(String source) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false)
+			.forms()
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
 	}
 
 	@Test

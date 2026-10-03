@@ -3,7 +3,8 @@
 値の種類を調べる述語です。どれも `true` か `false` を返し、`extends?` 以外は同じ引数をとる関数としても使えます。
 答えは値の表現に従います（[仕様との差異](../deviations.md)）。`nil` は空リストであり、strict な入力に対して
 操作が返す seq はリストであり、decimal と `N` のリテラルは通常の有理数として読まれます。ここに
-値が存在しない種類の述語（`sorted?`・`delay?`・`future?`・`decimal?` など）は `false` を返します。
+値が存在しない種類の述語（`delay?`・`future?`・`decimal?` など）は `false` を返します。ソート済みの
+マップとセットはどの述語にもマップとセットとして扱われ、`sorted?` と `reversible?` も成り立ちます。
 `coll?` などの述語は[数値と述語](numbers.md)にあります。
 
 | Name | Example | Result |
@@ -14,7 +15,7 @@
 | `set?` | `(set? #{1})` | `true` |
 | `list?` | `(list? '(1))` | `true` |
 | `record?` | `(record? {:a 1})` | `false` |
-| `sorted?` | `(sorted? [1 2])` | `false` |
+| `sorted?` | `(sorted? (sorted-set 1 2))` | `true` |
 | `seqable?` | `(seqable? "ab")` | `true` |
 | `associative?` | `(associative? [1])` | `true` |
 | `counted?` | `(counted? [1])` | `true` |

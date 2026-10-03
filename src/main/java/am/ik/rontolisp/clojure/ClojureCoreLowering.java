@@ -56,9 +56,14 @@ final class ClojureCoreLowering {
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
-			case "key", "val", "map-entry?", "rseq":
+			case "key", "val", "map-entry?":
 				arity(name, n, 1, 1);
 				return worker("map-entry?".equals(name) ? "map-entry-p" : name, ctx.lower(items.get(1)));
+			case "rseq":
+				// a sorted map or set walks backwards through its items vector (a view a
+				// program building no sorted collection sheds, ClojureSortedArms)
+				arity(name, n, 1, 1);
+				return worker(name, worker("sorted-items", ctx.lower(items.get(1))));
 			case "find-keyword":
 				arity(name, n, 1, 2);
 				return n == 1 ? worker(name, ctx.lower(items.get(1)))

@@ -3194,6 +3194,10 @@ public final class ClojureLowering {
 				if (predicate != null) {
 					return predicate;
 				}
+				LispVal sorted = ClojureSortedLowering.callOf(this, name, items);
+				if (sorted != null) {
+					return sorted;
+				}
 				LispVal core = ClojureCoreLowering.callOf(this, name, items);
 				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
 		}
@@ -3360,6 +3364,10 @@ public final class ClojureLowering {
 				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
 				if (predicate != null) {
 					yield predicate;
+				}
+				LispVal sorted = ClojureSortedLowering.valueOf(name);
+				if (sorted != null) {
+					yield sorted;
 				}
 				LispVal core = ClojureCoreLowering.valueOf(this, name);
 				yield core != null ? core : ClojureTransducerLowering.valueOf(name);

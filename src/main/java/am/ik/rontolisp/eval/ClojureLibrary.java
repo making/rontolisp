@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureSortedArms;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -37,6 +38,12 @@ import org.jspecify.annotations.Nullable;
  * a lowered Clojure program does -- gets the definitions prepended, and
  * {@link LibraryDefunPruner} drops the ones it does not reach.</li>
  * </ul>
+ *
+ * <p>
+ * A program that builds no sorted collection has the sorted-collection arms of its own
+ * forms and of the library stripped first ({@link ClojureSortedArms}), so it is spliced
+ * and compiled exactly as before sorted collections existed. The interpreter keeps them:
+ * its library loads once for whatever the session reads next.
  */
 public final class ClojureLibrary {
 
@@ -118,14 +125,40 @@ public final class ClojureLibrary {
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		if (!referencesAny(program)) {
+			return program;
+		}
+		// an arm names the library too, so the reference is asked again once they go
+		ClojureSortedArms.Scan sorted = ClojureSortedArms.scan(program);
+		List<LispVal> body = sorted.strips() ? ClojureSortedArms.strip(program) : program;
+		if (body != program && !referencesAny(body)) {
+			return body;
+		}
+		List<LispVal> out = new ArrayList<>(library(usesJava(body), sorted.builds()));
+		out.addAll(body);
+		return out;
+	}
+
+	private static boolean referencesAny(List<LispVal> program) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(usesJava(program) ? forms() : formsWithoutHostArms());
-				out.addAll(program);
-				return out;
+				return true;
 			}
 		}
-		return program;
+		return false;
+	}
+
+	/**
+	 * The library a program splices: with or without the host arms, with or without the
+	 * sorted-collection arms (a program that builds no sorted collection takes none).
+	 */
+	private static List<LispVal> library(boolean java, boolean sorted) {
+		List<LispVal> library = java ? forms() : formsWithoutHostArms();
+		if (sorted) {
+			return library;
+		}
+		return FORMS.computeIfAbsent(java ? "without-sorted" : "without-host-arms-or-sorted",
+				ignored -> List.copyOf(ClojureSortedArms.strip(library)));
 	}
 
 	/**

@@ -48,6 +48,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
 | `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused by spelling (`Duplicate key`) |
+| `sorted-map` / `sorted-set` (and `-by`) | `(:C%SORTED setp cmp items)`: a vector of `[k v]` entries or members in comparator order | "Sorted collections" |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)` | one cell shape, so STM verbs accept atoms; the second slot is only what `volatile?` reads |
@@ -133,22 +134,23 @@ answered `2 5 3` before).
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil and false are empty, anything else signals; `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` | a vector or string indexed directly, anything else stepped; past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
-| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `sort` orders numbers, strings, chars and keywords (else signals), a comparator runs on truthiness |
+| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `sort` orders numbers, strings, chars and keywords (else signals), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
 | `ffirst` `nfirst` | `car`/`cdr` of the seq of the head | each level seqs |
 | `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
-| `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a map (a sorted collection's rseq comes with sorted collections), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; type errors use CL wording |
+| `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `find` `subvec` `key` `val` `map-entry?` `rseq` `find-keyword` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); `find` answers a map/record's stored key (`%clojure-table-key`, so a structural key answers its held representative), a vector's `[i x]` for an integer index in range, nil of nil, and signals on a set, string or list; `subvec` copies (a fresh vector, never a view), truncates a float bound, signals on a nil bound, a non-vector or a range out of bounds; `key`/`val` read a two-member non-string vector and signal otherwise, `map-entry?` is true of exactly those (a map entry IS a plain 2-vector here, so `(map-entry? [1 2])` is true where the oracle's is false; giving entries their own representation would touch `first`/`seq`/`find`/`reduce-kv`/destructuring/`=`/printing for a distinction only `clojure.walk`-style code reads), `rseq` answers a strict list of a vector (nil when empty) and signals on nil, a list, a seq, a string and a hash map; a sorted collection goes through its items vector (`%clojure-sorted-items`, "Sorted collections"), `find-keyword` is `keyword`'s one-argument arm (a two-argument call needs a nil-or-string namespace and a string name) and answers a never-used spelling's keyword where the oracle's is nil -- keywords are `(:C%KEYWORD spelling)` lists with no intern table, and one would cost every `keyword` call and every compiled output a global table; type errors use CL wording |
 | `pmap` | `map` | no thread pool; the printed seq is the oracle's |
 | `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | the first three associate through `ClojureCollectionLowering.assocAnswer` like `assoc` (a vector level by index); `update-in` with no keys refused; `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; onto a vector (`assocAnswer`'s run-time `vectorp` arm, `%clojure-vector-assoc`) a fresh whole copy, index = count appending, a non-integer key `Key must be integer`, out of range signalling, like the oracle -- measured 2026-10-03 on a map-only program: wasm 58,004 -> 60,479 B (dispatch alone +298 B, the `(setf aref)` write ~1 KB; `make-array` plus an `aref` loop instead of `copy-seq`/`coerce` saved 0.8 KB), 2M two-pair `assoc` calls 4.0 s wasm / 2.05 s JVM before and after; pinned by clojure-spec `assoc-on-a-vector-replaces-or-appends-by-index`, `update-and-the-nested-verbs-reach-into-vectors` (and `replace-maps-through-a-map-or-a-vector` for `replace`); odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
+| `sorted-map` `sorted-map-by` `sorted-set` `sorted-set-by` `subseq` `rsubseq` `compare` `vector-of` | `ClojureSortedLowering`: one call to `rontolisp::%clojure-sorted-make` / `-subseq` / `-subseq-5` / `-compare` / `-vector-of` after a lower-time arity check in the oracle's wording; as a value `#'rontolisp::%clojure-NAME-v` | a literal core test of `subseq`/`rsubseq` lowers to its keyword (`:>` ...); "Sorted collections" |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword value takes extra arguments (a keyword-dispatched multimethod passes several) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` checks var-ness and answers true (a value-less `def` binds nil; a declared-never-defined `#'x` does not compile on JVM/wasm); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` checks var-ness and answers true (a value-less `def` binds nil; a declared-never-defined `#'x` does not compile on JVM/wasm); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` `char` `quot` `unchecked-add` | `truncate` (`char-code` for a char) / `code-char` / `truncate` / `+` | a non-number signals; `unchecked-add` never wraps |
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/`, except the lone `/` (a name, no namespace, like the oracle) |
 | `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
@@ -177,6 +179,7 @@ Each is a real work item unless the reason says otherwise.
   Clojure program).
 - Type predicates follow the representation: `()` is nil (`seq?`/`list?`/`coll?`/`counted?` false); a strict seq is a list (`list?`/`counted?`/`realized?` true where the oracle's LazySeq is false); nothing is chunked; an `iterate`/`cycle` head is unrealized until forced; `M`/`N` literals are plain rationals (`decimal?` never true); `identical?` is `eql` (numbers, chars and symbols by value); `bound?` is true of every var; `class?` of `(class 1)` is false (`class` answers a kind keyword).
 - Map entries: an entry is a plain two-member vector, so `map-entry?` is true of every `[k v]` (the oracle: false for one the program built). `find-keyword` answers a never-used spelling's keyword (keywords are not interned; the oracle: nil).
+- Sorted collections copy on every verb (O(n) per association, a hash map's cost), `nth` steps through one (the oracle refuses), `class` answers `:map`/`:set`, an empty `subseq` walked from the start is `nil` (the oracle `()`), a `subseq` test passed as a value is recognized by its answers, `compare` orders strings by code point, and `vector-of` answers a plain vector ("Sorted collections").
 - Structural keys: a stored collection key is the first `=` key of its kind the program
   stored, so its metadata and a nested member's spelling follow that object; the
   representatives live for the whole run, one per distinct value and kind.
@@ -203,14 +206,108 @@ Each is a real work item unless the reason says otherwise.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
   odd trailing `cond` arm.
 
+## Sorted collections
+
+**A program that builds no sorted collection compiles to the bytes it did before sorted
+collections existed.** A sorted map or set is a value every map and set verb must read, so
+the verbs carry an ARM for it, and a program naming no producer has every arm stripped
+before the library splice.
+
+- Value: `(:C%SORTED setp cmp items)` (`clojure.lisp`, "Sorted collections"): SETP true
+  for a set; CMP the `-by` comparator function, or NIL for `compare` (which then also
+  refuses a key that is not nil, a number or Comparable, the oracle's `Default comparator
+  requires nil, Number, or Comparable: <key>`); ITEMS a simple vector in comparator order,
+  members or `[k v]` entries (`seq` answers the entries themselves). Copy-on-write like the
+  hash maps, so an association is O(n); a lookup is a binary search asking `(cmp key
+  stored)`, so `(get (sorted-map 1 :a) 1.0)` is `:a` and a store keeps the stored key. A
+  constructor is one `stable-sort` plus a dedupe (first key kept, last value wins: the
+  oracle's assoc after assoc). A persistent tree would make an association O(log n), but
+  every hash map verb here already copies; the vector keeps the runtime small.
+- `compare` is `%clojure-compare`, the oracle's `Util.compare` over the values here
+  (strings by code point: the oracle's UTF-16 units differ past U+FFFF). A comparator
+  answer is read by `%clojure-cmp-call`, the oracle's `AFunction.compare`: `true` -1,
+  `false` asks the reversed call, a number its integer part (0.5 is equal, NaN 0), nil
+  signals. `sort`/`sort-by` with a comparator read the same rule (before 2026-10-03 a
+  number was truthy, so `(sort (fn [a b] (- a b)) xs)` answered garbage; pinned by
+  `sort-reads-a-comparator-answering-a-number`).
+- `subseq`/`rsubseq` (`%clojure-subseq`, `-5`): the oracle's two paths -- a test leading
+  away from the start (`>`/`>=`, `<`/`<=` for rsubseq) starts at the key through the
+  oracle's `seqFrom`, any other walks from the start while it holds. The oracle picks the
+  path by IDENTITY with the core functions: a literal `<`, `<=`, `>`, `>=` lowers to the
+  keyword `:<` ...; a test passed as a value is classified by its answers on `(1 0)`,
+  `(0 0)`, `(-1 0)` (`%clojure-sorted-test`; the core functions as values are fresh lambdas,
+  so identity cannot work).
+- `vector-of` is a plain vector of cast members (`%clojure-vector-of-1`, the oracle's casts
+  and messages); later `conj`/`assoc` do not cast and `:float` holds doubles -- a typed
+  vector would need an arm in every vector verb for a difference only those two show.
+- **The arms.** A TEST (`%clojure-sorted-p`, `-map-p`, `-set-p`) over a variable or a
+  `car`/`cdr` read of one, as a `cond` clause's test, an `if`'s test or an `or`'s disjunct;
+  a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
+  first argument for anything unsorted, its other arguments variables; an ALIAS
+  (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
+  `clojure/ClojureSortedArms` scans for a PRODUCER (`%clojure-sorted-make` and the four
+  constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
+  false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
+  a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
+  an argument with an effect, is an `IllegalStateException` at the strip.
+  `eval/ClojureLibrary.process` strips the program and splices a stripped library (two more
+  cached variants, beside the host-arm ones); the interpreter, a session and the macro-time
+  evaluator keep `forms()` whole, since what a later input builds is unknown.
+- Writing an arm: it allocates no `freshTemp` and lowers no datum again (a shifted temp
+  number would rename locals of the stripped program); it folds into an existing cons arm
+  where it can (`%clojure-strict-seq`, `count`, `%clojure-key-kind`), so the interpreter's
+  other kinds pass no extra test; and **a pre-existing defun keeps its docstring byte for
+  byte -- the JVM backend emits every docstring as an `ldc`/`pop` statement**, so a changed
+  docstring changes the class of every program splicing the defun (found 2026-10-03:
+  `demo.clj`'s class grew 209 bytes from two docstrings; comments go in `;;` lines).
+- Where the arms are: `getBranches` (`get`, keyword and IFn reads, `get-in`, `update`,
+  destructuring), `containsForm`, `countForm`, `emptyForm`, `tableKeysForm`, `conjTwoForm`,
+  `dissoc` (source table, `storedKey` inside `lookupKey`, `sorted-shrunk` answer), `disj`
+  (`isAnySetForm`, `hashedSet`, `shrunkSet`), `merge` (`entriesPlist`, a sorted first map
+  the `merge` value's base), `merge-with` (a sorted first map delegates to
+  `%clojure-sorted-merge-with`, later ones through `sorted-table`), `select-keys`,
+  `rand-nth`, `shuffle`, `class`, the protocol tag, `map->R`, `rseq`; in `clojure.lisp` the
+  printer, `=`, `%clojure-hash`, the structural-key kind (a sorted key is kind 4, so a hash
+  set stored first does not replace its spelling), seq, IFn, `%clojure-plist-table` (so
+  `assoc` and `merge` onto a sorted map need no lowering arm), `find`, `reduce-kv`,
+  `replace`, the predicates, `with-meta`'s map check and `clojure.set`.
+- A macro answering a sorted collection decodes to a map or set literal of its entries in
+  order (`ClojureMacroLowering.decodeSorted`), an unsorted one, like the oracle's compiler.
+- Measured 2026-10-03 against the parent build: `--dump-ir` of the clojure-spec program
+  as it stood (231 cases, `sorted?` lines dropped) differs only at its three
+  sort-with-a-comparator sites (the `sort` rule above); the 27 shcloj4 drivers' IR is
+  identical; `examples/clojure/demo.clj` is byte-identical as wasm, `--optimize=size`,
+  component and JVM class. Interpreter, a map/set-verb loop (`get`, `contains?`, `count`,
+  `seq`, `empty?`): 10.24 s before and after (medians of four, ±0.4 s noise). A sorted
+  program carries the runtime: `(println (sorted-set 3 1 2))` 55,294 B of wasm (41,817 at
+  `--optimize=size`) against 33,229 (26,601) for `#{3 1 2}` -- `compare` with its name
+  and vector arms, the sort runtime and the `str` path the refusals print through.
+  `(apply sorted-map ...)` of 20,000 shuffled pairs plus 20,000 lookups: wasm 1.9 s, JVM
+  2.3 s, interpreter about 10 s.
+- Pinned by clojure-spec `sorted-map-and-sorted-set-print-in-comparator-order`,
+  `sorted-collections-look-up-through-their-comparator`, `sorted-collections-grow-and-shrink-in-order`,
+  `sorted-collections-seq-in-order`, `sorted-collections-equal-and-key-like-their-unsorted-kind`,
+  `sorted-map-by-and-sorted-set-by-order-through-a-comparator`,
+  `subseq-and-rsubseq-walk-a-bounded-range`, `sorted-collections-and-the-type-predicates`,
+  `compare-orders-like-the-oracle`, `sort-reads-a-comparator-answering-a-number`,
+  `vector-of-stores-each-member-as-its-primitive`, `sorted-collections-refuse-like-the-oracle`,
+  `clojure-set-grows-and-shrinks-a-sorted-set`,
+  `sorted-collections-carry-metadata-and-travel-through-macros` (oracle-identical but for
+  the commented lines); the strip by `ClojureSortedArmsTest`,
+  `ClojureLoweringTest#aProgramBuildingNoSortedCollectionCarriesNoneOfItsArms`,
+  `ClojureLibraryTest#aProgramBuildingNoSortedCollectionSplicesTheLibraryWithoutItsSortedArms`;
+  a session keeping its arms by
+  `PlaygroundReplTest#aClojureSessionKeepsTheSortedArmsOfWhatAnEarlierBufferDefined`.
+
 ## Structural keys
 
 **A map, set, memo or method-table key finds an `=` key, though the tables are `equal`
 tables whose `equal` is identity on a vector or table.** No backend has a custom-test
 table, so `clojure.lisp` ("Structural keys") stores every structural key (non-string
-vector, list, lazy seq, map, set, record) under a REPRESENTATIVE: the first `=` key of its
-kind (vector / lazy seq / list / other) the program stored. `%clojure-key-classes` (equal
-table, `%clojure-hash` -> classes) groups the representatives `=` to each other;
+vector, list, lazy seq, map, set, record, sorted collection) under a REPRESENTATIVE: the
+first `=` key of its kind (vector / lazy seq / list / sorted / other) the program stored.
+`%clojure-key-classes` (equal table, `%clojure-hash` -> classes) groups the representatives
+`=` to each other;
 `%clojure-key-reps` (eq table) maps a representative to its class without hashing.
 
 - `%clojure-table-key k table` (lookups, `remhash`) answers the representative TABLE holds,
@@ -885,6 +982,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
+- `ClojureSortedArmsTest` (the sorted-collection strip).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

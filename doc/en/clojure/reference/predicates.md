@@ -4,7 +4,8 @@ The predicates over a value's kind. Each answers `true` or `false`, and every on
 `extends?` is also a function value of the same arguments. The answers follow the representation
 ([Deviations](../deviations.md)): `nil` is the empty list, a seq a verb answers over a strict
 input is a list, and decimal and `N` literals read as plain rationals. A predicate over a
-kind no value here has (`sorted?`, `delay?`, `future?`, `decimal?`, ...) answers `false`.
+kind no value here has (`delay?`, `future?`, `decimal?`, ...) answers `false`. A sorted map
+or set is a map or set to every predicate, and `sorted?` and `reversible?` hold for it.
 `coll?` and the other predicates are on [Numbers and predicates](numbers.md).
 
 | Name | Example | Result |
@@ -15,7 +16,7 @@ kind no value here has (`sorted?`, `delay?`, `future?`, `decimal?`, ...) answers
 | `set?` | `(set? #{1})` | `true` |
 | `list?` | `(list? '(1))` | `true` |
 | `record?` | `(record? {:a 1})` | `false` |
-| `sorted?` | `(sorted? [1 2])` | `false` |
+| `sorted?` | `(sorted? (sorted-set 1 2))` | `true` |
 | `seqable?` | `(seqable? "ab")` | `true` |
 | `associative?` | `(associative? [1])` | `true` |
 | `counted?` | `(counted? [1])` | `true` |

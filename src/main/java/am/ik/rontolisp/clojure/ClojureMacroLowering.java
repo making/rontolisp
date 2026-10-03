@@ -341,6 +341,9 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%RECORD")) {
 					return decodeRecord(ctx, cons);
 				}
+				if (tag.name().equals(":C%SORTED")) {
+					return decodeSorted(ctx, cons);
+				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
 				}
@@ -403,6 +406,36 @@ final class ClojureMacroLowering {
 				&& parts.get(4) instanceof LispString className) {
 			return ClojureLowerUtil.list(new LispSymbol("%record"), new LispSymbol(className.value()),
 					decodeDatum(ctx, table));
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * A sorted collection answer back to its literal: a map or set literal of its entries
+	 * or members in order, which builds an unsorted one, like the oracle's compiler (a
+	 * returned collection is a literal of its kind, so {@code sorted?} of it is false).
+	 */
+	static LispVal decodeSorted(ClojureLowering ctx, LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 4 && parts.get(3) instanceof LispArray items
+				&& items.dimensions().length == 1) {
+			boolean set = !(parts.get(1) instanceof LispNil);
+			List<LispVal> elements = new ArrayList<>();
+			elements.add(new LispSymbol(set ? "%hash-set" : "%hash-map"));
+			for (int i = 0; i < items.totalSize(); i++) {
+				LispVal item = items.readFlat(i);
+				if (set) {
+					elements.add(decodeDatum(ctx, item));
+				}
+				else if (item instanceof LispArray entry && entry.totalSize() == 2) {
+					elements.add(decodeDatum(ctx, entry.readFlat(0)));
+					elements.add(decodeDatum(ctx, entry.readFlat(1)));
+				}
+				else {
+					throw new LispReadException("an unreadable value: " + wrapper.print());
+				}
+			}
+			return ClojureLowerUtil.list(elements);
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}

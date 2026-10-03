@@ -1,0 +1,89 @@
+package am.ik.rontolisp.clojure;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The strip of the sorted-collection arms ({@link ClojureSortedArms}): what a program
+ * that builds no sorted collection is left with is the form each verb lowered to before.
+ */
+class ClojureSortedArmsTest {
+
+	private static List<LispVal> read(String source) {
+		return LispReader.readAllFromString(source);
+	}
+
+	private static String stripped(String source) {
+		return ClojureSortedArms.strip(read(source)).stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void aTestFoldsAwayItsClauseItsBranchAndItsDisjunct() {
+		assertThat(stripped("(cond ((consp x) 1) ((rontolisp::%clojure-sorted-p x) (f x)) (t 2))"))
+			.isEqualTo("(COND ((CONSP X) 1) (T 2))");
+		assertThat(stripped("(if (rontolisp::%clojure-sorted-map-p m) (g m) (h m))")).isEqualTo("(H M)");
+		assertThat(stripped("(if (rontolisp::%clojure-sorted-set-p m) (g m))")).isEqualTo("NIL");
+		assertThat(stripped("(or (a x) (b x) (rontolisp::%clojure-sorted-p x))")).isEqualTo("(OR (A X) (B X))");
+		assertThat(stripped("(or (a x) (rontolisp::%clojure-sorted-p x))")).isEqualTo("(A X)");
+		assertThat(stripped("(cond ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b)) 1) (t 2))"))
+			.isEqualTo("(COND (T 2))");
+		// a test over a car/cdr read of a variable folds too
+		assertThat(stripped("(if (rontolisp::%clojure-sorted-map-p (car maps)) (car maps) nil)")).isEqualTo("NIL");
+	}
+
+	@Test
+	void aViewIsItsFirstArgumentAndAnAliasItsPlainHelper() {
+		assertThat(stripped("(remhash (rontolisp::%clojure-table-key (rontolisp::%clojure-sorted-key k m) c) c)"))
+			.isEqualTo("(REMHASH (RONTOLISP::%CLOJURE-TABLE-KEY K C) C)");
+		assertThat(stripped("(cadr (rontolisp::%clojure-sorted-hashed s))")).isEqualTo("(CADR S)");
+		assertThat(stripped("(rontolisp::%clojure-sorted-shrunk (list :c%set table) s)"))
+			.isEqualTo("(LIST :C%SET TABLE)");
+		assertThat(stripped("(lambda (x) (rontolisp::%clojure-is-set x) (rontolisp::%clojure-is-reversible x))"))
+			.isEqualTo("(LAMBDA (X) (RONTOLISP::%CLOJURE-SET-P X) (RONTOLISP::%CLOJURE-IS-VECTOR X))");
+	}
+
+	@Test
+	void formsWithoutAnArmAreAnsweredThemselves() {
+		List<LispVal> forms = read("(defun f (x) (cond ((consp x) 1) (t (or x 2)))) '(rontolisp::%clojure-sorted-p x)");
+		assertThat(ClojureSortedArms.strip(forms)).isSameAs(forms);
+		List<LispVal> mixed = read(
+				"(defun f (x) (if (g x) 1 2)) (defun h (x) (or (rontolisp::%clojure-sorted-p x) x))");
+		List<LispVal> out = ClojureSortedArms.strip(mixed);
+		assertThat(out.get(0)).isSameAs(mixed.get(0));
+		assertThat(out.get(1).print()).isEqualTo("(DEFUN H (X) X)");
+	}
+
+	@Test
+	void anArmTheStripCannotFoldIsRefused() {
+		// a test anywhere else would survive the strip and splice the sorted runtime
+		// after
+		// all; one over an argument with an effect would lose that effect
+		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(and (a x) (rontolisp::%clojure-sorted-p x))")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("cannot fold");
+		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(if (rontolisp::%clojure-sorted-p (pop xs)) 1 2)")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("an argument with an effect");
+		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(rontolisp::%clojure-sorted-key k (next m))")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("an argument with an effect");
+	}
+
+	@Test
+	void theScanTellsAProducerFromAnArm() {
+		assertThat(ClojureSortedArms.scan(read("(if (rontolisp::%clojure-sorted-p x) 1 2)")))
+			.isEqualTo(new ClojureSortedArms.Scan(false, true));
+		assertThat(ClojureSortedArms.scan(read("(rontolisp::%clojure-sorted-make t nil (list 1))")).builds()).isTrue();
+		assertThat(ClojureSortedArms.scan(read("#'rontolisp::%clojure-sorted-set-by-v")).builds()).isTrue();
+		assertThat(ClojureSortedArms.scan(read("(princ 1)")).strips()).isFalse();
+		assertThat(ClojureSortedArms.scan(read("(rontolisp::%clojure-is-set x)")).strips()).isTrue();
+	}
+
+}

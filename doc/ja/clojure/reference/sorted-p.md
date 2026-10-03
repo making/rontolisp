@@ -2,8 +2,8 @@
 
 `(sorted? x)`
 
-`clojure.core/sorted?`: どの値にも `false` を返します。ソート済みコレクションはまだないため、ここにはそれに当たる値がありません。引数は評価されます。値としては1引数の関数です。
+`clojure.core/sorted?`: ソート済みのマップかセット（`sorted-map`・`sorted-set` とその `-by` 形）なら `true`、ハッシュマップ・セット・ベクターは `false` を返します。値としては1引数の関数です。
 
 ```clojure
-(println (sorted? {:a 1}) (sorted? [1 2]))  ; false false
+(println (sorted? (sorted-map :a 1)) (sorted? {:a 1}) (sorted? [1 2]))  ; true false false
 ```

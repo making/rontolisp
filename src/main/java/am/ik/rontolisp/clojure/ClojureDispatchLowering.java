@@ -124,6 +124,12 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("pattern")));
 		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isMatcherForm(one),
 				ClojureCollectionLowering.keywordForm("matcher")));
+		// a sorted map or set is a map or set to class (its wrapper is a cons): an arm a
+		// program building no sorted collection sheds
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(one),
+				ClojureCollectionLowering.keywordForm("map")));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
+				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),

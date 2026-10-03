@@ -5358,10 +5358,11 @@ cases:
       false 2 true
       false :refused :refused :refused :refused
   - name: predicates-of-kinds-no-value-has-answer-false
-    # Oracle-identical (clj 1.12.6): no sorted collection, chunked seq, decimal, byte
-    # array, delay, future, reader conditional, tagged literal or host object exists in
-    # these programs. The host kinds answer true on the interpreter and the JVM
-    # (ClojureInteropTest).
+    # Oracle-identical (clj 1.12.6): an unsorted map, vector or set is not sorted?, and no
+    # chunked seq, decimal, byte array, delay, future, reader conditional, tagged literal
+    # or host object exists in these programs. The host kinds answer true on the
+    # interpreter and the JVM (ClojureInteropTest); sorted? of a sorted collection is
+    # sorted-collections-and-the-type-predicates.
     source: |
       (prn (sorted? {}) (sorted? []) (chunked-seq? (lazy-seq [1])) (chunked-seq? '(1)) (decimal? 1.5) (bytes? [1]) (bytes? "s") (delay? 1) (future? 1) (reader-conditional? '(1)) (tagged-literal? 1) (class? 1) (inst? 1) (uuid? "x") (uri? "http://a"))
       (prn (map sorted? [nil #{}]) (map delay? [nil]) (map future? [nil]) (map class? [nil]) (map inst? [nil]) (map uuid? [nil]) (map uri? [nil]))
@@ -5419,3 +5420,213 @@ cases:
       (prn (identical? 1000 1000) (identical? 'a 'a) (identical? 1.5 1.5) (identical? {} {}))
     expected: |
       true true true false
+  - name: sorted-map-and-sorted-set-print-in-comparator-order
+    # Oracle-identical (clj 1.12.6): compare orders the keys (nil first, numbers across
+    # their kinds, vectors by length first); of keys comparing equal the first stays and,
+    # in a map, the last value wins.
+    source: |
+      (prn (sorted-map :b 1 :a 2 :c 3) (sorted-set 3 1 2) (sorted-map) (sorted-set))
+      (prn (sorted-map :a 1 :a 2) (sorted-set 1 1.0) (sorted-set 1.0 1) (sorted-map 1 :x 1.0 :y))
+      (prn (sorted-set nil 1 2) (sorted-map nil 1 :a 2) (sorted-set [1 2] [1 1] [0 5 6]) (sorted-set 1 2.5 3/2 -1))
+      (prn (sorted-set "b" "a" "ab") (sorted-set \c \a) (sorted-set true false) (sorted-set 'b 'a 'a/b) (sorted-set :b :a :a/b :c/a))
+      (println (sorted-map :a "x") (str (sorted-map :a 1 :b "x")) (pr-str (sorted-set "a" "b")))
+      (prn (apply sorted-map [:b 1 :a 2]) (apply sorted-set [3 1 2]) (map sorted-set [3 1]))
+    expected: |
+      {:a 2, :b 1, :c 3} #{1 2 3} {} #{}
+      {:a 2} #{1} #{1.0} {1 :y}
+      #{nil 1 2} {nil 1, :a 2} #{[1 1] [1 2] [0 5 6]} #{-1 1 3/2 2.5}
+      #{"a" "ab" "b"} #{\a \c} #{false true} #{a b a/b} #{:a :b :a/b :c/a}
+      {:a x} {:a 1, :b "x"} #{"a" "b"}
+      {:a 2, :b 1} #{1 2 3} (#{3} #{1})
+  - name: sorted-collections-look-up-through-their-comparator
+    # Oracle-identical (clj 1.12.6): a key comparing equal to a stored one finds it, so
+    # 1.0 finds 1; an empty sorted map compares nothing.
+    source: |
+      (prn (get (sorted-map 1 :a) 1.0) (get (sorted-map) "x") (get (sorted-set 1 2) 2.0) (contains? (sorted-set 1 2) 2.0) (contains? (sorted-map :a 1) :b))
+      (prn ((sorted-set 1 2) 2) ((sorted-map :a 1) :a) ((sorted-map :a 1) :b :dflt) (:a (sorted-map :a 1)) (:b (sorted-map :a 1) :d))
+      (prn (find (sorted-map :a 1) :a) (find (sorted-map :a 1) :b) (get-in (sorted-map :a (sorted-map :b 1)) [:a :b]))
+      (prn (let [{:keys [a b]} (sorted-map :a 1 :b 2)] [a b]) (let [{x 1.0} (sorted-map 1 :one)] x) (map get [(sorted-map :a 1)] [:a]) (filter (sorted-set 1 3) [1 2 3]))
+    expected: |
+      :a nil 2 true false
+      2 1 :dflt 1 :d
+      [:a 1] nil 1
+      [1 2] :one (1) (1 3)
+  - name: sorted-collections-grow-and-shrink-in-order
+    # Oracle-identical (clj 1.12.6): every verb answers a sorted collection under the
+    # same comparator, keeping a stored key a new one compares equal to; select-keys
+    # answers a plain map, like the oracle's.
+    source: |
+      (prn (assoc (sorted-map :b 1) :a 2) (assoc (sorted-map :b 1) :b 2 :c 3) (assoc (sorted-map 1 :a) 1.0 :b))
+      (prn (dissoc (sorted-map :b 1 :a 2) :a) (dissoc (sorted-map :b 1 :a 2) :z) (dissoc (sorted-map) "z") (dissoc (sorted-map 1 :a 2 :b) 1.0))
+      (prn (conj (sorted-set 2) 1) (conj (sorted-set 2) 2.0) (conj (sorted-map :b 1) [:a 2]) (conj (sorted-map :b 1) {:a 2 :c 3}) (conj (sorted-map :b 1) nil))
+      (prn (disj (sorted-set 1 2 3) 2) (disj (sorted-set 1 2 3) 2.0) (disj (sorted-set 1 2 3) 5))
+      (prn (into (sorted-map) {:b 1 :a 2}) (into (sorted-set) [3 1 2]) (into [] (sorted-set 3 1 2)) (into (sorted-map-by >) {1 :a 2 :b}))
+      (prn (merge (sorted-map :b 1) {:a 2}) (merge {} (sorted-map :a 2)) (merge-with + (sorted-map :b 1) {:b 2 :a 2}) (merge-with + (sorted-map 1 1) {1.0 2}))
+      (prn (update (sorted-map :a 1) :a inc) (assoc-in (sorted-map) [:a :b] 1) (update-in (sorted-map :a {:b 1}) [:a :b] inc))
+      (prn (select-keys (sorted-map :a 1 :b 2) [:b]) (select-keys (sorted-map 1 :a) [1.0]))
+      (prn (apply assoc (sorted-map :b 1) [:a 2]) (apply dissoc (sorted-map :a 1 :b 2) [:a]) (apply disj (sorted-set 1 2 3) [1 2]) (reduce conj (sorted-set) [3 1 2]))
+      (prn (apply merge [(sorted-map :b 1) {:a 2}]) (apply merge-with + [(sorted-map :b 1) {:b 2 :a 2}]) (map dissoc [(sorted-map 1 :a 2 :b)] [1.0]))
+    expected: |
+      {:a 2, :b 1} {:b 2, :c 3} {1 :b}
+      {:b 1} {:a 2, :b 1} {} {2 :b}
+      #{1 2} #{2} {:a 2, :b 1} {:a 2, :b 1, :c 3} {:b 1}
+      #{1 3} #{1 3} #{1 2 3}
+      {:a 2, :b 1} #{1 2 3} [1 2 3] {2 :b, 1 :a}
+      {:a 2, :b 1} {:a 2} {:a 2, :b 3} {1 3}
+      {:a 2} {:a {:b 1}} {:a {:b 2}}
+      {:b 2} {1 :a}
+      {:a 2, :b 1} {:b 2} #{3} #{1 2 3}
+      {:a 2, :b 1} {:a 2, :b 3} ({2 :b})
+  - name: sorted-collections-seq-in-order
+    # Oracle-identical (clj 1.12.6): seq, rseq, keys and vals walk the comparator's
+    # order, and every seq verb reads a sorted collection through them.
+    source: |
+      (prn (seq (sorted-map :b 1 :a 2)) (seq (sorted-map)) (seq (sorted-set)) (first (sorted-set 3 1 2)) (first (sorted-map :b 1 :a 2)))
+      (prn (rest (sorted-set 3 1 2)) (next (sorted-set 1)) (last (sorted-set 3 1 2)) (rseq (sorted-map :b 1 :a 2)) (rseq (sorted-map)) (rseq (sorted-set 1 2 3)))
+      (prn (keys (sorted-map :b 1 :a 2)) (vals (sorted-map :b 1 :a 2)) (keys (sorted-map)) (vals (sorted-map)) (map keys [(sorted-map :b 1 :a 2)]) (map rseq [(sorted-set 1 2)]))
+      (prn (count (sorted-map :b 1 :a 2)) (count (sorted-set)) (empty? (sorted-set)) (empty? (sorted-map :a 1)) (not-empty (sorted-set)) (not-empty (sorted-set 1)))
+      (prn (map inc (sorted-set 3 1 2)) (filter odd? (sorted-set 3 1 2)) (reduce + (sorted-set 1 2 3)) (reduce (fn [acc [k v]] (+ acc v)) 0 (sorted-map :a 1 :b 2)))
+      (prn (reduce-kv (fn [acc k v] (conj acc k)) [] (sorted-map :b 1 :a 2)) (vec (sorted-set 3 1 2)) (sort (sorted-set 3 1 2)) (for [x (sorted-set 3 1 2)] (* x 10)))
+      (prn (map key (sorted-map :b 1 :a 2)) (map val (sorted-map :b 1 :a 2)) (apply + (sorted-set 1 2 3)) (let [[[k v]] (seq (sorted-map :b 1 :a 2))] [k v]))
+      (doseq [[k v] (sorted-map :b 2 :a 1)] (println k v))
+    expected: |
+      ([:a 2] [:b 1]) nil nil 1 [:a 2]
+      (2 3) nil 3 ([:b 1] [:a 2]) nil (3 2 1)
+      (:a :b) (2 1) nil nil ((:a :b)) ((2 1))
+      2 0 true false nil #{1}
+      (2 3 4) (1 3) 6 3
+      [:a :b] [1 2 3] (1 2 3) (10 20 30)
+      (:a :b) (2 1) 6 [:a 2]
+      :a 1
+      :b 2
+  - name: sorted-collections-equal-and-key-like-their-unsorted-kind
+    # Oracle-identical (clj 1.12.6): = compares on the first argument's side, so the
+    # comparator finds 1.0 in a sorted collection where a hash one keeps it apart; as a
+    # key a sorted collection finds an = hash one and keeps the sorted spelling.
+    source: |
+      (prn (= (sorted-map :a 1) {:a 1}) (= {:a 1} (sorted-map :a 1)) (= (sorted-set 1) #{1}) (= #{1} (sorted-set 1)))
+      (prn (= (sorted-set 1) #{1.0}) (= #{1.0} (sorted-set 1)) (= (sorted-map 1 :a) {1.0 :a}) (= {1.0 :a} (sorted-map 1 :a)))
+      (prn (= (sorted-map 1 2) (sorted-map-by > 1 2)) (= (sorted-set 1 2) (sorted-set-by > 1 2)) (= (sorted-set 1 2) [1 2]) (not= (sorted-map :a 1) {:a 2}))
+      (prn (contains? #{(sorted-set 1 2)} #{1 2}) (get {(sorted-map :a 1) :x} {:a 1}) (keys (assoc {} (sorted-set 2 1) :b)) (distinct [(sorted-set 1) #{1}]))
+    expected: |
+      true true true true
+      true false false true
+      true true false true
+      true :x (#{1 2}) (#{1})
+  - name: sorted-map-by-and-sorted-set-by-order-through-a-comparator
+    # Oracle-identical (clj 1.12.6): a comparator answering a boolean is less-than (its
+    # false asks the reversed call), one answering a number is read by its integer part
+    # (0.5 is equal), and keys it calls equal collapse into the first.
+    source: |
+      (prn (sorted-map-by > 1 :a 2 :b 3 :c) (sorted-set-by > 1 2 3) (sorted-map-by compare :b 1 :a 2) (sorted-map-by #(compare %2 %1) :b 1 :a 2 :c 3))
+      (prn (sorted-set-by (fn [a b] (compare (count a) (count b))) "ab" "cd" "x") (sorted-map-by (fn [a b] (compare (count a) (count b))) "ab" 1 "cd" 2))
+      (prn (sorted-set-by (fn [a b] 0.5) 1 2) (sorted-set-by (fn [a b] (- a b)) 3 1 2) (sorted-set-by (fn [a b] (> a b)) 3 1 2) (apply sorted-map-by > [1 :a 2 :b]))
+      (prn (sorted-set-by compare '(1 2)) (conj (sorted-set-by >) 1 3 2) (assoc (sorted-map-by >) 1 :a 2 :b))
+    expected: |
+      {3 :c, 2 :b, 1 :a} #{3 2 1} {:a 2, :b 1} {:c 3, :b 1, :a 2}
+      #{"x" "ab"} {"ab" 2}
+      #{1} #{1 2 3} #{3 2 1} {2 :b, 1 :a}
+      #{(1 2)} #{3 2 1} {2 :b, 1 :a}
+  - name: subseq-and-rsubseq-walk-a-bounded-range
+    # Oracle-identical (clj 1.12.6) but for the last line: a > or >= test (a < or <=
+    # for rsubseq) starts at the key, any other walks from the start while it holds,
+    # each in the comparator's order; a test passed as a value is recognized by how it
+    # answers. Where nothing passes after a walk from the start the oracle prints its
+    # empty lazy seq, (), and here nil, like every strict seq verb.
+    source: |
+      (prn (subseq (sorted-set 1 2 3) > 1) (subseq (sorted-set 1 2 3) >= 2) (subseq (sorted-set 1 2 3) < 3) (subseq (sorted-set 1 2 3) <= 2) (subseq (sorted-set 1 2 3) > 5))
+      (prn (subseq (sorted-set 1 2 3 4 5) > 1 < 4) (subseq (sorted-set 1 2 3 4 5) >= 2 <= 4) (subseq (sorted-set 1 2 3 4 5) > 10 < 20))
+      (prn (rsubseq (sorted-set 1 2 3) < 3) (rsubseq (sorted-set 1 2 3) > 1) (rsubseq (sorted-set 1 2 3) <= 2) (rsubseq (sorted-set 1 2 3 4 5) > 1 < 4) (rsubseq (sorted-set 1 2 3 4 5) >= 2 <= 4))
+      (prn (subseq (sorted-map :a 1 :b 2 :c 3) > :a) (rsubseq (sorted-map :a 1 :b 2 :c 3) < :c) (subseq (sorted-set-by > 1 2 3) > 2) (subseq (sorted-set-by > 1 2 3) < 2))
+      (prn (let [t >] (subseq (sorted-set 1 2 3) t 1)) (subseq (sorted-set) > 1) (subseq (sorted-set 1 2 3) > 1.5) (apply subseq [(sorted-set 1 2 3) >= 2]) (apply rsubseq [(sorted-set 1 2 3) < 3]))
+      (prn (subseq (sorted-set 1 2 3) < 0) (rsubseq (sorted-set 1 2 3) > 5))
+    expected: |
+      (2 3) (2 3) (1 2) (1 2) nil
+      (2 3) (2 3 4) nil
+      (2 1) (3 2) (2 1) (3 2) (4 3 2)
+      ([:b 2] [:c 3]) ([:b 2] [:a 1]) (1) (3)
+      (2 3) nil (2 3) (2 3) (2 1)
+      nil nil
+  - name: sorted-collections-and-the-type-predicates
+    # Oracle-identical (clj 1.12.6) but for class: here it answers the kind keyword (a
+    # sorted map is :map, a sorted set :set), the oracle its host class
+    # (clojure.lang.PersistentTreeMap, ...PersistentTreeSet).
+    source: |
+      (prn (sorted? (sorted-map)) (sorted? (sorted-set)) (sorted? {}) (reversible? (sorted-map)) (reversible? (sorted-set)) (reversible? []) (reversible? {}))
+      (prn (map? (sorted-map)) (set? (sorted-set)) (map? (sorted-set)) (set? (sorted-map)) (coll? (sorted-set)) (seqable? (sorted-set)) (counted? (sorted-set)) (counted? (sorted-map)))
+      (prn (associative? (sorted-map)) (associative? (sorted-set)) (ifn? (sorted-set)) (ifn? (sorted-map)) (sequential? (sorted-set)) (seq? (sorted-set)) (vector? (sorted-set)) (list? (sorted-set)) (fn? (sorted-set)) (record? (sorted-map)))
+      (prn (map sorted? [(sorted-map) {}]) (filter set? [(sorted-set) #{} {}]) (class (sorted-map)) (class (sorted-set)))
+    expected: |
+      true true false true true true false
+      true true false false true true true true
+      true false true true false false false false false false
+      (true false) (#{} #{}) :map :set
+  - name: compare-orders-like-the-oracle
+    # Oracle-identical (clj 1.12.6): numbers by value across their kinds, strings,
+    # keywords and symbols as compareTo (the difference of the first differing
+    # characters; a name without a namespace first), false before true, nil before
+    # anything, vectors by length then member by member.
+    source: |
+      (prn (compare 1 2) (compare 2 1) (compare 1 1.0) (compare "a" "c") (compare "abc" "ab") (compare :a :c) (compare :a :a/b) (compare :b/a :a/b) (compare 'a 'c) (compare \a \c))
+      (prn (compare false true) (compare nil 1) (compare 1 nil) (compare nil nil) (compare [1 2] [1 3]) (compare [1 2] [1 2 3]) (compare [1 2 3] [9 9]) (compare ##NaN 1) (compare 1/2 0.5) (compare [] []))
+      (prn (map compare [1 2] [2 1]) (sort compare [3 1 2]) (sort #(compare %2 %1) [3 1 2]) (sort-by identity #(compare %2 %1) [3 1 2]) (apply compare ["b" "a"]))
+    expected: |
+      -1 1 0 -2 1 -2 -1 1 -2 -2
+      -1 -1 1 0 -1 -1 1 0 0 0
+      (-1 1) (1 2 3) (3 2 1) (3 2 1) 1
+  - name: sort-reads-a-comparator-answering-a-number
+    # Oracle-identical (clj 1.12.6): a comparator answering a number orders by its
+    # integer part's sign (it was read by truthiness, so every number meant less).
+    source: |
+      (prn (sort (fn [a b] (- a b)) [3 1 2 5 4]) (sort-by - (fn [a b] (- a b)) [3 1 2]) (sort > [3 1 2]) (sort (fn [a b] (* 0.5 (- a b))) [2 1]) (sort-by count compare ["ccc" "a" "bb"]))
+    expected: |
+      (1 2 3 4 5) (3 2 1) (3 2 1) (2 1) ("a" "bb" "ccc")
+  - name: vector-of-stores-each-member-as-its-primitive
+    # Oracle-identical (clj 1.12.6) but for the last line: the answer is an ordinary
+    # vector, so a later conj or assoc stores its value as given (the oracle's Vec keeps
+    # casting: [1 2]).
+    source: |
+      (prn (vector-of :int 1 2) (vector-of :int 1.7 -1.7) (vector-of :long 1 2) (vector-of :double 1 2) (vector-of :float 1 2) (vector-of :char 97 98) (vector-of :char \a))
+      (prn (vector-of :boolean true false) (vector-of :boolean 1) (vector-of :int) (vector-of :double 1/2) (vector-of :long 1.5) (vector-of :int ##NaN))
+      (prn (vector-of :boolean false nil 0) (vector-of :char 97.6) (vector-of :int \a) (vector-of :byte 1.9) (vector-of :short 32767 -32768) (vector-of :int 2147483647 -2147483648))
+      (prn (= (vector-of :int 1 2) [1 2]) (vector? (vector-of :int 1 2)) (map (partial vector-of :int) [1 2]) (apply vector-of :int [1 2.5]))
+      (prn (conj (vector-of :int 1) 2.5))
+    expected: |
+      [1 2] [1 -1] [1 2] [1.0 2.0] [1.0 2.0] [\a \b] [\a]
+      [true false] [true] [] [0.5] [1] [0]
+      [false false true] [\a] [97] [1] [32767 -32768] [2147483647 -2147483648]
+      true true ([1] [2]) [1 2]
+      [1 2.5]
+  - name: sorted-collections-refuse-like-the-oracle
+    # The first three lines are the oracle's messages (clj 1.12.6); on the last the
+    # oracle names Java casts (PersistentVector cannot be cast to clojure.lang.Sorted,
+    # Keyword to java.util.Comparator, to java.lang.Number).
+    source: |
+      (defn sc-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (println (sc-msg #(sorted-map :a)) "|" (sc-msg #(sorted-map nil)))
+      (println (sc-msg #(sorted-set '(1 2))) "|" (sc-msg #(conj (sorted-set) {:a 1})) "|" (sc-msg #(assoc (sorted-map) (sorted-set 1) 1)))
+      (println (sc-msg #(vector-of :foo 1)) "|" (sc-msg #(vector-of :byte 200)) "|" (sc-msg #(vector-of :short 70000)) "|" (sc-msg #(vector-of :int 3000000000)) "|" (sc-msg #(vector-of :char 65536)))
+      (println (sc-msg #(subseq [1 2 3] > 1)) "|" (sc-msg #(sorted-set-by :foo 1)) "|" (sc-msg #(compare 1 :a)) "|" (sc-msg #(get (sorted-map :a 1) 1)))
+    expected: |
+      No value supplied for key: :a | No value supplied for key: null
+      Default comparator requires nil, Number, or Comparable: (1 2) | Default comparator requires nil, Number, or Comparable: {:a 1} | Default comparator requires nil, Number, or Comparable: #{1}
+      Unrecognized type :foo | Value out of range for byte: 200 | Value out of range for short: 70000 | integer overflow | Value out of range for char: 65536
+      subseq needs a sorted collection | a sorted collection needs a comparator function | compare needs two values of one comparable kind | compare needs two values of one comparable kind
+  - name: clojure-set-grows-and-shrinks-a-sorted-set
+    # Oracle-identical (clj 1.12.6): union grows the larger input, so a sorted set
+    # stays one, and rename-keys keeps a sorted map sorted.
+    source: |
+      (prn (clojure.set/union (sorted-set 1 2) #{3}) (clojure.set/union #{3} (sorted-set 1 2)) (clojure.set/difference (sorted-set 1 2 3) #{3 2}) (clojure.set/intersection (sorted-set 1 2 3) #{2}))
+      (prn (clojure.set/subset? (sorted-set 1) #{1 2}) (clojure.set/superset? (sorted-set 1 2) #{1}) (clojure.set/select odd? (sorted-set 1 2 3)) (clojure.set/rename-keys (sorted-map :a 1 :b 2) {:a :c}))
+    expected: |
+      #{1 2 3} #{1 2 3} #{1} #{2}
+      true true #{1 3} {:b 2, :c 1}
+  - name: sorted-collections-carry-metadata-and-travel-through-macros
+    # Oracle-identical (clj 1.12.6): with-meta keeps the order, and a macro answering a
+    # sorted collection gives back a literal of its kind, which is unsorted, like the
+    # oracle's compiler.
+    source: |
+      (defmacro sc-sorted [] (sorted-map-by > :a 1))
+      (prn (meta (with-meta (sorted-map :a 1) {:m 1})) (with-meta (sorted-set 2 1) {:m 1}) (sc-sorted) (sorted? (sc-sorted)))
+    expected: |
+      {:m 1} #{1 2} {:a 1} false

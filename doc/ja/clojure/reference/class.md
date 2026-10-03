@@ -3,7 +3,8 @@
 `(class x)`
 
 値の種類をキーワードで返します。`:map`・`:vector`・`:set`・`:list`・`:string`・
-`:number`・`:keyword`・`:symbol`・`:char`・`:boolean`・`:nil`・`:function`・`:atom` です。
+`:number`・`:keyword`・`:symbol`・`:char`・`:boolean`・`:nil`・`:function`・`:atom` です
+（ソート済みマップは `:map`、ソート済みセットは `:set`）。
 オラクルはホストクラスを返しますが、wasm バックエンドにはないため、全バックエンド共通で
 種類名のキーワードを返します。record/deftype はタグのキーワードを返します。ホストオブジェクトは
 インタプリタと JVM でホストクラスを返すため、それに対する `class` ディスパッチは `Object` か

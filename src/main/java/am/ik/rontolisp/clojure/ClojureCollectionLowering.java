@@ -381,12 +381,12 @@ final class ClojureCollectionLowering {
 		LispSymbol copy = ctx.freshTemp();
 		List<LispVal> body = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
-			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(ctx.lower(items.get(i)), copy),
-					copy));
+			LispVal key = ctx.lower(items.get(i));
+			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
+					lookupKey(storedKey(key, map), copy, isScalarKeyForm(key)), copy));
 		}
 		body.add(dissocAnswer(ctx, map, copy));
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
-				ClojureProtocolLowering.typedTableOf(map), map);
+		LispVal src = dissocSource(map);
 		LispVal rebuilt = ClojureLowerUtil
 			.letForm(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src)))), body);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -412,12 +412,37 @@ final class ClojureCollectionLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), keep, ClojureLowering.NIL_CONST)));
 		LispVal rewrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), keep,
 				ClojureProtocolLowering.rewrapRecord(map, copy), copy);
+		// a sorted map's survivors go back in its order (a view a program building no
+		// sorted collection sheds, ClojureSortedArms)
+		LispVal survivors = ClojureSortedLowering.runtime("sorted-shrunk", copy, map);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(keep, ClojureLowering.TRUE_CONST),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), scan, rewrap), copy));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), scan, rewrap), survivors));
+	}
+
+	/**
+	 * The table {@code dissoc} copies: a record's entry table, a sorted map's entries as
+	 * a fresh table (an arm a program building no sorted collection sheds), else the map
+	 * itself.
+	 */
+	static LispVal dissocSource(LispVal map) {
+		LispVal sorted = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(map),
+				ClojureSortedLowering.runtime("sorted-table", map, LispString.literal("dissoc")), map);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
+				ClojureProtocolLowering.typedTableOf(map), sorted);
+	}
+
+	/**
+	 * A key looked up in a table of {@code coll}'s entries or members: the key a sorted
+	 * {@code coll} stores comparing equal to it, else the key itself (a view a program
+	 * building no sorted collection sheds, ClojureSortedArms). It goes inside
+	 * {@link #lookupKey}, whose literal-scalar test reads the key form itself.
+	 */
+	static LispVal storedKey(LispVal key, LispVal coll) {
+		return ClojureSortedLowering.runtime("sorted-key", key, coll);
 	}
 
 	/**
@@ -430,10 +455,10 @@ final class ClojureCollectionLowering {
 		LispSymbol bound = ctx.freshTemp();
 		LispSymbol copy = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(bound),
-				ClojureProtocolLowering.typedTableOf(bound), bound);
+		LispVal src = dissocSource(bound);
 		LispVal drops = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, keys)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(one, copy), copy));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(storedKey(one, bound), copy, false),
+						copy));
 		LispVal rebuilt = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src))))), drops,
 				dissocAnswer(ctx, bound, copy));
@@ -500,6 +525,10 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), coll, key)));
 		branches.add(ClojureLowerUtil.list(indexForm(coll, key, false),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("char"), coll, key)));
+		// a sorted map or set reads by its comparator (an arm a program building none
+		// sheds, ClojureSortedArms)
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
+				ClojureSortedLowering.runtime("sorted-get", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
 	}
@@ -567,6 +596,8 @@ final class ClojureCollectionLowering {
 									miss)))));
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, true), ClojureLowering.TRUE_CONST));
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, false), ClojureLowering.TRUE_CONST));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(bound),
+				ctx.booleanAnswer(ClojureSortedLowering.runtime("sorted-contains", bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ctx.falseVariable));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
@@ -614,13 +645,14 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), take, acc))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
 						ClojureProtocolLowering.typedTableOf(map), map));
+		LispVal gathered = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect, acc);
+		// a sorted map answers its keys (vals) in order
+		LispVal sorted = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(map),
+				ClojureSortedLowering.runtime("sorted-keys", map, new LispInteger(keys ? 0 : 1)), gathered);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))),
-								collect, acc),
-						ClojureLowering.NIL_CONST));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, sorted, ClojureLowering.NIL_CONST));
 	}
 
 	/** {@code keys} as a value: a one-argument lambda over the same accumulation. */
@@ -662,8 +694,8 @@ final class ClojureCollectionLowering {
 				base = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST);
 				continue;
 			}
-			plists.add(
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, tablePlist(src), ClojureLowering.NIL_CONST));
+			plists.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, entriesPlist(one, src),
+					ClojureLowering.NIL_CONST));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
@@ -686,7 +718,7 @@ final class ClojureCollectionLowering {
 		LispSymbol probe = ctx.freshTemp();
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal onePlist = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, tablePlist(src),
+		LispVal onePlist = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, entriesPlist(one, src),
 				ClojureLowering.NIL_CONST);
 		LispVal gather = ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), onePlist), maps);
@@ -699,17 +731,29 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), found), probe),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), found, probe)));
 		// the answer is nil unless some map is present, but the rewrap follows the
-		// first map (a nil first map answers a plain map), like the oracle
+		// first map (a nil first map answers a plain map), like the oracle; a sorted
+		// first map is the base the pairs join, so the answer keeps its order (an arm a
+		// program building no sorted collection sheds)
 		LispVal first = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), maps);
+		LispVal base = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(first),
+				first, ClojureLowering.NIL_CONST);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, maps),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST),
 								ClojureLowerUtil.list(grown, spread))),
-						find,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
-								rewrapAnswer(ctx, first, grownTable(ClojureLowering.NIL_CONST, grown)),
-								ClojureLowering.NIL_CONST)));
+						find, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
+								rewrapAnswer(ctx, first, grownTable(base, grown)), ClojureLowering.NIL_CONST)));
+	}
+
+	/**
+	 * The entries a map joining a merge adds, as a plist: a sorted map's in order (an arm
+	 * a program building no sorted collection sheds), else its table's ({@code src}, a
+	 * record's entry table or the map).
+	 */
+	static LispVal entriesPlist(LispSymbol map, LispVal src) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(map),
+				ClojureSortedLowering.runtime("sorted-plist", map), tablePlist(src));
 	}
 
 	static LispVal conjOf(ClojureLowering ctx, List<LispVal> items) {
@@ -759,6 +803,10 @@ final class ClojureCollectionLowering {
 										ClojureLowerUtil.quoted("list")),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), item)),
 						ClojureLowerUtil.quoted("vector"))));
+		// a sorted map or set takes the item in its order, before the list arm below
+		// (its wrapper is a cons)
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(collSym),
+				ClojureSortedLowering.runtime("sorted-conj", collSym, item)));
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureLowerUtil.list(
 						ClojureLowerUtil.sym("or"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), collSym),
@@ -919,30 +967,58 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
-				setInner(set));
+				setInner(hashedSet(set)));
 		List<LispVal> body = new ArrayList<>();
 		body.add(ClojureLowerUtil.list(table, makeTable()));
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(body), copy,
-				remhashes(ctx, items, table), wrapSet(table));
+				remhashes(ctx, items, table, set), shrunkSet(table, set));
 		LispVal needSet = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("disj needs a set"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(set, ctx.lower(items.get(1))))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), set,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isSetForm(set), kept, needSet),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(set), kept, needSet),
 						ClojureLowering.NIL_CONST));
+	}
+
+	/**
+	 * Whether the bound value is a set or a sorted set: the sorted half an arm a program
+	 * building no sorted collection sheds (ClojureSortedArms), which leaves
+	 * {@link #isSetForm}.
+	 */
+	static LispVal isAnySetForm(LispSymbol set) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), isSetForm(set),
+				ClojureSortedLowering.sortedSetTest(set));
+	}
+
+	/**
+	 * The set {@code disj} copies: a sorted set as a hash set of its members, anything
+	 * else itself (a view a program building no sorted collection sheds).
+	 */
+	static LispVal hashedSet(LispSymbol set) {
+		return ClojureSortedLowering.runtime("sorted-hashed", set);
+	}
+
+	/**
+	 * The set {@code disj} answers over its table: the hash set, or back in the sorted
+	 * set's order when it took one (a view a program building no sorted collection
+	 * sheds).
+	 */
+	static LispVal shrunkSet(LispSymbol table, LispSymbol set) {
+		return ClojureSortedLowering.runtime("sorted-shrunk", wrapSet(table), set);
 	}
 
 	/**
 	 * The {@code remhash} of each of {@code items}' keys from {@code table}, in order.
 	 */
-	static LispVal remhashes(ClojureLowering ctx, List<LispVal> items, LispSymbol table) {
+	static LispVal remhashes(ClojureLowering ctx, List<LispVal> items, LispSymbol table, LispSymbol set) {
 		if (items.size() == 2) {
 			return table;
 		}
 		List<LispVal> drops = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
-			drops.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(ctx.lower(items.get(i)), table),
-					table));
+			LispVal member = ctx.lower(items.get(i));
+			drops.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
+					lookupKey(storedKey(member, set), table, isScalarKeyForm(member)), table));
 		}
 		drops.add(table);
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), drops);
@@ -967,19 +1043,20 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), val)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
-				setInner(bound));
+				setInner(hashedSet(bound)));
 		LispVal drops = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
-				ClojureLowerUtil.list(List.of(one, members)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(one, table), table));
+				ClojureLowerUtil.list(List.of(one, members)), ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
+						lookupKey(storedKey(one, bound), table, false), table));
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops, wrapSet(table));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops,
+				shrunkSet(table, bound));
 		LispVal needSet = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("disj needs a set"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(set, ClojureLowering.AMPERSAND_REST, members)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, set))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isSetForm(bound), kept, needSet),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAnySetForm(bound), kept, needSet),
 								ClojureLowering.NIL_CONST)));
 	}
 
@@ -1118,8 +1195,12 @@ final class ClojureCollectionLowering {
 		// members); anything else takes length
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), coll, ctx.falseVariable),
 				new LispInteger(0)));
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll))));
+		// a sorted collection is a cons wrapper: its arm (one a program building none
+		// sheds) costs no other kind a test
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(coll),
+					ClojureSortedLowering.runtime("sorted-count", coll),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll)))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -1164,6 +1245,8 @@ final class ClojureCollectionLowering {
 		// a lazy seq is empty when it realizes to nothing: one level answers
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LAZY-P"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("zerop"), ClojureSortedLowering.runtime("sorted-count", coll))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),

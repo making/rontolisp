@@ -357,7 +357,8 @@ final class ClojureFnLowering {
 						ClojureLowering.NIL_CONST),
 				ClojureLowerUtil
 					.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureCollectionLowering.isSetForm(whole),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole)), refusal),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole),
+							ClojureSortedLowering.sortedTest(whole)), refusal),
 				ClojureLowerUtil.list(seqable, pick), ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, refusal)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, lowered))), check);
@@ -387,6 +388,7 @@ final class ClojureFnLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole),
 								refusal),
 						ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(whole), refusal),
+						ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(whole), refusal),
 						ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, shuffled)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, lowered))), check);

@@ -15,8 +15,10 @@ import org.jspecify.annotations.Nullable;
  * one test answering a Common Lisp boolean -- a CL type predicate or a spliced
  * {@code rontolisp::%clojure-is-} helper in {@code clojure.lisp} -- wrapped in
  * {@code (if test T false)}; as a value it is a one-argument lambda over the same test. A
- * predicate whose kind no value here can have ({@code sorted?}, {@code delay?},
- * {@code future?}, {@code decimal?}, ...) answers false after evaluating its argument.
+ * predicate whose kind no value here can have ({@code delay?}, {@code future?},
+ * {@code decimal?}, ...) answers false after evaluating its argument. {@code set?} and
+ * {@code reversible?} name the sorted-aware helpers, which a program building no sorted
+ * collection calls as the plain ones ({@link ClojureSortedArms#ALIASES}).
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -49,13 +51,14 @@ final class ClojurePredicateLowering {
 
 	private static final Map<String, Test> TESTS = Map.ofEntries(Map.entry("seq?", helper("IS-SEQ")),
 			Map.entry("sequential?", helper("IS-SEQUENTIAL")), Map.entry("map?", helper("IS-MAP")),
-			Map.entry("set?", helper("SET-P")), Map.entry("list?", helper("IS-LIST")),
+			Map.entry("set?", helper("IS-SET")), Map.entry("list?", helper("IS-LIST")),
 			Map.entry("record?", helper("RECORD-P")), Map.entry("coll?", helper("IS-COLL")),
 			Map.entry("seqable?", helper("IS-SEQABLE")), Map.entry("associative?", helper("IS-ASSOCIATIVE")),
 			Map.entry("counted?", helper("IS-COUNTED")), Map.entry("indexed?", helper("IS-VECTOR")),
-			Map.entry("reversible?", helper("IS-VECTOR")), Map.entry("ifn?", helper("IS-IFN")),
-			Map.entry("number?", cl("NUMBERP")), Map.entry("integer?", cl("INTEGERP")),
-			Map.entry("int?", helper("IS-INT")), Map.entry("double?", cl("FLOATP")), Map.entry("float?", cl("FLOATP")),
+			Map.entry("reversible?", helper("IS-REVERSIBLE")), Map.entry("ifn?", helper("IS-IFN")),
+			Map.entry("sorted?", helper("IS-SORTED")), Map.entry("number?", cl("NUMBERP")),
+			Map.entry("integer?", cl("INTEGERP")), Map.entry("int?", helper("IS-INT")),
+			Map.entry("double?", cl("FLOATP")), Map.entry("float?", cl("FLOATP")),
 			Map.entry("ratio?", helper("IS-RATIO")), Map.entry("rational?", cl("RATIONALP")),
 			Map.entry("nat-int?", helper("IS-NAT-INT")), Map.entry("pos-int?", helper("IS-POS-INT")),
 			Map.entry("neg-int?", helper("IS-NEG-INT")), Map.entry("infinite?", helper("IS-INFINITE")),
@@ -70,13 +73,13 @@ final class ClojurePredicateLowering {
 			Map.entry("uri?", host("java.net.URI")), Map.entry("class?", host("java.lang.Class")));
 
 	/**
-	 * The predicates of a kind no value here can have: no sorted collection, chunked seq,
-	 * decimal, byte array, delay, future, reader conditional or tagged literal exists on
-	 * any backend, so each answers false for every value, which is the oracle's answer
-	 * for every value a program here can build.
+	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte
+	 * array, delay, future, reader conditional or tagged literal exists on any backend,
+	 * so each answers false for every value, which is the oracle's answer for every value
+	 * a program here can build.
 	 */
-	private static final List<String> NEVER = List.of("sorted?", "chunked-seq?", "decimal?", "bytes?", "delay?",
-			"future?", "reader-conditional?", "tagged-literal?");
+	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?", "future?",
+			"reader-conditional?", "tagged-literal?");
 
 	/**
 	 * A predicate in call position, or null when the name is none of them.

@@ -207,6 +207,12 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("map")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), one),
 				ClojureCollectionLowering.keywordForm("vector")));
+		// a sorted map or set dispatches as a map or set (its wrapper is a cons): an arm
+		// a program building no sorted collection sheds
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(one),
+				ClojureCollectionLowering.keywordForm("map")));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
+				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
@@ -820,20 +826,19 @@ final class ClojureProtocolLowering {
 		}
 		fill.add(wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 				LispString.literal(def.className())));
-		LispVal whole = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("let*"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
-							ClojureLowerUtil.list(pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), src,
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isRecordForm(src),
-											ClojureCollectionLowering.tablePlist(typedTableOf(src)),
-											ClojureCollectionLowering.tablePlist(src)),
-									ClojureLowering.NIL_CONST)),
-							ClojureLowerUtil.list(miss,
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-							ClojureLowerUtil.list(List
-								.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.tableFromPlist(pairs)))),
-							ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
+		LispVal whole = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
+						ClojureLowerUtil.list(pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), src,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isRecordForm(src),
+										ClojureCollectionLowering.tablePlist(typedTableOf(src)),
+										ClojureCollectionLowering.entriesPlist(src, src)),
+								ClojureLowering.NIL_CONST)),
+						ClojureLowerUtil.list(miss,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(
+								List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.tableFromPlist(pairs)))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "map->" + name)),
 				ClojureLowerUtil.list(List.of(src)), whole);

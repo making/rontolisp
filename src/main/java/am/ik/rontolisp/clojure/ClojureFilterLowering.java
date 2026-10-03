@@ -432,19 +432,32 @@ final class ClojureFilterLowering {
 			LispSymbol right = ctx.freshTemp();
 			LispSymbol got = ctx.freshTemp();
 			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
-			LispVal truthy = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+			LispVal before = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil
 						.list(List.of(ClojureLowerUtil.list(got, ctx.callFun(cmp.real(), fun, List.of(left, right))))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+					comparatorBefore(ctx, got));
 			pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(left, right)),
-					truthy);
+					before);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("sort"), coll, pred));
+	}
+
+	/**
+	 * Whether a comparator's answer, bound to {@code got}, puts its first argument before
+	 * its second: the oracle's {@code AFunction.compare} read the way a sort reads it --
+	 * a number when its integer part is negative ({@code compare}, {@code (- a b)}),
+	 * anything else when it is truthy ({@code <}, {@code >}).
+	 */
+	static LispVal comparatorBefore(ClojureLowering ctx, LispSymbol got) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), got),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("<="), got, new LispInteger(-1)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
+						ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
 	}
 
 	/**
@@ -554,12 +567,7 @@ final class ClojureFilterLowering {
 			LispVal invoked = ctx.callFun(cmp.real(), fun, List.of(keyedLeft, keyedRight));
 			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
 			predBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))), comparatorBefore(ctx, got));
 		}
 		LispVal pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(left, right)), predBody);

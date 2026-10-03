@@ -2,7 +2,7 @@
 
 `(map? x)`
 
-`clojure.core/map?`: `true` for a map or a record. As a value a one-argument function.
+`clojure.core/map?`: `true` for a map (a sorted one too) or a record. As a value a one-argument function.
 
 ```clojure
 (defrecord MpR [a])
