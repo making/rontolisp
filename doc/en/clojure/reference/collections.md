@@ -15,6 +15,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `dissoc` | `(dissoc {:a 1} :a)` | `{}` |
 | `get` | `(get {:a 1} :b :none)` | `:none` |
 | `contains?` | `(contains? {:a 1} :a)` | `true` |
+| `find` | `(find {:a 1} :a)` | `[:a 1]` |
 | `keys` | `(keys (hash-map :a 1))` | `(:a)` |
 | `vals` | `(vals (hash-map :a 1))` | `(1)` |
 | `merge` | `(merge {:a 1} {:b 2})` | `{:a 1, :b 2}` |
@@ -32,6 +33,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |
 | `peek` | `(peek [1 2 3])` | `3` |
 | `pop` | `(pop [1 2 3])` | `[1 2]` |
+| `subvec` | `(subvec [1 2 3 4] 1 3)` | `[2 3]` |
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |
 | `update-vals` | `(update-vals {:a 1} inc)` | `{:a 2}` |
 | `reduce-kv` | `(reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2})` | `3` |
