@@ -169,6 +169,12 @@ Each is a real work item unless the reason says otherwise.
 - The whole-file pre-scan makes a definition shadow calls ABOVE it (the oracle's reach the
   core verb); a body defined above a `defn` redefinition still calls the older one (only
   `^:dynamic` names see the newest).
+- A local named like a `^:dynamic` var (a fn parameter, a `let`/`loop` binding) is the var's
+  own CL symbol (`ClojureLowerUtil.idSym`), a `defparameter`'d special, so it binds the var
+  dynamically: a function called in its scope reads the local's value (the oracle: the var).
+  A `let` did so on every backend; a parameter on the interpreter, and on the compilers since
+  special-named parameters bind dynamically (2026-10-03, `.kb/dynamic-special-variables.md`)
+  -- they answered the oracle by accident before (`.todo/c13`).
 - `catch` is catch-all; a thrown host `Throwable` reaches handlers as an opaque host object,
   so its message is lost (b66).
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;

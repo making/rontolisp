@@ -23663,6 +23663,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aParameterNamedLikeASpecialBindsItDynamically() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component, both through the whole front end: the same special let binds
+		// the parameter over the module global, and a call inside it is a call, never a
+		// return_call (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.SpecialParameterFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(am.ik.rontolisp.SpecialParameterFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+	}
+
+	@Test
 	void defparameterAndDeclaimSpecialAreDynamic() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *p* 5)

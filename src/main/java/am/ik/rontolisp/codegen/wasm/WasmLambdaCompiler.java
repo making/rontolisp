@@ -32,7 +32,7 @@ final class WasmLambdaCompiler {
 	static void compileValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
-				LambdaLists.MAX_PHYSICAL_PARAMS);
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
 		List<String> paramNames = nf.paramNames();
 		// A lambda body's tail settles the multiple-value channel like a defun's does
 		// (LispMacroExpander.settleDefunTails ran over those before Pass 1): a
@@ -126,7 +126,7 @@ final class WasmLambdaCompiler {
 	static void compileCall(LispCons lambda, LispCons call, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> lambdaParts = lambda.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
-				LambdaLists.MAX_PHYSICAL_PARAMS);
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
 		List<String> paramNames = nf.paramNames();
 		// The body is a function body however it is called: its tail settles the
 		// multiple-value channel (see compileValue).

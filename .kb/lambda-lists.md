@@ -305,6 +305,17 @@ inline `((lambda ...) ...)`.** The interpreter's answers are unchanged.
   `ref.eq` (`.kb/wasm-ref-type-fold.md`, "Singleton objects"; 2026-09-27), pinned by
   `WasmRefTypeFolderTest.anOptionalNoCallPassesCostsNothingOnceTheMarkerTestIsDecided`.
 
+## A parameter named like a special (2026-10-03)
+On the compilers `toNative(..., specials)` renames a special required or physical rest parameter
+to `__ll_sp_<position>` and binds the special from it by a `let` around the whole body, the
+`let*` prologue included; the other sections are prologue bindings under their own names, which
+a special `let*` binds dynamically anyway. `desugarProgram` leaves that renaming to `toNative`
+and takes the program's DECLARED specials only to keep a special supplied-p variable's binding
+out of `testSuppliedPInPlace`. `expandPhysical` (`flet`/`labels`, shared with the interpreter)
+knows no specials: the backend binds the parameter when the lambda reaches `toNative`, and the
+interpreter binds it in `apply`. Mechanism, measurements and the tail-call consequence:
+[dynamic-special-variables.md](dynamic-special-variables.md), "Parameters named like a special".
+
 ## Variadic calling convention (both compilers)
 Physically fixed-arity: required params, the physical optionals, then one trailing
 rest-list param (`variadic`), reusing `TYPE_CALLABLE_BASE + paramCount` on WASM.

@@ -59,6 +59,30 @@ class SpecialVarCollectorTest {
 	}
 
 	/**
+	 * A parameter named like a special binds it dynamically, as a let would -- every
+	 * section of a lambda list, a supplied-p variable, a default form's own bindings, in
+	 * lambda-list order, and the lambdas an {@code flet} expansion builds -- so the JVM
+	 * gives each a thread-local store before {@code LambdaLists.toNative} lowers the
+	 * parameter into a special let. A stream special named as a parameter is special from
+	 * then on, exactly as a let of it makes it: the interpreter binds that parameter
+	 * dynamically too.
+	 */
+	@Test
+	void aParameterNamedLikeASpecialIsADynamicBinding() {
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun f (*a* &optional (*b* (let ((*y* 1)) *y*) *bp*) &rest *r* &key ((:k *k*)) &aux (*x* 2))
+				  (mapcar (lambda (*z*) *z*) (list *a* *b* *r* *k* *x*)))
+				(flet ((g (*w*) *w*)) (g 1))
+				""");
+		SequencedSet<String> specials = new LinkedHashSet<>(
+				List.of("*A*", "*B*", "*BP*", "*R*", "*K*", "*X*", "*Y*", "*Z*", "*W*", "*NEVER-BOUND*"));
+		assertThat(SpecialVarCollector.collectDynamicallyBound(program, specials)).containsExactly("*A*", "*B*", "*Y*",
+				"*BP*", "*R*", "*K*", "*X*", "*Z*", "*W*");
+		assertThat(SpecialVarCollector.collect(LispReader.readAllFromString("(defun f (*standard-output*) (print 1))")))
+			.containsExactly("*STANDARD-OUTPUT*");
+	}
+
+	/**
 	 * A special the program actually let-binds still comes first, in walk order, ahead of
 	 * the ones the {@code progv} fallback sweeps up -- the fallback only tops the set up,
 	 * it does not reorder what the static walk already found.

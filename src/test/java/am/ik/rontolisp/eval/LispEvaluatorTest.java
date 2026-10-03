@@ -22371,6 +22371,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aParameterNamedLikeASpecialBindsItDynamically() {
+		// The reference answer the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:
+		// apply binds a special required or rest parameter, the let* prologue every
+		// other one. A parameter is a binding the special collector sees, so
+		// *standard-output* named as one is special here, as a let of it makes it
+		// (.kb/dynamic-special-variables.md).
+		assertThat(printedLines(am.ik.rontolisp.SpecialParameterFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+	}
+
+	@Test
 	void specialVariablesAreThreadScoped() throws Exception {
 		// The flagship acceptance case: one shared evaluator (like the HTTP handler,
 		// which

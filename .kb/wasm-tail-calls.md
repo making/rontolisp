@@ -33,7 +33,9 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
 - **Armed** by the defun and lambda body loops in `WasmLispCompiler` (the last body form;
   `compileForEffect` statements never are). **Re-armed** by `WasmIfCompiler` (both arms,
   never the test), `WasmPrognCompiler` (last form), `WasmLetCompiler` (last form, only when
-  no binding is dynamic: a special's restore runs after the body, in a protected region),
+  no binding is dynamic: a special's restore runs after the body, in a protected region --
+  which is also why a function with a parameter named like a special makes no tail call, its
+  parameter being bound by such a `let`, `.kb/dynamic-special-variables.md`),
   the `let*`/`the`/`locally` re-dispatches, `WasmBlockCompiler` (last form; the
   `%block`/named/`%fn-block` shapes are plain wasm blocks), and -- through
   `BlockMarker.tail` -- `WasmReturnCompiler`/`WasmReturnFromCompiler` for the exit value

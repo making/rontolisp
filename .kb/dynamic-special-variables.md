@@ -20,7 +20,10 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
 - The interpreter collects at the top-level `eval(expr)` entry BEFORE evaluating.
 - Symbol reads consult the dynamic store BEFORE the lexical chain, so a lambda or macro parameter
   whose name is special must ALSO bind dynamically (`LispEvaluator.apply` / `expandUserMacro`
-  push/pop `DynamicBindings`).
+  push/pop `DynamicBindings`; the compile paths: "Parameters" below).
+- A parameter is a binding the collector sees: `collectBoundForm` reads a `lambda`/`defun`
+  lambda list (every section, supplied-p variables, default forms walked in order), so
+  `(defun f (*standard-output*) ...)` makes the stream special special, as a `let` of it does.
 - A special is always ALSO a global; on the compile path specials are unioned into the
   `GlobalVarCollector` set.
 
@@ -163,8 +166,74 @@ native `evalProgv`).
    mirror, which the shallow save/restore does not update. Direct reads/`setq` are correct and
    both stores agree again after the `let`. The mirror does carry the global default for the
    three standard stream variables (`.kb/symbol-runtime-api.md`).
-3. A lambda/defun parameter named like a special is lexical: `(defvar *x* 1) (defun show () *x*)
-   (defun f (*x*) (show)) (f 2)` answers 1 on JVM and both WASM, 2 on the interpreter.
+
+## Parameters named like a special (all four backends, 2026-10-03)
+
+**Invariant: a parameter whose name is special -- any section of the lambda list, a supplied-p
+variable included, of a `defun`, a `lambda`, an `flet`/`labels` local or a built-in expansion's
+lambda (uiop's `with-*`, `async-lambda`) -- binds it dynamically, restored on every exit.**
+Landed 2026-10-03 (`.todo/c06`). Before, the compilers bound a required or rest one lexically:
+`(defvar *x* 1) (defun show () *x*) (defun f (*x*) (show)) (f 2)` answered 1 on the JVM and
+both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the global.
+
+- Interpreter: `LispEvaluator.apply` dual-binds a special required/rest parameter
+  (`lexicalLambdaScope` declines the lambda, so the call keeps a Java frame); the `let*` prologue
+  binds the other sections.
+- Compilers: `LambdaLists.toNative(..., specials)` renames a special required or physical rest
+  parameter to `__ll_sp_<position>` and wraps the WHOLE body, `let*` prologue included (a default
+  sees the binding), in `(let ((*x* __ll_sp_N)) ...)` -- this file's special `let`, so the
+  save/restore, the protected region and every exit channel come with it
+  (`bindSpecialParameters`). A body that is one `%fn-block` takes the `let` inside it, keeping
+  the wrap idempotent. Every extraction point passes the program's set: Pass 1
+  (`extractSetqLambda`, program defuns and injected runtime alike), `Jvm`/`WasmLambdaCompiler`
+  (`ctx.specialVars`), `WasmAsyncEmit`.
+- `desugarProgram` does NOT lower: it runs before `injectMvSpillGlobal` declares the standard
+  variables a program reads (`*print-base*`, `*package*`, `*features*`, `char-code-limit`, ...).
+  It gets `SpecialVarCollector.collectDeclared(program)` only so `testSuppliedPInPlace` keeps
+  the binding of a special supplied-p variable (a callee reads it; a test in place cannot
+  answer -- the binding used to be dropped on the compile paths). The full set is collected
+  right after `injectMvSpillGlobal` (wasm: after the arity bundler), before Pass 1, on the
+  program the old site saw, so its order is unchanged. Trap, the first cut: collecting the set
+  BEFORE the desugaring missed those standard variables -- cl-json's progv fallback covered 42
+  instead of 53 specials (class 424,786 -> 410,383 B), ci-spec lost 65 KB. A size "win" that
+  was a semantic change.
+- The dynamically-bound collection walks the injected wrappers and helpers beside the program
+  (`injectedForms`): their parameters are lowercase or `%`/`__` names that never match a user
+  special, but a `(defvar |x|)` would, and an uncollected lowered name throws in
+  `JvmLetCompiler`.
+- No tail call through the binding: the `let` is not tail-transparent, so a self or sibling
+  call inside it is a call -- no JVM jump (`JvmTailGroup.ofDefuns` stops at the lowered body's
+  special `let`, `ofLabels` drops a member whose physical parameter is special), no wasm
+  `return_call`. The interpreter keeps a frame per such call too. Depth of
+  `(defun deep (*y* n) (if (= n 0) ... (deep *y* (- n 1))))`: interpreter passes 10,000,
+  overflows at 20,000; JVM `java Prog` passes 50,000, overflows at 100,000; wasm passes 8,000,
+  overflows at 9,000 (a plain non-tail recursion there: 10,000 / 20,000). Restore-then-jump is
+  transparent only for a SELF call (a callee that does not rebind the name would see the outer
+  value) and was not taken: CL promises nothing here, and no corpus function recurses through
+  a special parameter (census below).
+- A closure capturing such a parameter reads the `let`'s capture: after the extent, with no
+  other binding active, every backend answers the argument (SBCL: the global value -- the dual
+  binding's deliberate departure); called inside ANOTHER binding of the name, the interpreter
+  answers that binding (dynamic first, as SBCL does) and the compilers the capture -- the
+  divergence a special `let` already had (`.todo/c14`).
+- `--component`: a special parameter of an async function whose body awaits is
+  `WasmLetCompiler`'s "dynamic binding around `rontolisp:await`" refusal.
+- wasm's `WasmArityBundler` binds a defun of more than 10 parameters through a `let` from its rest
+  list, so cl-ppcre's 12-parameter `create-scanner-aux` bound its special parameters dynamically
+  on wasm before this change and lexically on the JVM.
+- Census (2026-10-03, every lowered parameter printed during a JVM compile): ci-spec,
+  clojure-spec, scheme-spec: none. Vendored libraries: cl-ppcre only (rove and uax-15 load it):
+  `create-scanner-aux` (`starts-with`, `end-anchored-p`, `end-string-offset`, `reg-num`) and
+  `maybe-split-repetition` (`reg-seen`), special only through the program-wide reading of a local
+  `(declare (special ...))`, both called when a regex compiles, not when it matches (wasm lowers
+  the second only: the bundler took the first's twelve parameters).
+- Cost: a program without a special parameter compiles byte-identically on the JVM, wasm and
+  the component (ci-spec, its build-info strings aside, clojure-spec, scheme-spec and 13
+  vendored libraries loaded alone), so it runs at the same speed. cl-ppcre: JVM 734,954 ->
+  736,159 B (+0.16%), wasm 559,537 -> 559,455, component 564,059 -> 563,919 (wasm loses a
+  docstring `maybe-split-repetition` used to evaluate for effect); 3,000 scanner creations
+  JVM 1,067-1,089 -> 1,048-1,126 ms, wasm 1,005-1,149 -> 1,000-1,127 ms, i.e. noise, and the
+  scan path's code is unchanged.
 
 ## The two hand-rolled precedents
 
@@ -213,3 +282,11 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 `WasmReentrantCompilerTest`, `ClJsonE2eTest`, `ClPpcreE2eTest`, ci-spec
 `special-variable-dynamic-binding`, `progv-compiles-on-every-backend`,
 `special-let-restores-on-every-exit`.
+
+Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
+`JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one
+program and one expected text (`SpecialParameterFixture`), and ci-spec
+`special-parameters-bind-dynamically`; `JvmLispCompilerTest#aTailCallInsideASpecialParametersBindingStaysACall`
+(no jump, no group, values); `LambdaListsTest#aParameterNamedLikeASpecialIsBoundByALetAroundTheWholeBody`,
+`#aSpecialParametersLetGoesInsideTheFunctionBlock`, `#aSpecialSuppliedPKeepsItsBinding`;
+`SpecialVarCollectorTest#aParameterNamedLikeASpecialIsADynamicBinding`.

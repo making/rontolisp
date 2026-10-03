@@ -92,6 +92,23 @@ public final class SpecialVarCollector {
 	}
 
 	/**
+	 * The special names a program DECLARES ({@link #collectDeclared(LispVal, Set)} over
+	 * every form): what is known of the specials before the compile paths' late passes
+	 * declare the standard variables a program reads -- enough for the lambda-list
+	 * desugaring, which needs to know a supplied-p variable named like one
+	 * ({@code LambdaLists.desugarProgram}).
+	 * @param topLevelExprs the top-level forms
+	 * @return the declared special names
+	 */
+	public static Set<String> collectDeclared(List<LispVal> topLevelExprs) {
+		Set<String> declared = new java.util.HashSet<>();
+		for (LispVal expr : topLevelExprs) {
+			collectDeclared(expr, declared);
+		}
+		return declared;
+	}
+
+	/**
 	 * Records the special names a single form DECLARES -- {@link #collectForm} without
 	 * the seeded stream specials a binding makes special: the name of a
 	 * {@code defvar}-family form, the {@code (special ...)} clauses of a
@@ -133,16 +150,16 @@ public final class SpecialVarCollector {
 
 	/**
 	 * Returns the subset of {@code specials} that is <em>dynamically bound</em> somewhere
-	 * in the program -- appears as a binding name of a {@code let}/{@code let*}
-	 * (directly, or inside the expansion of a built-in binding macro such as
-	 * {@code do}/{@code
-	 * dolist}/{@code loop}/{@code multiple-value-bind}; user macros are already expanded
-	 * in the compile-path program this runs on). The JVM compiler gives only these names
-	 * a thread-scoped (ThreadLocal) dynamic store; a special never bound keeps its plain
-	 * static-field representation, so the common read stays a single {@code getstatic}.
-	 * Over-collection is harmless (the bound representation is correct, just slower);
-	 * under-collection is a loud compile error in {@code JvmLetCompiler}, never a silent
-	 * process-global binding.
+	 * in the program -- appears as a binding name of a {@code let}/{@code let*} or as a
+	 * parameter of a {@code lambda}/{@code defun} (directly, or inside the expansion of a
+	 * built-in binding macro such as {@code do}/{@code
+	 * dolist}/{@code loop}/{@code multiple-value-bind}/{@code flet}; user macros are
+	 * already expanded in the compile-path program this runs on). The JVM compiler gives
+	 * only these names a thread-scoped (ThreadLocal) dynamic store; a special never bound
+	 * keeps its plain static-field representation, so the common read stays a single
+	 * {@code getstatic}. Over-collection is harmless (the bound representation is
+	 * correct, just slower); under-collection is a loud compile error in
+	 * {@code JvmLetCompiler}, never a silent process-global binding.
 	 * @param topLevelExprs the fully macro-expanded top-level forms
 	 * @param specials the special-variable names ({@link #collect}). ITERATION ORDER
 	 * REACHES EMITTED BYTES: a {@code progv} anywhere in the program makes the fallback
@@ -225,6 +242,21 @@ public final class SpecialVarCollector {
 					}
 					return;
 				}
+				// A parameter named like a special binds it dynamically, as a let would
+				// (LambdaLists.toNative lowers it into one on the compile paths; the
+				// interpreter binds it itself).
+				boolean lambda = LispNames.LAMBDA.equals(h);
+				if ((lambda || LispNames.DEFUN.equals(h)) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					int listIndex = lambda ? 1 : 2;
+					if (parts.size() > listIndex) {
+						collectParameters(parts.get(listIndex), specials, out);
+						for (int i = listIndex + 1; i < parts.size(); i++) {
+							collectBoundForm(parts.get(i), specials, out);
+						}
+					}
+					return;
+				}
 				// A write-to-string keyword BINDS the printer variable it names: the
 				// Pass-2
 				// lowering (LispMacroExpander.expandWriteToStringKeywords) turns the call
@@ -264,6 +296,48 @@ public final class SpecialVarCollector {
 			}
 			collectBoundForm(cons.car(), specials, out);
 			form = cons.cdr();
+		}
+	}
+
+	/**
+	 * Records the special names a lambda list binds -- a required or rest parameter, an
+	 * {@code &optional}/{@code &key}/{@code &aux} variable, a supplied-p variable -- and
+	 * walks the default forms, in lambda-list order. Any shape: the raw list a reader
+	 * wrote (an interpreter's top-level form, a lambda an {@code flet} expansion built)
+	 * or the compilers' desugared one.
+	 */
+	private static void collectParameters(LispVal lambdaList, Set<String> specials, Set<String> out) {
+		for (LispVal node = lambdaList; node instanceof LispCons cell; node = cell.cdr()) {
+			LispVal param = cell.car();
+			if (param instanceof LispSymbol sym) {
+				addIfSpecial(sym, specials, out);
+				continue;
+			}
+			if (!(param instanceof LispCons spec)) {
+				continue;
+			}
+			// (var default supplied-p), ((:keyword var) default supplied-p), (var init)
+			if (spec.car() instanceof LispSymbol var) {
+				addIfSpecial(var, specials, out);
+			}
+			else if (spec.car() instanceof LispCons keyed && keyed.cdr() instanceof LispCons varCell
+					&& varCell.car() instanceof LispSymbol var) {
+				addIfSpecial(var, specials, out);
+			}
+			if (spec.cdr() instanceof LispCons defaultCell) {
+				collectBoundForm(defaultCell.car(), specials, out);
+				if (defaultCell.cdr() instanceof LispCons suppliedCell
+						&& suppliedCell.car() instanceof LispSymbol suppliedP) {
+					addIfSpecial(suppliedP, specials, out);
+				}
+			}
+		}
+	}
+
+	// A lambda-list keyword is no binding, and the specials never spell one.
+	private static void addIfSpecial(LispSymbol name, Set<String> specials, Set<String> out) {
+		if (specials.contains(name.name())) {
+			out.add(name.name());
 		}
 	}
 

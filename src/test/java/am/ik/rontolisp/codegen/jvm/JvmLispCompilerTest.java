@@ -20423,6 +20423,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aParameterNamedLikeASpecialBindsItDynamically() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a required or rest parameter
+		// named like a special is renamed and bound by a special let around the whole
+		// body (LambdaLists.toNative), so a callee reads the argument, a default sees it,
+		// every exit restores it and a setq writes the binding, not the global; the
+		// optionals, keys and auxes are the let* prologue's bindings, and an only-tested
+		// special supplied-p variable keeps its binding
+		// (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialParameterFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+	}
+
+	@Test
 	void defparameterAndDeclaimSpecialAreDynamic() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *p* 5)
@@ -23102,6 +23115,40 @@ class JvmLispCompilerTest {
 				(UP 3)
 				1
 				THROWN""");
+	}
+
+	@Test
+	void aTailCallInsideASpecialParametersBindingStaysACall() throws Exception {
+		// A parameter named like a special is bound by a let around the whole body
+		// (LambdaLists.toNative), and a call inside that binding is no tail call: the
+		// restore runs after it returns. So a defun's self call, a labels function's
+		// self call and SPT-EV's call to SPT-OD stay calls -- no jump, and no tail group
+		// (JvmTailGroup ends the walk at the binding: a defun's lowered body, a labels
+		// lambda's parameter list) -- and every round reads its own binding. SPT-OD's
+		// tail call back into SPT-EV is then an ordinary call too.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defvar *spt* :top)
+				(defun spt-show () *spt*)
+				(defun spt-self (*spt* n) (if (= n 0) (spt-show) (spt-self (cons n *spt*) (- n 1))))
+				(print (spt-self nil 3))
+				(print (labels ((spt-lb (*spt* n) (if (= n 0) (spt-show) (spt-lb (cons n *spt*) (- n 1)))))
+				         (spt-lb nil 3)))
+				(defun spt-ev (*spt* n) (if (= n 0) (spt-show) (spt-od n (- n 1))))
+				(defun spt-od (k n) (if (= n 0) (list k (spt-show)) (spt-ev n (- n 1))))
+				(print (list (spt-ev :e 4) (spt-ev :e 5) (spt-show)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(jumpsToEntry(classBytes, "SPT-SELF")).isZero();
+		assertThat(ownCallsIn(classBytes, "SPT-SELF", "SPT-SELF")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "SPT-EV", "SPT-OD")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "SPT-OD", "SPT-EV")).isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) > 0)
+			.toList()).as("no labels function's method loops").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(1 2 3)
+				(1 2 3)
+				(1 (1 2) :TOP)""");
 	}
 
 	@Test
