@@ -78,9 +78,9 @@ import org.jspecify.annotations.Nullable;
  * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
- * stays a no-copy identity. Laziness is the memoized-thunk wrapper {@code (:C%LAZY cell)}
- * (b11): {@code lazy-seq} builds one over its body (run at most once per object),
- * {@code lazy-cat} nests {@code concat} over per-member wrappers, and
+ * stays a no-copy identity. Laziness is the memoized-thunk wrapper
+ * {@code (:C%LAZY cell)}: {@code lazy-seq} builds one over its body (run at most once per
+ * object), {@code lazy-cat} nests {@code concat} over per-member wrappers, and
  * {@code repeat}/{@code cycle}/{@code iterate}/{@code repeatedly} build wrapper chains
  * (their finite arities answer strict lists); an end-less {@code range} stays refused by
  * name, and {@code range} with an end builds the strict list. {@code take} steps through
@@ -706,6 +706,13 @@ public final class ClojureLowering {
 	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
+	 * The vars a {@code defmulti} defined, by var key, until another definition of the
+	 * name: a {@code defmulti} of one of them is a no-op, like the oracle's, which
+	 * defines only when the var holds no multimethod yet.
+	 */
+	final Set<String> multimethods = new HashSet<>();
+
+	/**
 	 * The binding-depth counter of a dynamic var: a special beside the var itself, zero
 	 * at the root and rebound one deeper by every {@code binding} of the var, so
 	 * {@code set!} tests at run time whether the var is thread-bound. Defined beside the
@@ -1067,7 +1074,7 @@ public final class ClojureLowering {
 	 */
 	private void preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
 		String name = ClojureLowerUtil.plainName(nameDatum, what);
-		this.globals.put(intern(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
+		this.globals.put(internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
 	}
 
 	/**
@@ -1146,6 +1153,13 @@ public final class ClojureLowering {
 	 * @return its var key
 	 */
 	String intern(String name, boolean isPrivate) {
+		String key = internName(name, isPrivate);
+		this.multimethods.remove(key);
+		return key;
+	}
+
+	/** {@link #intern} without ending a multimethod: the pre-scan defines nothing. */
+	private String internName(String name, boolean isPrivate) {
 		ClojureNsState here = ns();
 		here.interns.put(name, isPrivate);
 		here.refers.remove(name);
@@ -2540,6 +2554,10 @@ public final class ClojureLowering {
 						ClojureCollectionLowering.equalityRaw(this, items)));
 			case "<", ">", "<=", ">=":
 				return booleanAnswer(plain(name, items));
+			case "==":
+				// numeric equality across categories: CL = (1 = 1.0, 0.0 = -0.0)
+				ClojureLowerUtil.isTrue(n >= 1, "== takes at least one argument");
+				return booleanAnswer(plain("=", items));
 			case "inc":
 				ClojureLowerUtil.isTrue(n == 1, "inc takes one argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
@@ -2903,7 +2921,7 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The b18 core convenience fns, sliced out of {@link #builtin}: that dispatcher had
+	 * The core convenience fns, sliced out of {@link #builtin}: that dispatcher had
 	 * crossed HotSpot's {@code HugeMethodLimit} (like the backend
 	 * {@code compileConsLocated} slices before it), so these names dispatch through one
 	 * more call -- null when the name is none of them, like {@code builtin} itself.
@@ -2979,6 +2997,8 @@ public final class ClojureLowering {
 			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
 			case "not=" -> notEqualValue();
+			case "==" -> comparisonValue("=");
+			case "<", ">", "<=", ">=" -> comparisonValue(name);
 			case "vector?" -> ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw);
 			case "fn?" ->
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
@@ -3332,12 +3352,27 @@ public final class ClojureLowering {
 						TRUE_CONST), this.falseVariable, TRUE_CONST));
 	}
 
+	/**
+	 * A numeric comparison as a value ({@code ==}, {@code <}, {@code >}, {@code <=},
+	 * {@code >=}): the Common Lisp function over every argument, answering
+	 * {@code T}-or-false.
+	 * @param clName the Common Lisp function
+	 * @return the lambda
+	 */
+	LispVal comparisonValue(String clName) {
+		LispSymbol values = new LispSymbol(mangle(clName + "-values"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(AMPERSAND_REST, values),
+				booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(clName)),
+						values)));
+	}
+
 	/** The Common Lisp function a core name names as a value, or null. */
 	static @Nullable String builtinValue(String name) {
 		return switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "<", ">",
-					"<=", ">=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector",
-					"vectorp", "identity" ->
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "apply", "=", "length",
+					"car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp", "vector", "vectorp",
+					"identity" ->
 				name;
 			case "gensym" -> "gensym";
 			case "count" -> "length";

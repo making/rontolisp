@@ -7,6 +7,6 @@
 引数を取ります。
 
 ```clojure
-(defn b15-blast [x] (if (zero? x) :done (fn [] (b15-blast (dec x)))))
-(println (trampoline b15-blast 50)) ; :done
+(defn blast [x] (if (zero? x) :done (fn [] (blast (dec x)))))
+(println (trampoline blast 50)) ; :done
 ```

@@ -1503,12 +1503,7 @@ final class WasmVecSimdRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF, Type.F64.code());
 		WasmVecLoops.get(w, tmpLocal);
-		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		WasmVecLoops.get(w, tmpLocal);
-		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_DIV);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_TO_F64);
 		w.write(Instruction.ELSE);
 		WasmVecLoops.get(w, tmpLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);

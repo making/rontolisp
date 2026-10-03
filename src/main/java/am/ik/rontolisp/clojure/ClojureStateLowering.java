@@ -662,7 +662,7 @@ final class ClojureStateLowering {
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
 				// a syntax-quote qualifies the stream specials with their namespace
-				// (b77: `*out* reads clojure.core/*out*), and the oracle binds the
+				// (`*out* reads clojure.core/*out*), and the oracle binds the
 				// qualified spelling like the bare one -- normalize it before the
 				// stream test, so the pair and the scope entry spell the special
 				if (name.startsWith(ClojureCoreNames.PREFIX)) {
@@ -858,7 +858,7 @@ final class ClojureStateLowering {
 		if (hoisted != null) {
 			// a reload keeps the root through a runtime boundp probe of the var
 			// itself: every store to a global feeds the eval mirror the compiled
-			// boundp reads (b78), so the init's own assignment is visible to the
+			// boundp reads, so the init's own assignment is visible to the
 			// probe and no set flag beside the var is needed. The probe survives
 			// the compile-time boundp fold -- the init's assignment poisons the
 			// name -- like the loaded flag's plain-variable test.

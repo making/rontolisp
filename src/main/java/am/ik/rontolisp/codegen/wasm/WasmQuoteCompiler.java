@@ -473,14 +473,7 @@ final class WasmQuoteCompiler {
 		switch (val) {
 			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
 			case am.ik.rontolisp.LispBigInteger bi -> WasmEmitHelper.compileBigIntegerLiteral(bi.value(), ctx);
-			case am.ik.rontolisp.LispRatio r -> {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(r.numerator().intValue());
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(r.denominator().intValue());
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
-			}
+			case am.ik.rontolisp.LispRatio r -> WasmEmitHelper.compileRatioLiteral(r, ctx);
 			case LispDouble d -> {
 				ctx.writer.write(Instruction.F64_CONST);
 				ctx.writer.writeF64(d.value());

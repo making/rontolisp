@@ -9,7 +9,7 @@ whole story runs on all four backends with no per-backend value shape.
 | `defprotocol` | `(do (defprotocol P13 (m [x])) (satisfies? P13 nil))` | `false` |
 | `defrecord` | `(do (defrecord R13 [a]) (get (->R13 1) :a))` | `1` |
 | `deftype` | `(do (deftype T13 [a]) (instance? T13 (T13. 2)))` | `true` |
-| `set!` | `(do (defprotocol B13 (b [x])) (deftype M13 [^:unsynchronized-mutable n] B13 (b [_] (set! n (inc n)))) (b (M13. 1)))` | `2` |
+| `set!` | `(do (defprotocol Bump (b [x])) (deftype Cell [^:unsynchronized-mutable n] Bump (b [_] (set! n (inc n)))) (b (Cell. 1)))` | `2` |
 | `reify` | `(do (defprotocol Q13 (m [x])) (m (reify Q13 (m [_] 7))))` | `7` |
 | `extend-protocol` | `(do (defprotocol E13 (m [x])) (extend-protocol E13 String (m [s] :s)) (m "x"))` | `:s` |
 | `extend-type` | `(do (defprotocol Y13 (m [x])) (extend-type String Y13 (m [s] :s)) (m "x"))` | `:s` |

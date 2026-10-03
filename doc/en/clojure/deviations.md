@@ -117,7 +117,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `clojure.core` var (`#'println`) is refused by name.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
-  answers its tag keyword instead.
+  answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
 - `unchecked-add` never wraps (integers are bignums); the other `unchecked-*` verbs are

@@ -17,8 +17,8 @@
 ;; - rontolisp::%clojure-str-of answers one part's string (str/pr-str, the REPL
 ;;   echo), written to a string stream and read back.
 ;; Neither is with-output-to-string: a literal one flips a WASM module into EH
-;; mode (measured gate, see .todo/artefacts/b07-clojure-print/NOTES.md finding 6),
-;; while make-string-output-stream/get-output-stream-string compile without it
+;; mode (measured gate), while make-string-output-stream/get-output-stream-string
+;; compile without it
 ;; (measured 2026-09-30: 6,429 B vs 11,948 B of wasm for the same writes).
 ;;
 ;; Cycles print with Scheme-scale datum labels (#0=(...) . #0#), copied from
@@ -32,7 +32,8 @@
 ;; (same as keys/vals); *print-length*/*print-level* are not honored (a routed
 ;; println never passed through %print-cased either); ~S/~A on Clojure values
 ;; stay Common Lisp notation (format is a CL surface); print-method/pprint stay
-;; absent; unreadable values (functions, conditions, host objects) print #<..>.
+;; absent; unreadable values (functions, conditions, host objects) print #<..>,
+;; except a host class object, which prints its name like the oracle's.
 
 (defun rontolisp::%clojure-keyword-p (x)
   "Whether X is the (:C%KEYWORD spelling) wrapper the lowering lowers keywords to."
@@ -237,6 +238,12 @@
            (write-char #\# stream)
            t))))
 
+(defun rontolisp::%clojure-symbolic-float-p (x)
+  "Whether the float X is a NaN or an infinity: the values the reader spells
+   ##NaN, ##Inf and ##-Inf."
+  (or (/= x x) (> x most-positive-double-float)
+      (< x most-negative-double-float)))
+
 (defun rontolisp::%clojure-write (x nil-replacement readable stream labels)
   "Write X to STREAM in Clojure notation. READABLE selects the pr side (quoted
    strings, \\chars) vs the print side (bare); NIL-REPLACEMENT is what nil prints
@@ -338,8 +345,14 @@
            (rontolisp::%clojure-write (car rest) nil-replacement readable stream
                                       labels))
          (write-char #\) stream))
+        ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
+         ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
+         ;; print and pr alike (str alone says NaN and Infinity)
+         (write-string (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf"))
+                       stream))
         ((functionp x) (write-string "#<procedure>" stream))
-        (t (princ x stream))))
+        (t (let ((name (rontolisp::%clojure-host-class-name x)))
+             (if name (write-string name stream) (princ x stream))))))
 
 (defun rontolisp::%clojure-write-record
     (x nil-replacement readable stream labels)
@@ -390,7 +403,8 @@
    so far WITHOUT clearing it under str (a zero-argument java.io.StringWriter
    lowers to one, so binding *out* to it and reading it back runs on every
    backend); readably it prints as the stream it is, like the oracle's
-   #object."
+   #object. A host object answers its toString, so a class object answers
+   \"class java.lang.String\"."
   (cond ((null readable)
          (cond ((null x) nil-replacement)
                ((stringp x) x)
@@ -401,7 +415,10 @@
                   text))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
-               (t (rontolisp::%clojure-str-of x "nil" t))))
+               ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
+                (princ-to-string x))
+               (t (or (rontolisp::%clojure-host-string x)
+                      (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
          (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x) "\""))
         (t (let ((stream (make-string-output-stream)))
@@ -413,6 +430,46 @@
    building block. Answers NIL, so a print call's value is nil like the oracle."
   (rontolisp::%clojure-print x nil-replacement readable *standard-output*)
   nil)
+
+(defun rontolisp::%clojure-host-class (x)
+  "class of a value of no Clojure kind: a host object's class (the oracle's
+   answer), anything else the refusal. java:call refuses every value that is no
+   host object, so its refusal IS the host test, the same one on the interpreter
+   and the JVM. eval/ClojureLibrary splices a refusal-only body instead into a
+   program with no java: operator, where no host object can exist: a java:
+   reference changes the JVM output and is a call-time error on wasm."
+  (handler-case (java:call x "getClass")
+    (error () (error "class needs a value of a known kind"))))
+
+(defun rontolisp::%clojure-lisp-value-p (x)
+  "Whether X is a value of a Lisp kind, so no host object: the cheap test the
+   printer's host arms ask before a java:call refusal could (numbers above all
+   reach the printer's fall-through)."
+  (or (numberp x) (characterp x) (symbolp x) (consp x) (arrayp x)
+      (hash-table-p x) (functionp x) (streamp x)))
+
+(defun rontolisp::%clojure-host-class-name (x)
+  "X's name when X is a host class object, which the oracle prints by its name
+   (java.lang.String, long), else NIL. A host arm like %clojure-host-class: a
+   program with no java: operator gets a body answering NIL."
+  (if (not (rontolisp::%clojure-lisp-value-p x))
+      (handler-case (if (equal (java:call (java:call x "getClass") "getName")
+                               "java.lang.Class")
+                        (java:call x "getName"))
+        (error () nil))))
+
+(defun rontolisp::%clojure-host-string (x)
+  "X's toString when X is a host object, str's answer (a class object's is
+   \"class java.lang.String\"), else NIL. The host test is the getClass
+   refusal; toString runs outside it, so its own exception propagates like the
+   oracle's. A host arm like %clojure-host-class: a program with no java:
+   operator gets a body answering NIL."
+  (if (and (not (rontolisp::%clojure-lisp-value-p x))
+           (handler-case (progn
+                           (java:call x "getClass")
+                           t)
+             (error () nil)))
+      (java:call x "toString")))
 
 ;;;; Equality: the = family over every value shape.
 
@@ -460,8 +517,9 @@
 (defun rontolisp::%clojure-equal (a b)
   "Clojure = over two values, T or NIL: two sets by membership, two records by
    tag plus entries, a deftype or reify by identity, two maps entry by entry,
-   two sequentials element by element, anything else with equal (numbers keep
-   their category, strings and characters compare by value)."
+   two sequentials element by element, two floats numerically, anything else
+   with equal (numbers keep their category, strings and characters compare by
+   value)."
   (cond ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
          ;; two vectors read in place, without the seq view's copies
          (and (eql (length a) (length b))
@@ -486,6 +544,9 @@
         ((and (rontolisp::%clojure-sequential-p a)
               (rontolisp::%clojure-sequential-p b))
          (rontolisp::%clojure-seq-equal a b))
+        ((and (floatp a) (floatp b))
+         ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
+         (= a b))
         (t (equal a b))))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
@@ -654,21 +715,34 @@
         ((or held (null c)) held)
       (if (not (eq (gethash (car c) table miss) miss)) (setq held (car c))))))
 
+(defun rontolisp::%clojure-zero-key (k table)
+  "The float zero TABLE holds when K is the other float zero (= to K, though
+   equal tells them apart), else K."
+  (let ((other (if (eql k 0.0) (- 0.0) 0.0)) (miss (list nil)))
+    (if (and (eq (gethash k table miss) miss)
+             (not (eq (gethash other table miss) miss)))
+        other
+        k)))
+
 (defun rontolisp::%clojure-table-key (k table)
   "The key TABLE holds K under: when K is structural, the representative = to
-   it that TABLE holds; otherwise (or when TABLE holds none) K itself, which
-   then misses like any absent key."
-  (if (rontolisp::%clojure-structural-key-p k)
-      (or (rontolisp::%clojure-held-key (rontolisp::%clojure-key-class k nil)
-                                        table) k)
-      k))
+   it that TABLE holds; the float zero TABLE holds when K is the other one;
+   otherwise (or when TABLE holds none) K itself, which then misses like any
+   absent key."
+  (cond ((rontolisp::%clojure-structural-key-p k)
+         (or (rontolisp::%clojure-held-key
+              (rontolisp::%clojure-key-class k nil) table) k))
+        ((and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table))
+        (t k)))
 
 (defun rontolisp::%clojure-store-key (k table)
   "The key to store K under in TABLE: when K is structural, the representative
    = to it that TABLE already holds (its value is replaced, its key kept, like
    the oracle), else the representative of K's own kind, else K, which becomes
-   that representative; any other K is itself."
-  (if (rontolisp::%clojure-structural-key-p k)
+   that representative; a float zero is the one TABLE holds (the other zero),
+   any other K is itself."
+  (if (not (rontolisp::%clojure-structural-key-p k))
+      (if (and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table) k)
       (let* ((class (rontolisp::%clojure-key-class k t))
              (held (rontolisp::%clojure-held-key class table)))
         (if held
@@ -683,8 +757,7 @@
                   (progn
                     (rplacd class (cons k (cdr class)))
                     (setf (gethash k rontolisp::%clojure-key-reps) class)
-                    k)))))
-      k))
+                    k)))))))
 
 (defun rontolisp::%clojure-set-put (table x)
   "X added to the set table TABLE as a member stored under itself (an = member
@@ -760,7 +833,7 @@
         ((hash-table-p coll) (gethash k coll dflt))
         (t dflt)))
 
-;;;; Lazy seqs (b11): memoized-thunk wrappers over the strict seq view.
+;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
 ;;
 ;; A lazy seq is (LIST :C%LAZY cell) where CELL is (CONS thunk-or-nil
 ;; realized-seq), beside the (:C%SET table) and (:C%KEYWORD spelling) wrappers.
@@ -790,7 +863,7 @@
   (list :C%LAZY (cons thunk nil)))
 
 (defun rontolisp::%clojure-strict-seq (coll)
-  "The strict list view of COLL: the b03 cond, now shared by every backend
+  "The strict list view of COLL: the original cond, now shared by every backend
    through this one defun instead of inline in the lowering."
   (cond ((null coll) nil)
    ((rontolisp::%clojure-set-p coll)
@@ -809,7 +882,7 @@
         (rontolisp::%clojure-re-matcher-p coll))
     (error "seq needs a collection"))
    ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-   ;; too, so the oracle signals instead of seqing (b45, the b42 conj-guard
+   ;; too, so the oracle signals instead of seqing (the conj-guard
    ;; precedent)
    ((rontolisp::%clojure-atom-p coll) (error "seq needs a collection"))
    ((consp coll) coll)
@@ -1258,7 +1331,7 @@
       (setq acc (cons (rontolisp::%clojure-call f nil) acc))
       (setq left (- left 1)))))
 
-;;;; Core convenience fns (b18): strict vector answers, names and randomness.
+;;;; Core convenience fns: strict vector answers, names and randomness.
 ;;
 ;; mapv/filterv answer vectors (never lazy wrappers); mapcat concats the mapped
 ;; seq views strictly (nil-safe, like concat); shuffle Fisher-Yates over a fresh
@@ -1552,7 +1625,7 @@
         ((numberp x) (code-char (truncate x)))
         (t (error "char needs a character or a number"))))
 
-;;;; Regular expressions (b21): patterns, matchers, and the pattern arms of
+;;;; Regular expressions: patterns, matchers, and the pattern arms of
 ;;;; split/replace.
 ;;
 ;; A pattern is (LIST :C%PATTERN stamp source ops ngroups): STAMP a fresh
@@ -2498,7 +2571,7 @@
                    (rontolisp::%clojure-re-subst rep s found ngroups) out)
                   (setq pos (car (cdr found))))))))))
 
-;;;; The core backlog (b57).
+;;;; The core backlog.
 ;;
 ;; The backlog verbs follow the lazy rows above: a lazy input answers a lazy
 ;; wrapper, a strict one a strict list (nil, never ()); dedupe and partition-by
@@ -3452,7 +3525,7 @@
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
 
-;;;; Vars: #'x as a value (b80).
+;;;; Vars: #'x as a value.
 ;;
 ;; A var is (:C%VAR "ns/name" getter), interned per name in
 ;; rontolisp::%clojure-var-table (made on first use), so #'x answers the same
@@ -3506,7 +3579,7 @@
   (rontolisp::%clojure-check-arity args 1 1 "test")
   (rontolisp::%clojure-var-test (car args)))
 
-;;;; Reduction and transducers (b60).
+;;;; Reduction and transducers.
 ;;
 ;; A transducer is what the oracle's is: a function from a reducing function to
 ;; a reducing function, so comp composes them left to right with no help and a
@@ -4020,7 +4093,7 @@
   (if (= (rontolisp::%clojure-check-arity args 1 2 "completing") 1)
       (rontolisp::%clojure-completing (car args) #'identity)
       (rontolisp::%clojure-completing (car args) (car (cdr args)))))
-;;;; clojure.test (b55): the run-time half of deftest/is/are/testing and the
+;;;; clojure.test: the run-time half of deftest/is/are/testing and the
 ;;;; run-tests summary runner.
 ;;
 ;; The lowering keeps the shapes the oracle's macros expand to: a deftest is a
@@ -4362,7 +4435,7 @@
       t
       rontolisp::%clojure-false))
 
-;;;; Reading (b85): read-string and read over one run-time reader.
+;;;; Reading: read-string and read over one run-time reader.
 ;;
 ;; The reader reads the language the source reader (ClojureReader) reads and
 ;; answers what a quote of the same text answers, so (= (read-string s) 's)
@@ -4790,9 +4863,12 @@
                                                           (- n 1)
                                                           n)))))
              (if decimal
-                 (rontolisp::%clojure-rd-double (car decimal)
-                                                (car (cdr decimal))
-                                                (car (cdr (cdr decimal))))
+                 ;; the nearest double, ties to even like parseDouble, negated
+                 ;; after the conversion so -0.0 keeps its sign
+                 (let ((magnitude
+                        (%decimal-double (car (cdr decimal))
+                                         (car (cdr (cdr decimal))))))
+                   (if (car decimal) (- magnitude) magnitude))
                  nil)))
           (t (rontolisp::%clojure-rd-integer token 0 big-end 10)))))
 
@@ -4851,56 +4927,6 @@
     (if (and ok (= i end) (> digits 0))
         (list neg mantissa (- exponent scale))
         nil)))
-
-(defun rontolisp::%clojure-rd-double (neg mantissa k)
-  "The double nearest MANTISSA * 10^K, ties to even like Java's parseDouble
-   (so the source reader's literal and this one agree), negated when NEG.
-   Built from its IEEE bits over exact integer arithmetic, so every backend
-   answers the same double: a float of the exact ratio would round through
-   the wasm backend's i32 ratio components."
-  (let ((magnitude 0.0d0)
-        (size (+ k (floor (* 31 (integer-length mantissa)) 100))))
-    (cond ((= mantissa 0))
-     ((> size 330) (setq magnitude (%ieee754-double-from-bits (ash 2047 52))))
-     ((< size -345))
-     (t (let* ((num (if (>= k 0) (* mantissa (expt 10 k)) mantissa))
-               (den (if (>= k 0) 1 (expt 10 (- k))))
-               (s (max -1074 (- (integer-length num) (integer-length den) 53)))
-               (qrd (rontolisp::%clojure-rd-quotient num den s)))
-          ;; s is the binary exponent of the significand's last bit: settle
-          ;; it so the quotient holds 53 bits (fewer below the subnormal
-          ;; floor), then round the remainder half to even
-          (do ()
-              ((< (car qrd) 9007199254740992))
-            (setq s (+ s 1))
-            (setq qrd (rontolisp::%clojure-rd-quotient num den s)))
-          (do ()
-              ((or (>= (car qrd) 4503599627370496) (<= s -1074)))
-            (setq s (- s 1))
-            (setq qrd (rontolisp::%clojure-rd-quotient num den s)))
-          (let ((q (car qrd))
-                (twice (* 2 (car (cdr qrd))))
-                (d (car (cdr (cdr qrd)))))
-            (if (or (> twice d) (and (= twice d) (oddp q))) (setq q (+ q 1)))
-            (if (>= q 9007199254740992)
-                (progn
-                  (setq q (ash q -1))
-                  (setq s (+ s 1))))
-            (setq magnitude
-                  (cond ((> s 971) (%ieee754-double-from-bits (ash 2047 52)))
-                        ((>= q 4503599627370496)
-                         (%ieee754-double-from-bits
-                          (logior (ash (+ s 1075) 52) (- q 4503599627370496))))
-                        (t (%ieee754-double-from-bits q))))))))
-    (if neg (- magnitude) magnitude)))
-
-(defun rontolisp::%clojure-rd-quotient (num den s)
-  "(q r d): q the floor of NUM / (DEN * 2^S), r its remainder over the
-   divisor d."
-  (let* ((n (if (< s 0) (ash num (- s)) num))
-         (d (if (> s 0) (ash den s) den))
-         (q (floor n d)))
-    (list q (- n (* q d)) d)))
 
 (defun rontolisp::%clojure-rd-keyword (rd token)
   "The keyword TOKEN spells: ::name in the calling namespace, ::alias/name
@@ -4967,9 +4993,31 @@
           ((char= c #\^)
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-meta rd))
+          ((char= c #\#)
+           (rontolisp::%clojure-rd-next rd)
+           (rontolisp::%clojure-rd-symbolic rd))
           ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
           (t (error "~A"
               (concatenate 'string "unsupported reader form #" (string c)))))))
+
+(defun rontolisp::%clojure-rd-symbolic (rd)
+  "A ## symbolic value, both hashes consumed: the double ##NaN, ##Inf or ##-Inf
+   spells. Like the oracle it reads the NEXT FORM (## Inf reads too) and
+   refuses a symbol it does not know, or a form that is no symbol, by name."
+  (let ((form (rontolisp::%clojure-rd-required rd)))
+    (cond ((eq form (rontolisp::%clojure-rd-symbol "NaN")) (/ 0.0d0 0.0d0))
+          ((eq form (rontolisp::%clojure-rd-symbol "Inf"))
+           (* most-positive-double-float 2.0d0))
+          ((eq form (rontolisp::%clojure-rd-symbol "-Inf"))
+           (* most-negative-double-float 2.0d0))
+          ((and (symbolp form) form (not (eq form t))
+                (not (eq form rontolisp::%clojure-false)) (not (keywordp form)))
+           (error "~A"
+                  (concatenate 'string "Unknown symbolic value: ##"
+                               (rontolisp::%clojure-str-of form "null" nil))))
+          (t (error "~A"
+                    (concatenate 'string "Invalid token: ##"
+                     (rontolisp::%clojure-str-of form "null" nil)))))))
 
 (defun rontolisp::%clojure-rd-regex (rd)
   "A regex literal, its #\" consumed: the source verbatim up to the closing

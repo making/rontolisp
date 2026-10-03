@@ -58,7 +58,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void aRedefinedDefnGetsAFreshNamePerDefinition() {
-		// b65: a later defn of the same name wins everywhere on the compiled
+		// A later defn of the same name wins everywhere on the compiled
 		// backends. Each definition lowers to its own defun (the first keeps the
 		// bare name, later ones take a %defN suffix no identifier spells), the
 		// call sites below each definition call the newest, and a value position
@@ -76,10 +76,9 @@ class ClojureLoweringTest {
 			.contains("(DEFUN |c%d%def2| NIL 2)")
 			.contains("(DEFPARAMETER |c%d| #'|c%d%def2|)");
 		// namespaces version their own names independently
-		assertThat(lowered("(ns b65a) (defn f [] 1) (ns b65b) (defn f [] 2) (b65a/f)"))
-			.contains("(DEFUN |c%b65a/f| NIL 1)")
-			.contains("(DEFUN |c%b65b/f| NIL 2)")
-			.contains("(|c%b65a/f|)");
+		assertThat(lowered("(ns nsa) (defn f [] 1) (ns nsb) (defn f [] 2) (nsa/f)")).contains("(DEFUN |c%nsa/f| NIL 1)")
+			.contains("(DEFUN |c%nsb/f| NIL 2)")
+			.contains("(|c%nsa/f|)");
 	}
 
 	@Test
@@ -169,7 +168,7 @@ class ClojureLoweringTest {
 		// an anonymous fn wraps the split in labels only when a recur reaches it
 		assertThat(lowered("((fn [a & r] (recur a r)) 1)")).contains("LABELS").contains("%*");
 		assertThat(lowered("((fn [a & r] a) 1)")).doesNotContain("LABELS");
-		// a stored method lambda splits the same way (decided 2026-10-01, b36)
+		// a stored method lambda splits the same way (decided 2026-10-01)
 		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] (recur a r))")).contains("LABELS")
 			.contains("%*")
 			.contains("&REST");
@@ -417,11 +416,11 @@ class ClojureLoweringTest {
 		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
 		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
 		assertThat(lowered("::foo")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"user/foo\")");
-		assertThat(lowered("(ns b19auto) ::foo")).contains("(LIST :C%KEYWORD \"b19auto/foo\")");
-		assertThat(lowered("(ns b19auto (:require [clojure.string :as str])) ::str/join"))
+		assertThat(lowered("(ns auto) ::foo")).contains("(LIST :C%KEYWORD \"auto/foo\")");
+		assertThat(lowered("(ns auto (:require [clojure.string :as str])) ::str/join"))
 			.contains("(LIST :C%KEYWORD \"clojure.string/join\")");
-		assertThat(lowered("(ns b19auto) '::foo")).contains("(:C%KEYWORD \"b19auto/foo\")");
-		assertThat(lowered("(ns b19auto) (in-ns 'other) ::foo")).contains("(LIST :C%KEYWORD \"other/foo\")");
+		assertThat(lowered("(ns auto) '::foo")).contains("(:C%KEYWORD \"auto/foo\")");
+		assertThat(lowered("(ns auto) (in-ns 'other) ::foo")).contains("(LIST :C%KEYWORD \"other/foo\")");
 		assertThatThrownBy(() -> Clojure.read("::nope/kw", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Invalid token: ::nope/kw");
 		assertThatThrownBy(() -> Clojure.read(":", null)).isInstanceOf(LispReadException.class)
@@ -430,10 +429,10 @@ class ClojureLoweringTest {
 
 	@Test
 	void nsSkipsMetadataOnItsNameLikeDefAndDefn() {
-		assertThat(lowered("(ns ^{:doc \"d\"} b58ns \"doc\" {:author :a}) ::foo"))
-			.contains("(LIST :C%KEYWORD \"b58ns/foo\")");
-		assertThat(lowered("(ns #^{:doc \"d\"} b58ns) ::foo")).contains("(LIST :C%KEYWORD \"b58ns/foo\")");
-		assertThat(lowered("(ns ^:no-doc b58ns (:require [clojure.string :as s])) (s/join \",\" [\"a\"])"))
+		assertThat(lowered("(ns ^{:doc \"d\"} docns \"doc\" {:author :a}) ::foo"))
+			.contains("(LIST :C%KEYWORD \"docns/foo\")");
+		assertThat(lowered("(ns #^{:doc \"d\"} docns) ::foo")).contains("(LIST :C%KEYWORD \"docns/foo\")");
+		assertThat(lowered("(ns ^:no-doc docns (:require [clojure.string :as s])) (s/join \",\" [\"a\"])"))
 			.contains("CONCATENATE");
 		assertThat(lowered("(defn #^String f [#^long x] x)")).isEqualTo(lowered("(defn f [x] x)"));
 	}
@@ -569,7 +568,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("get takes a map");
 		assertThatThrownBy(() -> Clojure.read("(hash-map :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("hash-map takes key/value pairs");
-		// (conj) is the oracle's init arity, [] (b60: (transduce xf conj coll))
+		// (conj) is the oracle's init arity, [], what (transduce xf conj coll) starts
+		// from
 		assertThat(lowered("(conj)")).isEqualTo(FALSE_BINDING + "(VECTOR)");
 		assertThatThrownBy(() -> Clojure.read("(count a b)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("count takes one collection");
@@ -1081,7 +1081,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void aZeroArgumentStringWriterLowersToAStringOutputStream() {
-		// b76: a zero-argument (new java.io.StringWriter) -- the oracle's own
+		// A zero-argument (new java.io.StringWriter) -- the oracle's own
 		// with-out-str construction -- is a string output stream on every backend,
 		// never a java:new (which wasm refuses); .toString of one answers the
 		// text so far without clearing it, so str reads it back twice.
@@ -1154,8 +1154,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(set! *warn-on-reflection* true)")).isEqualTo(FALSE_BINDING + "T");
 		assertThat(lowered("(set! *unchecked-math* false)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		// anything else names what is missing
-		assertThatThrownBy(() -> Clojure.read("(set! *no-such-b75* 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("set! of a var is not supported yet: *no-such-b75*");
+		assertThatThrownBy(() -> Clojure.read("(set! *no-such-var* 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! of a var is not supported yet: *no-such-var*");
 		assertThatThrownBy(() -> Clojure.read("(set! (.-f (Object.)) 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a host field is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(set! 3 4)", null)).isInstanceOf(LispReadException.class)
@@ -1181,7 +1181,7 @@ class ClojureLoweringTest {
 	@Test
 	void staticMembersLowerAsValues() {
 		// a static field as a value reads the field, through an import too
-		assertThat(lowered("(ns b20imp (:import (java.awt.event KeyEvent))) KeyEvent/VK_LEFT")).contains("JAVA:FIELD")
+		assertThat(lowered("(ns awtimp (:import (java.awt.event KeyEvent))) KeyEvent/VK_LEFT")).contains("JAVA:FIELD")
 			.contains("java.awt.event.KeyEvent");
 		assertThat(lowered("Math/PI")).contains("JAVA:FIELD").contains("java.lang.Math");
 		// a static method as a value is an arity-dispatching lambda over the static
@@ -1206,21 +1206,21 @@ class ClojureLoweringTest {
 		assertThat(lowered("(println (.contains (java.util.ArrayList. [1]) 2))")).contains("(IF (JAVA:CALL");
 		// a let/if-let/when-let local bound to a construction carries the class;
 		// a non-boolean answer and an unknown receiver keep the bare call
-		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))"))
+		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))")).contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (if-let [al (java.util.ArrayList.)] (.isEmpty al) :e))"))
 			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (if-let [b34-list (java.util.ArrayList.)] (.isEmpty b34-list) :e))"))
-			.contains("(IF (JAVA:CALL");
-		assertThat(lowered("(println (when-let [b34-list (java.util.ArrayList.)] (.isEmpty b34-list)))"))
+		assertThat(lowered("(println (when-let [al (java.util.ArrayList.)] (.isEmpty al)))"))
 			.contains("(IF (JAVA:CALL");
 		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))"))
 			.contains("(IF (JAVA:CALL");
 		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))")).contains("JAVA:CALL")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.size b29-list)))")).contains("JAVA:CALL")
+		assertThat(lowered("(let [al (java.util.ArrayList.)] (println (.size al)))")).contains("JAVA:CALL")
 			.doesNotContain("(IF (JAVA:CALL");
-		assertThat(lowered("(defn b29-empty [x] (.isEmpty x))")).contains("JAVA:CALL").doesNotContain("(IF (JAVA:CALL");
+		assertThat(lowered("(defn check-empty [x] (.isEmpty x))")).contains("JAVA:CALL")
+			.doesNotContain("(IF (JAVA:CALL");
 		// a shadowing binding hides the class again
-		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] ((fn [b29-list] (.isEmpty b29-list)) 1))"))
+		assertThat(lowered("(let [al (java.util.ArrayList.)] ((fn [al] (.isEmpty al)) 1))"))
 			.doesNotContain("(IF (JAVA:CALL");
 	}
 
@@ -1531,7 +1531,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void seqVerbsLowerOverTheSeqView() {
-		// b94: the dropping verbs are one call to a lazy-or-strict runtime worker, a
+		// The dropping verbs are one call to a lazy-or-strict runtime worker, a
 		// function passed as itself and any other value wrapped in the dispatcher at the
 		// call site (so a program passing a function never carries it)
 		assertThat(lowered("(keep inc [1])")).contains("(RONTOLISP::%CLOJURE-KEEP ").doesNotContain("%CLOJURE-CALL");
@@ -1623,7 +1623,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
 		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
-		assertThat(lowered("(let [b23-a (atom [1])] (swap! b23-a conj 1))")).contains("APPLY").contains("REDUCE");
+		assertThat(lowered("(let [a (atom [1])] (swap! a conj 1))")).contains("APPLY").contains("REDUCE");
 		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("vec takes one collection");
 		assertThatThrownBy(() -> Clojure.read("(vec [1] [2])", null)).isInstanceOf(LispReadException.class)
@@ -1838,9 +1838,9 @@ class ClojureLoweringTest {
 			.contains("|c%*d*|")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
 		assertThat(lowered("(binding [*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
-		// a syntax-quote qualifies the stream specials (b77: `*out* reads
+		// a syntax-quote qualifies the stream specials (`*out* reads
 		// clojure.core/*out*), and the oracle binds the qualified spelling like
-		// the bare one (b79)
+		// the bare one
 		assertThat(lowered("(binding [clojure.core/*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
 		assertThat(lowered("(binding [clojure.core/*in* 1] 1)")).contains("*STANDARD-INPUT*");
 		assertThatThrownBy(() -> Clojure.read("(binding [clojure.core/nope 1] 1)", null))
@@ -1929,10 +1929,10 @@ class ClojureLoweringTest {
 		// read-string/read call the run-time reader with the calling namespace and its
 		// aliases (what ::kw resolves against); a program that reads registers its
 		// record classes behind the false binding, ahead of everything else
-		String program = lowered("(ns b85 (:require [clojure.string :as s])) (defrecord R [a]) (read-string \"1\")");
+		String program = lowered("(ns rd (:require [clojure.string :as s])) (defrecord R [a]) (read-string \"1\")");
 		assertThat(program)
-			.startsWith(FALSE_BINDING + "(RONTOLISP::%CLOJURE-READ-REGISTER '((\"b85.R\" \"R\" (\"a\") T)))")
-			.contains("(RONTOLISP::%CLOJURE-READ-STRING \"1\" '(\"b85\" ")
+			.startsWith(FALSE_BINDING + "(RONTOLISP::%CLOJURE-READ-REGISTER '((\"rd.R\" \"R\" (\"a\") T)))")
+			.contains("(RONTOLISP::%CLOJURE-READ-STRING \"1\" '(\"rd\" ")
 			.contains("(\"s\" \"clojure.string\")");
 		assertThat(lowered("(read-string {:eof 1} \"\")")).contains("(RONTOLISP::%CLOJURE-READ-STRING-OPTS ");
 		assertThat(lowered("(read)")).contains("(RONTOLISP::%CLOJURE-READ *STANDARD-INPUT* T NIL '(\"user\"))");
@@ -1956,10 +1956,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(java.io.PushbackReader. (java.io.StringReader. \"x\"))"))
 			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
 		assertThat(lowered(
-				"(ns b85r (:import (java.io BufferedReader StringReader))) (BufferedReader. (new StringReader \"x\"))"))
+				"(ns rdr (:import (java.io BufferedReader StringReader))) (BufferedReader. (new StringReader \"x\"))"))
 			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
 		assertThat(lowered(
-				"(ns b85j (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
+				"(ns rdj (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
 			.endsWith("(OPEN \"f\")");
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
@@ -1993,7 +1993,7 @@ class ClojureLoweringTest {
 
 	@Test
 	void transducerAritiesBuildTheSplicedTransducers() {
-		// b60: the one-argument (zero for dedupe/distinct) arity of a seq verb is its
+		// The one-argument (zero for dedupe/distinct) arity of a seq verb is its
 		// transducer, a function over a reducing function built by a spliced worker
 		assertThat(lowered("(map inc)")).contains("(RONTOLISP::%CLOJURE-XF-MAP");
 		assertThat(lowered("(filter odd?)")).contains("(RONTOLISP::%CLOJURE-XF-FILTER").endsWith(" T)");
@@ -2155,7 +2155,7 @@ class ClojureLoweringTest {
 	@Test
 	void syntaxQuoteQualifiesTheVarsItsNamespaceSees() {
 		// like the oracle's read-time resolution: an own or referred var carries its
-		// namespace (user's included); anything else qualifies too (b77): a core
+		// namespace (user's included); anything else qualifies too: a core
 		// name the namespace sees as clojure.core/name, any other unresolved
 		// spelling with the defining namespace, an alias head with its namespace,
 		// a class head with its fully qualified name
@@ -2173,7 +2173,7 @@ class ClojureLoweringTest {
 		assertThat(loweredWithMacros("(ns s.c (:refer-clojure :exclude [map])) (defmacro m [] `(map filter))"))
 			.contains("'|c%s.c/map|")
 			.contains("'|c%clojure.core/filter|");
-		// a class spelling is already fully qualified (b79, measured on the
+		// a class spelling is already fully qualified (measured on the
 		// oracle: `java.io.StringWriter reads as written, `String as
 		// java.lang.String) -- never with the defining namespace
 		assertThat(loweredWithMacros("(ns s.d) (defmacro m [] `(java.io.StringWriter String))"))
@@ -2248,7 +2248,7 @@ class ClojureLoweringTest {
 			.contains("(DECLAIM (SPECIAL |c%app.dyn/y| |c%app.dyn/y%bound-depth|))")
 			.contains("(DEFPARAMETER |c%app.dyn/y%bound-depth| 0)")
 			.contains("(SETQ |c%app.dyn/x| 1)")
-			// b78: a reload keeps the defonce root through a runtime boundp probe
+			// A reload keeps the defonce root through a runtime boundp probe
 			// of the var itself -- every store feeds the eval mirror the probe
 			// reads, so no set flag beside the var is needed any more
 			.contains("(UNLESS (BOUNDP '|c%app.dyn/y|) (SETQ |c%app.dyn/y| 2))")
@@ -2260,7 +2260,7 @@ class ClojureLoweringTest {
 	void aDefonceInANamespaceKeepsItsRootThroughBoundp() {
 		// the plain (non-dynamic) init shape rides the same probe: the init's own
 		// assignment poisons the name, so the compile-time boundp fold leaves the
-		// probe to the run time, where the mirror answers it (b78)
+		// probe to the run time, where the mirror answers it
 		String out = loweredWithFiles("(require 'app.once)", Map.of("src/app/once.clj", "(ns app.once) (defonce v 1)"));
 		assertThat(out).contains("(UNLESS (BOUNDP '|c%app.once/v|) (SETQ |c%app.once/v| 1))").doesNotContain("%set");
 	}

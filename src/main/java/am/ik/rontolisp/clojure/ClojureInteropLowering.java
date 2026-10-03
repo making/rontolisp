@@ -52,7 +52,7 @@ final class ClojureInteropLowering {
 	/**
 	 * The one host class the lowering builds itself: a zero-argument
 	 * {@code java.io.StringWriter} is a Common Lisp string output stream on every backend
-	 * (b76) -- never a host {@code Writer}, which no backend writes to and wasm refuses
+	 * -- never a host {@code Writer}, which no backend writes to and wasm refuses
 	 * outright.
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
@@ -963,6 +963,9 @@ final class ClojureInteropLowering {
 		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
 			call = ctx.booleanAnswer(call);
 		}
+		if (method.equals("toString") && args.isEmpty()) {
+			call = valueToString(recv);
+		}
 		LispVal stream = streamMethod(ctx, method, recv, args);
 		if (stream != null) {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
@@ -973,6 +976,42 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(recv, receiver))), out);
+	}
+
+	/**
+	 * {@code toString} over an already-bound receiver that is no string or string output
+	 * stream (both arms of the stream test reach here, since {@code streamp} also answers
+	 * true for {@code t}, Clojure's {@code true}): a value of a Lisp kind -- number,
+	 * character, symbol (keywords and booleans included), cons (lists, keywords, records,
+	 * lazy seqs), array, table, function -- answers its {@code str} spelling, the
+	 * oracle's {@code toString}, on every backend; nil signals, like the oracle's
+	 * {@code NullPointerException}; anything else is a host object and keeps the
+	 * {@code java:call}. No predicate here answers true for a host object (a host
+	 * collection is no Lisp array or table on the JVM either), so the host path is
+	 * exactly what it was.
+	 */
+	static LispVal valueToString(LispSymbol recv) {
+		List<LispVal> direct = new ArrayList<>();
+		direct.add(recv);
+		direct.add(LispString.literal("toString"));
+		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		LispVal lispValue = ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("arrayp"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), recv),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), recv));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+								LispString.literal("NullPointerException: toString of nil"))),
+				ClojureLowerUtil
+					.list(lispValue,
+							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
+									ClojureLowering.NIL_CONST)),
+				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, call));
 	}
 
 	/**
@@ -1152,10 +1191,10 @@ final class ClojureInteropLowering {
 	 * and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
 	 * without reaching {@code java:call}. {@code toString} answers a string output
-	 * stream's text so far without clearing it (b76). Null when the method maps to
-	 * nothing, so the call goes to {@code java:call}.
+	 * stream's text so far without clearing it. Null when the method maps to nothing, so
+	 * the call goes to {@code java:call}.
 	 */
-	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args) {
+	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
 			// nil signals, like the oracle's NullPointerException out of Writer.write
 			LispSymbol value = ctx.freshTemp();
@@ -1189,9 +1228,10 @@ final class ClojureInteropLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), c), new LispInteger(-1)));
 		}
 		if (method.equals("toString") && args.isEmpty()) {
-			// A StringWriter lowered to a string output stream (b76) answers the
-			// text so far without clearing it; anything else keeps the java:call,
-			// whose run-time error names what is missing, like before.
+			// A StringWriter lowered to a string output stream answers the
+			// text so far without clearing it; anything else takes the value path
+			// (t is a stream to streamp, as the terminal's designator, and also
+			// Clojure's true).
 			return stringWriterContents(ctx, recv);
 		}
 		return null;
@@ -1203,24 +1243,17 @@ final class ClojureInteropLowering {
 	 * is written straight back. Only a string-stream in the output direction takes this
 	 * path (there is no portable string-stream predicate, so the test is the exact
 	 * {@code string-stream} type plus the real direction, both true on all four
-	 * backends); anything else keeps the {@code java:call}, like before.
+	 * backends); anything else takes {@link #valueToString}.
 	 */
-	static LispVal stringWriterContents(ClojureLowering ctx, LispVal recv) {
+	static LispVal stringWriterContents(ClojureLowering ctx, LispSymbol recv) {
 		LispSymbol text = ctx.freshTemp();
 		LispVal readback = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(text,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-output-stream-string"), recv)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, recv), text);
-		List<LispVal> direct = new ArrayList<>();
-		direct.add(recv);
-		direct.add(LispString.literal("toString"));
-		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv,
-								ClojureLowerUtil.quoted("string-stream")),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("output-stream-p"), recv)),
-				readback, call);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv, ClojureLowerUtil.quoted("string-stream")),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("output-stream-p"), recv)), readback, valueToString(recv));
 	}
 
 	/**

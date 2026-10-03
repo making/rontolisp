@@ -1972,9 +1972,9 @@
               ;; The exact rational the digits spell -- mantissa * 10^(exponent-scale) --
               ;; never rounded through a double, so "#e1.1" reads 11/10.
               (* sign (/ mantissa (expt 10 scale)) (expt 10 exponent))
-              ;; Negated AFTER the conversion, so "-0.0" keeps its sign.
-              (let ((magnitude
-                     (float (* mantissa (expt 10 (- exponent scale))) 1.0d0)))
+              ;; The nearest double, shared with the Clojure reader; negated AFTER the
+              ;; conversion, so "-0.0" keeps its sign.
+              (let ((magnitude (%decimal-double mantissa (- exponent scale))))
                 (if (< sign 0) (- magnitude) magnitude)))
           rontolisp::%scheme-false))))
 

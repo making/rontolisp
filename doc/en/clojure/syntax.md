@@ -37,6 +37,12 @@ token that parses to nothing is an `Invalid number` refusal.
 prints as the ratio without its mark; a `2N` past the `long` range is a bignum, also
 printing without its mark. Ratios read as `1/2`.
 
+`##NaN`, `##Inf` and `##-Inf` read as doubles, in source and under `read-string`/`read`,
+and `pr`, `prn` and `println` print them in the same spelling (also inside a collection);
+`str` and `format` say `NaN`, `Infinity` and `-Infinity` for the bare value. Any other
+`##name` is an `Unknown symbolic value` refusal. Two NaNs are never `=`; a NaN used as a
+map or set key is found by value here, where the oracle finds only the same boxed object.
+
 ## Booleans, nil and keywords
 
 `true`, `false` and `nil` are self-evaluating; `false` is a distinct object from `nil`

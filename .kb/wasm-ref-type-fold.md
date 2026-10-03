@@ -65,6 +65,12 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   `else` arm of `_rat_add`'s "both exact integers" guard, counted the rational path's
   `_rat_new` as reachable, and the ratio type stayed inhabited for the very test that
   should have retired it.
+- **A runtime path is retired only behind a TYPE TEST the fold can decide.** The rational
+  arms used to reach `_rat_new` for a non-number operand too (it failed later, inside
+  `_rat_num`), so any module doing arithmetic on values it cannot type kept the ratio
+  machinery; a `ratio(a) | ratio(b)` guard in front of the computation folds to 0 where no
+  ratio is ever built (2026-10-03, `.kb/wasm-bignum.md` "Ratios": Clojure's `(prn 1)` 11,047 ->
+  9,436 B).
 - **Symbolic i32s** (`Sym`): a `Const`, or a `Bool(local, members, negated)` -- "local x
   as read at position p is one of S". `i32.or`/`i32.and`/`i32.eqz`/`i32.eq 0` combine two
   questions about the same local (no assignment between the two reads) into one, so

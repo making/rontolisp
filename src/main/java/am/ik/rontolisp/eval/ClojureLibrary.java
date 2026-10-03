@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
@@ -39,6 +41,26 @@ import org.jspecify.annotations.Nullable;
 public final class ClojureLibrary {
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
+
+	/**
+	 * The {@code java:}-free bodies {@link #formsWithoutHostArms()} splices in place of
+	 * the library's host arms, one {@code defun} per arm, each defining the same name and
+	 * answering what the host arm answers for a value that is no host object:
+	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
+	 * {@code %clojure-host-class-name} (the printer) and {@code %clojure-host-string}
+	 * ({@code str}) answer NIL.
+	 */
+	private static final String HOST_ARMS_WITHOUT_JAVA = """
+			(defun rontolisp::%clojure-host-class (x)
+			  (declare (ignore x))
+			  (error "class needs a value of a known kind"))
+			(defun rontolisp::%clojure-host-class-name (x)
+			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-string (x)
+			  (declare (ignore x))
+			  nil)
+			""";
 
 	@Nullable private static volatile Set<String> functionNames;
 
@@ -94,12 +116,65 @@ public final class ClojureLibrary {
 	public static List<LispVal> process(List<LispVal> program) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(forms());
+				List<LispVal> out = new ArrayList<>(usesJava(program) ? forms() : formsWithoutHostArms());
 				out.addAll(program);
 				return out;
 			}
 		}
 		return program;
+	}
+
+	/**
+	 * The library for a program with no {@code java:} operator: the host arms replaced by
+	 * their {@code java:}-free bodies ({@link #HOST_ARMS_WITHOUT_JAVA}). No host object
+	 * can exist there, so the answer is the same, while the {@code java:} reference would
+	 * change the JVM output (the bridge, the host guards on every accessor) and is a
+	 * call-time error on wasm. The interpreter keeps {@link #forms()}: its {@code java:}
+	 * costs nothing.
+	 */
+	private static List<LispVal> formsWithoutHostArms() {
+		// read first: a nested computeIfAbsent on one ConcurrentHashMap is refused
+		List<LispVal> library = forms();
+		return FORMS.computeIfAbsent("without-host-arms", ignored -> {
+			Map<String, LispVal> standIns = new HashMap<>();
+			for (LispVal standIn : LispReader.readAllFromString(HOST_ARMS_WITHOUT_JAVA)) {
+				standIns.put(definedName(standIn), standIn);
+			}
+			List<LispVal> out = new ArrayList<>();
+			for (LispVal form : library) {
+				LispVal standIn = standIns.remove(definedName(form));
+				out.add(standIn == null ? form : standIn);
+			}
+			if (!standIns.isEmpty()) {
+				throw new IllegalStateException("clojure.lisp defines no host arm " + standIns.keySet());
+			}
+			return List.copyOf(out);
+		});
+	}
+
+	private static String definedName(LispVal form) {
+		return form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name ? name.name() : "";
+	}
+
+	private static boolean usesJava(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mentions(form, LispNames.JAVA_OPERATORS_QUALIFIED)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentions(LispVal form, List<String> names) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			if (mentions(cons.car(), names)) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return rest instanceof LispSymbol symbol && names.contains(symbol.name());
 	}
 
 	private static boolean references(LispVal form) {

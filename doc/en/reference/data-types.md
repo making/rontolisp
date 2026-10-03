@@ -82,17 +82,16 @@ Arithmetic, comparisons (`= < > <= >=`), `eq`/`eql`, `abs`/`min`/`max`/`1+`/`1-`
 mixing in a float switches to float contagion. Unary `(/ x)` is the reciprocal
 (`(/ 2)` is `1/2`).
 
-Per backend, the components follow the integer representation: the
-**interpreter and the JVM compiler** use big integers (a ratio of huge
-numerators/denominators stays exact), while the **WASM compiler** keeps ratio
-components in the 31-bit fixnum range with no overflow promotion (plain
-integers promote without bound, and `truncate`/`floor`/`ceiling`/`round`/
-`mod`/`rem` over two integers divide exactly at any magnitude -- only a
-division kept as a fraction is limited: components past 31 bits fold back, and
-a limb-sized big integer in an uneven `/` traps). The runtime reader emitted
-for compiled `read`/`load` does not
-parse ratio literals (a `1/3` token read at runtime is a symbol), and `mod`,
-`evenp`/`oddp`, `gcd`/`lcm` and `isqrt` remain integer-only.
+A ratio's numerator and denominator are integers like any other, so a ratio is
+exact at any magnitude on every backend: the **interpreter and the JVM
+compiler** hold them as big integers, and the **WASM compiler** in the same
+promoting integer tiers as every other integer, so `(/ 3000000000 7)` is
+`3000000000/7` everywhere. `float` of a ratio is the nearest double, ties to
+even, on all four backends (`(float 30000000000000004/100000000000000000)` is
+`0.30000000000000004`). The runtime reader emitted for compiled `read`/`load`
+parses ratio tokens like the frontend (`(read-from-string "1/3")` is `1/3`).
+`mod`/`rem` take any real, a ratio included; `evenp`/`oddp`, `gcd`/`lcm` and
+`isqrt` take integers only, as in Common Lisp.
 
 ## Comments, feature conditionals and `*features*`
 

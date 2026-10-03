@@ -399,7 +399,7 @@ final class ClojureFnLowering {
 				shuffleForm(ctx, coll));
 	}
 
-	// b15 map verbs: copy-on-write over fresh tables, like assoc/merge
+	// Map verbs: copy-on-write over fresh tables, like assoc/merge
 
 	/** {@code comp}: right-nested application, no functions the identity. */
 	static LispVal compOf(ClojureLowering ctx, List<LispVal> items) {
@@ -649,7 +649,7 @@ final class ClojureFnLowering {
 				trampolineForm(ctx, fun, rest));
 	}
 
-	// b15 predicates and casts
+	// Predicates and casts
 
 	/**
 	 * Whether the lowered value is a collection: a list, vector, map or set. Nil and the

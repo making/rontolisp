@@ -68,8 +68,8 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The names a syntax-quote leaves bare: the oracle's special forms, measured on
-	 * {@code clj} 1.12.6.1673 (b77). One less than {@link #SPECIAL_FORMS}:
-	 * {@code import*} is no special form there -- the oracle spells {@code ns/import*}.
+	 * {@code clj} 1.12.6.1673. One less than {@link #SPECIAL_FORMS}: {@code import*} is
+	 * no special form there -- the oracle spells {@code ns/import*}.
 	 */
 	static final Set<String> SYNTAX_QUOTE_BARE = Set.of("def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do",
 			"fn*", "quote", "var", ".", "set!", "deftype*", "reify*", "try", "throw", "monitor-enter", "monitor-exit",
@@ -451,13 +451,13 @@ final class ClojureMacroLowering {
 	 * the mangled namespace. A symbol naming a var the defining namespace sees qualifies
 	 * with its namespace (like the oracle's read-time resolution, so the expansion
 	 * reaches it from any namespace); a special form stays bare, while every other symbol
-	 * qualifies even when it resolves to nothing (b77): a core name the namespace sees
-	 * spells {@code clojure.core/name}, any other unresolved spelling the defining
-	 * namespace, an alias head its namespace, a class head its fully qualified name.
-	 * {@code ~} lowers its form as code, {@code ~@} splices a sequence into the enclosing
-	 * list, vector, map or set, and each {@code x#} binds one {@code (gensym "x")} per
-	 * syntax-quote node, so the name is one symbol per expansion and the same symbol at
-	 * every occurrence within it.
+	 * qualifies even when it resolves to nothing: a core name the namespace sees spells
+	 * {@code clojure.core/name}, any other unresolved spelling the defining namespace, an
+	 * alias head its namespace, a class head its fully qualified name. {@code ~} lowers
+	 * its form as code, {@code ~@} splices a sequence into the enclosing list, vector,
+	 * map or set, and each {@code x#} binds one {@code (gensym "x")} per syntax-quote
+	 * node, so the name is one symbol per expansion and the same symbol at every
+	 * occurrence within it.
 	 */
 	static LispVal syntaxQuote(ClojureLowering ctx, LispVal datum) {
 		return syntaxQuoteNode(ctx, datum);
@@ -568,7 +568,7 @@ final class ClojureMacroLowering {
 		// a var of a project namespace qualifies with its namespace, like the
 		// oracle's read-time resolution, so the expansion reaches it from any
 		// namespace it expands in; a special form stays bare, while every other
-		// symbol qualifies even unresolved (b77): a core name the namespace sees
+		// symbol qualifies even unresolved: a core name the namespace sees
 		// as clojure.core/name (a pending program macro below still shadows:
 		// shadowedCoreName above), any other unresolved spelling with the defining
 		// namespace, an alias head with its namespace, a class head with its fully
@@ -590,11 +590,11 @@ final class ClojureMacroLowering {
 
 	/**
 	 * Where an unresolved syntax-quoted symbol qualifies, like the oracle (measured on
-	 * {@code clj} 1.12.6.1673, b77): unqualified, a core name the namespace sees
+	 * {@code clj} 1.12.6.1673): unqualified, a core name the namespace sees
 	 * ({@code (:refer-clojure ...)} may hide it) spells {@code clojure.core/name}, a
 	 * class spelling its fully qualified name (an import, then {@code java.lang}, then a
-	 * dotted spelling as written -- b79, the oracle refuses to {@code def} over one, so
-	 * the class wins) and anything else the defining namespace; qualified, an alias head
+	 * dotted spelling as written -- the oracle refuses to {@code def} over one, so the
+	 * class wins) and anything else the defining namespace; qualified, an alias head
 	 * spells its namespace (no var check, like the oracle) and a class head its fully
 	 * qualified name (dotted as written, imported, or {@code java.lang}); a qualified
 	 * head naming neither stays as written.
@@ -608,7 +608,7 @@ final class ClojureMacroLowering {
 			if (ClojureCoreNames.contains(name) && ClojureNamespaceLowering.coreAllowed(ctx, name)) {
 				return ClojureCoreNames.PREFIX + name;
 			}
-			// a class spelling is already fully qualified (b79, measured on the
+			// a class spelling is already fully qualified (measured on the
 			// oracle: `java.io.StringWriter reads as written, `String as
 			// java.lang.String, an imported name through its import -- and the
 			// oracle refuses to def over one, so the class wins over any var)

@@ -973,6 +973,26 @@ cases:
       (10000000000 16 16 +inf.0 +nan.0)
       (#f #f #f #f #f)
       (255 3/2 5.0 16 +inf.0)
+  # An inexact decimal is the double nearest its exact value on every backend:
+  # %scheme-decimal floats the exact ratio mantissa * 10^(exponent - scale)
+  # through %decimal-double, the conversion the Clojure reader shares. WASM held a
+  # ratio's numerator and denominator in two i32 fields until 2026-10-03, so
+  # "0.30000000000000004" read as 0.8473649069170281 there; and a huge exponent
+  # built its power of ten on every backend (1e100000000 ran past a minute) until
+  # the range guard answered it from the digit count.
+  - name: decimal-string-to-number-is-the-nearest-double
+    source: |
+      (write
+       (list (string->number "0.30000000000000004") (string->number "3.141592653589793")
+             (string->number "-0.1234567890123456789") (string->number "123456789.123456789")
+             (read (open-input-string "0.1234567890123"))
+             (exact->inexact 30000000000000004/100000000000000000) (/ 3000000000 7)))
+      (newline)
+      (write (list (string->number "1e100000000") (string->number "-1e-100000000")))
+      (newline)
+    expected: |
+      (0.30000000000000004 3.141592653589793 -0.12345678901234568 123456789.12345679 0.1234567890123 0.30000000000000004 3000000000/7)
+      (+inf.0 -0.0)
   - name: the-inexact-library-keeps-an-exact-answer-exact
     source: |
       (write

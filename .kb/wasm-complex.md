@@ -231,8 +231,9 @@ implementations, changed together. What is this backend's alone:
 - A runtime-real value under a steered operator demotes exactly, but a float
   real answers a float-zero-imagined complex -- the JVM `_ccomplex` float path
   does the same (`_cneg` included: it always ends in `_ccomplex`).
-- Exact parts past the i32 ratio-component range wrap, exactly like real
-  ratio arithmetic (`.kb/wasm-bignum.md`, "Deliberate limits").
+- Exact parts are exact at any magnitude, like real ratio arithmetic (the
+  ratio components became exact integers 2026-10-03, `.kb/wasm-bignum.md`,
+  "Ratios"; they wrapped past i32 before).
 - The emitted `eval` and the runtime reader have no `#C` arm (the JVM twin
   neither); `mod`/`rem`/`gcd`/`lcm`/`isqrt`/`signum` and the rounding family
   treat a complex like any other mistyped operand. `signum` is 754's audit.

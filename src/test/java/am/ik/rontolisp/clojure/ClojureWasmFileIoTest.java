@@ -30,36 +30,36 @@ class ClojureWasmFileIoTest {
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnPreview1() throws Exception {
 		assertThat(runWithPreopen(false))
-			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#b51wio.B74W{:a 1, :b 2}\n7\n"
-					+ "(#b51wio.B74W{:a 1, :b \"x\"}) :eof\n");
+			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n");
 	}
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnTheComponent() throws Exception {
 		assertThat(runWithPreopen(true))
-			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#b51wio.B74W{:a 1, :b 2}\n7\n"
-					+ "(#b51wio.B74W{:a 1, :b \"x\"}) :eof\n");
+			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n");
 	}
 
 	private static String runWithPreopen(boolean component) throws Exception {
 		requireWasmtime();
-		Path fixture = workDir.resolve("b51-words.txt");
-		try (java.io.InputStream in = ClojureWasmFileIoTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+		Path fixture = workDir.resolve("words.txt");
+		try (java.io.InputStream in = ClojureWasmFileIoTest.class.getResourceAsStream("/clojure-words.txt")) {
 			assertThat(in).isNotNull();
 			Files.copy(in, fixture, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 		}
-		Path written = workDir.resolve("b51-out.txt");
+		Path written = workDir.resolve("out.txt");
 		Files.deleteIfExists(written);
 		String out = "\"" + written.toString().replace("\\", "\\\\") + "\"";
 		String words = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		String program = "(ns b51wio (:require [clojure.java.io :as jio]))" + "(defrecord B74W [a b])" + "(spit " + out
+		String program = "(ns fileio (:require [clojure.java.io :as jio]))" + "(defrecord Rec [a b])" + "(spit " + out
 				+ " \"a\\nb\")" + "(println (slurp " + out + "))" + "(println (line-seq " + out + "))" + "(spit " + out
 				+ " '(1 2))" + "(println (slurp " + out + "))" + "(spit " + out + " [1 2])" + "(println (slurp " + out
 				+ "))" + "(spit " + out + " {:a 1})" + "(println (slurp " + out + "))" + "(spit " + out + " 42)"
 				+ "(println (slurp " + out + "))" + "(spit " + out + " nil)" + "(println (pr-str (slurp " + out + ")))"
-				+ "(spit " + out + " \"s\")" + "(spit " + out + " (->B74W 1 2) :append true)" + "(println (slurp " + out
+				+ "(spit " + out + " \"s\")" + "(spit " + out + " (->Rec 1 2) :append true)" + "(println (slurp " + out
 				+ "))" + "(with-open [r (jio/reader " + words + ")] (println (count (line-seq r))))" + "(spit " + out
-				+ " (list (->B74W 1 \"x\")))" + "(with-open [r (java.io.PushbackReader. (jio/reader " + out + "))]"
+				+ " (list (->Rec 1 \"x\")))" + "(with-open [r (java.io.PushbackReader. (jio/reader " + out + "))]"
 				+ " (prn (read r) (read r false :eof)))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
 		byte[] module = WasmLispCompiler.builder()
@@ -67,10 +67,10 @@ class ClojureWasmFileIoTest {
 			.runtimeFeatures(frontend.features().names())
 			.build()
 			.compile(frontend.forms());
-		Path path = Files.createTempFile(workDir, "b51wio", component ? "-c.wasm" : ".wasm");
+		Path path = Files.createTempFile(workDir, "fileio", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
-		Path outFile = Files.createTempFile(workDir, "b51wio", ".out");
-		Path errFile = Files.createTempFile(workDir, "b51wio", ".err");
+		Path outFile = Files.createTempFile(workDir, "fileio", ".out");
+		Path errFile = Files.createTempFile(workDir, "fileio", ".err");
 		Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir",
 				workDir.toString(), path.toString())
 			.redirectOutput(outFile.toFile())

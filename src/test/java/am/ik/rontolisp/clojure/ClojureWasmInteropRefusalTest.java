@@ -29,14 +29,13 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void staticFieldValueRefusesOnPreview1() throws Exception {
-		assertRefusal("(ns b20wimp (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "JAVA:FIELD",
+		assertRefusal("(ns awtimp (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "JAVA:FIELD",
 				false);
 	}
 
 	@Test
 	void staticFieldValueRefusesOnTheComponent() throws Exception {
-		assertRefusal("(ns b20wimp (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "JAVA:FIELD",
-				true);
+		assertRefusal("(ns awtimp (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "JAVA:FIELD", true);
 	}
 
 	@Test
@@ -105,10 +104,10 @@ class ClojureWasmInteropRefusalTest {
 		assertThat(warnings.toString(StandardCharsets.UTF_8)).as("the compile warning names the refused surface")
 			.contains("the function " + surface + " is undefined");
 		requireWasmtime();
-		Path path = Files.createTempFile(workDir, "b20wref", component ? "-c.wasm" : ".wasm");
+		Path path = Files.createTempFile(workDir, "interopref", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
-		Path outFile = Files.createTempFile(workDir, "b20wref", ".out");
-		Path errFile = Files.createTempFile(workDir, "b20wref", ".err");
+		Path outFile = Files.createTempFile(workDir, "interopref", ".out");
+		Path errFile = Files.createTempFile(workDir, "interopref", ".err");
 		Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path.toString())
 			.redirectOutput(outFile.toFile())
 			.redirectError(errFile.toFile())

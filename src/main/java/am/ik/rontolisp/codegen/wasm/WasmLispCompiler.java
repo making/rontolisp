@@ -1059,8 +1059,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_LOAD = FUNC_READ + 1;
 
 	// Rational (ratio) runtime: always present. _rat_new normalizes and constructs,
-	// _rat_num/_rat_den read components (treating an i31 integer as value/1), and the
-	// arithmetic helpers dispatch between the i31 fast path and exact ratio arithmetic.
+	// _rat_num/_rat_den read the components -- exact integers at any tier -- treating an
+	// integer as itself over one, and the arithmetic helpers dispatch between the
+	// exact-integer fast path and exact ratio arithmetic over the _big_* helpers.
 	static final int FUNC_RAT_NEW = FUNC_LOAD + 1;
 
 	static final int FUNC_RAT_NUM = FUNC_RAT_NEW + 1;
@@ -1529,7 +1530,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _big_fdiv ((ref null eq) a, (ref null eq) b, i32 mode) -> (ref null eq): exact
 	// integer division -- mode 0 = truncate, 1 = floor, 2 = ceiling, 3 = round (ties
 	// to even). The fused form of `(truncate (/ a b))` and friends for exact-integer
-	// operands, where the ratio intermediate cannot hold limb components.
+	// operands, which never allocates the ratio intermediate.
 	static final int FUNC_BIG_FDIV = FUNC_BIG_HASH + 1;
 
 	static final int BIGINT_FUNC_LAST = FUNC_BIG_FDIV;
@@ -2067,6 +2068,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// so no index above shifts, and shaken when no site checks.
 	static final int FUNC_FP_HDR = FUNC_TYPE_ERR_OF + 1;
 
+	// _rat_to_f64 ((ref null eq) rational) -> f64: the double nearest an exact rational,
+	// ties to even (WasmRatioRuntimeBuilder.buildRatToF64Body) -- _as_f64's ratio arm,
+	// which a ratio with components past 2^53 needs: one f64 division rounds them
+	// twice. Reuses _big_to_f64's signature (TYPE_BIG_TO_F64); appended after the last
+	// fixed helper so no index above shifts, and shaken in a module with no ratio.
+	static final int FUNC_RAT_TO_F64 = FUNC_FP_HDR + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2097,7 +2105,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_FP_HDR + 1;
+	static final int FUNC_VEC_BASE = FUNC_RAT_TO_F64 + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2114,9 +2122,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
-	// landing (_type_err_of) and the fill-pointer check (_fp_hdr) -- plus, under --simd,
-	// the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_FP_HDR + 1;
+	// landing (_type_err_of), the fill-pointer check (_fp_hdr) and the ratio-to-double
+	// conversion (_rat_to_f64) -- plus, under --simd, the vec: SIMD block. Use
+	// userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_RAT_TO_F64 + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2164,15 +2173,23 @@ public final class WasmLispCompiler implements LispCompiler {
 	// type index for path_open: (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
 	static final int TYPE_PATH_OPEN = TYPE_ENV_LOOKUP + 2; // 26
 
-	// Ratio struct {i32 numerator, i32 denominator}, always normalized (coprime,
-	// denominator > 1, sign on the numerator). A rational whose denominator reduces to
-	// one is represented as a plain i31 integer instead.
+	// Ratio struct {(ref null eq) numerator, (ref null eq) denominator, i32 tag}, always
+	// normalized (coprime, denominator > 1, sign on the numerator); both components are
+	// exact integers in their narrowest tier (i31, TYPE_BIGNUM or TYPE_BIGINT), so a
+	// ratio is exact at any magnitude. A rational whose denominator reduces to one is
+	// the integer itself instead. The tag is always 0 and carries nothing: it keeps the
+	// shape apart from TYPE_FARRAY's {eqref, eqref}, which wasm-GC would otherwise
+	// canonicalize into the same type (WasmRatioRuntimeBuilder.emitNewRatio).
 	static final int TYPE_RATIO = TYPE_PATH_OPEN + 1; // 27
 
-	// type index for _rat_new: (i32, i32) -> (ref null eq)
+	// (i32, i32) -> (ref null eq): named for the i32-component _rat_new that first had
+	// it; _gensym, the string builders and the other helpers listed at the function
+	// section reuse it, and the ratio runtime no longer does.
 	static final int TYPE_RAT_NEW = TYPE_RATIO + 1; // 28
 
-	// type index for _rat_num/_rat_den: ((ref null eq)) -> (i32)
+	// ((ref null eq)) -> (i32): named for the i32-component _rat_num/_rat_den that first
+	// had it; _hash, _ihash and the other helpers listed at the function section reuse
+	// it, and the ratio runtime no longer does.
 	static final int TYPE_RAT_GET = TYPE_RAT_NEW + 1; // 29
 
 	// type index for _rat_cmp: ((ref null eq), (ref null eq)) -> (i32)
@@ -6219,12 +6236,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 23: path_open (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I64, Type.I64,
 						Type.I32, Type.I32 }, new Type[] { Type.I32 });
-				// type 24: ratio struct {i32 numerator, i32 denominator}
+				// type 24: ratio struct {(ref null eq) numerator, (ref null eq)
+				// denominator, i32 tag} -- see TYPE_RATIO for the tag
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
-					fields.addField(false, w -> w.write(Type.I32));
+					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+					fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
 					fields.addField(false, w -> w.write(Type.I32));
 				}));
-				// type 25: _rat_new (i32, i32) -> (ref null eq)
+				// type 25: (i32, i32) -> (ref null eq), TYPE_RAT_NEW
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
@@ -6233,7 +6252,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.writeRefType(true, Type.EQ.code());
 				});
-				// type 26: _rat_num/_rat_den ((ref null eq)) -> (i32)
+				// type 26: ((ref null eq)) -> (i32), TYPE_RAT_GET
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
@@ -6980,9 +6999,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_READ_LINE_FD); // _read (i32 fd) -> value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _load (path) -> value
 				// Rational runtime
-				fnDef.addFunction(TYPE_RAT_NEW); // _rat_new
-				fnDef.addFunction(TYPE_RAT_GET); // _rat_num
-				fnDef.addFunction(TYPE_RAT_GET); // _rat_den
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_new (num, den)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_num
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rat_den
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_add
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_sub
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _rat_mul
@@ -7264,6 +7283,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_TYPE_ERR_OF)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _fp_hdr (value, op) ->
 															// header (FUNC_FP_HDR)
+				fnDef.addFunction(TYPE_BIG_TO_F64); // _rat_to_f64 (rational) -> f64
+													// (FUNC_RAT_TO_F64)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7899,7 +7920,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(readListBody)
 					.addFunction(readBody)
 					.addFunction(loadBody)
-					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody(!this.optimize.prefersSizeOverSpeed()))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD,
@@ -7911,10 +7932,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBitsBody())
-					.addFunction(WasmRatioRuntimeBuilder.buildRatTruncBody())
-					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(false))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatFloorBody(true))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundBody())
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(0))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(1))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(2))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(3))
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINC_VAL, 1))
 					.addFunction(WasmRuntimeBuilder.buildToStringBody(FUNC_PRINT_VAL, 1))
 					.addFunction(WasmStringRuntimeBuilder.buildStringConcatBody(this.charvecPossible))
@@ -8256,6 +8277,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the fill-pointer check body (FUNC_FP_HDR): shaken with its sites.
 				code.addFunction(WasmOperandTypes.buildFillPointerCheckBody(operandTexts, operandOpGlobalIndex,
 						this.usesIdentityHashTables));
+				// the ratio-to-double body (FUNC_RAT_TO_F64): shaken with the ratios.
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatToF64Body());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

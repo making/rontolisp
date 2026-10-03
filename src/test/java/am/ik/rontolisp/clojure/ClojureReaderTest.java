@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.List;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
@@ -83,7 +84,7 @@ class ClojureReaderTest {
 	@Test
 	void regexLiteralsReadAsMarkedSourceStrings() {
 		assertThat(printed("#\"a+\"")).isEqualTo("[(|%regex| \"a+\")]");
-		// backslashes stay verbatim for the pattern parser (b50, oracle `clj`
+		// backslashes stay verbatim for the pattern parser (oracle `clj`
 		// 1.12.6.1673): `#"\\d"` reads two characters, not the digit class
 		assertThat(printed("#\"\\\\d\"")).isEqualTo("[(|%regex| \"\\\\\\\\d\")]");
 		assertThat(printed("#\"\\d\"")).isEqualTo("[(|%regex| \"\\\\d\")]");
@@ -92,6 +93,35 @@ class ClojureReaderTest {
 			.hasMessageContaining("Illegal/unsupported escape sequence");
 		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #:");
+	}
+
+	@Test
+	void symbolicValuesReadAsDoubles() {
+		assertThat(printed("##NaN ##Inf ##-Inf")).isEqualTo("[NaN, Infinity, -Infinity]");
+		assertThat(read("##NaN ##Inf ##-Inf")).allSatisfy(v -> assertThat(v).isInstanceOf(LispDouble.class));
+		assertThat(((LispDouble) read("##NaN").get(0)).value()).isNaN();
+		assertThat(((LispDouble) read("##Inf").get(0)).value()).isEqualTo(Double.POSITIVE_INFINITY);
+		assertThat(((LispDouble) read("##-Inf").get(0)).value()).isEqualTo(Double.NEGATIVE_INFINITY);
+		// the oracle reads the next form: whitespace, comments and discards in between,
+		// a delimiter ends the symbol
+		assertThat(printed("## Inf ##\n;c\n -Inf [##Inf]")).isEqualTo("[Infinity, -Infinity, (|%vector| Infinity)]");
+	}
+
+	@Test
+	void unknownSymbolicValuesAreRefusedByName() {
+		assertThatThrownBy(() -> read("##Foo")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##Foo");
+		assertThatThrownBy(() -> read("##-NaN")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##-NaN");
+		assertThatThrownBy(() -> read("##inf")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##inf");
+		assertThatThrownBy(() -> read("##1")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##1");
+		assertThatThrownBy(() -> read("##\"a\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##a");
+		assertThatThrownBy(() -> read("##nil")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##null");
+		assertThatThrownBy(() -> read("##")).isInstanceOf(LispReadException.class);
 	}
 
 	@Test
@@ -141,7 +171,7 @@ class ClojureReaderTest {
 
 	@Test
 	void unicodeStringEscapesMatchTheOracle() {
-		// measured on `clj` 1.12.6.1673 (b47): exactly four hex digits read, the
+		// measured on `clj` 1.12.6.1673: exactly four hex digits read, the
 		// rest stays string body
 		assertThat(read("\"\\u0041\"")).isEqualTo(List.of(new LispString("A")));
 		assertThat(read("\"\\u00419\"")).isEqualTo(List.of(new LispString("A9")));
@@ -178,7 +208,7 @@ class ClojureReaderTest {
 	@Test
 	void singleQuoteEscapeSignalsLikeTheOracle() {
 		// `\'` read as `'` here but the oracle (clj 1.12.6.1673) signals
-		// `Unsupported escape character: \'`: refused to match it (b44) instead
+		// `Unsupported escape character: \'`: refused to match it instead
 		// of keeping the lenient read (a `'` needs no escaping in `"..."`).
 		assertThatThrownBy(() -> read("\"a\\'b\"")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unsupported escape character: \\'");

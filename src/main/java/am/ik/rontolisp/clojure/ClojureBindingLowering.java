@@ -274,7 +274,7 @@ final class ClojureBindingLowering {
 		}
 		// a redefined defn gets a fresh internal name per definition: the call
 		// sites below it call the newest, and a value position captures the
-		// definition current at that point (b65). The first definition keeps the
+		// definition current at that point. The first definition keeps the
 		// bare var symbol, so a single defn lowers exactly as before.
 		int definition = ctx.defnCounts.merge(key, 1, Integer::sum);
 		LispSymbol fn = ClojureLowering.defnSym(key, definition);
@@ -1165,6 +1165,6 @@ final class ClojureBindingLowering {
 		return found == null ? ClojureLowering.NIL_CONST : ctx.lower(found);
 	}
 
-	// b15 seq verbs: each over the seq view, strict lists, nil-for-empty
+	// Seq verbs: each over the seq view, strict lists, nil-for-empty
 
 }

@@ -69,8 +69,10 @@ literal, the forgery returns. Pins:
 - **Float ARITHMETIC** — a float literal is fine as an ARGUMENT and the print family folds it
   (every backend prints the same Schubfach shortest decimal, `.kb/format.md`), but contagion, zero
   divisor and overflow-to-infinity are not pinned. Trigger: float rows in `FoldDifferential`.
-- **Every RATIO**, argument and result: `(/ 7 2)` declines, `(/ 100 5)` folds — the WASM ratio tier
-  has i32 components (`.kb/wasm-bignum.md`). Trigger: widen those components.
+- **Every RATIO**, argument and result: `(/ 7 2)` declines, `(/ 100 5)` folds. The reason was the
+  WASM ratio tier's i32 components; the trigger fired 2026-10-03 (the components are exact
+  integers now, a ratio literal included, `.kb/wasm-bignum.md` "Ratios"), and folding ratios is
+  `.todo/c04`.
 - **Case-INSENSITIVE operators** (`char-equal`, `string-equal`, `alpha-char-p`, `alphanumericp`):
   ASCII-only on WASM, full-Unicode elsewhere.
 - **Any value with IDENTITY** (cons, general array, hash table, instance) — enforced as a property

@@ -21,17 +21,38 @@ class ClojureSessionTest {
 	}
 
 	@Test
-	void aLaterBufferMemoizesWhatAnEarlierOneDefined() {
-		// (def p (memoize p)) in a later buffer captures the earlier buffer's
-		// function cell, like the same two forms in one file.
+	void aLaterBufferDefmultiOfAMultimethodKeepsTheEarlierOne() {
+		// the oracle's defmulti defines only when the var holds no multimethod, so a
+		// REPL re-entry changes nothing (neither the dispatch function nor the table)
 		ClojureSession session = new ClojureSession();
-		session.read("(defn b52sess [x] (* x 2))");
-		List<String> redefined = session.read("(def b52sess (memoize b52sess))")
+		session.read("(defmulti dispatch :k)");
+		List<String> again = session.read("(defmulti dispatch :j :default :other)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(redefined).anyMatch(form -> form.contains("#'|c%b52sess|"));
+		assertThat(again).noneMatch(form -> form.contains("dispatch"));
+		session.read("(defn dispatch [x] x)");
+		List<String> redefined = session.read("(defmulti dispatch :j)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(redefined).anyMatch(form -> form.contains("|c%dispatch%methods|"));
+	}
+
+	@Test
+	void aLaterBufferMemoizesWhatAnEarlierOneDefined() {
+		// (def p (memoize p)) in a later buffer captures the earlier buffer's
+		// function cell, like the same two forms in one file.
+		ClojureSession session = new ClojureSession();
+		session.read("(defn memoized [x] (* x 2))");
+		List<String> redefined = session.read("(def memoized (memoize memoized))")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(redefined).anyMatch(form -> form.contains("#'|c%memoized|"));
 	}
 
 	@Test
@@ -39,14 +60,14 @@ class ClojureSessionTest {
 		// the metadata a definition recorded travels with the session, so a #'
 		// typed later carries the earlier buffer's docstring and evaluated store
 		ClojureSession session = new ClojureSession();
-		session.read("(defn ^{:test (fn [] 1)} b80sess \"Sess doc.\" [x] x)");
-		List<String> var = session.read("(:doc (meta #'b80sess))")
+		session.read("(defn ^{:test (fn [] 1)} documented \"Sess doc.\" [x] x)");
+		List<String> var = session.read("(:doc (meta #'documented))")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(var).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-VAR \"user/b80sess\"")
-				&& form.contains("|c%b80sess%meta|"));
+		assertThat(var).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-VAR \"user/documented\"")
+				&& form.contains("|c%documented%meta|"));
 	}
 
 	@Test
@@ -54,20 +75,20 @@ class ClojureSessionTest {
 		// a session that reads registers each record class once, ahead of the
 		// buffer that adds it, so a literal typed later reads back as the record
 		ClojureSession session = new ClojureSession();
-		session.read("(defrecord B85S [a])");
-		List<String> reading = session.read("(read-string \"#user.B85S{:a 1}\")")
+		session.read("(defrecord RecS [a])");
+		List<String> reading = session.read("(read-string \"#user.RecS{:a 1}\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
 		assertThat(reading.get(0))
-			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85S\" \"B85S\" (\"a\") T)))");
-		List<String> later = session.read("(defrecord B85T [b]) (read-string \"1\")")
+			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecS\" \"RecS\" (\"a\") T)))");
+		List<String> later = session.read("(defrecord RecT [b]) (read-string \"1\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85T\" \"B85T\" (\"b\") T)))");
+		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecT\" \"RecT\" (\"b\") T)))");
 		assertThat(session.read("(read-string \"2\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
@@ -96,13 +117,13 @@ class ClojureSessionTest {
 	@Test
 	void aLaterBufferSeesTheNsAnEarlierOneDeclared() {
 		ClojureSession session = new ClojureSession();
-		session.read("(ns b19sess)");
+		session.read("(ns autons)");
 		List<String> auto = session.read("::checking")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(auto).anyMatch(form -> form.contains("\"b19sess/checking\""));
+		assertThat(auto).anyMatch(form -> form.contains("\"autons/checking\""));
 		session.read("(in-ns 'other)");
 		List<String> moved = session.read("::checking")
 			.stream()
@@ -118,21 +139,21 @@ class ClojureSessionTest {
 		// buffer that first uses it, the test registers under the session's
 		// namespace, and a later buffer runs it
 		ClojureSession session = new ClojureSession();
-		session.read("(ns b55sess (:require [clojure.test :refer :all]))");
-		List<String> defined = session.read("(deftest b55-s (is (= 1 1)))")
+		session.read("(ns testns (:require [clojure.test :refer :all]))");
+		List<String> defined = session.read("(deftest a-test (is (= 1 1)))")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
 		assertThat(defined).filteredOn(form -> form.contains("%CLOJURE-TEST-INIT")).hasSize(1);
-		assertThat(defined).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"b55sess\" \"b55-s\""));
+		assertThat(defined).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-REGISTER \"testns\" \"a-test\""));
 		List<String> run = session.read("(run-tests)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
 		assertThat(run).noneMatch(form -> form.contains("%CLOJURE-TEST-INIT"));
-		assertThat(run).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"b55sess\")"));
+		assertThat(run).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS (LIST \"testns\")"));
 	}
 
 	@Test

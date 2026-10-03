@@ -2006,21 +2006,31 @@ final class WasmBigIntRuntimeBuilder {
 		return b.toByteArray();
 	}
 
-	// _big_to_f64(x): float approximation of a limb integer (top-down limb
-	// accumulation over exact 2^32 scalings; may differ from a correctly-rounded
-	// conversion in the last ulp).
+	// _big_to_f64(x): the double nearest an exact integer at any tier, ties to even --
+	// BigInteger.doubleValue(), so float of a limb integer answers the same bits on every
+	// backend. The narrow tiers convert their i64 directly (f64.convert_i64_s rounds to
+	// nearest even). A limb integer's magnitude has L >= 64 bits: the 64 bits from its
+	// top one down form a u64 whose last bit absorbs any nonzero bit beneath them (the
+	// sticky bit), so f64.convert_i64_u rounds exactly once and the scaling by 2^(L - 64)
+	// after it is exact -- or overflows to infinity exactly when the rounded value does.
+	// Accumulating the limbs top-down in f64, as it did until 2026-10-03, rounded once
+	// per
+	// limb and answered an ulp off at ties.
 	static byte[] buildBigToF64Body() {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
-		// locals: 1=aT (ref null $limbs), 2=s, 3=i (i32), 4=acc (f64)
-		w.write(3);
+		// locals: 1=aT (ref null $limbs); 2=s, 3=i, 4=sh, 5=li, 6=bo, 7=st (i32); 8=lo,
+		// 9=top (i64); 10=f (f64)
+		w.write(4);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
-		w.write(2);
+		w.write(6);
 		w.write(Type.I32);
+		w.write(2);
+		w.write(Type.I64);
 		w.write(1);
 		w.write(Type.F64);
-		final int aT = 1, s = 2, i = 3, acc = 4;
+		final int aT = 1, s = 2, i = 3, sh = 4, li = 5, bo = 6, st = 7, lo = 8, top = 9, f = 10;
 
 		b.get(0);
 		b.refTest(WasmLispCompiler.TYPE_BIGINT);
@@ -2032,6 +2042,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		b.end();
 
+		// the magnitude's limbs (a fresh negation for a negative value)
 		b.get(0);
 		b.call(WasmLispCompiler.FUNC_LIMB_OF);
 		b.refCast(WasmLispCompiler.TYPE_LIMBS);
@@ -2055,9 +2066,7 @@ final class WasmBigIntRuntimeBuilder {
 		b.set(aT);
 		b.end();
 
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.0);
-		b.set(acc);
+		// i = the top nonzero limb (the magnitude is at least 2^63)
 		b.get(aT);
 		b.arrayLen();
 		b.i32c(1);
@@ -2065,20 +2074,10 @@ final class WasmBigIntRuntimeBuilder {
 		b.set(i);
 		b.block();
 		b.loop();
-		b.get(i);
-		b.i32c(0);
-		w.write(Instruction.I32_LT_S);
-		b.brIf(1);
-		b.get(acc);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(4294967296.0);
-		w.write(Instruction.F64_MUL);
 		b.get(aT);
 		b.get(i);
 		b.arrayGet();
-		w.write(Instruction.F64_CONVERT_U_I32);
-		w.write(Instruction.F64_ADD);
-		b.set(acc);
+		b.brIf(1);
 		b.get(i);
 		b.i32c(1);
 		w.write(Instruction.I32_SUB);
@@ -2086,16 +2085,140 @@ final class WasmBigIntRuntimeBuilder {
 		b.br(0);
 		b.end();
 		b.end();
+		// sh = L - 64, L = i*32 + 32 - clz(limb i)
+		b.get(i);
+		b.i32c(5);
+		w.write(Instruction.I32_SHL);
+		b.i32c(32);
+		w.write(Instruction.I32_ADD);
+		b.get(aT);
+		b.get(i);
+		b.arrayGet();
+		w.write(Instruction.I32_CLZ);
+		w.write(Instruction.I32_SUB);
+		b.i32c(64);
+		w.write(Instruction.I32_SUB);
+		b.set(sh);
 
+		w.write(Instruction.BLOCK);
+		w.write(Type.F64);
+		// past 2^1024: infinity
+		b.get(sh);
+		b.i32c(960);
+		w.write(Instruction.I32_GT_S);
+		b.ifVoid();
+		w.write(Instruction.F64_CONST);
+		w.writeF64(Double.POSITIVE_INFINITY);
+		b.br(1);
+		b.end();
+		b.get(sh);
+		b.i32c(5);
+		w.write(Instruction.I32_SHR_U);
+		b.set(li);
+		b.get(sh);
+		b.i32c(31);
+		w.write(Instruction.I32_AND);
+		b.set(bo);
+		// lo = limb li | limb li+1 << 32
+		b.get(aT);
+		b.get(li);
+		b.arrayGet();
+		w.write(Instruction.I64_EXTEND_U_I32);
+		b.get(aT);
+		b.get(li);
+		b.i32c(1);
+		w.write(Instruction.I32_ADD);
+		b.arrayGet();
+		w.write(Instruction.I64_EXTEND_U_I32);
+		b.i64c(32);
+		w.write(Instruction.I64_SHL);
+		w.write(Instruction.I64_OR);
+		b.set(lo);
+		// top = the 64 bits from sh: lo itself on a limb boundary, else lo's high part
+		// joined to the low bo bits of limb li+2 (the top limb)
+		b.get(bo);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		b.get(lo);
+		b.els();
+		b.get(lo);
+		b.get(bo);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_SHR_U);
+		b.get(aT);
+		b.get(li);
+		b.i32c(2);
+		w.write(Instruction.I32_ADD);
+		b.arrayGet();
+		w.write(Instruction.I64_EXTEND_U_I32);
+		b.i64c(64);
+		b.get(bo);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.I64_SHL);
+		w.write(Instruction.I64_OR);
+		b.end();
+		b.set(top);
+		// st = the bits below sh: limb li's low bo bits, then every limb under it
+		b.get(aT);
+		b.get(li);
+		b.arrayGet();
+		b.i32c(1);
+		b.get(bo);
+		w.write(Instruction.I32_SHL);
+		b.i32c(1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_AND);
+		b.set(st);
+		b.get(li);
+		b.set(i);
+		b.block();
+		b.loop();
+		b.get(i);
+		w.write(Instruction.I32_EQZ);
+		b.brIf(1);
+		b.get(i);
+		b.i32c(1);
+		w.write(Instruction.I32_SUB);
+		b.set(i);
+		b.get(st);
+		b.get(aT);
+		b.get(i);
+		b.arrayGet();
+		w.write(Instruction.I32_OR);
+		b.set(st);
+		b.br(0);
+		b.end();
+		b.end();
+		// (top | sticky) rounded once, then scaled by 2^sh
+		b.get(top);
+		b.get(st);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_OR);
+		w.write(Instruction.F64_CONVERT_U_I64);
+		b.get(sh);
+		b.i32c(1023);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		b.i64c(52);
+		w.write(Instruction.I64_SHL);
+		w.write(Instruction.F64_REINTERPRET_I64);
+		w.write(Instruction.F64_MUL);
+		b.end(); // magnitude block
+		b.set(f);
 		b.get(s);
 		b.i32c(0);
 		w.write(Instruction.I32_LT_S);
-		b.ifVoid();
-		b.get(acc);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		b.get(f);
 		w.write(Instruction.F64_NEG);
-		b.set(acc);
+		b.els();
+		b.get(f);
 		b.end();
-		b.get(acc);
 		b.end();
 		return b.toByteArray();
 	}
@@ -2382,8 +2505,8 @@ final class WasmBigIntRuntimeBuilder {
 	// _big_fdiv(a, b, mode): exact integer division over any tier -- mode 0 =
 	// truncate, 1 = floor, 2 = ceiling, 3 = round to nearest with ties to even. The
 	// fused lowering of `(truncate (/ a b))` and friends for exact-integer operands
-	// (the ratio intermediate cannot hold limb components). Composed from the other
-	// _big_* helpers; traps on b = 0 like _big_divrem.
+	// (no ratio intermediate is allocated). Composed from the other _big_* helpers;
+	// traps on b = 0 like _big_divrem.
 	static byte[] buildBigFdivBody() {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;

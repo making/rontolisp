@@ -14,7 +14,7 @@ path allocated and immediately unwrapped, never a different computation. Sibling
 - **`_dbl`'s ratio arm is the generated `_ratToDouble`: the correctly-rounded nearest
   double** (round-half-even over a 56-bit `BigInteger` head plus the remainder as the
   sticky bit, denormalizing to signed zero), bit-identical with
-  `LispRatio.doubleValue` and WASM's `_as_f64` f64 division. A `BigDecimal` DECIMAL64
+  `LispRatio.doubleValue` and WASM's `_rat_to_f64`. A `BigDecimal` DECIMAL64
   step used to sit here and rounded exact quotients to 16 decimal digits first
   (`1/8388608` answered `1.192092895507812e-7`, not `2^-23`); the ANSI
   `RATIONAL.1`/`RATIONALIZE.1`/`RATIONALIZE.3`/`/.12` round trips plus `*.12` pin the

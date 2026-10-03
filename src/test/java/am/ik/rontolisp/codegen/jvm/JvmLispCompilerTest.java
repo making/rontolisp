@@ -4475,14 +4475,15 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunBoundpSeesAnAssignmentMadeInsideALambda() throws Exception {
-		// b78: every store to a global feeds the eval mirror, so a runtime boundp
+		// Every store to a global feeds the eval mirror, so a runtime boundp
 		// answers what a lambda body assigned -- the mirror used to see top-level
 		// stores only and read stale forever after. The probes survive the
 		// compile-time fold (the init's own assignment poisons the name).
-		assertThat(compileAndRun("(setq b78-init (lambda () (setq b78-lam 42) nil))"
-				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))" + " (funcall b78-init)"
-				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))"
-				+ " (print (symbol-value (intern \"B78-LAM\"))) (print b78-lam)"))
+		assertThat(compileAndRun("(setq assign-init (lambda () (setq assigned-in-lambda 42) nil))"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (funcall assign-init)"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (print (symbol-value (intern \"ASSIGNED-IN-LAMBDA\"))) (print assigned-in-lambda)"))
 			.isEqualTo("NIL\nNIL\nT\nT\n42\n42");
 	}
 

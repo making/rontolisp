@@ -167,8 +167,12 @@ final class ClojureCollectionLowering {
 	}
 
 	private static boolean isScalarLiteral(LispVal form) {
-		return form instanceof LispString || form instanceof LispInteger || form instanceof LispDouble
-				|| form instanceof LispChar || form instanceof LispNil || form instanceof LispTrue;
+		if (form instanceof LispDouble d) {
+			// the two float zeros are one key under =, not under equal
+			return d.value() != 0.0;
+		}
+		return form instanceof LispString || form instanceof LispInteger || form instanceof LispChar
+				|| form instanceof LispNil || form instanceof LispTrue;
 	}
 
 	/**
@@ -751,8 +755,8 @@ final class ClojureCollectionLowering {
 								ClojureProtocolLowering.isTypedForm(collSym)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStringLowering.isRegexForm(collSym)),
 						// atoms (and refs/agents/volatiles, the same cell) are cons
-						// wrappers too, so the oracle signals instead of consing (b42,
-						// the b21 regex-guard precedent)
+						// wrappers too, so the oracle signals instead of consing
+						// (the regex-guard precedent)
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStateLowering.isAtomForm(collSym))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), item, collSym)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil
@@ -1091,8 +1095,8 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
 		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-		// too, so the oracle signals instead of counting (b45, the b42
-		// conj-guard precedent)
+		// too, so the oracle signals instead of counting (the conj-guard
+		// precedent)
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
@@ -1132,7 +1136,7 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("empty? needs a collection"))));
 		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-		// too, so the oracle signals instead of answering false (b45, the b42
+		// too, so the oracle signals instead of answering false (the
 		// conj-guard precedent)
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("empty? needs a collection"))));

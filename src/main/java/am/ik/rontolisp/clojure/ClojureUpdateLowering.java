@@ -562,6 +562,6 @@ final class ClojureUpdateLowering {
 				frequenciesForm(ctx, ClojureSeqLowering.seqAllForm(ctx, coll)));
 	}
 
-	// b15 higher-order functions: closures, no new runtime
+	// Higher-order functions: closures, no new runtime
 
 }

@@ -130,8 +130,8 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword value takes extra arguments (a keyword-dispatched multimethod passes several) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
-| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
-| `<` `>` `<=` `>=` `nil?` `false?` `true?` `boolean?` `boolean` `coll?` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `fn?` is false for keywords, sets and maps |
+| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
+| `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `coll?` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
 | `int` `long` `char` `quot` `unchecked-add` | `truncate` (`char-code` for a char) / `code-char` / `truncate` / `+` | a non-number signals; `unchecked-add` never wraps |
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/` |
 | `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
@@ -150,8 +150,9 @@ Each is a real work item unless the reason says otherwise.
 - Printing (`clojure.lisp`, `%clojure-write`): `nil` prints `nil`, never `()` (an empty lazy
   seq prints `()`); map/set walk order is unspecified (the spec pins only single-entry maps
   and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
-  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a class
-  object `#<java java.lang.Class>` -- while a deftype, reify and `reduced` print their
+  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, any
+  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
+  while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-length*`/`*print-level*`, `print-method` and `pprint` are absent;
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
@@ -179,7 +180,8 @@ Each is a real work item unless the reason says otherwise.
   so its message is lost (b66).
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
-  tag; `class` answers a kind keyword (host classes exist on no wasm backend).
+  tag; `class` answers a kind keyword (host classes exist on no wasm backend), a host
+  object its host class (interpreter and JVM).
 - Metadata: a derived value (`assoc`, `conj`, ...) starts without metadata; a symbol takes
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
@@ -217,6 +219,12 @@ table, `%clojure-hash` -> classes) groups the representatives `=` to each other;
 - Cost on keyword-only work (wasm, medians of 3, 2026-10-03): 4M `(get m k)` with a
   variable keyword 2.10 -> 2.37 s (the call to `%clojure-table-key`), 2M two-pair `assoc`
   calls 4.68 -> 4.93 s; JVM unchanged within noise.
+- The float zeros are one key though `equal` (= `eql`) tells them apart: `%clojure-table-key` /
+  `%clojure-store-key` answer the zero the table holds (`%clojure-zero-key`), and
+  `isScalarKeyForm` does not treat a zero double literal as scalar, so the lowered sites go
+  through them. `%clojure-hash` already gives both zeros 0. Measured 2026-10-03 against the oracle:
+  `(= -0.0 0.0)` true, `(contains? #{0.0} -0.0)` true. A NaN key is untouched (the oracle itself
+  finds the same boxed NaN but not another).
 - Two vectors compare in place in `%clojure-equal` (no seq-view copies) -- the bucket scan's
   hot path.
 - Untouched on purpose: hierarchy tables (tags), protocol tables (tags), `prefer-method`'s
@@ -347,6 +355,31 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   a class spelling to the keyword `class` answers for it, `nil` to the `(:C%NIL)` marker
   (the dispatcher maps a true nil there, so no table keys on nil and a literal `:nil` keeps
   its own row), `Object` to `:object` plus the slot, literal vectors element by element.
+- A `defmulti` of a var that holds a multimethod lowers to `nil`, like the oracle's (the
+  corpus's second `(defmulti my-print class :default :everything-else)` keeps the first's
+  methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
+  is cleared by every other definition (`intern`), never by the pre-scan (`internName`).
+  Static, so a `defmulti` run repeatedly inside a function still redefines.
+- `class`'s last arm (no Clojure kind) is `%clojure-host-class` (`clojure.lisp`): `(java:call
+  x "getClass")` under `handler-case` -- `java:call` refuses every non-host value on both
+  paths, so its refusal IS the host test -- else `class needs a value of a known kind`.
+  `ClojureLibrary.process` splices a refusal-only body when the program names no `java:`
+  operator (`LispNames.JAVA_OPERATORS_QUALIFIED`, the list `JvmLispCompiler.
+  programUsesAnyJavaOp` reads), since a `java:` reference changes the JVM output; the
+  interpreter always has the host body. A host object then misses every class row and
+  reaches `Object`, then `:default`. Measured 2026-10-03, shcloj4
+  `examples.test.multimethods`: 2 errors before (`.toString 42`, `class` of a `File`),
+  byte-identical to the oracle after on the interpreter and the JVM.
+- The printer and `str` have host arms of the same kind (`HOST_ARMS_WITHOUT_JAVA` holds
+  every stand-in, NIL where the arm answers "not mine"): `%clojure-write`'s fall-through
+  asks `%clojure-host-class-name`, so a class object prints `java.lang.String` (`long` for
+  `Long/TYPE`) under print and pr alike, like the oracle; `%clojure-str-of`'s non-readable
+  fall-through asks `%clojure-host-string`, so `str` of a host object is its `toString`
+  (`class java.lang.String`, a `File`'s path, `[1, 2]` for a host list) -- inside a
+  collection the printer's spelling stands, as in the oracle. Both test
+  `%clojure-lisp-value-p` first, so a number, keyword or vector in a `java:` program never
+  pays the `getClass` refusal. The stand-ins' cost without `java:`, measured 2026-10-03 on
+  `(println [1 2] (str 3 :k))`: wasm 36332 -> 36352 bytes, JVM `.class` 69529 -> 69757.
 - A `class` call in the dispatch function answers nil for nil, so the marker is hit --
   bare, wrapped, through a named `defn`/`def`'d function (the `defmulti` re-lowers its
   recorded definition with the dispatch lowering) or nested inline (inlined at the call
@@ -396,6 +429,12 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
 - A bare class name in value position is `(java:static "java.lang.Class" "forName"
   "<fqn>")`, the oracle's class object.
 - A string receiver answers the mapped core operation (a Lisp string is no host object).
+  `.toString` of a number, character, symbol (booleans too), cons, array, table or
+  function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
+  backend (`ClojureInteropLowering.valueToString`); nil signals (the oracle's NPE); only
+  what is left reaches `java:call`. The stream arm's non-string-stream branch reaches the
+  same test, since `streamp` answers true for `t` (the terminal's designator, and
+  Clojure's `true`).
   Stream receivers run on every backend: `.write` -> `princ` (nil signals), `.flush`,
   `.readLine` -> `read-line` (nil past the end), `.read` -> a character code (`-1` past
   the end), `.toString` of a string output stream -> the text so far. `(new
@@ -526,11 +565,22 @@ answers `:pattern`/`:matcher`.
 
 ## Reading
 
+**`##NaN`, `##Inf`, `##-Inf` read as doubles** in both readers (`readSymbolicValue`,
+`%clojure-rd-symbolic`): the oracle reads the NEXT FORM after `##` (so `## Inf` and
+`##Inf)` read) and refuses a symbol not in the three with `Unknown symbolic value: ##x`, any
+other form with `Invalid token: ##<str of the form>`. The printer spells them `##NaN`/`##Inf`/
+`##-Inf` under print and pr alike (`%clojure-write`, via `%clojure-symbolic-float-p`); `str`
+of the bare value and `format` keep `NaN`/`Infinity` (`%clojure-str-of`), a collection under
+`str` is readable, so `##`. Pinned on all four backends (clojure-spec, measured against clj
+1.12.6.1673, 2026-10-03). Not reproduced: `(get {##NaN 1} ##NaN)` is nil and
+`(contains? #{##NaN} ##NaN)` false there (two reads, two boxed objects); a double here has no identity,
+so a NaN key is found by value like a computed one always was.
+
 **`read-string`/`read` run one reader in `clojure.lisp` (`%clojure-read-from`) over the
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst`/`##Inf` are its refusals. A read map
+`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst` are its refusals. A read map
 or set stores its keys through "Structural keys" (`%clojure-plist-table`,
 `%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
 literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
@@ -550,13 +600,18 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
   session buffer ending in one waits, `endsInDiscard`), and a character literal takes the
   character after the backslash unconditionally (`\(` reads back what `pr` wrote; a
   backslash ends the literal, and `ClojureSession.isComplete` skips it).
-- **Doubles come from their IEEE bits** (`%clojure-rd-double`: exact integer arithmetic,
-  ties to even, `%ieee754-double-from-bits`), never `float` of the exact ratio: wasm ratio
-  components are i32 (`.kb/wasm-bignum.md`), so `(string->number "0.30000000000000004")`
-  answers `0.8473649069170281` there and `1e-300` traps (Scheme's `%scheme-decimal` still
-  does). Measured 2026-10-03: 430 values -- 300 random bit patterns, 100 random decimals,
-  subnormal, halfway and overflow edges -- equal the compiled literal (Java's
-  `parseDouble`) on all four backends. `M` decimals stay exact ratios.
+- **A double is `float` of the exact rational its digits spell**, through the prelude's
+  `%decimal-double` (shared with the Scheme reader's `%scheme-decimal`): every backend rounds
+  an exact rational once, ties to even (`.kb/wasm-bignum.md`, "Ratios"), so the run-time
+  reader answers the double the source reader's `parseDouble` compiled. A value surely past
+  either end of the double range is decided from the mantissa's bit length, so `1e400000000`
+  never builds its power of ten. Until 2026-10-03 the reader built the double from its IEEE
+  bits in Lisp (`%clojure-rd-double`) because WASM ratios held i32 components; that guard
+  estimated log10 too high for a long mantissa, and a 903-digit one worth `1e305` read as
+  infinity. Measured 2026-10-03: 1,593 values -- random bit patterns, 1-30-digit decimals with
+  exponents -340..320, exact halfway expansions, subnormal and overflow edges -- equal Java's
+  `parseDouble` on all four backends, and so do the same strings through Scheme's
+  `string->number`. `M` decimals stay exact ratios.
 - Records: a program that reads registers every record/deftype class, behind the false
   binding (`ClojureReadLowering.registration`: `(class tag fields record-p)` strings); a
   session registers what each buffer adds or redefines. So a class from a namespace
@@ -576,7 +631,9 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
 - Cost (2026-10-03, `(prn (read-string "[1 \"a\"]"))` against `(prn [1 "a"])`): wasm 32,204 ->
   103,678 B, class 61,618 -> 176,613 B. Of the wasm, ~20 KB is the regex parser (a `#"..."`
   in the input compiles at read time), ~13 KB the number parser's ratio and bignum
-  arithmetic, ~3 KB `intern`.
+  arithmetic, ~3 KB `intern`. Re-measured the same day after the shared `%decimal-double`
+  replaced the Lisp IEEE-bits conversion: wasm 118,226 -> 115,286 B, class 190,861 -> 186,835 B
+  (the plain `(prn [1 "a"])` 32,463 -> 32,112 B, class unchanged).
 
 ## Vars and metadata
 
@@ -653,7 +710,12 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 - `run-tests` takes symbols or strings and bakes in the namespaces seen so far, so an
   unknown one is `No namespace: x found`; `run-all-tests` filters by `re-matches`.
 - Deviations: definition order (the oracle's is map order); `thrown?` matches any
-  condition; error reports print the message without a stack trace, at the `is` line; a
+  condition (measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
+  17 assertions. 0 failures, 0 errors.` on the interpreter and the JVM, as the oracle --
+  its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` catch
+  `java:call`'s refusal of a string receiver, since the `#^Class` hint is dropped; a
+  class-typed match needs the host exception as a condition, the `catch` deviation above);
+  error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL
   condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with
   the CLI's one-line report) and a trap on WASM (`call stack exhausted`, no catch), but the

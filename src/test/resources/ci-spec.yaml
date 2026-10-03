@@ -2126,9 +2126,8 @@ cases:
       99
   - name: float-exact-comparison
     # A float against an exact number compares exact values on every backend
-    # (.todo/037). Sub-ulp ratios stay on the interpreter/JVM unit tests: a
-    # ratio that close to a float has components past WASM-GC's i32 limit, so
-    # only the shared representable range is pinned here.
+    # (.todo/037), a ratio within an ulp of the float included: the double
+    # 0.30000000000000004 is a little above the ratio its digits spell.
     source: |
       (print (= 2.0 2))
       (print (= 0.5 1/2))
@@ -2137,6 +2136,8 @@ cases:
       (print (= 1.0 (+ 1 1/1000)))
       (print (= -0.0 0))
       (print (> (max 1.0 3/2) 1.0))
+      (print (= 0.30000000000000004 30000000000000004/100000000000000000))
+      (print (> 0.30000000000000004 30000000000000004/100000000000000000))
     expected: |
       T
       T
@@ -2144,6 +2145,8 @@ cases:
       NIL
       NIL
       T
+      T
+      NIL
       T
   - name: double-nested-arithmetic
     source: |
@@ -3755,6 +3758,39 @@ cases:
       -1/3
       0
       0
+  # A ratio's numerator and denominator are exact integers at any magnitude on
+  # every backend, like any other integer. WASM-GC held them in two i32 fields
+  # until 2026-10-03: (/ 3000000000 7) printed -184995328 there, float of a ratio
+  # divided the wrapped components, and a limb-sized one trapped.
+  - name: ratio-components-past-the-fixnum-range
+    source: |
+      (defun wide-ratio-of (a b) (/ a b))
+      (print (wide-ratio-of 3000000000 7))
+      (print (wide-ratio-of 30000000000000004 100000000000000000))
+      (print (+ (wide-ratio-of 1 3000000000) (wide-ratio-of 1 7)))
+      (print (* (wide-ratio-of 3000000000 7) (wide-ratio-of 7 3000000000)))
+      (print (list (numerator (wide-ratio-of 3000000000 7)) (denominator (wide-ratio-of -1 (expt 2 70)))))
+      (print (list (floor (wide-ratio-of 3000000000 7)) (round (wide-ratio-of (+ (expt 10 20) 1) 2))))
+      (print (list (< (wide-ratio-of 1 3000000000) (wide-ratio-of 1 3000000001))
+                   (equal (wide-ratio-of 3000000000 7) (wide-ratio-of 6000000000 14))))
+      (print (float (wide-ratio-of 30000000000000004 100000000000000000) 1d0))
+      (print (float (wide-ratio-of 1 (expt 10 300)) 1d0))
+      (print (float (wide-ratio-of 3 (expt 2 1075)) 1d0))
+      (print (rational 0.1))
+      (print (read-from-string "3000000000/7"))
+    expected: |
+      3000000000/7
+      7500000000000001/25000000000000000
+      3000000007/21000000000
+      1
+      (3000000000 1180591620717411303424)
+      (428571428 50000000000000000000)
+      (NIL T)
+      0.30000000000000004
+      1.0e-300
+      9.9e-324
+      3602879701896397/36028797018963968
+      3000000000/7
   - name: common-lisp-fidelity-mod-rem-sign
     source: |
       (print (mod -13 4))
@@ -4380,15 +4416,14 @@ cases:
       1/3
       3/2
   # Slice C (.todo/037): the logcount population count (negatives count 0
-  # bits), integer-decode-float's three values, and rationalize. The
-  # rationalize rows stay inside what every backend holds: integer-valued
+  # bits), integer-decode-float's three values, and rationalize. Integer-valued
   # floats answer their exact integer through a fast path that runs BEFORE
   # integer-decode-float (.todo/896 -- that function's significand is now the
   # full (float-digits ax)-bit value, so its exponent is no longer reliably
-  # non-negative for a whole-number float), integers and ratios pass through;
-  # a fractional float needs big-denominator interval fractions, which trap
-  # fail-stop on WASM-GC exactly as (/ 1 (ash 1 52)) does, so 0.1-scale
-  # answers are pinned on the interpreter/JVM unit tests.
+  # non-negative for a whole-number float), integers and ratios pass through,
+  # and a fractional float walks interval fractions over power-of-two
+  # denominators past 2^52 (they trapped on WASM-GC while its ratio components
+  # were i32, until 2026-10-03).
   - name: slice-c-logcount
     source: |
       (print (logcount 0))
@@ -4439,6 +4474,10 @@ cases:
       (print (rationalize -7))
       (print (rationalize (/ 1 3)))
       (print (funcall #'rationalize 100.0))
+      (print (rationalize 0.1))
+      (print (rationalize -0.75))
+      (print (rationalize 0.333))
+      (print (rationalize 1d-10))
     expected: |
       2
       100
@@ -4448,6 +4487,10 @@ cases:
       -7
       1/3
       100
+      1/10
+      -3/4
+      333/1000
+      1/10000000000
   # Smalls (.todo/037 item 4): float-sign's sign-as-float (negative zero answers
   # -1.0) and float-digits' significand width (53 for every normal double,
   # fewer for a subnormal, 0 for a zero). Every row stays inside what every
@@ -12020,7 +12063,7 @@ cases:
       (print (symbol-value :sym-api-kw))
       ;; A global assigned only inside a lambda is unbound until the body runs:
       ;; every store feeds the eval mirror the runtime boundp/symbol-value read
-      ;; (b78 -- the mirror used to see top-level stores only and read stale).
+      ;; (the mirror used to see top-level stores only and read stale).
       (setq sym-api-init (lambda () (setq sym-api-lam 7) nil))
       (print (boundp (intern "SYM-API-LAM")))
       (print (boundp 'sym-api-lam))
@@ -17796,24 +17839,24 @@ cases:
     # wrote answers t and evaluates its forms -- three backends used to answer
     # the integer 1 here.
     source: |
-      (defun ci439-wr (path text dir ie)
+      (defun lopt-wr (path text dir ie)
         (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
-      (defun ci439-rd (path et)
+      (defun lopt-rd (path et)
         (with-open-file (in path :element-type et) (read-line in)))
-      (defun ci439-rd1 (path et)
+      (defun lopt-rd1 (path et)
         (with-open-file (in path :element-type et) (read-byte in)))
-      (ci439-wr "c439.dat" "one" :output :supersede)
-      (ci439-wr "c439.dat" "two" :output :append)
-      (print (ci439-rd "c439.dat" 'character))
-      (print (ci439-rd1 "c439.dat" (list 'unsigned-byte 8)))
+      (lopt-wr "lopt.dat" "one" :output :supersede)
+      (lopt-wr "lopt.dat" "two" :output :append)
+      (print (lopt-rd "lopt.dat" 'character))
+      (print (lopt-rd1 "lopt.dat" (list 'unsigned-byte 8)))
       (print (load "no-such-439.lisp" :if-does-not-exist nil))
-      (ci439-wr "c439-ok.lisp" "(print 'ci439-loaded)" :output :supersede)
-      (print (load "c439-ok.lisp"))
+      (lopt-wr "lopt-ok.lisp" "(print 'lopt-loaded)" :output :supersede)
+      (print (load "lopt-ok.lisp"))
     expected: |
       "onetwo"
       111
       NIL
-      CI439-LOADED
+      LOPT-LOADED
       T
 
   - name: string-designators
@@ -17828,7 +17871,7 @@ cases:
     # total princ coercion, so a symbol reached the trim intrinsic as its bare
     # runtime spelling and answered a silently wrong substring.
     source: |
-      (defun ci440-id (x) x)
+      (defun computed-id (x) x)
       (print (string-trim "*" '*foo*))
       (print (string-left-trim "F" '|FOO|))
       (print (string-right-trim "O" '|FOO|))
@@ -17836,18 +17879,18 @@ cases:
       (print (string-trim "T" t))
       (print (string-trim "K" :key))
       (print (string-trim "A" #\a))
-      (print (string-trim "*" (ci440-id '*foo*)))
-      (print (string-upcase (ci440-id #\a)))
-      (print (string-downcase (ci440-id '|FOO|)))
-      (print (string-capitalize (ci440-id nil)))
-      (print (string< (ci440-id 'abc) "abd"))
-      (print (string-lessp (ci440-id #\a) 'b))
-      (print (string= (ci440-id 'foo) "FOO"))
-      (print (handler-case (string-trim "*" (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string-upcase (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string< (ci440-id 'abc) (ci440-id 42)) (error () :signalled)))
-      (print (handler-case (string-trim (ci440-id #\*) "*x*") (error () :signalled)))
-      (print (string-trim (ci440-id (vector #\x)) "xhellox"))
+      (print (string-trim "*" (computed-id '*foo*)))
+      (print (string-upcase (computed-id #\a)))
+      (print (string-downcase (computed-id '|FOO|)))
+      (print (string-capitalize (computed-id nil)))
+      (print (string< (computed-id 'abc) "abd"))
+      (print (string-lessp (computed-id #\a) 'b))
+      (print (string= (computed-id 'foo) "FOO"))
+      (print (handler-case (string-trim "*" (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string-upcase (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string< (computed-id 'abc) (computed-id 42)) (error () :signalled)))
+      (print (handler-case (string-trim (computed-id #\*) "*x*") (error () :signalled)))
+      (print (string-trim (computed-id (vector #\x)) "xhellox"))
     expected: |
       "FOO"
       "OO"

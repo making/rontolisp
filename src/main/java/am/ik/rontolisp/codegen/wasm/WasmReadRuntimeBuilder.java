@@ -912,7 +912,7 @@ final class WasmReadRuntimeBuilder {
 
 		// classify: ratio? (N/D with grouping commas; a token the pattern rejects stays
 		// on the symbol path, and a literal /0 denominator signals like the frontend)
-		emitTryRatio(w, ctx, BYTE, START, LEN, POS, NEG, ACC, VALID, SAWDOT, HP, C2);
+		emitTryRatio(w, ctx, BYTE, START, LEN, POS, NEG, ACC64, VALID, SAWDOT, HP, CAR);
 
 		// classify: float? (a token with a '.' or an exponent marker falls through the
 		// integer parser)
@@ -1984,13 +1984,16 @@ final class WasmReadRuntimeBuilder {
 	/**
 	 * Emits the ratio classifier for the token at {@code [START, START+LEN)}: an optional
 	 * leading {@code -}, digits (with grouping commas), exactly one {@code /}, then
-	 * digits (with commas). On a match builds the ratio through {@code FUNC_RAT_NEW}
-	 * (normalization and the den==1 integer demotion come free) and returns from the
-	 * function; any token the pattern rejects falls through to the next classifier. A
-	 * literal zero denominator signals like the frontend.
+	 * digits (with commas). Each side accumulates in a tier-aware exact integer
+	 * ({@code NUM} and {@code DEN} are ref locals stepped through {@code _big_grow}, like
+	 * the integer classifier's), so a side past the fixnum range reads exactly. On a
+	 * match builds the ratio through {@code FUNC_RAT_NEW} (normalization and the den==1
+	 * integer demotion come free) and returns from the function; any token the pattern
+	 * rejects falls through to the next classifier. A literal zero denominator signals
+	 * like the frontend.
 	 */
-	private static void emitTryRatio(WasmWriter w, ReadCtx ctx, int BYTE, int START, int LEN, int POS, int NEG, int ACC,
-			int NUMD, int DEND, int SI, int ACC2) {
+	private static void emitTryRatio(WasmWriter w, ReadCtx ctx, int BYTE, int START, int LEN, int POS, int NEG, int NUM,
+			int NUMD, int DEND, int SI, int DEN) {
 		block(w); // the "not a ratio" bail-out target
 		// find the single '/'
 		i32(w, -1);
@@ -2037,7 +2040,8 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 0);
 		setLocal(w, NUMD);
 		i32(w, 0);
-		setLocal(w, ACC);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		setLocal(w, NUM);
 		getLocal(w, START);
 		setLocal(w, POS);
 		getLocal(w, START);
@@ -2085,14 +2089,13 @@ final class WasmReadRuntimeBuilder {
 		brIf(w, 2);
 		i32(w, 1);
 		setLocal(w, NUMD);
-		getLocal(w, ACC);
+		getLocal(w, NUM);
 		i32(w, 10);
-		w.write(Instruction.I32_MUL);
 		getLocal(w, BYTE);
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, ACC);
+		call(w, WasmLispCompiler.FUNC_BIG_GROW);
+		setLocal(w, NUM);
 		getLocal(w, POS);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -2111,7 +2114,8 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 0);
 		setLocal(w, DEND);
 		i32(w, 0);
-		setLocal(w, ACC2);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		setLocal(w, DEN);
 		getLocal(w, POS);
 		getLocal(w, START);
 		getLocal(w, LEN);
@@ -2149,14 +2153,13 @@ final class WasmReadRuntimeBuilder {
 		brIf(w, 2);
 		i32(w, 1);
 		setLocal(w, DEND);
-		getLocal(w, ACC2);
+		getLocal(w, DEN);
 		i32(w, 10);
-		w.write(Instruction.I32_MUL);
 		getLocal(w, BYTE);
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, ACC2);
+		call(w, WasmLispCompiler.FUNC_BIG_GROW);
+		setLocal(w, DEN);
 		getLocal(w, POS);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -2167,21 +2170,23 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, DEND);
 		w.write(Instruction.I32_EQZ);
 		brIf(w, 0);
-		// a valid ratio token: a zero denominator signals, like the frontend
-		getLocal(w, ACC2);
-		w.write(Instruction.I32_EQZ);
+		// a valid ratio token: a zero denominator signals, like the frontend (a
+		// canonical zero is the i31 0)
+		getLocal(w, DEN);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.REF_EQ);
 		ifVoid(w);
 		emitErr(w, ctx, ctx.msgDivZero());
 		end(w);
 		getLocal(w, NEG);
 		ifVoid(w);
-		i32(w, 0);
-		getLocal(w, ACC);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, ACC);
+		getLocal(w, NUM);
+		call(w, WasmLispCompiler.FUNC_BIG_NEG);
+		setLocal(w, NUM);
 		end(w);
-		getLocal(w, ACC);
-		getLocal(w, ACC2);
+		getLocal(w, NUM);
+		getLocal(w, DEN);
 		call(w, WasmLispCompiler.FUNC_RAT_NEW);
 		w.write(Instruction.RETURN);
 		end(w); // bail-out block
@@ -3475,14 +3480,7 @@ final class WasmReadRuntimeBuilder {
 		refTest(w, WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF, 0x7C);
 		getLocal(w, VAL);
-		refCast(w, WasmLispCompiler.TYPE_RATIO);
-		structGet(w, WasmLispCompiler.TYPE_RATIO, 0);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		getLocal(w, VAL);
-		refCast(w, WasmLispCompiler.TYPE_RATIO);
-		structGet(w, WasmLispCompiler.TYPE_RATIO, 1);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_DIV);
+		call(w, WasmLispCompiler.FUNC_RAT_TO_F64);
 		w.write(Instruction.ELSE);
 		emitErr(w, ctx, ctx.msgPackedNum());
 		end(w);

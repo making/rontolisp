@@ -10452,25 +10452,25 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void rational() throws Exception {
-		// Only the exactly representable range is pinned: a ratio whose reduced
-		// components leave the i31 range wraps on this backend, exactly as (/)
-		// of the same integers does (WasmRatioRuntimeBuilder), so 0.1-scale
-		// values stay on the interpreter/JVM tests above.
+		// A 0.1-scale float's exact value has a power-of-two denominator past 2^52: a
+		// ratio component the i32 ratio of this backend wrapped until it took exact
+		// integer components, so these rows mirror LispEvaluatorTest's.
 		assertThat(compileAndRun(
 				"(print (rational 5)) (print (rational 1.5)) (print (rational -2.5)) (print (rational 0.5)) (print (rational 2.0)) (print (rational 0.0)) (print (rational (/ 1 3))) (print (funcall #'rational 1.5))"))
 			.isEqualTo("5\n3/2\n-5/2\n1/2\n2\n0\n1/3\n3/2");
 		assertThat(compileAndRun("(print (= (rational (ash 1 100)) (ash 1 100)))")).isEqualTo("T");
+		assertThat(compileAndRun(
+				"(print (rational 0.1)) (print (rational -1d-300)) (print (= (float (rational 0.1)) 0.1))"))
+			.isEqualTo("3602879701896397/36028797018963968\n"
+					+ "-6032057205060441/6032057205060440848842124543157735677050252251748505781796615064961622344493727293370973578138265743708225425014400837164813540499979063179105919597766951022193355091707896034850684039059079180396788349106095584290087446076413771468940477241550670753145517602931224392424029547429993824129889235158145614364972941312\n"
+					+ "T");
 	}
 
 	@Test
 	void floatOfRatioIsCorrectlyRounded() throws Exception {
-		// The _as_f64 ratio arm divides numerator by denominator as f64, which is
-		// correctly rounded for the i31 components this backend can hold -- so no
-		// code change was needed here, only the pin. Wide components stay out:
-		// they wrap (small limb-tier) or trap fail-stop (big denominators),
-		// exactly as (/) of the same integers does, and live on the
-		// interpreter/JVM tests instead. Ties need 54-bit midpoints, which no
-		// i31 ratio can name, so they stay there too.
+		// Components within 2^53 take _rat_to_f64's one f64 division of exact operands,
+		// correctly rounded by IEEE 754 itself; wide components, the ties and the
+		// subnormal and overflow edges are aRatioFloatsToTheNearestDoubleTiesToEven's.
 		assertThat(compileAndRun(
 				"(print (= (float (/ 1 8388608)) 1.1920928955078125e-7)) (print (= (float (/ 1 3)) 0.3333333333333333)) (print (= (float (/ 1 10)) 0.1)) (print (= (float (/ -1 8388608)) -1.1920928955078125e-7)) (print (funcall #'float (/ 1 4)))"))
 			.isEqualTo("T\nT\nT\nT\n0.25");
@@ -10498,15 +10498,16 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void rationalize() throws Exception {
-		// Only answers that involve no fraction wider than i31 are pinned:
-		// integer-valued floats answer their exact integer through the fast
-		// path, integers and ratios pass through untouched. A fractional float
-		// needs big-denominator interval fractions, which trap here fail-stop
-		// exactly as (/ 1 (ash 1 52)) does -- the 0.1-scale values stay on the
-		// interpreter/JVM tests above.
+		// Integer-valued floats answer their exact integer through the fast path,
+		// integers and ratios pass through untouched, and a fractional float walks
+		// interval fractions over power-of-two denominators past 2^52 -- which trapped
+		// here while the ratio components were i32. The rows mirror LispEvaluatorTest's.
 		assertThat(compileAndRunPrelude(
 				"(print (rationalize 2.0)) (print (rationalize 100.0)) (print (rationalize 1024.0)) (print (rationalize 0.0)) (print (rationalize 5)) (print (rationalize -7)) (print (rationalize (/ 1 3))) (print (funcall #'rationalize 100.0))"))
 			.isEqualTo("2\n100\n1024\n0\n5\n-7\n1/3\n100");
+		assertThat(compileAndRunPrelude(
+				"(print (rationalize 0.1)) (print (rationalize -0.1)) (print (rationalize 1.5)) (print (= (float (rationalize 0.1)) 0.1)) (print (= (float (rationalize 3.141592653589793)) 3.141592653589793))"))
+			.isEqualTo("1/10\n-1/10\n3/2\nT\nT");
 	}
 
 	@Test
@@ -17291,14 +17292,178 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void aWideIntegerIsItsOwnNumeratorOverOne() throws Exception {
-		// _rat_num/_rat_den answer i32 (ratio components stay i32), so a boxed-i64 or
-		// limb
-		// integer used to come back wrapped: (numerator 12345678987654321) was
-		// -493751119.
+		// A boxed-i64 or limb integer is its own numerator over one; the accessors used
+		// to wrap it to i32: (numerator 12345678987654321) was -493751119.
 		assertThat(compileAndRun("""
 				(defun parts (x) (list (numerator x) (denominator x)))
 				(print (list (parts 12345678987654321) (parts (* 4611686018427387904 4)) (parts -7/3) (parts 5)))
 				""")).isEqualTo("((12345678987654321 1) (18446744073709551616 1) (-7 3) (5 1))");
+	}
+
+	@Test
+	void ratioComponentsPastTheFixnumRangeStayExactAtEveryLevel() throws Exception {
+		// A ratio's numerator and denominator are exact integers at any tier, like the
+		// interpreter's and the JVM's BigInteger pair. They used to be two i32 fields:
+		// (/ 3000000000 7) printed -184995328 and a 17-digit decimal fraction came back
+		// as 110815915/130777088, with no trap and no warning. Every operation that
+		// takes a ratio apart is here -- arithmetic, comparison, the rounding family,
+		// mod/rem, expt, the accessors, eql/equal and an equal table's hash -- with the
+		// fixnum edge (/ -1073741824 -3), whose numerator leaves the i31 range when the
+		// sign moves. The operands go through a defun so no fold answers them, and
+		// every level must answer what the interpreter does (the type-test fold decides
+		// the ratio arms from what the module constructs).
+		String program = """
+				(defun q (a b) (/ a b))
+				(print (q 3000000000 7))
+				(print (q 30000000000000004 100000000000000000))
+				(print (q (expt 10 30) (expt 3 40)))
+				(print (q -1073741824 -3))
+				(print (q 1073741824 -6))
+				(print (+ (q 1 3000000000) (q 1 7)))
+				(print (- (q 3000000000 7) 3000000000/7))
+				(print (* (q 3000000000 7) (q 7 3000000000)))
+				(print (q (q 3000000000 7) (q 9000000000 11)))
+				(print (list (numerator (q 3000000000 7)) (denominator (q -1 (expt 2 70)))))
+				(print (list (floor (q 3000000000 7)) (ceiling (q -3000000000 7))
+				             (round (q (+ (expt 10 20) 1) 2)) (truncate (q (expt 10 20) 3))))
+				(print (list (< (q 1 3000000000) (q 1 3000000001)) (= (q 6000000000 14) (q 3000000000 7))
+				             (> (q (expt 10 30) 7) (q (expt 10 30) 8))))
+				(print (list (mod (q 3000000000 7) 1) (rem (q -3000000000 7) 2)))
+				(print (list (equal (q 3000000000 7) (q 6000000000 14)) (eql (q 3000000000 7) (q 6000000000 14))
+				             (eql (q 3000000000 7) (q 3000000000 11))))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash (q 3000000000 7) h) 'big)
+				  (print (gethash (q 6000000000 14) h)))
+				(print (expt (q 3000000000 7) 2))
+				(print (expt 2/3 -40))
+				(print (rational 0.1))
+				(print (abs (q -3000000000 7)))
+				(print (list 3000000000/7 -30000000000000000000000/7))
+				(print (max (q 3000000000 7) (q 3000000001 7)))
+				(print (q 1 (expt 2 62)))
+				(print (q (- (expt 2 63)) 3))
+				""";
+		String expected = """
+				3000000000/7
+				7500000000000001/25000000000000000
+				1000000000000000000000000000000/12157665459056928801
+				1073741824/3
+				-536870912/3
+				3000000007/21000000000
+				0
+				1
+				11/21
+				(3000000000 1180591620717411303424)
+				(428571428 -428571428 50000000000000000000 33333333333333333333)
+				(NIL T T)
+				(4/7 -4/7)
+				(T T NIL)
+				BIG
+				9000000000000000000/49
+				12157665459056928801/1099511627776
+				3602879701896397/36028797018963968
+				3000000000/7
+				(3000000000/7 -30000000000000000000000/7)
+				3000000001/7
+				1/4611686018427387904
+				-9223372036854775808/3""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(runOptimizeLevel(parsed, level)).as("at %s", level.spelling()).isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void aRatioFloatsToTheNearestDoubleTiesToEven() throws Exception {
+		// float of a ratio is the correctly rounded double (LispRatio.doubleValue, the
+		// JVM's _ratToDouble): a quotient whose components fit 2^53 is one f64 division
+		// of exact operands; past that the exact binary quotient is rounded once. The
+		// rows are the Scheme decimals that used to come back wrong (0.30000000000000004
+		// was 0.8473649069170281, 1e-300 trapped), the ties in the normal and the
+		// subnormal range (to even), a subnormal rounding up to the smallest normal, the
+		// largest finite double and the overflow and underflow edges, and float
+		// contagion through a ratio operand.
+		String program = """
+				(defun q (a b) (/ a b))
+				(defun f (x) (float x 1d0))
+				(print (f (q 30000000000000004 100000000000000000)))
+				(print (f (q 3141592653589793 1000000000000000)))
+				(print (f (q 1 (expt 10 300))))
+				(print (f (q (+ (expt 2 53) 1) (expt 2 53))))
+				(print (f (q (+ (expt 2 54) 3) (expt 2 54))))
+				(print (f (q (+ (expt 2 53) 3) (expt 2 53))))
+				(print (f (q 1 (expt 2 1074))))
+				(print (f (q 3 (expt 2 1075))))
+				(print (f (q 1 (expt 2 1075))))
+				(print (f (q 3 (expt 2 1076))))
+				(print (f (q (- (expt 2 1025) (expt 2 971) 1) 2)))
+				(print (f (q (+ (- (expt 2 1025) (expt 2 971)) 1) 2)))
+				(print (f (q (expt 10 400) 3)))
+				(print (f (q (- (expt 10 400)) 7)))
+				(print (f (q 1 (expt 10 400))))
+				(print (f (q -1 3)))
+				(print (f (q 9007199254740993 9007199254740992)))
+				(print (f (q (expt 3 100) (expt 2 100))))
+				(print (f (q (- (* 4503599627370497 4) 1) 8)))
+				(print (f (q 22250738585072011 (expt 10 324))))
+				(print (f (q 22250738585072014 (expt 10 324))))
+				(print (f (q (- (expt 2 1022) 1) (expt 2 2044))))
+				(print (* 1.5 (q 3000000000 7)))
+				(print (+ 0.5d0 (q 30000000000000004 100000000000000000)))
+				(print (sqrt (q 9000000000000000000 49)))
+				""";
+		String expected = """
+				0.30000000000000004
+				3.141592653589793
+				1.0e-300
+				1.0
+				1.0000000000000002
+				1.0000000000000004
+				4.9e-324
+				9.9e-324
+				0.0
+				4.9e-324
+				1.7976931348623157e308
+				Infinity
+				Infinity
+				-Infinity
+				0.0
+				-0.3333333333333333
+				1.0
+				4.065611775352152e17
+				2.2517998136852485e15
+				2.225073858507201e-308
+				2.2250738585072014e-308
+				2.2250738585072014e-308
+				6.428571428571429e8
+				0.8
+				4.285714285714286e8""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(runOptimizeLevel(parsed, level)).as("at %s", level.spelling()).isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void theRuntimeReaderReadsARatioPastTheFixnumRange() throws Exception {
+		// The emitted reader's ratio classifier accumulated each side in an i32, so a
+		// token past 2^31 read wrapped (3000000000/7 read as the INTEGER -184995328).
+		assertThat(compileAndRunRead("""
+				(print (read-from-string "3000000000/7"))
+				(print (read-from-string "-30000000000000004/100000000000000000"))
+				(print (read-from-string "123456789012345678901234567890/7"))
+				(print (read-from-string "6/4"))
+				(print (read-from-string "-8/2"))
+				(print (type-of (read-from-string "3000000000/7")))
+				(print (+ (read-from-string "1/3000000000") 1))
+				""")).isEqualTo("""
+				3000000000/7
+				-7500000000000001/25000000000000000
+				17636684144620811271604938270
+				3/2
+				-4
+				RATIO
+				3000000001/3000000000""");
 	}
 
 	@Test
@@ -18088,15 +18253,16 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void boundpSeesAnAssignmentMadeInsideALambda() throws Exception {
-		// b78: every store to a global feeds the eval mirror, so a runtime boundp
+		// Every store to a global feeds the eval mirror, so a runtime boundp
 		// answers what a lambda body assigned -- the mirror used to see top-level
 		// stores only and read stale forever after. The probes survive the
 		// compile-time fold (the init's own assignment poisons the name).
 		// Pinned on both WASM tiers.
-		String code = "(setq b78-init (lambda () (setq b78-lam 42) nil))"
-				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))" + " (funcall b78-init)"
-				+ " (print (boundp (intern \"B78-LAM\"))) (print (boundp 'b78-lam))"
-				+ " (print (symbol-value (intern \"B78-LAM\"))) (print b78-lam)";
+		String code = "(setq assign-init (lambda () (setq assigned-in-lambda 42) nil))"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (funcall assign-init)"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (print (symbol-value (intern \"ASSIGNED-IN-LAMBDA\"))) (print assigned-in-lambda)";
 		assertThat(compileAndRun(code)).isEqualTo("NIL\nNIL\nT\nT\n42\n42");
 		assertThat(compileComponentAndRun(code)).isEqualTo("NIL\nNIL\nT\nT\n42\n42");
 	}

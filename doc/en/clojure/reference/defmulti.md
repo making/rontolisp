@@ -15,6 +15,10 @@ stays single-argument.
 A miss with no default method signals `No method in <name> for dispatch value: <value>`. The
 dispatch search widens past exact hits through the hierarchy (see `defmethod`).
 
+A `defmulti` of a name that already holds a multimethod changes nothing, like the oracle's: the
+methods, the dispatch function and the default stay. Another definition of the name in between
+(`defn`, `def`, ...) lets the next `defmulti` define again.
+
 A `class` dispatch runs over the kind keywords `class` answers (`:string`, `:number`,
 `:map`, ...), so host spellings name the same rows: `String`, `Number` (every numeric
 spelling merges into `:number`, where the oracle tells `Long` from `Double`), dotted

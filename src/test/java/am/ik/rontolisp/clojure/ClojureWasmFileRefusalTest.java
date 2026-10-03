@@ -38,13 +38,13 @@ class ClojureWasmFileRefusalTest {
 
 	private static void assertRefusal(boolean component) throws Exception {
 		requireWasmtime();
-		Path fixture = workDir.resolve("b22-words.txt");
-		try (java.io.InputStream in = ClojureWasmFileRefusalTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+		Path fixture = workDir.resolve("words.txt");
+		try (java.io.InputStream in = ClojureWasmFileRefusalTest.class.getResourceAsStream("/clojure-words.txt")) {
 			assertThat(in).isNotNull();
 			Files.copy(in, fixture, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 		}
 		String quoted = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		String program = "(ns b22wref (:require [clojure.java.io :as jio]))" + "(with-open [r (jio/reader " + quoted
+		String program = "(ns fileref (:require [clojure.java.io :as jio]))" + "(with-open [r (jio/reader " + quoted
 				+ ")] (println (count (line-seq r))))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
 		byte[] module = WasmLispCompiler.builder()
@@ -52,10 +52,10 @@ class ClojureWasmFileRefusalTest {
 			.runtimeFeatures(frontend.features().names())
 			.build()
 			.compile(frontend.forms());
-		Path path = Files.createTempFile(workDir, "b22wref", component ? "-c.wasm" : ".wasm");
+		Path path = Files.createTempFile(workDir, "fileref", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
-		Path outFile = Files.createTempFile(workDir, "b22wref", ".out");
-		Path errFile = Files.createTempFile(workDir, "b22wref", ".err");
+		Path outFile = Files.createTempFile(workDir, "fileref", ".out");
+		Path errFile = Files.createTempFile(workDir, "fileref", ".err");
 		Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path.toString())
 			.redirectOutput(outFile.toFile())
 			.redirectError(errFile.toFile())
