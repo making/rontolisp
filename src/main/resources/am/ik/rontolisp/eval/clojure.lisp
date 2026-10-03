@@ -32,7 +32,8 @@
 ;; (same as keys/vals); *print-length*/*print-level* are not honored (a routed
 ;; println never passed through %print-cased either); ~S/~A on Clojure values
 ;; stay Common Lisp notation (format is a CL surface); print-method/pprint stay
-;; absent; unreadable values (functions, conditions, host objects) print #<..>.
+;; absent; unreadable values (functions, conditions, host objects) print #<..>,
+;; except a host class object, which prints its name like the oracle's.
 
 (defun rontolisp::%clojure-keyword-p (x)
   "Whether X is the (:C%KEYWORD spelling) wrapper the lowering lowers keywords to."
@@ -339,7 +340,8 @@
                                       labels))
          (write-char #\) stream))
         ((functionp x) (write-string "#<procedure>" stream))
-        (t (princ x stream))))
+        (t (let ((name (rontolisp::%clojure-host-class-name x)))
+             (if name (write-string name stream) (princ x stream))))))
 
 (defun rontolisp::%clojure-write-record
     (x nil-replacement readable stream labels)
@@ -390,7 +392,8 @@
    so far WITHOUT clearing it under str (a zero-argument java.io.StringWriter
    lowers to one, so binding *out* to it and reading it back runs on every
    backend); readably it prints as the stream it is, like the oracle's
-   #object."
+   #object. A host object answers its toString, so a class object answers
+   \"class java.lang.String\"."
   (cond ((null readable)
          (cond ((null x) nil-replacement)
                ((stringp x) x)
@@ -401,7 +404,8 @@
                   text))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
-               (t (rontolisp::%clojure-str-of x "nil" t))))
+               (t (or (rontolisp::%clojure-host-string x)
+                      (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
          (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x) "\""))
         (t (let ((stream (make-string-output-stream)))
@@ -423,6 +427,36 @@
    reference changes the JVM output and is a call-time error on wasm."
   (handler-case (java:call x "getClass")
     (error () (error "class needs a value of a known kind"))))
+
+(defun rontolisp::%clojure-lisp-value-p (x)
+  "Whether X is a value of a Lisp kind, so no host object: the cheap test the
+   printer's host arms ask before a java:call refusal could (numbers above all
+   reach the printer's fall-through)."
+  (or (numberp x) (characterp x) (symbolp x) (consp x) (arrayp x)
+      (hash-table-p x) (functionp x) (streamp x)))
+
+(defun rontolisp::%clojure-host-class-name (x)
+  "X's name when X is a host class object, which the oracle prints by its name
+   (java.lang.String, long), else NIL. A host arm like %clojure-host-class: a
+   program with no java: operator gets a body answering NIL."
+  (if (not (rontolisp::%clojure-lisp-value-p x))
+      (handler-case (if (equal (java:call (java:call x "getClass") "getName")
+                               "java.lang.Class")
+                        (java:call x "getName"))
+        (error () nil))))
+
+(defun rontolisp::%clojure-host-string (x)
+  "X's toString when X is a host object, str's answer (a class object's is
+   \"class java.lang.String\"), else NIL. The host test is the getClass
+   refusal; toString runs outside it, so its own exception propagates like the
+   oracle's. A host arm like %clojure-host-class: a program with no java:
+   operator gets a body answering NIL."
+  (if (and (not (rontolisp::%clojure-lisp-value-p x))
+           (handler-case (progn
+                           (java:call x "getClass")
+                           t)
+             (error () nil)))
+      (java:call x "toString")))
 
 ;;;; Equality: the = family over every value shape.
 

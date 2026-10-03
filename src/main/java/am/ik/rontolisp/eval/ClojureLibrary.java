@@ -43,14 +43,23 @@ public final class ClojureLibrary {
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
 	/**
-	 * The refusal-only bodies {@link #formsWithoutHostArms()} splices in place of the
-	 * library's host arms, one {@code defun} per arm, each defining the same name:
-	 * {@code %clojure-host-class} is {@code class} of a value of no Clojure kind.
+	 * The {@code java:}-free bodies {@link #formsWithoutHostArms()} splices in place of
+	 * the library's host arms, one {@code defun} per arm, each defining the same name and
+	 * answering what the host arm answers for a value that is no host object:
+	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
+	 * {@code %clojure-host-class-name} (the printer) and {@code %clojure-host-string}
+	 * ({@code str}) answer NIL.
 	 */
-	private static final String HOST_ARM_REFUSALS = """
+	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
 			  (declare (ignore x))
 			  (error "class needs a value of a known kind"))
+			(defun rontolisp::%clojure-host-class-name (x)
+			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-string (x)
+			  (declare (ignore x))
+			  nil)
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;
@@ -117,26 +126,27 @@ public final class ClojureLibrary {
 
 	/**
 	 * The library for a program with no {@code java:} operator: the host arms replaced by
-	 * their refusals ({@link #HOST_ARM_REFUSALS}). No host object can exist there, so the
-	 * answer is the same, while the {@code java:} reference would change the JVM output
-	 * (the bridge, the host guards on every accessor) and is a call-time error on wasm.
-	 * The interpreter keeps {@link #forms()}: its {@code java:} costs nothing.
+	 * their {@code java:}-free bodies ({@link #HOST_ARMS_WITHOUT_JAVA}). No host object
+	 * can exist there, so the answer is the same, while the {@code java:} reference would
+	 * change the JVM output (the bridge, the host guards on every accessor) and is a
+	 * call-time error on wasm. The interpreter keeps {@link #forms()}: its {@code java:}
+	 * costs nothing.
 	 */
 	private static List<LispVal> formsWithoutHostArms() {
 		// read first: a nested computeIfAbsent on one ConcurrentHashMap is refused
 		List<LispVal> library = forms();
 		return FORMS.computeIfAbsent("without-host-arms", ignored -> {
-			Map<String, LispVal> refusals = new HashMap<>();
-			for (LispVal refusal : LispReader.readAllFromString(HOST_ARM_REFUSALS)) {
-				refusals.put(definedName(refusal), refusal);
+			Map<String, LispVal> standIns = new HashMap<>();
+			for (LispVal standIn : LispReader.readAllFromString(HOST_ARMS_WITHOUT_JAVA)) {
+				standIns.put(definedName(standIn), standIn);
 			}
 			List<LispVal> out = new ArrayList<>();
 			for (LispVal form : library) {
-				LispVal refusal = refusals.remove(definedName(form));
-				out.add(refusal == null ? form : refusal);
+				LispVal standIn = standIns.remove(definedName(form));
+				out.add(standIn == null ? form : standIn);
 			}
-			if (!refusals.isEmpty()) {
-				throw new IllegalStateException("clojure.lisp defines no host arm " + refusals.keySet());
+			if (!standIns.isEmpty()) {
+				throw new IllegalStateException("clojure.lisp defines no host arm " + standIns.keySet());
 			}
 			return List.copyOf(out);
 		});

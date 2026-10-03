@@ -150,8 +150,9 @@ Each is a real work item unless the reason says otherwise.
 - Printing (`clojure.lisp`, `%clojure-write`): `nil` prints `nil`, never `()` (an empty lazy
   seq prints `()`); map/set walk order is unspecified (the spec pins only single-entry maps
   and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
-  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a class
-  object `#<java java.lang.Class>` -- while a deftype, reify and `reduced` print their
+  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, any
+  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
+  while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-length*`/`*print-level*`, `print-method` and `pprint` are absent;
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
@@ -357,6 +358,16 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   reaches `Object`, then `:default`. Measured 2026-10-03, shcloj4
   `examples.test.multimethods`: 2 errors before (`.toString 42`, `class` of a `File`),
   byte-identical to the oracle after on the interpreter and the JVM.
+- The printer and `str` have host arms of the same kind (`HOST_ARMS_WITHOUT_JAVA` holds
+  every stand-in, NIL where the arm answers "not mine"): `%clojure-write`'s fall-through
+  asks `%clojure-host-class-name`, so a class object prints `java.lang.String` (`long` for
+  `Long/TYPE`) under print and pr alike, like the oracle; `%clojure-str-of`'s non-readable
+  fall-through asks `%clojure-host-string`, so `str` of a host object is its `toString`
+  (`class java.lang.String`, a `File`'s path, `[1, 2]` for a host list) -- inside a
+  collection the printer's spelling stands, as in the oracle. Both test
+  `%clojure-lisp-value-p` first, so a number, keyword or vector in a `java:` program never
+  pays the `getClass` refusal. The stand-ins' cost without `java:`, measured 2026-10-03 on
+  `(println [1 2] (str 3 :k))`: wasm 36332 -> 36352 bytes, JVM `.class` 69529 -> 69757.
 - A `class` call in the dispatch function answers nil for nil, so the marker is hit --
   bare, wrapped, through a named `defn`/`def`'d function (the `defmulti` re-lowers its
   recorded definition with the dispatch lowering) or nested inline (inlined at the call
@@ -676,7 +687,12 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 - `run-tests` takes symbols or strings and bakes in the namespaces seen so far, so an
   unknown one is `No namespace: x found`; `run-all-tests` filters by `re-matches`.
 - Deviations: definition order (the oracle's is map order); `thrown?` matches any
-  condition; error reports print the message without a stack trace, at the `is` line; a
+  condition (measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
+  17 assertions. 0 failures, 0 errors.` on the interpreter and the JVM, as the oracle --
+  its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` catch
+  `java:call`'s refusal of a string receiver, since the `#^Class` hint is dropped; a
+  class-typed match needs the host exception as a condition, the `catch` deviation above);
+  error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL
   condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with
   the CLI's one-line report) and a trap on WASM (`call stack exhausted`, no catch), but the

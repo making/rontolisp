@@ -88,6 +88,26 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aClassObjectPrintsItsNameAndStrSpellsItsToString() throws Exception {
+		// the oracle's print-method for a Class writes getName; str is toString
+		assertBothEqual("(println String)", "java.lang.String\n");
+		assertBothEqual("(print String) (prn String)", "java.lang.Stringjava.lang.String\n");
+		assertBothEqual("(println (pr-str String) (str String))", "java.lang.String class java.lang.String\n");
+		assertBothEqual("(pr [String \"a\"]) (println {String 1} (str [String]))",
+				"[java.lang.String \"a\"]{java.lang.String 1} [java.lang.String]\n");
+		assertBothEqual("(println Long/TYPE (str Long/TYPE))", "long long\n");
+		assertBothEqual("(println (class (java.io.File. \"foo\")))", "java.io.File\n");
+	}
+
+	@Test
+	void strOfAHostObjectIsItsToStringWhilePrintingStaysUnreadable() throws Exception {
+		assertBothEqual("(println (str (StringBuilder. \"ab\") \"|\" (java.io.File. \"foo\")))", "ab|foo\n");
+		assertBothEqual("(println (str (java.util.ArrayList. [1 2])))", "[1, 2]\n");
+		assertBothEqual("(println (str 1 :k [1 \"a\"] nil 'b92-s))", "1:k[1 \"a\"]b92-s\n");
+		assertBothEqual("(println (java.io.File. \"foo\"))", "#<java java.io.File>\n");
+	}
+
+	@Test
 	void classOfAHostObjectIsItsHostClassSoDispatchReachesTheDefault() throws Exception {
 		assertBothEqual("(println (= java.io.File (class (java.io.File. \"foo\"))))", "true\n");
 		assertBothEqual("(println (.getName (class (java.io.File. \"foo\"))))", "java.io.File\n");
@@ -113,15 +133,21 @@ class ClojureInteropTest {
 	}
 
 	@Test
-	void classAddsNoJavaReferenceToAProgramWithoutInterop() {
+	void theHostArmsAddNoJavaReferenceToAProgramWithoutInterop() {
 		// a java: reference changes the JVM output (the bridge, the host guards on
-		// every accessor), so the host arm exists only where the program has one
+		// every accessor), so class's, the printer's and str's host arms exist only
+		// where the program has one; the java:-free stand-ins take their names
 		for (boolean wasm : new boolean[] { false, true }) {
 			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
-				.clojure("(defmulti b99-k class) (defmethod b99-k :default [x] x) (println (b99-k 1) (class [1]))",
-						wasm, false)
-				.forms();
-			assertThat(forms.stream().map(LispVal::print).filter(text -> text.contains("JAVA:"))).isEmpty();
+				.clojure("(defmulti b99-k class) (defmethod b99-k :default [x] x)"
+						+ " (println (b99-k 1) (class [1]) (str [1] 2) (pr-str 3))", wasm, false)
+				.forms()
+				.stream()
+				.map(LispVal::print)
+				.toList();
+			assertThat(forms).noneMatch(text -> text.contains("JAVA:"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-CLASS-NAME"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-STRING"));
 		}
 	}
 

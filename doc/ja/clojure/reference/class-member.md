@@ -12,8 +12,8 @@
 答えます。クラスはドット付き・インポート済み・`java.lang` のいずれでも解決されます。
 ロード可能なクラス名単体（`String`）はクラスオブジェクトで、
 `(Class/forName "java.lang.String")` と等しく、文字列への `.getClass` も同じものを答えます。
-クラスオブジェクト自体の表示は、クラス名ではなく `#<java java.lang.Class>` になります
-（クラス名には `.getName` を使います）。
+クラスオブジェクトはオラクルと同じくクラス名（`java.lang.String`）で表示され、
+`str` はその `toString`（`class java.lang.String`）を答えます。
 インタプリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。
 
 ```clojure
@@ -24,4 +24,5 @@
 (println (> (System/currentTimeMillis) 0)) ; true
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
+(println String (str String)) ; java.lang.String class java.lang.String
 ```

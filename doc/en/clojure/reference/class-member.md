@@ -12,9 +12,9 @@ variadic-only member is refused. A static call or member value whose overloads
 all answer a boolean answers `true`/`false`. The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
-string answers it; printing the class object itself shows `#<java java.lang.Class>`,
-not the class name -- use `.getName`. Runs on the interpreter and the JVM only -- the wasm
-backends reject `java:`.
+string answers it. A class object prints its name (`java.lang.String`), and `str`
+answers its `toString` (`class java.lang.String`), like the oracle. Runs on the
+interpreter and the JVM only -- the wasm backends reject `java:`.
 
 ```clojure
 (ns doc-static (:import (java.awt.event KeyEvent)))
@@ -24,4 +24,5 @@ backends reject `java:`.
 (println (> (System/currentTimeMillis) 0)) ; true
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
+(println String (str String)) ; java.lang.String class java.lang.String
 ```
