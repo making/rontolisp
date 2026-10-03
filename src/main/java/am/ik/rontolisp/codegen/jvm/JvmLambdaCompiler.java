@@ -56,9 +56,21 @@ final class JvmLambdaCompiler {
 		// The lambda's code is written in this method's function -- unless it is an async
 		// body, whose report line names no function (its hop line names the async one).
 		String asyncHead = ctx.asyncBodyHeads.get(cons);
-		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
+		// A labels function whose tail calls cycle through its siblings joins their tail
+		// group, once: the expansion is fresh per compilation of the labels form, so a
+		// second lambda claiming the member would be a second compilation of this very
+		// form, which compiles on its own (JvmTailGroup).
+		JvmTailGroup.Member tailMember = ctx.tailGroupMembers.get(cons);
+		if (tailMember != null && tailMember.lambda != null) {
+			tailMember = null;
+		}
+		JvmLispCompiler.LambdaInfo info = new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
 				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
-				asyncHead == null ? ctx.writtenIn : null));
+				asyncHead == null ? ctx.writtenIn : null, ctx.lambdaSelfVars.get(cons), tailMember);
+		if (tailMember != null) {
+			tailMember.lambda = info;
+		}
+		ctx.lambdaDecls.add(info);
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();

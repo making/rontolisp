@@ -37,7 +37,7 @@ final class JvmBlockCompiler {
 
 	/** The internal {@code (%block body...)} boundary: unnamed, catches plain return. */
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileBody(cons.toList(), 1, ctx, className, null, true, false);
+		compileBody(cons, cons.toList(), 1, ctx, className, null, true, false);
 	}
 
 	/**
@@ -51,7 +51,7 @@ final class JvmBlockCompiler {
 			throw new IllegalArgumentException(LispNames.BLOCK + " expects a block name: " + cons.print());
 		}
 		String name = LispMacroExpander.blockName(parts.get(1));
-		compileBody(parts, 2, ctx, className, name, name == null, false);
+		compileBody(cons, parts, 2, ctx, className, name, name == null, false);
 	}
 
 	/**
@@ -65,11 +65,11 @@ final class JvmBlockCompiler {
 			throw new IllegalArgumentException(LispNames.FN_BLOCK_INTERNAL + " expects a block name: " + cons.print());
 		}
 		String name = LispMacroExpander.blockName(parts.get(1));
-		compileBody(parts, 2, ctx, className, name, false, true);
+		compileBody(cons, parts, 2, ctx, className, name, false, true);
 	}
 
-	private static void compileBody(List<LispVal> parts, int bodyStart, JvmLispCompiler.Ctx ctx, String className,
-			@Nullable String name, boolean catchesPlain, boolean functionBoundary) {
+	private static void compileBody(LispCons cons, List<LispVal> parts, int bodyStart, JvmLispCompiler.Ctx ctx,
+			String className, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
 		int savedNextLocal = ctx.nextLocal;
 		int rvSlot = ctx.allocTemp();
 		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, ctx.body.newLabel(), ctx.stack.snapshot(), name,
@@ -79,12 +79,18 @@ final class JvmBlockCompiler {
 			ctx.body.aconst_null();
 		}
 		else {
+			// The last body form's value is the block's (an exit's is too, through the
+			// slot): when the block is the method's tail, so is that form
+			// (JvmSelfTailCall, JvmTailBounce).
+			LispVal savedMark = ctx.tailMark;
 			for (int i = bodyStart; i < parts.size(); i++) {
 				if (i > bodyStart) {
 					ctx.body.pop();
 				}
+				ctx.tailMark = savedMark == cons && i == parts.size() - 1 ? parts.get(i) : null;
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
+			ctx.tailMark = savedMark;
 		}
 		// Normal completion: store the body value into the block's slot.
 		ctx.body.astore(rvSlot);

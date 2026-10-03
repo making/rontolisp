@@ -33,6 +33,10 @@ final class JvmFunctionCallCompiler {
 	 * Compiles the {@code funcall} built-in.
 	 */
 	static void compileFuncall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		if (JvmSelfTailCall.tryFuncall(cons, ctx, className)) {
+			// A labels function's (or a defun's #'name) own tail call: a jump.
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2;
 		if (ctx.tailBounce && ctx.tailMark == cons) {
@@ -83,6 +87,10 @@ final class JvmFunctionCallCompiler {
 			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, fi.required(), fi.variadic());
 			if (wrongCount != null) {
 				JvmExprCompiler.compileExpr(wrongCount, ctx, className);
+				return;
+			}
+			if (JvmSelfTailCall.tryDirect(fi, cons, ctx, className)) {
+				// The defun's own tail call: a jump back to its first instruction.
 				return;
 			}
 			// The arguments a parameter takes go straight onto the stack, the optionals

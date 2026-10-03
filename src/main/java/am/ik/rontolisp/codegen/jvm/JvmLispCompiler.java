@@ -1922,6 +1922,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			hasTrampoline |= fi.bounceVisible();
 		}
 
+		// The defuns whose tail calls to each other cycle: each such set is a tail group,
+		// whose calls among themselves are jumps (JvmTailGroup). A member's method may
+		// run any member's code, so it answers a bounce when any member's value tail
+		// bounces: the call sites unwrap for every member then.
+		List<JvmTailGroup> defunGroups = JvmTailGroup.ofDefuns(defuns, functions, specialVars);
+		Map<String, JvmTailGroup.Member> defunMembers = new HashMap<>();
+		for (JvmTailGroup group : defunGroups) {
+			boolean bounces = false;
+			for (JvmTailGroup.Member member : group.members()) {
+				bounces |= Objects.requireNonNull(member.function).bounceVisible();
+			}
+			for (JvmTailGroup.Member member : group.members()) {
+				FunctionInfo own = Objects.requireNonNull(member.function);
+				if (bounces && !own.bounceVisible()) {
+					member.function = new FunctionInfo(own.funcId(), own.paramCount(), own.variadic(), own.optionals(),
+							own.isClosure(), own.methodref(), own.nameUtf8(), own.descUtf8(), true);
+					functions.put(member.name, member.function);
+				}
+				defunMembers.put(member.name, member);
+			}
+		}
+
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
 				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
 						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program), hasTrampoline)
@@ -2473,6 +2495,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(defun.bodyExprs, closRegistry));
 			funcDeclaredDoubles.removeAll(specialVars);
 			funcCtx.declaredDoubles = funcDeclaredDoubles.isEmpty() ? Set.of() : funcDeclaredDoubles;
+			// The head a self tail call jumps back to, ahead of the boxing below so each
+			// round boxes its own cells; it costs nothing unless one does
+			// (JvmSelfTailCall).
+			funcCtx.selfLoop = JvmSelfTailCall.defun(funcCtx, Objects.requireNonNull(functions.get(defun.name)));
+			// A member of a tail group: its tail calls to the other members jump
+			// (JvmTailGroup).
+			JvmTailGroup.Member tailMember = defunMembers.get(defun.name);
+			funcCtx.tailMember = tailMember;
 			// Box captured params
 			for (String paramName : defun.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -2507,6 +2537,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				throw new IllegalStateException("while compiling defun " + defun.name + ": " + ex.getMessage(), ex);
 			}
 			funcCtxs.add(funcCtx);
+			if (tailMember != null) {
+				tailMember.ctx = funcCtx;
+			}
 		}
 
 		// Pass 2b: Compile top-level expressions into one or more void helper methods
@@ -2673,6 +2706,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// during defun compilation, top-level compilation, or even lambda compilation)
 		List<Ctx> lambdaCtxs = new ArrayList<>();
 		List<FunctionInfo> lambdaFuncInfos = new ArrayList<>();
+		List<JvmTailGroup> lambdaGroups = new ArrayList<>();
 		int lambdaIdx = 0;
 		while (lambdaIdx < lambdaDecls.size()) {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
@@ -2715,6 +2749,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(lambda.bodyExprs, closRegistry));
 			lambdaDeclaredDoubles.removeAll(specialVars);
 			lambdaCtx.declaredDoubles = lambdaDeclaredDoubles.isEmpty() ? Set.of() : lambdaDeclaredDoubles;
+			if (lambda.selfVar() != null) {
+				// A labels function: its calls through its own variable are self calls,
+				// and the tail ones jump back here, ahead of the boxing below
+				// (JvmSelfTailCall).
+				lambdaCtx.selfLoop = JvmSelfTailCall.labels(lambdaCtx, lambda);
+			}
+			// A labels function in a tail group: its tail calls to the other members
+			// jump (JvmTailGroup).
+			JvmTailGroup.Member tailMember = lambda.tailMember();
+			if (tailMember != null) {
+				lambdaCtx.tailMember = tailMember;
+				tailMember.function = fi;
+			}
 			// Box captured params of this lambda
 			for (String paramName : lambda.paramNames) {
 				if (capturedVars.contains(paramName)) {
@@ -2743,6 +2790,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaCtx.body.areturn();
 			lambdaCtxs.add(lambdaCtx);
 			lambdaIdx++;
+			if (tailMember != null) {
+				tailMember.ctx = lambdaCtx;
+				if (!lambdaGroups.contains(tailMember.group)) {
+					lambdaGroups.add(tailMember.group);
+				}
+			}
 		}
 
 		// The uncaught report's location lines (JvmUncaughtHandler): every body that can
@@ -2778,6 +2831,38 @@ public final class JvmLispCompiler implements LispCompiler {
 			fusedCtxs.add(fusedCtx);
 		}
 
+		// The tail groups, laid out now that every program body is compiled: a member
+		// the program's code -- or a Java caller -- calls directly has the group rooted
+		// at it as its method, the others keep their own code (JvmTailGroup).
+		List<JvmTailGroup> tailGroups = new ArrayList<>(defunGroups);
+		tailGroups.addAll(lambdaGroups);
+		if (!tailGroups.isEmpty()) {
+			Set<Integer> calledEntries = new HashSet<>();
+			List<Ctx> callers = new ArrayList<>(funcCtxs);
+			callers.addAll(lambdaCtxs);
+			callers.addAll(topChunks);
+			callers.add(mainCtx);
+			if (topRunnerCtx != null) {
+				callers.add(topRunnerCtx);
+			}
+			for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
+				callers.add(outlined.ctx());
+			}
+			for (Ctx caller : callers) {
+				caller.body.forEachEntry(entry -> calledEntries.add(entry.index()));
+			}
+			Set<String> exported = new HashSet<>();
+			for (JvmExportDirective decl : exportDecls) {
+				exported.add(decl.name());
+			}
+			for (JvmTailGroup group : tailGroups) {
+				group.finish(this.className, HUGE_METHOD_LIMIT,
+						member -> member.function != null
+								&& (calledEntries.contains(member.function.methodref().index())
+										|| exported.contains(member.name)));
+			}
+		}
+
 		// The invariant the whole class is measured against: no method that runs per
 		// evaluated form may cross HotSpot's HugeMethodLimit, or it is never
 		// JIT-compiled and nothing says so (.kb/hot-path-method-size.md). Every body
@@ -2789,7 +2874,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// next attempt to cut.
 		Map<String, AstOutliner.Budget> tooLarge = new LinkedHashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
-			int size = funcCtxs.get(i).body.size();
+			int size = funcCtxs.get(i).emittedSize();
 			if (size <= HUGE_METHOD_LIMIT) {
 				continue;
 			}
@@ -2816,10 +2901,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			List<Sized> sized = new ArrayList<>();
 			for (int i = 0; i < defuns.size(); i++) {
-				sized.add(new Sized(defuns.get(i).name, funcCtxs.get(i).body.size()));
+				sized.add(new Sized(defuns.get(i).name, funcCtxs.get(i).emittedSize()));
 			}
 			for (int i = 0; i < lambdaCtxs.size(); i++) {
-				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).body.size()));
+				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).emittedSize()));
 			}
 			// The top-level chunks are subject to the same 64 KB cap, and unlike a defun
 			// they cannot be split by the author -- chunking happens BETWEEN top-level
@@ -5525,10 +5610,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param asyncHead the report head of an {@code %async-run} thunk, or {@code null}
 	 * @param writtenIn the name the report calls the program function its code is written
 	 * in, or {@code null} for none (the top level, an async body)
+	 * @param selfVar the {@code labels} variable this lambda is the value of, through
+	 * which a call is a self call ({@link JvmSelfTailCall}), or {@code null}
+	 * @param tailMember the tail group this {@code labels} function is a member of
+	 * ({@link JvmTailGroup}), or {@code null}
 	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
 			List<LispVal> bodyExprs, List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
-			@Nullable String writtenIn) {
+			@Nullable String writtenIn, @Nullable String selfVar, JvmTailGroup.@Nullable Member tailMember) {
 	}
 
 	record DispatchMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
@@ -6373,12 +6462,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmBodyOutliner.@Nullable Tail tailBody;
 
 		/**
-		 * The form whose value is this method's result, when the trampoline
-		 * ({@link JvmTailBounce}) may turn its compilation into a bounce: laid by
-		 * {@link JvmBodyOutliner} on the final spine item and re-laid by the {@code if},
-		 * {@code progn} and plain {@code let} emitters on the arm or body form whose
-		 * value flows on unchanged. Matched by identity in the call emitters, so a form
-		 * compiled anywhere but the true tail sees no mark and emits exactly as before.
+		 * The form whose value is this method's result, when a call there may compile to
+		 * something other than a call: a bounce of the trampoline ({@link JvmTailBounce})
+		 * or a jump -- a self tail call's ({@link JvmSelfTailCall}) or one within a tail
+		 * group ({@link JvmTailGroup}). Laid by {@link JvmBodyOutliner} on the final
+		 * spine item and re-laid, on the arm or body form whose value flows on unchanged,
+		 * by the emitters of the forms that open no dynamic extent: {@code if},
+		 * {@code progn}, a plain {@code let}, the blocks, a tail
+		 * {@code return}/{@code return-from}'s value, and the pass-through lowerings
+		 * ({@link JvmExprCompiler#compileExpansion}). Matched by identity in the call
+		 * emitters, so a form compiled anywhere but the true tail sees no mark and emits
+		 * exactly as before.
 		 */
 		@Nullable LispVal tailMark;
 
@@ -6963,6 +7057,38 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final Map<LispCons, String> asyncBodyHeads;
 
+		/**
+		 * The {@code labels} variable each lambda form is assigned to, by identity;
+		 * shared per compilation ({@link LambdaInfo#selfVar}).
+		 */
+		final Map<LispCons, String> lambdaSelfVars;
+
+		/**
+		 * The tail-group member each {@code labels} lambda form is, by identity; shared
+		 * per compilation ({@link LambdaInfo#tailMember}).
+		 */
+		final Map<LispCons, JvmTailGroup.Member> tailGroupMembers;
+
+		/**
+		 * The function this method is, as the target of its own tail calls: a defun's
+		 * body or a {@code labels} function's, never a continuation or any other method
+		 * ({@link JvmSelfTailCall}).
+		 */
+		JvmSelfTailCall.@Nullable Loop selfLoop;
+
+		/**
+		 * The tail group this method is a member of, whose siblings its tail calls jump
+		 * to ({@link JvmTailGroup}); null for a continuation and every other method.
+		 */
+		JvmTailGroup.@Nullable Member tailMember;
+
+		/**
+		 * The method its tail group laid out for this member -- the group rooted at it
+		 * ({@link JvmTailGroup#finish}) -- which the class takes in place of
+		 * {@link #body}; null for every other method.
+		 */
+		JvmTailGroup.@Nullable LaidOut laidOut;
+
 		/** The owner code ({@link JvmSourceSites#owner}) of {@link #writtenIn}. */
 		int siteOwner;
 
@@ -7158,6 +7284,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.sites = builder.sites;
 			this.lambdaReportNames = builder.lambdaReportNames;
 			this.asyncBodyHeads = builder.asyncBodyHeads;
+			this.lambdaSelfVars = builder.lambdaSelfVars;
+			this.tailGroupMembers = builder.tailGroupMembers;
 		}
 
 		/**
@@ -7252,7 +7380,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param descriptor its descriptor
 		 */
 		void addTo(ClassDefinition.Builder definition, int access, Utf8Entry name, Utf8Entry descriptor) {
+			JvmTailGroup.LaidOut group = this.laidOut;
+			if (group != null) {
+				definition.addMethod(access, name, descriptor, group.body(), group.lines());
+				return;
+			}
 			definition.addMethod(access, name, descriptor, this.body, this.lines());
+		}
+
+		/**
+		 * {@return the bytecodes of the method the class takes for this body} -- its tail
+		 * group's layout when it has one ({@link #laidOut})
+		 */
+		int emittedSize() {
+			JvmTailGroup.LaidOut group = this.laidOut;
+			return group != null ? group.body().size() : this.body.size();
 		}
 
 		/**
@@ -7339,6 +7481,21 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * per compilation like {@link #lambdaReportNames}.
 			 */
 			private final Map<LispCons, String> asyncBodyHeads = new java.util.IdentityHashMap<>();
+
+			/**
+			 * The {@code labels} variable each lambda FORM is assigned to, by identity,
+			 * shared per compilation like {@link #lambdaReportNames}: set where the
+			 * expansion's {@code setq} is compiled, read by {@link JvmLambdaCompiler}.
+			 */
+			private final Map<LispCons, String> lambdaSelfVars = new java.util.IdentityHashMap<>();
+
+			/**
+			 * The tail-group member each {@code labels} lambda FORM is, by identity,
+			 * shared per compilation like {@link #lambdaSelfVars}: set where the
+			 * expansion is compiled ({@link JvmTailGroup#ofLabels}), read by
+			 * {@link JvmLambdaCompiler}.
+			 */
+			private final Map<LispCons, JvmTailGroup.Member> tailGroupMembers = new java.util.IdentityHashMap<>();
 
 			private @Nullable ConstantPool cp;
 

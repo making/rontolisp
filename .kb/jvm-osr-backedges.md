@@ -16,8 +16,17 @@ silently, with every functional test green. Same cliff as
   (`Ctx.spillLoopEntryStack`), or its halves `enterLoopScope`/`leaveLoopScope` called directly
   by `JvmTagbodyCompiler`/`JvmWhileCompiler` (every Lisp loop lowers to `tagbody` or `while`).
   Every other emitter with its own inline backedge wraps it in `inLoopScope` -- grep that name.
+  The one exception is `JvmSelfTailCall`: its backedge targets bci 0, which no operand can sit
+  under, so instead of spilling it declines (keeps the call) unless the stack is empty at the
+  jump ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
 
 ## Traps
+- **A loop with two entries refuses OSR on Graal.** Irreducible control flow -- a cycle entered
+  at two of its heads -- fails Graal's OSR compile with `Multiple OnStackReplacementNodes
+  generated` (`-Djdk.graal.CompilationFailureAction=Print` shows it), so one long call stays
+  interpreted; the invocation-counted compile still succeeds. `JvmTailGroup` keeps every cycle
+  through a tail group single-entry for this ([jvm-self-tail-calls.md](jvm-self-tail-calls.md),
+  "Mutual tail calls").
 - A `return`/`go` escaping to an ENCLOSING block must reload from the outermost escaped
   `JvmLispCompiler.SpillScope` (`JvmReturnCompiler`/`JvmGoCompiler`). In `JvmTagbodyCompiler`
   the push must happen BEFORE `TagbodyScope` records its spill depth, or a `go` to that

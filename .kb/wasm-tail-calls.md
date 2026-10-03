@@ -1,9 +1,13 @@
 # WASM backend: every call in tail position is a `return_call`
 
 Scope: the GC WASM backend (`codegen.wasm`), Preview 1 and `--component`; both run the same
-core module. The JVM has no counterpart; the interpreter has its own mechanism, the loop in
-`eval` (`.kb/interpreter-tail-calls.md`); their depths are recorded below and are not this
-file's invariant. `--no-gc` is untouched (its own
+core module. The JVM has three narrower counterparts -- a self tail call is a jump back to the
+method's start, a tail call within a tail group of mutually tail-calling defuns or `labels`
+functions a jump inside the method a call names
+([jvm-self-tail-calls.md](jvm-self-tail-calls.md)), a defun's tail through a value a
+trampoline bounce (`JvmTailBounce`) -- and the interpreter its own mechanism, the
+loop in `eval` (`.kb/interpreter-tail-calls.md`); their depths are recorded below and are
+not this file's invariant. `--no-gc` is untouched (its own
 compiler never arms the flag).
 
 **Invariant: a call in tail position of a compiled function is emitted as `return_call`
@@ -98,7 +102,14 @@ fraction of the interpreter's -- `.kb/interpreter-stack.md`), interpreter 15,497
 16 MiB worker; 5,000,000 -- the probe's ceiling -- since the interpreter's own loop landed
 later the same day, `.kb/interpreter-tail-calls.md`). The JVM figure became 16,201 when
 the compiled `main` moved onto a 16 MiB worker the same day
-([interpreter-stack.md](interpreter-stack.md)). One Scheme call through a value is two JVM
+([interpreter-stack.md](interpreter-stack.md)), and unbounded through the trampoline of
+2026-10-03 (`JvmTailBounce`); the JVM's `labels` self loop and every other self tail call
+answer 1,000,000 since the jump of the same day, mutual `defun`s and a `labels` pair since the
+tail groups of the same day ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
+Measured then: a self call inside a `labels`/`flet` BODY overflows here at 1,000,000 --
+`WasmExprCompiler`'s `flet`/`labels` arms do not re-arm the flag the way `let*`/`the`/
+`locally` do -- and so does a Clojure multi-arity `fn` clause's `recur` (Preview 1 and
+component; `.todo/c01`). One Scheme call through a value is two JVM
 frames, `g` and `_invoke_2`;
 `%scheme-ensure-procedure` returns before the call. V8: a 1,000-deep `labels` loop (2,000
 frames) threw `Maximum call stack size exceeded` under node's WASI before and runs now.

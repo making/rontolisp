@@ -237,8 +237,17 @@ body lowers). `loop` inits are sequential and destructure.
 - A `recur` reaching a variadic target splits it into a worker taking the rest as an
   ordinary parameter plus an `&rest` head, so the `recur` assigns exactly while normal
   calls wrap through the head; an unused variadic keeps its single shape.
-- Constant stack comes from the backends' tail calls (wasm `return_call`); the spec's
-  5000-deep case would overflow a non-tail expansion on wasm (about 3000 there).
+- Constant stack comes from the backends' tail calls: wasm `return_call`, the
+  interpreter's `eval` loop, the JVM's self tail call as a jump back to the method's start
+  and, for `letfn` entries or `defn`s calling each other, its tail groups
+  ([jvm-self-tail-calls.md](jvm-self-tail-calls.md); before them, a JVM `loop` overflowed
+  near 150,000 rounds, a `defn` near 200,000, a `letfn` pair near 150,000). The spec's
+  `deep-recur-answers-on-every-backend` runs a `loop` 1,000,000 deep on all four,
+  `letfn-mutual-tail-calls-run-in-constant-stack` a `letfn` pair.
+- A multi-arity `defn`'s fixed clause recurs to its own helper (`c%f%<n>`), never through
+  the dispatch defun -- that round trip was a mutual recursion of two functions, a tail group
+  on the JVM now but a self jump is cheaper. A multi-arity `fn`'s clauses are arms of one
+  lambda, so its `recur` re-enters the dispatch, a self call of that lambda.
 
 ## Namespaces and project files
 
@@ -650,9 +659,13 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with
   the CLI's one-line report) and a trap on WASM (`call stack exhausted`, no catch), but the
   JVM landing is catch-any, so compiled JVM output runs the catch like the oracle. Measured
-  2026-10-03 over shcloj4 `examples.test.functional`: oracle and JVM `Ran 7 tests containing
-  19 assertions. 0 failures, 0 errors.`; interpreter and WASM end after the `Testing ...`
-  header. Pinned by `ClojureProjectNamespacesTest` (`aDeepNonTail...`),
+  2026-10-03 over shcloj4 `examples.test.functional`: oracle `Ran 7 tests containing 19
+  assertions. 0 failures, 0 errors.`, compiled JVM the same until its self tail call became a
+  jump the same day, then `1 failures`: the corpus's `(thrown? StackOverflowError (tail-fibo
+  1000000N))` overflows only where a named self call keeps a frame, as the oracle's does, and
+  every backend here computes the millionth Fibonacci number instead (19 s;
+  [jvm-self-tail-calls.md](jvm-self-tail-calls.md)); interpreter and WASM end after the
+  `Testing ...` header (the non-tail `stack-consuming-fibo` comes first). Pinned by `ClojureProjectNamespacesTest` (`aDeepNonTail...`),
   `RontoLispCliStreamsTest` (`aClojure...StackOverflow...`) and the passing shapes in
   `clojure-spec.yaml` (`functional-shapes-match-the-oracle`). Not fixed: a catchable depth
   guard on every call would have to track JIT-varying frame sizes (`interpreter-stack.md`);

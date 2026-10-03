@@ -165,8 +165,9 @@ final class JvmBodyOutliner {
 				case ValueForm value -> {
 					ctx.tailBody = tail;
 					// The method's result is this form's value when nothing but
-					// run-time-free cleanups follows: the trampoline's mark
-					// (JvmTailBounce). A Cleanup with runtime code -- a dynamic-binding
+					// run-time-free cleanups follows: the tail mark, read by the
+					// trampoline (JvmTailBounce) and by a self tail call's jump
+					// (JvmSelfTailCall). A Cleanup with runtime code -- a dynamic-binding
 					// restore -- keeps a real call, its extent intact.
 					LispVal savedMark = ctx.tailMark;
 					boolean tailEnd = tail.queue.isEmpty();
@@ -179,7 +180,7 @@ final class JvmBodyOutliner {
 							}
 						}
 					}
-					ctx.tailMark = tailEnd && ctx.tailBounce ? value.form : null;
+					ctx.tailMark = tailEnd && (ctx.tailBounce || ctx.selfLoop != null) ? value.form : null;
 					JvmExprCompiler.compileExpr(value.form(), ctx, className);
 					ctx.tailMark = savedMark;
 					ctx.tailBody = null;

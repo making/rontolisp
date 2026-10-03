@@ -45,6 +45,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure
   signals. A threading step over a collection literal signals (collections are not
   functions here).
+- A function that calls itself by name in tail position (a `defn`, a named `fn`, a
+  `letfn` entry) runs in constant stack on every backend, as `recur` does, and so do
+  functions that call each other in tail position (`letfn` entries, `defn`s). The oracle
+  keeps a frame per such call, so a deep one overflows there and runs to completion here: a
+  test asserting that overflow (`(is (thrown? StackOverflowError (tail-fibo 1000000N)))`)
+  fails.
 - `clojure.test` runs the tests in definition order (the oracle's order is its
   namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
   names, like `catch`; an error report prints the condition's message (an `ex-info` the

@@ -136,8 +136,7 @@ class ClojureProjectNamespacesTest {
 					  (is (= ten-fibs (map stack-consuming-fibo (range 0 10))))
 					  (is (thrown? StackOverflowError (stack-consuming-fibo 1000000N))))
 					(deftest test-tail-fibo
-					  (is (= ten-fibs (map tail-fibo (range 0 10))))
-					  (is (thrown? StackOverflowError (tail-fibo 1000000N))))
+					  (is (= ten-fibs (map tail-fibo (range 0 10)))))
 					(deftest test-recur-fibo
 					  (is (= ten-fibs (map recur-fibo (range 0 10)))))
 					(deftest test-fibo
@@ -353,13 +352,18 @@ class ClojureProjectNamespacesTest {
 	}
 
 	/**
-	 * The corpus {@code examples.test.functional}: two {@code thrown?} assertions over a
+	 * The corpus {@code examples.test.functional}: a {@code thrown?} assertion over a
 	 * million-deep non-tail call. The oracle catches the {@code StackOverflowError} and
 	 * runs every assertion. The JVM backend's landing catches any {@code Throwable}, so
 	 * it answers the oracle's summary; the interpreter's overflow is no condition and
 	 * ends the program (the CLI reports it, {@code RontoLispCliStreamsTest}); a WASM
-	 * stack exhaustion is a trap. The shapes around the two assertions run on every
-	 * backend ({@code clojure-spec.yaml}, {@code functional-shapes-match-the-oracle}).
+	 * stack exhaustion is a trap. The shapes around the assertion run on every backend
+	 * ({@code clojure-spec.yaml}, {@code functional-shapes-match-the-oracle}). The book's
+	 * second one, {@code (thrown? StackOverflowError (tail-fibo 1000000N))}, is left out
+	 * of the copy: its overflow is the oracle keeping a frame per named self call, where
+	 * every backend here runs a self tail call in constant stack (the JVM's jump,
+	 * {@code .kb/jvm-self-tail-calls.md}) and would compute the millionth Fibonacci
+	 * number instead -- a documented deviation ({@code doc/en/clojure/deviations.md}).
 	 */
 	private static final String FUNCTIONAL_DRIVER = """
 			(ns corpus.functional-driver (:use clojure.test))
@@ -371,7 +375,7 @@ class ClojureProjectNamespacesTest {
 
 			Testing examples.test.functional
 
-			Ran 6 tests containing 10 assertions.
+			Ran 6 tests containing 9 assertions.
 			0 failures, 0 errors.
 			""";
 

@@ -128,6 +128,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("((fn [n] n) 1)")).doesNotContain("LABELS");
 		// a defn recurs through a direct call
 		assertThat(lowered("(defn cd [n] (recur n))")).contains("(|c%cd| |c%n|)");
+		// a multi-arity defn's fixed clause recurs to its own clause, never through
+		// the dispatch: a direct self call (.kb/jvm-self-tail-calls.md)
+		assertThat(lowered("(defn mc ([n] (recur n)) ([a b] a))"))
+			.contains("(DEFUN |c%mc%1| (|c%n|) (|c%mc%1| |c%n|))");
 		// a zero-arity defn recurs with no arguments
 		assertThat(lowered("(defn zg [] (recur))")).contains("(|c%zg|)");
 		// a recur in a call argument is not in tail position, like the oracle
