@@ -763,23 +763,25 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
 		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12, C2=13, SAWE=14, EXPVAL=15,
-		// EXPSGN=16, EXPDIGIT=17 ; f64 locals: FVAL=18, FPLACE=19, POW10=20 ; ref
-		// local: ACC64=21 (the decimal-integer accumulator, a tier-aware exact integer
-		// stepped through _big_grow so a token past the i31 range reads as a boxed or
-		// limb integer like the frontend). The classifiers reuse the i32 slots freely
-		// between attempts.
-		w.write(4);
+		// EXPSGN=16, EXPDIGIT=17 ; f64 locals: FVAL=18, FPOW=19 ; ref local: ACC64=20
+		// (the decimal accumulator, a tier-aware exact integer stepped through
+		// _big_grow so a token past the i31 range reads as a boxed or limb integer like
+		// the frontend, and a float token's digits stay exact) ; i64 local: MV=21. The
+		// classifiers reuse the i32 slots freely between attempts.
+		w.write(5);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(16);
 		w.write(Type.I32);
-		w.write(3);
+		w.write(2);
 		w.write(Type.F64);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
+		w.write(1);
+		w.write(Type.I64);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, C2 = 13, SAWE = 14, EXPVAL = 15, EXPSGN = 16, EXPDIGIT = 17, FVAL = 18,
-				FPLACE = 19, POW10 = 20, ACC64 = 21;
+				FPOW = 19, ACC64 = 20, MV = 21;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: return null
@@ -916,8 +918,8 @@ final class WasmReadRuntimeBuilder {
 
 		// classify: float? (a token with a '.' or an exponent marker falls through the
 		// integer parser)
-		emitTryFloat(w, BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, FVAL, FPLACE, SAWE, EXPVAL, EXPSGN, EXPDIGIT,
-				POW10, C2);
+		emitTryFloat(w, new FloatSlots(BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, SAWE, EXPVAL, EXPSGN, EXPDIGIT,
+				C2, HP, ACC, OFF, ACC64, CAR, CDR, MV, FVAL, FPOW));
 
 		// symbol: off = _intern(start, len)
 		getLocal(w, START);
@@ -1377,6 +1379,25 @@ final class WasmReadRuntimeBuilder {
 	}
 
 	/**
+	 * The {@code _read_expr} locals the float classifier works in: i32 {@code b} through
+	 * {@code bits}, the exact integers {@code mant} (the token's digits past the i64
+	 * range), {@code scaled} and {@code fact}, the i64 {@code mv} (the digits within it)
+	 * and the f64 {@code fval}/{@code fpow}.
+	 */
+	private record FloatSlots(int b, int start, int len, int pos, int neg, int valid, int sawDigit, int sawDot,
+			int sawE, int expVal, int expSgn, int expDigit, int mark, int scale, int k, int bits, int mant, int scaled,
+			int fact, int mv, int fval, int fpow) {
+	}
+
+	// The exponent digits saturate here: far past any exponent a double can use, and
+	// EXPVAL * 10 + 9 stays inside an i32.
+	private static final int EXPONENT_CLAMP = 100_000_000;
+
+	// A float token's digits accumulate in an i64 below this bound (MV * 10 + 9 stays
+	// under 2^63), and as an exact integer past it.
+	private static final long MANTISSA_I64_LIMIT = 100_000_000_000_000_000L;
+
+	/**
 	 * Emits the float classifier/parser for the token at {@code [START, START+LEN)}. A
 	 * decimal float is an optional leading {@code -}, digits, at most one {@code .}, and
 	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}, {@code 5.}), plus
@@ -1388,21 +1409,30 @@ final class WasmReadRuntimeBuilder {
 	 * {@link WasmLispCompiler#TYPE_FLOAT} struct and returns from the function; otherwise
 	 * falls through. Integer tokens never reach here because the integer parser already
 	 * returned for them, and a token with a {@code .} fails the integer parser (so it
-	 * falls through to this classifier). The exponent scales by ONE multiply (or, for a
-	 * negative exponent, divide) by a power built through repeated {@code * 10.0}: exact
-	 * under one f64 rounding for exponents up to 22, and saturating to infinity/zero for
-	 * larger ones like the frontend's {@code Double.parseDouble} does -- without matching
-	 * its rounding past that point, the same ulp tolerance the digit accumulation already
-	 * keeps. A zero mantissa skips the scaling so {@code 0e999} stays {@code 0.0} instead
-	 * of becoming {@code 0 * infinity}.
+	 * falls through to this classifier).
+	 * <p>
+	 * The value is the double nearest {@code mantissa * 10^k}, as the frontend's
+	 * {@code Double.parseDouble} answers: the digits accumulate in an i64 while they fit
+	 * and as an exact integer through {@code _big_grow} past that, {@code k} is the
+	 * signed exponent less the fractional digit count, and the conversion rounds once. A
+	 * mantissa within 2^53 and {@code |k| <= 22} is one f64 multiply or divide of two
+	 * exact doubles; otherwise the exact {@code mantissa * 10^k}, or the unreduced ratio
+	 * {@code mantissa / 10^-k}, goes through the correctly rounded {@code _rat_to_f64}
+	 * (the reader already carries it for packed float arrays). The range guard of the
+	 * prelude's {@code %decimal-double} answers infinity or zero from the mantissa's bit
+	 * length before a huge exponent builds its power of ten.
 	 */
-	private static void emitTryFloat(WasmWriter w, int BYTE, int START, int LEN, int POS, int NEG, int VALID,
-			int SAWDIGIT, int SAWDOT, int FVAL, int FPLACE, int SAWE, int EXPVAL, int EXPSGN, int EXPDIGIT, int POW10,
-			int MARK) {
-		// POS = START ; VALID = 1 ; SAWDIGIT = 0 ; SAWDOT = 0 ; NEG = 0
-		// FVAL = 0.0 ; FPLACE = 1.0 (fractional place, multiplied by 0.1 per frac digit)
+	private static void emitTryFloat(WasmWriter w, FloatSlots slots) {
+		final int BYTE = slots.b(), START = slots.start(), LEN = slots.len(), POS = slots.pos(), NEG = slots.neg(),
+				VALID = slots.valid(), SAWDIGIT = slots.sawDigit(), SAWDOT = slots.sawDot(), SAWE = slots.sawE(),
+				EXPVAL = slots.expVal(), EXPSGN = slots.expSgn(), EXPDIGIT = slots.expDigit(), MARK = slots.mark(),
+				SCALE = slots.scale(), K = slots.k(), BITS = slots.bits(), MANT = slots.mant(), SCALED = slots.scaled(),
+				FACT = slots.fact(), MV = slots.mv(), FVAL = slots.fval(), FPOW = slots.fpow();
+		// POS = START ; VALID = 1 ; SAWDIGIT = 0 ; SAWDOT = 0 ; NEG = 0 ; SCALE = 0 (the
+		// fractional digits seen) ; MV = 0, MANT = null (every digit: in the i64 MV
+		// while it stays under 10^17, then as the exact integer MANT)
 		// SAWE = 0 (the exponent marker has been consumed) ; EXPVAL = 0 (its digits,
-		// clamped at 500) ; EXPSGN = 0 (0 none, 1 '+', 2 '-') ; EXPDIGIT = 0
+		// clamped at EXPONENT_CLAMP) ; EXPSGN = 0 (0 none, 1 '+', 2 '-') ; EXPDIGIT = 0
 		getLocal(w, START);
 		setLocal(w, POS);
 		i32(w, 1);
@@ -1421,12 +1451,12 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, EXPSGN);
 		i32(w, 0);
 		setLocal(w, EXPDIGIT);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.0);
-		setLocal(w, FVAL);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(1.0);
-		setLocal(w, FPLACE);
+		i32(w, 0);
+		setLocal(w, SCALE);
+		i64(w, 0L);
+		setLocal(w, MV);
+		emitNull(w);
+		setLocal(w, MANT);
 		// if len > 1 and byte[START]=='-': NEG=1; POS++
 		getLocal(w, LEN);
 		i32(w, 1);
@@ -1469,8 +1499,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_LE_S);
 		w.write(Instruction.I32_AND);
 		ifVoid(w);
-		// EXPDIGIT = 1 ; EXPVAL = min(EXPVAL * 10 + digit, 500) -- the clamp bounds the
-		// scaling loop and, past ~324, the value saturates like parseDouble's anyway
+		// EXPDIGIT = 1 ; EXPVAL = min(EXPVAL * 10 + digit, EXPONENT_CLAMP)
 		i32(w, 1);
 		setLocal(w, EXPDIGIT);
 		getLocal(w, EXPVAL);
@@ -1482,10 +1511,10 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, EXPVAL);
 		getLocal(w, EXPVAL);
-		i32(w, 500);
+		i32(w, EXPONENT_CLAMP);
 		w.write(Instruction.I32_GT_S);
 		ifVoid(w);
-		i32(w, 500);
+		i32(w, EXPONENT_CLAMP);
 		setLocal(w, EXPVAL);
 		end(w);
 		w.write(Instruction.ELSE);
@@ -1549,33 +1578,39 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, SAWDIGIT);
 		getLocal(w, SAWDOT);
 		ifVoid(w);
-		// fractional digit: FPLACE *= 0.1 ; FVAL += digit * FPLACE
-		getLocal(w, FPLACE);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.1);
-		w.write(Instruction.F64_MUL);
-		setLocal(w, FPLACE);
-		getLocal(w, FVAL);
+		// fractional digit: SCALE++
+		getLocal(w, SCALE);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, SCALE);
+		end(w);
+		// MV = MV * 10 + digit while MANT is null and MV < 10^17 (no i64 overflow);
+		// past that MANT = _int_new(MV) once, then MANT = MANT * 10 + digit
+		getLocal(w, MANT);
+		w.write(Instruction.REF_IS_NULL);
+		getLocal(w, MV);
+		i64(w, MANTISSA_I64_LIMIT);
+		w.write(Instruction.I64_LT_U);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, MV);
+		i64(w, 10L);
+		w.write(Instruction.I64_MUL);
 		getLocal(w, BYTE);
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		getLocal(w, FPLACE);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_ADD);
-		setLocal(w, FVAL);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_ADD);
+		setLocal(w, MV);
 		w.write(Instruction.ELSE);
-		// integer-part digit: FVAL = FVAL * 10 + digit
-		getLocal(w, FVAL);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(10.0);
-		w.write(Instruction.F64_MUL);
+		emitMantissaToRef(w, MV, MANT);
+		getLocal(w, MANT);
+		i32(w, 10);
 		getLocal(w, BYTE);
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_ADD);
-		setLocal(w, FVAL);
+		call(w, WasmLispCompiler.FUNC_BIG_GROW);
+		setLocal(w, MANT);
 		end(w);
 		w.write(Instruction.ELSE);
 		// a CL exponent marker? (b | 0x20) is compared against lowercase e/s/f/d/l, so
@@ -1613,6 +1648,11 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		end(w);
 		end(w);
+		// an invalid byte decides the token is a symbol: stop before more digits grow
+		// MANT (most symbols stop at their first byte)
+		getLocal(w, VALID);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 1);
 		// POS++
 		getLocal(w, POS);
 		i32(w, 1);
@@ -1642,53 +1682,8 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_AND);
 		ifVoid(w);
-		// exponent scaling: P = 10^EXPVAL by repeated * 10.0, then ONE FVAL * P (or
-		// / P for a negative exponent). Skipped for a zero mantissa: 0.0 * inf would
-		// turn 0e999 into NaN where the frontend answers 0.0.
-		getLocal(w, SAWE);
-		ifVoid(w);
-		getLocal(w, FVAL);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(0.0);
-		w.write(Instruction.F64_NE);
-		ifVoid(w);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(1.0);
-		setLocal(w, POW10);
-		block(w);
-		loop(w);
-		getLocal(w, EXPVAL);
-		i32(w, 0);
-		w.write(Instruction.I32_LE_S);
-		brIf(w, 1);
-		getLocal(w, POW10);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(10.0);
-		w.write(Instruction.F64_MUL);
-		setLocal(w, POW10);
-		getLocal(w, EXPVAL);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, EXPVAL);
-		br(w, 0);
-		end(w); // loop
-		end(w); // block
-		getLocal(w, EXPSGN);
-		i32(w, 2);
-		w.write(Instruction.I32_EQ);
-		ifVoid(w);
-		getLocal(w, FVAL);
-		getLocal(w, POW10);
-		w.write(Instruction.F64_DIV);
+		emitDecimalToF64(w, EXPVAL, EXPSGN, SCALE, K, BITS, MANT, SCALED, FACT, MV, FPOW);
 		setLocal(w, FVAL);
-		w.write(Instruction.ELSE);
-		getLocal(w, FVAL);
-		getLocal(w, POW10);
-		w.write(Instruction.F64_MUL);
-		setLocal(w, FVAL);
-		end(w);
-		end(w);
-		end(w);
 		getLocal(w, NEG);
 		ifVoid(w);
 		getLocal(w, FVAL);
@@ -1699,6 +1694,235 @@ final class WasmReadRuntimeBuilder {
 		structNew(w, WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.RETURN);
 		end(w);
+	}
+
+	/** Emits {@code if MANT is null: MANT = _int_new(MV)}. */
+	private static void emitMantissaToRef(WasmWriter w, int MV, int MANT) {
+		getLocal(w, MANT);
+		w.write(Instruction.REF_IS_NULL);
+		ifVoid(w);
+		getLocal(w, MV);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		setLocal(w, MANT);
+		end(w);
+	}
+
+	/**
+	 * Pushes the f64 nearest {@code mantissa * 10^k}: the non-negative mantissa is
+	 * {@code MV} while {@code MANT} is null and the exact integer {@code MANT} once it is
+	 * not; k is the signed exponent in {@code EXPVAL}/{@code EXPSGN} (zero without one)
+	 * less {@code SCALE}. Clobbers {@code K}, {@code BITS}, {@code MANT}, {@code SCALED},
+	 * {@code FACT} and {@code FPOW}.
+	 */
+	private static void emitDecimalToF64(WasmWriter w, int EXPVAL, int EXPSGN, int SCALE, int K, int BITS, int MANT,
+			int SCALED, int FACT, int MV, int FPOW) {
+		// K = (EXPSGN == 2 ? -EXPVAL : EXPVAL) - SCALE
+		i32(w, 0);
+		getLocal(w, EXPVAL);
+		w.write(Instruction.I32_SUB);
+		getLocal(w, EXPVAL);
+		getLocal(w, EXPSGN);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.SELECT);
+		getLocal(w, SCALE);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, K);
+		w.write(Instruction.BLOCK, 0x7C); // (result f64)
+		// Exact operands: a mantissa within 2^53 and 10^|K| for |K| <= 22 are both
+		// doubles, so one multiply or divide rounds once.
+		getLocal(w, MANT);
+		w.write(Instruction.REF_IS_NULL);
+		ifVoid(w);
+		getLocal(w, MV);
+		i64(w, 1L << 53);
+		w.write(Instruction.I64_LE_U);
+		getLocal(w, K);
+		i32(w, 22);
+		w.write(Instruction.I32_ADD);
+		i32(w, 44);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		// FPOW = 10^|K|, exact by repeated * 10.0
+		w.write(Instruction.F64_CONST);
+		w.writeF64(1.0);
+		setLocal(w, FPOW);
+		emitAbsInto(w, K, BITS);
+		block(w);
+		loop(w);
+		getLocal(w, BITS);
+		i32(w, 0);
+		w.write(Instruction.I32_LE_S);
+		brIf(w, 1);
+		getLocal(w, FPOW);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(10.0);
+		w.write(Instruction.F64_MUL);
+		setLocal(w, FPOW);
+		getLocal(w, BITS);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, BITS);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		getLocal(w, K);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x7C);
+		getLocal(w, MV);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		getLocal(w, FPOW);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.ELSE);
+		getLocal(w, MV);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		getLocal(w, FPOW);
+		w.write(Instruction.F64_MUL);
+		end(w);
+		br(w, 2);
+		end(w);
+		end(w);
+		// BITS = integer-length(MANT); a zero mantissa is 0.0 at any exponent
+		emitMantissaToRef(w, MV, MANT);
+		getLocal(w, MANT);
+		call(w, WasmLispCompiler.FUNC_BIG_INTLEN);
+		call(w, WasmLispCompiler.FUNC_INT_VAL);
+		w.write(Instruction.I32_WRAP_I64);
+		setLocal(w, BITS);
+		getLocal(w, BITS);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		br(w, 1);
+		end(w);
+		// log10(MANT) lies in [(BITS - 1) * 0.30103, BITS * 0.30103): K plus the upper
+		// bound at or under -325 is under half the smallest subnormal ...
+		getLocal(w, K);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		getLocal(w, BITS);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		i64(w, 302L);
+		w.write(Instruction.I64_MUL);
+		i64(w, 999L);
+		w.write(Instruction.I64_ADD);
+		i64(w, 1000L);
+		w.write(Instruction.I64_DIV_S);
+		w.write(Instruction.I64_ADD);
+		i64(w, -325L);
+		w.write(Instruction.I64_LE_S);
+		ifVoid(w);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(0.0);
+		br(w, 1);
+		end(w);
+		// ... and K plus the lower bound at or past 309 is past the largest double
+		getLocal(w, K);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		getLocal(w, BITS);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		i64(w, 301L);
+		w.write(Instruction.I64_MUL);
+		i64(w, 1000L);
+		w.write(Instruction.I64_DIV_S);
+		w.write(Instruction.I64_ADD);
+		i64(w, 309L);
+		w.write(Instruction.I64_GE_S);
+		ifVoid(w);
+		w.write(Instruction.F64_CONST);
+		w.writeF64(Double.POSITIVE_INFINITY);
+		br(w, 1);
+		end(w);
+		// SCALED = K >= 0 ? MANT * 10^K : 10^-K
+		getLocal(w, K);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		ifVoid(w);
+		getLocal(w, MANT);
+		setLocal(w, SCALED);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		i31New(w);
+		setLocal(w, SCALED);
+		end(w);
+		emitAbsInto(w, K, BITS);
+		emitTimesPow10(w, SCALED, BITS, FACT);
+		getLocal(w, K);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x7C);
+		getLocal(w, SCALED);
+		call(w, WasmLispCompiler.FUNC_RAT_TO_F64);
+		w.write(Instruction.ELSE);
+		// the unreduced ratio MANT / 10^-K: _rat_to_f64 needs no gcd
+		getLocal(w, MANT);
+		getLocal(w, SCALED);
+		WasmRatioRuntimeBuilder.emitNewRatio(w);
+		call(w, WasmLispCompiler.FUNC_RAT_TO_F64);
+		end(w);
+		end(w); // result block
+	}
+
+	/** Emits {@code DST = |SRC|} for two i32 locals. */
+	private static void emitAbsInto(WasmWriter w, int SRC, int DST) {
+		i32(w, 0);
+		getLocal(w, SRC);
+		w.write(Instruction.I32_SUB);
+		getLocal(w, SRC);
+		getLocal(w, SRC);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.SELECT);
+		setLocal(w, DST);
+	}
+
+	/**
+	 * Emits {@code X = X * 10^N} for the exact-integer local {@code X} by binary
+	 * exponentiation ({@code FACT} runs through 10^(2^i)); counts the i32 local {@code N}
+	 * down to zero. A power of ten past the i64 range is a limb product either way, and
+	 * squaring takes about log2(N) of them where one {@code * 10} per digit took N.
+	 */
+	private static void emitTimesPow10(WasmWriter w, int X, int N, int FACT) {
+		i32(w, 10);
+		i31New(w);
+		setLocal(w, FACT);
+		block(w);
+		loop(w);
+		getLocal(w, N);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 1);
+		getLocal(w, N);
+		i32(w, 1);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, X);
+		getLocal(w, FACT);
+		call(w, WasmLispCompiler.FUNC_BIG_MUL);
+		setLocal(w, X);
+		end(w);
+		getLocal(w, N);
+		i32(w, 1);
+		w.write(Instruction.I32_SHR_U);
+		setLocal(w, N);
+		getLocal(w, N);
+		ifVoid(w);
+		getLocal(w, FACT);
+		getLocal(w, FACT);
+		call(w, WasmLispCompiler.FUNC_BIG_MUL);
+		setLocal(w, FACT);
+		end(w);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+	}
+
+	private static void i64(WasmWriter w, long value) {
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(value);
 	}
 
 	/**

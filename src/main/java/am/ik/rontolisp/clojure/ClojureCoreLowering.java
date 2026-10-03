@@ -44,18 +44,22 @@ final class ClojureCoreLowering {
 			case "split-at", "take-last", "nthnext", "nthrest", "update-keys", "update-vals":
 				arity(name, n, 2, 2);
 				if (name.startsWith("update-")) {
-					return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)));
+					return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.realFnValue(ctx, items.get(2)));
 				}
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "split-with":
 				arity(name, n, 2, 2);
-				return worker(name, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "peek", "pop", "not-empty":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "dedupe":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "replace":
+				arity(name, n, 1, 2);
+				return n == 1 ? worker("xf-replace", ctx.lower(items.get(1)))
+						: worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "partition-all":
 				arity(name, n, 2, 3);
 				if (n == 2) {
@@ -68,11 +72,11 @@ final class ClojureCoreLowering {
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
 			case "partition-by":
 				arity(name, n, 2, 2);
-				return worker(name, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "min-key", "max-key":
 				arity(name, n, 2, -1);
-				return ClojureLowerUtil.list(runtime("extreme-key"), ClojureBindingLowering.fnValue(ctx, items.get(1)),
-						ctx.lower(items.get(2)),
+				return ClojureLowerUtil.list(runtime("extreme-key"),
+						ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)),
 						name.equals("max-key") ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
 			case "juxt", "every-pred", "some-fn":
@@ -80,15 +84,15 @@ final class ClojureCoreLowering {
 				return worker(name, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), fnValues(ctx, items, 1)));
 			case "fnil":
 				arity(name, n, 2, 4);
-				return worker(name, ClojureBindingLowering.fnValue(ctx, items.get(1)),
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
 			case "reduce-kv":
 				arity(name, n, 3, 3);
-				return worker(name, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
 						ctx.lower(items.get(3)));
 			case "pmap":
 				arity(name, n, 2, -1);
-				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)),
+				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
 						ctx.lowers(items, 2));
 			case "with-meta":
 				arity(name, n, 2, 2);
@@ -101,7 +105,7 @@ final class ClojureCoreLowering {
 				return ClojureVarLowering.testOf(ctx.lower(items.get(1)));
 			case "vary-meta":
 				arity(name, n, 2, -1);
-				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
+				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.realFnValue(ctx, items.get(2)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
 			case "read-string", "read":
 				return ClojureReadLowering.callOf(ctx, name, items);
@@ -119,8 +123,9 @@ final class ClojureCoreLowering {
 	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
 		return switch (name) {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
-					"dedupe", "partition-all", "partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred",
-					"some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
+					"dedupe", "replace", "partition-all", "partition-by", "min-key", "max-key", "juxt", "fnil",
+					"every-pred", "some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta", "meta",
+					"vary-meta" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
@@ -153,6 +158,14 @@ final class ClojureCoreLowering {
 				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
 						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
 		if (!literal) {
+			LispVal tags = ClojureInteropLowering.paramTags(form);
+			if (tags != null && target instanceof LispSymbol member && ctx.hostMemberName(member.name())) {
+				// ^[types] Class/member as a value: the tags name the overload
+				LispVal tagged = ClojureInteropLowering.memberValue(ctx, member.name(), tags);
+				if (tagged != null) {
+					return tagged;
+				}
+			}
 			return ctx.lower(target);
 		}
 		List<LispVal> entries = new ArrayList<>();
@@ -192,7 +205,7 @@ final class ClojureCoreLowering {
 	private static List<LispVal> fnValues(ClojureLowering ctx, List<LispVal> items, int from) {
 		List<LispVal> out = new ArrayList<>();
 		for (int i = from; i < items.size(); i++) {
-			out.add(ClojureBindingLowering.fnValue(ctx, items.get(i)));
+			out.add(ClojureBindingLowering.realFnValue(ctx, items.get(i)));
 		}
 		return out;
 	}

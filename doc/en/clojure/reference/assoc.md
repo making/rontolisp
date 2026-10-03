@@ -8,6 +8,11 @@ compare by `=`: a key `=` to one already there replaces its value and keeps that
 
 Onto a record the entries join the entry table and the type survives.
 
+Onto a vector each key is an index: a fresh vector with that member replaced, an index
+equal to the count appending, like the oracle. A non-integer key signals `Key must be
+integer`, an index out of range signals. The copy is the whole vector (the oracle's
+persistent vector copies one path).
+
 As a value a map plus a rest list of pairs; an odd rest count signals at run time.
 
 Transients (`assoc!`) are refused by name.
@@ -19,4 +24,6 @@ Transients (`assoc!`) are refused by name.
 (println (get (assoc nil :a 1) :a))     ; 1
 (println (get ((fn [f] (f {:a 1} :b 2)) assoc) :b)) ; 2
 (println (assoc {[1 2] :a} '(1 2) :b)) ; {[1 2] :b}
+(println (assoc [0 1 2] 0 :y))          ; [:y 1 2]
+(println (assoc [0 1] 2 :x))            ; [0 1 :x]
 ```

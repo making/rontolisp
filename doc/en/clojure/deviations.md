@@ -152,9 +152,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
   go through the var while the definition stays direct); reader metadata on names
   and locals otherwise parses and drops, never affecting dispatch.
-- A local named like a `^:dynamic` var -- a function parameter, a `let` or `loop`
-  binding -- binds that var for its extent, so a function called there reads the
+- In the REPL, a local named like a `^:dynamic` var that a later input defines binds
+  that var for its extent once it is defined, so a function called there reads the
   local's value; the oracle binds a local lexically, and the function reads the var.
+  In a file such a local is lexical.
 - `with-meta` answers a copy carrying the metadata; a value derived from it (`assoc`,
   `conj`, ...) starts without metadata, where the oracle keeps it, and a symbol carries
   none (`with-meta` answers the symbol). A `:tag` from reader metadata on a collection
@@ -179,6 +180,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   to one, or a `..` step's declared return) and every
   overload at that arity answers a primitive boolean; any other host boolean
   keeps the shared `java:` unmarshal and prints `nil` for `false`.
+- A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
+  `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
+  overload.
 - Only `.clj` files below the source roots are read (no `.cljc`, no classpath).
 - Records and deftypes of one simple name in two namespaces share a dispatch tag, which
   `class`, protocol dispatch and `=` read.

@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -97,7 +98,7 @@ final class ClojureStateLowering {
 				LispVal clauseBody = ctx.inScope(new HashMap<>(Map.of(var, ClojureLowering.Kind.VARIABLE)),
 						() -> ctx.nonTailBodyOf(caught.subList(3, caught.size())));
 				clauses.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("ERROR"),
-						ClojureLowerUtil.list(ClojureLowerUtil.idSym(var)), clauseBody));
+						ClojureLowerUtil.list(ctx.localSym(var)), clauseBody));
 			}
 			List<LispVal> handler = new ArrayList<>();
 			handler.add(ClojureLowerUtil.sym("HANDLER-CASE"));
@@ -644,7 +645,7 @@ final class ClojureStateLowering {
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
 	 * the oracle -- which is why only {@code ^:dynamic} vars (and
 	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
-	 * like {@code let}, and the body closes over the scope the same way. Every bound
+	 * like {@code let}; the body reads each bound var through the var itself. Every bound
 	 * var's binding-depth counter rebinds one deeper beside it, so {@code set!} tests at
 	 * run time whether the var is thread-bound. The body lowers behind the {@code try}
 	 * barrier (the oracle wraps it in a {@code try/finally}), while the inits stay
@@ -654,55 +655,41 @@ final class ClojureStateLowering {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "binding needs a binding vector and a body");
 		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "binding");
 		ClojureLowerUtil.isTrue(bindings.size() % 2 == 0, "a binding vector pairs a var with a value");
-		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
-		ctx.scopes.add(scope);
-		ctx.directScopes.add(new HashSet<>());
-		try {
-			List<LispVal> pairs = new ArrayList<>();
-			for (int i = 0; i < bindings.size(); i += 2) {
-				String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
-				// a syntax-quote qualifies the stream specials with their namespace
-				// (`*out* reads clojure.core/*out*), and the oracle binds the
-				// qualified spelling like the bare one -- normalize it before the
-				// stream test, so the pair and the scope entry spell the special
-				if (name.startsWith(ClojureCoreNames.PREFIX)) {
-					String core = name.substring(ClojureCoreNames.PREFIX.length());
-					if (core.equals("*out*") || core.equals("*in*") || core.equals("*agent*")) {
-						name = core;
-					}
-				}
-				boolean stream = name.equals("*out*") || name.equals("*in*") || name.equals("*agent*");
-				// a project var (own, referred, or qualified) rebinds its own special;
-				// the body reads it through the var, so no local shadows it
-				String key = stream ? null : ctx.resolveVar(name);
-				if (!stream && (key == null || !ctx.dynamicVars.contains(key))) {
-					throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
-				}
-				if (name.equals("*agent*")) {
-					ctx.usedStm = true;
-				}
-				LispVal init = ctx.lower(bindings.get(i + 1));
-				pairs.add(ClojureLowerUtil
-					.list(key == null ? ClojureLowerUtil.idSym(name) : ClojureLowering.varSym(key), init));
-				if (key == null) {
-					scope.put(name, ClojureLowering.Kind.VARIABLE);
-					if (ClojureLowerUtil.isDirectFun(init)) {
-						ctx.markDirect(name);
-					}
-				}
-				else {
-					LispSymbol depth = ClojureLowering.boundDepthSym(key);
-					pairs.add(ClojureLowerUtil.list(depth,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))));
+		List<LispVal> pairs = new ArrayList<>();
+		for (int i = 0; i < bindings.size(); i += 2) {
+			String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
+			// a syntax-quote qualifies the stream specials with their namespace
+			// (`*out* reads clojure.core/*out*), and the oracle binds the
+			// qualified spelling like the bare one -- normalize it before the
+			// stream test, so the pair spells the special
+			if (name.startsWith(ClojureCoreNames.PREFIX)) {
+				String core = name.substring(ClojureCoreNames.PREFIX.length());
+				if (core.equals("*out*") || core.equals("*in*") || core.equals("*agent*")) {
+					name = core;
 				}
 			}
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
-					barrierBody(ctx, items, 2));
+			boolean stream = name.equals("*out*") || name.equals("*in*") || name.equals("*agent*");
+			// a project var (own, referred, or qualified) rebinds its own special,
+			// a stream alias the special it names; the body reads either through
+			// the var, so neither is a local
+			String key = stream ? null : ctx.resolveVar(name);
+			if (!stream && (key == null || !ctx.dynamicVars.contains(key))) {
+				throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
+			}
+			if (name.equals("*agent*")) {
+				ctx.usedStm = true;
+			}
+			LispVal init = ctx.lower(bindings.get(i + 1));
+			pairs.add(ClojureLowerUtil.list(key == null ? ClojureLowerUtil.idSym(name) : ClojureLowering.varSym(key),
+					init));
+			if (key != null) {
+				LispSymbol depth = ClojureLowering.boundDepthSym(key);
+				pairs.add(ClojureLowerUtil.list(depth,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))));
+			}
 		}
-		finally {
-			ctx.scopes.remove(ctx.scopes.size() - 1);
-			ctx.directScopes.remove(ctx.directScopes.size() - 1);
-		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+				barrierBody(ctx, items, 2));
 	}
 
 	/**
@@ -726,10 +713,10 @@ final class ClojureStateLowering {
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = ClojureLowerUtil.plainName(bindings.get(i), "with-open");
 				LispVal init = ctx.lower(bindings.get(i + 1));
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), init));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
 				names.add(name);
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				if (ClojureLowerUtil.isDirectFun(init)) {
+				if (ClojureLowerUtil.yieldsFun(init)) {
 					ctx.markDirect(name);
 				}
 			}
@@ -741,8 +728,7 @@ final class ClojureStateLowering {
 			guarded.add(ClojureLowerUtil.sym("unwind-protect"));
 			guarded.add(run);
 			for (int i = names.size() - 1; i >= 0; i--) {
-				guarded.add(ClojureInteropLowering.instanceCall(ctx, ClojureLowerUtil.idSym(names.get(i)), "close",
-						List.of()));
+				guarded.add(ClojureInteropLowering.instanceCall(ctx, ctx.localSym(names.get(i)), "close", List.of()));
 			}
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
 					ClojureLowerUtil.list(guarded));
@@ -827,6 +813,24 @@ final class ClojureStateLowering {
 	 * @return the form
 	 */
 	static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted) {
+		return defonceForm(ctx, items, hoisted, null);
+	}
+
+	/**
+	 * A {@code defonce} that answers like the oracle's REPL: the var when it defined one,
+	 * {@code nil} over a var that was already bound.
+	 * @param ctx the lowering
+	 * @param items the defonce datum's items
+	 * @param echo the lowered var the definition answers, built after the definition
+	 * lowered
+	 * @return the form
+	 */
+	static LispVal defonceEchoing(ClojureLowering ctx, List<LispVal> items, Supplier<LispVal> echo) {
+		return defonceForm(ctx, items, null, echo);
+	}
+
+	private static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted,
+			@Nullable Supplier<LispVal> echo) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "defonce");
@@ -840,7 +844,7 @@ final class ClojureStateLowering {
 			ctx.dynamicVars.add(key);
 		}
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == 3 ? items.get(2) : null);
-		if (ClojureLowerUtil.isDirectFun(value)) {
+		if (ClojureLowerUtil.yieldsFun(value)) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {
@@ -875,8 +879,13 @@ final class ClojureStateLowering {
 									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)), var, set);
+		if (echo != null) {
+			set = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), set, echo.get());
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+				echo != null ? ClojureLowering.NIL_CONST : var, set);
 	}
 
 	/**

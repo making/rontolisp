@@ -1482,12 +1482,80 @@ class RontoLispCliTest {
 				(def x 1)
 				(+ x 41)
 				""";
-		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("twice\n42\n1\n42\n");
+		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("#'user/twice\n42\n#'user/x\n42\n");
+	}
+
+	@Test
+	void theClojureReplEchoesTheVarADefinitionDefines() {
+		// every line below is what the clj REPL (1.12.6) answers
+		String program = """
+				(defn f "d" [a] a)
+				(defn f "e" [] 1)
+				(def x 1)
+				(def y)
+				(defmacro m [] 1)
+				(defmulti mm identity)
+				(defmulti mm identity)
+				(defonce z 1)
+				(defonce z 2)
+				(defn- p [] 1)
+				(def ^:dynamic *d* 1)
+				(defstruct s :a)
+				(def first 1)
+				(f)
+				(ns foo)
+				(defn g [] 1)
+				(def w 2)
+				(def x 1) (def x2 2)
+				(defprotocol P (pm [x]))
+				(defrecord R [a])
+				(deftype T [a])
+				(declare q)
+				(declare qa qb)
+				(do (def v 3))
+				(let [a 1] (def u a))
+				(def nested (def inner 1))
+				(println (def shown 1))
+				(ns my-app)
+				(defrecord R2 [a])
+				""";
+		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("""
+				#'user/f
+				#'user/f
+				#'user/x
+				#'user/y
+				#'user/m
+				#'user/mm
+				nil
+				#'user/z
+				nil
+				#'user/p
+				#'user/*d*
+				#'user/s
+				#'user/first
+				1
+				#'foo/g
+				#'foo/w
+				#'foo/x
+				#'foo/x2
+				P
+				foo.R
+				foo.T
+				#'foo/q
+				#'foo/qb
+				#'foo/v
+				#'foo/u
+				#'foo/nested
+				#'foo/shown
+				nil
+				my_app.R2
+				""");
 	}
 
 	@Test
 	void theClojureReplContinuesAnIncompleteForm() {
-		assertThat(runCli("(defn f [x]\n (* x 2))\n(f 21)\n", "--source-language", "clojure")).isEqualTo("f\n42\n");
+		assertThat(runCli("(defn f [x]\n (* x 2))\n(f 21)\n", "--source-language", "clojure"))
+			.isEqualTo("#'user/f\n42\n");
 	}
 
 	@Test

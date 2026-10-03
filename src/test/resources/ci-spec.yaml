@@ -3791,6 +3791,18 @@ cases:
       9.9e-324
       3602879701896397/36028797018963968
       3000000000/7
+  - name: runtime-read-decimal-token-is-the-nearest-double
+    source: |
+      (dolist (s '("0.30000000000000004" "1e-300" "2.2250738585072014e-308" "4.9e-324"
+                   "8.98846567431158e307" "6.02214076e23"))
+        (print (read-from-string s)))
+    expected: |
+      0.30000000000000004
+      1.0e-300
+      2.2250738585072014e-308
+      4.9e-324
+      8.98846567431158e307
+      6.02214076e23
   - name: common-lisp-fidelity-mod-rem-sign
     source: |
       (print (mod -13 4))

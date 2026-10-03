@@ -42,7 +42,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 
 | Clojure | representation | notes |
 |---|---|---|
-| identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`) |
+| identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
@@ -62,6 +62,22 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 Predicates answer `T`-or-false, as calls and as values, so `(map odd? [1 2])` prints
 `(true false)`. Every core verb also names a function value (a lambda over the same
 lowering, checking the oracle's arities) unless its row says otherwise.
+
+## Locals named like a special
+
+A local is lexical in the oracle, but a local spelled like a `^:dynamic` var of `user` would
+lower to the var's own symbol, a `defparameter`'d special, and so bind it dynamically (a
+function called in its scope would read the local). `localSym` gives such a local
+`c%name%local` instead; every binding site (parameters, `let`, `loop`, destructuring,
+`letfn`, `for`/`doseq`/`dotimes`, `catch`, `with-open`, `if-let`, deftype fields, ...) and
+`symOf` go through it, `binding` keeps the var's symbol. The names are `shadowedSpecials`:
+`*out*`/`*in*`/`*agent*` (aliases of specials) plus every `^:dynamic` `def`/`defn`/
+`defonce` of `user` the pre-scan (`declare`) finds at any depth -- the proclamation is
+program-wide, so a var defined below the local counts. Only a colliding local is renamed:
+a program without one lowers byte-identically. A namespaced var (`c%ns/name`) never
+collides. Measured 2026-10-03: `(defn f [*x*] (show))`, `(let [*x* 5] (show))`,
+`((fn [*x*] (show)) 3)` answer the var's `1` on all four backends, like the oracle (they
+answered `2 5 3` before).
 
 ## The lowering table
 
@@ -113,7 +129,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
-| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; a function form that may hold a collection is wrapped over the dispatcher at the call site, so a plain `reduce` carries no dispatcher |
+| `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; its function is a real one ("The IFn dispatcher stays at the call site") |
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil and false are empty, anything else signals; `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` | a vector or string indexed directly, anything else stepped; past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
@@ -124,10 +140,10 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `ffirst` `nfirst` | `car`/`cdr` of the seq of the head | each level seqs |
 | `range` | a strict list (1/2/3-arity) | a zero step signals; an end-less `(range)` is refused (no chunking; spell it with `iterate`) |
 | `lazy-seq` `lazy-cat` `repeat` `cycle` `iterate` `repeatedly` | "Laziness" | finite `repeat`/`repeatedly` arities answer strict lists |
-| `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); type errors use CL wording |
+| `drop-last` `split-at` `split-with` `take-last` `nthnext` `nthrest` `peek` `pop` `not-empty` `dedupe` `replace` `partition-all` `partition-by` `min-key` `max-key` `juxt` `fnil` `every-pred` `some-fn` `update-keys` `update-vals` `reduce-kv` `test` | `ClojureCoreLowering`: one call to the fixed-parameter `rontolisp::%clojure-NAME` worker after a lower-time arity check in the oracle's wording (`Wrong number of args (N) passed to: clojure.core/NAME`); as a value `#'rontolisp::%clojure-NAME-v`, checking at run time | `dedupe`/`partition-*`/`drop-last` are lazy-or-strict; `peek`/`pop` take vectors and lists (a strict seq peeks where the oracle's LazySeq throws); `some-fn` answers the oracle's exact failing value; `reduce-kv` walks maps/records/vectors and stops at `reduced`; a non-positive `partition-all` size signals (the oracle loops forever); type errors use CL wording |
 | `pmap` | `map` | no thread pool; the printed seq is the oracle's |
-| `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | `update-in` with no keys refused; `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
-| `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
+| `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | the first three associate through `ClojureCollectionLowering.assocAnswer` like `assoc` (a vector level by index); `update-in` with no keys refused; `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
+| `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; onto a vector (`assocAnswer`'s run-time `vectorp` arm, `%clojure-vector-assoc`) a fresh whole copy, index = count appending, a non-integer key `Key must be integer`, out of range signalling, like the oracle -- measured 2026-10-03 on a map-only program: wasm 58,004 -> 60,479 B (dispatch alone +298 B, the `(setf aref)` write ~1 KB; `make-array` plus an `aref` loop instead of `copy-seq`/`coerce` saved 0.8 KB), 2M two-pair `assoc` calls 4.0 s wasm / 2.05 s JVM before and after; pinned by clojure-spec `assoc-on-a-vector-replaces-or-appends-by-index`, `update-and-the-nested-verbs-reach-into-vectors` (and `replace-maps-through-a-map-or-a-vector` for `replace`); odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword value takes extra arguments (a keyword-dispatched multimethod passes several) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
@@ -170,12 +186,9 @@ Each is a real work item unless the reason says otherwise.
 - The whole-file pre-scan makes a definition shadow calls ABOVE it (the oracle's reach the
   core verb); a body defined above a `defn` redefinition still calls the older one (only
   `^:dynamic` names see the newest).
-- A local named like a `^:dynamic` var (a fn parameter, a `let`/`loop` binding) is the var's
-  own CL symbol (`ClojureLowerUtil.idSym`), a `defparameter`'d special, so it binds the var
-  dynamically: a function called in its scope reads the local's value (the oracle: the var).
-  A `let` did so on every backend; a parameter on the interpreter, and on the compilers since
-  special-named parameters bind dynamically (2026-10-03, `.kb/dynamic-special-variables.md`)
-  -- they answered the oracle by accident before (`.todo/c13`).
+- In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
+  it is defined (a function called in its scope reads the local's value; the oracle: the
+  var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
 - `catch` is catch-all; a thrown host `Throwable` reaches handlers as an opaque host object,
   so its message is lost (b66).
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
@@ -350,6 +363,64 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   passes an alist of the spellings the table cannot spell itself). `gensym` is the
   ordinary uninterned symbol.
 
+## The IFn dispatcher stays at the call site
+
+**A spliced runtime worker funcalls its function argument; the lowering hands it a real
+function.** `rontolisp::%clojure-call` (the IFn dispatcher: sets, maps, vectors, keywords,
+vars) drags the structural-key runtime behind it, about 26 KB of raw wasm, so one worker
+naming it put it in every program that used the verb. The workers: `map` `filter` `mapv`
+`filterv` `mapcat` `iterate` `repeatedly` `keep` `keep-indexed` `map-indexed` `remove`
+`reduce` `reduce-kv` `min-key`/`max-key` `juxt` `fnil` `every-pred` `some-fn`
+`update-keys` `update-vals` `partition-by` `split-with` `vary-meta`, every transducer
+constructor and consumer, and a regex `replace` with a function replacement.
+
+- `ClojureBindingLowering.realFnValue` passes a function argument as itself when
+  `holdsRealFun`: a form `ClojureLowerUtil.yieldsFun` (a `function`/`lambda`; a
+  `let`/`let*`/`labels`/`flet`/`progn` ending in one -- `comp`, `partial`, `complement`,
+  `memoize`, a named `fn`; a call to a worker in `FUNCTION_WORKERS` -- `juxt`, `fnil`,
+  `every-pred`, `some-fn`, `completing`, the `%clojure-xf-*` constructors), or a variable
+  bound to one (`isDirectVar`). Anything else goes through `ClojureLowering.realFun`:
+  `(rontolisp::%clojure-as-fn x)`, which answers a function as itself and wraps any other
+  value in a rest lambda over the dispatcher. A worker added to `FUNCTION_WORKERS` must
+  answer a `lambda` on every path.
+- A verb's VALUE (`(apply map ...)`, the `-v` entries) wraps its parameter at run time
+  through `%clojure-as-fn`, so using a verb as a value carries the dispatcher.
+- The same test makes a call-site invocation direct: `callFun`/`applyFun` (`comp`,
+  `partial`, `complement`, `memoize`, `trampoline`, `update`/`update-in`/`assoc-in`, a
+  computed head like `((comp f g) x)`), CL `apply`, and a `let`/`def` binding marked
+  direct. `update` lowers its function form in place (it has no effect to order against
+  the map and key before it); `update-in` binds it and threads `holdsRealFun`.
+- A regex `replace` with a replacement that is neither a literal string nor a real
+  function form wraps it in `%clojure-re-replacement` (a string stays a string).
+- The inline loops (`every?` `some` `take-while` `drop-while` `group-by` `sort` `sort-by`
+  `merge-with`, and the closures `comp` `partial` `complement` `memoize` `trampoline`)
+  take a `ClojureBindingLowering.FnArg` (the `fnValue` plus `real`), decided from the
+  DATUM by `fnArg`/`holdsRealFun` and passed to `callFun(real, ...)`/`applyFun(real, ...)`.
+  Never ask the scope from a generated symbol: the value forms (`everyValue`, ...) build
+  `FnArg.of(parameter)`, which is real only for a `yieldsFun` form, because a value
+  lambda's `c%NAME-fn` parameter can spell a user local's name. Raw wasm, before -> after:
+  `(let [f odd?] (every? f v))` 61,251 -> 34,113; `(let [f inc] (sort-by f v))` 71,010
+  -> 43,451; `(let [f inc] ((comp f dec) 1))` 60,886 -> 38,873. Pins: `ClojureLoweringTest`
+  `inlineLoopsFuncallALocalBoundToARealFunction`, clojure-spec
+  `locals-bound-to-functions-feed-the-inline-loops`.
+- Kept on the dispatcher: `test` (the `:test` metadata value) and a `defn` parameter used
+  as a function anywhere (`(defn f [g xs] (map g xs))` carries it).
+- Measured 2026-10-03, raw wasm of a one-line program, default / `--optimize=size`, before
+  -> after: `(map inc v)` 65,808 -> 43,452 / 51,352 -> 32,699; `(filter odd? v)` 65,593 ->
+  38,555 / 51,339 -> 30,515 (`remove` was already 38,987); `mapv` 65,222 -> 42,880;
+  `iterate` 64,137 -> 36,868; `reduce-kv` 64,263 -> 37,928; `update-vals` 67,192 ->
+  38,412; `(transduce (map inc) + v)` 62,461 -> 34,498; `(map (comp inc dec) v)` 66,128 ->
+  43,751; `(map (partial + 1) v)` 66,518 -> 44,189; `(filter (complement odd?) v)` 65,950
+  -> 44,093; `((comp inc dec) 1)` 61,024 -> 38,873; a regex `replace` with a string
+  117,361 -> 100,157; `(update m :a inc)` 62,265 -> 60,333 (it keeps the structural keys
+  `get` needs). Interpreter, 100,000-element strict vector, steady state of three runs on
+  a loaded host: `map inc` ~430 -> ~390 ms, `filter odd?` ~530 -> ~480 ms, `map` over a
+  `defn` parameter holding `inc` unchanged within the noise (~450 ms: `%clojure-as-fn`
+  answers the function itself).
+- Pins: `ClojureLoweringTest.aRuntimeWorkerTakesARealFunctionWrappedAtTheCallSite`,
+  `aProgramPassingRealFunctionsSplicesNoDispatcher` (the pruned IR); clojure-spec
+  `a-collection-as-the-function-of-a-seq-worker-answers-like-ifn` (every backend).
+
 ## Dispatch
 
 - `defmulti`: four globals (`equal` method table, default value, prefers table, `Object`
@@ -430,6 +501,22 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).
+- Clojure 1.12 qualified members (`ClojureInteropLowering.memberCall`/`memberValue`, one
+  `qualifiedMember` split): `Class/.m` is `instanceCallLoweredWithClass` with the class as
+  the known receiver class (so the string/stream/boolean rules apply); `Class/new` is
+  `hostConstruction`, the one construction path `(Class. ...)`/`new` share; `R/new` of a
+  record or deftype is `->R`. Values are `arityLambda` over the public instance-method
+  arities (+1 for the target) or constructor arities; none, or variadic-only, is refused
+  at lowering (the oracle's `no matches found`). `^[types]` param tags (`paramTags`, the
+  first vector among the `%with-meta` layers) become the `java:` designator `m(T1,T2)` /
+  `C(T1)` (`tagTypes`: primitives, `ints`.../`objects`, `T/N` arrays, `_`, else
+  `resolveClass`); a tagged value has the one fixed arity, a tagged call with another
+  count is refused at lowering. Tags apply only where `ClojureLowering.hostMemberName`
+  holds (no local/var/library/project namespace claims the name); elsewhere they stay
+  plain metadata. `constructedClass` strips a designator's `(...)` so a tagged
+  construction still records the local's class. Measured 2026-10-03 vs `clj` 1.12.6:
+  the oracle refuses `^[_] Math/abs` (tags leaving several overloads); ronto leaves `_`
+  to the cost rule (user doc deviation).
 - A bare class name in value position is `(java:static "java.lang.Class" "forName"
   "<fqn>")`, the oracle's class object.
 - A string receiver answers the mapped core operation (a Lisp string is no host object).
@@ -516,10 +603,8 @@ oracle's `Cons`).
   interpreter). The first five share one lazy arm, `%clojure-keep-lazy`, whose adapter
   answers `:C%SKIP` to drop; `interleave`/`interpose` emit one wrapper per element, so
   `rest` never exposes a strict cons holding a wrapper. The function argument is a real
-  function -- `ClojureSeqLowering.withRealFun` wraps any other value in the dispatcher
-  at the call site, as `reduce` does; calling `%clojure-call` from the runtime spliced
-  the dispatcher into every program (`(remove odd? [...])` 59,367 B against 39,262 B;
-  `map`/`filter` still do, c00). Raw wasm of a one-verb strict program, before -> after
+  function ("The IFn dispatcher stays at the call site"). Raw wasm of a one-verb strict
+  program, before -> after
   (default / `--optimize=size`): `remove` 38,534 -> 39,262 / 30,965 -> 31,471, `keep`
   38,916 -> 38,989 / 31,323 -> 31,222, `keep-indexed` 38,462 -> 38,910, `map-indexed`
   37,336 -> 37,894, `distinct` 50,767 -> 50,941 / 40,361 -> 40,343, `interpose`
@@ -549,8 +634,12 @@ tail after an early `take` stop).
   `reduced`; `deref` reads it.
 - `sequence`/`eduction` step inputs one element at a time behind a lazy wrapper
   (`%clojure-xf-puller`), lazy-or-strict; several collections step in lockstep.
-- The IFn dispatcher wrap sits at the call site, not in the runtime: calling it from the
-  runtime cost every `reduce` 7 KB of wasm.
+- Every transducer, reducing function and `completing` argument is a real function
+  ("The IFn dispatcher stays at the call site"), so the transducer runtime funcalls and
+  never names the dispatcher. A transducer a program calls BY HAND with a set, map or
+  keyword as the reducing function signals (`funcall` of a non-function) where the oracle
+  invokes it; every consumer (`transduce` `into` `sequence` `eduction` `completing`, as
+  calls and values) wraps such an argument first.
 - Deviations: an `eduction` is a seq computed once (the oracle re-runs it per reduction and
   `println` prints the object); `take-nth` of the seq arity signals on a zero step and
   steps by the magnitude of a negative one; `halt-when`/`random-sample` are absent.
@@ -746,6 +835,20 @@ its inits evaluate against the OLD binding (like one file). `SourceSession` prom
 bracket counting over `()[]{}` (outside strings and comments) plus a reader probe for a
 trailing dispatch prefix. A buffer's `require` loads from the working directory's source
 path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
+
+The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
+var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the
+datum's last form; a file's definition shows nothing), the oracle's. `defonce` over a bound var
+and `defmulti` over a held multimethod answer `nil`, like the oracle. `defprotocol` answers its
+name (`P`), `defrecord`/`deftype` the class name (`my_app.R`, namespace munged), `declare` the
+last name's var. A `def` nested below the datum (`(do (def v 3))`, `(println (def x 1))`)
+answers its var too, through `ClojureLowering.nestedDefAnswersVar`, set for a session datum only.
+
+A file's nested `def` keeps answering the value, not the var (oracle divergence, kept). Measured
+2026-10-03, wasm-GC: building the var per site costs ~0.5 KB per site plus ~26 KB once (the
+`VAR` runtime a program with no `#'x` otherwise leaves out): a 7-site program grew 10.1 KB ->
+39.7 KB, 14 sites 10.2 KB -> 43.5 KB. The value of a nested `def` is read almost never, so a
+size cost on every file is not worth the parity.
 
 ## `clojure.spec`: refused
 

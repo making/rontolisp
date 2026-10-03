@@ -42,10 +42,11 @@ final class ClojureFilterLowering {
 	 * {@code keep}: the non-nil results of the function over the collection, through the
 	 * spliced {@code rontolisp::%clojure-keep}. {@code false} is kept (only nil drops),
 	 * and a signalling function signals -- {@code (keep inc [1 nil 2])} throws, like the
-	 * oracle, instead of skipping. Lazy-or-strict, like {@code map}.
+	 * oracle, instead of skipping. Lazy-or-strict, like {@code map}. The function is a
+	 * real one ({@link ClojureLowering#realFun}).
 	 */
 	static LispVal keepForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("KEEP", real, coll));
+		return runtimeCall("KEEP", fn, coll);
 	}
 
 	/** {@code keep} as a value: a two-argument lambda over the same call. */
@@ -53,7 +54,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("keep-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("keep-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				keepForm(ctx, fun, coll));
+				keepForm(ctx, ClojureLowering.realFun(fun), coll));
 	}
 
 	/**
@@ -63,8 +64,7 @@ final class ClojureFilterLowering {
 	 * Lazy-or-strict, like {@code map}.
 	 */
 	static LispVal indexedForm(ClojureLowering ctx, LispVal fn, LispVal coll, boolean keep) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("INDEXED", real, coll,
-				keep ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST));
+		return runtimeCall("INDEXED", fn, coll, keep ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
 	}
 
 	/** {@code keep-indexed} or {@code map-indexed} as a value: a two-argument lambda. */
@@ -72,7 +72,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("indexed-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("indexed-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				indexedForm(ctx, fun, coll, keep));
+				indexedForm(ctx, ClojureLowering.realFun(fun), coll, keep));
 	}
 
 	/** The call {@code (rontolisp::%clojure-NAME args...)}. */
@@ -92,26 +92,27 @@ final class ClojureFilterLowering {
 	 * {@code every?}: true when the predicate holds for every member, answering
 	 * {@code T}-or-false directly (empty is true, like the oracle).
 	 */
-	static LispVal everyForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
+	static LispVal everyForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
 		String name = ClojureLowering.mangle("every-") + (ctx.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol fun = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-			.sym("null"), rest), ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(
-					ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
-							ctx.callFun(fn, fun, List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ctx.falseVariable, ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest)))));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.TRUE_CONST,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
+								ctx.callFun(fn.real(), fun,
+										List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))))),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
+								ctx.falseVariable, ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest)))));
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
 						ClojureLowerUtil.list(self, seq)));
 	}
@@ -121,33 +122,34 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("every-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("every-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				everyForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
+				everyForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
 	/**
 	 * {@code some}: the first truthy predicate result, or nil. The predicate's own value
 	 * answers (not the member), like the oracle.
 	 */
-	static LispVal someForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
+	static LispVal someForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
 		String name = ClojureLowering.mangle("some-") + (ctx.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol fun = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
-			.sym("null"), rest), ClojureLowering.NIL_CONST, ClojureLowerUtil.list(
-					ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
-							ctx.callFun(fn, fun, List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest)), got)));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
+								ctx.callFun(fn.real(), fun,
+										List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))))),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
+								ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest)), got)));
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
 						ClojureLowerUtil.list(self, seq)));
 	}
@@ -157,16 +159,17 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("some-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("some-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				someForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
+				someForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
 	/**
 	 * {@code remove}: the members the predicate rejects, through the spliced
 	 * {@code rontolisp::%clojure-remove} ({@code filter} over the complement), so it is
-	 * lazy-or-strict like {@code filter}.
+	 * lazy-or-strict like {@code filter}. The predicate is a real function
+	 * ({@link ClojureLowering#realFun}).
 	 */
 	static LispVal removeForm(ClojureLowering ctx, LispVal fn, LispVal coll) {
-		return ClojureSeqLowering.withRealFun(ctx, fn, real -> runtimeCall("REMOVE", real, coll));
+		return runtimeCall("REMOVE", fn, coll);
 	}
 
 	/** {@code remove} as a value: a two-argument lambda over the same call. */
@@ -174,7 +177,7 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("remove-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("remove-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				removeForm(ctx, pred, coll));
+				removeForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -218,14 +221,15 @@ final class ClojureFilterLowering {
 	 * {@code take-while}: the strict prefix while the predicate stays truthy
 	 * ({@code false} stops, like nil).
 	 */
-	static LispVal takeWhileForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
+	static LispVal takeWhileForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
 		String name = ClojureLowering.mangle("take-while-") + (ctx.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol pred = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
 		LispSymbol acc = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn, pred, List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
+		LispVal invoked = ctx.callFun(fn.real(), pred,
+				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
 		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
@@ -242,7 +246,7 @@ final class ClojureFilterLowering {
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(rest, acc)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
 						ClojureLowerUtil.list(self, seq, ClojureLowering.NIL_CONST)));
 	}
@@ -252,17 +256,18 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("take-while-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("take-while-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				takeWhileForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
+				takeWhileForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
 	/** {@code drop-while}: the seq view past the truthy prefix, sharing the tail. */
-	static LispVal dropWhileForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
+	static LispVal dropWhileForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
 		String name = ClojureLowering.mangle("drop-while-") + (ctx.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol pred = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn, pred, List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
+		LispVal invoked = ctx.callFun(fn.real(), pred,
+				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
 		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -275,7 +280,7 @@ final class ClojureFilterLowering {
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
 						ClojureLowerUtil.list(self, seq)));
 	}
@@ -285,7 +290,7 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("drop-while-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("drop-while-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				dropWhileForm(ctx, pred, ClojureSeqLowering.seqForm(ctx, coll)));
+				dropWhileForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
 	}
 
 	/**
@@ -359,13 +364,13 @@ final class ClojureFilterLowering {
 	 * {@code group-by}: a fresh map from each function value to the vector of members
 	 * answering it, in encounter order. Members accumulate reversed, then convert.
 	 */
-	static LispVal groupByForm(ClojureLowering ctx, LispVal fn, LispVal seq) {
+	static LispVal groupByForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
 		LispSymbol fun = ctx.freshTemp();
 		LispSymbol table = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol val = ctx.freshTemp();
-		LispVal keyed = ctx.callFun(fn, fun, List.of(one));
+		LispVal keyed = ctx.callFun(fn.real(), fun, List.of(one));
 		LispVal collect = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 				ClojureLowerUtil.list(List.of(one, seq)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -385,7 +390,7 @@ final class ClojureFilterLowering {
 				table);
 		return ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("let*"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fun, fn.fun()),
 							ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()))),
 					collect, freeze, table);
 	}
@@ -395,7 +400,7 @@ final class ClojureFilterLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("group-by-fn"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("group-by-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, coll)),
-				groupByForm(ctx, fun, ClojureSeqLowering.seqAllForm(ctx, coll)));
+				groupByForm(ctx, ClojureBindingLowering.FnArg.of(fun), ClojureSeqLowering.seqAllForm(ctx, coll)));
 	}
 
 	/** {@code sort}: the seq view copied and sorted, with an optional comparator. */
@@ -406,14 +411,14 @@ final class ClojureFilterLowering {
 		if (n == 1) {
 			return sortForm(ctx, seq, null);
 		}
-		return sortForm(ctx, seq, ClojureBindingLowering.fnValue(ctx, items.get(1)));
+		return sortForm(ctx, seq, ClojureBindingLowering.fnArg(ctx, items.get(1)));
 	}
 
 	/**
 	 * The sort over an already-lowered seq view: a copy (the primitive sorts
 	 * destructively) under the default or wrapped comparator.
 	 */
-	static LispVal sortForm(ClojureLowering ctx, LispVal seq, @Nullable LispVal cmp) {
+	static LispVal sortForm(ClojureLowering ctx, LispVal seq, ClojureBindingLowering.@Nullable FnArg cmp) {
 		LispSymbol coll = ctx.freshTemp();
 		LispVal pred;
 		List<LispVal> bindings = new ArrayList<>();
@@ -426,10 +431,10 @@ final class ClojureFilterLowering {
 			LispSymbol left = ctx.freshTemp();
 			LispSymbol right = ctx.freshTemp();
 			LispSymbol got = ctx.freshTemp();
-			bindings.add(ClojureLowerUtil.list(fun, cmp));
+			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
 			LispVal truthy = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil
-						.list(List.of(ClojureLowerUtil.list(got, ctx.callFun(cmp, fun, List.of(left, right))))),
+						.list(List.of(ClojureLowerUtil.list(got, ctx.callFun(cmp.real(), fun, List.of(left, right))))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
@@ -497,7 +502,7 @@ final class ClojureFilterLowering {
 				ClojureSeqLowering.seqAllForm(ctx,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
+				ClojureBindingLowering.FnArg.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
@@ -518,26 +523,27 @@ final class ClojureFilterLowering {
 				"sort-by takes a key function, a collection and an optional comparator");
 		LispVal coll = ClojureSeqLowering.seqAllForm(ctx, ctx.lower(items.get(n)));
 		if (n == 2) {
-			return sortByForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), coll, null);
+			return sortByForm(ctx, ClojureBindingLowering.fnArg(ctx, items.get(1)), coll, null);
 		}
-		return sortByForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), coll,
-				ClojureBindingLowering.fnValue(ctx, items.get(2)));
+		return sortByForm(ctx, ClojureBindingLowering.fnArg(ctx, items.get(1)), coll,
+				ClojureBindingLowering.fnArg(ctx, items.get(2)));
 	}
 
 	/**
 	 * The key sort over already-lowered key function, seq view and optional comparator:
 	 * the comparator (or the default) runs on the keyed values.
 	 */
-	static LispVal sortByForm(ClojureLowering ctx, LispVal keyFn, LispVal seq, @Nullable LispVal cmp) {
+	static LispVal sortByForm(ClojureLowering ctx, ClojureBindingLowering.FnArg keyFn, LispVal seq,
+			ClojureBindingLowering.@Nullable FnArg cmp) {
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol coll = ctx.freshTemp();
 		LispSymbol left = ctx.freshTemp();
 		LispSymbol right = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(ClojureLowerUtil.list(key, keyFn));
+		bindings.add(ClojureLowerUtil.list(key, keyFn.fun()));
 		bindings.add(ClojureLowerUtil.list(coll, ClojureLowerUtil.list(ClojureLowerUtil.sym("copy-list"), seq)));
-		LispVal keyedLeft = ctx.callFun(keyFn, key, List.of(left));
-		LispVal keyedRight = ctx.callFun(keyFn, key, List.of(right));
+		LispVal keyedLeft = ctx.callFun(keyFn.real(), key, List.of(left));
+		LispVal keyedRight = ctx.callFun(keyFn.real(), key, List.of(right));
 		LispVal predBody;
 		if (cmp == null) {
 			predBody = defaultCmpBody(ctx, keyedLeft, keyedRight);
@@ -545,8 +551,8 @@ final class ClojureFilterLowering {
 		else {
 			LispSymbol fun = ctx.freshTemp();
 			LispSymbol got = ctx.freshTemp();
-			LispVal invoked = ctx.callFun(cmp, fun, List.of(keyedLeft, keyedRight));
-			bindings.add(ClojureLowerUtil.list(fun, cmp));
+			LispVal invoked = ctx.callFun(cmp.real(), fun, List.of(keyedLeft, keyedRight));
+			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
 			predBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
@@ -595,13 +601,13 @@ final class ClojureFilterLowering {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("sort-by-args"));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("sort-by takes a key function, a collection and an optional comparator"));
-		LispVal one = sortByForm(ctx, key,
+		LispVal one = sortByForm(ctx, ClojureBindingLowering.FnArg.of(key),
 				ClojureSeqLowering.seqAllForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)), null);
-		LispVal two = sortByForm(ctx, key,
+		LispVal two = sortByForm(ctx, ClojureBindingLowering.FnArg.of(key),
 				ClojureSeqLowering.seqAllForm(ctx,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
+				ClojureBindingLowering.FnArg.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
@@ -647,10 +653,13 @@ final class ClojureFilterLowering {
 	static LispVal mapvOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 2, "mapv takes a function and collections");
-		return mapvForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lowers(items, 2));
+		return mapvForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lowers(items, 2));
 	}
 
-	/** {@code mapv} over an already-lowered function and collections. */
+	/**
+	 * {@code mapv} over an already-lowered real function
+	 * ({@link ClojureLowering#realFun}) and collections.
+	 */
 	static LispVal mapvForm(ClojureLowering ctx, LispVal fun, List<LispVal> colls) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fun,
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), colls));
@@ -662,7 +671,8 @@ final class ClojureFilterLowering {
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapv-colls"));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("mapv takes a function and collections"));
-		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fn, colls);
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), ClojureLowering.realFun(fn),
+				colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls), arity, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
@@ -670,8 +680,8 @@ final class ClojureFilterLowering {
 	}
 
 	/**
-	 * {@code filterv} over an already-lowered predicate and collection: one call to the
-	 * spliced {@code rontolisp::%clojure-filterv}, the strict vector arm of
+	 * {@code filterv} over an already-lowered real predicate and collection: one call to
+	 * the spliced {@code rontolisp::%clojure-filterv}, the strict vector arm of
 	 * {@code filter}.
 	 */
 	static LispVal filtervForm(ClojureLowering ctx, LispVal fun, LispVal coll) {
@@ -683,7 +693,7 @@ final class ClojureFilterLowering {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("filterv-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("filterv-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				filtervForm(ctx, pred, coll));
+				filtervForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -695,10 +705,13 @@ final class ClojureFilterLowering {
 	static LispVal mapcatOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 2, "mapcat takes a function and collections");
-		return mapcatForm(ctx, ClojureBindingLowering.fnValue(ctx, items.get(1)), ctx.lowers(items, 2));
+		return mapcatForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lowers(items, 2));
 	}
 
-	/** {@code mapcat} over an already-lowered function and collections. */
+	/**
+	 * {@code mapcat} over an already-lowered real function
+	 * ({@link ClojureLowering#realFun}) and collections.
+	 */
 	static LispVal mapcatForm(ClojureLowering ctx, LispVal fun, List<LispVal> colls) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fun,
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), colls));
@@ -711,10 +724,12 @@ final class ClojureFilterLowering {
 	static LispVal mapcatValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("mapcat-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapcat-colls"));
-		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fn, colls);
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), ClojureLowering.realFun(fn),
+				colls);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), colls),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAPCAT"), fn), call);
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-XF-MAPCAT"), ClojureLowering.realFun(fn)),
+				call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, colls)), body);
 	}

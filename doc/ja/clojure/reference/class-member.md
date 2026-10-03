@@ -1,6 +1,7 @@
 # Class/member
 
-`(Class/member args...)` `(Class/FIELD)` と裸の `Class/member` 値
+`(Class/member args...)` `(Class/FIELD)` `(Class/.method target args...)` `(Class/new args...)`
+と裸の `Class/member` 値
 
 静的メソッドを呼びます。引数なし -- `(System/currentTimeMillis)` または
 `(. System currentTimeMillis)` -- では、ホストクラスにあれば引数なし静的メソッド、
@@ -16,6 +17,18 @@
 `str` はその `toString`（`class java.lang.String`）を答えます。
 インタプリターと JVM でのみ動作し、wasm バックエンドは `java:` を拒否します。
 
+`Class/.method` はインスタンスメソッドです。呼び出し位置では最初の引数が対象で、
+`(.method target args...)` と同じです。値としては対象を最初に取る関数で、
+そのクラスの public なインスタンスメソッドのアリティ毎に振り分けます（該当する
+メソッドがない名前はプログラムを読む時点で拒否されます）。`Class/new` は
+コンストラクタで、呼び出し位置でも値でも `(Class. args...)` と同じです。レコードと
+deftype の `R/new` は位置引数のコンストラクタです。これらの前に `^[types]` の
+パラメータタグを付けるとオーバーロードを指定でき、値はちょうどその個数（と対象）の
+引数を取ります。タグはクラス名、プリミティブ、プリミティブ配列と `Object` 配列を表す
+`ints`/`longs`/... と `objects`、`N` 次元配列を表す `T/N`、任意の型を表す `_` の
+いずれかです。タグ付き呼び出しの引数の個数がタグと違うと、プログラムを読む時点で
+拒否されます。
+
 ```clojure
 (ns doc-static (:import (java.awt.event KeyEvent)))
 (println (Integer/parseInt "42")) ; 42
@@ -25,4 +38,14 @@
 (println (= String (.getClass "s"))) ; true
 (println (.getName String)) ; java.lang.String
 (println String (str String)) ; java.lang.String class java.lang.String
+```
+
+```clojure
+(ns doc-qualified (:import (java.util ArrayList)))
+(println (String/.toUpperCase "abc")) ; ABC
+(println (map String/.length ["ab" "abcd"])) ; (2 4)
+(println (String/new "q")) ; q
+(let [a (ArrayList/new)] (.add a 1) (println (ArrayList/.size a))) ; 1
+(println (map ^[double] Math/abs [-1 2])) ; (1.0 2.0)
+(println (map ^[int] String/.charAt ["ab"] [1])) ; (b)
 ```

@@ -698,11 +698,11 @@ final class ClojureProtocolLowering {
 		}
 		List<LispVal> binds = new ArrayList<>();
 		for (String field : fields) {
-			if (paramNames.contains(ClojureLowerUtil.idSym(field).name())) {
+			if (paramNames.contains(ctx.localSym(field).name())) {
 				continue;
 			}
 			if (!places.containsKey(field)) {
-				binds.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(field),
+				binds.add(ClojureLowerUtil.list(ctx.localSym(field),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
 								ClojureCollectionLowering.keywordForm(field), typedTableOf(self),
 								ClojureLowering.NIL_CONST)));
@@ -714,10 +714,10 @@ final class ClojureProtocolLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(4), self)));
 			List<LispVal> macros = new ArrayList<>();
 			for (Map.Entry<String, LispVal> place : places.entrySet()) {
-				if (paramNames.contains(ClojureLowerUtil.idSym(place.getKey()).name())) {
+				if (paramNames.contains(ctx.localSym(place.getKey()).name())) {
 					continue;
 				}
-				macros.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(place.getKey()), place.getValue()));
+				macros.add(ClojureLowerUtil.list(ctx.localSym(place.getKey()), place.getValue()));
 			}
 			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(macros), body);
 		}
@@ -772,15 +772,15 @@ final class ClojureProtocolLowering {
 		List<LispVal> keys = new ArrayList<>();
 		List<LispVal> slots = new ArrayList<>();
 		for (String field : def.fields()) {
-			params.add(ClojureLowerUtil.idSym(field));
+			params.add(ctx.localSym(field));
 			if (def.mutableFields().contains(field)) {
-				slots.add(ClojureLowerUtil.idSym(field));
+				slots.add(ctx.localSym(field));
 				continue;
 			}
 			LispVal key = ClojureCollectionLowering.keywordForm(field);
 			keys.add(key);
 			pairs.add(key);
-			pairs.add(ClojureLowerUtil.idSym(field));
+			pairs.add(ctx.localSym(field));
 		}
 		LispVal table = ClojureCollectionLowering
 			.tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs));

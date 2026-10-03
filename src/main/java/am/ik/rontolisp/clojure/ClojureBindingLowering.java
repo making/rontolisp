@@ -84,7 +84,7 @@ final class ClojureBindingLowering {
 			ctx.dynamicVars.add(key);
 		}
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, items.size() == at + 1 ? items.get(at) : null);
-		if (ClojureLowerUtil.isDirectFun(value)) {
+		if (ClojureLowerUtil.yieldsFun(value)) {
 			ctx.globalDirectFuns.add(key);
 		}
 		else {
@@ -136,6 +136,10 @@ final class ClojureBindingLowering {
 
 	static LispVal def(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		List<LispVal> forms = defForms(ctx, form, items, null);
+		if (ctx.nestedDefAnswersVar) {
+			forms = new ArrayList<>(forms);
+			forms.add(ClojureVarLowering.definedVar(ctx, ClojureLowerUtil.plainName(items.get(1), "def")));
+		}
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}
@@ -496,7 +500,7 @@ final class ClojureBindingLowering {
 				if (rest instanceof LispSymbol) {
 					String name = ClojureLowerUtil.plainName(rest, "the parameter vector of");
 					scope.put(name, ClojureLowering.Kind.VARIABLE);
-					params.add(ClojureLowerUtil.idSym(name));
+					params.add(ctx.localSym(name));
 				}
 				else {
 					LispSymbol temp = ctx.freshTemp();
@@ -508,7 +512,7 @@ final class ClojureBindingLowering {
 			if (datum instanceof LispSymbol) {
 				String param = ClojureLowerUtil.plainName(datum, "the parameter vector of");
 				scope.put(param, ClojureLowering.Kind.VARIABLE);
-				params.add(ClojureLowerUtil.idSym(param));
+				params.add(ctx.localSym(param));
 				continue;
 			}
 			LispSymbol temp = ctx.freshTemp();
@@ -580,7 +584,7 @@ final class ClojureBindingLowering {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(self, ClojureLowering.Kind.FUNCTION);
 		String name = self;
-		String callName = ClojureLowerUtil.idSym(name).name();
+		String callName = ctx.localSym(name).name();
 		int from = at;
 		return ctx.inScope(scope, () -> {
 			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, from, name, callName);
@@ -702,9 +706,9 @@ final class ClojureBindingLowering {
 				if (pattern instanceof LispSymbol) {
 					String name = ClojureLowerUtil.plainName(pattern, "let");
 					LispVal init = ctx.lower(bindings.get(i + 1));
-					pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), init));
+					pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
 					scope.put(name, ClojureLowering.Kind.VARIABLE);
-					if (ClojureLowerUtil.isDirectFun(init)) {
+					if (ClojureLowerUtil.yieldsFun(init)) {
 						ctx.markDirect(name);
 					}
 					noteHostClass(ctx, name, init);
@@ -735,11 +739,10 @@ final class ClojureBindingLowering {
 	static void noteHostClass(ClojureLowering ctx, String name, LispVal init) {
 		String fqn = ClojureInteropLowering.constructedClass(init);
 		if (fqn == null) {
-			ctx.hostClasses.remove(ClojureLowerUtil.idSym(name).name());
+			ctx.hostClasses.remove(ctx.localSym(name).name());
 		}
 		else {
-			ctx.hostClasses.put(ClojureLowerUtil.idSym(name).name(),
-					new ClojureLowering.HostClass(fqn, name, ctx.scopes.size()));
+			ctx.hostClasses.put(ctx.localSym(name).name(), new ClojureLowering.HostClass(fqn, name, ctx.scopes.size()));
 		}
 	}
 
@@ -750,7 +753,7 @@ final class ClojureBindingLowering {
 	static void forgetHostClasses(ClojureLowering ctx, Set<String> now, Set<String> before) {
 		for (String key : now) {
 			if (!before.contains(key)) {
-				ctx.hostClasses.remove(ClojureLowerUtil.idSym(key).name());
+				ctx.hostClasses.remove(ctx.localSym(key).name());
 			}
 		}
 	}
@@ -833,10 +836,10 @@ final class ClojureBindingLowering {
 				LispVal init = ctx.lower(bindings.get(i + 1));
 				if (pattern instanceof LispSymbol) {
 					String binding = ClojureLowerUtil.plainName(pattern, "loop");
-					paramSyms.add(ClojureLowerUtil.idSym(binding));
+					paramSyms.add(ctx.localSym(binding));
 					inits.add(init);
 					scope.put(binding, ClojureLowering.Kind.VARIABLE);
-					if (ClojureLowerUtil.isDirectFun(init)) {
+					if (ClojureLowerUtil.yieldsFun(init)) {
 						ctx.markDirect(binding);
 					}
 					continue;
@@ -918,7 +921,7 @@ final class ClojureBindingLowering {
 			Map<String, LispVal> bindings = new LinkedHashMap<>();
 			for (List<LispVal> parts : fnspecs) {
 				String fname = ClojureLowerUtil.plainName(parts.get(0), "letfn");
-				String callName = ClojureLowerUtil.idSym(fname).name();
+				String callName = ctx.localSym(fname).name();
 				ClojureLowering.SplitLambda split = ctx.inScope(captureScope,
 						() -> singleOrMultiFn(ctx, parts, 1, fname, callName));
 				for (LispVal worker : split.workers()) {
@@ -945,6 +948,55 @@ final class ClojureBindingLowering {
 	static LispVal letDatum(String name, LispVal init, LispVal body) {
 		return ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "let"),
 				new LispCons(ClojureReader.VECTOR, ClojureLowerUtil.list(List.of(new LispSymbol(name), init))), body));
+	}
+
+	/**
+	 * A function argument a spliced runtime worker funcalls: {@link #fnValue}, passed as
+	 * itself when it is a real function (a function form, or a variable bound to one),
+	 * else wrapped by {@link ClojureLowering#realFun}.
+	 */
+	static LispVal realFnValue(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return holdsRealFun(ctx, form, fun) ? fun : ClojureLowering.realFun(fun);
+	}
+
+	/**
+	 * A function argument an inline loop invokes at its call site: the {@link #fnValue}
+	 * plus whether it always evaluates to a real function, so the loop funcalls it
+	 * without the IFn dispatcher.
+	 *
+	 * @param fun the lowered function form
+	 * @param real whether {@code fun} is always a real function
+	 */
+	record FnArg(LispVal fun, boolean real) {
+
+		/** A form that was lowered elsewhere: real only when it {@code yieldsFun}. */
+		static FnArg of(LispVal fun) {
+			return new FnArg(fun, ClojureLowerUtil.yieldsFun(fun));
+		}
+
+	}
+
+	/**
+	 * The {@link FnArg} of a function datum: its {@link #fnValue}, real when
+	 * {@link #holdsRealFun} -- decided here, from the datum, never from a lowered symbol.
+	 */
+	static FnArg fnArg(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return new FnArg(fun, holdsRealFun(ctx, form, fun));
+	}
+
+	/**
+	 * Whether the {@link #fnValue} of the datum always evaluates to a real function: a
+	 * form that {@link ClojureLowerUtil#yieldsFun yields one}, or a variable bound to
+	 * one.
+	 * @param form the function datum
+	 * @param fun its {@link #fnValue}
+	 * @return whether it can be funcalled without the IFn dispatcher
+	 */
+	static boolean holdsRealFun(ClojureLowering ctx, LispVal form, LispVal fun) {
+		return ClojureLowerUtil.yieldsFun(fun)
+				|| form instanceof LispSymbol s && fun instanceof LispSymbol && ctx.isDirectVar(s.name());
 	}
 
 	/**
@@ -1004,7 +1056,7 @@ final class ClojureBindingLowering {
 		if (pattern instanceof LispSymbol) {
 			String name = ClojureLowerUtil.plainName(pattern, what);
 			scope.put(name, ClojureLowering.Kind.VARIABLE);
-			pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), init));
+			pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
 			return;
 		}
 		List<LispVal> elements = ClojureLowerUtil.items(pattern);
@@ -1036,7 +1088,7 @@ final class ClojureBindingLowering {
 				ClojureLowerUtil.isTrue(i + 1 < elements.size(), "a vector pattern :as needs a plain name after it");
 				String name = ClojureLowerUtil.plainName(elements.get(++i), "a vector pattern :as");
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), whole));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
 				continue;
 			}
 			if (ClojureLowerUtil.isSymbolNamed(element, "&")) {
@@ -1103,7 +1155,7 @@ final class ClojureBindingLowering {
 			if (ClojureLowerUtil.isSymbolNamed(head, ":as")) {
 				String name = ClojureLowerUtil.plainName(arg, "a map pattern :as");
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), whole));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
 				continue;
 			}
 			if (head instanceof LispSymbol kind
@@ -1114,8 +1166,8 @@ final class ClojureBindingLowering {
 			if (head instanceof LispSymbol) {
 				String name = ClojureLowerUtil.plainName(head, "a map pattern binding");
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), ClojureCollectionLowering.getForm(ctx,
-						whole, ctx.lower(arg), defaultFor(ctx, defaults, name))));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), ClojureCollectionLowering.getForm(ctx, whole,
+						ctx.lower(arg), defaultFor(ctx, defaults, name))));
 				continue;
 			}
 			// a nested pattern binds from the same read, without an :or default
@@ -1155,7 +1207,7 @@ final class ClojureBindingLowering {
 				default -> LispString.literal(local);
 			};
 			scope.put(local, ClojureLowering.Kind.VARIABLE);
-			pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(local),
+			pairs.add(ClojureLowerUtil.list(ctx.localSym(local),
 					ClojureCollectionLowering.getForm(ctx, whole, keyForm, defaultFor(ctx, defaults, local))));
 		}
 	}

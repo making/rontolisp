@@ -34,7 +34,8 @@ nesting `#|...|#`.
   records (`buildReadCtx`). An omitted slot takes a nil initform, re-reads a baked
   `EmittedReaderInitforms` constant text in place, or signals — never a silently wrong value.
 - The reader forces the JVM array machinery (`usesFloatArray |= usesRead`). WASM integers are `i31`;
-  decimal floats -> `TYPE_FLOAT` via `emitTryFloat`, exact under one rounding for |exp| <= 22.
+  decimal floats -> `TYPE_FLOAT` via `emitTryFloat`: the double nearest the token, as `parseDouble`
+  reads it (digits in an i64, then exact; `.kb/wasm-bignum.md`, "The runtime reader's decimal floats").
 - Dotted pairs: `.` is a dot token only when the next byte is a delimiter (whitespace `( ) ' " ;`) or
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`).
 

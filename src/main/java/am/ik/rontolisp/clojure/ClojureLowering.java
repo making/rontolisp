@@ -372,6 +372,12 @@ public final class ClojureLowering {
 	boolean tailPosition;
 
 	/**
+	 * Whether a {@code def} below a top-level datum answers the var it defined, like the
+	 * oracle's REPL; a file's nested {@code def} answers the value and builds no var.
+	 */
+	boolean nestedDefAnswersVar;
+
+	/**
 	 * How many {@code try} bodies deep the lowering sits: a {@code recur} with a
 	 * {@code try} between it and its target is the oracle's
 	 * {@code Cannot recur across try} refusal. Each target captures this depth when
@@ -706,6 +712,18 @@ public final class ClojureLowering {
 	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
+	 * The identifiers whose own symbol ({@link ClojureLowerUtil#idSym}) is a special
+	 * variable: the stream and agent aliases, and every {@code ^:dynamic} var of
+	 * {@code user} (whose var symbol is the bare mangled name). A local of one of these
+	 * names binds {@link #localSym}, so it stays lexical like the oracle's instead of
+	 * rebinding the special. Filled by the pre-scan of every datum, nested definitions
+	 * included: the special proclamation is program-wide, so a var defined below a local
+	 * counts. A macro expansion adds none, since a symbol carries no metadata through
+	 * one.
+	 */
+	final Set<String> shadowedSpecials = new HashSet<>(Set.of("*out*", "*in*", "*agent*"));
+
+	/**
 	 * The vars a {@code defmulti} defined, by var key, until another definition of the
 	 * name: a {@code defmulti} of one of them is a no-op, like the oracle's, which
 	 * defines only when the var holds no multimethod yet.
@@ -887,7 +905,7 @@ public final class ClojureLowering {
 		}
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
-			List<LispVal> forms = topLevels(datum);
+			List<LispVal> forms = topLevels(datum, true);
 			// an ns form shows nothing, also when its requires loaded namespaces
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
@@ -968,6 +986,7 @@ public final class ClojureLowering {
 			for (LispVal datum : datums) {
 				try {
 					declareOne(datum);
+					scanDynamicDefinitions(datum);
 				}
 				catch (LispReadException ex) {
 					throw positioned(ex, datum);
@@ -976,6 +995,29 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.currentNs = ns;
+		}
+	}
+
+	/**
+	 * Records into {@link #shadowedSpecials} every {@code ^:dynamic} {@code def},
+	 * {@code defn} or {@code defonce} of {@code user} the datum holds, at any depth: what
+	 * a local of that name must not bind, wherever the definition stands.
+	 */
+	private void scanDynamicDefinitions(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items == null) {
+			return;
+		}
+		if (items.size() >= 2 && items.get(0) instanceof LispSymbol head
+				&& (head.name().equals("def") || head.name().equals("defn") || head.name().equals("defn-")
+						|| head.name().equals("defonce"))
+				&& ClojureLowerUtil.nameIsDynamic(items.get(1))
+				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name
+				&& varSym(varKey(this.currentNs, name.name())).equals(ClojureLowerUtil.idSym(name.name()))) {
+			this.shadowedSpecials.add(name.name());
+		}
+		for (LispVal item : items) {
+			scanDynamicDefinitions(item);
 		}
 	}
 
@@ -1349,13 +1391,30 @@ public final class ClojureLowering {
 	 */
 	LispSymbol symOf(String name) {
 		if (isLocal(name)) {
-			return ClojureLowerUtil.idSym(name);
+			return localSym(name);
 		}
 		String key = resolveVar(name);
 		if (key != null && this.globals.get(key) == Kind.FUNCTION && this.defnCounts.getOrDefault(key, 0) > 1) {
 			return currentDefnSym(key);
 		}
 		return key != null ? varSym(key) : ClojureLowerUtil.idSym(name);
+	}
+
+	/**
+	 * The symbol a local of this name binds and reads: its own mangled name, or, when
+	 * that name is a special variable's ({@link #shadowedSpecials}), the name behind a
+	 * lone-{@code %} suffix no identifier spells, so the local binds lexically and a
+	 * function called in its scope still reads the var. Every binding site of a local
+	 * (parameters, {@code let}, {@code loop}, destructuring, {@code letfn}, ...) and
+	 * {@link #symOf} go through here.
+	 * @param name the local's plain name
+	 * @return the symbol
+	 */
+	LispSymbol localSym(String name) {
+		if (this.shadowedSpecials.contains(name)) {
+			return new LispSymbol(mangle(name) + "%local");
+		}
+		return ClojureLowerUtil.idSym(name);
 	}
 
 	/**
@@ -1382,10 +1441,24 @@ public final class ClojureLowering {
 	 * loaded: a {@code require} anywhere in it loads the namespace before the datum runs.
 	 */
 	List<LispVal> topLevels(LispVal form) {
+		return topLevels(form, false);
+	}
+
+	/**
+	 * One top-level datum lowered, with the definitions a REPL echoes answering their
+	 * var.
+	 * @param form the datum
+	 * @param echoVars whether a top-level definition answers the var it defined, like the
+	 * oracle's REPL; a file's definition shows nothing
+	 * @return its forms, the hoisted definitions first
+	 */
+	List<LispVal> topLevels(LispVal form, boolean echoVars) {
 		List<LispVal> outer = this.hoisted;
+		boolean outerEcho = this.nestedDefAnswersVar;
 		this.hoisted = new ArrayList<>();
+		this.nestedDefAnswersVar = echoVars;
 		try {
-			List<LispVal> own = topLevelsOf(form);
+			List<LispVal> own = echoVars ? echoingTopLevelsOf(form) : topLevelsOf(form);
 			if (this.hoisted.isEmpty()) {
 				return own;
 			}
@@ -1395,6 +1468,7 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.hoisted = outer;
+			this.nestedDefAnswersVar = outerEcho;
 		}
 	}
 
@@ -1426,6 +1500,8 @@ public final class ClojureLowering {
 		@Nullable String outerAnon = this.anonArgs;
 		boolean outerDispatch = this.inDispatchFn;
 		@Nullable String outerTestLocation = this.testLocation;
+		boolean outerEcho = this.nestedDefAnswersVar;
+		this.nestedDefAnswersVar = false;
 		this.scopes.clear();
 		this.scopes.add(new HashMap<>());
 		this.directScopes.clear();
@@ -1504,6 +1580,7 @@ public final class ClojureLowering {
 			this.anonArgs = outerAnon;
 			this.inDispatchFn = outerDispatch;
 			this.testLocation = outerTestLocation;
+			this.nestedDefAnswersVar = outerEcho;
 		}
 		this.hoisted.addAll(loaded);
 	}
@@ -1771,6 +1848,91 @@ public final class ClojureLowering {
 		catch (LispReadException ex) {
 			throw positioned(ex, datum);
 		}
+	}
+
+	/**
+	 * {@link #topLevelsOf} for a REPL: a definition (def, defn, defn-, defmacro,
+	 * defmulti, defonce, defstruct) answers the var it defined, as the oracle prints
+	 * {@code #'user/f}. A {@code defonce} over a bound var and a {@code defmulti} over a
+	 * multimethod answer nil. A {@code defprotocol} answers its name, a {@code defrecord}
+	 * and a {@code deftype} their class name, a {@code declare} the last name's var.
+	 */
+	private List<LispVal> echoingTopLevelsOf(LispVal form) {
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		String name = items == null ? null : definedVarName(items);
+		if (items != null && name == null) {
+			List<LispVal> answered = echoingNameForms(form, items);
+			if (answered != null) {
+				return answered;
+			}
+		}
+		if (items == null || name == null) {
+			return topLevelsOf(form);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
+			try {
+				return List.of(ClojureStateLowering.defonceEchoing(this, items,
+						() -> ClojureVarLowering.definedVar(this, name)));
+			}
+			catch (LispReadException ex) {
+				throw positioned(ex, form);
+			}
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")
+				&& this.multimethods.contains(varKey(this.currentNs, name))) {
+			// the var already holds a multimethod: nothing is defined, the oracle answers
+			// nil
+			return topLevelsOf(form);
+		}
+		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
+		forms.add(ClojureVarLowering.definedVar(this, name));
+		return forms;
+	}
+
+	/**
+	 * The echo of a {@code defprotocol}, {@code defrecord}, {@code deftype} or
+	 * {@code declare}: the protocol's name, the class name ({@code ns.Name}, the
+	 * namespace munged), the var of the last declared name. Null for any other form.
+	 */
+	private @Nullable List<LispVal> echoingNameForms(LispVal form, List<LispVal> items) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		boolean protocol = head.name().equals("defprotocol");
+		boolean type = head.name().equals("defrecord") || head.name().equals("deftype");
+		boolean declare = head.name().equals("declare");
+		if (!(protocol || type || declare)) {
+			return null;
+		}
+		String ns = this.currentNs;
+		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
+		try {
+			String last = ClojureLowerUtil.plainName(items.get(declare ? items.size() - 1 : 1), head.name());
+			if (declare) {
+				forms.add(ClojureVarLowering.definedVar(this, last));
+			}
+			else {
+				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+						new LispSymbol(protocol ? last : ns.replace('-', '_') + "." + last)));
+			}
+		}
+		catch (LispReadException ex) {
+			throw positioned(ex, form);
+		}
+		return forms;
+	}
+
+	private static @Nullable String definedVarName(List<LispVal> items) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		String op = head.name();
+		if (!(op.equals("def") || op.equals("defn") || op.equals("defn-") || op.equals("defmacro")
+				|| op.equals("defmulti") || op.equals("defonce") || op.equals("defstruct"))) {
+			return null;
+		}
+		return ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name && !name.name().startsWith(":")
+				&& !name.name().equals("&") ? name.name() : null;
 	}
 
 	private List<LispVal> topLevelsOf(LispVal form) {
@@ -2239,6 +2401,15 @@ public final class ClojureLowering {
 			return ClojureCoreLowering.readerMetaOf(this, form);
 		}
 		if (head instanceof LispCons) {
+			LispVal tags = ClojureInteropLowering.paramTags(head);
+			if (tags != null && ClojureLowerUtil.stripMeta(head) instanceof LispSymbol member
+					&& hostMemberName(member.name())) {
+				// (^[types] Class/member args...): the tags name the overload
+				LispVal tagged = ClojureInteropLowering.memberCall(this, member.name(), items, tags);
+				if (tagged != null) {
+					return tagged;
+				}
+			}
 			if (ClojureSeqLowering.isCollectionHead(head)) {
 				return ClojureSeqLowering.collectionCall(this, items);
 			}
@@ -2341,7 +2512,7 @@ public final class ClojureLowering {
 	private LispVal computedHeadCall(List<LispVal> items) {
 		LispVal fun = lower(items.get(0));
 		List<LispVal> args = lowers(items, 1);
-		if (ClojureLowerUtil.isDirectFun(fun)) {
+		if (ClojureLowerUtil.yieldsFun(fun)) {
 			List<LispVal> call = new ArrayList<>();
 			call.add(ClojureLowerUtil.sym("funcall"));
 			call.add(fun);
@@ -2369,7 +2540,21 @@ public final class ClojureLowering {
 	 * @return the invocation
 	 */
 	LispVal callFun(LispVal funForm, LispVal bound, List<LispVal> args) {
-		if (ClojureLowerUtil.isDirectFun(funForm)) {
+		return callFun(ClojureLowerUtil.yieldsFun(funForm), bound, args);
+	}
+
+	/**
+	 * {@link #callFun(LispVal, LispVal, List)} with the directness decided by the caller:
+	 * a datum-driven {@link ClojureBindingLowering#holdsRealFun} knows a local bound to a
+	 * real function, which the lowered symbol alone does not show (and which the scope
+	 * cannot be asked about from a generated parameter symbol).
+	 * @param real whether the bound value is always a real function
+	 * @param bound the bound value (a symbol)
+	 * @param args the argument forms
+	 * @return the invocation
+	 */
+	LispVal callFun(boolean real, LispVal bound, List<LispVal> args) {
+		if (real) {
 			List<LispVal> call = new ArrayList<>();
 			call.add(ClojureLowerUtil.sym("funcall"));
 			call.add(bound);
@@ -2380,16 +2565,47 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A one-argument function over the dispatcher: for the sequence operators that take a
-	 * Common Lisp function designator ({@code mapcar}, {@code remove-if}), so a variable
-	 * holding a collection still answers element by element.
-	 * @param bound the bound function value (a symbol)
-	 * @param arg the element (a symbol)
-	 * @return the lambda
+	 * The function form applied to an argument-list form over its bound value: CL
+	 * {@code apply} for real functions, through the prelude dispatcher otherwise -- the
+	 * {@link #callFun} of a computed argument list.
+	 * @param funForm the function form, as bound
+	 * @param bound the bound value (a symbol)
+	 * @param argList the argument-list form
+	 * @return the invocation
 	 */
-	LispVal dispatchLambda(LispVal bound, LispVal arg) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(arg),
-				callableApply(bound, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), arg)));
+	LispVal applyFun(LispVal funForm, LispVal bound, LispVal argList) {
+		return applyFun(ClojureLowerUtil.yieldsFun(funForm), bound, argList);
+	}
+
+	/**
+	 * {@link #applyFun(LispVal, LispVal, LispVal)} with the directness decided by the
+	 * caller, like {@link #callFun(boolean, LispVal, List)}.
+	 * @param real whether the bound value is always a real function
+	 * @param bound the bound value (a symbol)
+	 * @param argList the argument-list form
+	 * @return the invocation
+	 */
+	LispVal applyFun(boolean real, LispVal bound, LispVal argList) {
+		if (real) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), bound, argList);
+		}
+		return callableApply(bound, argList);
+	}
+
+	/**
+	 * A function form a spliced runtime worker funcalls: the form itself when it is a
+	 * real function form, else {@code rontolisp::%clojure-as-fn} of it, which answers a
+	 * real function as itself and wraps any other value (a set, map, vector, keyword or
+	 * var) in the IFn dispatcher. The wrap sits at the call site, never in the worker, so
+	 * a program passing only real functions carries no dispatcher (about 26 KB of wasm).
+	 * @param fun the lowered function form
+	 * @return the form, wrapped when it may hold another value
+	 */
+	static LispVal realFun(LispVal fun) {
+		if (ClojureLowerUtil.yieldsFun(fun)) {
+			return fun;
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-AS-FN"), fun);
 	}
 
 	/**
@@ -2668,20 +2884,20 @@ public final class ClojureLowering {
 		switch (name) {
 			case "map":
 				ClojureLowerUtil.isTrue(n >= 2, "map takes a function and collections");
-				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lowers(items, 2));
 			case "filter":
 				ClojureLowerUtil.isTrue(n == 2, "filter takes a predicate and a collection");
-				return ClojureSeqLowering.filterForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureSeqLowering.filterForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "reduce":
 				ClojureLowerUtil.isTrue(n == 2 || n == 3,
 						"reduce takes a function, an optional value and a collection");
 				if (n == 2) {
-					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+					return ClojureSeqLowering.reduceForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 							lower(items.get(2)), null);
 				}
-				LispVal reduceFn = ClojureBindingLowering.fnValue(this, items.get(1));
+				LispVal reduceFn = ClojureBindingLowering.realFnValue(this, items.get(1));
 				LispVal reduceInit = lower(items.get(2));
 				return ClojureSeqLowering.reduceForm(this, reduceFn, lower(items.get(3)), reduceInit);
 			case "apply":
@@ -2724,27 +2940,27 @@ public final class ClojureLowering {
 				return ClojureStringLowering.subsOf(this, items);
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
-				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
-				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)), true);
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
-				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)), false);
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
-				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "some":
 				ClojureLowerUtil.isTrue(n == 2, "some takes a predicate and a collection");
-				return ClojureFilterLowering.someForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.someForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
-				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
@@ -2753,11 +2969,11 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
 				ClojureLowerUtil.isTrue(n == 2, "take-while takes a predicate and a collection");
-				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "drop-while":
 				ClojureLowerUtil.isTrue(n == 2, "drop-while takes a predicate and a collection");
-				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "interleave":
 				return ClojureFilterLowering.interleaveOf(this, items);
@@ -2770,7 +2986,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
-				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "sort":
 				return ClojureFilterLowering.sortOf(this, items);
@@ -2822,11 +3038,11 @@ public final class ClojureLowering {
 				return ClojureFnLowering.compOf(this, items);
 			case "partial":
 				ClojureLowerUtil.isTrue(n >= 1, "partial takes a function and arguments");
-				return ClojureFnLowering.partialForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.partialForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						lowers(items, 2));
 			case "complement":
 				ClojureLowerUtil.isTrue(n == 1, "complement takes one function");
-				return ClojureFnLowering.complementForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.complementForm(this, ClojureBindingLowering.fnArg(this, items.get(1)));
 			case "constantly":
 				ClojureLowerUtil.isTrue(n == 1, "constantly takes one value");
 				return ClojureFnLowering.constantlyForm(this, lower(items.get(1)));
@@ -2835,10 +3051,10 @@ public final class ClojureLowering {
 				return lower(items.get(1));
 			case "memoize":
 				ClojureLowerUtil.isTrue(n == 1, "memoize takes one function");
-				return ClojureFnLowering.memoizeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.memoizeForm(this, ClojureBindingLowering.fnArg(this, items.get(1)));
 			case "trampoline":
 				ClojureLowerUtil.isTrue(n >= 1, "trampoline takes a function and arguments");
-				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), lowers(items, 2)));
 			case "coll?":
 				ClojureLowerUtil.isTrue(n == 1, "coll? takes one value");
@@ -2904,7 +3120,7 @@ public final class ClojureLowering {
 			case "iterate":
 				ClojureLowerUtil.isTrue(n == 2, "iterate takes a function and a value");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"),
-						ClojureBindingLowering.fnValue(this, items.get(1)), lower(items.get(2)));
+						ClojureBindingLowering.realFnValue(this, items.get(1)), lower(items.get(2)));
 			case "future":
 				throw new LispReadException("future is not supported yet: there is no thread pool on any backend");
 			case "delay":
@@ -2932,7 +3148,7 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.mapvOf(this, items);
 			case "filterv":
 				ClojureLowerUtil.isTrue(n == 2, "filterv takes a predicate and a collection");
-				return ClojureFilterLowering.filtervForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.filtervForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "mapcat":
 				return ClojureFilterLowering.mapcatOf(this, items);
@@ -3281,7 +3497,7 @@ public final class ClojureLowering {
 			// that name
 			return coreValue(core);
 		}
-		if (name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) {
+		if ((name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) && !isLocal(name)) {
 			// dynamic aliases, not mangled names (see idSym): always resolvable
 			if (name.equals("*agent*")) {
 				this.usedStm = true;
@@ -3550,6 +3766,19 @@ public final class ClojureLowering {
 		return isLocal(name) || resolveVar(name) != null;
 	}
 
+	/**
+	 * Whether a qualified name can only name a host member: no local, core spelling, var,
+	 * library var or project namespace claims it. Only there do {@code ^[types]} param
+	 * tags select an overload; anywhere else they are plain reader metadata.
+	 */
+	boolean hostMemberName(String name) {
+		int slash = qualifierSlash(name);
+		return slash > 0 && ClojureCoreNames.coreSpelling(name) == null && !known(name)
+				&& ClojureNamespaceLowering.resolveQualified(this, name) == null
+				&& ClojureNamespaceLowering.libraryRefer(this, name) == null
+				&& projectNamespaceOf(name.substring(0, slash)) == null;
+	}
+
 	boolean isFunction(String name) {
 		for (int i = this.scopes.size() - 1; i >= 0; i--) {
 			Kind kind = this.scopes.get(i).get(name);
@@ -3667,7 +3896,7 @@ public final class ClojureLowering {
 	List<LispVal> capturedBindings(List<String> names, LispVal lowered) {
 		List<LispVal> bindings = new ArrayList<>();
 		for (String name : names) {
-			LispSymbol local = ClojureLowerUtil.idSym(name);
+			LispSymbol local = localSym(name);
 			if (ClojureLowerUtil.mentions(lowered, local.name())) {
 				bindings.add(ClojureLowerUtil.list(local, mutableFieldPlace(name)));
 			}

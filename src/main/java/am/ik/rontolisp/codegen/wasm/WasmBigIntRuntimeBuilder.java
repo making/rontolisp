@@ -850,25 +850,33 @@ final class WasmBigIntRuntimeBuilder {
 		return b.toByteArray();
 	}
 
-	// _limb_divrem_mag(u, v, which) -> array: binary long division on non-negative
-	// values (the caller pre-negates); reads u bit-by-bit from the top, shifting the
-	// remainder window left and subtracting v whenever it fits. which = 0 answers the
-	// quotient, 1 the remainder. Neither input array is mutated.
+	// _limb_divrem_mag(u, v, which) -> array: long division on non-negative values (the
+	// caller pre-negates, v is nonzero), one 32-bit limb of quotient per step -- Knuth's
+	// Algorithm D as Hacker's Delight's divmnu64 writes it for 32-bit digits in 64-bit
+	// arithmetic: shift both so v's top limb has its high bit set (into fresh working
+	// arrays one limb longer), estimate each quotient limb from the top two
+	// remainder limbs over v's top limb, correct the estimate against v's second limb
+	// (at most twice), multiply-subtract, and add back in the rare case it was still one
+	// too large; the remainder is the working dividend shifted back. A one-limb v takes
+	// the same steps with a zero second limb: its estimate is already exact. which = 0
+	// answers the quotient, 1 the remainder. Neither input array is mutated. The
+	// bit-at-a-time loop it replaced cost O(bits(u) * limbs(v)): 250 us for a 1,059-bit
+	// by 997-bit quotient, 6 us now.
 	static byte[] buildLimbDivremMagBody() {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
-		// params 0=u, 1=v, 2=which. locals: 3=uT, 4=vT, 5=q, 6=r (ref null $limbs),
-		// 7=lu, 8=lv, 9=lr, 10=i, 11=j, 12=bit, 13=ge, 14=nc, 15=rv, 16=vv (i32),
-		// 17=t (i64)
+		// params 0=u, 1=v, 2=which. locals: 3=uT, 4=vT, 5=q, 6=r, 7=un, 8=vn (ref null
+		// $limbs); 9=m, 10=n, 11=i, 12=j (i32); 13=qhat, 14=rhat, 15=k, 16=t, 17=p,
+		// 18=vtop, 19=vsec, 20=s (i64)
 		w.write(3);
-		w.write(4);
+		w.write(6);
 		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
-		w.write(10);
+		w.write(4);
 		w.write(Type.I32);
-		w.write(1);
+		w.write(8);
 		w.write(Type.I64);
-		final int uT = 3, vT = 4, q = 5, r = 6, lu = 7, lv = 8, lr = 9, i = 10, j = 11, bit = 12, ge = 13, nc = 14,
-				rv = 15, vv = 16, t = 17;
+		final int uT = 3, vT = 4, q = 5, r = 6, un = 7, vn = 8, m = 9, n = 10, i = 11, j = 12, qhat = 13, rhat = 14,
+				k = 15, t = 16, p = 17, vtop = 18, vsec = 19, s = 20;
 
 		b.get(0);
 		b.refCast(WasmLispCompiler.TYPE_LIMBS);
@@ -878,90 +886,72 @@ final class WasmBigIntRuntimeBuilder {
 		b.set(vT);
 		b.get(uT);
 		b.arrayLen();
-		b.set(lu);
-		b.get(vT);
-		b.arrayLen();
-		b.set(lv);
-		b.get(lv);
-		b.i32c(1);
-		w.write(Instruction.I32_ADD);
-		b.set(lr);
-		b.get(lu);
 		b.arrayNewDefault();
 		b.set(q);
-		b.get(lr);
-		b.arrayNewDefault();
-		b.set(r);
+		// m = u's limb count, n = v's significant one (n >= 1: v is nonzero). u's
+		// leading zero limbs only add zero quotient limbs.
+		b.get(uT);
+		b.arrayLen();
+		b.set(m);
+		b.get(vT);
+		b.arrayLen();
+		b.set(n);
+		b.block();
+		b.loop();
+		b.get(vT);
+		emitSum(b, n, -1);
+		b.arrayGet();
+		b.brIf(1);
+		emitStep(b, n, -1);
+		b.br(0);
+		b.end();
+		b.end();
 
-		// i = lu*32 - 1
-		b.get(lu);
-		b.i32c(5);
-		w.write(Instruction.I32_SHL);
+		// normalize: s = the leading zeros of v's top limb; vn = v << s (n + 1 limbs,
+		// the last one zero), un = u << s (max(m, n) + 1 limbs, un[m] taking the bits
+		// shifted out of u's top limb; when m < n the loop below never runs and the
+		// remainder is u)
+		b.get(vT);
+		b.get(n);
 		b.i32c(1);
 		w.write(Instruction.I32_SUB);
-		b.set(i);
-
-		b.block();
-		b.loop();
-		b.get(i);
-		b.i32c(0);
-		w.write(Instruction.I32_LT_S);
-		b.brIf(1);
-
-		// bit = (u[i>>5] >>u (i&31)) & 1
-		b.get(uT);
-		b.get(i);
-		b.i32c(5);
-		w.write(Instruction.I32_SHR_S);
 		b.arrayGet();
-		b.get(i);
-		b.i32c(31);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.I32_SHR_U);
-		b.i32c(1);
-		w.write(Instruction.I32_AND);
-		b.set(bit);
-
-		// r = (r << 1) | bit, in place
-		b.i32c(0);
-		b.set(j);
-		b.block();
-		b.loop();
-		b.get(j);
-		b.get(lr);
-		w.write(Instruction.I32_GE_S);
-		b.brIf(1);
-		b.get(r);
-		b.get(j);
-		b.arrayGet();
-		b.i32c(31);
-		w.write(Instruction.I32_SHR_U);
-		b.set(nc);
-		b.get(r);
-		b.get(j);
-		b.get(r);
-		b.get(j);
-		b.arrayGet();
-		b.i32c(1);
-		w.write(Instruction.I32_SHL);
-		b.get(bit);
-		w.write(Instruction.I32_OR);
-		b.arraySet();
-		b.get(nc);
-		b.set(bit);
-		b.get(j);
+		w.write(Instruction.I32_CLZ);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		b.set(s);
+		emitSum(b, n, 1);
+		b.arrayNewDefault();
+		b.set(vn);
+		emitShiftedCopy(b, vT, n, vn, i, k, t, s);
+		b.get(m);
+		b.get(n);
+		b.get(m);
+		b.get(n);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.SELECT);
 		b.i32c(1);
 		w.write(Instruction.I32_ADD);
-		b.set(j);
-		b.br(0);
+		b.arrayNewDefault();
+		b.set(un);
+		emitShiftedCopy(b, uT, m, un, i, k, t, s);
+		emitLimbU64(b, vn, () -> emitSum(b, n, -1));
+		b.set(vtop);
+		// vsec = vn[n-2], or 0 for a one-limb divisor (a zero second limb never corrects
+		// an estimate)
+		b.get(n);
+		b.i32c(1);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		emitLimbU64(b, vn, () -> emitSum(b, n, -2));
+		b.els();
+		b.i64c(0);
 		b.end();
-		b.end();
+		b.set(vsec);
 
-		// ge = (r >= v) unsigned, scanning from the top
-		b.i32c(1);
-		b.set(ge);
-		b.get(lr);
-		b.i32c(1);
+		// for j = m - n down to 0
+		b.get(m);
+		b.get(n);
 		w.write(Instruction.I32_SUB);
 		b.set(j);
 		b.block();
@@ -970,93 +960,194 @@ final class WasmBigIntRuntimeBuilder {
 		b.i32c(0);
 		w.write(Instruction.I32_LT_S);
 		b.brIf(1);
-		b.get(r);
-		b.get(j);
-		b.arrayGet();
-		b.set(rv);
-		emitDivisorLimb(b, vT, j, lv);
-		b.set(vv);
-		b.get(rv);
-		b.get(vv);
-		w.write(Instruction.I32_NE);
-		b.ifVoid();
-		b.get(rv);
-		b.get(vv);
-		w.write(Instruction.I32_GT_U);
-		b.set(ge);
-		b.br(2);
-		b.end();
-		b.get(j);
+		// qhat, rhat = (un[j+n] * 2^32 + un[j+n-1]) divmod vtop
+		emitLimbU64(b, un, () -> emitSum(b, j, n, 0));
+		b.i64c(32);
+		w.write(Instruction.I64_SHL);
+		emitLimbU64(b, un, () -> emitSum(b, j, n, -1));
+		w.write(Instruction.I64_OR);
+		b.set(t);
+		b.get(t);
+		b.get(vtop);
+		w.write(Instruction.I64_DIV_U);
+		b.set(qhat);
+		b.get(t);
+		b.get(vtop);
+		w.write(Instruction.I64_REM_U);
+		b.set(rhat);
+		// while qhat >= 2^32 or qhat * vsec > rhat * 2^32 + un[j+n-2]: qhat -= 1,
+		// rhat += vtop, stopping once rhat >= 2^32. A one-limb divisor reads un[0] for
+		// the j+n-2 = -1 its zero vsec makes irrelevant.
+		b.block();
+		b.loop();
+		b.get(qhat);
+		b.i64c(1L << 32);
+		w.write(Instruction.I64_GE_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
 		b.i32c(1);
-		w.write(Instruction.I32_SUB);
-		b.set(j);
+		b.els();
+		b.get(qhat);
+		b.get(vsec);
+		w.write(Instruction.I64_MUL);
+		b.get(rhat);
+		b.i64c(32);
+		w.write(Instruction.I64_SHL);
+		emitLimbU64(b, un, () -> {
+			emitSum(b, j, n, -2);
+			b.i32c(0);
+			emitSum(b, j, n, -2);
+			b.i32c(0);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.SELECT);
+		});
+		w.write(Instruction.I64_OR);
+		w.write(Instruction.I64_GT_U);
+		b.end();
+		w.write(Instruction.I32_EQZ);
+		b.brIf(1);
+		b.get(qhat);
+		b.i64c(1);
+		w.write(Instruction.I64_SUB);
+		b.set(qhat);
+		b.get(rhat);
+		b.get(vtop);
+		w.write(Instruction.I64_ADD);
+		b.set(rhat);
+		b.get(rhat);
+		b.i64c(1L << 32);
+		w.write(Instruction.I64_LT_U);
+		b.brIf(0);
+		b.end();
+		b.end();
+		// multiply and subtract: un[j..j+n] -= qhat * vn, k the signed borrow
+		b.i64c(0);
+		b.set(k);
+		b.i32c(0);
+		b.set(i);
+		b.block();
+		b.loop();
+		b.get(i);
+		b.get(n);
+		w.write(Instruction.I32_GE_S);
+		b.brIf(1);
+		b.get(qhat);
+		emitLimbU64(b, vn, () -> b.get(i));
+		w.write(Instruction.I64_MUL);
+		b.set(p);
+		emitLimbU64(b, un, () -> emitSum(b, i, j, 0));
+		b.get(k);
+		w.write(Instruction.I64_SUB);
+		b.get(p);
+		b.i64c(0xFFFFFFFFL);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I64_SUB);
+		b.set(t);
+		b.get(un);
+		emitSum(b, i, j, 0);
+		b.get(t);
+		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+		b.get(p);
+		b.i64c(32);
+		w.write(Instruction.I64_SHR_U);
+		b.get(t);
+		b.i64c(32);
+		w.write(Instruction.I64_SHR_S);
+		w.write(Instruction.I64_SUB);
+		b.set(k);
+		emitStep(b, i, 1);
 		b.br(0);
 		b.end();
 		b.end();
-
-		// if (ge) { r -= v; q |= 1 << i }
-		b.get(ge);
-		b.ifVoid();
-		b.i32c(0);
-		b.set(bit); // borrow
-		b.i32c(0);
-		b.set(j);
-		b.block();
-		b.loop();
-		b.get(j);
-		b.get(lr);
-		w.write(Instruction.I32_GE_S);
-		b.brIf(1);
-		b.get(r);
-		b.get(j);
-		b.arrayGet();
-		w.write(Instruction.I64_EXTEND_U_I32);
-		emitDivisorLimb(b, vT, j, lv);
-		w.write(Instruction.I64_EXTEND_U_I32);
-		w.write(Instruction.I64_SUB);
-		b.get(bit);
-		w.write(Instruction.I64_EXTEND_U_I32);
+		emitLimbU64(b, un, () -> emitSum(b, j, n, 0));
+		b.get(k);
 		w.write(Instruction.I64_SUB);
 		b.set(t);
-		b.get(r);
-		b.get(j);
+		b.get(un);
+		emitSum(b, j, n, 0);
 		b.get(t);
 		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+		// q[j] = qhat, less one when the subtraction went negative: then add vn back
+		// into un[j..j+n]
+		b.get(q);
+		b.get(j);
+		b.get(qhat);
+		w.write(Instruction.I32_WRAP_I64);
+		b.get(t);
+		b.i64c(63);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_SUB);
 		b.arraySet();
 		b.get(t);
 		b.i64c(0);
 		w.write(Instruction.I64_LT_S);
-		b.set(bit);
-		b.get(j);
-		b.i32c(1);
-		w.write(Instruction.I32_ADD);
-		b.set(j);
+		b.ifVoid();
+		b.i64c(0);
+		b.set(k);
+		b.i32c(0);
+		b.set(i);
+		b.block();
+		b.loop();
+		b.get(i);
+		b.get(n);
+		w.write(Instruction.I32_GT_S);
+		b.brIf(1);
+		// t = un[i+j] + (i < n ? vn[i] : 0) + k, the last round carrying into un[j+n]
+		emitLimbU64(b, un, () -> emitSum(b, i, j, 0));
+		emitLimbU64(b, vn, () -> b.get(i));
+		w.write(Instruction.I64_ADD);
+		b.get(k);
+		w.write(Instruction.I64_ADD);
+		b.set(t);
+		b.get(un);
+		emitSum(b, i, j, 0);
+		b.get(t);
+		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+		b.get(t);
+		b.i64c(32);
+		w.write(Instruction.I64_SHR_U);
+		b.set(k);
+		emitStep(b, i, 1);
 		b.br(0);
 		b.end();
 		b.end();
-		// q[i>>5] |= 1 << (i&31)
-		b.get(q);
-		b.get(i);
-		b.i32c(5);
-		w.write(Instruction.I32_SHR_S);
-		b.get(q);
-		b.get(i);
-		b.i32c(5);
-		w.write(Instruction.I32_SHR_S);
-		b.arrayGet();
-		b.i32c(1);
-		b.get(i);
-		b.i32c(31);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.I32_SHL);
-		w.write(Instruction.I32_OR);
-		b.arraySet();
+		b.end();
+		emitStep(b, j, -1);
+		b.br(0);
+		b.end();
 		b.end();
 
-		b.get(i);
+		// the remainder is the working dividend's first n limbs shifted back: r[i] =
+		// (un[i+1] * 2^32 + un[i]) >> s, one zero limb on top
+		b.get(n);
 		b.i32c(1);
-		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_ADD);
+		b.arrayNewDefault();
+		b.set(r);
+		b.i32c(0);
 		b.set(i);
+		b.block();
+		b.loop();
+		b.get(i);
+		b.get(n);
+		w.write(Instruction.I32_GE_S);
+		b.brIf(1);
+		b.get(r);
+		b.get(i);
+		emitLimbU64(b, un, () -> emitSum(b, i, 1));
+		b.i64c(32);
+		w.write(Instruction.I64_SHL);
+		emitLimbU64(b, un, () -> b.get(i));
+		w.write(Instruction.I64_OR);
+		b.get(s);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+		emitStep(b, i, 1);
 		b.br(0);
 		b.end();
 		b.end();
@@ -1072,20 +1163,76 @@ final class WasmBigIntRuntimeBuilder {
 		return b.toByteArray();
 	}
 
-	// Pushes v[j] for j < lv, else 0 (the remainder window is one limb longer than v).
-	private static void emitDivisorLimb(BodyWriter b, int vT, int j, int lv) {
+	// dst[0..len] = src's first len limbs shifted left by the i64 local s (< 32), the
+	// carry out of each limb going into the next (dst holds at least len + 1 limbs).
+	private static void emitShiftedCopy(BodyWriter b, int src, int len, int dst, int x, int carry, int t, int s) {
 		WasmWriter w = b.w;
-		b.get(j);
-		b.get(lv);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
-		b.get(vT);
-		b.get(j);
-		b.arrayGet();
-		w.write(Instruction.ELSE);
+		b.i64c(0);
+		b.set(carry);
 		b.i32c(0);
+		b.set(x);
+		b.block();
+		b.loop();
+		b.get(x);
+		b.get(len);
+		w.write(Instruction.I32_GE_S);
+		b.brIf(1);
+		emitLimbU64(b, src, () -> b.get(x));
+		b.get(s);
+		w.write(Instruction.I64_SHL);
+		b.get(carry);
+		w.write(Instruction.I64_OR);
+		b.set(t);
+		b.get(dst);
+		b.get(x);
+		b.get(t);
+		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+		b.get(t);
+		b.i64c(32);
+		w.write(Instruction.I64_SHR_U);
+		b.set(carry);
+		emitStep(b, x, 1);
+		b.br(0);
 		b.end();
+		b.end();
+		b.get(dst);
+		b.get(len);
+		b.get(carry);
+		w.write(Instruction.I32_WRAP_I64);
+		b.arraySet();
+	}
+
+	// Pushes arr[index] zero-extended to an i64.
+	private static void emitLimbU64(BodyWriter b, int arr, Runnable index) {
+		b.get(arr);
+		index.run();
+		b.arrayGet();
+		b.w.write(Instruction.I64_EXTEND_U_I32);
+	}
+
+	// Pushes the i32 a + c + delta.
+	private static void emitSum(BodyWriter b, int a, int c, int delta) {
+		b.get(a);
+		b.get(c);
+		b.w.write(Instruction.I32_ADD);
+		if (delta != 0) {
+			b.i32c(delta);
+			b.w.write(Instruction.I32_ADD);
+		}
+	}
+
+	// Pushes the i32 a + delta.
+	private static void emitSum(BodyWriter b, int a, int delta) {
+		b.get(a);
+		b.i32c(delta);
+		b.w.write(Instruction.I32_ADD);
+	}
+
+	// slot += delta (an i32 local)
+	private static void emitStep(BodyWriter b, int slot, int delta) {
+		emitSum(b, slot, delta);
+		b.set(slot);
 	}
 
 	// _limb_divmod_small(arr, d) -> i32 rem: divide a NON-NEGATIVE value in place by a

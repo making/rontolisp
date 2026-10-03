@@ -7,12 +7,16 @@
 `def`/`defn` 名を宣言するので、後のバッファは先のバッファが定義したものを呼べます。
 `(ns name)` や `(in-ns 'name)` のバッファは、その下の `::` キーワードが解決される
 `*ns*` を切り替えます（ファイル自身の `ns` フォームと同様）。値の
-エコーは Clojure 記法で可読に描画されます。
+エコーは Clojure 記法で可読に描画されます。トップレベルの `def`・`defn`・`defn-`・`defmacro`・
+`defmulti`・`defonce` は定義した var（`#'user/twice`）をエコーし、束縛済みの var への `defonce` は
+`nil` をエコーします。
+`defprotocol` は名前（`P`）、`defrecord` と `deftype` はクラス名（`user.R`）、`declare` は最後の名前の var、
+他のフォームに入れ子になった `def` もその var をエコーします。ファイルでは入れ子の `def` は値を返します。
 
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
-twice
+#'user/twice
 clojure> (twice 21)
 42
 ```

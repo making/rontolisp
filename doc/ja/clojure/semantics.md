@@ -136,7 +136,8 @@ lazy なコレクションから先は消費されるにつれて realize され
 形で保たれます。セットリテラルは各要素を自分自身の下に格納した同じテーブルで、操作がセットを
 マップと区別できるよう包まれます。キーは `=` で一致します: ベクター・リスト・マップ・セットの
 キーは、プログラムが最初に格納した同じ種類の `=` なキーの下に格納されるので、`equal`
-テーブルで見つかります。キーワードは綴りを `(:C%KEYWORD name)` と包んだもの:
+テーブルで見つかります。ベクターも変更されません: `assoc`・`update`・`assoc-in`・`update-in`
+はベクター全体をコピーして添字の要素を置き換え、要素数と等しい添字は末尾に追加します。キーワードは綴りを `(:C%KEYWORD name)` と包んだもの:
 `equal` で比較されるデータで、呼び出し位置（`(:k m)`、省略可能なデフォルト付き）や関数値として
 はマップ参照です。配列は general です。`(make-array Class dim...)` はクラスを無視した
 一般配列を作り、`aget` で読み、`aset` で書き、`alength` で測ります（本の
@@ -286,7 +287,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
 | インターフェースだけの proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない（クラスの proxy は実行する） |
-| 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
+| 可変長のみの静的メンバー、インスタンスメソッド（`Class/.m`）、コンストラクタ（`Class/new`）の値 | `... is variadic and has no value form` | `java:static`、`java:call`、`java:new` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |

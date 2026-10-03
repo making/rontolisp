@@ -197,6 +197,71 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void qualifiedInstanceMethodsTakeTheTargetFirst() throws Exception {
+		// Clojure 1.12 Class/.method, answers measured against clj 1.12.6
+		assertBothEqual("(println (String/.toUpperCase \"abc\"))", "ABC\n");
+		assertBothEqual("(println (String/.substring \"hello\" 1 3))", "el\n");
+		assertBothEqual("(println (map String/.length [\"ab\" \"abcd\"]))", "(2 4)\n");
+		assertBothEqual("(prn ((fn [f] (f \"x\" 0)) String/.charAt))", "\\x\n");
+		assertBothEqual("(prn (map String/.indexOf [\"abc\"] [\"c\"] [1]))", "(2)\n");
+		assertBothEqual("(prn (apply String/.substring [\"hello\" 1]))", "\"ello\"\n");
+		assertBothEqual("(prn ((comp String/.length String/.trim) \" ab \"))", "2\n");
+		assertBothEqual("(prn (Object/.toString 5))", "\"5\"\n");
+		assertBothEqual("(ns qi (:import (java.util ArrayList)))"
+				+ " (let [a (ArrayList/new)] (.add a 1) (println (ArrayList/.size a) (ArrayList/.isEmpty a)"
+				+ " (map ArrayList/.isEmpty [(ArrayList/new)])))", "1 false (true)\n");
+		assertBothEqual("(println (str (StringBuilder/.append (StringBuilder/new \"a\") \"b\")))", "ab\n");
+	}
+
+	@Test
+	void qualifiedConstructorsConstruct() throws Exception {
+		assertBothEqual("(prn (String/new \"q\"))", "\"q\"\n");
+		assertBothEqual("(prn (map String/new [\"a\"]))", "(\"a\")\n");
+		assertBothEqual("(prn (map (comp str StringBuilder/new) [\"a\" \"b\"]))", "(\"a\" \"b\")\n");
+		assertBothEqual("(ns qc (:import (java.util ArrayList)))"
+				+ " (let [a (ArrayList/new 4)] (ArrayList/.add a \"x\") (println (str a)))", "[x]\n");
+		assertBothEqual("(defrecord R [a b]) (prn (R/new 1 2) (map R/new [3] [4]))",
+				"#user.R{:a 1, :b 2} (#user.R{:a 3, :b 4})\n");
+		assertBothEqual("(let [w (java.io.StringWriter/new)] (.write w \"hi\") (println (str w)))", "hi\n");
+		assertBothEqual("(prn (read (java.io.PushbackReader/new (java.io.StringReader/new \"(1 2)\"))))", "(1 2)\n");
+	}
+
+	@Test
+	void paramTagsSelectTheOverload() throws Exception {
+		// ^[double] picks abs(double) over the cost rule's abs(long), like the oracle
+		assertBothEqual("(prn (map ^[double] Math/abs [-1 2]) (^[double] Math/abs -1))", "(1.0 2.0) 1.0\n");
+		assertBothEqual("(prn (^[long] Long/toString 5) (map ^[long] Long/toString [1 2]))", "\"5\" (\"1\" \"2\")\n");
+		assertBothEqual("(prn (map ^[int] String/.charAt [\"ab\"] [1]))", "(\\b)\n");
+		assertBothEqual("(prn (^[int int] String/.substring \"hello\" 1 3))", "\"el\"\n");
+		assertBothEqual("(prn (map ^[_ _] String/.substring [\"hello\"] [1] [3]))", "(\"el\")\n");
+		assertBothEqual("(prn (map ^[] String/.length [\"abc\"]) (^[] String/new))", "(3) \"\"\n");
+		assertBothEqual("(println (.capacity (^[int] StringBuilder/new 64)) (str (^[String] StringBuilder/new \"z\")))",
+				"64 z\n");
+		assertBothEqual("(let [b (^[int] StringBuilder/new 64)] (println (StringBuilder/.capacity b)))", "64\n");
+		assertBothEqual("(ns qt (:import (java.util ArrayList Collection)))"
+				+ " (println (map ^[Collection] ArrayList/new [[1 2]]))", "(#<java java.util.ArrayList>)\n");
+		assertBothEqual("(println (^[objects] java.util.Arrays/toString (make-array Object 2))"
+				+ " (^[Object/1] java.util.Arrays/toString (make-array Object 1)))", "[null, null] [null]\n");
+		// on a name a var claims, the tags stay plain reader metadata
+		assertBothEqual("(println (^[long] clojure.string/upper-case \"a\"))", "A\n");
+	}
+
+	@Test
+	void qualifiedMethodRefusals() {
+		// the oracle refuses these at compile time
+		assertThatThrownBy(() -> interpret("(println (map String/.foo [\"x\"]))"))
+			.hasMessageContaining("no matches found for instance method foo in class java.lang.String");
+		assertThatThrownBy(() -> runOnJvm("(println (map Math/.abs [1]))"))
+			.hasMessageContaining("no matches found for instance method abs in class java.lang.Math");
+		assertThatThrownBy(() -> interpret("(println (^[int] String/.substring \"hello\" 1 3))"))
+			.hasMessageContaining("expected 1 arguments, but received 2");
+		assertThatThrownBy(() -> runOnJvm("(println (^[int] String/.substring \"hello\" 1 3))"))
+			.hasMessageContaining("expected 1 arguments, but received 2");
+		assertThatThrownBy(() -> interpret("(println ((fn [f] (f \"x\" 0 1)) String/.charAt))"))
+			.hasMessageContaining("wrong number of arguments passed to: String/.charAt");
+	}
+
+	@Test
 	void arraysRoundTripThroughMakeArrayAgetAsetAlength() throws Exception {
 		// the book's interop.clj painstakingly-create-array shape: the class spells
 		// the element type and is ignored, every array here is general

@@ -343,10 +343,10 @@ final class ClojureTestLowering {
 				continue;
 			}
 			String temp = "%is-arg" + ctx.counter++;
-			bindings.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(temp), ctx.lower(arg)));
+			bindings.add(ClojureLowerUtil.list(ctx.localSym(temp), ctx.lower(arg)));
 			scope.put(temp, ClojureLowering.Kind.VARIABLE);
 			callDatum.add(new LispSymbol(temp));
-			shown.add(ClojureLowerUtil.idSym(temp));
+			shown.add(ctx.localSym(temp));
 		}
 		LispVal call = ctx.inScope(scope, () -> ctx.lower(ClojureLowerUtil.list(callDatum)));
 		LispVal notForm = ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ctx.quote(new LispSymbol("not")),

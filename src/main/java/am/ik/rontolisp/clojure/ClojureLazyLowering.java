@@ -76,7 +76,8 @@ final class ClojureLazyLowering {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("iterate-fn"));
 		LispSymbol start = new LispSymbol(ClojureLowering.mangle("iterate-start"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(fun, start)),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"), fun, start));
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"), ClojureLowering.realFun(fun),
+						start));
 	}
 
 	/**
@@ -87,10 +88,10 @@ final class ClojureLazyLowering {
 	static LispVal repeatedlyValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("repeatedly-args"));
 		LispVal one = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
+				ClojureLowering.realFun(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)));
 		LispVal two = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY-N"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowering.realFun(ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("repeatedly takes a function, or a count and a function"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
@@ -207,10 +208,10 @@ final class ClojureLazyLowering {
 		ClojureLowerUtil.isTrue(n == 1 || n == 2, "repeatedly takes a function, or a count and a function");
 		if (n == 1) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY"),
-					ClojureBindingLowering.fnValue(ctx, items.get(1)));
+					ClojureBindingLowering.realFnValue(ctx, items.get(1)));
 		}
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY-N"), ctx.lower(items.get(1)),
-				ClojureBindingLowering.fnValue(ctx, items.get(2)));
+				ClojureBindingLowering.realFnValue(ctx, items.get(2)));
 	}
 
 	/**

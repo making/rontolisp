@@ -17467,6 +17467,73 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theRuntimeReaderReadsTheNearestDoubleOfADecimalToken() throws Exception {
+		// The float classifier accumulated the digits in f64 and scaled by a power of
+		// ten built through repeated * 10.0, rounding once per step: 4.9e-324 read 0.0,
+		// 1.7976931348623158e308 read Infinity. Subnormal, halfway, overflow and long
+		// tokens against Double.parseDouble.
+		assertThat(compileAndRunRead("""
+				(dolist (s '("4.9e-324" "2.4703282292062327e-324" "2.4703282292062328e-324" "-1e-400" "0e999"
+				             "9007199254740993.0" "9007199254740995.0" "1.7976931348623158e308"
+				             "1.7976931348623159e308" "1e99999999999999" "-0.0" "5e-324"
+				             "0.1000000000000000055511151231257827021181583404541015625"
+				             "0.0000000000000000000000000000000000000000000000001e49"
+				             "123456789012345678901234567890.5e-10" "3.14159" "-123.456e-7" "1.5f3" "1e23"))
+				  (print (read-from-string s)))
+				""")).isEqualTo("""
+				4.9e-324
+				0.0
+				4.9e-324
+				-0.0
+				0.0
+				9.007199254740992e15
+				9.007199254740996e15
+				1.7976931348623157e308
+				Infinity
+				Infinity
+				-0.0
+				4.9e-324
+				0.1
+				1.0
+				1.2345678901234567e19
+				3.14159
+				-1.23456e-5
+				1500.0
+				1.0e23""");
+	}
+
+	@Test
+	void limbDivisionTakesItsCorrectionAndAddBackSteps() throws Exception {
+		// The limb division estimates one 32-bit quotient limb per step and corrects it.
+		// The first pair is Hacker's Delight's divmnu vector whose estimate survives the
+		// correction one too large (the add-back step), the second its vector whose
+		// multiply-subtract borrow must stay unsigned; then a top-heavy dividend over a
+		// three-limb divisor, a quotient far shorter than the dividend, a one-limb
+		// divisor, a three-limb one, a dividend below the divisor, and a gcd of two limb
+		// integers (Euclid's steps are such short quotients).
+		assertThat(compileAndRun("""
+				(defun d (a b) (multiple-value-list (truncate a b)))
+				(print (d #x8000000000000000fffe00000000 #x8000000000000000ffff))
+				(print (d #x7fff000080000000000000000000 #x800000000000000000000001))
+				(print (d #x80000000000000000000000000000003 #x200000000000000000000001))
+				(print (d (- (expt 2 1059)) (expt 10 300)))
+				(print (d (1- (expt 2 200)) #xffffffff))
+				(print (d (expt 10 50) (- (expt 2 70) 1)))
+				(print (d (expt 3 100) (expt 3 101)))
+				(print (gcd (+ (expt 3 400) 12345) (+ (expt 7 200) 999)))
+				""")).isEqualTo(
+				"""
+						(4294967295 604462909807310292451327)
+						(65534 604462909807314587287554)
+						(17179869183 9903520314283042182013124612)
+						(-6176826577981891429 -214335532193521333299458305790469920559733826520701280761576748411876944013584121557222835214746457256769065471978560695404461668113357846725995613908885539687100455996497080726311269484641878313049544782247701984195048695347886851221010025401573777842206256568313675909006576801941109109732291903488)
+						(374144419243823433012185973430366389442367801262336 255)
+						(84703294725430033906903996549 398599417254016112773)
+						(0 515377520732011331036461129765621272702107522001)
+						2""");
+	}
+
+	@Test
 	void isqrtIsExactBeyondTheI31Range() throws Exception {
 		// The f64 path traps past 2^31 ("invalid conversion to integer") and rounds past
 		// 2^53; the boxed-i64 and limb tiers take an exact Newton iteration instead. The
