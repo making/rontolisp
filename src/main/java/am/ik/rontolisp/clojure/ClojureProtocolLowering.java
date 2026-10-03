@@ -911,12 +911,13 @@ final class ClojureProtocolLowering {
 	/**
 	 * Maps an {@code extend} target name to its dispatch-key form, or null for
 	 * {@code Object} (the default row). Record and deftype names answer their tags; host
-	 * kinds answer the {@code class} keyword spelling, so dispatch agrees with
-	 * {@code class}; anything else (a {@code java.time.Instant}, a {@code Date}, ...) is
-	 * a named refusal.
+	 * kinds answer the {@code class} keyword spelling (a {@code java.lang.}/
+	 * {@code clojure.lang.} qualified or imported spelling too, like a {@code defmethod}
+	 * dispatch value), so dispatch agrees with {@code class}; anything else (a
+	 * {@code java.time.Instant}, a {@code Date}, ...) is a named refusal.
 	 */
 	static @Nullable LispVal extendKeyForm(ClojureLowering ctx, String typeName, String what) {
-		if (typeName.equals("Object")) {
+		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName)) {
 			return null;
 		}
 		if (typeName.equals("nil")) {
@@ -926,21 +927,10 @@ final class ClojureProtocolLowering {
 		if (type != null) {
 			return typeTagForm(type.tagSpelling());
 		}
-		String kind = switch (typeName) {
-			case "String", "CharSequence" -> "string";
-			case "Number", "Long", "Double", "Integer", "Float", "Short", "Byte" -> "number";
-			case "Boolean" -> "boolean";
-			case "Keyword" -> "keyword";
-			case "Symbol" -> "symbol";
-			case "Character", "Char" -> "char";
-			case "Map", "IPersistentMap" -> "map";
-			case "Vector", "IPersistentVector" -> "vector";
-			case "Set", "IPersistentSet" -> "set";
-			case "List", "Seq", "Sequential", "Collection", "IPersistentList", "IPersistentCollection" -> "list";
-			case "Fn", "IFn", "Function" -> "function";
-			case "Atom" -> "atom";
-			default -> null;
-		};
+		// a package-qualified or imported spelling resolves like a defmethod dispatch
+		// value
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			throw new LispReadException(what + " needs a core type, not " + typeName);
 		}

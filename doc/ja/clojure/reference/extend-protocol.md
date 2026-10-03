@@ -6,7 +6,7 @@
 （`defmethod` 行同様。繰り返した型は後の行が勝ちます。オラクル同様）。対象は
 `class` が答える種類（`String`、`Number`、`Boolean`、`Keyword`、`Symbol`、
 `Character`、`Map`、`Vector`、`Set`、`List`/`Seq`、それに外れ既定としての `nil`
-と `Object`）と既知の record/deftype 名です。それ以外（`Instant`、`Date` 等）は
+と `Object`。`java.lang.String`、`clojure.lang.IPersistentMap` のようなパッケージ修飾の綴りも可）と既知の record/deftype 名です。それ以外（`Instant`、`Date` 等）は
 名前付きで拒否されます。
 
 ```clojure

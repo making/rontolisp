@@ -5405,6 +5405,22 @@ cases:
       (prn (extends? TpP TpPR) (extends? TpP TpPS) (extends? TpP TpPT) (extends? TpP TpPU) (extends? TpP String) (extends? TpP Long) (extends? TpQ Object) (extends? TpQ TpPS) (extends? TpP Object) (extends? TpQ TpPR))
     expected: |
       true false false true true false true true false false
+  - name: extend-takes-a-package-qualified-class-spelling
+    # Oracle-identical (clj 1.12.6): extend-protocol, extend-type, extend and extends? take
+    # java.lang./clojure.lang./java.util. spellings the way defmethod does; java.lang.Object
+    # is the Object default row.
+    source: |
+      (defprotocol QcP (qc-m [x]))
+      (defprotocol QcQ (qc-q [x]))
+      (defprotocol QcR (qc-r [x]))
+      (extend-protocol QcP java.lang.String (qc-m [s] :str) clojure.lang.IPersistentMap (qc-m [m] :map) java.lang.Object (qc-m [_] :other))
+      (extend-type clojure.lang.Keyword QcQ (qc-q [k] :kw))
+      (extend java.lang.Boolean QcR {:qc-r (fn [b] :bool)})
+      (prn (qc-m "x") (qc-m {:a 1}) (qc-m 1) (qc-q :a) (qc-r true))
+      (prn (extends? QcP java.lang.String) (extends? QcP clojure.lang.IPersistentMap) (extends? QcP String) (extends? QcQ clojure.lang.Keyword) (extends? QcQ java.lang.String) (extends? QcP java.lang.Object))
+    expected: |
+      :str :map :other :kw :bool
+      true true true true false true
   - name: the-seq-predicates-follow-the-list-representation
     # A deviation: nil is the empty list, so the seq and collection predicates answer
     # false for () (the oracle: true); a strict seq is a list, so list? and counted? are
