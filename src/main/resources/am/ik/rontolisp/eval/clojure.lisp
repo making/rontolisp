@@ -4208,27 +4208,28 @@
 
 (defun rontolisp::%clojure-sorted-entry-plist (item one)
   "The entries conj adds to a map from ITEM, as a plist: none of nil, the pair
-   of a [k v] vector or a (k v) list, a map's or record's entries, and -- ONE
-   false, one level deep like the hash maps' conj -- a set's members each an
-   entry; anything else signals."
-  (cond ((null item) nil)
-   ((and (vectorp item) (not (stringp item)) (= (length item) 2))
-    (list (aref item 0) (aref item 1)))
-   ((hash-table-p item) (rontolisp:hash-table-plist item))
-   ((rontolisp::%clojure-sorted-map-p item)
-    (rontolisp::%clojure-sorted-plist item))
-   ((rontolisp::%clojure-record-p item)
-    (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
-   ((and (not one)
-         (or (rontolisp::%clojure-set-p item)
-             (rontolisp::%clojure-sorted-set-p item)))
-    (let ((acc nil))
-      (dolist (m (rontolisp::%clojure-strict-seq item) acc)
-        (setq acc (append acc (rontolisp::%clojure-sorted-entry-plist m t))))))
-   ((and (consp item) (not (keywordp (car item))) (consp (cdr item))
-         (null (cdr (cdr item))))
-    (list (car item) (car (cdr item))))
-   (t (error "conj needs a map entry: a map, a [k v] vector or a (k v) list"))))
+   of a [k v] vector, a map's or record's entries, and -- ONE false -- a set's
+   members each a [k v] vector (the oracle casts them to map entries); anything
+   else, a list included, signals."
+  (cond (one
+         (if (and (vectorp item) (not (stringp item)) (= (length item) 2))
+             (list (aref item 0) (aref item 1))
+             (error "conj needs a map entry: a map, a [k v] vector or nil")))
+        ((null item) nil)
+        ((and (vectorp item) (not (stringp item)) (= (length item) 2))
+         (list (aref item 0) (aref item 1)))
+        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((rontolisp::%clojure-sorted-map-p item)
+         (rontolisp::%clojure-sorted-plist item))
+        ((rontolisp::%clojure-record-p item)
+         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+        ((or (rontolisp::%clojure-set-p item)
+             (rontolisp::%clojure-sorted-set-p item))
+         (let ((acc nil))
+           (dolist (m (rontolisp::%clojure-strict-seq item) acc)
+             (setq acc
+                   (append acc (rontolisp::%clojure-sorted-entry-plist m t))))))
+        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member

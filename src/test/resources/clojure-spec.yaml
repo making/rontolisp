@@ -1011,6 +1011,22 @@ cases:
       {:a 1} {:a 1, :b 2} {:a 1, :b 2} {:a 1, :b 2}
       :refused :refused :refused :refused :refused {:b 1}
       {} {:a 2}
+  - name: conj-onto-a-map-refuses-a-list-and-a-set-of-non-entries
+    # Oracle-identical (clj 1.12.6): only a map, a [k v] vector and nil are entries of
+    # a direct item, so a list is none, `(k v)` included; a conjoined set's members are
+    # cast to map entries, which a map, list, nil or string member is not. (A vector
+    # member of a set stays accepted: an entry is a plain two-vector here.)
+    source: |
+      (defn conj-list-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-list-try #(conj {} '(1 2))) (conj-list-try #(into {} ['(1 2)])) (conj-list-try #(merge {} '(1 2))) (conj-list-try #(conj {:a 1} (list :b 2))) (conj-list-try #(conj {} '(1))) (conj-list-try #(conj {} '())))
+      (println (conj-list-try #(conj (sorted-map) '(1 2))) (conj-list-try #(into (sorted-map) ['(1 2)])) (conj-list-try #(merge (sorted-map :a 1) '(:b 2))))
+      (println (conj-list-try #(conj {} #{{1 2}})) (conj-list-try #(conj {} #{nil})) (conj-list-try #(conj {} #{'(1 2)})) (conj-list-try #(conj (sorted-map) #{{1 2}})) (conj-list-try #(conj (sorted-map) (sorted-set '(1 2)))))
+      (println (conj-list-try #(conj {} "ab")) (conj-list-try #(conj (sorted-map) "ab")) (conj-list-try #(into {} #{[1 2]})) (conj-list-try #(conj {} {1 2} [3 4])) (conj-list-try #(conj (sorted-map) {1 2})))
+    expected: |
+      :refused :refused :refused :refused :refused {}
+      :refused :refused :refused
+      :refused :refused :refused :refused :refused
+      :refused :refused {1 2} {1 2, 3 4} {1 2}
   - name: disj-removes-set-members
     source: |
       (println (count (disj #{1 2 3} 2)))

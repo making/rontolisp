@@ -827,7 +827,8 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * The entries one conjoined item adds to a map, as a plist: none of nil, a map's own
-	 * pairs, a two-vector's or two-list's pair, or a set's members each as an entry.
+	 * pairs, a two-vector's pair, or a set's members each as an entry. A list is no
+	 * entry, like the oracle's.
 	 */
 	static LispVal entryPlist(ClojureLowering ctx, LispVal item) {
 		List<LispVal> branches = new ArrayList<>();
@@ -839,37 +840,24 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), item),
+						// a string is a vector too, and no entry
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), item)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), item), new LispInteger(2))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), item, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), item, new LispInteger(1)))));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), item),
-						// a keyword, atom, regex... is a cons wrapper whose car is a CL
-						// keyword: no entry
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), item))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), isSetForm(item)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), item)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cddr"), item))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), item),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), item))));
 		branches.add(ClojureLowerUtil.list(isSetForm(item), membersPlist(ctx, item)));
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("conj needs a map entry: a map, a [k v] vector or a (k v) list"))));
+					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
 	}
 
 	/**
 	 * The entries of a set conjoined onto a map, as a plist: each member is itself an
-	 * entry, one level deep. A set nested in the set is refused: entries nest one level.
+	 * entry (a two-vector, which a map entry is here), nothing else.
 	 */
 	static LispVal membersPlist(ClojureLowering ctx, LispVal item) {
 		LispSymbol grown = ctx.freshTemp();
@@ -888,41 +876,27 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * One set member's entries as a plist: a map's pairs, a two-vector's or two-list's
-	 * pair. Unlike {@link #entryPlist}, this never recurses, so the Java construction
-	 * terminates; a set nested in the conjoined set is refused at run time instead.
+	 * One set member's entry as a plist: a two-vector's pair. The oracle casts every
+	 * member of a conjoined set to a map entry, so a map, list, set or nil member is
+	 * refused (a map entry is a plain two-vector here, so a vector member stays
+	 * accepted).
 	 */
 	static LispVal memberEntryPlist(LispVal key) {
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), key),
-				tablePlist(key)));
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), key),
+						// a string is a vector too, and no entry
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), key)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eql"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), key), new LispInteger(2))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), key, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), key, new LispInteger(1)))));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), key),
-						// a keyword, atom, regex... is a cons wrapper whose car is a CL
-						// keyword: no entry
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), key))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), isSetForm(key)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cddr"), key))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), key),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), key))));
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("conj needs a map entry: a map, a [k v] vector or a (k v) list"))));
+					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
 	}
 
