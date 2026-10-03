@@ -132,8 +132,11 @@
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
 - `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
   他のクラスは誤答の代わりに名前付きで拒否されます。
-- `unchecked-add` は折り返しません（整数は bignum です）。`unchecked-` の型変換（`int`・`long`・`short`・
-  `byte`・`char`・`double`・`float`）はオラクルと同じで、他の `unchecked-*` は未対応です。
+- `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換（`int`・`long`・`short`・
+  `byte`・`char`・`double`・`float`）と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは
+  通常の整数なので、オラクルでは折り返されない bigint のオペランド
+  （`(unchecked-add 9223372036854775807N 1)`）も折り返します。`inc`・`dec` と検査付きの演算は
+  桁あふれしません（整数は bignum です）。
 - `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
   `3/2` と表示され、オラクルは `1.5M`）。`N`・`M` リテラルと同じです。10進展開が無限になる比の
   `bigdec` はオラクル同様シグナルします。

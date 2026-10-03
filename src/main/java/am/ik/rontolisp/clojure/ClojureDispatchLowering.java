@@ -172,14 +172,6 @@ final class ClojureDispatchLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), intForm(ctx, one));
 	}
 
-	/** {@code unchecked-add} as a value: addition without the overflow check. */
-	static LispVal uncheckedAddValue(ClojureLowering ctx) {
-		LispSymbol first = new LispSymbol(ClojureLowering.mangle("unchecked-a"));
-		LispSymbol second = new LispSymbol(ClojureLowering.mangle("unchecked-b"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(first, second)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), first, second));
-	}
-
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
 	// clojure.java.io/reader constructor and the line-seq reader arity)
 

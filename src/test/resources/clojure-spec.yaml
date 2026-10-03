@@ -5897,6 +5897,69 @@ cases:
       \a \a \a 1 65535 65535 0 (\b \c) \d
       (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
       (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+  - name: unchecked-arithmetic-verbs-wrap-at-long-and-int-width
+    # Oracle-identical (clj 1.12.6) for every integer a long holds: the long verbs wrap at 64 bits,
+    # the -int verbs cast their arguments to int (a double or ratio truncates, one past the int range
+    # signals) and wrap at 32. Deviation, not pinned here: an integer past 64 bits is a plain integer
+    # here, where the oracle keeps a bigint literal unwrapped (see unchecked-add in deviations.md).
+    # The refusal texts are ours (only that it signals is pinned).
+    source: |
+      (defn uv-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (unchecked-add 9223372036854775807 1) (unchecked-add -9223372036854775808 -1) (unchecked-add 1 2) (unchecked-add 1.5 2) (unchecked-add 1/2 1) (unchecked-add 1.5 1/2) (unchecked-add ##Inf 1) (unchecked-add 4611686018427387904 4611686018427387904))
+      (prn (unchecked-subtract -9223372036854775808 1) (unchecked-subtract 9223372036854775807 -1) (unchecked-subtract 3 1) (unchecked-subtract 1.5 1) (unchecked-subtract 1/2 1))
+      (prn (unchecked-multiply 9223372036854775807 2) (unchecked-multiply 4611686018427387904 4) (unchecked-multiply 3 4) (unchecked-multiply 1.5 2) (unchecked-multiply 3037000500 3037000500) (unchecked-multiply -9223372036854775808 -1))
+      (prn (unchecked-inc 9223372036854775807) (unchecked-inc 1) (unchecked-inc 1.5) (unchecked-inc 1/2) (unchecked-dec -9223372036854775808) (unchecked-dec 1) (unchecked-dec 1.5) (unchecked-dec 1/2))
+      (prn (unchecked-negate -9223372036854775808) (unchecked-negate 5) (unchecked-negate 1.5) (unchecked-negate 1/2) (unchecked-negate 0) (unchecked-negate -0.0) (unchecked-negate -5))
+      (prn (unchecked-add-int 2147483647 1) (unchecked-add-int 1 2) (unchecked-add-int 1.5 1) (unchecked-add-int 1/2 1) (unchecked-add-int -2147483648 -1) (unchecked-add-int 2147483647 2147483647))
+      (prn (unchecked-subtract-int -2147483648 1) (unchecked-subtract-int 5 3) (unchecked-subtract-int 2147483647 -1) (unchecked-subtract-int 7.9 2.9))
+      (prn (unchecked-multiply-int 65536 65536) (unchecked-multiply-int 46341 46341) (unchecked-multiply-int 3 4) (unchecked-multiply-int -2147483648 -1) (unchecked-multiply-int 2.9 3.9))
+      (prn (unchecked-negate-int -2147483648) (unchecked-negate-int 5) (unchecked-negate-int 0) (unchecked-negate-int 2.9) (unchecked-inc-int 2147483647) (unchecked-inc-int 1) (unchecked-dec-int -2147483648) (unchecked-dec-int 1))
+      (prn (unchecked-divide-int 7 2) (unchecked-divide-int -7 2) (unchecked-divide-int 7 -2) (unchecked-divide-int -2147483648 -1) (unchecked-divide-int 7.9 2) (unchecked-divide-int 0 5))
+      (prn (unchecked-remainder-int 7 2) (unchecked-remainder-int -7 2) (unchecked-remainder-int 7 -2) (unchecked-remainder-int -2147483648 -1) (unchecked-remainder-int 7 2.9) (unchecked-remainder-int 0 5))
+      (prn (map unchecked-inc [1 2]) (map unchecked-dec [1 2]) (map unchecked-negate [1 2]) (map unchecked-inc-int [1 2]) (map unchecked-dec-int [1 2]) (map unchecked-negate-int [1 2]))
+      (prn (reduce unchecked-add [1 2 3]) (reduce unchecked-subtract [10 2 3]) (reduce unchecked-multiply [1 2 3]) (reduce unchecked-add 0 [9223372036854775807 1]) (reduce unchecked-multiply 1 (range 1 30)) (apply unchecked-subtract [5 3]))
+      (prn (reduce unchecked-add-int [1 2 3]) (reduce unchecked-subtract-int [10 2 3]) (reduce unchecked-multiply-int 1 (range 1 20)) (reduce unchecked-add-int 0 [2147483647 1]) (map unchecked-divide-int [7 8] [2 3]) (map unchecked-remainder-int [7 8] [2 3]))
+      (prn (loop [i 0 h 1125899906842597] (if (< i 20) (recur (inc i) (unchecked-add (unchecked-multiply h 31) i)) h)))
+      (prn (loop [i 0 h 17] (if (< i 20) (recur (inc i) (unchecked-add-int (unchecked-multiply-int h 31) i)) h)))
+      (prn (map uv-refused [#(unchecked-add nil 1) #(unchecked-add 1 nil) #(unchecked-add \a 1) #(unchecked-add "a" 1) #(unchecked-subtract nil 1) #(unchecked-multiply "a" 2) #(unchecked-multiply 2 \a) #(unchecked-inc nil) #(unchecked-inc "a") #(unchecked-dec nil) #(unchecked-dec \a) #(unchecked-negate nil) #(unchecked-negate "a")]))
+      (prn (map uv-refused [#(unchecked-add-int nil 1) #(unchecked-add-int 1 nil) #(unchecked-add-int \a 1) #(unchecked-add-int "a" 1) #(unchecked-add-int 2147483648 1) #(unchecked-add-int 1 -2147483649) #(unchecked-add-int 4294967297 1) #(unchecked-subtract-int 3000000000 1) #(unchecked-multiply-int 3000000000 1) #(unchecked-inc-int 3000000000) #(unchecked-inc-int nil) #(unchecked-dec-int -3000000000) #(unchecked-dec-int \a) #(unchecked-negate-int 2147483648) #(unchecked-negate-int "a")]))
+      (prn (map uv-refused [#(unchecked-divide-int 7 0) #(unchecked-divide-int 7 0.5) #(unchecked-remainder-int 7 0) #(unchecked-remainder-int 7 0.5) #(unchecked-divide-int nil 2) #(unchecked-divide-int 7 nil) #(unchecked-remainder-int \a 2) #(unchecked-remainder-int 7 "a") #(unchecked-divide-int 2147483648 1) #(unchecked-remainder-int 7 2147483648)]))
+      (prn (map uv-refused [#(apply unchecked-add [1]) #(apply unchecked-add [1 2 3]) #(apply unchecked-inc []) #(apply unchecked-inc [1 2]) #(apply unchecked-negate []) #(apply unchecked-add-int [1]) #(apply unchecked-inc-int [1 2]) #(apply unchecked-divide-int [1]) #(apply unchecked-remainder-int [1 2 3]) #(apply unchecked-subtract []) #(apply unchecked-multiply [1 2 3]) #(apply unchecked-dec-int []) #(apply unchecked-negate-int [1 2]) #(apply unchecked-dec [1 2])]))
+    expected: |
+      -9223372036854775808 9223372036854775807 3 3.5 3/2 2.0 ##Inf -9223372036854775808
+      9223372036854775807 -9223372036854775808 2 0.5 -1/2
+      -2 0 12 3.0 -9223372036709301616 -9223372036854775808
+      -9223372036854775808 2 2.5 3/2 9223372036854775807 0 0.5 -1/2
+      -9223372036854775808 -5 -1.5 -1/2 0 0.0 5
+      -2147483648 3 2 1 2147483647 -2
+      2147483647 2 -2147483648 5
+      0 -2147479015 12 -2147483648 6
+      -2147483648 -5 0 -2 -2147483648 2 2147483647 0
+      3 -3 -3 -2147483648 3 0
+      1 -1 1 0 1 0
+      (2 3) (0 1) (-1 -2) (2 3) (0 1) (-1 -2)
+      6 5 6 -9223372036854775808 -7055958792655077376 2
+      6 5 109641728 -2147483648 (3 2) (1 2)
+      -6598722044477124753
+      1102119323
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+  - name: bigint-and-bigdec-strings-refuse-surrounding-whitespace
+    # Oracle-identical (clj 1.12.6): BigInteger and BigDecimal parse the whole string, so a space,
+    # tab or newline on either side refuses; a leading sign is accepted.
+    source: |
+      (defn bw-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (map #(str (bigint %)) ["12" "+12" "-12" "0" "007" "-0"]) (map #(str (biginteger %)) ["12" "+12"]))
+      (prn (map bw-refused [#(bigint " 12 ") #(bigint " 12") #(bigint "12 ") #(bigint "\t12") #(bigint "12\n") #(bigint "1 2") #(bigint "") #(bigint " ") #(bigint "-") #(bigint "+") #(bigint "1_0") #(bigint "1.5") #(bigint "0x1F") #(biginteger " 12") #(biginteger "12 ")]))
+      (prn (map #(double (bigdec %)) ["1.5" "+1.5" "-1.5" ".5" "1." "1e3" "1E+3" "0"]))
+      (prn (map bw-refused [#(bigdec " 1.5") #(bigdec "1.5 ") #(bigdec "\t1.5") #(bigdec "1.5\n") #(bigdec "1 .5") #(bigdec "") #(bigdec " ") #(bigdec "-") #(bigdec "+") #(bigdec "1e") #(bigdec "1_0") #(bigdec "a")]))
+    expected: |
+      ("12" "12" "-12" "0" "7" "0") ("12" "12")
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (1.5 1.5 -1.5 0.5 1.0 1000.0 1000.0 0.0)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
   - name: sorted-collections-refuse-like-the-oracle
     # The first three lines are the oracle's messages (clj 1.12.6); on the last the
     # oracle names Java casts (PersistentVector cannot be cast to clojure.lang.Sorted,

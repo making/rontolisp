@@ -136,8 +136,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
-- `unchecked-add` never wraps (integers are bignums); the `unchecked-` casts (`int`, `long`, `short`,
-  `byte`, `char`, `double`, `float`) match the oracle; the other `unchecked-*` verbs are absent.
+- The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
+  (`int`, `long`, `short`, `byte`, `char`, `double`, `float`) match the oracle, with one deviation:
+  an integer past 64 bits is a plain integer here, so the oracle's unwrapped bigint operand
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `inc`, `dec` and the checked verbs never
+  overflow (integers are bignums).
 - `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
   prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
   decimal expansion signals, like the oracle.

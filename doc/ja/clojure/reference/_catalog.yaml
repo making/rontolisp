@@ -231,6 +231,19 @@ categories:
       - { slug: rand, name: "rand" }
       - { slug: rand-int, name: "rand-int" }
       - { slug: unchecked-add, name: "unchecked-add" }
+      - { slug: unchecked-subtract, name: "unchecked-subtract" }
+      - { slug: unchecked-multiply, name: "unchecked-multiply" }
+      - { slug: unchecked-inc, name: "unchecked-inc" }
+      - { slug: unchecked-dec, name: "unchecked-dec" }
+      - { slug: unchecked-negate, name: "unchecked-negate" }
+      - { slug: unchecked-add-int, name: "unchecked-add-int" }
+      - { slug: unchecked-subtract-int, name: "unchecked-subtract-int" }
+      - { slug: unchecked-multiply-int, name: "unchecked-multiply-int" }
+      - { slug: unchecked-inc-int, name: "unchecked-inc-int" }
+      - { slug: unchecked-dec-int, name: "unchecked-dec-int" }
+      - { slug: unchecked-negate-int, name: "unchecked-negate-int" }
+      - { slug: unchecked-divide-int, name: "unchecked-divide-int" }
+      - { slug: unchecked-remainder-int, name: "unchecked-remainder-int" }
       - { slug: unchecked-int, name: "unchecked-int" }
       - { slug: unchecked-long, name: "unchecked-long" }
       - { slug: unchecked-short, name: "unchecked-short" }

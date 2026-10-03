@@ -57,7 +57,20 @@ The arithmetic and comparison core, plus the type predicates. The comparisons an
 | `char` | `(char 97)` | `a` |
 | `rand` | `(rand 5)` | a double in `[0,5)` |
 | `rand-int` | `(rand-int 1)` | `0` |
-| `unchecked-add` | `(unchecked-add 3 4)` | `7` |
+| `unchecked-add` | `(unchecked-add 9223372036854775807 1)` | `-9223372036854775808` |
+| `unchecked-subtract` | `(unchecked-subtract -9223372036854775808 1)` | `9223372036854775807` |
+| `unchecked-multiply` | `(unchecked-multiply 4611686018427387904 4)` | `0` |
+| `unchecked-inc` | `(unchecked-inc 9223372036854775807)` | `-9223372036854775808` |
+| `unchecked-dec` | `(unchecked-dec -9223372036854775808)` | `9223372036854775807` |
+| `unchecked-negate` | `(unchecked-negate -9223372036854775808)` | `-9223372036854775808` |
+| `unchecked-add-int` | `(unchecked-add-int 2147483647 1)` | `-2147483648` |
+| `unchecked-subtract-int` | `(unchecked-subtract-int -2147483648 1)` | `2147483647` |
+| `unchecked-multiply-int` | `(unchecked-multiply-int 65536 65536)` | `0` |
+| `unchecked-inc-int` | `(unchecked-inc-int 2147483647)` | `-2147483648` |
+| `unchecked-dec-int` | `(unchecked-dec-int -2147483648)` | `2147483647` |
+| `unchecked-negate-int` | `(unchecked-negate-int -2147483648)` | `-2147483648` |
+| `unchecked-divide-int` | `(unchecked-divide-int -7 2)` | `-3` |
+| `unchecked-remainder-int` | `(unchecked-remainder-int -7 2)` | `-1` |
 | `unchecked-int` | `(unchecked-int 2147483648)` | `-2147483648` |
 | `unchecked-long` | `(unchecked-long 7/2)` | `3` |
 | `unchecked-short` | `(unchecked-short 70000)` | `4464` |

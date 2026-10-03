@@ -3083,9 +3083,6 @@ public final class ClojureLowering {
 			case "int", "long":
 				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
 				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
-			case "unchecked-add":
-				ClojureLowerUtil.isTrue(n == 2, "unchecked-add takes two numbers");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), lower(items.get(2)));
 			case "spit":
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
@@ -3339,7 +3336,6 @@ public final class ClojureLowering {
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
 			case "int", "long" -> ClojureDispatchLowering.intValue(this);
-			case "unchecked-add" -> ClojureDispatchLowering.uncheckedAddValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);

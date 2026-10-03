@@ -4704,8 +4704,10 @@
   (if (or (numberp x) (null x)) x (error "num needs a number")))
 
 (defun rontolisp::%clojure-wrap-bits (n bits)
-  "The integer N as a signed two's-complement value of BITS bits."
-  (let* ((m (expt 2 bits)) (r (mod n m))) (if (>= r (ash m -1)) (- r m) r)))
+  "The integer N as a signed two's-complement value of BITS bits (a mask, not a
+   division: `mod` over a bignum linked about 20 KB of wasm)."
+  (let* ((m (ash 1 bits)) (r (logand n (- m 1))))
+    (if (>= r (ash m -1)) (- r m) r)))
 
 (defun rontolisp::%clojure-unchecked-cast (x bits wide charp kind)
   "The oracle's unchecked KIND cast of X: an integer or a ratio (truncated)
@@ -4841,7 +4843,17 @@
          (if (rontolisp::%clojure-symbolic-float-p x)
              (error "Infinite or NaN")
              (truncate x)))
-        ((stringp x) (parse-integer x))
+        ((stringp x)
+         ;; parse-integer skips surrounding whitespace, BigInteger refuses it: the
+         ;; string must start on a sign or a digit and end on a digit
+         (let ((n (length x)))
+           (when (or (= n 0)
+                     (not
+                      (or (digit-char-p (char x 0)) (char= (char x 0) #\+)
+                          (char= (char x 0) #\-)))
+                     (not (digit-char-p (char x (- n 1)))))
+             (error "~A" (concatenate 'string "Invalid integer: " x)))
+           (parse-integer x)))
         (t (error "bigint needs a number or a string"))))
 
 (defun rontolisp::%clojure-biginteger (x)
@@ -4914,6 +4926,169 @@
   "unchecked-float as a value."
   (rontolisp::%clojure-check-arity args 1 1 "unchecked-float")
   (rontolisp::%clojure-unchecked-float (car args)))
+
+(defun rontolisp::%clojure-wrap-long (n)
+  "The integer N as a signed 64-bit value; any other number passes. The mask and
+   the bounds are literals on purpose: a generic wrap over a computed mask ran an
+   overflowing hash loop 6x slower on the JVM."
+  (if (and (integerp n) (not (<= -9223372036854775808 n 9223372036854775807)))
+      (let ((r (logand n 18446744073709551615)))
+        (if (>= r 9223372036854775808) (- r 18446744073709551616) r))
+      n))
+
+(defun rontolisp::%clojure-wrap-int (n)
+  "The integer N as a signed 32-bit value."
+  (if (<= -2147483648 n 2147483647)
+      n
+      (let ((r (logand n 4294967295)))
+        (if (>= r 2147483648) (- r 4294967296) r))))
+
+(defun rontolisp::%clojure-int-arg (x)
+  "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
+   double (truncated) inside the int range; anything else signals."
+  (cond ((integerp x)
+         (if (<= -2147483648 x 2147483647) x (error "integer overflow")))
+        ((floatp x)
+         (if (and (>= x -2147483648.0) (<= x 2147483647.0))
+             (truncate x)
+             (error "Value out of range for int")))
+        ((rationalp x) (rontolisp::%clojure-int-arg (truncate x)))
+        (t (error "int needs a number"))))
+
+(defun rontolisp::%clojure-unchecked-add (a b)
+  "(unchecked-add a b): the sum, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (+ a b)))
+
+(defun rontolisp::%clojure-unchecked-subtract (a b)
+  "(unchecked-subtract a b): the difference, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- a b)))
+
+(defun rontolisp::%clojure-unchecked-multiply (a b)
+  "(unchecked-multiply a b): the product, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (* a b)))
+
+(defun rontolisp::%clojure-unchecked-inc (x)
+  "(unchecked-inc x): X plus one, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (+ x 1)))
+
+(defun rontolisp::%clojure-unchecked-dec (x)
+  "(unchecked-dec x): X minus one, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- x 1)))
+
+(defun rontolisp::%clojure-unchecked-negate (x)
+  "(unchecked-negate x): minus X, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- x)))
+
+(defun rontolisp::%clojure-unchecked-add-int (a b)
+  "(unchecked-add-int a b): the sum of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (+ (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-subtract-int (a b)
+  "(unchecked-subtract-int a b): the difference of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (- (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-multiply-int (a b)
+  "(unchecked-multiply-int a b): the product of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (* (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-inc-int (x)
+  "(unchecked-inc-int x): the int X plus one, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (+ (rontolisp::%clojure-int-arg x) 1)))
+
+(defun rontolisp::%clojure-unchecked-dec-int (x)
+  "(unchecked-dec-int x): the int X minus one, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x) 1)))
+
+(defun rontolisp::%clojure-unchecked-negate-int (x)
+  "(unchecked-negate-int x): minus the int X, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x))))
+
+(defun rontolisp::%clojure-unchecked-divide-int (a b)
+  "(unchecked-divide-int a b): the truncated quotient of two ints, wrapped to
+   32 bits (only -2147483648 / -1 wraps); a zero divisor signals."
+  (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
+    (if (= y 0)
+        (error "Divide by zero")
+        (rontolisp::%clojure-wrap-int (truncate x y)))))
+
+(defun rontolisp::%clojure-unchecked-remainder-int (a b)
+  "(unchecked-remainder-int a b): the remainder of two ints, signed like the
+   dividend; a zero divisor signals."
+  (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
+    (if (= y 0) (error "Divide by zero") (rem x y))))
+
+(defun rontolisp::%clojure-unchecked-inc-v (&rest args)
+  "unchecked-inc as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-inc")
+  (rontolisp::%clojure-unchecked-inc (car args)))
+
+(defun rontolisp::%clojure-unchecked-dec-v (&rest args)
+  "unchecked-dec as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-dec")
+  (rontolisp::%clojure-unchecked-dec (car args)))
+
+(defun rontolisp::%clojure-unchecked-negate-v (&rest args)
+  "unchecked-negate as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-negate")
+  (rontolisp::%clojure-unchecked-negate (car args)))
+
+(defun rontolisp::%clojure-unchecked-inc-int-v (&rest args)
+  "unchecked-inc-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-inc-int")
+  (rontolisp::%clojure-unchecked-inc-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-dec-int-v (&rest args)
+  "unchecked-dec-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-dec-int")
+  (rontolisp::%clojure-unchecked-dec-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-negate-int-v (&rest args)
+  "unchecked-negate-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-negate-int")
+  (rontolisp::%clojure-unchecked-negate-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-add-v (&rest args)
+  "unchecked-add as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-add")
+  (rontolisp::%clojure-unchecked-add (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-subtract-v (&rest args)
+  "unchecked-subtract as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-subtract")
+  (rontolisp::%clojure-unchecked-subtract (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-multiply-v (&rest args)
+  "unchecked-multiply as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-multiply")
+  (rontolisp::%clojure-unchecked-multiply (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-add-int-v (&rest args)
+  "unchecked-add-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-add-int")
+  (rontolisp::%clojure-unchecked-add-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-subtract-int-v (&rest args)
+  "unchecked-subtract-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-subtract-int")
+  (rontolisp::%clojure-unchecked-subtract-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-multiply-int-v (&rest args)
+  "unchecked-multiply-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-multiply-int")
+  (rontolisp::%clojure-unchecked-multiply-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-divide-int-v (&rest args)
+  "unchecked-divide-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-divide-int")
+  (rontolisp::%clojure-unchecked-divide-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-remainder-int-v (&rest args)
+  "unchecked-remainder-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-remainder-int")
+  (rontolisp::%clojure-unchecked-remainder-int (car args) (cadr args)))
 
 (defun rontolisp::%clojure-rationalize-v (&rest args)
   "rationalize as a value."
