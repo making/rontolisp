@@ -4229,7 +4229,24 @@
            (dolist (m (rontolisp::%clojure-strict-seq item) acc)
              (setq acc
                    (append acc (rontolisp::%clojure-sorted-entry-plist m t))))))
+        ((consp item) (rontolisp::%clojure-seq-entry-plist item))
         (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+
+(defun rontolisp::%clojure-seq-entry-plist (item)
+  "The entries a sorted map or a seq (strict or lazy) ITEM adds to a map, as a
+   plist: a sorted map's pairs in order, a seq's members each a [k v] vector
+   (a map entry is a plain two-vector here, so a seq of vectors is accepted
+   where the oracle casts to Map.Entry); any other member signals."
+  (if (rontolisp::%clojure-sorted-map-p item)
+      (rontolisp::%clojure-sorted-plist item)
+      (let ((acc nil) (s (rontolisp::%clojure-seq item)))
+        (do ()
+            ((null s) (reverse acc))
+          (let ((m (car s)))
+            (if (and (vectorp m) (not (stringp m)) (= (length m) 2))
+                (setq acc (cons (aref m 1) (cons (aref m 0) acc)))
+                (error "conj needs a map entry: a map, a [k v] vector or nil")))
+          (setq s (rontolisp::%clojure-seq-rest s))))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member

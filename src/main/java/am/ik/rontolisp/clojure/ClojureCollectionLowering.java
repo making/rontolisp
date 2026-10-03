@@ -827,8 +827,8 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * The entries one conjoined item adds to a map, as a plist: none of nil, a map's own
-	 * pairs, a two-vector's pair, or a set's members each as an entry. A list is no
-	 * entry, like the oracle's.
+	 * pairs, a two-vector's pair, a set's members each as an entry, or a sorted map's
+	 * pairs and a seq's members. A list of non-entries is none, like the oracle's.
 	 */
 	static LispVal entryPlist(ClojureLowering ctx, LispVal item) {
 		List<LispVal> branches = new ArrayList<>();
@@ -849,6 +849,10 @@ final class ClojureCollectionLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), item, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), item, new LispInteger(1)))));
 		branches.add(ClojureLowerUtil.list(isSetForm(item), membersPlist(ctx, item)));
+		// a sorted map or a seq of entries (the other cons wrappers fall through to the
+		// signal inside the worker)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), item),
+				ClojureSortedLowering.runtime("seq-entry-plist", item)));
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));

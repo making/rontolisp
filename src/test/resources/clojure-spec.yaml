@@ -1027,6 +1027,21 @@ cases:
       :refused :refused :refused
       :refused :refused :refused :refused :refused
       :refused :refused {1 2} {1 2, 3 4} {1 2}
+  - name: conj-onto-a-map-takes-a-sorted-map-and-a-seq-of-entries
+    # Oracle-identical (clj 1.12.6): a sorted map is a Map, and a seq (strict or lazy) of
+    # real map entries is walked entry by entry. A seq of plain vectors is accepted here
+    # (an entry is a plain two-vector) and refused by the oracle, so it is not pinned.
+    source: |
+      (defn conj-seq-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-seq-try #(conj {} (sorted-map 1 2))) (conj-seq-try #(conj {:a 1} (sorted-map :b 2 :c 3))) (conj-seq-try #(conj {} (sorted-map))) (conj-seq-try #(conj (sorted-map) (sorted-map 1 2))))
+      (println (conj-seq-try #(conj {} (seq {1 2}))) (conj-seq-try #(= {1 2, 3 4} (conj {} (map identity {1 2 3 4})))) (conj-seq-try #(conj {:a 1} (seq {:b 2}))) (conj-seq-try #(conj {} (seq {}))) (conj-seq-try #(conj {} (lazy-seq (seq {5 6})))))
+      (println (conj-seq-try #(conj (sorted-map) (seq {1 2}))) (conj-seq-try #(conj (sorted-map) (map identity {1 2 3 4}))))
+      (println (conj-seq-try #(conj {} (seq [1 2]))) (conj-seq-try #(conj {} (seq [(first {1 2}) 3]))) (conj-seq-try #(conj {} (seq ["ab"]))) (conj-seq-try #(conj {} :a)) (conj-seq-try #(conj {} (atom 1))))
+    expected: |
+      {1 2} {:a 1, :b 2, :c 3} {} {1 2}
+      {1 2} true {:a 1, :b 2} {} {5 6}
+      {1 2} {1 2, 3 4}
+      :refused :refused :refused :refused :refused
   - name: disj-removes-set-members
     source: |
       (println (count (disj #{1 2 3} 2)))

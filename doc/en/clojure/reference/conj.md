@@ -4,8 +4,8 @@
 
 Answers a fresh collection with the values added, per kind: a member onto a set, an entry
 onto a map, at the end of a vector, at the front of a list -- `nil` collects like a list.
-A set conjoined onto a map contributes its members as entries (two-member vectors); a list,
-including a `(k v)` one, is no entry and signals, like anything else conjoined onto a map. Entries conjoined onto a record keep the type; onto an atom (or a ref/agent/volatile, the same cell), a deftype or reify it signals, like the oracle.
+A set or a seq (strict or lazy) conjoined onto a map contributes its members as entries (two-member vectors), and a sorted map its pairs; a list of
+non-entries, including a `(k v)` one, is no entry and signals, like anything else conjoined onto a map. Entries conjoined onto a record keep the type; onto an atom (or a ref/agent/volatile, the same cell), a deftype or reify it signals, like the oracle.
 
 As a value a collection plus a rest list of items, folded one by one -- so `alter` and
 `swap!` over `conj` run what a call would run. With no arguments `[]`, the init arity
