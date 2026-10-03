@@ -730,8 +730,8 @@
    otherwise (or when TABLE holds none) K itself, which then misses like any
    absent key."
   (cond ((rontolisp::%clojure-structural-key-p k)
-         (or (rontolisp::%clojure-held-key
-              (rontolisp::%clojure-key-class k nil) table) k))
+         (or (rontolisp::%clojure-held-key (rontolisp::%clojure-key-class k nil)
+                                           table) k))
         ((and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table))
         (t k)))
 
