@@ -11,6 +11,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `vec` | `(vec '(1 2))` | `[1 2]` |
 | `hash-map` | `(hash-map :a 1)` | `{:a 1}` |
 | `array-map` | `(array-map :a 1)` | `{:a 1}` |
+| `hash-set` | `(hash-set 1 2 1)` | `#{1 2}` |
 | `assoc` | `(assoc {:a 1} :b 2)` | `{:a 1, :b 2}` |
 | `dissoc` | `(dissoc {:a 1} :a)` | `{}` |
 | `get` | `(get {:a 1} :b :none)` | `:none` |
@@ -48,6 +49,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `subseq` | `(subseq (sorted-set 1 2 3) > 1)` | `(2 3)` |
 | `rsubseq` | `(rsubseq (sorted-set 1 2 3) < 3)` | `(2 1)` |
 | `compare` | `(compare "a" "c")` | `-2` |
+| `comparator` | `(sort (comparator >) [1 3 2])` | `(3 2 1)` |
 | `vector-of` | `(vector-of :int 1.5 2)` | `[1 2]` |
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |

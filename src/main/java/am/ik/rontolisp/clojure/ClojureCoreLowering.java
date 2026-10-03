@@ -53,6 +53,14 @@ final class ClojureCoreLowering {
 			case "peek", "pop", "not-empty":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "empty":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "comparator":
+				arity(name, n, 1, 1);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)));
+			case "hash-set":
+				return worker("set-of", ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
@@ -144,7 +152,7 @@ final class ClojureCoreLowering {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
 					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
 					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
-					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
+					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta", "empty", "comparator", "hash-set" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

@@ -2802,6 +2802,55 @@
   (rontolisp::%clojure-check-arity args 1 1 "not-empty")
   (rontolisp::%clojure-not-empty (car args)))
 
+;; empty carries X's metadata over, like the oracle's empty (a list, a lazy seq
+;; and a seq answer nil, the empty-as-nil position of rest and next, so they have
+;; none to carry). The sorted arm keeps the comparator and the kind.
+(defun rontolisp::%clojure-empty (x)
+  "The empty collection of X's kind: a vector, map, set or sorted collection
+   answers a fresh empty one carrying X's metadata and, for a sorted one, its
+   comparator; a record signals; a list, a seq, a string and anything that is
+   no collection answer nil."
+  (cond ((hash-table-p x)
+         (rontolisp::%clojure-put-meta (make-hash-table :test 'equal)
+                                       (rontolisp::%clojure-meta x)))
+        ((rontolisp::%clojure-record-p x)
+         (error "~A"
+                (concatenate 'string "Can't create empty: "
+                             (car (cdr (cdr (cdr (cdr x))))))))
+        ((rontolisp::%clojure-set-p x)
+         (rontolisp::%clojure-put-meta
+          (list :C%SET (make-hash-table :test 'equal))
+          (rontolisp::%clojure-meta x)))
+        ((rontolisp::%clojure-sorted-p x)
+         (rontolisp::%clojure-put-meta
+          (rontolisp::%clojure-sorted-with x (vector))
+          (rontolisp::%clojure-meta x)))
+        ((and (vectorp x) (not (stringp x)))
+         (rontolisp::%clojure-put-meta (vector) (rontolisp::%clojure-meta x)))
+        (t nil)))
+
+(defun rontolisp::%clojure-empty-v (&rest args)
+  "empty as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "empty")
+  (rontolisp::%clojure-empty (car args)))
+
+(defun rontolisp::%clojure-comparator (pred)
+  "(comparator pred): a function answering -1 when (pred a b) holds, else 1 when
+   (pred b a) does, else 0."
+  (lambda (a b)
+    (cond ((rontolisp::%clojure-truthy (funcall pred a b)) -1)
+          ((rontolisp::%clojure-truthy (funcall pred b a)) 1)
+          (t 0))))
+
+(defun rontolisp::%clojure-comparator-v (&rest args)
+  "comparator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "comparator")
+  (rontolisp::%clojure-comparator (car args)))
+
+(defun rontolisp::%clojure-hash-set-v (&rest xs)
+  "hash-set as a value: the set of its arguments, a repeated one kept once."
+  (rontolisp::%clojure-set-of xs))
+
 (defun rontolisp::%clojure-dedupe (coll)
   "COLL without consecutive = duplicates."
   (rontolisp::%clojure-lazy-or-strict coll

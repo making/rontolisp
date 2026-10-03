@@ -152,6 +152,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
   given, where the oracle's keeps casting, and `:float` holds doubles.
+- `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position
+  of `rest`), so it carries no metadata, and of a map entry `[]` (the oracle `nil`).
 - `partition` takes no pad. `partition-all` with a non-positive size or step signals,
   where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
   calling thread. `take-nth` with a zero step signals, and its seq arity steps by the

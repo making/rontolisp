@@ -109,6 +109,7 @@ categories:
       - { slug: partition-by, name: "partition-by" }
       - { slug: take-nth, name: "take-nth" }
       - { slug: not-empty, name: "not-empty" }
+      - { slug: empty, name: "empty" }
       - { slug: pmap, name: "pmap" }
   - title: "反復"
     index_page: clojure/reference/iteration.md
@@ -126,6 +127,7 @@ categories:
       - { slug: vec, name: "vec" }
       - { slug: hash-map, name: "hash-map" }
       - { slug: array-map, name: "array-map" }
+      - { slug: hash-set, name: "hash-set" }
       - { slug: assoc, name: "assoc" }
       - { slug: dissoc, name: "dissoc" }
       - { slug: get, name: "get" }
@@ -163,6 +165,7 @@ categories:
       - { slug: subseq, name: "subseq" }
       - { slug: rsubseq, name: "rsubseq" }
       - { slug: compare, name: "compare" }
+      - { slug: comparator, name: "comparator" }
       - { slug: vector-of, name: "vector-of" }
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
