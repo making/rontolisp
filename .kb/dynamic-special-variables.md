@@ -163,7 +163,8 @@ native `evalProgv`).
    mirror, which the shallow save/restore does not update. Direct reads/`setq` are correct and
    both stores agree again after the `let`. The mirror does carry the global default for the
    three standard stream variables (`.kb/symbol-runtime-api.md`).
-3. A lambda/defun parameter named like a special is still lexical, everywhere.
+3. A lambda/defun parameter named like a special is lexical: `(defvar *x* 1) (defun show () *x*)
+   (defun f (*x*) (show)) (f 2)` answers 1 on JVM and both WASM, 2 on the interpreter.
 
 ## The two hand-rolled precedents
 
