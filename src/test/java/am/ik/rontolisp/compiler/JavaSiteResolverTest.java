@@ -103,6 +103,25 @@ class JavaSiteResolverTest {
 			.isEqualTo("java.util.Set size()");
 	}
 
+	// A Lisp value is called as the object it converts to for an Object parameter: a
+	// receiver whose kinds all convert to one class resolves among that class's methods;
+	// an integer's box depends on its value, so it is left to run time.
+	@Test
+	void aLispValueReceiverResolvesAsTheClassItConvertsTo() {
+		assertThat(member("(java:call \"abc\" \"codePointAt\" 0)")).isEqualTo("java.lang.String codePointAt(int)");
+		assertThat(member("(java:call (java:call \"ab\" \"toUpperCase\") \"length\")"))
+			.isEqualTo("java.lang.String length()");
+		assertThat(member("(java:call (the (java:object \"java.lang.String\") x) \"isBlank\")"))
+			.isEqualTo("java.lang.String isBlank()");
+		assertThat(member("(java:call 1.5 \"isNaN\")")).isEqualTo("java.lang.Double isNaN()");
+		assertThat(member("(java:call #\\a \"charValue\")")).isEqualTo("java.lang.Character charValue()");
+		assertThat(member("(java:call 100000000000000000000 \"bitLength\")"))
+			.isEqualTo("java.math.BigInteger bitLength()");
+		assertThat(member("(java:call t \"booleanValue\")")).isEqualTo("java.lang.Boolean booleanValue()");
+		assertThat(resolve("(java:call 42 \"toString\")").reason()).isEqualTo("the receiver's class is not known");
+		assertThat(resolve("(java:call nil \"toString\")").reason()).isEqualTo("the receiver's class is not known");
+	}
+
 	// The documented difference: a receiver typed by an upper bound resolves among the
 	// bound's methods, so ArrayList's added remove(int) is not a candidate.
 	@Test

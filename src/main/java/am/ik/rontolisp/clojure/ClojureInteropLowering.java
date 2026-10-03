@@ -1157,9 +1157,9 @@ final class ClojureInteropLowering {
 
 	/**
 	 * An instance call: the receiver runs once, behind a temporary; a string receiver
-	 * answers the mapped core operation (a Lisp string is not a host object, so the
-	 * {@code java:} surface cannot take it), anything else goes to {@code java:call}
-	 * directly.
+	 * answers the mapped core operation, which runs on every backend; anything else goes
+	 * to {@code java:call} directly, which calls a string, number or character as its
+	 * {@code String}, box or {@code Character}.
 	 */
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, String method, List<LispVal> argDatums) {
 		List<LispVal> args = new ArrayList<>();
@@ -1205,7 +1205,8 @@ final class ClojureInteropLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(designator));
 		direct.addAll(args);
-		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		LispVal hostCall = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		LispVal call = hostCall;
 		String cls = knownClass;
 		if (cls == null) {
 			cls = constructedClass(receiver);
@@ -1224,11 +1225,47 @@ final class ClojureInteropLowering {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), recv), stream, call);
 		}
+		if (cls == null) {
+			call = valuePredicate(ctx, recv, method, args.size(), hostCall, call);
+		}
 		LispVal mapped = stringMethod(ctx, method, recv, args);
+		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {
+			// An unmapped String predicate (matches, regionMatches, ...) on a string
+			// answers T-or-false, as on a receiver known to be a String.
+			mapped = ctx.booleanAnswer(hostCall);
+		}
 		LispVal out = mapped == null ? call : ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), recv), mapped, call);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(recv, receiver))), out);
+	}
+
+	/**
+	 * A receiver of no known class that is a number or a character is called as its box
+	 * or {@code Character} (an integer as an {@code Integer} or a {@code Long}, by size):
+	 * where every overload of the method at this arity on each of those classes answers a
+	 * primitive boolean, such a receiver answers {@code T}-or-false, like a known
+	 * receiver ({@code (.isNaN 1.5)}, {@code (.equals 1 2)}); anything else keeps the
+	 * call. A string takes its own arm ({@link #stringMethod}).
+	 */
+	static LispVal valuePredicate(ClojureLowering ctx, LispSymbol recv, String method, int arity, LispVal hostCall,
+			LispVal call) {
+		List<LispVal> tests = new ArrayList<>();
+		if (instanceBooleanAtArity("java.lang.Integer", method, arity)
+				&& instanceBooleanAtArity("java.lang.Long", method, arity)) {
+			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv));
+		}
+		if (instanceBooleanAtArity("java.lang.Double", method, arity)) {
+			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("floatp"), recv));
+		}
+		if (instanceBooleanAtArity("java.lang.Character", method, arity)) {
+			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), recv));
+		}
+		if (tests.isEmpty()) {
+			return call;
+		}
+		LispVal test = tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, ctx.booleanAnswer(hostCall), call);
 	}
 
 	/**

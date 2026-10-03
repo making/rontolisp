@@ -173,10 +173,27 @@ final class JavaInterop {
 	}
 
 	static LispVal callInstance(LispVal target, String methodName, List<LispVal> args, Caller caller) {
-		if (!(target instanceof LispJavaObject obj)) {
+		Object receiver = receiverObject(target, caller);
+		if (receiver == null) {
 			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
 		}
-		return invoke(ReflectiveJavaClasses.of(obj.ref().getClass()), obj.ref(), methodName, args, caller);
+		return invoke(ReflectiveJavaClasses.of(receiver.getClass()), receiver, methodName, args, caller);
+	}
+
+	/**
+	 * The object a {@code java:call} is made on: a host object's own, or the one a Lisp
+	 * value of a receiver kind ({@link JavaOverloads#isReceiverKind}) converts to for an
+	 * {@code Object} parameter -- a string's {@code String}, an integer's narrowest box.
+	 * @return the object, or {@code null} when the value is neither
+	 */
+	private static @Nullable Object receiverObject(LispVal target, Caller caller) {
+		if (target instanceof LispJavaObject obj) {
+			return obj.ref();
+		}
+		if (kindOf(target) instanceof JavaKind.Lisp kind && JavaOverloads.isReceiverKind(kind)) {
+			return convert(target, Object.class, caller);
+		}
+		return null;
 	}
 
 	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
@@ -422,16 +439,17 @@ final class JavaInterop {
 		Object target = null;
 		if (receiver != null) {
 			boolean call = site.operator() == JavaSite.Operator.CALL;
-			if (!(receiver instanceof LispJavaObject obj)) {
+			target = call ? receiverObject(receiver, caller)
+					: receiver instanceof LispJavaObject obj ? obj.ref() : null;
+			if (target == null) {
 				throw new LispEvalException(
 						call ? "java:call expects a java object as the first argument, got " + receiver.print()
 								: "java:field expects a class-name string or a java object, got " + receiver.print());
 			}
-			if (!loadClass(className).type().isInstance(obj.ref())) {
+			if (!loadClass(className).type().isInstance(target)) {
 				throw new LispEvalException(operator + ": the " + (call ? "receiver" : "object") + " is not a "
 						+ className + ", got " + receiver.print());
 			}
-			target = obj.ref();
 		}
 		JavaField resolvedField = site.field();
 		if (resolvedField != null) {

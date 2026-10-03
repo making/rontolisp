@@ -298,11 +298,28 @@ final class JavaBridgeTemplate {
 		if (method == null) {
 			throw new RuntimeException("java:call expects (java:call object \"method\" args...)");
 		}
-		if (target == null || !isJavaObject(target)) {
+		Object receiver = receiverObject(target);
+		if (receiver == null) {
 			throw new RuntimeException(
 					"java:call expects a java object as the first argument, got " + describe(target));
 		}
-		return invoke(target.getClass(), target, method, args);
+		return invoke(receiver.getClass(), receiver, method, args);
+	}
+
+	// The object a java:call is made on: a host object itself, or the one a Lisp value of
+	// a receiver kind converts to for an Object parameter -- every kind but nil and a
+	// function (compiler/JavaOverloads.isReceiverKind): a string's String, an integer's
+	// narrowest box. Null when the value is neither.
+	private static @Nullable Object receiverObject(@Nullable Object target) {
+		if (target != null && isJavaObject(target)) {
+			return target;
+		}
+		Object value = rendered(target);
+		Object kind = kindOf(value);
+		if (kind == null || kind == KIND_NIL || kind == KIND_FUNCTION || kind instanceof Class) {
+			return null;
+		}
+		return convert(value, Object.class);
 	}
 
 	/** Implements {@code (java:static "class" "method" args...)}. */

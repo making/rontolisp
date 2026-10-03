@@ -55,6 +55,17 @@ can be passed back into `java:call`/`java:field`:
 (java:field "java.lang.Integer" "MAX_VALUE")   ; => 2147483647
 ```
 
+A Lisp value is a `java:call` receiver too, called as the object it becomes for an `Object`
+parameter: a string as a `String`, an integer as an `Integer` (a `Long` when it does not fit
+one), a float as a `Double`, a bignum as a `BigInteger`, a character as a `Character` (a
+supplementary one as the `Integer` of its code point), `t` as `Boolean.TRUE`. `nil`, a
+function, a symbol, a list, an array and a hash table are no receiver.
+
+```lisp
+(java:call "abc" "codePointAt" 0)   ; => 97
+(java:call 42 "toString")           ; => "42"
+```
+
 ## Value marshalling
 
 Arguments and results are converted between rontolisp and Java automatically:
@@ -169,6 +180,10 @@ What the program text says about a value:
 A call on a value whose known class is an interface also resolves to `Object`'s public
 methods the interface does not declare (`toString`, `getClass`, ...), as Java's own call
 `list.toString()` does.
+
+A call on a value known to be a string, float, character, bignum or `t` resolves among the
+methods of the class it is called as (`String`, `Double`, ...). An integer's box depends on
+its size, so a call on one is resolved when it runs.
 
 A declared type is trusted: a value that is not a `C` is an error where it meets the call,
 whether it is the receiver or an argument -- never converted for a method it was not chosen

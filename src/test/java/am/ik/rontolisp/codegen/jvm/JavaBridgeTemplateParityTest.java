@@ -284,6 +284,60 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
+	// The object a java:call on a Lisp value is made on is one rule with three copies:
+	// the shared JavaOverloads.isReceiverKind / receiverClassName, the bridge's
+	// receiverObject and the _jrecv a resolved site calls. Over the compiled
+	// representation of every kind, the two run-time copies answer the same object, of
+	// the class the shared rule names (a fixnum's narrowest box, which it leaves to the
+	// value), and none for nil, a function or a value of no kind.
+	@Test
+	void theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("ReceiverTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(print (java:call "abc" "length"))
+				"""));
+		Files.write(dir.resolve("ReceiverTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		Object function = new Object[] { 3, "car" };
+		List<Arg> values = List.of(NIL, T, integer(5), integer(-7), integer(1L << 40), bignum(BigInteger.TEN.pow(30)),
+				real(1.5), string("s"), string("str"), character('a'), character(128512),
+				new Arg(JavaKind.Lisp.FUNCTION, function));
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method jrecv = loader.loadClass("ReceiverTest")
+				.getDeclaredMethod(JvmJavaDirectSites.RECEIVER, Object.class);
+			jrecv.setAccessible(true);
+			for (Arg value : values) {
+				JavaKind.Lisp kind = (JavaKind.Lisp) value.kind();
+				Object direct = jrecv.invoke(null, value.compiled());
+				Object bridge = invoke("receiverObject", new Class<?>[] { Object.class }, value.compiled());
+				assertThat(direct).as("_jrecv %s", kind).isEqualTo(bridge);
+				if (!JavaOverloads.isReceiverKind(kind)) {
+					assertThat(bridge).as("bridge %s", kind).isNull();
+					continue;
+				}
+				assertThat(bridge).as("bridge %s", kind).isNotNull();
+				String expected = JavaOverloads.receiverClassName(kind);
+				if (expected == null) {
+					long fixnum = (Long) Objects.requireNonNull(value.compiled());
+					expected = fixnum == (int) fixnum ? "java.lang.Integer" : "java.lang.Long";
+				}
+				assertThat(Objects.requireNonNull(bridge).getClass().getName()).as("bridge %s", kind)
+					.isEqualTo(expected);
+			}
+			for (Object none : List.of("FOO", new BigInteger[] { BigInteger.ONE, BigInteger.TWO },
+					new Object[] { 1L, null })) {
+				assertThat(jrecv.invoke(null, none)).as("_jrecv %s", none).isNull();
+				assertThat(invoke("receiverObject", new Class<?>[] { Object.class }, none)).as("bridge %s", none)
+					.isNull();
+			}
+		}
+	}
+
 	// A specialized vector reaches a site as the same elements whichever copy reads it:
 	// the bridge's packedElements and the _jseq a dispatched site calls, over every
 	// packed shape -- the rank-1 ones as aref reads them, a rank-2 array and a quantized

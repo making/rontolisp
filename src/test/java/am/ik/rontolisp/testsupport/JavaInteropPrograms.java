@@ -79,8 +79,10 @@ public final class JavaInteropPrograms {
 	 * ({@code size}), a dispatched one ({@code shown}), receivers declared a
 	 * {@code Collection} / {@code Map}, a falsely declared argument -- and
 	 * {@code BigInteger} results: every Lisp value is refused and shown as {@code prin1}
-	 * shows it, a host list and map are called, and a {@code BigInteger} is a Lisp
-	 * integer. Prints {@link #HOST_OBJECT_OUTPUT}.
+	 * shows it -- a float, bignum or fixnum receiver is called as its {@code Double},
+	 * {@code BigInteger} or {@code Integer}, which has no {@code size} --, a host list
+	 * and map are called, and a {@code BigInteger} is a Lisp integer. Prints
+	 * {@link #HOST_OBJECT_OUTPUT}.
 	 */
 	public static final String HOST_OBJECT_PROGRAM = """
 			(defun row (thunk)
@@ -269,9 +271,9 @@ public final class JavaInteropPrograms {
 	public static final String HOST_OBJECT_OUTPUT = """
 			java:call expects a java object as the first argument, got (1 2)
 			"[1, 2]"
-			java:call expects a java object as the first argument, got 1.0e10
+			No matching method java.lang.Double.size with 0 argument(s)
 			"1.0E10"
-			java:call expects a java object as the first argument, got 1267650600228229401496703205376
+			No matching method java.math.BigInteger.size with 0 argument(s)
 			"1267650600228229401496703205376"
 			java:call expects a java object as the first argument, got 1/3
 			No matching method java.util.Objects.toString with 1 argument(s)
@@ -290,7 +292,60 @@ public final class JavaInteropPrograms {
 			(1 1 1 1 "[1]" "{k=1}")
 			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
 			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
-			java:call expects a java object as the first argument, got 5""";
+			No matching method java.lang.Integer.size with 0 argument(s)""";
+
+	/**
+	 * A Lisp value as a {@code java:call} receiver: called as the object it converts to
+	 * for an {@code Object} parameter -- a string a {@code String} (a mutable one too), a
+	 * fixnum its narrowest box, a float a {@code Double}, a bignum a {@code BigInteger},
+	 * a character a {@code Character}, {@code t} {@code Boolean.TRUE} -- at a site left
+	 * to run time ({@code call0}), a resolved one (a literal or declared {@code String}
+	 * receiver) and a receiver declared another class; {@code nil}, a symbol, a list and
+	 * a function are no receiver. Prints {@link #LISP_RECEIVER_OUTPUT}.
+	 */
+	public static final String LISP_RECEIVER_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun call0 (x m) (java:call x m))
+			(defun len (x)
+			  (declare (type (java:object "java.lang.String") x))
+			  (java:call x "length"))
+			(defun sized (x)
+			  (declare (type (java:object "java.util.Collection") x))
+			  (java:call x "size"))
+			(row (lambda () (list (java:call "abc" "codePointAt" 0) (java:call "a" "compareTo" "b")
+			                      (call0 "abc" "length") (java:call "abc" "matches" "a.c"))))
+			(row (lambda () (list (call0 42 "toString") (call0 (expt 2 40) "toString") (call0 1.5 "isNaN")
+			                      (call0 (expt 2 100) "bitLength") (call0 #\\a "charValue") (call0 t "booleanValue"))))
+			(row (lambda () (list (java:call (call0 42 "getClass") "getSimpleName")
+			                      (java:call (call0 (expt 2 40) "getClass") "getSimpleName")
+			                      (java:call (call0 "s" "getClass") "getSimpleName"))))
+			(let ((s (concatenate 'string "a" "bc")))
+			  (row (lambda () (list (len s) (call0 s "length")
+			                        (java:call (the (java:object "java.lang.String") s) "codePointAt" 1)))))
+			(row (lambda () (len 5)))
+			(row (lambda () (len nil)))
+			(row (lambda () (sized "abc")))
+			(row (lambda () (java:call "abc" "noSuch")))
+			(dolist (x (list nil 'foo (list 1) #'car))
+			  (row (lambda () (call0 x "toString"))))
+			""";
+
+	/** What {@link #LISP_RECEIVER_PROGRAM} prints. */
+	public static final String LISP_RECEIVER_OUTPUT = """
+			(97 -1 3 T)
+			("42" "1099511627776" NIL 101 #\\a T)
+			("Integer" "Long" "String")
+			(3 3 98)
+			java:call: the receiver is not a java.lang.String, got 5
+			java:call expects a java object as the first argument, got NIL
+			java:call: the receiver is not a java.util.Collection, got "abc"
+			No matching method java.lang.String.noSuch with 0 argument(s)
+			java:call expects a java object as the first argument, got NIL
+			java:call expects a java object as the first argument, got FOO
+			java:call expects a java object as the first argument, got (1)
+			java:call expects a java object as the first argument, got #<function CAR>""";
 
 	/**
 	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},

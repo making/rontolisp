@@ -336,6 +336,43 @@ public final class JavaOverloads {
 	}
 
 	/**
+	 * Whether a Lisp value of this kind is a {@code java:call} receiver: every kind but
+	 * {@code nil} (Java's {@code null}) and a function (no object of its own). Such a
+	 * value is called as the object it converts to for an {@code Object} parameter, so
+	 * {@code (java:call "abc" "codePointAt" 0)} calls {@code String.codePointAt} --
+	 * {@link #receiverClassName} names the class.
+	 * @param kind the receiver's kind
+	 * @return whether a value of it is called as a Java object
+	 */
+	public static boolean isReceiverKind(JavaKind.Lisp kind) {
+		return kind != JavaKind.Lisp.NIL && kind != JavaKind.Lisp.FUNCTION;
+	}
+
+	/**
+	 * The class of the object a {@code java:call} receiver of this kind is called as
+	 * ({@link #isReceiverKind}), when the kind fixes it: a string a {@code String}, a
+	 * float a {@code Double}, a BMP character a {@code Character}, a supplementary one
+	 * the {@code Integer} of its code point, a bignum a {@code BigInteger}, {@code t}
+	 * {@code Boolean.TRUE} -- what each converts to for an {@code Object} parameter. An
+	 * integer becomes the narrowest box that holds it, {@code Integer} or {@code Long},
+	 * so its class is the value's, not the kind's.
+	 * @param kind the receiver's kind
+	 * @return the class name, or {@code null} for an integer and a kind that is no
+	 * receiver
+	 */
+	public static @Nullable String receiverClassName(JavaKind.Lisp kind) {
+		return switch (kind) {
+			case T -> "java.lang.Boolean";
+			case BIGNUM -> BIG_INTEGER;
+			case FLOAT -> "java.lang.Double";
+			case STRING, STRING_1 -> "java.lang.String";
+			case CHAR -> "java.lang.Character";
+			case SUPPLEMENTARY_CHAR -> "java.lang.Integer";
+			case NIL, INTEGER, FUNCTION -> null;
+		};
+	}
+
+	/**
 	 * The conversion cost of a value of {@code kind} where {@code target} is expected --
 	 * THE cost table. Pure: it reads no value, so selection over kinds needs none.
 	 * @param kind the argument kind
