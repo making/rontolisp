@@ -436,6 +436,19 @@ oracle's `Cons`).
   `for` on the interpreter 8.95 s vs 4.18 s).
 - `%clojure-concat-step` lets its last member answer its own seq: re-wrapping it made a
   lazy multi-level `for` walk each element through one layer per outer element.
+- **A skip never nests a realization** (b93). `%clojure-realize` hands a thunk's wrapper
+  answer to `%clojure-realize-chain`, which forces the chain in a loop (the oracle's
+  `LazySeq.seq`) and memoizes the final seq into every cell it forced; a cell reads
+  realized-and-empty from the moment its thunk answers, so a self-answering body and a
+  throw further down the chain leave `nil`, both the oracle's answers. The runtime
+  producers skip in a loop inside one realization: `filter`, `concat` over empty members,
+  `for` (`%clojure-for-next`), `dedupe`, `partition-by`, the transducer puller. Before:
+  `(first (filter #(> % 100000) (iterate inc 0)))` overflowed every backend (50,000 the
+  interpreter and wasm, 20,000 wasm). Raw wasm (2026-10-03): the chain loop is its own
+  defun (256 B) because inlining it into `%clojure-realize` widened the analysis of
+  `%clojure-strict-seq`'s argument (+688 B in a vector-free program); `concat-step`
+  113 -> 206 B; a lazy program +255..362 B. Pin: clojure-spec
+  `long-skips-and-wrapper-chains-run-in-constant-stack`.
 - The printer realizes a wrapper where it stands and steps its tail, so an infinite seq
   prints without end like the oracle's; the cycle walk keeps a wrapper a leaf.
 

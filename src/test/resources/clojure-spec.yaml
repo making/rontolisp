@@ -479,6 +479,58 @@ cases:
       (println (take 10 b11-primes))
     expected: |
       (2 3 5 7 11 13 17 19 23 29)
+  - name: long-skips-and-wrapper-chains-run-in-constant-stack
+    # Oracle clj 1.12.6.1673 prints the same. A lazy-seq body answering another
+    # lazy-seq is forced in a loop (the oracle's LazySeq.seq), and filter, concat,
+    # dedupe, partition-by, a :when-filtered for and sequence skip a run inside one
+    # realization, so a run of skipped members nests nothing (50,000 overflowed
+    # the interpreter and both wasm legs, 20,000 both wasm legs). Every cell on a chain memoizes the
+    # final seq; a body answering its own seq reads as empty, and a throw further
+    # down a chain leaves the seq empty without re-running a body, like the oracle.
+    source: |
+      (println (first (filter #(> % 50000) (iterate inc 0))))
+      (defn b93-chain [n] (lazy-seq (if (< n 50000) (b93-chain (inc n)) (list n))))
+      (println (first (b93-chain 0)))
+      (println (first (filter #(> % 20000) (map inc (iterate inc 0)))))
+      (defn b93-filter [p s]
+        (lazy-seq
+          (when-let [s (seq s)]
+            (if (p (first s))
+              (cons (first s) (b93-filter p (rest s)))
+              (b93-filter p (rest s))))))
+      (println (first (b93-filter #(> % 20000) (iterate inc 0))))
+      (println (first (apply concat (concat (repeat 20000 (lazy-seq nil)) [[7]]))))
+      (println (take 2 (dedupe (concat (repeat 20000 1) (iterate inc 2)))))
+      (println (count (first (partition-by #(< % 20000) (iterate inc 0)))))
+      (println (first (for [x (iterate inc 0) :when (> x 20000)] x)))
+      (println (first (sequence (filter #(> % 20000)) (iterate inc 0))))
+      (def b93-inner (lazy-seq (list 1 2)))
+      (def b93-outer (lazy-seq b93-inner))
+      (println (seq b93-outer) (seq b93-inner))
+      (def b93-self (lazy-seq b93-self))
+      (println (seq b93-self))
+      (def b93-calls (atom 0))
+      (def b93-throws
+        (lazy-seq
+          (lazy-seq
+            (swap! b93-calls inc)
+            (if (= @b93-calls 1) (throw (ex-info "boom" {})) (list :ok)))))
+      (println (try (seq b93-throws) (catch Exception e (ex-message e))))
+      (println (seq b93-throws) @b93-calls)
+    expected: |
+      50001
+      50000
+      20001
+      20001
+      7
+      (1 2)
+      20000
+      20001
+      20001
+      (1 2) (1 2)
+      nil
+      boom
+      nil 1
   - name: nth-and-quot-as-values
     # nth/quot as values are lambdas with the Clojure argument order (a bare #'NTH
     # would take the index first).

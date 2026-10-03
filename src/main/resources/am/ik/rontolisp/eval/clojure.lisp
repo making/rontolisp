@@ -824,19 +824,50 @@
 
 (defun rontolisp::%clojure-realize (x)
   "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.
-   A thunk answering another wrapper chains through it; anything else seqs
-   strictly (a cons passes through, so a lazy tail stays lazy)."
+   A thunk answering another wrapper chains through it in a loop
+   (%clojure-realize-chain); anything else seqs strictly (a cons passes
+   through, so a lazy tail stays lazy). The cell reads as realized and empty
+   from the moment its thunk answers until the seq is known, so a throw
+   further down the chain or in the seq leaves nil behind, as the oracle's
+   LazySeq does."
   (let ((cell (car (cdr x))))
     (if (car cell)
         (let ((v (funcall (car cell))))
+          (rplaca cell nil)
           (let ((s
                  (if (rontolisp::%clojure-lazy-p v)
-                     (rontolisp::%clojure-realize v)
+                     (rontolisp::%clojure-realize-chain v)
                      (rontolisp::%clojure-strict-seq v))))
-            (rplaca cell nil)
             (rplacd cell s)
             s))
         (cdr cell))))
+
+(defun rontolisp::%clojure-realize-chain (v)
+  "The seq at the end of the chain of wrappers from V, each forced in turn in
+   a loop like the oracle's LazySeq.seq, so a chain of any length (a lazy-seq
+   body answering another lazy-seq per skipped element) runs in constant
+   stack; every cell it forces memoizes the final seq. A cell reads as
+   realized and empty while the chain runs, so a thunk answering its own
+   wrapper answers nil, like the oracle. Only a thunk's answer is seqed: a
+   realized cell already holds a seq."
+  (let ((more nil) (s nil) (done nil))
+    (do ()
+        (done (do ((p more (cdr p)))
+                  ((null p) s)
+                (rplacd (car p) s)))
+      (let ((c (car (cdr v))))
+        (if (car c)
+            (let ((w (funcall (car c))))
+              (rplaca c nil)
+              (setq more (cons c more))
+              (if (rontolisp::%clojure-lazy-p w)
+                  (setq v w)
+                  (progn
+                    (setq s (rontolisp::%clojure-strict-seq w))
+                    (setq done t))))
+            (progn
+              (setq s (cdr c))
+              (setq done t)))))))
 
 (defun rontolisp::%clojure-seq (coll)
   "The lazy-aware seq view: one-level realize for wrappers, the strict view
@@ -956,15 +987,17 @@
                      (rontolisp::%clojure-seq-all coll))))
 
 (defun rontolisp::%clojure-filter-lazy (pred coll)
-  "The lazy arm of %clojure-filter."
+  "The lazy arm of %clojure-filter. A run of dropped members is a loop inside
+   one realization, never one nested realization per member."
   (rontolisp::%clojure-make-lazy
    (lambda ()
      (let ((s (rontolisp::%clojure-seq coll)))
-       (cond ((null s) nil)
-             ((rontolisp::%clojure-filter-test pred (car s))
-              (cons (car s) (rontolisp::%clojure-filter-lazy pred (cdr s))))
-             (t (rontolisp::%clojure-seq
-                 (rontolisp::%clojure-filter-lazy pred (cdr s)))))))))
+       (do ()
+           ((or (null s) (rontolisp::%clojure-filter-test pred (car s)))
+            (if (null s)
+                nil
+                (cons (car s) (rontolisp::%clojure-filter-lazy pred (cdr s)))))
+         (setq s (rontolisp::%clojure-seq-rest s)))))))
 
 (defun rontolisp::%clojure-concat (colls)
   "Append the COLLS list: a wrapper when any member is lazy, strict append
@@ -983,15 +1016,18 @@
    last member answers its own seq, like the oracle's concat: re-wrapping it
    would stack one more layer per member reached, so a concat whose last
    member is again a concat (a for over several levels) walked each element
-   through every earlier layer."
-  (cond ((null colls) nil)
-        ((null (cdr colls)) (rontolisp::%clojure-seq (car colls)))
-        (t (let ((s (rontolisp::%clojure-seq (car colls))))
-             (if (null s)
-                 (rontolisp::%clojure-concat-step (cdr colls))
-                 (cons (car s)
-                       (rontolisp::%clojure-concat-lazy
-                        (cons (cdr s) (cdr colls)))))))))
+   through every earlier layer. A run of empty members is a loop."
+  (let ((cs colls) (s nil))
+    (do ()
+        ((or (null (cdr cs))
+             (progn
+               (setq s (rontolisp::%clojure-seq (car cs)))
+               s))
+         (if (null (cdr cs))
+             (rontolisp::%clojure-seq (car cs))
+             (cons (car s)
+                   (rontolisp::%clojure-concat-lazy (cons (cdr s) (cdr cs))))))
+      (setq cs (cdr cs)))))
 
 (defun rontolisp::%clojure-repeat (x)
   "The infinite seq of X."
