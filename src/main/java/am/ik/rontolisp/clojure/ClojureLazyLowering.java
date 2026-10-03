@@ -214,18 +214,18 @@ final class ClojureLazyLowering {
 	}
 
 	/**
-	 * {@code dorun}: the strict companion of {@code doseq} -- seqs are already strict
-	 * lists here, so realizing one is evaluating it; answers nil.
+	 * {@code dorun}: the spliced {@code %clojure-dorun} (or {@code -n} with a count),
+	 * walking the seq view to its end -- a lazy seq realizes member by member, a strict
+	 * one is already realized -- and answering nil.
 	 */
 	static LispVal dorunOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 1 || n == 2, "dorun takes a collection and an optional count");
 		if (n == 1) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(1)),
-					ClojureLowering.NIL_CONST);
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DORUN"), ctx.lower(items.get(1)));
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(1)), ctx.lower(items.get(2)),
-				ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DORUN-N"), ctx.lower(items.get(1)),
+				ctx.lower(items.get(2)));
 	}
 
 	/**
@@ -236,14 +236,16 @@ final class ClojureLazyLowering {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 1 || n == 2, "doall takes a collection and an optional count");
 		if (n == 1) {
-			return ctx.lower(items.get(1));
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DOALL"), ctx.lower(items.get(1)));
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DOALL-N"), ctx.lower(items.get(1)),
+				ctx.lower(items.get(2)));
 	}
 
 	/**
 	 * {@code dorun} as a value: over one collection (or a count and a collection),
-	 * answering nil; any other count signals, like a call's arity refusal.
+	 * realizing it like the call and answering nil; any other count signals, like a
+	 * call's arity refusal.
 	 */
 	static LispVal dorunValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("dorun-args"));
@@ -251,13 +253,18 @@ final class ClojureLazyLowering {
 				LispString.literal("dorun takes a collection and an optional count"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
-				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)), ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DORUN"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
 				ClojureLowerUtil.list(
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
-						ClojureLowering.NIL_CONST),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DORUN-N"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);
@@ -265,7 +272,7 @@ final class ClojureLazyLowering {
 
 	/**
 	 * {@code doall} as a value: over one collection (or a count and a collection),
-	 * answering the collection; any other count signals.
+	 * realizing it like the call and answering the collection; any other count signals.
 	 */
 	static LispVal doallValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("doall-args"));
@@ -276,12 +283,15 @@ final class ClojureLazyLowering {
 				ClojureLowerUtil.list(
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DOALL"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
 				ClojureLowerUtil.list(
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args)),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DOALL-N"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args))),
 				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arity));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), body);

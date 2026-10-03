@@ -88,17 +88,18 @@ import org.jspecify.annotations.Nullable;
  * {@code drop}/{@code first}/{@code rest}/{@code next}/{@code seq}/
  * {@code cons}/{@code concat}/{@code map}/{@code filter} realize through the same view,
  * so {@code (take 5 (iterate inc 0))} terminates; printing a wrapper (or a list holding a
- * lazy tail) refuses with {@code #<LazySeq>} instead of hanging. There is no chunking:
- * every element realizes singly. {@code nth} and {@code quot} as VALUES are
- * correctly-ordered lambdas wrapping the primitive (a bare {@code #'NTH} would have the
- * operands backwards). A keyword {@code :foo} is the list {@code (:C%KEYWORD "foo")}
- * holding its spelling verbatim (case-preserved, so {@code :a} and {@code :A} stay apart
- * and compare unequal); {@code println}/{@code print}/{@code str} spell it with its
- * colon, and a keyword in call position {@code (:k m)} (or with a default
- * {@code (:k m dflt)}) is the same table-aware read {@code get} lowers to. {@code false}
- * is a DISTINCT non-{@code NIL} object -- the value of {@code rontolisp::%clojure-false},
- * bound before anything else runs, a symbol spelled {@code false} -- so
- * {@code (= false nil)} is false and {@code (nil?
+ * lazy tail) realizes it as it writes, like the oracle (an infinite one prints without
+ * end). There is no chunking: every element realizes singly. {@code nth} and {@code quot}
+ * as VALUES are correctly-ordered lambdas wrapping the primitive (a bare {@code #'NTH}
+ * would have the operands backwards). A keyword {@code :foo} is the list
+ * {@code (:C%KEYWORD "foo")} holding its spelling verbatim (case-preserved, so {@code :a}
+ * and {@code :A} stay apart and compare unequal);
+ * {@code println}/{@code print}/{@code str} spell it with its colon, and a keyword in
+ * call position {@code (:k m)} (or with a default {@code (:k m dflt)}) is the same
+ * table-aware read {@code get} lowers to. {@code false} is a DISTINCT non-{@code NIL}
+ * object -- the value of {@code rontolisp::%clojure-false}, bound before anything else
+ * runs, a symbol spelled {@code false} -- so {@code (= false nil)} is false and
+ * {@code (nil?
  * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
  * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
  * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,

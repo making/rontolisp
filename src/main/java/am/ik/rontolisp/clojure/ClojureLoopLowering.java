@@ -249,12 +249,23 @@ final class ClojureLoopLowering {
 	}
 
 	/**
-	 * {@code for}: a strict list comprehension over the seq view -- nested stepped
-	 * {@code do} loops ({@link #stepOf}) accumulating in reverse, so no backend learns a
-	 * representation. Modifiers behave per level, left to right: {@code :when} skips the
-	 * element, {@code :while} ends its level's loop (an outer level's ends the whole
-	 * comprehension), {@code :let} binds sequentially. Answers the strict list,
-	 * {@code nil} when empty (the {@code rest}/{@code take} divergence, not {@code ()}).
+	 * What a {@code for} step answers when its {@code :when} fails: the level steps on.
+	 */
+	static final LispSymbol FOR_SKIP = new LispSymbol(":C%FOR-SKIP");
+
+	/** What a {@code for} step answers when its {@code :while} fails: the level ends. */
+	static final LispSymbol FOR_STOP = new LispSymbol(":C%FOR-STOP");
+
+	/**
+	 * {@code for}: the first collection and one step closure per binding level
+	 * ({@link #forStep}) handed to the spliced {@code %clojure-for}, which runs the
+	 * oracle's comprehension over them under the lazy-or-strict rule of
+	 * {@code map}/{@code filter}, per collection met: realized at once as a strict list
+	 * while every collection is strict ({@code nil} when empty -- the
+	 * {@code rest}/{@code take} divergence, not {@code ()}), a lazy seq from the first
+	 * lazy one on, so {@code first}/{@code take} realize only what they answer. The first
+	 * collection runs when the {@code for} runs, every later one each time its level
+	 * starts, like the oracle's.
 	 */
 	static LispVal forOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "for takes a binding vector and a body");
@@ -265,16 +276,57 @@ final class ClojureLoopLowering {
 			collectSeqNames(level, scope);
 		}
 		return ctx.inScope(scope, () -> {
-			LispSymbol acc = ctx.freshTemp();
-			LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), acc,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), ctx.lower(items.get(2)), acc));
-			for (int i = levels.size() - 1; i >= 0; i--) {
-				inner = seqLevel(ctx, levels.get(i), inner, scope, "for");
-			}
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), inner,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc));
+			LispVal coll = ctx.lower(levels.get(0).coll());
+			LispVal step = forStep(ctx, levels, 0, items.get(2), scope);
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-FOR"), coll, step,
+					new LispInteger(levels.size()));
 		});
+	}
+
+	/**
+	 * The step closure of one {@code for} level: {@code (lambda (x) ...)} binding the
+	 * pattern to one element afresh (a closure in the body keeps its own), then the
+	 * level's modifiers in order -- a failed {@code :when} answers {@link #FOR_SKIP}, a
+	 * failed {@code :while} {@link #FOR_STOP}, {@code :let} binds sequentially -- then
+	 * the body's value (the innermost level) or the next level's collection consed onto
+	 * its step closure (any other level), so the runtime walks every level with no
+	 * per-site loop.
+	 */
+	static LispVal forStep(ClojureLowering ctx, List<ClojureLowering.SeqLevel> levels, int index, LispVal bodyDatum,
+			Map<String, ClojureLowering.Kind> scope) {
+		ClojureLowering.SeqLevel level = levels.get(index);
+		LispVal wrap;
+		if (index == levels.size() - 1) {
+			wrap = ctx.lower(bodyDatum);
+		}
+		else {
+			LispVal next = ctx.lower(levels.get(index + 1).coll());
+			wrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), next,
+					forStep(ctx, levels, index + 1, bodyDatum, scope));
+		}
+		for (int m = level.modifiers().size() - 1; m >= 0; m--) {
+			ClojureLowering.SeqModifier modifier = level.modifiers().get(m);
+			switch (modifier.kind()) {
+				case ":when" -> wrap = ctx.ifFalsey(ctx.lower(modifier.datum()), wrap, FOR_SKIP);
+				case ":while" -> wrap = ctx.ifFalsey(ctx.lower(modifier.datum()), wrap, FOR_STOP);
+				case ":let" -> wrap = seqLetOf(ctx, modifier.datum(), wrap, scope, "for");
+				default -> throw new LispReadException("Invalid 'for' keyword " + modifier.kind());
+			}
+		}
+		LispSymbol element = ctx.freshTemp();
+		LispVal bound;
+		if (level.pattern() instanceof LispSymbol) {
+			String name = ClojureLowerUtil.plainName(level.pattern(), "for");
+			bound = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), element))), wrap);
+		}
+		else {
+			List<LispVal> pairs = new ArrayList<>();
+			ClojureBindingLowering.destructureInto(ctx, level.pattern(), element, pairs, scope, "for");
+			bound = pairs.isEmpty() ? wrap
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs), wrap);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(element)), bound);
 	}
 
 	/**

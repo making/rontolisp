@@ -10,8 +10,8 @@ There is no chunking: every element realizes singly. The body is its own zero-ar
 `recur` target: a `recur` in tail position re-runs the thunk itself (a recur with
 arguments is an arity error).
 
-A lazy seq prints as `#<LazySeq>` (a lazy tail truncates with `...`) instead of hanging
-the printer, so only print a lazy seq behind `take`.
+Printing realizes a lazy seq, like the oracle: an empty one prints `()`, and an infinite
+one prints without end, so print an infinite seq behind `take`.
 
 ```clojure
 (println (take 5 (lazy-seq (cons 1 (lazy-seq (cons 2 nil)))))) ; (1 2)

@@ -1,9 +1,9 @@
 # Iteration
 
 Side-effecting loops lower to nested loops stepping through the seq view one element at
-a time (a lazy input included), and `for` to the same nesting accumulating in reverse into
-a strict list. `for` answers no lazy seq and there is no chunking; the empty `for` is
-`nil`.
+a time (a lazy input included). `for` answers a strict list over strict collections and a
+lazy seq from its first lazy collection on; there is no chunking, and the empty strict
+`for` is `nil`. `dorun`/`doall` realize a lazy seq to its end.
 
 | Name | Example | Result |
 |---|---|---|

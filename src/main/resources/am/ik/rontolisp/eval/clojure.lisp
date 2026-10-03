@@ -116,7 +116,9 @@
 (defun rontolisp::%clojure-node-p (x)
   "Whether X can close a cycle: a pair, a non-string vector, or a table.
    A lazy wrapper is a leaf: its cell is machinery, never user data, and
-   %clojure-write refuses it without forcing (b11)."
+   %clojure-write realizes it where it stands, so the walk never forces one
+   (an infinite seq then prints without end, like the oracle's, instead of
+   hanging silently in the walk)."
   (and (not (rontolisp::%clojure-lazy-p x))
        (or (consp x) (and (vectorp x) (not (stringp x))) (hash-table-p x))))
 
@@ -242,7 +244,14 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
-        ((rontolisp::%clojure-lazy-p x) (write-string "#<LazySeq>" stream))
+        ((rontolisp::%clojure-lazy-p x)
+         ;; realized as it prints, like the oracle: empty is (), anything
+         ;; else a seq the cons arm writes, realizing each lazy tail it meets
+         (let ((s (rontolisp::%clojure-realize x)))
+           (if (null s)
+               (write-string "()" stream)
+               (rontolisp::%clojure-write s nil-replacement readable stream
+                                          labels))))
         ((rontolisp::%clojure-re-pattern-p x)
          (write-string "#\"" stream)
          (write-string (rontolisp::%clojure-re-pat-source x) stream)
@@ -315,16 +324,16 @@
          (write-char #\( stream)
          (rontolisp::%clojure-write (car x) nil-replacement readable stream
                                     labels)
-         (do ((rest (cdr x) (cdr rest)))
-             ((or (not (consp rest)) (rontolisp::%clojure-lazy-p rest)
+         (do ((rest
+               (rontolisp::%clojure-seq-rest x)
+               (rontolisp::%clojure-seq-rest rest)))
+             ((or (not (consp rest))
                   (and labels (rontolisp::%clojure-labeled-p rest labels)))
-              (cond
-               ((rontolisp::%clojure-lazy-p rest) (write-string " ..." stream))
-               ((not (null rest))
-                (progn
-                  (write-string " . " stream)
-                  (rontolisp::%clojure-write rest nil-replacement readable
-                                             stream labels)))))
+              (if (not (null rest))
+                  (progn
+                    (write-string " . " stream)
+                    (rontolisp::%clojure-write rest nil-replacement readable
+                                               stream labels))))
            (write-char #\Space stream)
            (rontolisp::%clojure-write (car rest) nil-replacement readable stream
                                       labels))
@@ -726,14 +735,19 @@
    (lambda () (rontolisp::%clojure-concat-step colls))))
 
 (defun rontolisp::%clojure-concat-step (colls)
-  "The first surviving head of the COLLS list over its lazy tail, or nil."
-  (if (null colls)
-      nil
-      (let ((s (rontolisp::%clojure-seq (car colls))))
-        (if (null s)
-            (rontolisp::%clojure-concat-step (cdr colls))
-            (cons (car s)
-             (rontolisp::%clojure-concat-lazy (cons (cdr s) (cdr colls))))))))
+  "The first surviving head of the COLLS list over its lazy tail, or nil. The
+   last member answers its own seq, like the oracle's concat: re-wrapping it
+   would stack one more layer per member reached, so a concat whose last
+   member is again a concat (a for over several levels) walked each element
+   through every earlier layer."
+  (cond ((null colls) nil)
+        ((null (cdr colls)) (rontolisp::%clojure-seq (car colls)))
+        (t (let ((s (rontolisp::%clojure-seq (car colls))))
+             (if (null s)
+                 (rontolisp::%clojure-concat-step (cdr colls))
+                 (cons (car s)
+                       (rontolisp::%clojure-concat-lazy
+                        (cons (cdr s) (cdr colls)))))))))
 
 (defun rontolisp::%clojure-repeat (x)
   "The infinite seq of X."
@@ -803,6 +817,127 @@
         ((null s) (reverse acc))
       (setq acc (cons (car s) acc))
       (setq s (rontolisp::%clojure-seq (cdr s))))))
+
+(defun rontolisp::%clojure-dorun (coll)
+  "(dorun coll): the seq of COLL walked to its end, realizing a lazy one member
+   by member; answers nil."
+  (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
+      ((null s) nil)))
+
+(defun rontolisp::%clojure-dorun-n (n coll)
+  "(dorun n coll): the oracle's walk -- step to the next while the seq is not
+   empty and N stays positive -- so up to N+1 members realize; answers nil."
+  (let ((s (rontolisp::%clojure-seq coll)) (left n))
+    (do ()
+        ((or (null s) (<= left 0)) nil)
+      (setq s (rontolisp::%clojure-seq-rest s))
+      (setq left (- left 1)))))
+
+(defun rontolisp::%clojure-doall (coll)
+  "(doall coll): COLL realized like dorun, answered itself (never coerced)."
+  (rontolisp::%clojure-dorun coll)
+  coll)
+
+(defun rontolisp::%clojure-doall-n (n coll)
+  "(doall n coll): COLL realized like (dorun n coll), answered itself."
+  (rontolisp::%clojure-dorun-n n coll)
+  coll)
+
+;;;; for: the oracle's comprehension over per-level step closures.
+;;
+;; The lowering compiles each binding level to a step closure over one element:
+;; it binds the pattern, runs the level's modifiers in order and answers
+;; :C%FOR-SKIP (a :when failed), :C%FOR-STOP (a :while failed, so the level
+;; ends), the body's value (the innermost level) or (coll . step) for the next
+;; level (any other level). The lazy-or-strict rule of map/filter, per
+;; collection met: while every collection a level steps over is strict, the
+;; answer realizes at once through nested loops (no per-element wrapper); from
+;; the first lazy one on -- the first collection included -- the rest is a lazy
+;; seq, so first/take realize only what they answer and an infinite level ends
+;; behind them.
+
+(defun rontolisp::%clojure-for (coll step depth)
+  "(for ...) over the first collection COLL, the outermost STEP closure and the
+   DEPTH (the number of binding levels): a lazy seq when COLL is lazy, else the
+   realized strict list, or that list's prefix concatenated before the lazy
+   rest when a later level meets a lazy collection."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-for-lazy coll step depth)
+      (let ((box (list nil)))
+        (let ((rest (rontolisp::%clojure-for-walk coll step depth box)))
+          (if rest
+              (rontolisp::%clojure-concat (cons (reverse (car box)) rest))
+              (reverse (car box)))))))
+
+(defun rontolisp::%clojure-for-walk (coll step depth box)
+  "The level over COLL walked eagerly, each result pushed onto (car BOX); a
+   :while stop ends the level before the next element realizes. Answers nil
+   when the level ran to its end, or the lazy rest as a list of seqs once a
+   level below meets a lazy collection: that level's seq, then the rest of
+   every level above it, innermost first."
+  (let ((s (rontolisp::%clojure-seq coll)) (done nil) (rest nil))
+    (do ()
+        ((or done (null s)) rest)
+      (let ((r (funcall step (car s))))
+        (cond ((eq r :C%FOR-SKIP) nil)
+              ((eq r :C%FOR-STOP) (setq done t))
+              ((= depth 1) (rplaca box (cons r (car box))))
+              ((rontolisp::%clojure-lazy-p (car r))
+               (setq rest
+                     (list
+                      (rontolisp::%clojure-for-lazy (car r) (cdr r) (- depth 1))
+                      (rontolisp::%clojure-for-lazy (cdr s) step depth)))
+               (setq done t))
+              (t
+               (let ((below
+                      (rontolisp::%clojure-for-walk (car r) (cdr r) (- depth 1)
+                                                    box)))
+                 (if below
+                     (progn
+                       (setq rest
+                             (append below
+                                     (list
+                                      (rontolisp::%clojure-for-lazy (cdr s) step
+                                                                    depth))))
+                       (setq done t)))))))
+      (if (not done) (setq s (rontolisp::%clojure-seq-rest s))))))
+
+(defun rontolisp::%clojure-for-lazy (coll step depth)
+  "The level over COLL as a lazy seq, like the oracle's
+   (fn iter [s] (lazy-seq (loop [s s] ...))): realizing it steps COLL to the
+   next element the level keeps."
+  (rontolisp::%clojure-make-lazy
+   (lambda () (rontolisp::%clojure-for-next coll step depth))))
+
+(defun rontolisp::%clojure-for-next (coll step depth)
+  "One realization of a lazy for level: the next kept element's result consed
+   onto the level's rest (the innermost level), the next non-empty inner level
+   concatenated before the rest (any other level), or nil at the end or a
+   :while stop. A run of skipped elements or empty inner levels is a loop,
+   never a deeper stack."
+  (let ((s (rontolisp::%clojure-seq coll)) (out nil) (done nil))
+    (do ()
+        ((or done (null s)) out)
+      (let ((r (funcall step (car s))))
+        (cond ((eq r :C%FOR-SKIP) (setq s (rontolisp::%clojure-seq-rest s)))
+              ((eq r :C%FOR-STOP) (setq done t))
+              ((= depth 1)
+               (setq out
+                     (cons r (rontolisp::%clojure-for-lazy (cdr s) step depth)))
+               (setq done t))
+              (t (let ((fs
+                        (rontolisp::%clojure-seq
+                         (rontolisp::%clojure-for-lazy (car r) (cdr r)
+                                                       (- depth 1)))))
+                   (if (null fs)
+                       (setq s (rontolisp::%clojure-seq-rest s))
+                       (progn
+                         (setq out
+                               (rontolisp::%clojure-concat
+                                (list fs
+                                      (rontolisp::%clojure-for-lazy (cdr s) step
+                                                                    depth))))
+                         (setq done t))))))))))
 
 (defun rontolisp::%clojure-mapv (f colls)
   "Map F over the COLLS list, answering a vector (of empty, the empty vector)."

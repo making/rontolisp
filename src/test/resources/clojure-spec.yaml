@@ -422,8 +422,8 @@ cases:
       (11 22)
   - name: take-over-repeat-cycle-iterate-repeatedly
     # The infinite constructors terminate behind take; their finite arities
-    # answer strict lists and print like the oracle. A bare infinite seq never
-    # prints: it refuses with #<LazySeq>, and a lazy tail truncates with ...
+    # answer strict lists and print like the oracle. A lazy seq prints realized,
+    # like the oracle -- an empty one as () -- so only an infinite one needs take.
     source: |
       (println (take 5 (repeat 3)))
       (println (take 5 (cycle [1 2])))
@@ -432,7 +432,7 @@ cases:
       (println (repeat 3 :x))
       (println (repeatedly 2 (fn [] 7)))
       (println (take 10 (cycle [])))
-      (println (iterate inc 0))
+      (println (map inc (lazy-seq [1 2])) (filter odd? (lazy-seq [2])) [(map inc (lazy-seq [1]))])
       (println (take 3 (drop 2 (iterate inc 0))))
       (println (take 3 (map inc (iterate inc 0))))
       (println (take 4 (filter odd? (iterate inc 0))))
@@ -446,7 +446,7 @@ cases:
       (:x :x :x)
       (7 7)
       nil
-      #<LazySeq>
+      (2 3) () [(2)]
       (2 3 4)
       (1 2 3)
       (1 3 5 7)
@@ -1817,8 +1817,8 @@ cases:
   - name: for-over-lazy-map
     # for steps through a lazy input one realized level at a time, so a lazy tail
     # never reaches the pattern as wrapper internals, and a :while stops an
-    # infinite input. The answer stays the strict list. Measured on the oracle
-    # (Clojure CLI 1.12.6).
+    # infinite input. Over a lazy first collection the answer is a lazy seq, which
+    # prints realized. Measured on the oracle (Clojure CLI 1.12.6).
     source: |
       (println (for [[idx elt] (map vector (iterate inc 0) "zzab")] idx))
       (println (for [[i c] (map vector (iterate inc 0) "zzab") :when (= c \a) :let [j (* i 10)]] j))
@@ -1831,6 +1831,58 @@ cases:
       (1 3 5 7)
       ([1 11] [1 21] [2 11] [2 21])
       (1 2 2 3)
+  - name: logging-seq-realizes-only-what-first-takes
+    # Over a lazy first collection for answers a lazy seq, so first realizes only
+    # up to the first element its :when keeps -- the book's lazy_index_of_any.clj
+    # shape prints one and four lines, like the oracle -- and take ends an infinite
+    # comprehension. Over strict collections the answer realizes at once, up to the
+    # first lazy collection a later level meets: the rest is lazy from there, so an
+    # infinite inner level ends behind first too. Every line diffed against the
+    # oracle (Clojure CLI 1.12.6).
+    source: |
+      (defn lazy-for-logging-seq [coll]
+        (lazy-seq
+          (when-let [s (seq coll)]
+            (do (println "Iterating over" (first s))
+                (cons (first s) (lazy-for-logging-seq (rest s)))))))
+      (defn lazy-for-index-of-any [pred coll]
+        (first (for [[idx elt] (map vector (iterate inc 0) coll (lazy-for-logging-seq coll)) :when (pred elt)] idx)))
+      (println (lazy-for-index-of-any #{\z \a} "zzabyycdxx"))
+      (println (lazy-for-index-of-any #{\b \y} "zzabyycdxx"))
+      (println (take 5 (for [x (iterate inc 0)] (* x x))))
+      (println (take 5 (for [x (iterate inc 0) y [:a :b] :when (odd? x)] [x y])))
+      (println (take 3 (for [x (iterate inc 1) y (iterate inc x) :while (< y (+ x 2))] [x y])))
+      (println (first (for [x (iterate inc 0) :let [y (* x x)] :when (> y 50)] y)))
+      (println (map (fn [f] (f)) (for [x (lazy-seq [1 2])] (fn [] x))))
+      (println (for [x (lazy-seq [])] x))
+      (def lazy-for-seen (atom []))
+      (dorun (for [x (map inc (lazy-seq [1 2]))] (swap! lazy-for-seen conj x)))
+      (println @lazy-for-seen)
+      (println (first (for [x [1 2] y (iterate inc 0)] [x y])))
+      (def lazy-for-later (for [x [1 2] y (lazy-for-logging-seq [10 20])] [x y]))
+      (println "built")
+      (println (first lazy-for-later))
+      (println (for [x [1 2 3] y (if (= x 2) (lazy-seq [:a :b]) [:c])] [x y]))
+    expected: |
+      Iterating over z
+      0
+      Iterating over z
+      Iterating over z
+      Iterating over a
+      Iterating over b
+      3
+      (0 1 4 9 16)
+      ([1 :a] [1 :b] [3 :a] [3 :b] [5 :a])
+      ([1 1] [1 2] [2 2])
+      64
+      (1 2)
+      ()
+      [2 3]
+      [1 0]
+      built
+      Iterating over 10
+      [1 10]
+      ([1 :c] [2 :a] [2 :b] [3 :c])
   - name: doseq-does-not-yield-lazy-internals
     # doseq walks a lazy input the same stepped way: destructuring, :when, :let
     # and :while see only the elements. Measured on the oracle (Clojure CLI 1.12.6).
@@ -1880,9 +1932,10 @@ cases:
       0 1 2
       {0 :a} (0 :x 1 :y) (2 3 2 3 2)
   - name: dorun-doall
-    # Seqs are already strict, so realizing one is evaluating it: dorun answers
-    # nil, doall the collection itself (never coerced -- a vector stays a vector).
-    # Both take an optional count, and both name function values.
+    # dorun walks a collection to its end, realizing a lazy one, and answers nil;
+    # doall answers the collection itself (never coerced -- a vector stays a
+    # vector). With a count both stop like the oracle's (n+1 members realize),
+    # and both name function values.
     source: |
       (println (dorun [1 2 3]))
       (println (doall [1 2 3]))
@@ -1895,6 +1948,13 @@ cases:
       (println (doall (map inc [1 2])))
       (println (map dorun [[1] [2]]))
       (println (map doall [[1] [2]]))
+      (def lazy-dorun-seen (atom []))
+      (dorun (map #(swap! lazy-dorun-seen conj %) (lazy-seq [7 8])))
+      (println @lazy-dorun-seen)
+      (def lazy-dorun-count (atom 0))
+      (dorun 1 (map (fn [x] (swap! lazy-dorun-count inc) x) (iterate inc 1)))
+      (println @lazy-dorun-count)
+      (println (doall (map inc (lazy-seq [1 2]))) (count (doall 1 (map inc (lazy-seq [1 2 3])))))
     expected: |
       nil
       [1 2 3]
@@ -1906,6 +1966,9 @@ cases:
       (2 3)
       (nil nil)
       ([1] [2])
+      [7 8]
+      2
+      (2 3) 3
   - name: defmacro-unless-expands-before-backends
     # A defmacro is a compile-time expander plus its runtime table entry: call sites
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees

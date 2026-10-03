@@ -63,8 +63,8 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `list*` | a right fold of `cons` over the seq view | of one argument, just its seq (signalling for a non-collection, like the oracle) |
 | `doseq` | nested stepped `do` loops over the seq view around an implicit `do`, answering `nil` (b81: `(do ((s view (%clojure-seq-rest s))) ((null s)) (let ((x (car s))) ...))`, `ClojureLoopLowering.stepOf`; a `dolist` walked a realized lazy cons's wrapper tail `(:C%LAZY cell)` as list structure, so `(for [[i e] (map vector (iterate inc 0) "ab")] i)` destructured `:C%LAZY` and signalled `seq needs a collection`; the step realizes the next level only when the next element is wanted, so a `:while` stops an infinite input. +1,094 B raw wasm for `(println (for [x [1 2 3]] (* x 10)))` 35,215 -> 36,309 and `(doseq [x [1 2 3]] (println x))` 31,575 -> 32,669, 2026-10-02: the spliced `%clojure-seq-rest`/`-realize`) | `:when` skips, `:while` ends its level through a block (an outer level's ends the whole form), `:let` binds sequentially; patterns destructure like `let`; an empty vector runs the body once, `nil` never |
 | `dotimes [i n]` | the core `dotimes` over `(truncate n)`, answering `nil` | the count runs through `truncate` first (the oracle's `intCast`: `2.5` counts `0 1`, a non-number signals there); exactly one plain name and count, else a named refusal |
-| `for` | nested stepped `do` loops (the `doseq` shape) accumulating in reverse into a strict list | `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); empty is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
-| `dorun`/`doall` | the strict companions: the collection (and the optional count) evaluated, answering `nil`/the collection itself, each a function value too | seqs are already strict, so realizing is evaluating; `doall` never coerces (a vector stays a vector) |
+| `for` | `(rontolisp::%clojure-for coll step depth)`: the first collection plus one step closure per level (b82, "Lazy `for`" below) | strict while every collection met is strict, lazy from the first lazy one on; `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); an empty strict answer is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
+| `dorun`/`doall` | `%clojure-dorun`/`-doall` (`-n` with a count): the seq view walked to its end with `%clojure-seq-rest`, answering `nil`/the collection itself, each a function value too | a lazy seq realizes (b82: they only evaluated, so `(dorun (map f lazy))` ran nothing); with a count the oracle's walk, `n + 1` members realize; `doall` never coerces (a vector stays a vector) |
 | `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value, a per-multimethod prefers table and an `Object`-method slot in four globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table (a keyword dispatch value takes the lookup plus an optional default, like `(:k m dflt)`, so multi-argument calls dispatch on it -- decided 2026-10-01, b39; set/vector values share the rest-tolerant shape while a map literal stays the attr-map, like the oracle); `defmethod` stores a parameter lambda (destructuring included) under the dispatch value lowered by `dispatchKeyForm` -- a class spelling (`String`, `Number`, ..., dotted/`java.lang`/imported names, known record/deftype names) onto the keyword the `class` dispatcher produces for it, `nil` onto the `(:C%NIL)` marker (the dispatcher maps a true nil onto it first, so no table ever keys on nil, while a dispatch value that literally is `:nil` keeps its keyword row, like the oracle; a `class` call inside the dispatch function answers nil itself for a nil
 argument, so the null test maps it onto the marker too -- bare, wrapped in another
 function, through a named `defn` / `def`'d function (the `defmulti` re-lowers the
@@ -259,11 +259,11 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   unspecified; strings seq to characters, which print in Common Lisp notation; a lazy
   seq is the memoized-thunk wrapper `(:C%LAZY cell)` (b11: the body runs at most once
   per object, `take`/`drop`/`first`/`rest`/`next`/`seq`/`map`/`filter`/`concat` realize
-  through it, printing refuses with `#<LazySeq>` instead of hanging, never a bare
-  infinite print); there is no chunking, so an end-less `range` stays refused by name
+  through it, printing realizes it like the oracle, b82 -- an infinite one prints
+  without end); there is no chunking, so an end-less `range` stays refused by name
   (spell it with `iterate`). Every verb reaches a lazy input (b88, "Lazy inputs reach every
   verb" below): the whole-collection consumers realize it, the prefix consumers step
-  through it; `for` still answers a strict list (b82).
+  through it; `for` is lazy from its first lazy collection on (b82).
 - protocols (lowered in b13, below), `set!` (of a deftype mutable field in b61,
   of a thread-bound dynamic var and the always-bound compiler flags in b75),
   `var`/`#'` (lowered in b80, "Vars (b80)" below; backquote lowered in b12, below; regex
@@ -290,8 +290,9 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   measured on the oracle 2026-10-01); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
   prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
-  functions as `#<procedure>`, a lazy seq as `#<LazySeq>` (a lazy tail truncates with
-  ` ...`, so no bare infinite print ever hangs); a record prints as its literal
+  functions as `#<procedure>`, a lazy seq realized like the oracle (an empty one `()`,
+  b82), but `str` spells its members where the oracle answers
+  `clojure.lang.LazySeq@<hash>`; a record prints as its literal
   `#user.R{:a 7}` like the oracle (b58, lifting the wrapper-print deviation), but `str`
   spells the literal too where the oracle answers `user.R@<hash>`; a
   deftype prints as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; `class` of a
@@ -461,7 +462,7 @@ oracle's lowercase; b77 qualifies the unresolved symbols too, so `macros/bench-1
 prints the oracle's bytes: `clojure.core/let`, `examples.macros.bench-1/start`,
 `java.lang.System/nanoTime`), plus `preface` since b72: its `(use :reload ...)` inside a `deftest` captures
 the file's print where the `require` runs); of the 7 `macros*`, `examples.macros.chain-4/chain` qualifies like the oracle; the rest
-stop at other gaps (`read`, `meta`/`#'` -- closed by b80, below --, `String` as a value (closed by b83), the lazy `for` input (b81 removed its 2 errors, the 2 `with-out-str` line-count failures are b82's strict `for`), the host
+stop at other gaps (`read`, `meta`/`#'` -- closed by b80, below --, `String` as a value (closed by b83), the lazy `for` input (b81 removed its 2 errors, b82 the 2 `with-out-str` line-count failures: `lazy-index-of-any` prints the oracle's bytes since 2026-10-03), the host
 stack overflow, `clojure.set` -- measured after b57/b59/b60 merged; `proxy` over a class
 joined them then and left with b71, unmeasured on the corpus here).
 The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
@@ -732,10 +733,11 @@ pinned in `clojure-spec.yaml` (run on all four backends) and in
 `ClojureLoweringTest` (the lowered shapes). Imperative loops and comprehensions lower the same way (b10):
 `doseq` as nested stepped loops over the seq view answering `nil` (an empty vector
 runs the body once), `dotimes` as the core `dotimes` over a truncated count,
-`for` as the same loops accumulating in reverse into a strict list
-(`:when`/`:while`/`:let` per level, an inner `:while` ending only its level like the
-oracle, destructuring through the `let` lowering, `dorun`/`doall` as the strict
-companions) -- each pinned in `clojure-spec.yaml` (run on all four backends) or,
+`for` as per-level step closures over the spliced `%clojure-for` (b82; it was the
+same loops accumulating into a strict list until then) (`:when`/`:while`/`:let` per
+level, an inner `:while` ending only its level like the oracle, destructuring through the
+`let` lowering, `dorun`/`doall` walking a lazy seq to its end) -- each pinned in
+`clojure-spec.yaml` (run on all four backends) or,
 for the lowered shapes and the modifier/arity refusals, in `ClojureLoweringTest`.
 Printing runs through the spliced library (b07): `println`/`print`/`pr`/`prn`
 write straight to the stream, `str`/`pr-str` build strings, the `clojure> ` echo
@@ -1011,6 +1013,65 @@ branch).
 
 Pinned by `clojure-spec.yaml` (`whole-seq-consumers-realize-a-lazy-input`, all four backends)
 and `ClojureLoweringTest.wholeCollectionConsumersRealizeAndPrefixConsumersStep`.
+
+## Lazy `for` and the realizing printer (b82)
+
+Decided 2026-10-03 against `clj` 1.12.6.1673. The premise "answer a lazy wrapper from
+`for`" was measured first, alone: over `(for [x (map inc (lazy-seq [1 2 3]))] x)`, 22 of 37
+consumer probes regressed against the strict `for` (printing `#<LazySeq>`, `count` 2, `last`
+a cell, `apply`/`sort`/`some` errors, ...; the strict `for` matched the oracle in 36, hung
+on `(take 5 (for [x (iterate inc 0)] ...))`). So the lazy `for` landed after b88 and with a
+printer that realizes; then 36 of 37 match (`str` spells the members where the oracle
+answers `clojure.lang.LazySeq@<hash>`), and the corpus `lazy-index-of-any` prints the
+oracle's bytes.
+
+- **Shape**: `(rontolisp::%clojure-for coll step depth)` -- the first collection, one step
+  closure per level (`ClojureLoopLowering.forStep`: binds the pattern afresh per element,
+  runs the modifiers, answers `:C%FOR-SKIP`/`:C%FOR-STOP`, the body's value at the
+  innermost level, else `(next-coll . next-step)`), and the level count. The iteration
+  lives once in `clojure.lisp`: `%clojure-for-walk` runs the closures in nested loops,
+  `%clojure-for-lazy`/`-next` is the oracle's `(fn iter [s] (lazy-seq (loop ...)))`, an
+  inner level `concat`enated before the outer rest, and runs of skipped elements or
+  empty inner levels loop instead of deepening the stack.
+- **Rule**: the lazy-or-strict rule per collection met. While every collection a level
+  steps over is strict, the answer realizes at once as a strict list; from the first lazy
+  one on -- the first collection, or an inner one reached later -- the rest is a lazy seq
+  (`%clojure-for-walk` answers the lazy rest, innermost level first, and `%clojure-for`
+  concatenates the realized prefix before it). So `first`/`take` realize only what they
+  answer, an infinite inner level ends behind them, and a strict input keeps its strict
+  answer (deviation: realized when the `for` runs, where the oracle waits).
+- **Fixed beside it**: `%clojure-concat-step` re-wrapped its last member, so a concat whose
+  last member is again a concat (every level of a lazy multi-level `for`) walked each
+  element through one layer per outer element reached -- a 400 x 250 comprehension took
+  274 s on the interpreter, 7 s once the last member answers its own seq, like the
+  oracle's `concat`. `dorun`/`doall` realize (they only evaluated).
+- **Printer**: a lazy seq prints realized, like the oracle -- `%clojure-write` realizes a
+  wrapper where it stands (an empty one prints `()`) and the list arm steps its tail with
+  `%clojure-seq-rest`, so an infinite seq prints without end like the oracle's (it printed
+  `#<LazySeq>`, a deliberate b11 refusal that a lazy `for` would have put on every
+  printed comprehension over a lazy input). The cycle walk keeps a wrapper a leaf: it never
+  forces one, so an infinite seq streams instead of hanging silently in the walk.
+
+Cost (2026-10-03, x86-64, Java 25, raw wasm module totals, base `a5e80fdf9`):
+`(println (for [x [1 2 3]] (* x 10)))` 36,488 -> 39,576, two levels 36,111 -> 39,167,
+`(println (take 5 (for [x (iterate inc 0)] (* x x))))` 45,174 -> 47,938; the printer's
+realize path, on every program printing a collection: `(println [1 2])` 30,368 -> 32,201,
+`(println (list 1 2))` 30,218 -> 32,094, `(println {:a 1})` 31,322 -> 32,838,
+`(println (+ 1 2))` 9,586 -> 9,706; `(dorun (map inc [1 2]))` 30,700 -> 30,782,
+`(doseq [x [1 2 3]] (println x))` 32,848 -> 32,833. Speed (same base, wall clock with
+the JVM start): a strict 200,000-element `for` on the interpreter 3.92 -> 4.18 s, 400 x 500
+3.24 -> 3.74 s; 400 x 250 plus 1000 x 1000 compiled, JVM 0.85 -> 0.91 s, wasm 2.84 -> 3.69 s;
+a lazy 400 x 500 one: interpreter 12.2 s, JVM 0.50 s, wasm 0.65 s. A first cut generated
+the lazy structure inline at every site and realized it for a strict input: 37,235 B for
+the one-level program (the shared runtime costs ~2.3 KB more), but the 200,000 case took
+8.95 s on the interpreter and 400 x 500 0.58 s on wasm (0.17 s strict) -- every element
+paid a thunk and a wrapper.
+
+Pinned by `clojure-spec.yaml` (`logging-seq-realizes-only-what-first-takes` -- the corpus
+shape's one and four lines, infinite comprehensions, the strict-then-lazy switch --
+`for-over-lazy-map`, `dorun-doall`, `take-over-repeat-cycle-iterate-repeatedly`, every line
+diffed against the oracle, all four backends) and `ClojureLoweringTest`
+(`doseqDotimesForLowerToCoreLoops`).
 
 b62 (2026-10-02) lowers `:extend-via-metadata` (the `note.clj` `MidiNote` protocol of
 the shcloj4 corpus) plus the value metadata it needs (the table rows above). The todo's

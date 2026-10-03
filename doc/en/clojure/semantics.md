@@ -119,13 +119,15 @@ binding pair nested left to right, the body an implicit `do`. Each loop steps th
 lazy input one element at a time, so a `:while` stops an infinite one. `dotimes` binds `0` below
 its count the same way and answers `nil`; the count runs through `truncate` first, so
 `2.5` counts `0 1` and a non-number signals, like the oracle's `intCast`. `for` answers
-the strict list of its body over every combination, accumulated in reverse; an empty
-result is `nil`, where the oracle prints `()`. Each pair takes any collection the seq
-view takes, and patterns destructure like `let`. The `:when`/`:while`/`:let` modifiers
-trail their binding in order: `:when` skips the element, `:while` ends its level's loop
-(an outer level's ends the whole form), `:let` binds sequentially; any other keyword is
-refused. `dorun` realizes a collection for effect and answers `nil`, `doall` answers the
-collection itself; seqs are already strict, so realizing is evaluating.
+its body over every combination: realized at once, a strict list, while every collection
+it steps over is strict (an empty one is `nil`, where the oracle prints `()`), and a lazy
+seq from the first lazy collection on, realized as it is consumed -- so `first`/`take`
+realize only what they answer, and an infinite collection ends behind them. Each pair
+takes any collection the seq view takes, and patterns destructure like `let`. The
+`:when`/`:while`/`:let` modifiers trail their binding in order: `:when` skips the
+element, `:while` ends its level (an outer level's ends the whole form), `:let` binds
+sequentially; any other keyword is refused. `dorun` walks a collection to its end for
+effect (a lazy one realizes) and answers `nil`, `doall` answers the collection itself.
 
 ## Collections
 
@@ -146,9 +148,9 @@ while a lazy seq (`lazy-seq`, `lazy-cat`, `repeat`, `cycle`, `iterate`, `repeate
 realizes one element at a time through the same view: `take` steps through it and
 terminates on infinite seqs, `drop`/`first`/`rest`/`next`/`seq` realize through it, and
 `cons`/`concat`/`map`/`filter` answer lazy again when any input is lazy (strict lists
-otherwise). A `lazy-seq` body runs at most once per seq object; only `take`n prefixes
-print -- a bare lazy seq prints `#<LazySeq>` (a lazy tail truncates with `...`) instead
-of hanging. There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
+otherwise). A `lazy-seq` body runs at most once per seq object; printing realizes a
+lazy seq like the oracle (an empty one prints `()`, an infinite one without end). There
+is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
 and structurally); `get` takes an optional default and reads maps, sets, vectors,
 strings and nil.
 
@@ -157,7 +159,7 @@ A lazy input reaches every seq verb. The verbs that walk the whole collection (`
 `into`) realize it first -- an infinite one never answers, like the oracle's -- and the
 ones that stop early (`second`, `nth`, `some`, `every?`, `take-while`, `drop-while`,
 `zipmap`, `interleave`, positional destructuring, `doseq`/`for`) step through it, so an
-infinite input still answers. `for` still answers a strict list.
+infinite input still answers.
 
 ## State and dynamic scope
 

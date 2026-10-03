@@ -31,11 +31,12 @@
 - seq 群の空に対する `rest`/`next` は `nil` です（オラクルは `()` を印字）。範囲外の
  `nth` は投げずにデフォルトを返します。map/set seq の順序はテーブルの走査順です。
  文字列の seq は Common Lisp 記法で印字される文字になります。lazy seq は1要素ずつ
- realize します（chunk 化なし）。素の lazy seq は `#<LazySeq>` と表示され、lazy な
- tail は `...` で打ち切られます（オラクルはハングします）。`map` は任意個数の
- コレクションを取ります。
-- 要素のない strict な `for` は `nil` を答え、オラクルが `()` と印字する点と異なります
- （`rest`/`next`/`take` と同じ empty-as-`nil` の立場）。
+ realize します（chunk 化なし）。lazy seq の `str` は要素を綴ります（オラクルは
+ `clojure.lang.LazySeq@<hash>`）。`map` は任意個数のコレクションを取ります。
+- strict なコレクション上の `for` は strict なリストを答え、`for` の実行時に realize
+ されます（オラクルは消費まで待ちます）。要素がなければ `nil` で、オラクルが `()` と
+ 印字する点と異なります（`rest`/`next`/`take` と同じ empty-as-`nil` の立場）。最初の
+ lazy なコレクションから先はオラクル同様に lazy です。
 - `cond` は寛容な読みを保ちます:奇数の末尾 arm はデフォルトです（Clojure はシグナル）。
  コレクションリテラル上のスレッディングステップはシグナルします（ここではコレクションは
  関数ではない）。

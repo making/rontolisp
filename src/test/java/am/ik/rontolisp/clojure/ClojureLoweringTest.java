@@ -726,19 +726,26 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-SEQ-REST")
 			.contains("(CAR ");
 		assertThat(lowered("(dotimes [i 2] i)")).contains("DOTIMES").contains("TRUNCATE");
-		assertThat(lowered("(for [x [1]] x)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
-			.contains("REVERSE")
-			.contains("SETQ");
-		assertThat(lowered("(for [x [1] :when x] x)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
-			.doesNotContain("DOLIST");
-		assertThat(lowered("(for [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
+		// for hands the first collection and one step closure per level to the spliced
+		// runtime: a lazy seq over a lazy first collection, the realized strict list
+		// otherwise
+		assertThat(lowered("(for [x [1]] x)")).matches("(?s).*\\(RONTOLISP::%CLOJURE-FOR \\(VECTOR 1\\) "
+				+ "\\(LAMBDA \\((\\|__clojure_\\d+\\|)\\) \\(LET \\(\\(\\|c%x\\| \\1\\)\\) \\|c%x\\|\\)\\) 1\\)");
+		// a later level's collection runs inside the outer step, consed onto its step
+		assertThat(lowered("(for [x [1] y [2]] [x y])")).contains("(CONS (VECTOR 2) (LAMBDA (").endsWith(" 2)");
+		assertThat(lowered("(for [x [1] :when x] x)")).contains(":C%FOR-SKIP").doesNotContain("DOLIST");
+		assertThat(lowered("(for [x [1] :while x] x)")).contains(":C%FOR-STOP").doesNotContain("RETURN-FROM");
 		assertThat(lowered("(doseq [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
 		assertThat(lowered("(for [x [1] :let [y 2]] y)")).contains("LET*").contains("|c%y|");
-		assertThat(lowered("(for [[a b] [[1 2]]] a)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
+		assertThat(lowered("(for [[a b] [[1 2]]] a)")).contains("(RONTOLISP::%CLOJURE-FOR ")
 			.contains("LET*")
+			.contains("(RONTOLISP::%CLOJURE-NTH ")
 			.doesNotContain("DOLIST");
-		assertThat(lowered("(dorun [1])")).contains("PROGN");
-		assertThat(lowered("(doall [1])")).isEqualTo(FALSE_BINDING + "(VECTOR 1)");
+		// dorun/doall walk the seq to its end, so a lazy one realizes
+		assertThat(lowered("(dorun [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-DORUN (VECTOR 1))");
+		assertThat(lowered("(dorun 2 [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-DORUN-N 2 (VECTOR 1))");
+		assertThat(lowered("(doall [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-DOALL (VECTOR 1))");
+		assertThat(lowered("(doall 2 [1])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-DOALL-N 2 (VECTOR 1))");
 		assertThatThrownBy(() -> Clojure.read("(for [x [1] :foo 1] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Invalid 'for' keyword :foo");
 		assertThatThrownBy(() -> Clojure.read("(doseq [x [1] :unless true] x)", null))
