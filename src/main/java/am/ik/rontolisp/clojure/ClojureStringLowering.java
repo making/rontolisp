@@ -817,6 +817,93 @@ final class ClojureStringLowering {
 	}
 
 	/**
+	 * {@code pr-str} of a source datum, rendered at lower time, or null when some part is
+	 * not a plain symbol, keyword, integer, string, character, list, vector or map (a
+	 * double, ratio, set, regex, reader marker or anything else), where the runtime
+	 * printer is the one source of truth.
+	 * @param form the datum the reader (or a macro) produced
+	 * @return the readable rendering, or null
+	 */
+	static @Nullable String prSource(LispVal form) {
+		StringBuilder out = new StringBuilder();
+		return prSource(form, out) ? out.toString() : null;
+	}
+
+	private static boolean prSource(LispVal form, StringBuilder out) {
+		if (form instanceof LispSymbol s) {
+			String name = s.name();
+			if (name.isEmpty() || name.startsWith("%")) {
+				return false;
+			}
+			out.append(name);
+			return true;
+		}
+		if (form instanceof LispInteger i) {
+			out.append(i.value());
+			return true;
+		}
+		if (form instanceof LispString str) {
+			out.append('"');
+			String value = str.value();
+			for (int i = 0; i < value.length(); i++) {
+				char c = value.charAt(i);
+				switch (c) {
+					case '"' -> out.append("\\\"");
+					case '\\' -> out.append("\\\\");
+					case '\n' -> out.append("\\n");
+					case '\t' -> out.append("\\t");
+					case '\r' -> out.append("\\r");
+					case '\f' -> out.append("\\f");
+					case '\b' -> out.append("\\b");
+					default -> out.append(c);
+				}
+			}
+			out.append('"');
+			return true;
+		}
+		if (form instanceof LispChar c) {
+			String named = switch (c.codePoint()) {
+				case '\n' -> "newline";
+				case ' ' -> "space";
+				case '\t' -> "tab";
+				case '\b' -> "backspace";
+				case '\f' -> "formfeed";
+				case '\r' -> "return";
+				default -> null;
+			};
+			out.append('\\');
+			if (named != null) {
+				out.append(named);
+			}
+			else {
+				out.appendCodePoint(c.codePoint());
+			}
+			return true;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null) {
+			return false;
+		}
+		boolean vector = !items.isEmpty() && items.get(0) == ClojureReader.VECTOR;
+		boolean map = !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-map");
+		List<LispVal> body = vector || map ? items.subList(1, items.size()) : items;
+		if (map && body.size() % 2 != 0) {
+			return false;
+		}
+		out.append(vector ? '[' : map ? '{' : '(');
+		for (int i = 0; i < body.size(); i++) {
+			if (i > 0) {
+				out.append(map && i % 2 == 0 ? ", " : " ");
+			}
+			if (!prSource(body.get(i), out)) {
+				return false;
+			}
+		}
+		out.append(vector ? ']' : map ? '}' : ')');
+		return true;
+	}
+
+	/**
 	 * One part's Clojure-notation string: {@code rontolisp::%clojure-str-of} over the
 	 * lowered value (false is {@code "false"}, {@code T} is {@code "true"}, {@code NIL}
 	 * is the replacement, a keyword its colon spelling, collections in Clojure notation).

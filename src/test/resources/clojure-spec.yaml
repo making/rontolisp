@@ -3157,7 +3157,30 @@ cases:
       false
       :failed
       Assert failed: oops
+      (= 1 2)
       :failed-with-msg
+  - name: assert-message-names-the-failed-form
+    # The failure text is the oracle's: the form through pr-str, after the message
+    # and a newline when there is one.
+    source: |
+      (println (try (assert (nil? 1)) (catch Exception e (ex-message e))))
+      (println (try (assert (nil? 1) "m") (catch Exception e (ex-message e))))
+      (println (try (assert (= [1 "a"] {:k 2})) (catch Exception e (ex-message e))))
+      (println (try (assert false) (catch Exception e (ex-message e))))
+      (println (try (assert nil) (catch Exception e (ex-message e))))
+      (println (try (assert (= {:a 1 :b "x\"y\n"} [\a \space 'q])) (catch Exception e (ex-message e))))
+      (println (try (assert (= 2.5 #{1})) (catch Exception e (ex-message e))))
+      (println (try (assert (= () (list 1))) (catch Exception e (ex-message e))))
+    expected: |
+      Assert failed: (nil? 1)
+      Assert failed: m
+      (nil? 1)
+      Assert failed: (= [1 "a"] {:k 2})
+      Assert failed: false
+      Assert failed: nil
+      Assert failed: (= {:a 1, :b "x\"y\n"} [\a \space (quote q)])
+      Assert failed: (= 2.5 #{1})
+      Assert failed: (= () (list 1))
   - name: rand-draws-scaled-doubles
     # rand answers a double in [0,1) bare, one scaled draw with a bound (never a
     # domain check: a negative bound answers a negative double, like the oracle's
