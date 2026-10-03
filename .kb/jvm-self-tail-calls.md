@@ -155,10 +155,11 @@ a `labels`/`flet` body: overflow -> answers (a CL defun passed 200,000 before);
 `(funcall #'f ..)` answered before too, as a trampoline bounce, and is a jump now. Clojure:
 `loop`/`recur` passed 100,000 and overflowed at 150,000, a `defn` `recur` passed 150,000
 and overflowed at 200,000, a multi-arity clause and `(count (distinct (range 200000)))`
-overflowed -- all answer now. The interpreter and wasm answer every one of these but three
-gaps of their own: the interpreter overflows on a `return-from` whose value is the self call,
-wasm and the component on a self call inside a `labels`/`flet` body and on a multi-arity
-Clojure `fn` clause's `recur` (`.todo/c01`).
+overflowed -- all answer now. The interpreter and wasm answer every one of these since
+2026-10-03 too: the interpreter had overflowed on a `return-from` whose value is the self call
+(`.kb/interpreter-tail-calls.md`), wasm and the component on a self call inside a
+`labels`/`flet` body and on a multi-arity Clojure `fn` clause's `recur`
+(`.kb/wasm-tail-calls.md`, "Built-in macro expansions").
 
 **Time**, best of 5 alternating runs, the same programs at depths the old emission
 survived: 10,000 calls of a 10,000-round CL defun loop 447-547 -> 93-100 ms, the `labels`

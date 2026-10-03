@@ -13174,6 +13174,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theValueOfAnExitToABlockTheFrameOwnsIsATailPosition() {
+		// 100,000 deep, like the test above: the value form of a return-from or a return
+		// whose block is the frame's own continuation replaces the frame, and so does a
+		// call inside a labels or flet body.
+		assertThat(evalMulti("""
+				(defun exit-from (n) (if (= n 0) :done (return-from exit-from (exit-from (- n 1)))))
+				(defun exit-nil (n) (block nil (if (= n 0) (return :d) (return (exit-nil (- n 1))))))
+				(defun exit-bare (n) (if (= n 0) (return-from exit-bare) (return-from exit-bare (exit-bare (- n 1)))))
+				(defun in-labels (n) (labels ((d (x) (- x 1))) (if (= n 0) :labels (in-labels (d n)))))
+				(defun in-flet (n) (flet ((d (x) (- x 1))) (if (= n 0) :flet (in-flet (d n)))))
+				(list (exit-from 100000) (exit-nil 100000) (exit-bare 100000) (in-labels 100000) (in-flet 100000)
+				      (multiple-value-list (block b (return-from b (values 1 2)))))
+				""").print()).isEqualTo("(:DONE :D NIL :LABELS :FLET (1 2))");
+	}
+
+	@Test
 	void aTailPositionThatKeepsItsFrameStillUnwindsItsBookkeeping() {
 		// SBCL 2.x prints the same list: a special let and a special parameter restore
 		// their binding when the chain returns, an unwind-protect cleanup runs once per

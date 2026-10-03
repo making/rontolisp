@@ -61,6 +61,14 @@ engine or JavaScript embedder gets a core module.
 To ship the WASI command module as one executable that needs no wasmtime, see
 [Compile to a Native Executable](native.md).
 
+On the wasm-GC outputs a call in tail position is a WebAssembly tail call
+(`return_call`), so a loop written as tail recursion runs at any depth: a direct
+call, a call through a function value or `apply`, a call in the tail of a `cond`,
+`case`, `when`, `flet`, `labels` or another built-in macro, and the value of a
+`return-from`/`return` that leaves the function. A call inside a special binding,
+an `unwind-protect` or a `handler-case` keeps its frame. The engine must support
+tail calls (wasmtime 21+, Chrome 112+, Firefox 121+, Safari 18.2+).
+
 ## Host Boundaries
 
 Two complementary directives declare what crosses the module/host boundary:

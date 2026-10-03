@@ -12651,6 +12651,28 @@ cases:
       500000
       (:APPLIED (:A :B))
       (7 :TOP)
+  - name: exits-expansions-and-moved-lambdas-in-tail-position-run-in-constant-stack
+    source: |
+      ;; 100,000 deep, past what a frame per call held on every backend: the value of
+      ;; a return-from or a return aimed at the function's own block, a call in the
+      ;; body of a flet or labels, the clause bodies of cond, case, when and typecase,
+      ;; a call through a value from a cond clause, and a continuation chain whose
+      ;; every link is a lambda calling the next one through funcall.
+      (defun ctp-from (n) (if (= n 0) :from (return-from ctp-from (ctp-from (- n 1)))))
+      (defun ctp-nil (n) (block nil (if (= n 0) (return :nil) (return (ctp-nil (- n 1))))))
+      (defun ctp-labels (n) (labels ((d (x) (- x 1))) (if (= n 0) :labels (ctp-labels (d n)))))
+      (defun ctp-flet (n) (flet ((d (x) (- x 1))) (if (= n 0) :flet (ctp-flet (d n)))))
+      (defun ctp-cond (n) (cond ((= n 0) :cond) (t (ctp-case (- n 1)))))
+      (defun ctp-case (n) (case 1 (1 (when t (ctp-typecase n)))))
+      (defun ctp-typecase (n) (typecase n (integer (ctp-cond n))))
+      (defun ctp-call (f args) (cond ((functionp f) (apply f args)) (t :not-a-function)))
+      (defun ctp-value (self n) (if (= n 0) :value (ctp-call self (list self (- n 1)))))
+      (defun ctp-chain (k n) (if (= n 0) k (ctp-chain (lambda (v) (funcall k v)) (- n 1))))
+      (print (list (ctp-from 100000) (ctp-nil 100000) (ctp-labels 100000) (ctp-flet 100000)
+                   (ctp-cond 100000) (ctp-value #'ctp-value 100000)
+                   (funcall (ctp-chain (lambda (v) v) 100000) :chain)))
+    expected: |
+      (:FROM :NIL :LABELS :FLET :COND :VALUE :CHAIN)
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list

@@ -37,12 +37,25 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
   no binding is dynamic: a special's restore runs after the body, in a protected region --
   which is also why a function with a parameter named like a special makes no tail call, its
   parameter being bound by such a `let`, `.kb/dynamic-special-variables.md`),
-  the `let*`/`the`/`locally` re-dispatches, `WasmBlockCompiler` (last form; the
+  every built-in macro re-dispatch (below), `WasmBlockCompiler` (last form; the
   `%block`/named/`%fn-block` shapes are plain wasm blocks), and -- through
   `BlockMarker.tail` -- `WasmReturnCompiler`/`WasmReturnFromCompiler` for the exit value
   when the target block is in tail position and the exit crosses no `UnwindScope` (an
   inlined cleanup would run after the value). `WasmDotimesCompiler`'s own marker says
   false.
+- **Built-in macro expansions** (`WasmExprCompiler.compileExpansion`, 2026-10-03): an arm
+  that compiles what a built-in macro or lowering turned the form into -- `cond`, `case`,
+  `when`/`unless`, `and`/`or`, `typecase`, `multiple-value-bind`, `destructuring-bind`,
+  `symbol-macrolet`, `flet`/`labels`, `dolist`, `setf`, the sequence functions, every
+  `case X -> compile(expandX(cons))` arm -- hands the consumed flag on: the expansion IS
+  the form. Before, only `let*`/`the`/`locally` did, so a call in a `cond` clause, a `flet`
+  or `labels` body or a `case` arm was a plain `call` (the frontend leaves these to the
+  backend). That was also the unidentified cause behind a Clojure multi-arity `fn`'s
+  `recur` (its arity dispatch is a `cond`) and `%clojure-call`'s `apply` (a `cond` clause).
+  An arm that emits instructions AFTER compiling its expansion must not take the flag (a
+  conversion after a `return_call` is dead); the single-expression arms cannot.
+  `WasmFunctionCallCompiler`'s call through a variable holding a nested defun's closure
+  hands it on too.
 - **Emitted** by `WasmFunctionCallCompiler` (`compileDefault` -> `compileDirectCall`, the
   `funcall` dispatch, `WasmDesignatorCall.emitCall`), `WasmApplyCompiler` (the two physical
   direct-call arms and `_apply`). A host import call (`compileLiteralImportCall`) never is:
@@ -83,13 +96,22 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
 - `WasmInliner`: three rules. (1) A `return_call callee` site is a call site: the moved
   body is followed by a `return`, because the emitter's tail sites are followed only by
   value-passing `end`s and `br`s but a dispatcher case falls through into the NEXT case's
-  body. (2) A `return_call X` inside a moved body becomes `call X; br <wrapper>`: the
-  callee's frame is gone either way, so the stack is exactly as deep as the tail call left
-  it. (3) A TRAILING one (the body's last instruction at depth 0 -- every forwarder) needs
+  body; there the moved body's own `return`s stay `return`s and its `return_call X`s stay
+  `return_call X`s (X answers the callee's results, which are the caller's), and a body
+  ENDING in one is followed by nothing. (2) At a plain `call` site a `return_call X` inside
+  a moved body becomes `call X; br <wrapper>`: the callee's frame is gone either way, so
+  the stack is exactly as deep as the tail call left it. That premise fails at a
+  `return_call` site, where the caller's frame is what the callee's had replaced: until
+  2026-10-03 rule (2) applied there too, so a lambda whose one call site is a dispatcher
+  arm and whose body tail-calls back through the dispatcher (a continuation chain,
+  `(lambda (v) (funcall k v))`) kept one `_invoke_1` frame per link and trapped at 100,000
+  links. (3) A TRAILING one (the body's last instruction at depth 0 -- every forwarder) needs
   no block and no branch: it becomes `call X` falling off the end. Without (3) the wrapper
   block cost what the move saved and `bench_fib` kept a one-line wrapper (+8 B); without
   (1) `bench_clos`'s once-called lambdas stayed out of the dispatcher.
   `WasmInlinerTest#aTailCallSiteTakesTheMovedBodyFollowedByAReturn`,
+  `#aTailCallInsideABodyMovedToATailCallSiteStaysATailCall`,
+  `#aTrailingTailCallMovedToATailCallSiteNeedsNoReturnAfterIt`,
   `#aTailCallInsideAMovedBodyBecomesACallAndABranchOutOfTheWrappingBlock`,
   `#aTrailingTailCallInAMovedBodyNeedsNoBlock`.
 
@@ -109,10 +131,9 @@ the compiled `main` moved onto a 16 MiB worker the same day
 2026-10-03 ([jvm-tail-bounce.md](jvm-tail-bounce.md)); the JVM's `labels` self loop and every other self tail call
 answer 1,000,000 since the jump of the same day, mutual `defun`s and a `labels` pair since the
 tail groups of the same day ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
-Measured then: a self call inside a `labels`/`flet` BODY overflows here at 1,000,000 --
-`WasmExprCompiler`'s `flet`/`labels` arms do not re-arm the flag the way `let*`/`the`/
-`locally` do -- and so does a Clojure multi-arity `fn` clause's `recur` (Preview 1 and
-component; `.todo/c01`). One Scheme call through a value is two JVM
+A self call inside a `labels`/`flet` BODY overflowed here at 1,000,000, and so did a
+Clojure multi-arity `fn` clause's `recur` and a `cond`/`case`/`when` clause's call, until
+the built-in macro arms handed the flag on (2026-10-03, above). One Scheme call through a value is two JVM
 frames, `g` and `_invoke_2`;
 `%scheme-ensure-procedure` returns before the call. V8: a 1,000-deep `labels` loop (2,000
 frames) threw `Maximum call stack size exceeded` under node's WASI before and runs now.
@@ -152,11 +173,27 @@ that runs the wasm-GC modules the backend already emits. Cranelift's `call_ref` 
 direct call on this box (7.6 s vs 0.25 s per 100M), so the dispatcher must keep its
 `br_table` of direct calls and never become a `call_ref`.
 
+**2026-10-03, the macro arms and inliner rule (1)** (wasmtime 49, baseline jar vs this
+change, `wasm-tools validate` ok on every module, outputs identical): size-report
+`hello_world`/`pi_approx` byte-identical in all four rows, `zlib` -8/-8/-6 B (optimize,
+size, component; `--optimize=off` 0) but gzip -9 +85/+47/+35 B; bench-report all ten
+byte-identical; `examples/scheme` 0 to -10 B (`streams` -10), `examples/clojure/demo.clj`
+0 B with gzip +5 to +12 B. `return_call`s in the optimized modules: `demo` 195 -> 213,
+`evaluator` 207 -> 217, `zlib` 185 -> 182 (moved bodies). Time: evaluator and demo within
+noise. Still a plain call in tail position: a lambda head `((lambda (k) ..) x)` (the
+general indirect call above).
+
 ## Tests
 
 `WasmLispCompilerIntegrationTest#aTailCallRunsInConstantStackAndATailPositionThatKeepsItsFrameStillDoes`
 (300,000 deep through a value, direct mutual, `labels`, `apply` literal and value,
 `return-from`, `let`/`progn`/`the`; and the frame-keeping tail positions: a special
-`let`, `unwind-protect`, `handler-case`, `multiple-value-prog1`; the component twin), the
-three `WasmInlinerTest` cases above. The Scheme side lowers to the same `funcall`
+`let`, `unwind-protect`, `handler-case`, `multiple-value-prog1`; the component twin),
+`#aBuiltInMacroInTailPositionHandsTheTailOnToItsExpansion` (`cond`/`case`/`typecase`/
+`multiple-value-bind`/`destructuring-bind`/`symbol-macrolet`/`flet`/`labels`/`dolist`
+`return`/a value call from a `cond` clause, 300,000 deep),
+`#aLambdaInlinedIntoTheDispatcherStillTailCallsThroughIt` (the continuation chain, both
+packagings), the five `WasmInlinerTest` cases above; across all four backends
+`ci-spec.yaml`'s `exits-expansions-and-moved-lambdas-in-tail-position-run-in-constant-stack`
+and `clojure-spec.yaml`'s `deep-recur-answers-on-every-backend`. The Scheme side lowers to the same `funcall`
 (`.kb/scheme-frontend.md`, "Tail-call groups").

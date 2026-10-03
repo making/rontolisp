@@ -323,6 +323,18 @@ final class WasmExprCompiler {
 		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
 	}
 
+	/**
+	 * Compiles what a built-in macro or lowering turned {@code cons} into. The expansion
+	 * IS the form, so it takes the form's tail position ({@code Ctx.tailPosition}): a
+	 * {@code cond}, {@code case}, {@code when}, {@code flet} or {@code labels} in tail
+	 * position hands it on to its own tail exactly as the {@code if} and {@code let} it
+	 * expands into would.
+	 */
+	private static void compileExpansion(LispVal expansion, WasmLispCompiler.Ctx ctx, boolean tail) {
+		ctx.tailPosition = tail;
+		compileExpr(expansion, ctx);
+	}
+
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		compileCons(cons, ctx, false);
 	}
@@ -398,7 +410,7 @@ final class WasmExprCompiler {
 			// evaluated in its place and the call compiled without it.
 			LispVal withoutIgnored = builtinCall ? IgnoredArgument.drop(cons) : cons;
 			if (withoutIgnored != cons) {
-				compileExpr(withoutIgnored, ctx);
+				compileExpansion(withoutIgnored, ctx, tail);
 				return;
 			}
 			// --simd: the vectorizable vec: kernels are routed to the emitted v128
@@ -579,11 +591,11 @@ final class WasmExprCompiler {
 						case LispNames.WRITE_STRING_RAW_INTERNAL ->
 							WasmWriteStringCompiler.compileWriteString(cons, ctx);
 						case LispNames.READ_SEQUENCE_RAW_INTERNAL ->
-							WasmExprCompiler.compileExpr(guardPackedForWideStreams(LispMacroExpander
-								.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx), ctx);
+							compileExpansion(guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons, false,
+									characterStreams(ctx), boundsCheck(ctx)), ctx), ctx, tail);
 						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL ->
-							WasmExprCompiler.compileExpr(guardPackedForWideStreams(LispMacroExpander
-								.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx), ctx);
+							compileExpansion(guardPackedForWideStreams(LispMacroExpander.expandWriteSequence(cons,
+									false, characterStreams(ctx), boundsCheck(ctx)), ctx), ctx, tail);
 						// The designator resolution has to apply under the alias too:
 						// the socket rewrite maps (close s) to (%io-close s), whose
 						// non-socket arm lands here, so without it a component would
@@ -730,7 +742,7 @@ final class WasmExprCompiler {
 				if (LispNames.WITH_ARENA.equals(qn.member())) {
 					// A reclamation boundary for --no-gc; the wasm-GC heap is
 					// garbage-collected, so the body runs as a plain progn.
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithArena(cons), ctx);
+					compileExpansion(LispMacroExpander.expandWithArena(cons), ctx, tail);
 					return;
 				}
 				if (LispNames.WITH_MUTEX.equals(qn.member())) {
@@ -1131,23 +1143,22 @@ final class WasmExprCompiler {
 			// form here, so its inverse must not have one either.
 			case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT, LispNames.USE_PACKAGE,
 					LispNames.UNUSE_PACKAGE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons, ctx.usesRuntimePackages), ctx);
+				compileExpansion(LispMacroExpander.expandRuntimeExport(cons, ctx.usesRuntimePackages), ctx, tail);
 			// The package-registry queries: answered from the use table baked in at
 			// compile time (the compiled runtimes have no registry), plus the
 			// runtime table when the program can create packages.
 			case LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPackageQuery(cons, ctx.packageTable,
-						ctx.packageUseTable, ctx.usesRuntimePackages), ctx);
+				compileExpansion(LispMacroExpander.expandPackageQuery(cons, ctx.packageTable, ctx.packageUseTable,
+						ctx.usesRuntimePackages), ctx, tail);
 			// The printer's accessibility question (CLHS 22.1.3.3.1), answered from
 			// the
 			// table baked in at compile time (.kb/pretty-printer.md).
 			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx);
+				compileExpansion(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, tail);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx);
+				compileExpansion(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, tail);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
-						ctx);
+				compileExpansion(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx, tail);
 			case LispNames.MAKE_SYMBOL -> WasmSymbolApiCompiler.compileMakeSymbol(cons, ctx);
 			case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 			case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
@@ -1161,8 +1172,8 @@ final class WasmExprCompiler {
 			// one to the quoted package keyword before the compiler ever sees it
 			// (unless the program can create packages at run time).
 			case LispNames.FIND_PACKAGE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1),
-						ctx.packageTable, ctx.usesRuntimePackages, ctx.functions::containsKey), ctx);
+				compileExpansion(LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable,
+						ctx.usesRuntimePackages, ctx.functions::containsKey), ctx, tail);
 			case LispNames.CONCATENATE -> {
 				WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx);
 				// The string family's fresh result carries a writable identity
@@ -1199,10 +1210,10 @@ final class WasmExprCompiler {
 					WasmReadCharCompiler.compile(cons, ctx);
 				}
 			}
-			case LispNames.PEEK_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx);
+			case LispNames.PEEK_CHAR -> compileExpansion(LispMacroExpander.expandPeekChar(cons), ctx, tail);
 			case LispNames.READ_CHAR_NO_HANG ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandReadCharNoHang(cons), ctx);
-			case LispNames.UNREAD_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnreadChar(cons), ctx);
+				compileExpansion(LispMacroExpander.expandReadCharNoHang(cons), ctx, tail);
+			case LispNames.UNREAD_CHAR -> compileExpansion(LispMacroExpander.expandUnreadChar(cons), ctx, tail);
 			case LispNames.PEEK_CHAR_INTERNAL -> {
 				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
 				if (typed != null) {
@@ -1213,7 +1224,7 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.MAKE_SYNONYM_STREAM ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMakeSynonymStream(cons), ctx, tail);
 			case LispNames.OPEN -> {
 				// A failure signals a file-error (expandOpenFileErrorSignal), which
 				// unwraps a pathname designator itself. A computed option -- or an
@@ -1249,10 +1260,10 @@ final class WasmExprCompiler {
 				wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.FILE);
 			}
 			case LispNames.OPEN_OR_NIL_INTERNAL -> WasmOpenCompiler.compile(cons, ctx);
-			case LispNames.FILE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander.lowerFileError(cons,
-					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
-			case LispNames.PACKAGE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander
-				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
+			case LispNames.FILE_ERROR_INTERNAL -> compileExpansion(LispMacroExpander.lowerFileError(cons,
+					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
+			case LispNames.PACKAGE_ERROR_INTERNAL -> compileExpansion(LispMacroExpander.lowerPackageError(cons,
+					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
 			case LispNames.CLOSE -> compileClose(cons, ctx);
 			case LispNames.CLOSE_INTERNAL -> WasmCloseCompiler.compile(cons, ctx);
 			case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
@@ -1329,13 +1340,13 @@ final class WasmExprCompiler {
 			// chdir to move it -- and uiop:getcwd's one shared Lisp definition turns
 			// that nil into its not-implemented-error, so the divergence is a value
 			// rather than a second code path.
-			case LispNames.HOST_GETCWD -> WasmExprCompiler.compileExpr(LispNil.INSTANCE, ctx);
+			case LispNames.HOST_GETCWD -> compileExpansion(LispNil.INSTANCE, ctx, tail);
 			// %target-machine-type: the ABI this artifact targets, the one thing the
 			// environment-enquiry family (machine-type, a prelude defun over it)
 			// answers differently per backend. Both WASM backends emit wasm32
 			// modules, so the module -- not the host processor, which no wasm
 			// program can see -- is the answer, matching uiop:architecture.
-			case LispNames.TARGET_MACHINE_TYPE -> WasmExprCompiler.compileExpr(new LispString("WASM32"), ctx);
+			case LispNames.TARGET_MACHINE_TYPE -> compileExpansion(new LispString("WASM32"), ctx, tail);
 			case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
 			case LispNames.WRITE_LINE -> {
 				LispVal bounded = LispMacroExpander.lowerWriteLineBounds(cons);
@@ -1371,15 +1382,15 @@ final class WasmExprCompiler {
 				wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.STRING_OUTPUT);
 			}
 			case LispNames.MAKE_STRING_OUTPUT_STREAM ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringOutputStream(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMakeStringOutputStream(cons), ctx, tail);
 			case LispNames.GET_OUTPUT_STREAM_STRING ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx);
+				compileExpansion(LispMacroExpander.expandGetOutputStreamString(cons), ctx, tail);
 			case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL -> {
 				WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
 				wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.STRING_INPUT);
 			}
 			case LispNames.MAKE_STRING_INPUT_STREAM ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMakeStringInputStream(cons), ctx, tail);
 			case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> {
 				// The with-output-to-string / get-output-stream-string capture.
 				WasmWriteStringCompiler.compileContents(cons, ctx);
@@ -1392,13 +1403,13 @@ final class WasmExprCompiler {
 			// with-output-to-string) inside a non-EH module, which keep the
 			// close-after-body shape so they still compile without the tag section.
 			case LispNames.WITH_OUTPUT_TO_STRING ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode), ctx);
+				compileExpansion(LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode), ctx, tail);
 			case LispNames.PPRINT_LOGICAL_BLOCK ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPprintLogicalBlock(cons), ctx);
+				compileExpansion(LispMacroExpander.expandPprintLogicalBlock(cons), ctx, tail);
 			case LispNames.WITH_INPUT_FROM_STRING ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons, ctx.ehMode), ctx);
-			case LispNames.PUSHNEW -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx);
-			case LispNames.DEFTYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx);
+				compileExpansion(LispMacroExpander.expandWithInputFromString(cons, ctx.ehMode), ctx, tail);
+			case LispNames.PUSHNEW -> compileExpansion(LispMacroExpander.expandPushnew(cons), ctx, tail);
+			case LispNames.DEFTYPE -> compileExpansion(LispMacroExpander.expandDeftype(cons), ctx, tail);
 			case LispNames.DEFINE_CONDITION ->
 				// Like defclass: top-level define-conditions are spliced into their
 				// generated defuns before Pass 1; one reaching this compiler is
@@ -1406,21 +1417,20 @@ final class WasmExprCompiler {
 				throw new UnsupportedOperationException(
 						LispNames.DEFINE_CONDITION + " is only supported as a top-level form");
 			case LispNames.DEFINE_SETF_EXPANDER ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineSetfExpander(cons), ctx);
+				compileExpansion(LispMacroExpander.expandDefineSetfExpander(cons), ctx, tail);
 			case LispNames.DEFINE_COMPILER_MACRO ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx);
-			case LispNames.RESTART_CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx);
-			case LispNames.RESTART_BIND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRestartBind(cons), ctx);
+				compileExpansion(LispMacroExpander.expandDefineCompilerMacro(cons), ctx, tail);
+			case LispNames.RESTART_CASE -> compileExpansion(LispMacroExpander.expandRestartCase(cons), ctx, tail);
+			case LispNames.RESTART_BIND -> compileExpansion(LispMacroExpander.expandRestartBind(cons), ctx, tail);
 			case LispNames.WITH_SIMPLE_RESTART ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSimpleRestart(cons), ctx);
+				compileExpansion(LispMacroExpander.expandWithSimpleRestart(cons), ctx, tail);
 			case LispNames.MAKE_CONDITION ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx);
-			case LispNames.DOCUMENTATION ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx, tail);
+			case LispNames.DOCUMENTATION -> compileExpansion(LispMacroExpander.expandDocumentation(cons), ctx, tail);
 			case LispNames.WITH_OPEN_STREAM ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, ctx.ehMode), ctx);
+				compileExpansion(LispMacroExpander.expandWithOpenStream(cons, ctx.ehMode), ctx, tail);
 			case LispNames.WITH_OPEN_FILE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons, ctx.ehMode), ctx);
+				compileExpansion(LispMacroExpander.expandWithOpenFile(cons, ctx.ehMode), ctx, tail);
 			case LispNames.READ_BYTE -> {
 				LispVal wide = ctx.functions.containsKey(LispNames.WIDE_READ_BYTE_INTERNAL)
 						? LispMacroExpander.expandWideReadByte(cons) : null;
@@ -1447,7 +1457,7 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.WRITE_OCTET_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
-			case LispNames.CLEAR_OUTPUT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx);
+			case LispNames.CLEAR_OUTPUT -> compileExpansion(LispMacroExpander.expandClearOutput(cons), ctx, tail);
 			case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> {
 				// Every WASM write goes out synchronously (fd_write / the component's
 				// sock-stream-write park per call), so flushing is the identity: the
@@ -1465,40 +1475,39 @@ final class WasmExprCompiler {
 			}
 			case LispNames.OPEN_STREAM_P -> compileOpenStreamP(cons, ctx);
 			case LispNames.LISTEN -> WasmListenCompiler.compile(cons, ctx);
-			case LispNames.READ_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
+			case LispNames.READ_SEQUENCE -> compileExpansion(guardPackedForWideStreams(
 					LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
-					ctx);
-			case LispNames.WRITE_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
+					ctx, tail);
+			case LispNames.WRITE_SEQUENCE -> compileExpansion(guardPackedForWideStreams(
 					LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
-					ctx);
+					ctx, tail);
 			case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 				WasmSequencePackedCompiler.compile(cons, ctx);
 			case LispNames.READ_SEQUENCE_CHARS -> WasmSequenceCharsCompiler.compile(cons, ctx);
-			case LispNames.MAKE_STRING -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx);
+			case LispNames.MAKE_STRING -> compileExpansion(LispMacroExpander.expandMakeString(cons), ctx, tail);
 			// A site whose DESTINATION is provably an array calls the shared
 			// runtime's array arm directly, skipping the %arrayp dispatch. A program
 			// with no unproven site then leaves the wide one -- the list rewrite and
 			// the string rebuild -- without a caller (.kb/sequence-op-runtimes.md).
-			case LispNames.REPLACE -> WasmExprCompiler.compileExpr(
+			case LispNames.REPLACE -> compileExpansion(
 					LispMacroExpander.expandReplace(cons, true, ctx.functions.containsKey(LispNames.REPLACE_RUNTIME),
 							routesToArrayArm(cons, LispNames.REPLACE_ARRAY_RUNTIME, ctx)),
-					ctx);
-			case LispNames.FILL -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME),
-						routesToArrayArm(cons, LispNames.FILL_ARRAY_RUNTIME, ctx)), ctx);
-			case LispNames.SCHAR_SET ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
+					ctx, tail);
+			case LispNames.FILL ->
+				compileExpansion(LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME),
+						routesToArrayArm(cons, LispNames.FILL_ARRAY_RUNTIME, ctx)), ctx, tail);
+			case LispNames.SCHAR_SET -> compileExpansion(LispMacroExpander.expandScharSetFunctional(cons), ctx, tail);
 			case LispNames.LOWER_CASE_P -> WasmCharCompiler.compileLowerCaseP(cons, ctx);
 			case LispNames.UPPER_CASE_P -> WasmCharCompiler.compileUpperCaseP(cons, ctx);
-			case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
-			case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
-					ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx);
-			case LispNames.SIMPLE_STRING_P ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
-			case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
+			case LispNames.CONSTANTP -> compileExpansion(LispMacroExpander.expandConstantp(cons), ctx, tail);
+			case LispNames.STREAMP -> compileExpansion(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams,
+					ctx.usesStreamValues, ctx.closRegistry), ctx, tail);
+			case LispNames.SIMPLE_STRING_P -> compileExpansion(LispMacroExpander.expandSimpleStringP(cons), ctx, tail);
+			case LispNames.INPUT_STREAM_P,
+					LispNames.OUTPUT_STREAM_P ->
+				compileExpansion(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
 						ctx.usesStreamValues, ctx.asksStreamDirection,
-						ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)), ctx);
+						ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)), ctx, tail);
 			// file-length is REAL here: it stats the stream's descriptor through the
 			// fd_filestat_get import and answers nil only for what genuinely has no
 			// length (a string stream, a standard stream, a socket, a closed or
@@ -1557,34 +1566,33 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.FILE_WRITE_DATE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
-			case LispNames.PATHNAMEP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx);
+				compileExpansion(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, tail);
+			case LispNames.PATHNAMEP -> compileExpansion(LispMacroExpander.expandPathnamep(cons), ctx, tail);
 			case LispNames.MAKE_DIRECTORIES -> WasmMakeDirectoriesCompiler.compile(cons, ctx);
 			case LispNames.DELETE_FILE_INTERNAL -> WasmDeleteFileCompiler.compile(cons, ctx);
 			case LispNames.RENAME_FILE_INTERNAL -> WasmRenameFileCompiler.compile(cons, ctx);
-			case LispNames.STREAM_ELEMENT_TYPE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamElementType(cons,
-						ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)), ctx);
+			case LispNames.STREAM_ELEMENT_TYPE -> compileExpansion(LispMacroExpander.expandStreamElementType(cons,
+					ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)), ctx, tail);
 			case LispNames.MAKE_BROADCAST_STREAM ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx);
-			case LispNames.FDEFINITION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFdefinition(cons), ctx);
-			case LispNames.MASK_FIELD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx);
-			case LispNames.SCALE_FLOAT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx);
-			case LispNames.CLASS_OF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, true), ctx);
+				compileExpansion(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, tail);
+			case LispNames.FDEFINITION -> compileExpansion(LispMacroExpander.expandFdefinition(cons), ctx, tail);
+			case LispNames.MASK_FIELD -> compileExpansion(LispMacroExpander.expandMaskField(cons), ctx, tail);
+			case LispNames.SCALE_FLOAT -> compileExpansion(LispMacroExpander.expandScaleFloat(cons), ctx, tail);
+			case LispNames.CLASS_OF -> compileExpansion(LispMacroExpander.expandClassOf(cons, true), ctx, tail);
 			case LispNames.CLASS_DESIGNATOR_INTERNAL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandClassDesignator(cons), ctx);
+				compileExpansion(LispMacroExpander.expandClassDesignator(cons), ctx, tail);
 			case LispNames.CLASS_SLOT_DEFS_INTERNAL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.SLOT_BOUNDP ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.SLOT_EXISTS_P ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotExistsP(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandSlotExistsP(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.SLOT_MAKUNBOUND ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx);
-			case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx);
-			case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx, tail);
+			case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> compileExpansion(
+					LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx, tail);
+			case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> compileExpansion(
+					LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx, tail);
 			// The IEEE 754 bit primitives. A single's bits fit the exact integer as they
 			// are; a double's are an i64 reinterpretation lifted into the UNSIGNED range
 			// the interpreter answers (a negative double's bits are a bignum), and the
@@ -1707,15 +1715,12 @@ final class WasmExprCompiler {
 			case LispNames.CHAR_GE -> WasmCharCompiler.compileGe(cons, ctx);
 			case LispNames.CHAR_NE -> WasmCharCompiler.compileNe(cons, ctx);
 			case LispNames.CHAR_EQUAL -> WasmCharCompiler.compileEqual(cons, ctx);
-			case LispNames.PARSE_INTEGER ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx);
-			case LispNames.VALUES_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx);
-			case LispNames.COPY_READTABLE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx);
+			case LispNames.PARSE_INTEGER -> compileExpansion(LispMacroExpander.expandParseInteger(cons), ctx, tail);
+			case LispNames.VALUES_LIST -> compileExpansion(LispMacroExpander.expandValuesList(cons), ctx, tail);
+			case LispNames.COPY_READTABLE -> compileExpansion(LispMacroExpander.expandCopyReadtable(cons), ctx, tail);
 			case LispNames.SET_DISPATCH_MACRO_CHARACTER ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx);
-			case LispNames.READTABLE_CASE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandReadtableCase(cons), ctx);
+				compileExpansion(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx, tail);
+			case LispNames.READTABLE_CASE -> compileExpansion(LispMacroExpander.expandReadtableCase(cons), ctx, tail);
 			case LispNames.COMPLEX -> WasmComplexCompiler.compileComplex(cons, ctx);
 			case LispNames.NE -> {
 				if (WasmComplexCompiler.hasComplex(cons)) {
@@ -1835,36 +1840,32 @@ final class WasmExprCompiler {
 						ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			}
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL ->
-				WasmExprCompiler
-					.compileExpr(
-							am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons,
-									BuiltinFunctionWrappers
-										.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons))),
-							ctx);
+				compileExpansion(
+						am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons,
+								BuiltinFunctionWrappers
+									.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons))),
+						ctx, tail);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL ->
-				WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerArityMissingMessage(cons), ctx);
+				compileExpansion(am.ik.rontolisp.LambdaLists.lowerArityMissingMessage(cons), ctx, tail);
 			case LispNames.SUPPLIED_P_INTERNAL -> WasmPhysicalArgs.compileSuppliedP(cons, ctx);
 			case LispNames.HANDLER_BIND ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
-			case LispNames.IGNORE_ERRORS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
+				compileExpansion(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx, tail);
+			case LispNames.IGNORE_ERRORS -> compileExpansion(LispMacroExpander.expandIgnoreErrors(cons), ctx, tail);
 			case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx, tail);
 			case LispNames.TAGBODY -> WasmTagbodyCompiler.compile(cons, ctx);
 			case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
 			case LispNames.PRINT_UNREADABLE_OBJECT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx);
+				compileExpansion(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, tail);
 			case LispNames.DO_EXTERNAL_SYMBOLS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDoSymbols(cons, true), ctx);
-			case LispNames.DO_SYMBOLS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDoSymbols(cons, false), ctx);
-			case LispNames.DO_ALL_SYMBOLS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDoAllSymbols(cons), ctx);
+				compileExpansion(LispMacroExpander.expandDoSymbols(cons, true), ctx, tail);
+			case LispNames.DO_SYMBOLS -> compileExpansion(LispMacroExpander.expandDoSymbols(cons, false), ctx, tail);
+			case LispNames.DO_ALL_SYMBOLS -> compileExpansion(LispMacroExpander.expandDoAllSymbols(cons), ctx, tail);
 			case LispNames.WITH_PACKAGE_ITERATOR ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx);
+				compileExpansion(LispMacroExpander.expandWithPackageIterator(cons), ctx, tail);
 			case LispNames.WITH_HASH_TABLE_ITERATOR ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithHashTableIterator(cons), ctx);
-			case LispNames.PROG -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx);
-			case LispNames.PROG_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx);
+				compileExpansion(LispMacroExpander.expandWithHashTableIterator(cons), ctx, tail);
+			case LispNames.PROG -> compileExpansion(LispMacroExpander.expandProg(cons, false), ctx, tail);
+			case LispNames.PROG_STAR -> compileExpansion(LispMacroExpander.expandProg(cons, true), ctx, tail);
 			case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 			case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
 			case LispNames.DEFUN -> {
@@ -1880,19 +1881,18 @@ final class WasmExprCompiler {
 				// Like defstruct: the CLOS forms are spliced before Pass 1.
 				throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
 			case LispNames.MAKE_INSTANCE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry, true), ctx);
+				compileExpansion(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry, true), ctx, tail);
 			case LispNames.SLOT_VALUE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx);
-			case LispNames.WITH_SLOTS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx);
+				compileExpansion(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, tail);
+			case LispNames.WITH_SLOTS -> compileExpansion(LispMacroExpander.expandWithSlots(cons), ctx, tail);
 			case LispNames.SYMBOL_MACROLET ->
 				// No user-macro hook: UserMacroExpander has already expanded every
 				// user
 				// macro on the compile path.
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSymbolMacrolet(cons), ctx);
-			case LispNames.WITH_ACCESSORS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx);
+				compileExpansion(LispMacroExpander.expandSymbolMacrolet(cons), ctx, tail);
+			case LispNames.WITH_ACCESSORS -> compileExpansion(LispMacroExpander.expandWithAccessors(cons), ctx, tail);
 			case LispNames.CHANGE_CLASS ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx);
+				compileExpansion(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx, tail);
 			case LispNames.DEFVAR -> WasmDefvarCompiler.compile(cons, ctx, false);
 			case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> WasmDefvarCompiler.compile(cons, ctx, true);
 			case LispNames.LIST -> WasmListCompiler.compile(cons, ctx);
@@ -1912,22 +1912,18 @@ final class WasmExprCompiler {
 					WasmArrayCompiler.compileAset(knownArrayStore, ctx, true);
 				}
 				else {
-					WasmExprCompiler
-						.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
+					compileExpansion(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx,
+							tail);
 				}
 			}
-			case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
-			case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
-			case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);
-			case LispNames.LET_STAR -> {
-				// A nested let chain: transparent to the tail position.
-				ctx.tailPosition = tail;
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx);
-			}
-			case LispNames.DOLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx);
-			case LispNames.DO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx);
-			case LispNames.DO_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx);
-			case LispNames.LOOP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx);
+			case LispNames.PUSH -> compileExpansion(LispMacroExpander.expandPush(cons), ctx, tail);
+			case LispNames.POP -> compileExpansion(LispMacroExpander.expandPop(cons), ctx, tail);
+			case LispNames.REMF -> compileExpansion(LispMacroExpander.expandRemf(cons), ctx, tail);
+			case LispNames.LET_STAR -> compileExpansion(LispMacroExpander.expandLetStar(cons), ctx, tail);
+			case LispNames.DOLIST -> compileExpansion(LispMacroExpander.expandDolist(cons), ctx, tail);
+			case LispNames.DO -> compileExpansion(LispMacroExpander.expandDo(cons), ctx, tail);
+			case LispNames.DO_STAR -> compileExpansion(LispMacroExpander.expandDoStar(cons), ctx, tail);
+			case LispNames.LOOP -> compileExpansion(LispMacroExpander.expandLoop(cons), ctx, tail);
 			case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx, tail);
 			case LispNames.BLOCK -> WasmBlockCompiler.compileNamed(cons, ctx, tail);
 			case LispNames.FN_BLOCK_INTERNAL -> WasmBlockCompiler.compileFnBlock(cons, ctx, tail);
@@ -1938,8 +1934,8 @@ final class WasmExprCompiler {
 			case LispNames.THROW -> WasmNlxCompiler.compileTagThrow(cons, ctx);
 			case LispNames.RETURN_FROM -> WasmReturnFromCompiler.compile(cons, ctx);
 			case LispNames.RETURN -> WasmReturnCompiler.compile(cons, ctx);
-			case LispNames.INCF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx);
-			case LispNames.DECF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx);
+			case LispNames.INCF -> compileExpansion(LispMacroExpander.expandIncf(cons), ctx, tail);
+			case LispNames.DECF -> compileExpansion(LispMacroExpander.expandDecf(cons), ctx, tail);
 			case LispNames.FORMAT -> {
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx);
 				// A literal-nil destination is a string PRODUCER: its capture
@@ -1950,35 +1946,32 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.LENGTH -> WasmLengthCompiler.compile(cons, ctx);
-			case LispNames.REVERSE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons), ctx);
-			case LispNames.MEMBER -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx);
-			case LispNames.FIND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons), ctx);
-			case LispNames.FIND_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons), ctx);
-			case LispNames.FIND_IF_NOT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFindIfNot(cons), ctx);
-			case LispNames.MEMBER_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMemberIf(cons), ctx);
-			case LispNames.POSITION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons), ctx);
-			case LispNames.POSITION_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons), ctx);
-			case LispNames.POSITION_IF_NOT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandPositionIfNot(cons), ctx);
-			case LispNames.COMPLEMENT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx);
-			case LispNames.COUNT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCount(cons), ctx);
-			case LispNames.COUNT_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCountIf(cons), ctx);
-			case LispNames.ASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx);
-			case LispNames.ASSOC_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssocIf(cons), ctx);
-			case LispNames.RASSOC_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassocIf(cons), ctx);
-			case LispNames.GETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx);
-			case LispNames.EVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx);
-			case LispNames.SOME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx);
-			case LispNames.REMOVE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons), ctx);
-			case LispNames.REMOVE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons), ctx);
-			case LispNames.REMOVE_IF_NOT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons), ctx);
-			case LispNames.DELETE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons), ctx);
-			case LispNames.DELETE_IF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons), ctx);
-			case LispNames.DELETE_IF_NOT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons), ctx);
-			case LispNames.SUBSTITUTE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons), ctx);
-			case LispNames.NSUBSTITUTE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons), ctx);
+			case LispNames.REVERSE -> compileExpansion(LispMacroExpander.expandReverse(cons), ctx, tail);
+			case LispNames.MEMBER -> compileExpansion(LispMacroExpander.expandMember(cons), ctx, tail);
+			case LispNames.FIND -> compileExpansion(LispMacroExpander.expandFind(cons), ctx, tail);
+			case LispNames.FIND_IF -> compileExpansion(LispMacroExpander.expandFindIf(cons), ctx, tail);
+			case LispNames.FIND_IF_NOT -> compileExpansion(LispMacroExpander.expandFindIfNot(cons), ctx, tail);
+			case LispNames.MEMBER_IF -> compileExpansion(LispMacroExpander.expandMemberIf(cons), ctx, tail);
+			case LispNames.POSITION -> compileExpansion(LispMacroExpander.expandPosition(cons), ctx, tail);
+			case LispNames.POSITION_IF -> compileExpansion(LispMacroExpander.expandPositionIf(cons), ctx, tail);
+			case LispNames.POSITION_IF_NOT -> compileExpansion(LispMacroExpander.expandPositionIfNot(cons), ctx, tail);
+			case LispNames.COMPLEMENT -> compileExpansion(LispMacroExpander.expandComplement(cons), ctx, tail);
+			case LispNames.COUNT -> compileExpansion(LispMacroExpander.expandCount(cons), ctx, tail);
+			case LispNames.COUNT_IF -> compileExpansion(LispMacroExpander.expandCountIf(cons), ctx, tail);
+			case LispNames.ASSOC -> compileExpansion(LispMacroExpander.expandAssoc(cons), ctx, tail);
+			case LispNames.ASSOC_IF -> compileExpansion(LispMacroExpander.expandAssocIf(cons), ctx, tail);
+			case LispNames.RASSOC_IF -> compileExpansion(LispMacroExpander.expandRassocIf(cons), ctx, tail);
+			case LispNames.GETF -> compileExpansion(LispMacroExpander.expandGetf(cons), ctx, tail);
+			case LispNames.EVERY -> compileExpansion(LispMacroExpander.expandEvery(cons), ctx, tail);
+			case LispNames.SOME -> compileExpansion(LispMacroExpander.expandSome(cons), ctx, tail);
+			case LispNames.REMOVE -> compileExpansion(LispMacroExpander.expandRemove(cons), ctx, tail);
+			case LispNames.REMOVE_IF -> compileExpansion(LispMacroExpander.expandRemoveIf(cons), ctx, tail);
+			case LispNames.REMOVE_IF_NOT -> compileExpansion(LispMacroExpander.expandRemoveIfNot(cons), ctx, tail);
+			case LispNames.DELETE -> compileExpansion(LispMacroExpander.expandDelete(cons), ctx, tail);
+			case LispNames.DELETE_IF -> compileExpansion(LispMacroExpander.expandDeleteIf(cons), ctx, tail);
+			case LispNames.DELETE_IF_NOT -> compileExpansion(LispMacroExpander.expandDeleteIfNot(cons), ctx, tail);
+			case LispNames.SUBSTITUTE -> compileExpansion(LispMacroExpander.expandSubstitute(cons), ctx, tail);
+			case LispNames.NSUBSTITUTE -> compileExpansion(LispMacroExpander.expandNsubstitute(cons), ctx, tail);
 			default -> {
 				return false;
 			}
@@ -1997,23 +1990,21 @@ final class WasmExprCompiler {
 	 */
 	private static boolean compileOperator4(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
-			case LispNames.SUBSTITUTE_IF ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstituteIf(cons), ctx);
+			case LispNames.SUBSTITUTE_IF -> compileExpansion(LispMacroExpander.expandSubstituteIf(cons), ctx, tail);
 			case LispNames.SUBSTITUTE_IF_NOT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSubstituteIfNot(cons), ctx);
-			case LispNames.NSUBSTITUTE_IF ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx);
+				compileExpansion(LispMacroExpander.expandSubstituteIfNot(cons), ctx, tail);
+			case LispNames.NSUBSTITUTE_IF -> compileExpansion(LispMacroExpander.expandNsubstituteIf(cons), ctx, tail);
 			case LispNames.NSUBSTITUTE_IF_NOT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx);
+				compileExpansion(LispMacroExpander.expandNsubstituteIfNot(cons), ctx, tail);
 			case LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx);
-			case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);
-			case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);
-			case LispNames.BUTLAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx);
-			case LispNames.IDENTITY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx);
-			case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(
-					LispMacroExpander.expandCopyList(cons, ctx.functions.containsKey(LispNames.COPY_LIST_RUNTIME)),
-					ctx);
+				compileExpansion(LispMacroExpander.expandRemoveDuplicates(cons), ctx, tail);
+			case LispNames.NCONC -> compileExpansion(LispMacroExpander.expandNconc(cons), ctx, tail);
+			case LispNames.LAST -> compileExpansion(LispMacroExpander.expandLast(cons), ctx, tail);
+			case LispNames.BUTLAST -> compileExpansion(LispMacroExpander.expandButlast(cons), ctx, tail);
+			case LispNames.IDENTITY -> compileExpansion(LispMacroExpander.expandIdentity(cons), ctx, tail);
+			case LispNames.COPY_LIST -> compileExpansion(
+					LispMacroExpander.expandCopyList(cons, ctx.functions.containsKey(LispNames.COPY_LIST_RUNTIME)), ctx,
+					tail);
 			case LispNames.NREVERSE -> {
 				// A string/vector sequence reverses via a coerced list and is
 				// rebuilt in its own representation; null when the call is already
@@ -2026,14 +2017,12 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx);
 				}
 			}
-			case LispNames.MAKE_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx);
-			case LispNames.UNION -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx);
-			case LispNames.INTERSECTION ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandIntersection(cons), ctx);
-			case LispNames.SET_DIFFERENCE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx);
-			case LispNames.ADJOIN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx);
-			case LispNames.SUBSETP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSubsetp(cons), ctx);
+			case LispNames.MAKE_LIST -> compileExpansion(LispMacroExpander.expandMakeList(cons), ctx, tail);
+			case LispNames.UNION -> compileExpansion(LispMacroExpander.expandUnion(cons), ctx, tail);
+			case LispNames.INTERSECTION -> compileExpansion(LispMacroExpander.expandIntersection(cons), ctx, tail);
+			case LispNames.SET_DIFFERENCE -> compileExpansion(LispMacroExpander.expandSetDifference(cons), ctx, tail);
+			case LispNames.ADJOIN -> compileExpansion(LispMacroExpander.expandAdjoin(cons), ctx, tail);
+			case LispNames.SUBSETP -> compileExpansion(LispMacroExpander.expandSubsetp(cons), ctx, tail);
 			case LispNames.EQ_GENERAL, LispNames.EQL -> WasmEqGeneralCompiler.compile(cons, ctx);
 			case LispNames.EQUAL -> WasmEqualCompiler.compile(cons, ctx);
 			case LispNames.REMF_TAIL -> WasmRemfTailCompiler.compile(cons, ctx);
@@ -2059,14 +2048,13 @@ final class WasmExprCompiler {
 			case LispNames.ROW_MAJOR_ASET -> WasmArrayCompiler.compileRowMajorAset(cons, ctx);
 			case LispNames.REPLACE_BULK -> WasmArrayCompiler.compileReplaceBulk(cons, ctx);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx);
-			case LispNames.VECTOR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx);
-			case LispNames.SVREF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSvref(cons), ctx);
-			case LispNames.ARRAY_RANK -> WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayRank(cons), ctx);
-			case LispNames.ARRAY_DIMENSION ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDimension(cons), ctx);
+				compileExpansion(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, tail);
+			case LispNames.VECTOR -> compileExpansion(LispMacroExpander.expandVector(cons), ctx, tail);
+			case LispNames.SVREF -> compileExpansion(LispMacroExpander.expandSvref(cons), ctx, tail);
+			case LispNames.ARRAY_RANK -> compileExpansion(LispMacroExpander.expandArrayRank(cons), ctx, tail);
+			case LispNames.ARRAY_DIMENSION -> compileExpansion(LispMacroExpander.expandArrayDimension(cons), ctx, tail);
 			case LispNames.ARRAY_TOTAL_SIZE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayTotalSize(cons), ctx);
+				compileExpansion(LispMacroExpander.expandArrayTotalSize(cons), ctx, tail);
 			case LispNames.FILL_POINTER -> WasmArrayCompiler.compileFillPointer(cons, ctx);
 			case LispNames.SET_FILL_POINTER -> WasmArrayCompiler.compileSetFillPointer(cons, ctx);
 			case LispNames.ARRAY_HAS_FILL_POINTER_P -> WasmArrayCompiler.compileHasFillPointer(cons, ctx);
@@ -2075,14 +2063,14 @@ final class WasmExprCompiler {
 			case LispNames.VECTOR_PUSH -> WasmArrayCompiler.compileVectorPush(cons, ctx);
 			case LispNames.VECTOR_POP -> WasmArrayCompiler.compileVectorPop(cons, ctx);
 			case LispNames.VECTOR_PUSH_EXTEND -> WasmArrayCompiler.compileVectorPushExtend(cons, ctx);
-			case LispNames.ADJUST_ARRAY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
+			case LispNames.ADJUST_ARRAY -> compileExpansion(LispMacroExpander.expandAdjustArray(cons), ctx, tail);
 			case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
 			case LispNames.ARRAY_BECOME_DISPLACED -> WasmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx);
 			case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
 			case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
 			case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);
 			case LispNames.ARRAY_DISPLACEMENT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
+				compileExpansion(LispMacroExpander.expandArrayDisplacement(cons), ctx, tail);
 			case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
 			case LispNames.ARRAY_DISP_OFFSET -> WasmArrayCompiler.compileDispOffset(cons, ctx);
 			case LispNames.ARRAY_UNDISPLACE -> WasmArrayCompiler.compileArrayUndisplace(cons, ctx);
@@ -2096,8 +2084,8 @@ final class WasmExprCompiler {
 								ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
 						ctx);
 			}
-			case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons,
-					ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx);
+			case LispNames.MAP_INTO -> compileExpansion(LispMacroExpander.expandMapInto(cons,
+					ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx, tail);
 			case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 			case LispNames.FUNCALL -> {
 				// A direct (funcall __FLETn_f ...) of a registered local function in
@@ -2193,10 +2181,10 @@ final class WasmExprCompiler {
 					}
 				}
 			}
-			case LispNames.STABLE_SORT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons), ctx);
-			case LispNames.COPY_SEQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx);
-			case LispNames.VECTORP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx);
-			case LispNames.ARRAYP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx);
+			case LispNames.STABLE_SORT -> compileExpansion(LispMacroExpander.expandStableSort(cons), ctx, tail);
+			case LispNames.COPY_SEQ -> compileExpansion(LispMacroExpander.expandCopySeq(cons), ctx, tail);
+			case LispNames.VECTORP -> compileExpansion(LispMacroExpander.expandVectorp(cons), ctx, tail);
+			case LispNames.ARRAYP -> compileExpansion(LispMacroExpander.expandArrayp(cons), ctx, tail);
 			case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx, tail);
 			case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 			case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
@@ -2250,43 +2238,43 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandFFamily(cons), ctx);
-			case LispNames.COND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCond(cons), ctx);
-			case LispNames.CASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCase(cons), ctx);
-			case LispNames.ECASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEcase(cons), ctx);
-			case LispNames.CCASE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx);
-			case LispNames.ERROR -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx);
-			case LispNames.CERROR -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx);
+				compileExpansion(LispMacroExpander.expandFFamily(cons), ctx, tail);
+			case LispNames.COND -> compileExpansion(LispMacroExpander.expandCond(cons), ctx, tail);
+			case LispNames.CASE -> compileExpansion(LispMacroExpander.expandCase(cons), ctx, tail);
+			case LispNames.ECASE -> compileExpansion(LispMacroExpander.expandEcase(cons), ctx, tail);
+			case LispNames.CCASE -> compileExpansion(LispMacroExpander.expandCcase(cons), ctx, tail);
+			case LispNames.ERROR -> compileExpansion(
+					LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx, tail);
+			case LispNames.CERROR ->
+				compileExpansion(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
 			case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 			case LispNames.ERROR_COND_INTERNAL ->
 				// Outside EH mode the condition-carrying variant traps like %error (a
 				// WASM trap is uncatchable and carries no payload; the arguments are
 				// not evaluated); in EH mode it throws the typed instance.
 				WasmErrorCompiler.compileCond(cons, ctx);
-			case LispNames.WARN -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode), ctx);
+			case LispNames.WARN ->
+				compileExpansion(LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
 			case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
-			case LispNames.SIGNAL -> WasmExprCompiler
-				.compileExpr(LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx);
+			case LispNames.SIGNAL -> compileExpansion(
+					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
 			case LispNames.SIGNAL_COND_INTERNAL -> WasmSignalCondCompiler.compile(cons, ctx);
 			case LispNames.HC_DEPTH_DEC_INTERNAL -> WasmHandlerCaseCompiler.compileDepthDec(ctx);
 			case LispNames.DYN_RESTORE_INTERNAL -> WasmLetCompiler.compileDynRestore(cons, ctx);
-			case LispNames.AND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx);
-			case LispNames.OR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx);
-			case LispNames.WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx);
+			case LispNames.AND -> compileExpansion(LispMacroExpander.expandAnd(cons), ctx, tail);
+			case LispNames.OR -> compileExpansion(LispMacroExpander.expandOr(cons), ctx, tail);
+			case LispNames.WHEN -> compileExpansion(LispMacroExpander.expandWhen(cons), ctx, tail);
 			case LispNames.DOTIMES -> WasmDotimesCompiler.compile(cons, ctx);
-			case LispNames.PROG1 -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx);
-			case LispNames.TIME -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTime(cons), ctx);
-			case LispNames.UNLESS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUnless(cons), ctx);
-			case LispNames.ONE_PLUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx);
-			case LispNames.ONE_MINUS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx);
-			case LispNames.ZEROP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandZerop(cons), ctx);
-			case LispNames.PLUSP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPlusp(cons), ctx);
-			case LispNames.MINUSP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx);
-			case LispNames.EVENP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx);
-			case LispNames.ODDP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx);
+			case LispNames.PROG1 -> compileExpansion(LispMacroExpander.expandProg1(cons), ctx, tail);
+			case LispNames.TIME -> compileExpansion(LispMacroExpander.expandTime(cons), ctx, tail);
+			case LispNames.UNLESS -> compileExpansion(LispMacroExpander.expandUnless(cons), ctx, tail);
+			case LispNames.ONE_PLUS -> compileExpansion(LispMacroExpander.expandOnePlus(cons), ctx, tail);
+			case LispNames.ONE_MINUS -> compileExpansion(LispMacroExpander.expandOneMinus(cons), ctx, tail);
+			case LispNames.ZEROP -> compileExpansion(LispMacroExpander.expandZerop(cons), ctx, tail);
+			case LispNames.PLUSP -> compileExpansion(LispMacroExpander.expandPlusp(cons), ctx, tail);
+			case LispNames.MINUSP -> compileExpansion(LispMacroExpander.expandMinusp(cons), ctx, tail);
+			case LispNames.EVENP -> compileExpansion(LispMacroExpander.expandEvenp(cons), ctx, tail);
+			case LispNames.ODDP -> compileExpansion(LispMacroExpander.expandOddp(cons), ctx, tail);
 			case LispNames.ABS -> {
 				if (WasmComplexCompiler.hasComplex(cons)) {
 					WasmComplexCompiler.compileAbs(cons, ctx);
@@ -2340,7 +2328,7 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.MAKE_RANDOM_STATE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
+				compileExpansion(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, tail);
 			// Under --no-wasi these read the cell a host writes through the exported
 			// __ronto_set_time hook instead of the (unimported) clock, and signal
 			// while it is unset -- the branch is WasmTimeCompiler's, which is also
@@ -2476,8 +2464,8 @@ final class WasmExprCompiler {
 			}
 			case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
 			case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
-			case LispNames.LIST_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx);
-			case LispNames.ACONS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx);
+			case LispNames.LIST_STAR -> compileExpansion(LispMacroExpander.expandListStar(cons), ctx, tail);
+			case LispNames.ACONS -> compileExpansion(LispMacroExpander.expandAcons(cons), ctx, tail);
 			case LispNames.ENDP -> WasmNullPredCompiler.compileEndp(cons, ctx);
 			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);
 			case LispNames.CHECK_STRING_INTERNAL -> WasmCharCompiler.compileCheckString(cons, ctx);
@@ -2485,89 +2473,79 @@ final class WasmExprCompiler {
 			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> WasmCharCompiler.compileOperandTypeError(cons, ctx);
 			case LispNames.CHECK_SEQUENCE_INTERNAL -> WasmCharCompiler.compileCheckSequence(cons, ctx);
 			case LispNames.CHECK_CHARACTER_INTERNAL -> WasmCharCompiler.compileCheckCharacter(cons, ctx);
-			case LispNames.ELT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx);
-			case LispNames.RASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx);
-			case LispNames.PAIRLIS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPairlis(cons), ctx);
-			case LispNames.COPY_ALIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyAlist(cons), ctx);
-			case LispNames.REVAPPEND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRevappend(cons), ctx);
-			case LispNames.NRECONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNreconc(cons), ctx);
-			case LispNames.MAPLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx);
-			case LispNames.MAPCON -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx);
-			case LispNames.MAPL -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapl(cons), ctx);
-			case LispNames.NOTANY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx);
-			case LispNames.NOTEVERY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNotevery(cons), ctx);
-			case LispNames.PROG2 -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx);
-			case LispNames.PSETQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx);
-			case LispNames.PSETF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPsetf(cons), ctx);
+			case LispNames.ELT -> compileExpansion(LispMacroExpander.expandElt(cons), ctx, tail);
+			case LispNames.RASSOC -> compileExpansion(LispMacroExpander.expandRassoc(cons), ctx, tail);
+			case LispNames.PAIRLIS -> compileExpansion(LispMacroExpander.expandPairlis(cons), ctx, tail);
+			case LispNames.COPY_ALIST -> compileExpansion(LispMacroExpander.expandCopyAlist(cons), ctx, tail);
+			case LispNames.REVAPPEND -> compileExpansion(LispMacroExpander.expandRevappend(cons), ctx, tail);
+			case LispNames.NRECONC -> compileExpansion(LispMacroExpander.expandNreconc(cons), ctx, tail);
+			case LispNames.MAPLIST -> compileExpansion(LispMacroExpander.expandMaplist(cons), ctx, tail);
+			case LispNames.MAPCON -> compileExpansion(LispMacroExpander.expandMapcon(cons), ctx, tail);
+			case LispNames.MAPL -> compileExpansion(LispMacroExpander.expandMapl(cons), ctx, tail);
+			case LispNames.NOTANY -> compileExpansion(LispMacroExpander.expandNotany(cons), ctx, tail);
+			case LispNames.NOTEVERY -> compileExpansion(LispMacroExpander.expandNotevery(cons), ctx, tail);
+			case LispNames.PROG2 -> compileExpansion(LispMacroExpander.expandProg2(cons), ctx, tail);
+			case LispNames.PSETQ -> compileExpansion(LispMacroExpander.expandPsetq(cons), ctx, tail);
+			case LispNames.PSETF -> compileExpansion(LispMacroExpander.expandPsetf(cons), ctx, tail);
 			case LispNames.TYPECASE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.ETYPECASE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.CTYPECASE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.TYPEP ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx);
+				compileExpansion(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx, tail);
 			case LispNames.SUBTYPEP ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.SUBTYPEP_VALID ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandSubtypepValid(cons, ctx.closRegistry), ctx);
+				compileExpansion(LispMacroExpander.expandSubtypepValid(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx);
-			case LispNames.CHECK_TYPE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx);
-			case LispNames.ASSERT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAssert(cons), ctx);
-			case LispNames.DECLARE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx);
-			case LispNames.DECLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclaim(cons), ctx);
-			case LispNames.PROCLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx);
-			case LispNames.THE -> {
-				ctx.tailPosition = tail;
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
-			}
-			case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
+				compileExpansion(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx, tail);
+			case LispNames.CHECK_TYPE -> compileExpansion(LispMacroExpander.expandCheckType(cons), ctx, tail);
+			case LispNames.ASSERT -> compileExpansion(LispMacroExpander.expandAssert(cons), ctx, tail);
+			case LispNames.DECLARE -> compileExpansion(LispMacroExpander.expandDeclare(cons), ctx, tail);
+			case LispNames.DECLAIM -> compileExpansion(LispMacroExpander.expandDeclaim(cons), ctx, tail);
+			case LispNames.PROCLAIM -> compileExpansion(LispMacroExpander.expandProclaim(cons), ctx, tail);
+			case LispNames.THE -> compileExpansion(LispMacroExpander.expandThe(cons), ctx, tail);
+			case LispNames.EVAL_WHEN -> compileExpansion(LispMacroExpander.expandEvalWhen(cons), ctx, tail);
 			case LispNames.WITH_COMPILATION_UNIT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx);
-			case LispNames.LOCALLY -> {
-				ctx.tailPosition = tail;
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
-			}
+				compileExpansion(LispMacroExpander.expandWithCompilationUnit(cons), ctx, tail);
+			case LispNames.LOCALLY -> compileExpansion(LispMacroExpander.expandLocally(cons), ctx, tail);
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx);
-			case LispNames.WRITE_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx);
-			case LispNames.FLET -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFlet(cons), ctx);
-			case LispNames.LABELS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLabels(cons), ctx);
-			case LispNames.VALUES -> WasmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx);
+				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, tail);
+			case LispNames.WRITE_CHAR -> compileExpansion(LispMacroExpander.expandWriteChar(cons), ctx, tail);
+			case LispNames.FLET -> compileExpansion(LispMacroExpander.expandFlet(cons), ctx, tail);
+			case LispNames.LABELS -> compileExpansion(LispMacroExpander.expandLabels(cons), ctx, tail);
+			case LispNames.VALUES -> compileExpansion(LispMacroExpander.expandValues(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_BIND ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueBind(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMultipleValueBind(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_LIST ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueList(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMultipleValueList(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_CALL ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueCall(cons), ctx);
-			case LispNames.NTH_VALUE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMultipleValueCall(cons), ctx, tail);
+			case LispNames.NTH_VALUE -> compileExpansion(LispMacroExpander.expandNthValue(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_SETQ ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMultipleValueSetq(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_PROG1 ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueProg1(cons), ctx);
-			case LispNames.ROTATEF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx);
-			case LispNames.SHIFTF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandShiftf(cons), ctx);
-			case LispNames.LOAD_TIME_VALUE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandLoadTimeValue(cons), ctx);
-			case LispNames.BYTE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx);
-			case LispNames.BYTE_SIZE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx);
-			case LispNames.BYTE_POSITION ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx);
-			case LispNames.LDB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx);
-			case LispNames.DPB -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx);
-			case LispNames.DEPOSIT_FIELD ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDepositField(cons), ctx);
+				compileExpansion(LispMacroExpander.expandMultipleValueProg1(cons), ctx, tail);
+			case LispNames.ROTATEF -> compileExpansion(LispMacroExpander.expandRotatef(cons), ctx, tail);
+			case LispNames.SHIFTF -> compileExpansion(LispMacroExpander.expandShiftf(cons), ctx, tail);
+			case LispNames.LOAD_TIME_VALUE -> compileExpansion(LispMacroExpander.expandLoadTimeValue(cons), ctx, tail);
+			case LispNames.BYTE -> compileExpansion(LispMacroExpander.expandByte(cons), ctx, tail);
+			case LispNames.BYTE_SIZE -> compileExpansion(LispMacroExpander.expandByteSize(cons), ctx, tail);
+			case LispNames.BYTE_POSITION -> compileExpansion(LispMacroExpander.expandBytePosition(cons), ctx, tail);
+			case LispNames.LDB -> compileExpansion(LispMacroExpander.expandLdb(cons), ctx, tail);
+			case LispNames.DPB -> compileExpansion(LispMacroExpander.expandDpb(cons), ctx, tail);
+			case LispNames.DEPOSIT_FIELD -> compileExpansion(LispMacroExpander.expandDepositField(cons), ctx, tail);
 			case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2, LispNames.LOGNAND,
 					LispNames.LOGNOR ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx);
-			case LispNames.LOGEQV -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLogEqv(cons), ctx);
-			case LispNames.FLOAT_RADIX -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFloatRadix(cons), ctx);
-			case LispNames.LOGTEST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx);
-			case LispNames.MAKE_SEQUENCE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx);
+				compileExpansion(LispMacroExpander.expandLogComplement(cons), ctx, tail);
+			case LispNames.LOGEQV -> compileExpansion(LispMacroExpander.expandLogEqv(cons), ctx, tail);
+			case LispNames.FLOAT_RADIX -> compileExpansion(LispMacroExpander.expandFloatRadix(cons), ctx, tail);
+			case LispNames.LOGTEST -> compileExpansion(LispMacroExpander.expandLogtest(cons), ctx, tail);
+			case LispNames.MAKE_SEQUENCE -> compileExpansion(LispMacroExpander.expandMakeSequence(cons), ctx, tail);
 			case LispNames.DESTRUCTURING_BIND ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx);
+				compileExpansion(LispMacroExpander.expandDestructuringBind(cons), ctx, tail);
 			case LispNames.GCD -> {
 				if (isBinaryCall(cons)) {
 					WasmGcdCompiler.compile(cons, ctx);
@@ -2592,18 +2570,18 @@ final class WasmExprCompiler {
 					WasmExptCompiler.compile(cons, ctx, LispMacroExpander.escapesToComplex(sym.name(), cons.toList()));
 				}
 			}
-			case LispNames.FIRST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx);
-			case LispNames.REST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx);
-			case LispNames.NTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx);
-			case LispNames.SECOND -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx);
-			case LispNames.THIRD -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx);
-			case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);
-			case LispNames.FIFTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFifth(cons), ctx);
-			case LispNames.SIXTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSixth(cons), ctx);
-			case LispNames.SEVENTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandSeventh(cons), ctx);
-			case LispNames.EIGHTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEighth(cons), ctx);
-			case LispNames.NINTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNinth(cons), ctx);
-			case LispNames.TENTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandTenth(cons), ctx);
+			case LispNames.FIRST -> compileExpansion(LispMacroExpander.expandFirst(cons), ctx, tail);
+			case LispNames.REST -> compileExpansion(LispMacroExpander.expandRest(cons), ctx, tail);
+			case LispNames.NTH -> compileExpansion(LispMacroExpander.expandNth(cons), ctx, tail);
+			case LispNames.SECOND -> compileExpansion(LispMacroExpander.expandSecond(cons), ctx, tail);
+			case LispNames.THIRD -> compileExpansion(LispMacroExpander.expandThird(cons), ctx, tail);
+			case LispNames.FOURTH -> compileExpansion(LispMacroExpander.expandFourth(cons), ctx, tail);
+			case LispNames.FIFTH -> compileExpansion(LispMacroExpander.expandFifth(cons), ctx, tail);
+			case LispNames.SIXTH -> compileExpansion(LispMacroExpander.expandSixth(cons), ctx, tail);
+			case LispNames.SEVENTH -> compileExpansion(LispMacroExpander.expandSeventh(cons), ctx, tail);
+			case LispNames.EIGHTH -> compileExpansion(LispMacroExpander.expandEighth(cons), ctx, tail);
+			case LispNames.NINTH -> compileExpansion(LispMacroExpander.expandNinth(cons), ctx, tail);
+			case LispNames.TENTH -> compileExpansion(LispMacroExpander.expandTenth(cons), ctx, tail);
 			case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 			default -> {
 				return false;

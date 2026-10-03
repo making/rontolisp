@@ -23,7 +23,14 @@ Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`).
   `runBlockIn` catches, since a value returned to a tail position is the value of the
   frame. A block that runs in a frame of its own (`apply`'s, `evalDoSymbols`'s) is its own
   owner, as before. The old envs are garbage as soon as nothing captures them: 5,000,000
-  activations of a defun keep ONE scope alive, not a list.
+  activations of a defun keep ONE scope alive, not a list. The same fact makes the VALUE
+  FORM of such an exit a tail of the frame: a `return-from`/`return` whose block resolves to
+  `owner` (`exitsOwnedBlock`) continues the frame with its value form instead of evaluating
+  it and throwing, so `(return-from f (f (- n 1)))` runs in constant stack (it overflowed
+  near 35,000 until 2026-10-03). An exit to any other block, and one with no value form,
+  still throws. A `return` out of a `dolist` body is not reached that way (the body runs
+  as a tagbody statement, a frame of its own whose owner is not the block): its value form
+  still costs a frame per call, measured 2026-10-03 at 1,000,000 deep.
 - `inBody` -- whether the frame entered a function body: `functionBodyDepth` (what tells a
   macro expansion whether its call site is top level, `expandUserMacro`) is raised once per
   frame however many bodies tail calls replace, and lowered in the frame's `finally` -- so
@@ -117,7 +124,9 @@ changes are the depth ceilings above and `or`'s multiple values. Compiled progra
 `LispEvaluatorTest.aTailCallRunsInConstantStack` (100,000 deep through a value, mutual
 defuns, `apply`, a lambda head, `labels`, `return-from`, and `progn`/`let`/`let*`/`cond`/
 `when`/`unless`/`block`/`case`/`multiple-value-bind`/`the`/`or`/`and`),
-`#aTailPositionThatKeepsItsFrameStillUnwindsItsBookkeeping` (SBCL prints the same),
+`#theValueOfAnExitToABlockTheFrameOwnsIsATailPosition` (`return-from`/`return` values,
+`labels`/`flet` bodies), `#aTailPositionThatKeepsItsFrameStillUnwindsItsBookkeeping` (SBCL
+prints the same),
 `#aReturnFromReachesTheActivationWhoseBlockTheClosureCaptured` (SBCL prints the same),
 `#aFuncallInTailPositionKeepsTheBuiltInsHandlerBindSeam`,
 `#aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody`, and the
