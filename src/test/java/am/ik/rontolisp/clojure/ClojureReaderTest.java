@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.List;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
@@ -92,6 +93,35 @@ class ClojureReaderTest {
 			.hasMessageContaining("Illegal/unsupported escape sequence");
 		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #:");
+	}
+
+	@Test
+	void symbolicValuesReadAsDoubles() {
+		assertThat(printed("##NaN ##Inf ##-Inf")).isEqualTo("[NaN, Infinity, -Infinity]");
+		assertThat(read("##NaN ##Inf ##-Inf")).allSatisfy(v -> assertThat(v).isInstanceOf(LispDouble.class));
+		assertThat(((LispDouble) read("##NaN").get(0)).value()).isNaN();
+		assertThat(((LispDouble) read("##Inf").get(0)).value()).isEqualTo(Double.POSITIVE_INFINITY);
+		assertThat(((LispDouble) read("##-Inf").get(0)).value()).isEqualTo(Double.NEGATIVE_INFINITY);
+		// the oracle reads the next form: whitespace, comments and discards in between,
+		// a delimiter ends the symbol
+		assertThat(printed("## Inf ##\n;c\n -Inf [##Inf]")).isEqualTo("[Infinity, -Infinity, (|%vector| Infinity)]");
+	}
+
+	@Test
+	void unknownSymbolicValuesAreRefusedByName() {
+		assertThatThrownBy(() -> read("##Foo")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##Foo");
+		assertThatThrownBy(() -> read("##-NaN")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##-NaN");
+		assertThatThrownBy(() -> read("##inf")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown symbolic value: ##inf");
+		assertThatThrownBy(() -> read("##1")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##1");
+		assertThatThrownBy(() -> read("##\"a\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##a");
+		assertThatThrownBy(() -> read("##nil")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ##null");
+		assertThatThrownBy(() -> read("##")).isInstanceOf(LispReadException.class);
 	}
 
 	@Test

@@ -240,10 +240,54 @@ final class ClojureReader {
 		if (peek() == '^') { // the legacy spelling of ^ metadata
 			return readMeta();
 		}
+		if (peek() == '#') { // a symbolic value: ##NaN, ##Inf, ##-Inf
+			next();
+			return readSymbolicValue();
+		}
 		if (Character.isLetter(peek())) {
 			return readRecordLiteral();
 		}
 		throw error("unsupported reader form #" + peek());
+	}
+
+	/**
+	 * One symbolic value {@code ##NaN}, {@code ##Inf} or {@code ##-Inf}, positioned after
+	 * both hashes: the double. Like the oracle it reads the NEXT FORM (so {@code ## Inf}
+	 * reads too) and refuses a symbol it does not know, or a form that is no symbol, by
+	 * name.
+	 */
+	private LispVal readSymbolicValue() {
+		LispVal form = readRequired();
+		if (form instanceof LispSymbol symbol) {
+			switch (symbol.name()) {
+				case "NaN" -> {
+					return new LispDouble(Double.NaN);
+				}
+				case "Inf" -> {
+					return new LispDouble(Double.POSITIVE_INFINITY);
+				}
+				case "-Inf" -> {
+					return new LispDouble(Double.NEGATIVE_INFINITY);
+				}
+				default -> {
+				}
+			}
+			if (!List.of("nil", "true", "false").contains(symbol.name())) {
+				throw error("Unknown symbolic value: ##" + symbol.name());
+			}
+		}
+		throw error("Invalid token: ##" + symbolicText(form));
+	}
+
+	/** The form as {@code str} spells it, for the symbolic-value refusal. */
+	private static String symbolicText(LispVal form) {
+		if (form instanceof LispString string) {
+			return string.value();
+		}
+		if (form instanceof LispSymbol symbol && symbol.name().equals("nil")) {
+			return "null";
+		}
+		return form instanceof LispSymbol symbol ? symbol.name() : form.print();
 	}
 
 	/**

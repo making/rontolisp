@@ -238,6 +238,12 @@
            (write-char #\# stream)
            t))))
 
+(defun rontolisp::%clojure-symbolic-float-p (x)
+  "Whether the float X is a NaN or an infinity: the values the reader spells
+   ##NaN, ##Inf and ##-Inf."
+  (or (/= x x) (> x most-positive-double-float)
+      (< x most-negative-double-float)))
+
 (defun rontolisp::%clojure-write (x nil-replacement readable stream labels)
   "Write X to STREAM in Clojure notation. READABLE selects the pr side (quoted
    strings, \\chars) vs the print side (bare); NIL-REPLACEMENT is what nil prints
@@ -339,6 +345,11 @@
            (rontolisp::%clojure-write (car rest) nil-replacement readable stream
                                       labels))
          (write-char #\) stream))
+        ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
+         ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
+         ;; print and pr alike (str alone says NaN and Infinity)
+         (write-string (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf"))
+                       stream))
         ((functionp x) (write-string "#<procedure>" stream))
         (t (let ((name (rontolisp::%clojure-host-class-name x)))
              (if name (write-string name stream) (princ x stream))))))
@@ -404,6 +415,8 @@
                   text))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
+               ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
+                (princ-to-string x))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -4980,9 +4993,31 @@
           ((char= c #\^)
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-meta rd))
+          ((char= c #\#)
+           (rontolisp::%clojure-rd-next rd)
+           (rontolisp::%clojure-rd-symbolic rd))
           ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
           (t (error "~A"
               (concatenate 'string "unsupported reader form #" (string c)))))))
+
+(defun rontolisp::%clojure-rd-symbolic (rd)
+  "A ## symbolic value, both hashes consumed: the double ##NaN, ##Inf or ##-Inf
+   spells. Like the oracle it reads the NEXT FORM (## Inf reads too) and
+   refuses a symbol it does not know, or a form that is no symbol, by name."
+  (let ((form (rontolisp::%clojure-rd-required rd)))
+    (cond ((eq form (rontolisp::%clojure-rd-symbol "NaN")) (/ 0.0d0 0.0d0))
+          ((eq form (rontolisp::%clojure-rd-symbol "Inf"))
+           (* most-positive-double-float 2.0d0))
+          ((eq form (rontolisp::%clojure-rd-symbol "-Inf"))
+           (* most-negative-double-float 2.0d0))
+          ((and (symbolp form) form (not (eq form t))
+                (not (eq form rontolisp::%clojure-false)) (not (keywordp form)))
+           (error "~A"
+                  (concatenate 'string "Unknown symbolic value: ##"
+                               (rontolisp::%clojure-str-of form "null" nil))))
+          (t (error "~A"
+                    (concatenate 'string "Invalid token: ##"
+                     (rontolisp::%clojure-str-of form "null" nil)))))))
 
 (defun rontolisp::%clojure-rd-regex (rd)
   "A regex literal, its #\" consumed: the source verbatim up to the closing

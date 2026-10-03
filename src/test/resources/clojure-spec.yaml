@@ -4868,3 +4868,53 @@ cases:
       :err
       :err
       :yes :no
+  - name: symbolic-values-read-as-doubles-and-print-with-the-hashes
+    # ##NaN, ##Inf and ##-Inf read in source and under read-string, print as written under
+    # pr/prn/println (also inside a collection) and as NaN/Infinity under a bare str/format.
+    # The reader takes the NEXT form after ##, so "## Inf" reads and any other form is an
+    # Invalid token. Every line matches the oracle (clj 1.12.6.1673, 2026-10-03). Not pinned:
+    # a NaN as a map or set key (the oracle finds only the same boxed object, two reads are two).
+    source: |
+      (prn ##NaN ##Inf ##-Inf [##NaN ##Inf])
+      (println ##NaN ##Inf ##-Inf (str ##NaN ##Inf ##-Inf) (pr-str ##Inf))
+      (prn (= ##NaN ##NaN) (= ##Inf ##Inf) (== ##Inf ##Inf) (= ##-Inf (- ##Inf)) (< 1 ##Inf) (> 1 ##-Inf))
+      (prn (read-string "##Inf") (read-string "[##NaN ##-Inf]") (= ##Inf (read-string "##Inf")))
+      (prn (try (read-string "##Foo") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##") (catch Exception e (ex-message e))))
+      (prn (read-string "## Inf") (read-string "##Inf)"))
+      (prn (try (read-string "##Infx") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##1") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##\"a\"") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##:k") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##nil") (catch Exception e (ex-message e))))
+      (prn (try (read-string "##-NaN") (catch Exception e (ex-message e))))
+      (prn (read-string "## ;c\n Inf"))
+      (prn {##Inf 1} (get {##Inf 1} ##Inf) (contains? #{##Inf} ##Inf) (max 1 ##Inf) (min 1 ##-Inf) (+ 1 ##Inf) (- ##Inf ##Inf) (format "%s" ##Inf) (str 1.0 ##NaN))
+      (prn (quote ##Inf) '(##Inf) (pr-str '##NaN))
+      (prn (sort [3.0 ##Inf ##-Inf 1.0]) (reduce + [1 ##Inf]) (* 2 ##Inf) (/ 1 ##Inf) (pos? ##Inf) (zero? ##NaN))
+      (prn (str [##Inf "a"]) (str {:a ##NaN}))
+      (print ##Inf) (print " ") (pr ##NaN) (newline)
+      (def ^:const sym-big ##Inf)
+      (defn sym-f [x] (if (> x ##Inf) :gt :le))
+      (prn sym-big (sym-f 1) (sym-f ##Inf) (apply max [1 ##NaN]))
+    expected: |
+      ##NaN ##Inf ##-Inf [##NaN ##Inf]
+      ##NaN ##Inf ##-Inf NaNInfinity-Infinity ##Inf
+      false true true true true true
+      ##Inf [##NaN ##-Inf] true
+      "Unknown symbolic value: ##Foo"
+      "EOF while reading"
+      ##Inf ##Inf
+      "Unknown symbolic value: ##Infx"
+      "Invalid token: ##1"
+      "Invalid token: ##a"
+      "Invalid token: ##:k"
+      "Invalid token: ##null"
+      "Unknown symbolic value: ##-NaN"
+      ##Inf
+      {##Inf 1} 1 true ##Inf ##-Inf ##Inf ##NaN "Infinity" "1.0NaN"
+      ##Inf (##Inf) "##NaN"
+      (##-Inf 1.0 3.0 ##Inf) ##Inf ##Inf 0.0 true false
+      "[##Inf \"a\"]" "{:a ##NaN}"
+      ##Inf ##NaN
+      ##Inf :le :le ##NaN

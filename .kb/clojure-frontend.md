@@ -559,11 +559,22 @@ answers `:pattern`/`:matcher`.
 
 ## Reading
 
+**`##NaN`, `##Inf`, `##-Inf` read as doubles** in both readers (`readSymbolicValue`,
+`%clojure-rd-symbolic`): the oracle reads the NEXT FORM after `##` (so `## Inf` and
+`##Inf)` read) and refuses a symbol not in the three with `Unknown symbolic value: ##x`, any
+other form with `Invalid token: ##<str of the form>`. The printer spells them `##NaN`/`##Inf`/
+`##-Inf` under print and pr alike (`%clojure-write`, via `%clojure-symbolic-float-p`); `str`
+of the bare value and `format` keep `NaN`/`Infinity` (`%clojure-str-of`), a collection under
+`str` is readable, so `##`. Pinned on all four backends (clojure-spec, measured against clj
+1.12.6.1673, 2026-10-03). Not reproduced: `(get {##NaN 1} ##NaN)` is nil and
+`(contains? #{##NaN} ##NaN)` false there (two reads, two boxed objects); a double here has no identity,
+so a NaN key is found by value like a computed one always was.
+
 **`read-string`/`read` run one reader in `clojure.lisp` (`%clojure-read-from`) over the
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst`/`##Inf` are its refusals. A read map
+`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst` are its refusals. A read map
 or set stores its keys through "Structural keys" (`%clojure-plist-table`,
 `%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
 literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
