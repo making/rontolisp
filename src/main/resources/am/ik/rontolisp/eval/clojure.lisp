@@ -868,7 +868,9 @@
    values through their lookup, like the oracle's IFn. Sets answer the member,
    maps the value, vectors the indexed element, keywords and symbols the
    table-aware read -- each with the next argument as the default (nil without
-   one). Strings are no functions, like the oracle, and anything else signals."
+   one); a keyword or symbol with any other argument count signals the oracle's
+   arity error. Strings are no functions, like the oracle, and anything else
+   signals."
   (cond ((functionp f) (apply f args))
         ((rontolisp::%clojure-set-p f)
          (gethash (rontolisp::%clojure-table-key (car args) (car (cdr f)))
@@ -882,11 +884,17 @@
                (elt f i)
                (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-keyword-p f)
-         (rontolisp::%clojure-call-keyword f (car args)
-          (if (cdr args) (car (cdr args)) nil)))
+         (if (or (null args) (cdr (cdr args)))
+             (error "Wrong number of args (~D) passed to: :~A" (length args)
+                    (car (cdr f)))
+             (rontolisp::%clojure-call-keyword f (car args)
+              (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-real-symbol-p f)
-         (rontolisp::%clojure-call-keyword f (car args)
-          (if (cdr args) (car (cdr args)) nil)))
+         (if (or (null args) (cdr (cdr args)))
+             (error "Wrong number of args (~D) passed to: clojure.lang.Symbol"
+                    (length args))
+             (rontolisp::%clojure-call-keyword f (car args)
+              (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-var-p f)
          (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
         ((rontolisp::%clojure-sorted-p f)

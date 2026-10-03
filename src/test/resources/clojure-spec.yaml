@@ -4318,6 +4318,38 @@ cases:
       Wrong number of args (2) passed to: clojure.core/reduce-kv
       (2 3 4) (11 22) nil (2 3)
       (true true true false) (false true) true
+  - name: a-keyword-or-symbol-called-dynamically-checks-its-argument-count
+    # a keyword or symbol reaching the call dispatcher (a local, a parameter,
+    # apply, a quoted symbol head, a seq worker) takes one or two arguments;
+    # any other count signals the oracle's message: the keyword's own
+    # spelling, clojure.lang.Symbol for a symbol. A literal keyword head is
+    # refused at lower time. Every line matches the oracle (clj 1.12.6,
+    # 2026-10-03).
+    source: |
+      (defn kc [f & a] (try (apply f a) (catch Exception e (ex-message e))))
+      (prn (kc :a {:a 1}) (kc :a {} 9) (kc 'a {'a 1}) (kc 'a {} 9))
+      (println (kc :a))
+      (println (kc :a 1 2 3))
+      (println (kc :x/y))
+      (println (kc 'a))
+      (println (kc 'a 1 2 3))
+      (println (try (let [f 'a] (f)) (catch Exception e (ex-message e))))
+      (println (try ('a 1 2 3) (catch Exception e (ex-message e))))
+      (println (try (let [f :b] (f 1 2 3)) (catch Exception e (ex-message e))))
+      (println (try (doall (map (fn [f] (f)) [:a])) (catch Exception e (ex-message e))))
+      (prn ((fn [f] (f {:a 1})) :a) ((fn [f] (f {} 7)) 'a))
+    expected: |
+      1 9 1 9
+      Wrong number of args (0) passed to: :a
+      Wrong number of args (3) passed to: :a
+      Wrong number of args (0) passed to: :x/y
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: :b
+      Wrong number of args (0) passed to: :a
+      1 7
   - name: into-transduce-and-composition
     # a transducer is the oracle's function from a reducing function to a
     # reducing function, so comp composes left to right, a program's own

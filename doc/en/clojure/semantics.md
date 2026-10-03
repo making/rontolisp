@@ -12,7 +12,7 @@ head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable 
 a real function is a `funcall` of the value cell, so `(defn call-it [f x] (f x))` runs;
 a variable that may hold a collection goes through the prelude dispatcher instead
 (`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords/symbols
-through their lookup, like `IFn`); a `declare`d-but-never-defined name keeps its
+through their lookup, like `IFn`; a keyword or symbol takes one or two arguments and signals the arity error otherwise); a `declare`d-but-never-defined name keeps its
 direct-call error. `def` is a top-level `setq` -- inside a body it
 still sets the global when the body runs.
 
