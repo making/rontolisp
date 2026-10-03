@@ -2554,6 +2554,10 @@ public final class ClojureLowering {
 						ClojureCollectionLowering.equalityRaw(this, items)));
 			case "<", ">", "<=", ">=":
 				return booleanAnswer(plain(name, items));
+			case "==":
+				// numeric equality across categories: CL = (1 = 1.0, 0.0 = -0.0)
+				ClojureLowerUtil.isTrue(n >= 1, "== takes at least one argument");
+				return booleanAnswer(plain("=", items));
 			case "inc":
 				ClojureLowerUtil.isTrue(n == 1, "inc takes one argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), new LispInteger(1));
@@ -2993,6 +2997,7 @@ public final class ClojureLowering {
 			case "=" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
 					new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES"));
 			case "not=" -> notEqualValue();
+			case "==" -> numericEqualValue();
 			case "vector?" -> ClojureFnLowering.predValue(this, ClojureLowering::vectorRaw);
 			case "fn?" ->
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
@@ -3344,6 +3349,17 @@ public final class ClojureLowering {
 										new LispSymbol("RONTOLISP::%CLOJURE-EQUAL-VALUES")),
 								values),
 						TRUE_CONST), this.falseVariable, TRUE_CONST));
+	}
+
+	/**
+	 * {@code ==} as a value: CL {@code =} over every argument, answering
+	 * {@code T}-or-false.
+	 */
+	LispVal numericEqualValue() {
+		LispSymbol values = new LispSymbol(mangle("==-values"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(AMPERSAND_REST, values),
+				booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym("=")), values)));
 	}
 
 	/** The Common Lisp function a core name names as a value, or null. */

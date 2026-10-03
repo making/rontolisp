@@ -4846,3 +4846,25 @@ cases:
       false true true true true
       :a true 1 {} 1 1
       false (0.0) :v
+  - name: double-equals-is-numeric-equality-across-categories
+    # == is Numbers.equiv over one or more numbers: 1 == 1.0, 0.0 == -0.0, NaN is not == NaN,
+    # a non-number signals (unlike =, which keeps the categories apart). Every line matches
+    # the oracle (clj 1.12.6.1673, 2026-10-03).
+    source: |
+      (prn (== 0.0 -0.0) (== 1 1.0) (== 1 1 1.0) (== 1 2) (== 5) (== 1/2 0.5) (== 1 1.0 2))
+      (prn (== (/ 0.0 0.0) (/ 0.0 0.0)) (= 1 1.0) (== 1M 1.0))
+      (prn (map == [1 2 3] [1.0 3 3.0]))
+      (prn (apply == [1 1.0 1]) (let [f ==] (f 2 2.0)))
+      (prn (try (== 1 :a) (catch Throwable e :err)))
+      (prn (try (== "a" "a") (catch Throwable e :err)))
+      (prn (try (== nil nil) (catch Throwable e :err)))
+      (prn (if (== 1 1.0) :yes :no) (if (== 1 2) :yes :no))
+    expected: |
+      true true true false true true false
+      false false true
+      (true false true)
+      true true
+      :err
+      :err
+      :err
+      :yes :no
