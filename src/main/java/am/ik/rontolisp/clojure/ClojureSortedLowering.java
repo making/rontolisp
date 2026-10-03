@@ -18,9 +18,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Also the arms the other verbs carry for a sorted collection: {@link #sortedTest} and
- * friends build the tests and views {@link ClojureSortedArms} strips from a program that
- * builds none. An arm built here names only bound variables and allocates no temporary,
- * so what is left after the strip is the very form the verb lowered to before.
+ * friends build the tests and views {@link ClojureArms} strips from a program that builds
+ * none. An arm built here names only bound variables and allocates no temporary, so what
+ * is left after the strip is the very form the verb lowered to before.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument

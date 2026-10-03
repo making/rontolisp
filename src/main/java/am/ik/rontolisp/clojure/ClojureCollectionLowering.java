@@ -413,7 +413,7 @@ final class ClojureCollectionLowering {
 		LispVal rewrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), keep,
 				ClojureProtocolLowering.rewrapRecord(map, copy), copy);
 		// a sorted map's survivors go back in its order (a view a program building no
-		// sorted collection sheds, ClojureSortedArms)
+		// sorted collection sheds, ClojureArms)
 		LispVal survivors = ClojureSortedLowering.runtime("sorted-shrunk", copy, map);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(keep, ClojureLowering.TRUE_CONST),
@@ -438,7 +438,7 @@ final class ClojureCollectionLowering {
 	/**
 	 * A key looked up in a table of {@code coll}'s entries or members: the key a sorted
 	 * {@code coll} stores comparing equal to it, else the key itself (a view a program
-	 * building no sorted collection sheds, ClojureSortedArms). It goes inside
+	 * building no sorted collection sheds, ClojureArms). It goes inside
 	 * {@link #lookupKey}, whose literal-scalar test reads the key form itself.
 	 */
 	static LispVal storedKey(LispVal key, LispVal coll) {
@@ -526,7 +526,7 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(indexForm(coll, key, false),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("char"), coll, key)));
 		// a sorted map or set reads by its comparator (an arm a program building none
-		// sheds, ClojureSortedArms)
+		// sheds, ClojureArms)
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
 				ClojureSortedLowering.runtime("sorted-get", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
@@ -983,8 +983,7 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * Whether the bound value is a set or a sorted set: the sorted half an arm a program
-	 * building no sorted collection sheds (ClojureSortedArms), which leaves
-	 * {@link #isSetForm}.
+	 * building no sorted collection sheds (ClojureArms), which leaves {@link #isSetForm}.
 	 */
 	static LispVal isAnySetForm(LispSymbol set) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), isSetForm(set),

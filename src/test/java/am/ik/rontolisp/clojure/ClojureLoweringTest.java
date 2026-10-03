@@ -99,13 +99,16 @@ class ClojureLoweringTest {
 	void headPositionCallsToVariablesReachTheValueCell() {
 		// a parameter may hold a collection, so its call goes through the prelude
 		// dispatcher (which funcalls real functions); a let/def binding of a real
-		// function stays a direct funcall, like a declared name stays direct
+		// function stays a direct funcall; a declared-never-defined name calls its
+		// unbound root, which signals like the oracle's
 		assertThat(lowered("(defn call-it [f x] (f x))"))
 			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (RONTOLISP::%CLOJURE-CALL |c%f| (LIST |c%x|)))");
 		assertThat(lowered("(let [g inc] (g 1))")).contains("(FUNCALL |c%g| 1)");
 		assertThat(lowered("(let [s #{:h}] (s :h))")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
-		assertThat(lowered("(declare u) (u 1)")).contains("(|c%u| 1)").doesNotContain("FUNCALL");
+		assertThat(lowered("(declare u) (u 1)")).contains("(SETQ |c%u| (RONTOLISP::%CLOJURE-UNBOUND \"user/u\"))",
+				"(RONTOLISP::%CLOJURE-CALL |c%u| (LIST 1))");
+		assertThat(lowered("(declare u) (defn u [x] x) (u 1)")).contains("(|c%u| 1)").doesNotContain("UNBOUND");
 	}
 
 	@Test

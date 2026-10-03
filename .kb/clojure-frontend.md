@@ -86,10 +86,10 @@ answered `2 5 3` before).
 |---|---|---|
 | `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Several arities: one `c%f%N` `defun` per arity (`%*` variadic) plus a dispatch `defun`; a wrong count signals `wrong number of arguments passed to: f`; at most one variadic clause and one clause per arity. In a body: statement position only, single-arity only |
 | redefined `defn` | a fresh internal name per definition: the first keeps the bare name, later ones `%defN` | call sites below each definition call the newest; a value position (`#'f`, `(def g f)`) captures the one current there. Each namespace versions its own names; a session keeps the counts |
-| a call to a `VARIABLE`-kind head | `funcall` of the value cell when it holds a real function (a `let` binding of one, a `def`'d one), else `rontolisp::%clojure-call` | the dispatcher applies functions and looks up collections, like `IFn`, so a parameter may hold a set or map; a `declare`d-never-defined name keeps its direct-call error |
+| a call to a `VARIABLE`-kind head | `funcall` of the value cell when it holds a real function (a `let` binding of one, a `def`'d one), else `rontolisp::%clojure-call` | the dispatcher applies functions and looks up collections, like `IFn`, so a parameter may hold a set or map; a `declare`d-never-defined name (`Kind.DECLARED`) calls its unbound root through the dispatcher (the oracle's `Attempting to call unbound fn`); a session keeps it a direct call, since a later buffer may define it |
 | a call whose head is a compound form (`((fn ...) x)`, `((set v) x)`, `((first ks) m)`) | `funcall` when the head lowers to a `function`/`lambda`, else `rontolisp::%clojure-call` | a call result may be a set, map, vector or keyword, which the dispatcher looks up like `IFn`; a collection literal head and a `#'f` head keep their own rows |
 | a call to a core name the program defines or binds | the program's call | `call` checks `known(name)` before the core rows |
-| `declare` | `nil` | a pre-scan forward declaration; a real definition wins |
+| `declare` | `nil` (plus a `^:dynamic` name's hoisted declaim and counter) | a pre-scan forward declaration (`Kind.DECLARED`); a real definition wins. "Vars and metadata", unbound vars |
 | `def` | top-level `setq` of the mangled name | inside a body it sets the global when the body runs. The value lowers against the OLD binding, so `(def p (memoize p))` after `(defn p ...)` captures `#'c%p`. A docstring and an attr map are skipped (recorded as var metadata); an attr map needs a value behind it and a lone string is the value |
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
@@ -150,7 +150,7 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` checks var-ness and answers true (a value-less `def` binds nil; a declared-never-defined `#'x` does not compile on JVM/wasm); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` `char` `quot` | `truncate` (`char-code` for a char) / `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
 | `bigint` `biginteger` `bigdec` `rationalize` `numerator` `denominator` `unchecked-int` `-long` `-short` `-byte` `-char` `-double` `-float` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | integers and ratios are plain Lisp rationals (the `N`/`M` literal rule), so `bigint`/`biginteger` truncate to an integer (a decimal string through `parse-integer` after a first/last character check, since `parse-integer` skips surrounding whitespace and `BigInteger` refuses it; `bigdec` of a string was already strict, both pinned by clojure-spec `bigint-and-bigdec-strings-refuse-surrounding-whitespace`) and `bigdec` answers a rational: an integer, a ratio only when its denominator is `2^a 5^b` (the oracle's `Non-terminating decimal expansion`), a string through `%clojure-parse-decimal`. `rationalize` and `bigdec` of a double read the SHORTEST decimal it prints as (`princ-to-string` parsed back: `(rationalize 0.1)` is `1/10`, the oracle's `BigDecimal.valueOf`; the Lisp `rationalize` answers the simplest rational within half an ulp, `0.3333333333333333` is `1/3` there, not `3333333333333333/10000000000000000`). `numerator`/`denominator` signal on an integer (the oracle's `ClassCastException` on a `Long`). The `unchecked-` casts follow the oracle's Java casts: an integer or ratio wraps two's-complement to the width (`%clojure-wrap-bits`), a double saturates first (int range for `int`/`short`/`byte`, long range for `long`/`char`; NaN 0) so `(unchecked-byte 1e20)` is `-1`, a character is accepted by `unchecked-int`/`-char` only; `unchecked-float` answers a double, the infinity past the float range; `-double` is `double`. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts` (a bigint printed through `str`, a bigdec through `double`: the representation deviates) |
@@ -181,7 +181,7 @@ Each is a real work item unless the reason says otherwise.
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
-- Type predicates follow the representation: `()` is nil (`seq?`/`list?`/`coll?`/`counted?` false); a strict seq is a list (`list?`/`counted?`/`realized?` true where the oracle's LazySeq is false); nothing is chunked; an `iterate`/`cycle` head is unrealized until forced; `M`/`N` literals are plain rationals (`decimal?` never true); `identical?` is `eql` (numbers, chars and symbols by value); `bound?` is true of every var; `class?` of `(class 1)` is false (`class` answers a kind keyword).
+- Type predicates follow the representation: `()` is nil (`seq?`/`list?`/`coll?`/`counted?` false); a strict seq is a list (`list?`/`counted?`/`realized?` true where the oracle's LazySeq is false); nothing is chunked; an `iterate`/`cycle` head is unrealized until forced; `M`/`N` literals are plain rationals (`decimal?` never true); `identical?` is `eql` (numbers, chars and symbols by value); `class?` of `(class 1)` is false (`class` answers a kind keyword).
 - Map entries: an entry is a plain two-member vector, so `map-entry?` is true of every `[k v]` (the oracle: false for one the program built). `find-keyword` answers a never-used spelling's keyword (keywords are not interned; the oracle: nil).
 - Sorted collections copy on every verb (O(n) per association, a hash map's cost), `nth` steps through one (the oracle refuses), `class` answers `:map`/`:set`, an empty `subseq` walked from the start is `nil` (the oracle `()`), a `subseq` test passed as a value is recognized by its answers, `compare` orders strings by code point, and `vector-of` answers a plain vector ("Sorted collections").
 - Structural keys: a stored collection key is the first `=` key of its kind the program
@@ -287,13 +287,15 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureSortedArms` scans for a PRODUCER (`%clojure-sorted-make` and the four
+  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's, "Vars and
+  metadata") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
   a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
   an argument with an effect, is an `IllegalStateException` at the strip.
-  `eval/ClojureLibrary.process` strips the program and splices a stripped library (two more
-  cached variants, beside the host-arm ones); the interpreter, a session and the macro-time
+  `eval/ClojureLibrary.process` strips the program family by family and splices a library
+  stripped of every family it makes no value of (one cached variant per combination, beside
+  the host-arm ones); the interpreter, a session and the macro-time
   evaluator keep `forms()` whole, since what a later input builds is unknown.
 - Writing an arm: it allocates no `freshTemp` and lowers no datum again (a shifted temp
   number would rename locals of the stripped program); it folds into an existing cons arm
@@ -337,7 +339,7 @@ before the library splice.
   `clojure-set-grows-and-shrinks-a-sorted-set`,
   `empty-answers-the-empty-collection-of-its-kind`,
   `sorted-collections-carry-metadata-and-travel-through-macros` (oracle-identical but for
-  the commented lines); the strip by `ClojureSortedArmsTest`,
+  the commented lines); the strip by `ClojureArmsTest`,
   `ClojureLoweringTest#aProgramBuildingNoSortedCollectionCarriesNoneOfItsArms`,
   `ClojureLibraryTest#aProgramBuildingNoSortedCollectionSplicesTheLibraryWithoutItsSortedArms`;
   a session keeping its arms by
@@ -906,6 +908,35 @@ resolve var`; a `clojure.core` var is refused.
   `|c%x%meta|` ahead of the definition. A site above a redefinition sees the older
   metadata. Anything other than `def`/`defn`/`defn-`/`defmacro` carries only
   `:name`/`:ns`. `test` calls `(:test (meta v))`.
+- **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's
+  unbound var: the value cell holds `(:C%UNBOUND "ns/name")` (`%clojure-unbound`), truthy,
+  `str` `Unbound: #'ns/name`, printing `#<Unbound: #'ns/name>` (the oracle's `#object` has a
+  hash), calling it `Attempting to call unbound fn: #'ns/name`; `bound?` reads the root
+  through the var, `defonce` of a name in `unboundCapable` treats it as unbound. A file is
+  closed, so `ClojureLowering.lower` stores every root the lowering met
+  (`unboundRoots`) right after the false binding and the site lowers to nothing -- a
+  `declare` or value-less `def` never touches a bound root, a definition below the site
+  still finds it. A session stores it at the site under `(unless (boundp ...))`, and reads
+  a `Kind.DECLARED` name as `(if (fboundp 's) #'s s)`, since a later buffer may define it
+  either way. `declare` records `:declared true` after the name's metadata (the oracle's
+  order); a `^:dynamic` declare joins `dynamicVars` with its declaim and counter hoisted.
+  A function's or macro's name declared too gets no root (its value is no value cell); a
+  `#'f` deref above the `defn` answers the function where the oracle's is unbound (kept).
+  **Arms**: every library test of the root (`%clojure-unbound-p` in the printer, `str`,
+  IFn, `bound?`) and `defonce`'s is an arm of `ClojureArms.Family.UNBOUND`, whose producer
+  is `%clojure-unbound`, so a program making no unbound var compiles byte-identically.
+  Measured 2026-10-03 (wasm / class bytes, before -> after): `(prn [1 "a"])` 32,313 /
+  64,141 unchanged, `(let [s #{:a}] (println (s :a)))` 63,546 / 85,453 unchanged; the
+  printer arm alone, unstripped, cost every printing program 234 / 380 bytes and the IFn
+  arm 210 / 419. `(declare y) (def v #'y) (println (bound? v) (str @v))` 45,395 / 79,399
+  (did not compile before); reading `:macro` costs `bound?` users ~2.8 KB wasm, against
+  59 / 177 bytes in every IFn program for a NIL-getter macro var (`%clojure-var-get`
+  testing it).
+  Pinned by clojure-spec `unbound-vars-answer-the-unbound-root`,
+  `def-without-a-value-is-unbound-and-defn-is-called-directly`,
+  `ClojureSessionTest#aDeclaredNameStaysOpenForALaterBuffer`,
+  `ClojureLibraryTest#aProgramMakingNoUnboundRootSplicesTheLibraryWithoutItsUnboundArms`,
+  `ClojureArmsTest#theUnboundRootFamilyStripsOnlyItsOwnArms`.
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).
@@ -1041,7 +1072,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureSortedArmsTest` (the sorted-collection strip).
+- `ClojureArmsTest` (the sorted-collection and unbound-root strips).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

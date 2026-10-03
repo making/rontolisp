@@ -275,6 +275,10 @@
         ((rontolisp::%clojure-var-p x)
          (write-string "#'" stream)
          (write-string (car (cdr x)) stream))
+        ((rontolisp::%clojure-unbound-p x)
+         (write-string "#<Unbound: #'" stream)
+         (write-string (car (cdr x)) stream)
+         (write-char #\> stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-record-p x)
@@ -425,6 +429,8 @@
                 (rontolisp::%clojure-re-pat-source x))
                ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
                 (princ-to-string x))
+               ((rontolisp::%clojure-unbound-p x)
+                (concatenate 'string "Unbound: #'" (car (cdr x))))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -900,6 +906,8 @@
         ((rontolisp::%clojure-sorted-p f)
          (rontolisp::%clojure-sorted-get f (car args)
                                          (if (cdr args) (car (cdr args)) nil)))
+        ((rontolisp::%clojure-unbound-p f)
+         (error "Attempting to call unbound fn: #'~A" (car (cdr f))))
         (t (error "not a function"))))
 
 (defun rontolisp::%clojure-as-fn (f)
@@ -3444,11 +3452,24 @@
         (t (error "realized? needs a lazy seq"))))
 
 (defun rontolisp::%clojure-is-bound (vars)
-  "bound?: every one of VARS is a var holding a value. A var here always has
-   one (a value-less def binds nil), so anything that is a var answers true;
-   anything else signals, like the oracle's cast."
-  (dolist (v vars t)
-    (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))))
+  "bound?: every one of VARS is a var whose root is no unbound marker (a
+   declared-never-defined name, a value-less def). A macro's var (:macro in its
+   metadata, the oracle's own mark) is bound without taking its root, which
+   signals. Anything that is no var signals, like the oracle's cast; stops at
+   the first var that is not bound, like its every?."
+  (let ((ok t))
+    (dolist (v vars ok)
+      (if ok
+          (progn
+            (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))
+            (let ((root
+                   (if (rontolisp::%clojure-truthy
+                        (rontolisp::%clojure-call-keyword
+                         (list :C%KEYWORD "macro") (rontolisp::%clojure-meta v)
+                         nil))
+                       nil
+                       (rontolisp::%clojure-var-get v))))
+              (if (rontolisp::%clojure-unbound-p root) (setq ok nil))))))))
 
 (defun rontolisp::%clojure-is-thread-bound (vars)
   "thread-bound?: every one of VARS is a dynamic var under a binding right now.
@@ -3503,7 +3524,7 @@
 
 (defun rontolisp::%clojure-is-bound-v (&rest args)
   "bound? as a value."
-  (rontolisp::%clojure-is-bound args))
+  (if (rontolisp::%clojure-is-bound args) t rontolisp::%clojure-false))
 
 (defun rontolisp::%clojure-is-inst (x)
   "inst?: a host java.util.Date or java.time.Instant."
@@ -3964,7 +3985,7 @@
 ;; %clojure-sorted-shrunk, %clojure-sorted-rewrap): the lowering's inline map and
 ;; set verbs, and this file's printer, =, hash, seq, IFn, assoc, find, reduce-kv,
 ;; replace and clojure.set. A program that builds no sorted collection has every
-;; arm and view stripped before the splice (clojure/ClojureSortedArms: a test
+;; arm and view stripped before the splice (clojure/ClojureArms: a test
 ;; folds to false, a view to its first argument), so it compiles to the bytes it
 ;; did before sorted collections existed. Hence the shape each arm keeps: its test
 ;; names a variable (or a car/cdr of one) and is a cond clause's test, an if's
@@ -5287,7 +5308,9 @@
               (not (rontolisp::%clojure-atom-p x))
               (not
                (member (car x)
-                '(:C%TYPE :C%PATTERN :C%MATCHER :C%REDUCED :C%NIL :C%VAR))))
+                       '(:C%TYPE :C%PATTERN :C%MATCHER
+                                 :C%REDUCED :C%NIL
+                                 :C%VAR :C%UNBOUND))))
          (rontolisp::%clojure-put-meta (copy-list x) m))
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
@@ -5347,7 +5370,13 @@
 ;; the root through it; its metadata lives in %clojure-meta-table like any other
 ;; value's. Each site hands both in: the lowering records a definition's
 ;; metadata at lower time (docstring, arglists, position, name metadata), and a
-;; site lowered after a redefinition sees the newest one.
+;; site lowered after a redefinition sees the newest one. An unbound var's root
+;; is the (:C%UNBOUND "ns/name") marker its value cell holds from the start of
+;; the program (a declared-never-defined name, a value-less def), like the
+;; oracle's Var$Unbound: truthy, str "Unbound: #'ns/name", calling it signals.
+;; Each test of one (%clojure-unbound-p over a variable, in a foldable place) is
+;; an arm a program that makes none sheds, like a sorted-collection arm
+;; (clojure/ClojureArms, the UNBOUND family).
 
 (defvar rontolisp::%clojure-var-table
   nil
@@ -5381,6 +5410,14 @@
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."
   (funcall (car (cdr (cdr v)))))
+
+(defun rontolisp::%clojure-unbound (name)
+  "The unbound root of the var NAME (\"ns/name\")."
+  (list :C%UNBOUND name))
+
+(defun rontolisp::%clojure-unbound-p (x)
+  "Whether X is an unbound var's root."
+  (and (consp x) (eq (car x) :C%UNBOUND)))
 
 (defun rontolisp::%clojure-var-test (v)
   "clojure.core/test: call the fn at :test in V's metadata, answering :ok, or

@@ -884,9 +884,7 @@ final class ClojureStateLowering {
 			// probe and no set flag beside the var is needed. The probe survives
 			// the compile-time boundp fold -- the init's assignment poisons the
 			// name -- like the loaded flag's plain-variable test.
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), boundTest(ctx, key, var),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value));
 		}
 		else {
@@ -900,10 +898,26 @@ final class ClojureStateLowering {
 		if (echo != null) {
 			set = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), set, echo.get());
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), boundTest(ctx, key, var),
 				echo != null ? ClojureLowering.NIL_CONST : var, set);
+	}
+
+	/**
+	 * Whether a {@code defonce}'s var has a root: its global is bound and -- when a
+	 * {@code declare} or a value-less {@code def} may have left it the unbound root --
+	 * holds no unbound root. The root test is an {@code if}'s, so a program that makes no
+	 * unbound root folds it to {@code t} ({@link ClojureArms}).
+	 */
+	private static LispVal boundTest(ClojureLowering ctx, String key, LispSymbol var) {
+		LispVal boundp = ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var));
+		if (!ctx.unboundCapable.contains(key)) {
+			return boundp;
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), boundp,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND-P"), var),
+						ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
 	}
 
 	/**

@@ -213,6 +213,25 @@ public final class ClojureLowering {
 	final Map<String, ClojureVarLowering.VarMeta> varMetas = new HashMap<>();
 
 	/**
+	 * The var keys whose value cell may hold the unbound root: a {@code declare}d name
+	 * and a value-less {@code def}, pre-scanned and lowered. A {@code defonce} of one
+	 * tests the root too, so it binds an unbound var.
+	 */
+	final Set<String> unboundCapable = new HashSet<>();
+
+	/**
+	 * The var keys a file starts with the unbound root in their value cell, in lowering
+	 * order (see {@link ClojureVarLowering#unboundRoot}).
+	 */
+	final Set<String> unboundRoots = new LinkedHashSet<>();
+
+	/**
+	 * Whether this lowering reads a session's buffers one at a time: no pre-scan sees a
+	 * later buffer, so a name only declared so far may still be defined.
+	 */
+	boolean session;
+
+	/**
 	 * The var keys whose top-level root reader a {@code #'} site under a shadowing local
 	 * already hoisted (see {@link ClojureVarLowering#varOf}).
 	 */
@@ -886,6 +905,8 @@ public final class ClojureLowering {
 				lowering.forms.add(1, registration);
 			}
 		}
+		// every unbound var holds its root before anything runs, like the false value
+		lowering.forms.addAll(1, ClojureVarLowering.unboundRootInits(lowering.unboundRoots));
 		return lowering.forms;
 	}
 
@@ -899,6 +920,7 @@ public final class ClojureLowering {
 	 * @return the lowered datums, in order
 	 */
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
+		this.session = true;
 		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
 		// A buffer's pre-scan must not clobber what earlier buffers already
@@ -1049,7 +1071,10 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			preDeclare(items.get(1), "def", Kind.VARIABLE, false);
+			String key = preDeclare(items.get(1), "def", Kind.VARIABLE, false);
+			if (items.size() == 2) {
+				this.unboundCapable.add(key);
+			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")) {
@@ -1097,7 +1122,8 @@ public final class ClojureLowering {
 			for (int i = 1; i < items.size(); i++) {
 				String key = internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
 						ClojureLowerUtil.nameIsPrivate(items.get(i)));
-				this.globals.putIfAbsent(key, Kind.FUNCTION);
+				this.globals.putIfAbsent(key, Kind.DECLARED);
+				this.unboundCapable.add(key);
 			}
 		}
 	}
@@ -1121,9 +1147,11 @@ public final class ClojureLowering {
 	 * The pre-scan half of a definition: the name interned in the current namespace under
 	 * its kind, so a form above the definition (or a later buffer) resolves it.
 	 */
-	private void preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
+	private String preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
 		String name = ClojureLowerUtil.plainName(nameDatum, what);
-		this.globals.put(internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
+		String key = internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum));
+		this.globals.put(key, kind);
+		return key;
 	}
 
 	/**
@@ -2164,7 +2192,7 @@ public final class ClojureLowering {
 			return ClojureBindingLowering.letfn(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "declare")) {
-			return ClojureBindingLowering.declareForm(this, items);
+			return ClojureVarLowering.declareForm(this, form, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "->")) {
 			return ClojureLoopLowering.threadFirst(this, items);
@@ -2722,11 +2750,13 @@ public final class ClojureLowering {
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
 		}
-		if (!isFunction(name)) {
+		if (!isFunction(name) && !(this.session && isDeclaredOnly(name))) {
 			// a parameter, a let/loop binding or a def'd variable holds the
 			// function in the VALUE cell (Lisp-2): a direct call would read the
 			// function cell and miss, so call through funcall instead. A defn
-			// (and a declare, which keeps its current error) stays direct. A
+			// stays direct, and so does a session's declared name (a later
+			// buffer may define it); a file's declared-never-defined name calls
+			// its unbound root, which signals like the oracle's. A
 			// variable whose value may hold a collection goes through the
 			// prelude dispatcher instead, which funcalls real functions.
 			if (!isDirectVar(name)) {
@@ -3568,6 +3598,9 @@ public final class ClojureLowering {
 		if (isFunction(name)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
 		}
+		if (this.session && isDeclaredOnly(name)) {
+			return ClojureVarLowering.sessionDeclaredRoot(symOf(name));
+		}
 		return symOf(name);
 	}
 
@@ -3817,6 +3850,20 @@ public final class ClojureLowering {
 		return globalKind(name) == Kind.FUNCTION;
 	}
 
+	/**
+	 * Whether the name resolves to a var only {@code declare}d so far: no local binds it
+	 * and no definition has been seen. Its root is the value cell, which holds the
+	 * unbound root until a definition binds it.
+	 */
+	boolean isDeclaredOnly(String name) {
+		for (Map<String, Kind> scope : this.scopes) {
+			if (scope.containsKey(name)) {
+				return false;
+			}
+		}
+		return globalKind(name) == Kind.DECLARED;
+	}
+
 	boolean isMacro(String name) {
 		for (Map<String, Kind> scope : this.scopes) {
 			Kind kind = scope.get(name);
@@ -3932,11 +3979,16 @@ public final class ClojureLowering {
 	enum Kind {
 
 		/**
+		 * {@code DECLARED}: a global only {@code declare}d so far (a definition replaces
+		 * it). A file's is never defined, so it is an unbound var; a session's may be
+		 * defined by a later buffer.
+		 *
+		 * <p>
 		 * {@code MUTABLE_FIELD}: a deftype's {@code ^:unsynchronized-mutable}/
 		 * {@code ^:volatile-mutable} field inside one of its inline methods, read and
 		 * {@code set!} through the instance's slot ({@link #mutableFieldPlaces}).
 		 */
-		VARIABLE, FUNCTION, MACRO, MUTABLE_FIELD
+		VARIABLE, FUNCTION, MACRO, MUTABLE_FIELD, DECLARED
 
 	}
 

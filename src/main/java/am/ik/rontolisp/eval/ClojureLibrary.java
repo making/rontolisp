@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,7 +17,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.clojure.ClojureSortedArms;
+import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -41,9 +42,10 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * A program that builds no sorted collection has the sorted-collection arms of its own
- * forms and of the library stripped first ({@link ClojureSortedArms}), so it is spliced
- * and compiled exactly as before sorted collections existed. The interpreter keeps them:
- * its library loads once for whatever the session reads next.
+ * forms and of the library stripped first ({@link ClojureArms}), so it is spliced and
+ * compiled exactly as before sorted collections existed; likewise the unbound-root arms
+ * of a program that makes no unbound var. The interpreter keeps them: its library loads
+ * once for whatever the session reads next.
  */
 public final class ClojureLibrary {
 
@@ -129,12 +131,21 @@ public final class ClojureLibrary {
 			return program;
 		}
 		// an arm names the library too, so the reference is asked again once they go
-		ClojureSortedArms.Scan sorted = ClojureSortedArms.scan(program);
-		List<LispVal> body = sorted.strips() ? ClojureSortedArms.strip(program) : program;
+		List<LispVal> body = program;
+		Set<ClojureArms.Family> made = EnumSet.noneOf(ClojureArms.Family.class);
+		for (ClojureArms.Family family : ClojureArms.Family.values()) {
+			ClojureArms.Scan scan = ClojureArms.scan(body, family);
+			if (scan.builds()) {
+				made.add(family);
+			}
+			else if (scan.strips()) {
+				body = ClojureArms.strip(body, family);
+			}
+		}
 		if (body != program && !referencesAny(body)) {
 			return body;
 		}
-		List<LispVal> out = new ArrayList<>(library(usesJava(body), sorted.builds()));
+		List<LispVal> out = new ArrayList<>(library(usesJava(body), made));
 		out.addAll(body);
 		return out;
 	}
@@ -149,16 +160,30 @@ public final class ClojureLibrary {
 	}
 
 	/**
-	 * The library a program splices: with or without the host arms, with or without the
-	 * sorted-collection arms (a program that builds no sorted collection takes none).
+	 * The library a program splices: with or without the host arms, and with the arms of
+	 * only the families whose values the program makes (one that builds no sorted
+	 * collection takes no sorted-collection arm).
 	 */
-	private static List<LispVal> library(boolean java, boolean sorted) {
+	private static List<LispVal> library(boolean java, Set<ClojureArms.Family> made) {
 		List<LispVal> library = java ? forms() : formsWithoutHostArms();
-		if (sorted) {
+		StringBuilder key = new StringBuilder(java ? "default" : "without-host-arms");
+		List<ClojureArms.Family> stripped = new ArrayList<>();
+		for (ClojureArms.Family family : ClojureArms.Family.values()) {
+			if (!made.contains(family)) {
+				key.append(" without-").append(family.name());
+				stripped.add(family);
+			}
+		}
+		if (stripped.isEmpty()) {
 			return library;
 		}
-		return FORMS.computeIfAbsent(java ? "without-sorted" : "without-host-arms-or-sorted",
-				ignored -> List.copyOf(ClojureSortedArms.strip(library)));
+		return FORMS.computeIfAbsent(key.toString(), ignored -> {
+			List<LispVal> out = library;
+			for (ClojureArms.Family family : stripped) {
+				out = ClojureArms.strip(out, family);
+			}
+			return List.copyOf(out);
+		});
 	}
 
 	/**

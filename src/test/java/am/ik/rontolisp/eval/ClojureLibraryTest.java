@@ -48,6 +48,20 @@ class ClojureLibraryTest {
 			.contains("(RONTOLISP::%CLOJURE-SORTED-P COLL)");
 	}
 
+	@Test
+	void aProgramMakingNoUnboundRootSplicesTheLibraryWithoutItsUnboundArms() {
+		// the unbound-root arms (the printer's, IFn's) go like the sorted ones: only a
+		// program storing an unbound root (a declare, a value-less def) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-UNBOUND-P X)");
+		List<LispVal> plain = LispReader.readAllFromString("(rontolisp::%clojure-str-of x \"\" nil)");
+		assertThat(defun(ClojureLibrary.process(plain), "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("UNBOUND");
+		List<LispVal> unbound = LispReader.readAllFromString(
+				"(setq x (rontolisp::%clojure-unbound \"user/x\")) (rontolisp::%clojure-str-of x \"\" nil)");
+		assertThat(defun(ClojureLibrary.process(unbound), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-UNBOUND-P X)");
+	}
+
 	private static String defun(List<LispVal> forms, String name) {
 		return forms.stream()
 			.map(LispVal::print)

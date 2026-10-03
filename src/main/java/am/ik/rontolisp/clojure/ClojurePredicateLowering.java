@@ -18,7 +18,7 @@ import org.jspecify.annotations.Nullable;
  * predicate whose kind no value here can have ({@code delay?}, {@code future?},
  * {@code decimal?}, ...) answers false after evaluating its argument. {@code set?} and
  * {@code reversible?} name the sorted-aware helpers, which a program building no sorted
- * collection calls as the plain ones ({@link ClojureSortedArms#ALIASES}).
+ * collection calls as the plain ones ({@link ClojureArms.Family#SORTED}).
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -117,8 +117,8 @@ final class ClojurePredicateLowering {
 				return ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-DISTINCT"),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))));
 			case "bound?":
-				return ClojureLowerUtil.list(helperSymbol("IS-BOUND"),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
+				return ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-BOUND"),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))));
 			case "thread-bound?":
 				return ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-THREAD-BOUND"),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))));

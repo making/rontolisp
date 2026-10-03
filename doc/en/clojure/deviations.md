@@ -18,7 +18,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   single-entry maps and single-member sets print deterministically. A value that closes a
   cycle prints with a datum label (`#0=(1 . #0#)`), like Scheme's `write`; sharing
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
-  as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`).
+  as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`), an
+  unbound var's root as `#<Unbound: #'user/x>` (the oracle's `#object` carries a hash).
 - `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
   Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
@@ -43,8 +44,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
   `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
   compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
-  two keywords of one spelling as one object. `bound?` is `true` of every var (a value-less
-  `def` binds `nil`).
+  two keywords of one spelling as one object.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the

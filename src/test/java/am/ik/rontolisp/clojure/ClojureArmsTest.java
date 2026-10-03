@@ -11,17 +11,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The strip of the sorted-collection arms ({@link ClojureSortedArms}): what a program
- * that builds no sorted collection is left with is the form each verb lowered to before.
+ * The strip of a family's arms ({@link ClojureArms}): what a program that makes no value
+ * of the kind (no sorted collection, no unbound root) is left with is the form each verb
+ * lowered to before.
  */
-class ClojureSortedArmsTest {
+class ClojureArmsTest {
 
 	private static List<LispVal> read(String source) {
 		return LispReader.readAllFromString(source);
 	}
 
 	private static String stripped(String source) {
-		return ClojureSortedArms.strip(read(source)).stream().map(LispVal::print).collect(Collectors.joining("\n"));
+		return ClojureArms.strip(read(source), ClojureArms.Family.SORTED)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
 	}
 
 	@Test
@@ -52,10 +56,10 @@ class ClojureSortedArmsTest {
 	@Test
 	void formsWithoutAnArmAreAnsweredThemselves() {
 		List<LispVal> forms = read("(defun f (x) (cond ((consp x) 1) (t (or x 2)))) '(rontolisp::%clojure-sorted-p x)");
-		assertThat(ClojureSortedArms.strip(forms)).isSameAs(forms);
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.SORTED)).isSameAs(forms);
 		List<LispVal> mixed = read(
 				"(defun f (x) (if (g x) 1 2)) (defun h (x) (or (rontolisp::%clojure-sorted-p x) x))");
-		List<LispVal> out = ClojureSortedArms.strip(mixed);
+		List<LispVal> out = ClojureArms.strip(mixed, ClojureArms.Family.SORTED);
 		assertThat(out.get(0)).isSameAs(mixed.get(0));
 		assertThat(out.get(1).print()).isEqualTo("(DEFUN H (X) X)");
 	}
@@ -63,27 +67,50 @@ class ClojureSortedArmsTest {
 	@Test
 	void anArmTheStripCannotFoldIsRefused() {
 		// a test anywhere else would survive the strip and splice the sorted runtime
-		// after
-		// all; one over an argument with an effect would lose that effect
-		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(and (a x) (rontolisp::%clojure-sorted-p x))")))
+		// after all; one over an argument with an effect would lose that effect
+		assertThatThrownBy(() -> ClojureArms.strip(read("(and (a x) (rontolisp::%clojure-sorted-p x))"),
+				ClojureArms.Family.SORTED))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("cannot fold");
-		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(if (rontolisp::%clojure-sorted-p (pop xs)) 1 2)")))
+		assertThatThrownBy(() -> ClojureArms.strip(read("(if (rontolisp::%clojure-sorted-p (pop xs)) 1 2)"),
+				ClojureArms.Family.SORTED))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("an argument with an effect");
-		assertThatThrownBy(() -> ClojureSortedArms.strip(read("(rontolisp::%clojure-sorted-key k (next m))")))
+		assertThatThrownBy(
+				() -> ClojureArms.strip(read("(rontolisp::%clojure-sorted-key k (next m))"), ClojureArms.Family.SORTED))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("an argument with an effect");
 	}
 
 	@Test
 	void theScanTellsAProducerFromAnArm() {
-		assertThat(ClojureSortedArms.scan(read("(if (rontolisp::%clojure-sorted-p x) 1 2)")))
-			.isEqualTo(new ClojureSortedArms.Scan(false, true));
-		assertThat(ClojureSortedArms.scan(read("(rontolisp::%clojure-sorted-make t nil (list 1))")).builds()).isTrue();
-		assertThat(ClojureSortedArms.scan(read("#'rontolisp::%clojure-sorted-set-by-v")).builds()).isTrue();
-		assertThat(ClojureSortedArms.scan(read("(princ 1)")).strips()).isFalse();
-		assertThat(ClojureSortedArms.scan(read("(rontolisp::%clojure-is-set x)")).strips()).isTrue();
+		assertThat(ClojureArms.scan(read("(if (rontolisp::%clojure-sorted-p x) 1 2)"), ClojureArms.Family.SORTED))
+			.isEqualTo(new ClojureArms.Scan(false, true));
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-sorted-make t nil (list 1))"), ClojureArms.Family.SORTED)
+			.builds()).isTrue();
+		assertThat(ClojureArms.scan(read("#'rontolisp::%clojure-sorted-set-by-v"), ClojureArms.Family.SORTED).builds())
+			.isTrue();
+		assertThat(ClojureArms.scan(read("(princ 1)"), ClojureArms.Family.SORTED).strips()).isFalse();
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-is-set x)"), ClojureArms.Family.SORTED).strips())
+			.isTrue();
+	}
+
+	@Test
+	void theUnboundRootFamilyStripsOnlyItsOwnArms() {
+		List<LispVal> forms = read(
+				"(cond ((rontolisp::%clojure-unbound-p x) 1) ((rontolisp::%clojure-sorted-p x) 2) (t 3))"
+						+ " (and (boundp 'v) (if (rontolisp::%clojure-unbound-p v) nil t))");
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.UNBOUND).stream().map(LispVal::print))
+			.containsExactly("(COND ((RONTOLISP::%CLOJURE-SORTED-P X) 2) (T 3))", "(AND (BOUNDP 'V) T)");
+		assertThat(
+				ClojureArms.scan(read("(setq x (rontolisp::%clojure-unbound \"user/x\"))"), ClojureArms.Family.UNBOUND)
+					.builds())
+			.isTrue();
+		assertThat(ClojureArms.scan(forms, ClojureArms.Family.UNBOUND).strips()).isTrue();
+		assertThatThrownBy(() -> ClojureArms.strip(read("(and (a x) (rontolisp::%clojure-unbound-p x))"),
+				ClojureArms.Family.UNBOUND))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("unbound-root test where it cannot fold");
 	}
 
 }

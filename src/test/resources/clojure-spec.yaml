@@ -808,14 +808,16 @@ cases:
       (println "after-ns")
     expected: |
       after-ns
-  - name: def-without-a-value-is-nil-and-defn-is-called-directly
+  - name: def-without-a-value-is-unbound-and-defn-is-called-directly
+    # Oracle-identical (clj 1.12.6): a value-less def interns an unbound var. Its root
+    # prints #<Unbound: #'corpus-ns/dv-no-val> (the oracle's #object carries a hash).
     source: |
       (def dv-no-val)
-      (println dv-no-val)
+      (println (str dv-no-val) (bound? #'dv-no-val))
       (defn dv-twice [x] (* 2 x))
       (println (dv-twice 21))
     expected: |
-      nil
+      Unbound: #'corpus-ns/dv-no-val false
       42
   - name: def-lone-string-is-the-value-not-a-docstring
     # A docstring only counts with a value behind it: (def g "hello") binds
@@ -5513,7 +5515,7 @@ cases:
       true false true false true false true true false
       true false (true false)
   - name: var-volatile-bound-and-realized-predicates
-    # Oracle-identical (clj 1.12.6): a volatile is no atom, a var is always bound, a lazy
+    # Oracle-identical (clj 1.12.6): a volatile is no atom, a defined var is bound, a lazy
     # seq is realized once its body ran; realized? of anything but a seq signals.
     source: |
       (def tp-bx 1)
@@ -5561,6 +5563,61 @@ cases:
       false :refused
       false
       true 2
+  - name: unbound-vars-answer-the-unbound-root
+    # Oracle-identical (clj 1.12.6): a declared-never-defined name and a value-less def are
+    # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v"),
+    # calling it signals, bound? is false until a definition binds it, defonce binds it. A
+    # value-less def or declare leaves a bound root alone; declare adds :declared to the
+    # metadata and a ^:dynamic declare rebinds. The root prints #<Unbound: #'v> (the
+    # oracle's #object carries a hash).
+    source: |
+      (declare ub-y)
+      (def ub-v #'ub-y)
+      (prn (bound? #'ub-y) (bound? ub-v) (var? ub-v) ub-v (str @ub-v) (str ub-y) (bound?))
+      (prn (= @ub-v @ub-v) (= @ub-v ub-y) (nil? @ub-v) (if ub-y :truthy :falsy) (bound? ub-v 1) (try (bound? 1 ub-v) (catch Exception e :refused)) (map bound? [ub-v]))
+      (prn (try (ub-y 1) (catch Exception e (ex-message e))) (try (#'ub-y) (catch Exception e (ex-message e))) (try (@ub-v 1 2) (catch Exception e (ex-message e))))
+      (prn (:declared (meta #'ub-y)) (:name (meta ub-v)))
+      (def ub-z)
+      (prn (bound? #'ub-z) (str ub-z) (try (ub-z) (catch Exception e (ex-message e))))
+      (defonce ub-z 9)
+      (prn ub-z (bound? #'ub-z))
+      (def ub-w 1)
+      (def ub-w)
+      (declare ub-w)
+      (prn ub-w (bound? #'ub-w) (:declared (meta #'ub-w)))
+      (declare ub-q)
+      (defn ub-rq [] ub-q)
+      (prn (bound? #'ub-q) (str (ub-rq)) (:declared (meta #'ub-q)))
+      (def ub-q 7)
+      (prn (bound? #'ub-q) (ub-rq) (:declared (meta #'ub-q)))
+      (defmacro ub-m [] 1)
+      (declare ub-f)
+      (defn ub-g [x] (ub-f x))
+      (defn ub-f [x] (* x 2))
+      (prn (bound? #'ub-m #'ub-g #'ub-f) (ub-g 4))
+      (declare ^:dynamic *ub-d*)
+      (prn (bound? #'*ub-d*) (thread-bound? #'*ub-d*))
+      (binding [*ub-d* 2] (prn *ub-d* (bound? #'*ub-d*) (thread-bound? #'*ub-d*)))
+      (def ^:dynamic *ub-e*)
+      (prn (bound? #'*ub-e*))
+      (binding [*ub-e* 3] (prn *ub-e* (bound? #'*ub-e*)))
+      (prn (bound? #'*ub-e*) (str *ub-e*))
+    expected: |
+      false false true #'reading/ub-y "Unbound: #'reading/ub-y" "Unbound: #'reading/ub-y" true
+      true true false :truthy false :refused (false)
+      "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y"
+      true ub-y
+      false "Unbound: #'reading/ub-z" "Attempting to call unbound fn: #'reading/ub-z"
+      9 true
+      1 true true
+      false "Unbound: #'reading/ub-q" true
+      true 7 nil
+      true 8
+      false false
+      2 true true
+      false
+      3 true
+      false "Unbound: #'reading/*ub-e*"
   - name: predicates-of-kinds-no-value-has-answer-false
     # Oracle-identical (clj 1.12.6): an unsorted map, vector or set is not sorted?, and no
     # chunked seq, decimal, byte array, delay, future, reader conditional, tagged literal
