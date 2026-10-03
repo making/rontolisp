@@ -2175,6 +2175,60 @@ cases:
       [7 8]
       2
       (2 3) 3
+  - name: print-family-and-run-bang-as-values
+    # println/print/prn/pr and run! are function values: passed to map/run!/apply
+    # they print like the call (single spaces, println/prn end the line, prn/pr
+    # print readably) and answer nil; run! calls a function on every member for
+    # effect and answers nil, and #'println reads the same value.
+    source: |
+      (dorun (map prn [1 "a"]))
+      (run! println [1 2])
+      (run! print [3 4])
+      (println)
+      (run! pr ["x" :k])
+      (println)
+      (println (run! inc [1 2]) (run! println []) (run! println nil))
+      (apply println [1 "a" :b nil])
+      (apply prn [1 "a" :b nil])
+      (apply print ["a" "b"])
+      (apply pr ["a" "b"])
+      (println)
+      (println (println) (print) (prn))
+      (println (doall (map println [1])) (apply pr []))
+      (run! #(println % %) [5 6])
+      (run! (partial println "p") [7])
+      (def lazy-run-seen (atom []))
+      (run! #(swap! lazy-run-seen conj %) (lazy-seq [8 9]))
+      (println @lazy-run-seen)
+      (println (doall (map run! [println] [[1]])))
+      (let [f println] (f "via" "let"))
+      ((var println) "via var")
+      (#'prn "via var")
+    expected: |
+      1
+      "a"
+      1
+      2
+      34
+      "x":k
+      nil nil nil
+      1 a :b nil
+      1 "a" :b nil
+      a b"a" "b"
+
+
+      nil nil nil
+      1
+      (nil) nil
+      5 5
+      6 6
+      p 7
+      [8 9]
+      1
+      (nil)
+      via let
+      via var
+      "via var"
   - name: defmacro-unless-expands-before-backends
     # A defmacro is a compile-time expander plus its runtime table entry: call sites
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees

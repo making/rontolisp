@@ -128,6 +128,9 @@ final class ClojureCoreLowering {
 				arity(name, n, 3, 3);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
 						ctx.lower(items.get(3)));
+			case "run!":
+				arity(name, n, 2, 2);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "pmap":
 				arity(name, n, 2, -1);
 				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
@@ -170,7 +173,7 @@ final class ClojureCoreLowering {
 					"unchecked-negate", "unchecked-inc-int", "unchecked-dec-int", "unchecked-negate-int",
 					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
 					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
-					"unchecked-remainder-int" ->
+					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

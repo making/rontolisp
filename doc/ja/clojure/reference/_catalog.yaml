@@ -119,6 +119,7 @@ categories:
       - { slug: for, name: "for" }
       - { slug: dorun, name: "dorun" }
       - { slug: doall, name: "doall" }
+      - { slug: run-bang, name: "run!" }
   - title: "マップ・セット・ベクター"
     index_page: clojure/reference/collections.md
     functions:

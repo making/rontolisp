@@ -457,6 +457,46 @@
     (if newline (terpri stream))
     (get-output-stream-string stream)))
 
+(defun rontolisp::%clojure-print-args (parts readable newline)
+  "The println/print/prn/pr family as one function over the PARTS list: each
+   part written to *standard-output* in Clojure notation, single spaces between,
+   a trailing newline under NEWLINE; answers nil."
+  (let ((first t))
+    (dolist (x parts)
+      (if first (setq first nil) (write-char #\Space))
+      (rontolisp::%clojure-write-datum x "nil" readable))
+    (if newline (terpri))
+    nil))
+
+(defun rontolisp::%clojure-println-v (&rest args)
+  "println as a value."
+  (rontolisp::%clojure-print-args args nil t))
+
+(defun rontolisp::%clojure-print-v (&rest args)
+  "print as a value."
+  (rontolisp::%clojure-print-args args nil nil))
+
+(defun rontolisp::%clojure-prn-v (&rest args)
+  "prn as a value."
+  (rontolisp::%clojure-print-args args t t))
+
+(defun rontolisp::%clojure-pr-v (&rest args)
+  "pr as a value."
+  (rontolisp::%clojure-print-args args t nil))
+
+(defun rontolisp::%clojure-run! (f coll)
+  "(run! f coll): F called on every member of COLL for effect, a lazy one
+   realizing member by member; answers nil."
+  (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
+      ((null s) nil)
+    (funcall f (car s))))
+
+(defun rontolisp::%clojure-run!-v (&rest args)
+  "run! as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "run!")
+  (rontolisp::%clojure-run! (rontolisp::%clojure-as-fn (car args))
+                            (car (cdr args))))
+
 (defun rontolisp::%clojure-host-class (x)
   "class of a value of no Clojure kind: a host object's class (the oracle's
    answer), anything else the refusal. java:call refuses every value that is no
