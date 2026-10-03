@@ -269,8 +269,8 @@ body lowers). `loop` inits are sequential and destructure.
   and, for `letfn` entries or `defn`s calling each other, its tail groups
   ([jvm-self-tail-calls.md](jvm-self-tail-calls.md); before them, a JVM `loop` overflowed
   near 150,000 rounds, a `defn` near 200,000, a `letfn` pair near 150,000). A call through
-  a value in tail position -- `%clojure-call`'s `apply`, `%clojure-call-1`'s `funcall` --
-  bounces through the JVM's trampoline ([jvm-tail-bounce.md](jvm-tail-bounce.md)): a `fn`
+  a value in tail position -- `%clojure-call`'s `apply`, a call site's `funcall` of a real
+  function -- bounces through the JVM's trampoline ([jvm-tail-bounce.md](jvm-tail-bounce.md)): a `fn`
   in an atom calling itself runs 1,000,000 deep on the JVM and the interpreter, and traps on
   wasm and the component (`.todo/c01`). The spec's
   `deep-recur-answers-on-every-backend` runs a `loop` 1,000,000 deep on all four,
