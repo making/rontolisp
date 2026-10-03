@@ -239,13 +239,15 @@ body lowers). `loop` inits are sequential and destructure.
   calls wrap through the head; an unused variadic keeps its single shape.
 - Constant stack comes from the backends' tail calls: wasm `return_call`, the
   interpreter's `eval` loop, the JVM's self tail call as a jump back to the method's start
-  ([jvm-self-tail-calls.md](jvm-self-tail-calls.md); before it, a JVM `loop` overflowed near
-  150,000 rounds and a `defn` near 200,000). The spec's `deep-recur-answers-on-every-backend`
-  runs a `loop` 1,000,000 deep on all four.
+  and, for `letfn` entries or `defn`s calling each other, its tail groups
+  ([jvm-self-tail-calls.md](jvm-self-tail-calls.md); before them, a JVM `loop` overflowed
+  near 150,000 rounds, a `defn` near 200,000, a `letfn` pair near 150,000). The spec's
+  `deep-recur-answers-on-every-backend` runs a `loop` 1,000,000 deep on all four,
+  `letfn-mutual-tail-calls-run-in-constant-stack` a `letfn` pair.
 - A multi-arity `defn`'s fixed clause recurs to its own helper (`c%f%<n>`), never through
-  the dispatch defun -- that round trip was a mutual recursion of two functions, which the
-  JVM's jump cannot loop. A multi-arity `fn`'s clauses are arms of one lambda, so its `recur`
-  re-enters the dispatch, a self call of that lambda.
+  the dispatch defun -- that round trip was a mutual recursion of two functions, a tail group
+  on the JVM now but a self jump is cheaper. A multi-arity `fn`'s clauses are arms of one
+  lambda, so its `recur` re-enters the dispatch, a self call of that lambda.
 
 ## Namespaces and project files
 

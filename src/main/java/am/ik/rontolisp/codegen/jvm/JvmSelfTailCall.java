@@ -19,7 +19,8 @@ import am.ik.rontolisp.compiler.FunctionDesignators;
  * method's first instruction. A loop written as tail recursion (Clojure's
  * {@code loop}/{@code recur}, the Clojure lowering's per-element {@code labels} verbs, a
  * Common Lisp accumulator) then runs in constant stack, as it does on the interpreter and
- * on both wasm backends ({@code .kb/jvm-self-tail-calls.md}).
+ * on both wasm backends ({@code .kb/jvm-self-tail-calls.md}). A tail call to another
+ * function of the same tail group is the jump {@link JvmTailGroup} emits.
  *
  * <p>
  * The tail position is the trampoline's mark ({@link JvmTailBounce}): the form whose
@@ -91,7 +92,8 @@ final class JvmSelfTailCall {
 	}
 
 	/**
-	 * Emits a direct call of {@code fi} as a jump when it is this defun's own tail call.
+	 * Emits a direct call of {@code fi} as a jump when it is this defun's own tail call,
+	 * or a tail call to a sibling in its tail group ({@link JvmTailGroup}).
 	 * @param fi the callee
 	 * @param cons the call form
 	 * @param ctx the method being emitted
@@ -100,33 +102,48 @@ final class JvmSelfTailCall {
 	 */
 	static boolean tryDirect(JvmLispCompiler.FunctionInfo fi, LispCons cons, JvmLispCompiler.Ctx ctx,
 			String className) {
-		Loop loop = ctx.selfLoop;
-		if (loop == null || loop.defun() != fi || !atTail(cons, ctx)) {
+		if (!atTail(cons, ctx)) {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
-		return emitJump(loop, parts.subList(1, parts.size()), ctx, className);
+		Loop loop = ctx.selfLoop;
+		if (loop != null && loop.defun() == fi) {
+			return emitJump(loop, parts.subList(1, parts.size()), ctx, className);
+		}
+		// A sibling in this defun's tail group: a jump to its start (JvmTailGroup).
+		JvmTailGroup.Member sibling = JvmTailGroup.siblingByFunction(fi, ctx);
+		return sibling != null && JvmTailGroup.emitJump(sibling, parts.subList(1, parts.size()), ctx, className);
 	}
 
 	/**
 	 * Emits {@code (funcall designator arg...)} as a jump when the designator names this
 	 * method's own function -- the {@code labels} variable holding this closure, or a
-	 * literal {@code #'name} of this defun -- and the call is in tail position.
+	 * literal {@code #'name} of this defun -- or a sibling in its tail group
+	 * ({@link JvmTailGroup}), and the call is in tail position.
 	 * @param cons the {@code funcall} form
 	 * @param ctx the method being emitted
 	 * @param className the class being generated
 	 * @return whether the call was emitted (as a jump); false leaves nothing emitted
 	 */
 	static boolean tryFuncall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Loop loop = ctx.selfLoop;
-		if (loop == null || !atTail(cons, ctx)) {
+		if (!atTail(cons, ctx)) {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2 || !namesSelf(parts.get(1), loop, ctx)) {
+		if (parts.size() < 2) {
 			return false;
 		}
-		return emitJump(loop, parts.subList(2, parts.size()), ctx, className);
+		Loop loop = ctx.selfLoop;
+		if (loop != null && namesSelf(parts.get(1), loop, ctx)) {
+			return emitJump(loop, parts.subList(2, parts.size()), ctx, className);
+		}
+		JvmTailGroup.Member sibling = JvmTailGroup.siblingByVariable(parts.get(1), ctx);
+		if (sibling == null) {
+			String name = FunctionDesignators.literalName(parts.get(1));
+			JvmLispCompiler.FunctionInfo fi = name == null ? null : ctx.functions.get(name);
+			sibling = fi == null ? null : JvmTailGroup.siblingByFunction(fi, ctx);
+		}
+		return sibling != null && JvmTailGroup.emitJump(sibling, parts.subList(2, parts.size()), ctx, className);
 	}
 
 	private static boolean atTail(LispCons cons, JvmLispCompiler.Ctx ctx) {

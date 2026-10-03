@@ -1,4 +1,4 @@
-# JVM backend: a self tail call is a jump back to the method's first instruction
+# JVM backend: a self tail call is a jump back to the method's first instruction, a mutual one a jump inside its tail group
 
 **Invariant: a call in tail position to the function whose method is being emitted -- a
 `defun` calling itself by name or through a literal `#'name`, a `labels` function calling
@@ -45,6 +45,65 @@ tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounc
   (`atTail`): the frame the verifier and HotSpot's OSR entry need
   ([jvm-osr-backedges.md](jvm-osr-backedges.md)); on the marked chain it always is.
 
+## Mutual tail calls: tail groups (`JvmTailGroup`)
+
+**Invariant: functions whose tail calls to each other form a cycle -- top-level defuns, or the
+functions of one `labels` form (a Clojure `letfn`) -- are a tail group, and a call on the
+tail mark from one member to another is a jump.** A mutual recursion runs in constant stack
+as a self tail call does. Landed 2026-10-03 (`.todo/c02`).
+
+- **Finding**: `JvmTailGroup.ofDefuns` before Pass 2a, `.ofLabels` on each expansion in the
+  `labels` arm (fresh per compile of the form, so its lambda conses name this instance's
+  members, `Ctx.tailGroupMembers` -> `LambdaInfo.tailMember`). A walk of each body's tail
+  positions that mirrors the mark (`if`, `progn`, a `let`/`let*` binding no special, the
+  blocks and a `return`/`return-from` reached through them, the pass-through lowerings; an
+  `flet`/`labels` body's names shadow defuns), then Tarjan: each strongly connected component
+  of two members or more. A disagreement with the emitter only loses a group or keeps a member
+  whose call is no jump -- only the mark makes a jump.
+- **Emitting**: each member compiles alone, exactly as without the group. A sibling call on
+  the mark (`JvmSelfTailCall.tryDirect`/`tryFuncall` -> `JvmTailGroup.emitJump`) evaluates the
+  sibling's physical arguments, stores a `labels` sibling's closure (its variable's value; only
+  the expansion assigns it) into slot 0, the arguments into the parameter slots, and branches
+  to a label the member never binds (`Member.jumps`).
+- **Laying out** (`finish`, after Pass 2d, every program body compiled): a member a call names
+  -- an `invokestatic` of its method in a program body (`MethodCode.forEachEntry`), or a
+  `jvm-export` -- gets the group ROOTED at it as its method (`Ctx.laidOut`): its own code at
+  the entry, then the members its jumps reach, appended from the compiled bodies
+  (`MethodCode.append(block, landing)`), each jump landing on its target's first instruction.
+  Every other member keeps its own code, each jump landing on an epilogue that reloads the
+  arguments and calls the target's method: one frame on the way into a rooted method, whose
+  loop then runs in constant stack. While the non-rooted members' jumps still form a cycle,
+  the first member of each is rooted too -- a `labels` function is only ever called through
+  the dispatcher, so its group roots its first function. A rooted method past
+  `HugeMethodLimit` (8000) lays the whole group out apart: every jump an epilogue, a frame a
+  round as before. The shake drops a rooted method nothing calls.
+- **Why rooted methods** (2026-10-03, a generic function whose method tail-calls the generic,
+  30,000 x 1,000 calls, steady state, Graal): calls 67-89 ms; ONE shared method with a switch
+  at its entry and direct jumps 71-74 ms, but a cycle with two entry heads is irreducible and
+  Graal refuses its OSR (`Multiple OnStackReplacementNodes generated`), so one long call stays
+  interpreted ([jvm-osr-backedges.md](jvm-osr-backedges.md)); the same method with every jump
+  re-entering the switch (reducible) 171-190 ms (C2 162-250); rooted 67-73 ms. Rooting EVERY
+  member put the whole group into each method a dispatcher names (+0.47-1.40% on 15 example
+  classes, against +0.21-0.39%). When the jumps form a cycle the root does not close
+  (`JvmTailGroup.reducible`), that root's method dispatches instead: `iconst_0; istore m`, a
+  switch on `m`, each jump storing its target's index and re-entering the switch.
+- **Bounces**: a member's method may run any member's code, so every member's
+  `FunctionInfo.bounceVisible` is the group's OR, set before Pass 2a; a lambda never bounces.
+- **Frames**: a rooted method's frame holds its largest member's locals, which a deep non-tail
+  recursion through it pays per level.
+- `-Drontolisp.jvm.debug-tail-groups=true` prints `[tail-calls] labels A->B ...` for every
+  `labels` form with a sibling tail call and `[tail-group] ...` per group, with each rooted
+  member's size.
+
+**The premise, measured with that hook** (2026-10-03): a `labels` tail call to a sibling in 8
+of 239 example files (cl-base64's `output-group`, llm's `layer-tensor`, jzon's
+`read-element`), none of them a cycle; one even/odd pair each in ci-spec and clojure-spec;
+none in scheme-spec (the Scheme lowering groups its own, `.kb/scheme-frontend.md`). Defun
+cycles in 30 example programs, all in spliced code: the stream `read` delimiter
+(`%rd-datum` -> `%rd-dispatch` -> `%rd-sharp`), generic functions whose methods tail-call the
+generic (cl-ppcre, cl-unicode, cffi, dissect, rove, trivial-gray-streams), asdf's test-op
+pair, Clojure's regex matcher, a multi-arity `defn`'s clause helper.
+
 ## What keeps a real call
 
 - A dynamic extent between the call and the result: a special `let` (its restore), an
@@ -53,11 +112,9 @@ tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounc
   methods of the test below: each keeps its one self call.
 - A tail in a `_k$N` continuation (`JvmBodyOutliner` split a body past the method-size
   budget): another method, so a call, one frame a round.
-- Mutual tail calls (two `labels` functions, `letfn` siblings, two defuns): not a self call.
-  A Scheme program groups them (`.kb/scheme-frontend.md`, "Tail-call groups"); Common Lisp and
-  Clojure keep a frame per hop on the JVM -- two through a lambda's dispatcher, so a `labels`
-  even/odd pair overflows at 1,000,000 and Clojure's `letfn` twin at 150,000, while two
-  defuns pass 1,000,000 only because C2 inlines one into the other (`.todo/c02`).
+- A tail group laid out apart (a rooted method past 8000 bytecodes): each member's tail call
+  to another is a direct call, a frame a round. A jump from a member that is not rooted is a
+  call into a rooted method: one frame per entry, not per round.
 - A tail `apply` of itself, and a nested `defun` (a global variable that may be reassigned).
 
 ## A Clojure deviation it creates
@@ -101,6 +158,19 @@ noise). bench-report: nine programs compile byte-identically, `string` grows 5 B
 the whole `clojure-spec.yaml` program 3,655,421 -> 3,653,061 B, 172 methods jumping back to
 their start.
 
+**Mutual tail calls** (tail groups, same box, a loaded 64-core host). Depth, 1,000,000
+rounds, `java Prog`: a CL `labels` even/odd pair and Clojure's `letfn` twin overflowed (the
+twin passed 100,000) -> answer; two defuns answered in 1 of 3 runs (C2 inlining one into the
+other) and overflowed under `-Xint` -> answer every time, `-Xint` included. Time, best of
+iterations 3-5 in one process, range over 7 alternating runs: 1,000 x a 10,000-round defun
+pair 6-9 -> 3-4 ms, the `labels` pair 65-78 -> 37-44; 10M shallow `(ev? (mod k 4))` defuns
+19-22 -> 21-24, `labels` 123-143 -> 28-32 (no dispatcher); 10,000 x a generic function over
+1,000 elements 27-28 -> 24-26; 100 x `read` of 2,000 data (the `%rd-*` group) 783-862 ->
+779-898. Bytes: of the examples suite's 116 JVM legs 15 change, every one by a group in
+spliced code, +2,988 to +11,135 B (+0.21% to +0.39%); bench-report and size-report
+byte-identical; the ci-spec program 7,618,685 -> 7,622,142 B, clojure-spec 3,692,871 ->
+3,700,216 B (Clojure's regex matcher: four functions, three rooted).
+
 ## Tests
 
 `JvmLispCompilerTest#aSelfTailCallJumpsBackToTheMethodsFirstInstruction` (no self call left,
@@ -109,3 +179,15 @@ one entry jump, a `labels` method looping, 1,000,000 deep),
 semantics and bytecode), `#aSelfTailCallInASplitOffContinuationStaysACall`; clojure-spec
 `deep-recur-answers-on-every-backend` (all four backends: `loop` 1,000,000, a `defn` and a
 multi-arity clause 300,000, `distinct`/`range` over 200,000).
+
+Tail groups: `JvmLispCompilerTest#aMutualTailCallAmongDefunsOrLabelsFunctionsIsAJump` (the
+defun and `labels` pairs 1,000,000 deep, no call left, `OD?` shaken),
+`#aMutualTailCallRunsInConstantStackWithNoJitToInlineItAway` (the same under `-Xint`, a child
+JVM), `#everyShapeOfAMutualTailCallJumpsAndADynamicExtentKeepsItsCall` (lambda lists, a
+closure per round, values, a tail `return-from`, three members, a member as a value, a
+bouncing member, a special binding and an `unwind-protect` keeping their calls, a wrong
+count), `#aCycleTheRootDoesNotCloseDispatchesOnAMemberIndex`,
+`#aGroupPastTheMethodSizeLimitKeepsAMethodPerMember`;
+`MethodCodeTest#aBlockBranchesToALandingLabelOfTheBodyItJoins`, `#aLandingLabelIsOneTheBlockNeverBinds`;
+clojure-spec `letfn-mutual-tail-calls-run-in-constant-stack` (all four backends, 1,000,000
+deep).

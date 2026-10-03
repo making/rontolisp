@@ -21,6 +21,12 @@ silently, with every functional test green. Same cliff as
   jump ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
 
 ## Traps
+- **A loop with two entries refuses OSR on Graal.** Irreducible control flow -- a cycle entered
+  at two of its heads -- fails Graal's OSR compile with `Multiple OnStackReplacementNodes
+  generated` (`-Djdk.graal.CompilationFailureAction=Print` shows it), so one long call stays
+  interpreted; the invocation-counted compile still succeeds. `JvmTailGroup` keeps every cycle
+  through a tail group single-entry for this ([jvm-self-tail-calls.md](jvm-self-tail-calls.md),
+  "Mutual tail calls").
 - A `return`/`go` escaping to an ENCLOSING block must reload from the outermost escaped
   `JvmLispCompiler.SpillScope` (`JvmReturnCompiler`/`JvmGoCompiler`). In `JvmTagbodyCompiler`
   the push must happen BEFORE `TagbodyScope` records its spill depth, or a `go` to that

@@ -194,7 +194,37 @@ public final class MethodCode {
 	 * block's instructions never reached it)
 	 */
 	public MethodCode append(MethodCode block) {
-		block.checkComplete();
+		return this.append(block, Map.of());
+	}
+
+	/**
+	 * Appends a body assembled apart whose branches to the {@code landing} labels --
+	 * labels never bound in it -- land on labels of THIS body, bound already or later: a
+	 * function compiled in a method of its own, with its tail calls to a sibling left
+	 * waiting, laid into a method that holds the sibling too, where each such call
+	 * reaches the sibling's first instruction. Everything else moves as
+	 * {@link #append(MethodCode)} moves it.
+	 * @param block the block, every label its branches name bound but the landing ones
+	 * @param landing each label the block's branches wait for, mapped to the label of
+	 * this body they land on
+	 * @return this
+	 * @throws IllegalStateException when a branch in the block waits for a label the map
+	 * does not name
+	 * @throws IllegalArgumentException when a landing label is bound in the block, or
+	 * when this body feeds an operand-stack model (the block's instructions never reached
+	 * it)
+	 */
+	public MethodCode append(MethodCode block, Map<Label, Label> landing) {
+		int waiting = 0;
+		for (Label external : landing.keySet()) {
+			if (external.position >= 0) {
+				throw new IllegalArgumentException("a landing label is bound in the block");
+			}
+			waiting += external.waitingCount / 2;
+		}
+		if (block.unbound != waiting) {
+			throw new IllegalStateException(block.unbound - waiting + " branch(es) to a label never bound");
+		}
 		if (this.stack != null) {
 			throw new IllegalArgumentException("a block is appended to a plain body only");
 		}
@@ -207,7 +237,8 @@ public final class MethodCode {
 		for (int i = 0; i < block.count; i++) {
 			Object ref = block.refs[i];
 			if (ref instanceof Label label) {
-				ref = rebased.computeIfAbsent(label, l -> {
+				Label target = landing.get(label);
+				ref = target != null ? target : rebased.computeIfAbsent(label, l -> {
 					Label moved = new Label();
 					moved.position = base + l.position;
 					moved.offset = baseOffset + l.offset;
@@ -221,7 +252,39 @@ public final class MethodCode {
 		for (Handler h : block.handlers) {
 			this.handlers.add(new Handler(h.start() + base, h.end() + base, h.handler() + base, h.catchType()));
 		}
+		// A landing branch was never measured against its target: it is now, where the
+		// target is bound, or when it is.
+		for (Map.Entry<Label, Label> entry : landing.entrySet()) {
+			Label external = entry.getKey();
+			Label target = entry.getValue();
+			int[] pairs = external.waiting;
+			for (int k = 0; pairs != null && k < external.waitingCount; k += 2) {
+				int branch = base + pairs[k];
+				int offset = baseOffset + pairs[k + 1];
+				if (target.position >= 0) {
+					this.reach(opcodeOf(this.ops[branch]), offset, target.offset);
+				}
+				else {
+					target.await(branch, offset);
+					this.unbound++;
+				}
+			}
+		}
 		return this;
+	}
+
+	/**
+	 * Visits the master-pool entry of every instruction that names one -- a field, a
+	 * method, a class, a constant -- in instruction order: what a caller asks to learn
+	 * which methods a body calls before the class is written.
+	 * @param visit receives each entry
+	 */
+	public void forEachEntry(java.util.function.Consumer<PoolEntry> visit) {
+		for (int i = 0; i < this.count; i++) {
+			if (this.refs[i] instanceof PoolEntry entry) {
+				visit.accept(entry);
+			}
+		}
 	}
 
 	// --- the records, for the writer and the splitter's scan

@@ -2252,7 +2252,11 @@ final class JvmExprCompiler {
 				// A pass-through lowering: the expansion sits where this form sat, so
 				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
 				ctx.tailBody = tail;
-				compileExpansion(cons, LispMacroExpander.expandLabels(cons), ctx, className);
+				LispVal expansion = LispMacroExpander.expandLabels(cons);
+				// Functions whose tail calls to each other cycle are a tail group, and
+				// each such call is a jump (JvmTailGroup).
+				ctx.tailGroupMembers.putAll(JvmTailGroup.ofLabels(expansion, ctx.specialVars));
+				compileExpansion(cons, expansion, ctx, className);
 			}
 			case LispNames.VALUES -> JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_BIND ->

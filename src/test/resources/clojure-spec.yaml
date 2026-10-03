@@ -137,6 +137,19 @@ cases:
       :defn
       :clause
       200000
+  - name: letfn-mutual-tail-calls-run-in-constant-stack
+    # letfn siblings calling each other in tail position, 1,000,000 deep: wasm's
+    # return_call, the interpreter's eval loop, the JVM's tail group -- the method
+    # the entry runs in holds both functions, so each call is a jump
+    # (.kb/jvm-self-tail-calls.md, "Mutual tail calls"); the JVM overflowed near
+    # 150,000 before. A deviation: the oracle keeps a frame per call and throws
+    # StackOverflowError here (doc/*/clojure/deviations.md).
+    source: |
+      (println (letfn [(mutual-even? [n] (if (zero? n) true (mutual-odd? (dec n))))
+                       (mutual-odd? [n] (if (zero? n) false (mutual-even? (dec n))))]
+                 (mutual-even? 1000000)))
+    expected: |
+      true
   - name: recur-to-variadic-clause-splits-a-worker
     # Oracle clj 1.12.6.1673: the rest parameter binds the last recur argument
     # itself, so (vr :start [1]) is [1] and (vr :start nil) is nil (a plain

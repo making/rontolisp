@@ -12,6 +12,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.LongConsumer;
 
 import org.junit.jupiter.api.Test;
@@ -262,6 +263,65 @@ class MethodCodeTest {
 			assertThat(splice.getMethod("run", Object.class, int.class).invoke(null, null, which)).isEqualTo(-1);
 			assertThat(splice.getMethod("run", Object.class, int.class).invoke(null, "x", which)).isEqualTo(1);
 		}
+	}
+
+	// Two blocks assembled apart, each branching to a label it never binds, laid into one
+	// body where each such branch lands on the other block's first instruction -- one
+	// ahead of it, one behind -- the way a tail group lays its members out. The blocks
+	// are left as they were, so the same pair lays out again with the other one first.
+	@Test
+	void aBlockBranchesToALandingLabelOfTheBodyItJoins() throws Exception {
+		Fixture f = new Fixture("Landing");
+		// int run(int n): A answers 100 at zero, else counts down into B; B answers 200
+		// at zero, else counts down into A.
+		MethodCode a = new MethodCode();
+		MethodCode.Label aZero = a.newLabel();
+		MethodCode.Label aExit = a.newLabel();
+		a.iload(0).ifeq(aZero).iinc(0, -1).goto_(aExit);
+		a.labelBinding(aZero);
+		a.loadConstant(100).ireturn();
+		MethodCode b = new MethodCode();
+		MethodCode.Label bZero = b.newLabel();
+		MethodCode.Label bExit = b.newLabel();
+		b.iload(0).ifeq(bZero).iinc(0, -1).goto_(bExit);
+		b.labelBinding(bZero);
+		b.loadConstant(200).ireturn();
+		for (boolean aFirst : new boolean[] { true, false }) {
+			MethodCode c = new MethodCode();
+			MethodCode.Label aHead = c.newLabel();
+			MethodCode.Label bHead = c.newLabel();
+			MethodCode first = aFirst ? a : b;
+			MethodCode second = aFirst ? b : a;
+			c.labelBinding(aFirst ? aHead : bHead);
+			c.append(first, Map.of(aFirst ? aExit : bExit, aFirst ? bHead : aHead));
+			c.labelBinding(aFirst ? bHead : aHead);
+			c.append(second, Map.of(aFirst ? bExit : aExit, aFirst ? aHead : bHead));
+			c.checkComplete();
+			assertThat(c.size()).isEqualTo(a.size() + b.size());
+			f.add(aFirst ? "runA" : "runB", "(I)I", c);
+		}
+		Class<?> landing = f.load();
+		for (int n = 0; n < 6; n++) {
+			assertThat(landing.getMethod("runA", int.class).invoke(null, n)).isEqualTo(n % 2 == 0 ? 100 : 200);
+			assertThat(landing.getMethod("runB", int.class).invoke(null, n)).isEqualTo(n % 2 == 0 ? 200 : 100);
+		}
+	}
+
+	@Test
+	void aLandingLabelIsOneTheBlockNeverBinds() {
+		MethodCode block = new MethodCode();
+		MethodCode.Label exit = block.newLabel();
+		MethodCode.Label stray = block.newLabel();
+		block.iconst_0().ifeq(stray).goto_(exit);
+		MethodCode.Label target = new MethodCode().newLabel();
+		// A branch waiting on a label the map does not name has nowhere to land.
+		assertThatIllegalStateException().isThrownBy(() -> new MethodCode().append(block, Map.of(exit, target)))
+			.withMessageContaining("never bound");
+		block.labelBinding(stray);
+		block.iconst_1().ireturn();
+		// A label bound in the block is the block's own.
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> new MethodCode().append(block, Map.of(stray, target, exit, target)));
 	}
 
 	@Test

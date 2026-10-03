@@ -23123,6 +23123,202 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(forms)).isEqualTo(String.valueOf(51 * 400));
 	}
 
+	private static final String MUTUAL_PAIRS = """
+			(defun ev? (n) (if (= n 0) t (od? (- n 1))))
+			(defun od? (n) (if (= n 0) nil (ev? (- n 1))))
+			(print (ev? 1000000))
+			(print (labels ((lev? (n) (if (= n 0) t (lod? (- n 1))))
+			                (lod? (n) (if (= n 0) nil (lev? (- n 1)))))
+			         (lev? 1000001)))
+			""";
+
+	@Test
+	void aMutualTailCallAmongDefunsOrLabelsFunctionsIsAJump() throws Exception {
+		// Functions whose tail calls to each other cycle -- two defuns, two labels
+		// functions -- are a tail group (JvmTailGroup, .kb/jvm-self-tail-calls.md,
+		// "Mutual tail calls"): the method a call names holds the whole group, its own
+		// code at the entry, so every such call is a jump and the pair runs 1,000,000
+		// deep. Nothing but EV?'s tail calls OD?, so OD? has no method left at all.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MUTUAL_PAIRS));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "EV?", "OD?")).isZero();
+		assertThat(jumpsToEntry(classBytes, "EV?")).as("OD?'s tail call back").isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("OD?");
+		// The labels pair: the closure method the dispatcher enters at LEV? holds
+		// LOD?'s code too, which jumps back to its start; no dispatcher call is left.
+		List<String> looping = declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) == 1)
+			.toList();
+		assertThat(looping).hasSize(1);
+		assertThat(ownCallsIn(classBytes, looping.get(0), "_invoke_1")).isZero();
+		assertThat(compileAndRun(forms)).isEqualTo("T\nNIL");
+	}
+
+	@Test
+	void aMutualTailCallRunsInConstantStackWithNoJitToInlineItAway() throws Exception {
+		// Before the tail groups two defuns passed 1,000,000 only when C2 inlined one
+		// into
+		// the other; with no JIT at all (-Xint) every frame is real, so this is the run
+		// that pins the depth.
+		Path dir = Files.createDirectories(this.tempDir.resolve("xint"));
+		Files.write(dir.resolve("Test.class"), new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(MUTUAL_PAIRS))));
+		// Into files, not pipes: a program that hangs must fail the test, not hang it.
+		Path out = dir.resolve("stdout.txt");
+		Path err = dir.resolve("stderr.txt");
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+				"-Xint", "-cp", dir.toString(), "Test")
+			.redirectOutput(out.toFile())
+			.redirectError(err.toFile())
+			.start();
+		if (!process.waitFor(2, java.util.concurrent.TimeUnit.MINUTES)) {
+			process.destroyForcibly().waitFor();
+			throw new AssertionError("-Xint run still going after 2 minutes");
+		}
+		assertThat(Files.readString(out).trim()).as(Files.readString(err)).isEqualTo("T\nNIL");
+		assertThat(process.exitValue()).isZero();
+	}
+
+	@Test
+	void everyShapeOfAMutualTailCallJumpsAndADynamicExtentKeepsItsCall() throws Exception {
+		// The jump stores the target's physical arguments (its defaults, keys and rest
+		// list re-derived by its own prologue), a closure's round keeps its own binding,
+		// values pass through, a tail return-from hands the jump on, three members cycle
+		// with self calls among them, and a member passed as a value enters the group
+		// through its dispatcher. A defun whose value tail bounces answers through every
+		// member (JvmTailBounce). A special binding and an unwind-protect keep their
+		// calls; a count the lambda list rules out signals, as a call would.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (labels ((a (n acc) (if (= n 0) acc (b (- n 1) (+ acc 1) 0)))
+				                (b (n acc extra &optional (k 2)) (if (= n 0) (+ acc extra k) (c (- n 1) acc)))
+				                (c (n acc &rest r) (if (= n 0) (list acc r) (a (- n 1) (+ acc (length r))))))
+				         (a 300001 0)))
+				(print (mapcar #'funcall
+				               (labels ((p (n acc) (if (= n 0) acc (q (- n 1) (cons (lambda () n) acc))))
+				                        (q (n acc) (if (= n 0) acc (p (- n 1) (cons (lambda () (* 10 n)) acc)))))
+				                 (p 5 nil))))
+				(defun s1 (n) (cond ((= n 0) 's1) ((evenp n) (s2 (- n 1))) (t (s1 (- n 1)))))
+				(defun s2 (n) (if (= n 0) 's2 (s3 (- n 1))))
+				(defun s3 (n) (if (= n 0) 's3 (s1 (- n 1))))
+				(print (list (s1 1000000) (s1 7) (s2 3)))
+				(defun ka (n &key (step 1) acc) (if (<= n 0) (length acc) (kb (- n step) acc)))
+				(defun kb (n &optional acc (more 1)) (if (<= n 0) (list :kb more) (ka n :step 2 :acc (cons n acc))))
+				(print (ka 1000001))
+				(defun mv-a (n) (if (= n 0) (values 1 2 3) (mv-b (- n 1))))
+				(defun mv-b (n) (if (= n 0) (values :b) (mv-a (- n 1))))
+				(print (list (multiple-value-list (mv-a 100000)) (multiple-value-list (mv-a 100001))))
+				(print (labels ((r1 (n) (if (= n 0) (return-from r1 :r1) (return-from r1 (r2 (- n 1)))))
+				                (r2 (n) (labels ((dec (x) (- x 1))) (if (= n 0) :r2 (r1 (dec n))))))
+				         (r1 1000000)))
+				(print (labels ((ga (n) (if (= n 0) :ga (gb (- n 1)))) (gb (n) (if (= n 0) :gb (ga (- n 1)))))
+				         (list (mapcar #'ga '(0 1 2 3)) (funcall #'gb 1000001))))
+				(defun tb-a (n f) (if (= n 0) (funcall f n) (tb-b (- n 1) f)))
+				(defun tb-b (n f) (if (= n 0) :b (tb-a (- n 1) f)))
+				(print (list (tb-a 1000000 (lambda (x) (list :done x))) (tb-b 3 #'identity)))
+				(defvar *lvl* 0)
+				(defun sp-a (n) (if (= n 0) *lvl* (let ((*lvl* n)) (sp-b (- n 1)))))
+				(defun sp-b (n) (if (= n 0) *lvl* (sp-a (- n 1))))
+				(print (list (sp-a 5) *lvl*))
+				(defvar *ups* 0)
+				(defun up-a (n) (if (= n 0) :up (unwind-protect (up-b (- n 1)) (incf *ups*))))
+				(defun up-b (n) (if (= n 0) :up (up-a (- n 1))))
+				(print (list (up-a 6) *ups*))
+				(defun wa (n) (if (= n 0) :wa (wb n 1 2)))
+				(defun wb (n) (if (= n 0) :wb (wa (- n 1))))
+				(print (handler-case (wa 3) (error () :signalled)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String[] jump : new String[][] { { "S1", "S2" }, { "S1", "S3" }, { "S2", "S3" }, { "S2", "S1" },
+				{ "KA", "KB" }, { "MV-A", "MV-B" }, { "TB-A", "TB-B" }, { "TB-B", "TB-A" } }) {
+			assertThat(ownCallsIn(classBytes, jump[0], jump[1])).as(jump[0] + " -> " + jump[1]).isZero();
+		}
+		for (String[] call : new String[][] { { "SP-A", "SP-B" }, { "UP-A", "UP-B" } }) {
+			assertThat(ownCallsIn(classBytes, call[0], call[1])).as(call[0] + " -> " + call[1]).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				100003
+				(1 20 3 40 5)
+				(S1 S3 S1)
+				(:KB 1)
+				((1 2 3) (:B))
+				:R1
+				((:GA :GB :GA :GB) :GA)
+				((:DONE 0) 0)
+				(1 0)
+				(:UP 3)
+				:SIGNALLED""");
+	}
+
+	@Test
+	void aCycleTheRootDoesNotCloseDispatchesOnAMemberIndex() throws Exception {
+		// R reaches A and B, and A and B also cycle between themselves: rooted at R, that
+		// cycle would have two entries, which Graal's on-stack replacement cannot
+		// compile. R's method stores the target's index and re-enters a switch instead
+		// (its first instructions); rooted at A every cycle passes A, so A's jumps are
+		// direct.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (labels ((r (n acc) (cond ((= n 0) (list :r acc))
+				                                 ((evenp n) (a (- n 1) (+ acc 1)))
+				                                 (t (b (- n 1) (+ acc 1)))))
+				                (a (n acc) (cond ((= n 0) (list :a acc))
+				                                 ((= (mod n 3) 0) (r (- n 1) (+ acc 10)))
+				                                 (t (b (- n 1) (+ acc 10)))))
+				                (b (n acc) (if (= n 0) (list :b acc) (a (- n 1) (+ acc 100)))))
+				         (list (r 1000000 0) (r 7 0) (funcall #'a 5 0) (funcall #'b 1000001 0))))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		long dispatching = declaredMethodNames(classBytes).stream().filter(name -> {
+			List<java.lang.classfile.Opcode> first = firstOpcodes(classBytes, name, 2);
+			return name.startsWith("_lambda_") && first.size() == 2
+					&& first.get(0) == java.lang.classfile.Opcode.ICONST_0 && first.get(1).name().startsWith("ISTORE");
+		}).count();
+		assertThat(dispatching).isEqualTo(1);
+		assertThat(compileAndRun(forms)).isEqualTo("((:B 38499868) (:B 232) (:B 131) (:B 38500067))");
+	}
+
+	@Test
+	void aGroupPastTheMethodSizeLimitKeepsAMethodPerMember() throws Exception {
+		// Rooted, the pair would cross HotSpot's 8000-bytecode HugeMethodLimit, so each
+		// defun keeps its own code and its tail call to the other is a direct call --
+		// one frame a round, as before the groups.
+		StringBuilder sb = new StringBuilder();
+		for (String[] pair : new String[][] { { "big-a", "big-b" }, { "big-b", "big-a" } }) {
+			sb.append("(defun ").append(pair[0]).append(" (n acc)\n  (let ((a 0))\n");
+			// About 4,400 bytecodes each: under the body splitter's budget, past the
+			// limit together.
+			for (int k = 0; k < 90; k++) {
+				sb.append("    (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+			}
+			sb.append("    (if (= n 0) (+ acc a) (").append(pair[1]).append(" (- n 1) (+ acc a)))))\n");
+		}
+		sb.append("(print (big-a 9 0))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(declaredMethodNames(classBytes)).as("no body was split").noneMatch(name -> name.startsWith("_k$"));
+		assertThat(jumpsToEntry(classBytes, "BIG-A")).isZero();
+		assertThat(ownCallsIn(classBytes, "BIG-A", "BIG-B")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "BIG-B", "BIG-A")).isEqualTo(1);
+		assertThat(compileAndRun(forms)).isEqualTo("900");
+	}
+
+	/** The first {@code count} opcodes of method {@code method}. */
+	private static List<java.lang.classfile.Opcode> firstOpcodes(byte[] classBytes, String method, int count) {
+		List<java.lang.classfile.Opcode> opcodes = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.Instruction instruction && opcodes.size() < count) {
+					opcodes.add(instruction.opcode());
+				}
+			}
+		}
+		return opcodes;
+	}
+
 	/** The calls method {@code method} makes to the class's own method {@code callee}. */
 	private static int ownCallsIn(byte[] classBytes, String method, String callee) {
 		int calls = 0;

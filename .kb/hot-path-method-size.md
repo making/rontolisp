@@ -93,6 +93,12 @@ chunker can adopt it.
   sibling arm compiles to a raw store (WRONG ANSWER), and a method past 255 local slots emits a
   truncated index.
 
+## Tail groups
+A tail group's member method holds the code of every member it reaches
+([jvm-self-tail-calls.md](jvm-self-tail-calls.md), "Mutual tail calls"), so it is laid out
+that way only when the result stays within the limit, measured on the compiled bodies; past
+it every member keeps its own method and its tail calls stay calls (`JvmTailGroup.finish`).
+
 ## The sequences we emit per site
 One method per class, built on first use; the JIT inlines the static call.
 
@@ -123,4 +129,5 @@ run once per AST node at COMPILE time and stay over.
   function values).
 - `JvmLispCompilerTest.aBranchArmPastTheMethodSizeBudgetBecomesItsOwnMethod`,
   `.aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations`,
-  `.aSplitFunctionBodyCarriesItsUnboxedLocalsAcross`.
+  `.aSplitFunctionBodyCarriesItsUnboxedLocalsAcross`,
+  `.aGroupPastTheMethodSizeLimitKeepsAMethodPerMember`.

@@ -95,10 +95,12 @@ requires, and so does a class whose top level runs when it is initialized (one w
 
 A function that calls itself in tail position -- a `defun` by name or through `#'name`, a
 `labels` function, Clojure's `recur` -- jumps back to its own start instead of calling, so a
-loop written as tail recursion runs at any depth, whatever its lambda list. A `defun` whose
-tail calls through a function value runs in constant stack too. A tail call to another
-function -- two `defun`s or two `labels` functions calling each other -- takes a frame per
-call here, where the interpreter and WebAssembly take none.
+loop written as tail recursion runs at any depth, whatever its lambda list. Functions that
+call each other in tail position -- `defun`s, or the functions of one `labels` form (a
+Clojure `letfn`) -- jump to each other the same way: the method a call enters holds the code
+of the functions the cycle runs through. A cycle whose code would pass the 8,000 bytes of
+bytecode HotSpot compiles in one method keeps a frame per call instead. A `defun` whose tail
+calls through a function value runs in constant stack too.
 
 ## Optimize (Dead-Code Elimination)
 
