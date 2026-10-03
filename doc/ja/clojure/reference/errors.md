@@ -1,6 +1,6 @@
 # エラー
 
-try は unwind-protect の中の handler-case です。catch 節はすべて catch-all で -- クラスは区別されず、最初の節がどの条件も扱い、catch 変数は例外を束縛します。例外はどのバックエンドでもコンディションです。`ex-info`、メッセージと cause だけを持つ throwable クラスの構築（`(Exception. "m")`、`(IllegalArgumentException. "m" cause)`）、throw されたホストの `Throwable`、実行時エラーの Common Lisp コンディションのいずれかです。
+try は unwind-protect の中の handler-case です。catch 節は自分が名指すクラスかそのサブクラスの例外を節の順に捕捉し、catch 変数はその例外を束縛します。実行時エラーは、オラクルがその箇所で投げるクラスとして捕捉されます（[try](try.md)）。例外はどのバックエンドでもコンディションです。`ex-info`、メッセージと cause だけを持つ throwable クラスの構築（`(Exception. "m")`、`(IllegalArgumentException. "m" cause)`）、throw されたホストの `Throwable`、実行時エラーの Common Lisp コンディションのいずれかです。
 
 | Name | Example | Result |
 |---|---|---|

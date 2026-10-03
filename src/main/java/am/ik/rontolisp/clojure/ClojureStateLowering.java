@@ -58,10 +58,12 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (try body... (catch Class var body...)... (finally ...))}: the body guarded
-	 * by a {@code handler-case} inside an {@code unwind-protect}. Every catch class
-	 * answers the catch-all {@code error} clause -- the classes are not distinguished, so
-	 * the first clause handles any condition -- and the clauses keep their order. The
-	 * catch var binds the Common Lisp condition, not a host exception. The body lowers
+	 * by a {@code handler-case} inside an {@code unwind-protect}. Each catch clause is a
+	 * {@code handler-case} clause of the type its class takes
+	 * ({@link ClojureThrowables#clauseType}: an unknown class is the oracle's refusal),
+	 * in order, so the first clause whose class takes the condition runs, with its var
+	 * bound to the condition, and a condition no clause takes is never caught here -- the
+	 * oracle's exception passing a catch that does not name its class. The body lowers
 	 * behind the {@code try} barrier (a {@code recur} across it is the oracle's
 	 * {@code Cannot recur across try} refusal); the catch and finally parts are never
 	 * tail position (a {@code recur} there is the oracle's tail refusal), like the
@@ -92,18 +94,17 @@ final class ClojureStateLowering {
 		}
 		LispVal guarded = body.isEmpty() ? ClojureLowering.NIL_CONST : tryBodyOf(ctx, body);
 		if (!catches.isEmpty()) {
-			List<LispVal> clauses = new ArrayList<>();
-			for (List<LispVal> caught : catches) {
-				String var = ((LispSymbol) caught.get(2)).name();
-				LispVal clauseBody = ctx.inScope(new HashMap<>(Map.of(var, ClojureLowering.Kind.VARIABLE)),
-						() -> ctx.nonTailBodyOf(caught.subList(3, caught.size())));
-				clauses.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("ERROR"),
-						ClojureLowerUtil.list(ctx.localSym(var)), clauseBody));
-			}
 			List<LispVal> handler = new ArrayList<>();
 			handler.add(ClojureLowerUtil.sym("HANDLER-CASE"));
 			handler.add(guarded);
-			handler.addAll(clauses);
+			for (List<LispVal> caught : catches) {
+				LispVal type = ClojureThrowables.clauseType(ctx,
+						ClojureThrowables.caughtChain(ctx, caught.get(1), "catch"));
+				String var = ((LispSymbol) caught.get(2)).name();
+				LispVal clauseBody = ctx.inScope(new HashMap<>(Map.of(var, ClojureLowering.Kind.VARIABLE)),
+						() -> ctx.nonTailBodyOf(caught.subList(3, caught.size())));
+				handler.add(ClojureLowerUtil.list(type, ClojureLowerUtil.list(ctx.localSym(var)), clauseBody));
+			}
 			guarded = ClojureLowerUtil.list(handler);
 		}
 		if (!fin.isEmpty()) {
@@ -1073,8 +1074,9 @@ final class ClojureStateLowering {
 	 * The exception runtime, spliced once behind the false binding when the program
 	 * throws, builds or reads an exception: the one condition class every exception of
 	 * the program is (ex-info, a throwable construction, a thrown host
-	 * {@code Throwable}), carrying a class name, a message, data and a cause, whose
-	 * report is the oracle's {@code toString}; {@code C%E-NEW} builds one and
+	 * {@code Throwable}), carrying a class chain ({@link ClojureThrowables}: the class's
+	 * name, then its superclasses' -- what a catch tests), a message, data and a cause,
+	 * whose report is the oracle's {@code toString}; {@code C%E-NEW} builds one and
 	 * {@code C%E-PARTS} answers the four slots of one (NIL for any other value). The
 	 * readers and builders over them are library functions ({@code clojure.lisp},
 	 * "Exceptions"), which only a program carrying this runtime reaches. Pure lowering

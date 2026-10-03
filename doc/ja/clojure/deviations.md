@@ -70,17 +70,24 @@
   そのオーバーフローを確かめるテスト（`(is (thrown? StackOverflowError (tail-fibo 1000000N)))`）
   は失敗します。
 - `clojure.test` はテストを定義順に実行します（本家の順序は名前空間のマップの順です）。
-  `thrown?`/`thrown-with-msg?` は `catch` と同じく、クラス名に関わらずどのコンディションにも
-  一致します。エラー報告は例外の `toString`（実行時エラーはその report）を表示し、
+  エラー報告は例外の `toString`（実行時エラーはその report）を表示し、
   スタックトレースは表示しません。位置は `is` 式の行で、本家は例外を投げたフレームを示します。
   失敗した `thrown-with-msg?` はコンディションのメッセージを表示し、本家は `#error {...}` を
   表示します。ホストのスタックオーバーフロー（`catch StackOverflowError`、
   `(is (thrown? StackOverflowError ...))`）は、インタプリタではコンディションではないため
   1 行の報告でプログラムが終了し、WASM ではトラップになります。本家と同じく捕捉するのは
   JVM バックエンドだけです。`use-fixtures` は名前を挙げて拒否します。
-- `try` の catch 節は順に catch-all です:最初の節がどの条件も扱います（オラクルは
- クラスでディスパッチ）。catch 変数は Common Lisp の条件を束縛します。
-- 例外はクラス名、メッセージ、データ、cause を持つコンディションです。実行時エラーは
+- `catch`（と `thrown?`）は、ランタイムが Common Lisp のコンディションをシグナルする箇所で
+  オラクルが投げるクラスとして実行時エラーを捕捉します。コンディションがクラスを示さない
+  拒否 -- Clojure ランタイム自身の拒否の大半（`(first 5)`、オラクルでは
+  `IllegalArgumentException`）、失敗した `assert`（オラクルでは `Exception` の catch が捕捉
+  しない `AssertionError`）、失敗したホスト呼び出し -- は、`clojure.lang.ExceptionInfo` 以外の
+  どのクラスの catch でも最初のものが捕捉します。範囲外の添字は `IndexOutOfBoundsException` で、
+  そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException`、
+  `.charAt` は `StringIndexOutOfBoundsException` を投げます）。catch が名指すクラスはこの
+  ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable）。オラクルの
+  クラスパスにしかないクラスは拒否します。
+- 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは
   ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の
   report（失敗した `(inc nil)` の `(.getMessage e)` は `+: The value NIL is not of type
   NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
@@ -88,8 +95,8 @@
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
   （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
   例外の `class`、`instance?`、その他のメソッド（`.printStackTrace`、`.getStackTrace`）は
-  拒否され、例外でない値の `throw` はオラクルが拒否するところでそのレンダリングを
-  シグナルします。
+  拒否されます。例外でない値の `throw` は、値のレンダリングをメッセージとする
+  `ClassCastException` になります（オラクルのメッセージは 2 つのクラス名を挙げます）。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
  `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える

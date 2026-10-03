@@ -291,13 +291,13 @@ final class ClojureInteropLowering {
 		if (type == null) {
 			return null;
 		}
-		LispVal name = LispString.literal(type.getName());
+		LispVal chain = ClojureThrowables.quoted(ClojureThrowables.chainOf(type));
 		LispVal call = switch (args.size()) {
 			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
-					name, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
-			case 1 -> messageOrCauseConstruction(type, name, args.get(0));
+					chain, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
+			case 1 -> messageOrCauseConstruction(type, chain, args.get(0));
 			case 2 -> onlyConstructorsAtArity(type, 2, List.of(String.class, Throwable.class)) ? ClojureLowerUtil
-				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, args.get(0), args.get(1)) : null;
+				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, args.get(0), args.get(1)) : null;
 			default -> null;
 		};
 		if (call != null) {
@@ -314,13 +314,13 @@ final class ClojureInteropLowering {
 	 * oracle resolves a literal at compile time: {@code (AssertionError. "m")} is its
 	 * {@code (Object)} constructor). Anything else is null.
 	 */
-	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal name, LispVal arg) {
+	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal chain, LispVal arg) {
 		if (onlyConstructorsAtArity(type, 1, List.of(String.class, Throwable.class))) {
-			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), name, arg);
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), chain, arg);
 		}
 		boolean literal = arg instanceof LispString;
 		if (onlyConstructorsAtArity(type, 1, List.of(String.class)) || (literal && takesAString(type))) {
-			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, arg,
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, arg,
 					ClojureLowering.NIL_CONST);
 		}
 		return null;

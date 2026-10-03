@@ -105,7 +105,7 @@ answered `2 5 3` before).
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
 | `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
-| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | every catch clause is catch-all, first wins, binding the CL condition; `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` converts), anything else `(error "~a" rendering)`, so strings keep their message |
+| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` converts), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around `error` | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
@@ -201,7 +201,8 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- `catch` is catch-all. Exceptions: see "Exceptions".
+- A runtime error whose condition names no class is taken by any catch but `ExceptionInfo`'s
+  ("Catching"). Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
   tag; `class` answers a kind keyword (host classes exist on no wasm backend), a host
@@ -216,7 +217,8 @@ Each is a real work item unless the reason says otherwise.
 An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10-03).
 
 - One class per program, `C%E-EXCEPTION` (`ClojureStateLowering.exInfoRuntime`, spliced behind
-  `usedExInfo`): class name, message, data, cause. Its report IS the oracle's `toString`
+  `usedExInfo`): class chain ("Catching"; `(car chain)` the class name), message, data, cause.
+  Its report IS the oracle's `toString`
   (`%clojure-exception-string`: `clojure.lang.ExceptionInfo: m {data}`, `C: m`, `C`), so `str`,
   `.toString` (`valueToString`'s `(typep x 'condition)` disjunct), printing, the uncaught report
   and clojure.test's error line need no reader of their own. The runtime defines only
@@ -226,8 +228,8 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   undefined call). A `define-condition` stays in the program because the library pruner keeps
   every non-defun definition.
 - `%clojure-exception-of`: a condition is itself, a host `Throwable` (`%clojure-host-throwable`,
-  a host arm: NIL stand-in without `java:`) a new exception of its class name, message and
-  cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
+  a host arm: NIL stand-in without `java:`) a new exception of its class chain (read at run time,
+  `%clojure-host-chain`), message and cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
   `C%E-PARTS` (a host throwable has no data). `ex-message` of a non-exception is `nil` (was the
   rendering before 2026-10-03); of a CL condition its report (`Division by zero`, the oracle's
   `Divide by zero`; wasm-GC traps on division by zero, so the spec uses `(assoc [0 1] :a :x)`).
@@ -249,8 +251,9 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   it without the `JAVA:CALL` warning.
 - Deviations: `class`/`instance?`/other methods (`.printStackTrace`) of an exception are refused
   (before, a construction was a host object on the interpreter and the JVM); a runtime error's
-  `str` has no class prefix; `throw` of a non-exception signals its rendering (the oracle's
-  `ClassCastException`).
+  `str` has no class prefix; `throw` of a non-exception is a `ClassCastException` whose message
+  is its rendering (the oracle's names the two classes; until 2026-10-03 it signalled the
+  rendering as a plain error, which an `IllegalArgumentException` catch took).
 - Size, wasm P1, measured 2026-10-03 against the tree before: `(try (throw (ex-info ..)) (catch
   Exception e (ex-message e)))` 145,619 -> 146,474 B; a `try` reading no exception 83,311 B
   unchanged; `(.toString 5)` 51,108 -> 51,192 B (the condition disjunct);
@@ -259,6 +262,78 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
 - Pins: clojure-spec `get-message-reads-a-caught-runtime-error`,
   `throwable-constructions-are-exceptions-on-every-backend`, `ex-info-carries-data-through-throw`;
   `ClojureInteropTest.aThrownHostThrowableKeepsItsClassAndMessage` (interpreter and JVM).
+
+## Catching
+
+A catch takes an exception whose class is the class it names or a subclass of it, in clause
+order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
+
+- Class chains (`ClojureThrowables`): the class's name, then each superclass's up to
+  `java.lang.Throwable`, resolved at LOWERING time, so every backend tests the same list and none
+  needs a hierarchy at run time. `PARENTS` is a table for every throwable a program names
+  without an import (`JAVA_LANG`'s, with the classes between them and `Throwable`) and for the
+  public `clojure.lang` throwables (not on this class path: `ExceptionInfo`, `ArityException`,
+  `Compiler$CompilerException`, the two `ReaderException`s); anything else is host reflection.
+  The table exists because a native image reflects only what its image holds (measured: a
+  `Class.forName` test image found `IllegalArgumentException` and `FileNotFoundException`,
+  not `StackOverflowError` or `java.sql.SQLException`); `ClojureThrowablesTest` pins its `java`
+  rows to reflection and its completeness against `JAVA_LANG`. A construction bakes its chain
+  (`throwableConstruction`); a catch class resolves like any class name -- an unknown one is the
+  oracle's `Unable to resolve classname: Foo`, a non-throwable (`Object`, `String`)
+  `Catch type is not a subclass of Throwable: C` (the oracle's `VerifyError`).
+- Lowering: `(catch C e body)` is the clause `((and error (satisfies |C%E-CATCHES-<C>|)) (e)
+  body)`, `Throwable` plain `error` (byte-identical to before). A condition no clause type takes
+  is never caught, so it passes on with nothing signalled again. The first version caught
+  everything and re-signalled with `(error c)`, whose object-designator expansion cost +100 KB
+  of wasm on a one-`try` program (46,651 -> 147,149 B, the `%princ-piece` printer; `(error c)`
+  alone in a CL program 46,175 -> 391,337 B). One predicate per caught class
+  (`ClojureThrowables.catchRuntime`, emitted with the runtimes; a session emits a class's
+  predicate ahead of the buffer that first catches it) calls `%clojure-catches` over the
+  quoted chain: `satisfies` takes one symbol, so the chain cannot ride the clause.
+  `thrown?`/`thrown-with-msg?` lower to the same clause around the body
+  (`ClojureTestLowering.caughtOf`), so another class's exception reaches the `is` as an ERROR.
+- `%clojure-catches` (`clojure.lisp`, "Catching"): an exception (`C%E-PARTS`) when the catch's
+  class is in its chain; a runtime error by `%clojure-error-chain`, the class the oracle throws
+  where the runtime signals that condition type: `arithmetic-error` `ArithmeticException`;
+  `type-error` `ClassCastException`, `NullPointerException` for a nil datum,
+  `IndexOutOfBoundsException` for an `(INTEGER 0 (D))` expected type,
+  `UnsupportedOperationException` for `SEQUENCE` (`count` of a number), none for a nil expected
+  type (the JVM pad's type-error synthesized from a raw host failure: a compiled `.charAt` past
+  the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
+  when the catch's class is that class, a superclass or a subclass (the operation may throw a
+  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a
+  `simple-error` refusal of the Clojure runtime, a failed host call, `assert`) matches every
+  catch but `ExceptionInfo`'s: the oracle's classes there are all over the place (52 runtime
+  errors probed: IAE, CCE, IOOBE, NPE, ISE, NFE, CNFE, AssertionError, ...), and a catch-all
+  keeps every program that caught one working. Attributing them needs a class carrier at the
+  refusal sites (`.todo/c63`); a failed host call's throwable is reduced to text at the
+  `java:` boundary (`.todo/c64`).
+- A program that catches by class but builds no exception carries `C%E-PARTS` answering NIL
+  (`catchRuntime`'s reader) instead of the exception runtime, whose `define-condition` report
+  reaches the printer (~100 KB of wasm). A session emits the reader while no buffer built an
+  exception; the exception runtime's own `C%E-PARTS` replaces it once one does.
+- The type-error slots are read by name (`type-error-datum`/`-expected-type`, `slot-value`): ~1.5
+  KB of wasm and ~1.9 KB of class of the cost below. `%obj-ref` at the seed's indexes would save
+  it but bakes the slot order, which a condition with a mixin first parent breaks
+  (`closer-mop.lisp`'s note), so it stays by name.
+- Size, measured 2026-10-03, wasm P1 / `--optimize=size` / component / JVM class, before ->
+  after: `(println (try (inc 1) (catch Exception e :x)))` 46,651 / 39,096 / 47,992 / 70,405 ->
+  49,160 / 41,485 / 52,644 / 75,858; `(try (throw (ex-info ..)) (catch Exception e (ex-message
+  e)))` 146,474 / 119,741 / 150,207 / 141,233 -> 148,048 / 121,131 / 151,809 / 145,250; a
+  `Throwable` catch, a program with no catch and `examples/clojure/demo.clj` byte-identical.
+- Measured against the oracle: 52 runtime-error kinds under a catch of the oracle's class, all
+  four backends alike, differ only where documented (`nth` past the end answers nil; the
+  division message); the shcloj4 drivers with `catch`/`thrown?` sites (interop, exploring,
+  life-without-multi, macros, chain-1/3) report what they did before on the interpreter and the
+  JVM.
+- Pins: clojure-spec `catch-takes-an-exception-of-its-class-or-a-subclass`,
+  `catch-takes-a-runtime-error-by-the-class-the-oracle-throws`,
+  `a-refusal-naming-no-class-is-taken-by-any-catch-but-exception-info`,
+  `thrown-matches-the-class-and-reports-any-other-exception-as-an-error`, the `assert-*` cases
+  (an `AssertionError` catch); `ClojureThrowablesTest`, `ClojureLoweringTest`
+  `aCatchTestsItsClassThroughAPredicateOverTheClassChain`/`aCatchOfNoThrowableClassIsTheOraclesRefusal`,
+  `ClojureSessionTest.aBufferDefinesThePredicateOfEachClassItCatchesFirst`,
+  `ClojureInteropTest.aThrownHostThrowableIsCaughtByItsOwnClassChain`.
 
 ## Sorted collections
 
@@ -1108,13 +1183,12 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
   last segment or `NO_SOURCE_FILE`; an unlocated form names its `deftest`).
 - `run-tests` takes symbols or strings and bakes in the namespaces seen so far, so an
   unknown one is `No namespace: x found`; `run-all-tests` filters by `re-matches`.
-- Deviations: definition order (the oracle's is map order); `thrown?` matches any
-  condition (measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
+- Deviations: definition order (the oracle's is map order); `thrown?` matches like `catch`
+  ("Catching": measured 2026-10-03, shcloj4 `examples.test.interop`: `Ran 6 tests containing
   17 assertions. 0 failures, 0 errors.` on the interpreter and the JVM, as the oracle --
-  its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` catch
-  `No matching method java.lang.String.getName` (before 2026-10-03: `java:call`'s refusal of
-  a string receiver), since the `#^Class` hint is dropped; a
-  class-typed match needs the host exception as a condition, the `catch` deviation above);
+  its `(thrown? IllegalArgumentException ...)`/`(thrown? ClassCastException ...)` take
+  `No matching method java.lang.String.getName`, a refusal naming no class, since the
+  `#^Class` hint is dropped);
   error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL
   condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with
@@ -1170,7 +1244,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
 - `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
-  `clojureSetWiresLikeClojureString`), `ClojureReaderTest`,
+  `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,

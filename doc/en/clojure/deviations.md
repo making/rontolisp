@@ -71,17 +71,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   test asserting that overflow (`(is (thrown? StackOverflowError (tail-fibo 1000000N)))`)
   fails.
 - `clojure.test` runs the tests in definition order (the oracle's order is its
-  namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
-  names, like `catch`; an error report prints the exception's `toString` (a runtime error
+  namespace map's); an error report prints the exception's `toString` (a runtime error
   its report) with no stack trace, at the `is` form's line where the oracle names the
   frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
   the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
   like the oracle. `use-fixtures` is refused by name.
-- `try` catch clauses are catch-all in order: the first handles any condition, where the
-  oracle dispatches by class; the catch variable binds the Common Lisp condition.
-- An exception is a condition carrying a class name, a message, data and a cause. A runtime
+- A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
+  runtime signals its Common Lisp condition. A refusal whose condition names no class -- most
+  of the Clojure runtime's own refusals (`(first 5)`, the oracle's
+  `IllegalArgumentException`), a failed `assert` (the oracle's `AssertionError`, which an
+  `Exception` catch does not take), a failed host call -- is taken by the first catch of any
+  class but `clojure.lang.ExceptionInfo`. An index past its bound is an
+  `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's
+  `aget` throws `ArrayIndexOutOfBoundsException`, `.charAt` a
+  `StringIndexOutOfBoundsException`). A catch must name a class that resolves on this host
+  (`java.*`, `clojure.lang`'s throwables); one the oracle finds on its class path only is
+  refused.
+- An exception is a condition carrying its class, a message, data and a cause. A runtime
   error is the Common Lisp condition the runtime signals, whose message is the Common Lisp
   report (`(.getMessage e)` of a failed `(inc nil)` is `+: The value NIL is not of type
   NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
@@ -89,8 +97,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   for a class that carries nothing but a message and a cause; one with members of its own
   (`java.net.URISyntaxException`) stays a host object until it is thrown. `class`,
   `instance?` and every other method of an exception (`.printStackTrace`, `.getStackTrace`)
-  are refused, and `throw` of a value that is no exception signals its rendering where the
-  oracle refuses it.
+  are refused, and `throw` of a value that is no exception is a `ClassCastException` whose
+  message is the value's rendering, where the oracle's message names the two classes.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword

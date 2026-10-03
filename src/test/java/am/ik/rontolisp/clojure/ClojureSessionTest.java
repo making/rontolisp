@@ -155,6 +155,24 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aBufferDefinesThePredicateOfEachClassItCatchesFirst() {
+		// a catch's predicate travels ahead of the buffer that first catches its class,
+		// with the exception reader while no buffer built an exception; the exception
+		// runtime's own reader replaces it once one does
+		ClojureSession session = new ClojureSession();
+		List<String> first = forms(session.read("(try 1 (catch IllegalStateException e 2))"));
+		assertThat(first).filteredOn(form -> form.startsWith("(DEFUN |C%E-CATCHES-java.lang.IllegalStateException|"))
+			.hasSize(1);
+		assertThat(first).contains("(DEFUN C%E-PARTS (|c|) (DECLARE (IGNORE |c|)) NIL)");
+		List<String> again = forms(session.read("(try 3 (catch IllegalStateException e 4))"));
+		assertThat(again).noneMatch(form -> form.contains("DEFUN"));
+		List<String> built = forms(session.read("(try (throw (ex-info \"m\" {})) (catch Exception e 5))"));
+		assertThat(built).anyMatch(form -> form.startsWith("(DEFINE-CONDITION C%E-EXCEPTION"))
+			.anyMatch(form -> form.startsWith("(DEFUN |C%E-CATCHES-java.lang.Exception|"))
+			.noneMatch(form -> form.contains("(DECLARE (IGNORE |c|)) NIL)"));
+	}
+
+	@Test
 	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
 		// clojure.test in a session: the runtime start travels ahead of the
 		// buffer that first uses it, the test registers under the session's

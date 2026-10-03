@@ -858,9 +858,12 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("RONTOLISP::%CLOJURE-EX-DATA");
 		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("RONTOLISP::%CLOJURE-EX-MESSAGE");
 		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-cause e)")).contains("RONTOLISP::%CLOJURE-EX-CAUSE");
+		// a construction carries its class chain, resolved at lowering time
 		assertThat(lowered("(Exception. \"m\")"))
-			.contains("(RONTOLISP::%CLOJURE-EXCEPTION-NEW-1 \"java.lang.Exception\" \"m\")")
+			.contains("(RONTOLISP::%CLOJURE-EXCEPTION-NEW-1 '(\"java.lang.Exception\" \"java.lang.Throwable\") \"m\")")
 			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(IllegalArgumentException. \"m\")")).contains(
+				"'(\"java.lang.IllegalArgumentException\" \"java.lang.RuntimeException\" \"java.lang.Exception\" \"java.lang.Throwable\")");
 		assertThat(lowered("(.getMessage (ex-info \"m\" {}))")).contains("RONTOLISP::%CLOJURE-EXCEPTION-METHOD")
 			.doesNotContain("JAVA:CALL");
 		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\")", null)).isInstanceOf(LispReadException.class)
@@ -952,8 +955,57 @@ class ClojureLoweringTest {
 	void tryIsAHandlerCaseInsideAnUnwindProtect() {
 		assertThat(lowered("(try 1 (catch Exception e 2) (finally 3))")).contains("HANDLER-CASE")
 			.contains("UNWIND-PROTECT")
-			.contains("(ERROR (|c%e|)");
+			.contains("((AND ERROR (SATISFIES |C%E-CATCHES-java.lang.Exception|)) (|c%e|) 2)");
+		// a Throwable catch takes every error untested, so it carries no predicate
+		assertThat(lowered("(try 1 (catch Throwable e 2))")).contains("(ERROR (|c%e|) 2)")
+			.doesNotContain("SATISFIES")
+			.doesNotContain("C%E-PARTS");
 		assertThat(lowered("(throw \"boom\")")).contains("RONTOLISP::%CLOJURE-THROW");
+	}
+
+	@Test
+	void aCatchTestsItsClassThroughAPredicateOverTheClassChain() {
+		String out = lowered(
+				"(try 1 (catch IllegalArgumentException e 2) (catch java.io.IOException e 3) (catch Throwable t 4))");
+		// one clause per catch, in order, the Throwable one plain ERROR
+		assertThat(out)
+			.contains("(HANDLER-CASE 1 ((AND ERROR (SATISFIES |C%E-CATCHES-java.lang.IllegalArgumentException|))"
+					+ " (|c%e|) 2) ((AND ERROR (SATISFIES |C%E-CATCHES-java.io.IOException|)) (|c%e|) 3) (ERROR (|c%t|) 4))");
+		// one predicate per caught class over its chain, and the exception reader a
+		// program that builds no exception carries alone
+		assertThat(out)
+			.contains("(DEFUN |C%E-CATCHES-java.lang.IllegalArgumentException| (|c|) (RONTOLISP::%CLOJURE-CATCHES |c|"
+					+ " '(\"java.lang.IllegalArgumentException\" \"java.lang.RuntimeException\" \"java.lang.Exception\""
+					+ " \"java.lang.Throwable\")))")
+			.contains("'(\"java.io.IOException\" \"java.lang.Exception\" \"java.lang.Throwable\")")
+			.contains("(DEFUN C%E-PARTS (|c|) (DECLARE (IGNORE |c|)) NIL)")
+			.doesNotContain("DEFINE-CONDITION");
+		// a program that builds an exception carries the exception runtime's reader
+		assertThat(lowered("(try (throw (ex-info \"m\" {})) (catch clojure.lang.ExceptionInfo e 1))"))
+			.contains("(DEFINE-CONDITION C%E-EXCEPTION")
+			.contains("|C%E-CATCHES-clojure.lang.ExceptionInfo|")
+			.doesNotContain("(DECLARE (IGNORE |c|)) NIL)");
+		// imports resolve, a class catches once however many clauses name it
+		assertThat(lowered("(ns t (:import (java.io IOException))) (try 1 (catch IOException e 2))"
+				+ " (try 3 (catch java.io.IOException e 4))"))
+			.containsOnlyOnce("(DEFUN |C%E-CATCHES-java.io.IOException|");
+	}
+
+	@Test
+	void aCatchOfNoThrowableClassIsTheOraclesRefusal() {
+		assertThatThrownBy(() -> Clojure.read("(try 1 (catch Foo e 2))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve classname: Foo");
+		// ExceptionInfo is no default import, like the oracle's
+		assertThatThrownBy(() -> Clojure.read("(try 1 (catch ExceptionInfo e 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve classname: ExceptionInfo");
+		assertThatThrownBy(() -> Clojure.read("(try 1 (catch Object e 2))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Catch type is not a subclass of Throwable: java.lang.Object");
+		assertThatThrownBy(() -> Clojure.read("(try 1 (catch String e 2))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Catch type is not a subclass of Throwable: java.lang.String");
+		assertThatThrownBy(() -> Clojure.read("(require '[clojure.test :refer [is]]) (is (thrown? Foo (inc 1)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve classname: Foo");
 	}
 
 	@Test

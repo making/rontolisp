@@ -1369,10 +1369,11 @@ cases:
       ello
       (A B)
   - name: try-catch-finally-and-throw
-    # try guards handler-case inside unwind-protect; every catch class answers
-    # the catch-all error clause, so the first clause handles any condition (the
-    # oracle would run the second clause of the iae/ex pair); throw renders in
-    # Clojure notation, so strings keep their message.
+    # try guards handler-case inside unwind-protect; the catch clauses test their
+    # classes in order. throw of a value that is no exception is the oracle's
+    # ClassCastException, so the iae/ex pair runs its second clause like the
+    # oracle; its message is the value's Clojure rendering (the oracle's names
+    # the two classes), which str prefixes with the class.
     source: |
       (println (try (throw "boom") (catch Exception e "caught")))
       (println (try (throw "boom") (catch IllegalArgumentException e "iae") (catch Exception e "ex")))
@@ -1381,11 +1382,11 @@ cases:
       (println (try (+ 1 2) (catch Exception e "no")))
     expected: |
       caught
-      iae
+      ex
       fin
       1
       done
-      got-x
+      got-java.lang.ClassCastException: x
       3
   - name: atoms-are-shared-cells
     # An atom is a tagged one-vector cell every verb reads and writes; swap!
@@ -1779,9 +1780,9 @@ cases:
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
-    # else through its Clojure-notation rendering; ex-data answers the map (nil for
-    # any other condition) and ex-message the message. Each works as a function
-    # value.
+    # else as a ClassCastException whose message is its Clojure-notation
+    # rendering; ex-data answers the map (nil for any other condition) and
+    # ex-message the message. Each works as a function value.
     source: |
       (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (get (ex-data e) :code))))
       (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (ex-message e))))
@@ -1794,7 +1795,7 @@ cases:
       42
       boom
       nil
-      got-plain
+      got-java.lang.ClassCastException: plain
       (1 nil)
       (m nil)
       2
@@ -1846,6 +1847,82 @@ cases:
       "th" "er" "java.lang.ArithmeticException: ar"
       "java.lang.Exception: inner"
       "No matching ctor found for class java.lang.Exception"
+  - name: catch-takes-an-exception-of-its-class-or-a-subclass
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a catch clause takes an
+    # exception whose class is the class it names or a subclass of it, the
+    # clauses in order; an exception no clause takes passes on to the handlers
+    # outside, after the finally. ExceptionInfo is what ex-info builds, a thrown
+    # nil a NullPointerException and any other value no exception a
+    # ClassCastException.
+    source: |
+      (println (try (throw (IllegalArgumentException. "x")) (catch ArithmeticException e :arith) (catch IllegalArgumentException e :iae)))
+      (println (try (throw (NumberFormatException. "m")) (catch IllegalArgumentException e :iae)))
+      (println (try (throw (IllegalArgumentException. "m")) (catch NumberFormatException e :nfe) (catch IllegalArgumentException e :iae)))
+      (println (try (try (throw (Exception. "m")) (catch RuntimeException e :rte)) (catch Exception e :outer)))
+      (println (try (try (throw (AssertionError. "m")) (catch Exception e :ex)) (catch Error e :error)))
+      (println (try (throw (ex-info "m" {})) (catch IllegalArgumentException e :iae) (catch clojure.lang.ExceptionInfo e :ex-info)))
+      (println (try (throw (ex-info "m" {})) (catch RuntimeException e :rte)))
+      (println (try (try (throw (Exception. "m")) (catch clojure.lang.ExceptionInfo e :ex-info)) (catch Throwable t :outer)))
+      (println (try (try (throw (java.io.IOException. "io")) (catch RuntimeException e :rte)) (catch java.io.IOException e (.getMessage e))))
+      (println (try (throw (StringIndexOutOfBoundsException. "m")) (catch ArrayIndexOutOfBoundsException e :array) (catch IndexOutOfBoundsException e :index)))
+      (println (try (try (throw (Exception. "inner")) (catch IllegalStateException e :ise) (finally (println "fin"))) (catch Exception e (ex-message e))))
+      (println (try (throw (try (throw (IllegalStateException. "again")) (catch Exception e e))) (catch IllegalStateException e (ex-message e))))
+      (println (try (throw nil) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (println (try (throw "s") (catch NullPointerException e :npe) (catch ClassCastException e :cce)))
+    expected: |
+      :iae
+      :iae
+      :iae
+      :outer
+      :error
+      :ex-info
+      :rte
+      :outer
+      io
+      :index
+      fin
+      inner
+      again
+      :npe
+      :cce
+  - name: catch-takes-a-runtime-error-by-the-class-the-oracle-throws
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a runtime error is the Common
+    # Lisp condition the runtime signals, and a catch takes it by the class the
+    # oracle throws there -- a type error a ClassCastException, a
+    # NullPointerException for nil, an IndexOutOfBoundsException for an index
+    # past its bound, an UnsupportedOperationException for count of a value that
+    # is no collection; a wrong argument count an ArityException (an
+    # IllegalArgumentException). A runtime error is never an ExceptionInfo.
+    source: |
+      (println (try (+ 1 "a") (catch ArithmeticException e :arith) (catch ClassCastException e :cce)))
+      (println (try (inc nil) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (println (try (aget (make-array Object 2) 5) (catch IndexOutOfBoundsException e :index)))
+      (println (try (count 5) (catch UnsupportedOperationException e :unsupported)))
+      (println (try ((fn [a] a) 1 2) (catch clojure.lang.ArityException e :arity)))
+      (println (try ((fn [a] a) 1 2) (catch IllegalArgumentException e :iae)))
+      (println (try (try (+ 1 "a") (catch IllegalArgumentException e :iae)) (catch RuntimeException e :rte)))
+      (println (try (try (first 5) (catch clojure.lang.ExceptionInfo e :ex-info)) (catch Exception e :ex)))
+    expected: |
+      :cce
+      :npe
+      :index
+      :unsupported
+      :arity
+      :iae
+      :rte
+      :ex
+  - name: a-refusal-naming-no-class-is-taken-by-any-catch-but-exception-info
+    # Deviation: a refusal of the runtime whose condition names no class (first
+    # of a number, a failed assert) is taken by the first catch of any class but
+    # ExceptionInfo. The oracle throws an IllegalArgumentException past the
+    # ArithmeticException catch here, and an AssertionError, which an Exception
+    # catch does not take, to the Error one.
+    source: |
+      (println (try (try (first 5) (catch ArithmeticException e :taken)) (catch Exception e :oracle)))
+      (println (try (assert false) (catch Exception e :taken) (catch Error e :oracle)))
+    expected: |
+      :taken
+      :taken
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance
@@ -1961,8 +2038,9 @@ cases:
       #<procedure>
       (1 2)
   - name: throw-and-miss-messages-use-clojure-notation
-    # throw of a non-ex-info value signals its Clojure-notation rendering, and a
-    # multimethod miss names its dispatch value the same way.
+    # throw of a value that is no exception signals a ClassCastException whose
+    # message is the value's Clojure-notation rendering, and a multimethod miss
+    # names its dispatch value the same way.
     source: |
       (println (try (throw {:a 1}) (catch Exception e (ex-message e))))
       (println (try (throw [1 :a]) (catch Exception e (str "got-" e))))
@@ -1971,7 +2049,7 @@ cases:
       (println (try (by-tag {:t :zzz}) (catch Exception e (ex-message e))))
     expected: |
       {:a 1}
-      got-[1 :a]
+      got-java.lang.ClassCastException: [1 :a]
       No method in by-tag for dispatch value: :zzz
   - name: doseq-prints-and-answers-nil
     # doseq iterates the seq view for side effects and answers nil: nested pairs
@@ -3715,13 +3793,15 @@ cases:
   - name: assert-answers-nil-and-throws-lazily
     # assert answers nil when the test is truthy and signals otherwise; the
     # message form sits in the else branch, so it never evaluates on success.
+    # Oracle-identical (clj 1.12.6, 2026-10-03), the failure caught as the
+    # oracle's AssertionError.
     source: |
       (println (assert (= 1 1)))
       (println (assert (= 1 1) "msg"))
       (let [evaluated (atom false)] (assert true (do (reset! evaluated true) "x")) (println @evaluated))
-      (println (try (assert (= 1 2)) (catch Exception e :failed)))
-      (println (try (assert (= 1 2) "oops") (catch Exception e (ex-message e))))
-      (println (try (assert false (str "m" "sg")) (catch Exception e :failed-with-msg)))
+      (println (try (assert (= 1 2)) (catch AssertionError e :failed)))
+      (println (try (assert (= 1 2) "oops") (catch AssertionError e (ex-message e))))
+      (println (try (assert false (str "m" "sg")) (catch AssertionError e :failed-with-msg)))
     expected: |
       nil
       nil
@@ -3732,16 +3812,16 @@ cases:
       :failed-with-msg
   - name: assert-message-names-the-failed-form
     # The failure text is the oracle's: the form through pr-str, after the message
-    # and a newline when there is one.
+    # and a newline when there is one (oracle-identical, clj 1.12.6, 2026-10-03).
     source: |
-      (println (try (assert (nil? 1)) (catch Exception e (ex-message e))))
-      (println (try (assert (nil? 1) "m") (catch Exception e (ex-message e))))
-      (println (try (assert (= [1 "a"] {:k 2})) (catch Exception e (ex-message e))))
-      (println (try (assert false) (catch Exception e (ex-message e))))
-      (println (try (assert nil) (catch Exception e (ex-message e))))
-      (println (try (assert (= {:a 1 :b "x\"y\n"} [\a \space 'q])) (catch Exception e (ex-message e))))
-      (println (try (assert (= 2.5 #{1})) (catch Exception e (ex-message e))))
-      (println (try (assert (= () (list 1))) (catch Exception e (ex-message e))))
+      (println (try (assert (nil? 1)) (catch AssertionError e (ex-message e))))
+      (println (try (assert (nil? 1) "m") (catch AssertionError e (ex-message e))))
+      (println (try (assert (= [1 "a"] {:k 2})) (catch AssertionError e (ex-message e))))
+      (println (try (assert false) (catch AssertionError e (ex-message e))))
+      (println (try (assert nil) (catch AssertionError e (ex-message e))))
+      (println (try (assert (= {:a 1 :b "x\"y\n"} [\a \space 'q])) (catch AssertionError e (ex-message e))))
+      (println (try (assert (= 2.5 #{1})) (catch AssertionError e (ex-message e))))
+      (println (try (assert (= () (list 1))) (catch AssertionError e (ex-message e))))
     expected: |
       Assert failed: (nil? 1)
       Assert failed: m
@@ -4748,6 +4828,35 @@ cases:
       Ran 8 tests containing 17 assertions.
       9 failures, 2 errors.
       8 6 9 2 :summary false
+  - name: thrown-matches-the-class-and-reports-any-other-exception-as-an-error
+    # Oracle-identical (clj 1.12.6, 2026-10-03) but for the stack trace the
+    # oracle prints below an error: thrown? and thrown-with-msg? take an exception
+    # of the class they name or a subclass, and any other passes on to the is,
+    # which reports it as an error.
+    source: |
+      (ns thrown-class-test (:require [clojure.test :refer :all]))
+      (deftest by-class
+        (is (thrown? IllegalArgumentException (throw (NumberFormatException. "nfe"))))
+        (is (thrown? ArithmeticException (throw (IllegalArgumentException. "x"))))
+        (is (thrown-with-msg? IllegalStateException #"b" (throw (IllegalStateException. "abc"))))
+        (is (thrown-with-msg? IllegalStateException #"b" (throw (IllegalArgumentException. "abc"))))
+        (is (thrown? ClassCastException (+ 1 "a"))))
+      (let [s (run-tests 'thrown-class-test)] (println (:pass s) (:fail s) (:error s)))
+    expected: |
+
+      Testing thrown-class-test
+
+      ERROR in (by-class) (spec.clj:N)
+      expected: (thrown? ArithmeticException (throw (IllegalArgumentException. "x")))
+        actual: java.lang.IllegalArgumentException: x
+
+      ERROR in (by-class) (spec.clj:N)
+      expected: (thrown-with-msg? IllegalStateException #"b" (throw (IllegalArgumentException. "abc")))
+        actual: java.lang.IllegalArgumentException: abc
+
+      Ran 1 tests containing 5 assertions.
+      0 failures, 2 errors.
+      3 0 2
   - name: clojure-test-is-answers-and-reports-outside-run-tests
     # is answers the assertion's value and reports even outside run-tests (no
     # counting there); a test is a zero-argument function, a nested test call

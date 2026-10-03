@@ -105,6 +105,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aThrownHostThrowableIsCaughtByItsOwnClassChain() throws Exception {
+		// measured against clj 1.12.6: the host class's superclasses, read at run time,
+		// decide the catch -- a checked exception passes a RuntimeException catch
+		assertBothEqual("(println (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch java.net.URISyntaxException e (.getMessage e))))", "bad: in\n");
+		assertBothEqual("(println (try (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch RuntimeException e :rte)) (catch Exception e :ex)))", ":ex\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
