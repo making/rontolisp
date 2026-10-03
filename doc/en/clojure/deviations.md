@@ -31,8 +31,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
   the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A map entry is a plain two-member vector, so `map-entry?` is `true` of every `[k v]`
-  (the oracle: `false` for one the program built) and `key`/`val` read any such vector. For the same reason `(conj {} #{[1 2]})`
-  and `(conj {} (seq [[1 2]]))` answer `{1 2}` (the oracle: `ClassCastException`, the members must be real entries). Keywords
+  (the oracle: `false` for one the program built) and `key`/`val` read any such vector. For the same reason `(conj {} #{[1 2]})`,
+  `(conj {} (seq [[1 2]]))` and `(merge {} (seq [[1 2]]))` answer `{1 2}` (the oracle: `ClassCastException`, the members must be real entries). Keywords
   are not interned, so `find-keyword` answers the keyword for a spelling no keyword ever used
   (the oracle: `nil`).
 - The type predicates follow the representation. `nil` is the empty list, so `seq?`,

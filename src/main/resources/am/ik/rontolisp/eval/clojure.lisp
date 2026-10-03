@@ -4248,6 +4248,20 @@
                 (error "conj needs a map entry: a map, a [k v] vector or nil")))
           (setq s (rontolisp::%clojure-seq-rest s))))))
 
+(defun rontolisp::%clojure-merge-entry-plist (item)
+  "The entries a later merge ITEM adds, as a plist (merge is conj folded over the
+   maps): none of nil, a map's or record's pairs, a [k v] vector's pair, a sorted
+   map's pairs, or the members of a set or seq each a [k v] vector; anything else,
+   a list of non-entries included, signals."
+  (cond ((null item) nil)
+        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((and (vectorp item) (not (stringp item)) (= (length item) 2))
+         (list (aref item 0) (aref item 1)))
+        ((rontolisp::%clojure-record-p item)
+         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+        ((consp item) (rontolisp::%clojure-seq-entry-plist item))
+        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member
    compares equal to it (that member stays); a map gains ITEM's entries

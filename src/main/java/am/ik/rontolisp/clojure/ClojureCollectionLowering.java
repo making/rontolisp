@@ -694,7 +694,7 @@ final class ClojureCollectionLowering {
 				base = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST);
 				continue;
 			}
-			plists.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, entriesPlist(one, src),
+			plists.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, mergedEntriesPlist(one),
 					ClojureLowering.NIL_CONST));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
@@ -716,9 +716,7 @@ final class ClojureCollectionLowering {
 		LispSymbol found = ctx.freshTemp();
 		LispSymbol grown = ctx.freshTemp();
 		LispSymbol probe = ctx.freshTemp();
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
-				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal onePlist = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, entriesPlist(one, src),
+		LispVal onePlist = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, mergedEntriesPlist(one),
 				ClojureLowering.NIL_CONST);
 		LispVal gather = ClojureLowerUtil.list(ClojureLowerUtil.sym("mapcar"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), onePlist), maps);
@@ -747,9 +745,21 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * The entries a map joining a merge adds, as a plist: a sorted map's in order (an arm
-	 * a program building no sorted collection sheds), else its table's ({@code src}, a
-	 * record's entry table or the map).
+	 * The entries a later {@code merge} item adds, as a plist. Merge is conj folded over
+	 * the maps: a table's pairs are read inline, anything else (a record, a sorted map, a
+	 * {@code [k v]} vector, a set or seq of entries) goes through one shared worker
+	 * instead of inlining every arm at each item.
+	 */
+	static LispVal mergedEntriesPlist(LispSymbol item) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), item), tablePlist(item),
+				ClojureSortedLowering.runtime("merge-entry-plist", item));
+	}
+
+	/**
+	 * The entries a map adds, as a plist: a sorted map's in order (an arm a program
+	 * building no sorted collection sheds), else its table's ({@code src}, a record's
+	 * entry table or the map).
 	 */
 	static LispVal entriesPlist(LispSymbol map, LispVal src) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(map),

@@ -1042,6 +1042,22 @@ cases:
       {1 2} true {:a 1, :b 2} {} {5 6}
       {1 2} {1 2, 3 4}
       :refused :refused :refused :refused :refused
+  - name: merge-takes-an-entry-vector-and-a-seq-of-entries-after-the-first-map
+    # Oracle-identical (clj 1.12.6): merge is conj folded over the maps, so a later item
+    # is a map, a sorted map, a [k v] vector or a seq of entries, nil adding nothing; a
+    # record keeps contributing its entries. A list of non-entries is refused.
+    source: |
+      (defrecord MRec [a])
+      (defn merge-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (merge-try #(merge {} (seq {1 2}))) (merge-try #(merge {} [1 2])) (merge-try #(merge (sorted-map) (seq {1 2}))) (merge-try #(merge {} (sorted-map 1 2))))
+      (println (merge-try #(merge {:a 1} [:b 2] (seq {:c 3}) nil {:d 4})) (merge-try #(merge (sorted-map :a 1) [:b 2])) (merge-try #(merge nil [1 2])) (merge-try #(merge {} (map identity {5 6}))))
+      (println (merge-try #((fn [f] (f {} [1 2] (seq {3 4}))) merge)) (merge-try #((fn [f] (f (sorted-map :a 1) (seq {:b 2}) [:c 3])) merge)) (merge-try #((fn [f] (f {} (->MRec 1))) merge)) (merge-try #(:a (merge {} (->MRec 1)))))
+      (println (merge-try #(merge {} [1])) (merge-try #(merge {} [1 2 3])) (merge-try #(merge {} (seq [1 2]))) (merge-try #(merge {} "ab")) (merge-try #((fn [f] (f {} [1])) merge)))
+    expected: |
+      {1 2} {1 2} {1 2} {1 2}
+      {:a 1, :b 2, :c 3, :d 4} {:a 1, :b 2} {1 2} {5 6}
+      {1 2, 3 4} {:a 1, :b 2, :c 3} {:a 1} 1
+      :refused :refused :refused :refused :refused
   - name: disj-removes-set-members
     source: |
       (println (count (disj #{1 2 3} 2)))
