@@ -275,19 +275,9 @@ final class WasmRuntimeBuilder {
 		emitFloatBitsEqual(w);
 		w.write(Instruction.ELSE);
 
-		// both ratios -> numerators and denominators equal
-		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
-		refTest(w, 1, WasmLispCompiler.TYPE_RATIO);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
-		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_NUM);
-		w.write(Instruction.I32_EQ);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
-		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_AND);
+		// both ratios -> _equal(num, num) && _equal(den, den): the components are
+		// canonical exact integers, so the recursion is the integer arms above
+		emitRatioEqual(w);
 		w.write(Instruction.ELSE);
 
 		// both complexes -> _equal(re, re) && _equal(im, im) (parts are always
@@ -399,19 +389,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
 		w.write(Instruction.ELSE);
-		// both ratios -> numerators and denominators equal
-		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
-		refTest(w, 1, WasmLispCompiler.TYPE_RATIO);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
-		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_NUM);
-		w.write(Instruction.I32_EQ);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
-		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_AND);
+		// both ratios -> _equal(num, num) && _equal(den, den): the components are
+		// canonical exact integers, so the recursion is the integer arms above
+		emitRatioEqual(w);
 		w.write(Instruction.ELSE);
 		// both complexes -> _equal(re, re) && _equal(im, im)
 		refTest(w, 0, WasmLispCompiler.TYPE_COMPLEX);
@@ -860,15 +840,20 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_XOR);
 		w.write(Instruction.ELSE);
 
-		// ratio -> numerator * 31 + denominator
+		// ratio -> hash(numerator) * 31 + hash(denominator): an i31 component hashes
+		// to its value, so a ratio of two fixnums keeps numerator * 31 + denominator
 		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
+		ratioField(w, 0, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(31);
 		w.write(Instruction.I32_MUL);
-		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
+		ratioField(w, 0, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.ELSE);
 
@@ -1430,10 +1415,43 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 	}
 
-	private static void ratioComponent(WasmWriter w, int local, int func) {
+	// Pushes field 0 (numerator) or 1 (denominator) of the ratio in local.
+	private static void ratioField(WasmWriter w, int local, int field) {
 		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
+		w.writeUnsignedLeb128(field);
+	}
+
+	/**
+	 * Opens the both-ratios arm of {@code _equal} and {@code _eql_tail} over locals 0 and
+	 * 1: numerators and denominators {@code _equal} -- the components are canonical exact
+	 * integers, so the recursion answers at the integer arms ({@code ref.eq}, the
+	 * {@code i64} field, {@code _big_eq}). The caller writes the {@code ELSE} that
+	 * follows.
+	 */
+	private static void emitRatioEqual(WasmWriter w) {
+		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
+		refTest(w, 1, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		ratioField(w, 0, 0);
+		ratioField(w, 1, 0);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(func);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		ratioField(w, 0, 1);
+		ratioField(w, 1, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
 	}
 
 	/**
@@ -5101,7 +5119,7 @@ final class WasmRuntimeBuilder {
 		emitPrintBignum(w);
 
 		// Check ratio struct -> "numerator/denominator"
-		emitPrintRatio(w, st);
+		emitPrintRatio(w, st, WasmLispCompiler.FUNC_PRINT_VAL);
 
 		// Check complex struct -> "#C(re im)"
 		emitPrintComplex(w, st, WasmLispCompiler.FUNC_PRINT_VAL);
@@ -5337,7 +5355,7 @@ final class WasmRuntimeBuilder {
 		emitPrintBignum(w);
 
 		// Check ratio struct -> "numerator/denominator"
-		emitPrintRatio(w, st);
+		emitPrintRatio(w, st, WasmLispCompiler.FUNC_PRINC_VAL);
 
 		// Check complex struct -> "#C(re im)"
 		emitPrintComplex(w, st, WasmLispCompiler.FUNC_PRINC_VAL);
@@ -6907,31 +6925,22 @@ final class WasmRuntimeBuilder {
 	}
 
 	// Emits the ratio branch shared by _print_val and _princ_val: if the value in
-	// param 0 is a ratio struct, prints "numerator/denominator" and returns.
-	private static void emitPrintRatio(WasmWriter w, WasmLispCompiler.StringTable st) {
+	// param 0 is a ratio struct, prints "numerator/denominator" and returns. Each
+	// component is an exact integer at any tier and renders through elementFunc, the
+	// integer arms of the printer itself (print and princ spell an integer alike).
+	private static void emitPrintRatio(WasmWriter w, WasmLispCompiler.StringTable st, int elementFunc) {
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		ratioField(w, 0, 0);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		w.writeUnsignedLeb128(elementFunc);
+		writeStr(w, st.slash);
+		ratioField(w, 0, 1);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.slash.offset());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(st.slash.length());
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINT_I32_NO_NL);
+		w.writeUnsignedLeb128(elementFunc);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 	}

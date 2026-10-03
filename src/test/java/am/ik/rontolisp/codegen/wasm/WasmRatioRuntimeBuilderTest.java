@@ -59,4 +59,13 @@ class WasmRatioRuntimeBuilderTest {
 		assertThat(without.length).isLessThan(withHead.length);
 	}
 
+	@Test
+	void theSizeLevelNormalizesEveryRatioThroughTheTierAwareSteps() {
+		// _rat_new's i32 normalization of two i31 operands is a speed path only -- the
+		// _big_* steps after it answer every operand -- so --optimize=size drops it, like
+		// the binary helpers' head.
+		assertThat(WasmRatioRuntimeBuilder.buildRatNewBody(false).length)
+			.isLessThan(WasmRatioRuntimeBuilder.buildRatNewBody(true).length);
+	}
+
 }

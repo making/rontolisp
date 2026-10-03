@@ -2126,9 +2126,8 @@ cases:
       99
   - name: float-exact-comparison
     # A float against an exact number compares exact values on every backend
-    # (.todo/037). Sub-ulp ratios stay on the interpreter/JVM unit tests: a
-    # ratio that close to a float has components past WASM-GC's i32 limit, so
-    # only the shared representable range is pinned here.
+    # (.todo/037), a ratio within an ulp of the float included: the double
+    # 0.30000000000000004 is a little above the ratio its digits spell.
     source: |
       (print (= 2.0 2))
       (print (= 0.5 1/2))
@@ -2137,6 +2136,8 @@ cases:
       (print (= 1.0 (+ 1 1/1000)))
       (print (= -0.0 0))
       (print (> (max 1.0 3/2) 1.0))
+      (print (= 0.30000000000000004 30000000000000004/100000000000000000))
+      (print (> 0.30000000000000004 30000000000000004/100000000000000000))
     expected: |
       T
       T
@@ -2144,6 +2145,8 @@ cases:
       NIL
       NIL
       T
+      T
+      NIL
       T
   - name: double-nested-arithmetic
     source: |
@@ -3755,6 +3758,39 @@ cases:
       -1/3
       0
       0
+  # A ratio's numerator and denominator are exact integers at any magnitude on
+  # every backend, like any other integer. WASM-GC held them in two i32 fields
+  # until 2026-10-03: (/ 3000000000 7) printed -184995328 there, float of a ratio
+  # divided the wrapped components, and a limb-sized one trapped.
+  - name: ratio-components-past-the-fixnum-range
+    source: |
+      (defun wide-ratio-of (a b) (/ a b))
+      (print (wide-ratio-of 3000000000 7))
+      (print (wide-ratio-of 30000000000000004 100000000000000000))
+      (print (+ (wide-ratio-of 1 3000000000) (wide-ratio-of 1 7)))
+      (print (* (wide-ratio-of 3000000000 7) (wide-ratio-of 7 3000000000)))
+      (print (list (numerator (wide-ratio-of 3000000000 7)) (denominator (wide-ratio-of -1 (expt 2 70)))))
+      (print (list (floor (wide-ratio-of 3000000000 7)) (round (wide-ratio-of (+ (expt 10 20) 1) 2))))
+      (print (list (< (wide-ratio-of 1 3000000000) (wide-ratio-of 1 3000000001))
+                   (equal (wide-ratio-of 3000000000 7) (wide-ratio-of 6000000000 14))))
+      (print (float (wide-ratio-of 30000000000000004 100000000000000000) 1d0))
+      (print (float (wide-ratio-of 1 (expt 10 300)) 1d0))
+      (print (float (wide-ratio-of 3 (expt 2 1075)) 1d0))
+      (print (rational 0.1))
+      (print (read-from-string "3000000000/7"))
+    expected: |
+      3000000000/7
+      7500000000000001/25000000000000000
+      3000000007/21000000000
+      1
+      (3000000000 1180591620717411303424)
+      (428571428 50000000000000000000)
+      (NIL T)
+      0.30000000000000004
+      1.0e-300
+      9.9e-324
+      3602879701896397/36028797018963968
+      3000000000/7
   - name: common-lisp-fidelity-mod-rem-sign
     source: |
       (print (mod -13 4))
@@ -4380,15 +4416,14 @@ cases:
       1/3
       3/2
   # Slice C (.todo/037): the logcount population count (negatives count 0
-  # bits), integer-decode-float's three values, and rationalize. The
-  # rationalize rows stay inside what every backend holds: integer-valued
+  # bits), integer-decode-float's three values, and rationalize. Integer-valued
   # floats answer their exact integer through a fast path that runs BEFORE
   # integer-decode-float (.todo/896 -- that function's significand is now the
   # full (float-digits ax)-bit value, so its exponent is no longer reliably
-  # non-negative for a whole-number float), integers and ratios pass through;
-  # a fractional float needs big-denominator interval fractions, which trap
-  # fail-stop on WASM-GC exactly as (/ 1 (ash 1 52)) does, so 0.1-scale
-  # answers are pinned on the interpreter/JVM unit tests.
+  # non-negative for a whole-number float), integers and ratios pass through,
+  # and a fractional float walks interval fractions over power-of-two
+  # denominators past 2^52 (they trapped on WASM-GC while its ratio components
+  # were i32, until 2026-10-03).
   - name: slice-c-logcount
     source: |
       (print (logcount 0))
@@ -4439,6 +4474,10 @@ cases:
       (print (rationalize -7))
       (print (rationalize (/ 1 3)))
       (print (funcall #'rationalize 100.0))
+      (print (rationalize 0.1))
+      (print (rationalize -0.75))
+      (print (rationalize 0.333))
+      (print (rationalize 1d-10))
     expected: |
       2
       100
@@ -4448,6 +4487,10 @@ cases:
       -7
       1/3
       100
+      1/10
+      -3/4
+      333/1000
+      1/10000000000
   # Smalls (.todo/037 item 4): float-sign's sign-as-float (negative zero answers
   # -1.0) and float-digits' significand width (53 for every normal double,
   # fewer for a subnormal, 0 for a zero). Every row stays inside what every

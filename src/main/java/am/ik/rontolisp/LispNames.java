@@ -9443,6 +9443,17 @@ public final class LispNames {
 	public static final String IEEE754_DOUBLE_FROM_BITS = "%IEEE754-DOUBLE-FROM-BITS";
 
 	/**
+	 * The {@code %decimal-double} internal prelude helper: the double nearest
+	 * {@code mantissa * 10^exponent} (a non-negative integer mantissa), ties to even --
+	 * {@code float} of the exact rational, which every backend rounds once -- with a
+	 * value surely past either end of the double range answered from the mantissa's bit
+	 * length, so a huge exponent never builds its power of ten. The one decimal-to-double
+	 * conversion of the Scheme reader ({@code %scheme-decimal}) and the Clojure reader's
+	 * decimal arm, which agree with Java's {@code parseDouble}.
+	 */
+	public static final String DECIMAL_DOUBLE_INTERNAL = "%DECIMAL-DOUBLE";
+
+	/**
 	 * {@code %ieee754-single-bits} -- the IEEE 754 single-precision bits (unsigned
 	 * 32-bit) of a float rounded to single precision.
 	 */

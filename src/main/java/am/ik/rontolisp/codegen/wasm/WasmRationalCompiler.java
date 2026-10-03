@@ -17,10 +17,11 @@ import am.ik.wasm.Type;
  * {@code WasmFloatFdivRuntimeBuilder}'s exact route (hidden bit, subnormal shape, sign on
  * the mantissa, trailing-zero strip so integral values divide by one) and normalizes
  * through the existing {@code _rat_div} -- so the answer is exactly what
- * {@code (/ num den)} of the same integers would be, including the backend's
- * ratio-component range. A complex or any other non-real takes the {@code _type_err_real}
- * landing (the interpreter's REAL operand-type report text); a NaN or an infinity has no
- * exact rational and signals the interpreter's non-finite error instead.
+ * {@code (/ num den)} of the same integers would be: {@code (rational 0.1)} is
+ * {@code 3602879701896397/36028797018963968}, as on the interpreter and the JVM. A
+ * complex or any other non-real takes the {@code _type_err_real} landing (the
+ * interpreter's REAL operand-type report text); a NaN or an infinity has no exact
+ * rational and signals the interpreter's non-finite error instead.
  */
 final class WasmRationalCompiler {
 

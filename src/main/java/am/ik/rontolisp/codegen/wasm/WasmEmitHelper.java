@@ -216,6 +216,36 @@ final class WasmEmitHelper {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
 	}
 
+	/**
+	 * Emits an exact-integer literal of any magnitude in its narrowest tier: through
+	 * {@link #compileIntegerLiteral} inside the signed 64-bit range, through
+	 * {@link #compileBigIntegerLiteral} past it.
+	 * @param value the integer value
+	 * @param ctx the compilation context
+	 */
+	static void compileExactIntegerLiteral(java.math.BigInteger value, WasmLispCompiler.Ctx ctx) {
+		if (value.bitLength() < 64) {
+			compileIntegerLiteral(value.longValue(), ctx);
+		}
+		else {
+			compileBigIntegerLiteral(value, ctx);
+		}
+	}
+
+	/**
+	 * Emits a ratio literal: the reader already normalized it, so its two components --
+	 * exact integers, each in its narrowest tier like a computed one -- plus the
+	 * construction are the value. Constant instructions only, so it serves a global's
+	 * initializer as well as code.
+	 * @param ratio the ratio
+	 * @param ctx the compilation context
+	 */
+	static void compileRatioLiteral(am.ik.rontolisp.LispRatio ratio, WasmLispCompiler.Ctx ctx) {
+		compileExactIntegerLiteral(ratio.numerator(), ctx);
+		compileExactIntegerLiteral(ratio.denominator(), ctx);
+		WasmRatioRuntimeBuilder.emitNewRatio(ctx.writer);
+	}
+
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
 		castI31GetS(ctx.writer);
 	}
@@ -637,8 +667,9 @@ final class WasmEmitHelper {
 	 * Builds {@code _as_f64} (FUNC_AS_F64): the value in {@code local[slot]} as an
 	 * {@code f64}, dispatching on its runtime type -- an i31 integer converts directly, a
 	 * {@code TYPE_BIGNUM} converts its {@code i64} field, a limb {@code TYPE_BIGINT} goes
-	 * through {@code _big_to_f64}, a ratio divides numerator by denominator (float
-	 * contagion), and anything else is cast to a {@code TYPE_FLOAT} struct and read.
+	 * through {@code _big_to_f64}, a ratio converts through {@code _rat_to_f64} (the
+	 * nearest double, float contagion), and anything else is cast to a {@code TYPE_FLOAT}
+	 * struct and read.
 	 * @param w the body writer
 	 * @param slot the {@code (ref null eq)} local holding the value
 	 */
@@ -713,18 +744,11 @@ final class WasmEmitHelper {
 		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF);
 		w.write(Type.F64);
-		// ratio path: numerator / denominator as f64 (float contagion)
+		// ratio path: the double nearest numerator / denominator (float contagion)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(tmpSlot);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(tmpSlot);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_DIV);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_TO_F64);
 		w.write(Instruction.ELSE);
 		// A complex reaching the f64 coercion is not silently reduced to its real
 		// part (that would be a wrong number): it lands in _type_err_real, like a

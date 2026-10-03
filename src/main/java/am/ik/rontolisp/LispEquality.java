@@ -176,10 +176,11 @@ public final class LispEquality {
 	 * <ul>
 	 * <li>an ARRAY does not fold, since {@link #equal} on a vector is identity on every
 	 * backend and a folded copy would never find itself;</li>
-	 * <li>a float with a FRACTION does not fold to the ratio it equals, because the WASM
-	 * backends' ratio holds two i32 components and cannot represent one (a float's exact
-	 * value has a power-of-two denominator far outside that range), so {@code 0.5} and
-	 * {@code 1/2} are two keys everywhere rather than one key here and two there.</li>
+	 * <li>a float with a FRACTION does not fold to the ratio it equals, so {@code 0.5}
+	 * and {@code 1/2} are two keys on every backend. It was kept because the WASM ratio
+	 * held two i32 components, too narrow for a float's power-of-two denominator; since
+	 * 2026-10-03 its components are exact integers, and the fold waits only on being made
+	 * on all four backends at once.</li>
 	 * </ul>
 	 * Both deviations are a MISS, never a false match: the fold only ever refuses to
 	 * merge two keys {@code equalp} would call the same.

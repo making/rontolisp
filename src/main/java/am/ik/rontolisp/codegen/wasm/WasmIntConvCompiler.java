@@ -18,8 +18,8 @@ import am.ik.wasm.Instruction;
  * runtime helper, and a float applies the f64 rounding then truncates to i64. A direct
  * {@code (op (/ a b))} shape -- which is also what the two-argument
  * {@code (truncate a b)} family lowers to -- fuses into {@code _big_fdiv} when both
- * operands are exact integers, so the division stays exact at any magnitude (the ratio
- * intermediate cannot hold limb components).
+ * operands are exact integers, so the division stays exact at any magnitude without
+ * allocating the ratio intermediate.
  */
 final class WasmIntConvCompiler {
 

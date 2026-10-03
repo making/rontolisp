@@ -3095,11 +3095,11 @@ public final class LispPreludeLibrary {
 		// (2.0 decodes to significand 4503599627370496 and exponent -51, not
 		// significand 1 and exponent 1), so branching on the exponent's sign
 		// would route ordinary whole-number floats through the fractional
-		// interval search below with 53-bit-wide intermediates -- exactly the
-		// case a backend whose fractions wrap (WASM-GC past i31) cannot carry.
-		// The round-trip postcondition on the fractional branch is checked
-		// with the same float conversion the callers use; when it fails the
-		// exact value is the answer, for that same backend.
+		// interval search below with 53-bit-wide intermediates (which WASM-GC
+		// wrapped until its ratio components became exact integers,
+		// 2026-10-03). The round-trip postcondition on the fractional branch is
+		// checked with the same float conversion the callers use; when it fails
+		// the exact value is the answer.
 		SOURCES.put(LispNames.RATIONALIZE,
 				"""
 						(defun rationalize (x)
@@ -3127,6 +3127,22 @@ public final class LispPreludeLibrary {
 						                        (if (< x 0) (- xc) xc)))))))
 						      x))
 						""");
+		// %decimal-double: the double nearest mantissa * 10^exponent, the Scheme and
+		// Clojure readers' one decimal conversion. float of the exact rational rounds
+		// once on every backend (LispRatio.ratioToDouble, the JVM's _ratToDouble,
+		// WASM-GC's _rat_to_f64), so the readers agree with parseDouble. The bounds
+		// only keep a huge exponent from building its power of ten: log10 of the
+		// mantissa lies in [(bits - 1) * 0.30103, bits * 0.30103), so a value whose
+		// lower bound reaches 10^309 is past the largest double and one whose upper
+		// bound stays at 10^-325 is under half the smallest subnormal.
+		SOURCES.put(LispNames.DECIMAL_DOUBLE_INTERNAL, """
+				(defun %decimal-double (mantissa exponent)
+				  (let ((bits (integer-length mantissa)))
+				    (cond ((or (= mantissa 0) (<= (+ exponent (ceiling (* 302 bits) 1000)) -325)) 0.0d0)
+				          ((>= (+ exponent (floor (* 301 (- bits 1)) 1000)) 309)
+				           (%ieee754-double-from-bits (ash 2047 52)))
+				          (t (float (* mantissa (expt 10 exponent)) 1.0d0)))))
+				""");
 		// A LIST operand is read through a cons cursor rather than indexed with elt --
 		// elt on a list is an nth walk from the head, so the obvious loop is quadratic
 		// (the same defect the replace list SOURCE arm and count-if-not already avoid).

@@ -4790,9 +4790,12 @@
                                                           (- n 1)
                                                           n)))))
              (if decimal
-                 (rontolisp::%clojure-rd-double (car decimal)
-                                                (car (cdr decimal))
-                                                (car (cdr (cdr decimal))))
+                 ;; the nearest double, ties to even like parseDouble, negated
+                 ;; after the conversion so -0.0 keeps its sign
+                 (let ((magnitude
+                        (%decimal-double (car (cdr decimal))
+                                         (car (cdr (cdr decimal))))))
+                   (if (car decimal) (- magnitude) magnitude))
                  nil)))
           (t (rontolisp::%clojure-rd-integer token 0 big-end 10)))))
 
@@ -4851,56 +4854,6 @@
     (if (and ok (= i end) (> digits 0))
         (list neg mantissa (- exponent scale))
         nil)))
-
-(defun rontolisp::%clojure-rd-double (neg mantissa k)
-  "The double nearest MANTISSA * 10^K, ties to even like Java's parseDouble
-   (so the source reader's literal and this one agree), negated when NEG.
-   Built from its IEEE bits over exact integer arithmetic, so every backend
-   answers the same double: a float of the exact ratio would round through
-   the wasm backend's i32 ratio components."
-  (let ((magnitude 0.0d0)
-        (size (+ k (floor (* 31 (integer-length mantissa)) 100))))
-    (cond ((= mantissa 0))
-     ((> size 330) (setq magnitude (%ieee754-double-from-bits (ash 2047 52))))
-     ((< size -345))
-     (t (let* ((num (if (>= k 0) (* mantissa (expt 10 k)) mantissa))
-               (den (if (>= k 0) 1 (expt 10 (- k))))
-               (s (max -1074 (- (integer-length num) (integer-length den) 53)))
-               (qrd (rontolisp::%clojure-rd-quotient num den s)))
-          ;; s is the binary exponent of the significand's last bit: settle
-          ;; it so the quotient holds 53 bits (fewer below the subnormal
-          ;; floor), then round the remainder half to even
-          (do ()
-              ((< (car qrd) 9007199254740992))
-            (setq s (+ s 1))
-            (setq qrd (rontolisp::%clojure-rd-quotient num den s)))
-          (do ()
-              ((or (>= (car qrd) 4503599627370496) (<= s -1074)))
-            (setq s (- s 1))
-            (setq qrd (rontolisp::%clojure-rd-quotient num den s)))
-          (let ((q (car qrd))
-                (twice (* 2 (car (cdr qrd))))
-                (d (car (cdr (cdr qrd)))))
-            (if (or (> twice d) (and (= twice d) (oddp q))) (setq q (+ q 1)))
-            (if (>= q 9007199254740992)
-                (progn
-                  (setq q (ash q -1))
-                  (setq s (+ s 1))))
-            (setq magnitude
-                  (cond ((> s 971) (%ieee754-double-from-bits (ash 2047 52)))
-                        ((>= q 4503599627370496)
-                         (%ieee754-double-from-bits
-                          (logior (ash (+ s 1075) 52) (- q 4503599627370496))))
-                        (t (%ieee754-double-from-bits q))))))))
-    (if neg (- magnitude) magnitude)))
-
-(defun rontolisp::%clojure-rd-quotient (num den s)
-  "(q r d): q the floor of NUM / (DEN * 2^S), r its remainder over the
-   divisor d."
-  (let* ((n (if (< s 0) (ash num (- s)) num))
-         (d (if (> s 0) (ash den s) den))
-         (q (floor n d)))
-    (list q (- n (* q d)) d)))
 
 (defun rontolisp::%clojure-rd-keyword (rd token)
   "The keyword TOKEN spells: ::name in the calling namespace, ::alias/name

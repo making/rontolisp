@@ -98,7 +98,9 @@ Fold: string/character to UPPER CASE code point by code point; a float whose val
 that integer (`1`, `1.0`, `2/2` are one key, read out of `mantissa * 2^exponent`); a cons
 element-wise; everything else is its own key. Two deliberate ANSI deviations, both a MISS and never
 a false match: an ARRAY does not fold (`equal` on a vector is identity); a float with a FRACTION
-does not fold to the ratio it equals (WASM `TYPE_RATIO` holds two **i32** components).
+does not fold to the ratio it equals. The second one's reason -- WASM `TYPE_RATIO` held two i32
+components, too narrow for a float's power-of-two denominator -- is gone since 2026-10-03, when the
+components became exact integers; folding the fraction on all four backends is `.todo/c03`.
 **The fold is also what is STORED**, so `maphash` hands back the representative.
 
 - interpreter `LispHashTable` via `LispEquality.equalpKey`.

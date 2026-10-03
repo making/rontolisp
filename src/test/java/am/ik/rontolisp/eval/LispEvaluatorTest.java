@@ -14727,9 +14727,8 @@ class LispEvaluatorTest {
 	void anEqualpHashTableFoldsAFloatToTheIntegerItEquals() {
 		// equalp compares numbers with =, so a float and the integer it equals are one
 		// key -- at any magnitude, since the fold reads the exact mantissa * 2^exponent
-		// out of the bits. A float with a FRACTION is its own key on every backend: the
-		// WASM ratio holds two i32 components and cannot represent the power-of-two
-		// denominator a float's exact value has (.kb/hash-tables.md).
+		// out of the bits. A float with a FRACTION is its own key on every backend
+		// (.kb/hash-tables.md).
 		LispVal result = evalMulti("""
 				(defparameter *n* (make-hash-table :test 'equalp))
 				(setf (gethash 1 *n*) 'one)

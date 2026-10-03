@@ -65,10 +65,10 @@ public record LispRatio(BigInteger numerator, BigInteger denominator) implements
 	 * {@code 1/8388608} is {@code 2^-23}) converts back exactly, which is what the
 	 * {@code RATIONAL.1}/{@code RATIONALIZE.1}/{@code /.12} round trips require. Huge
 	 * magnitudes answer signed infinity, tinies denormalize down to signed zero. The JVM
-	 * backend's generated {@code _ratToDouble} and the WASM backend's {@code _as_f64}
-	 * ratio arm (an f64 division, correctly rounded for the i32 components it can hold)
-	 * answer bit-identically; see the {@code floatOfRatio}-family pinning tests on each
-	 * backend.
+	 * backend's generated {@code _ratToDouble} and the WASM backend's {@code _rat_to_f64}
+	 * (one f64 division while both components fit 2^53, the same once-rounded binary
+	 * quotient past that) answer bit-identically; see the {@code floatOfRatio}-family
+	 * pinning tests on each backend.
 	 * @return the double approximation
 	 */
 	public double doubleValue() {

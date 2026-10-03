@@ -1365,7 +1365,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   itself, anything else `_int_val` under the id. `compileAset` names itself (a statement-position
   store and a pinned-kind `setf` reach it without `compileCons`). `random`'s integer arm first runs
   the limit through `_as_f64` (a ratio passes and meets `_int_val`'s unnamed, true, `INTEGER`);
-  `denominator` checks a non-ratio through `_int_val`, since `_rat_den` answers 1 for anything.
+  `denominator`'s `_rat_den` lands a non-rational in `_type_err_int` itself (since 2026-10-03; it
+  answered 1 for anything before, and the site checked through `_int_val`).
 - **Cost, measured 2026-09-26** (wasmtime 47): P1 `zlib` 114,383 -> 115,984 (+1.4%), size level
   87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
   (+28%), while the site tested the type twice (`ref.test`, `ref.cast`). With the one

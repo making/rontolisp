@@ -775,8 +775,8 @@ public final class PureBuiltinFolder {
 	 * <li><b>Exact integer arithmetic</b> -- every backend implements the full integer
 	 * tower exactly at any magnitude ({@code .kb/wasm-bignum.md}), and Java's
 	 * {@link BigInteger} is the same mathematics. {@code /} folds only when the quotient
-	 * is an exact integer: a RATIO result would have to survive as a literal, and the
-	 * WASM ratio tier has i32 components.</li>
+	 * is an exact integer: a RATIO result declines ({@code .kb/pure-builtin-fold.md},
+	 * "Deliberately OUT").</li>
 	 * <li><b>Bitwise</b> -- two's complement of an unbounded integer, which is what
 	 * {@link BigInteger} and {@code .kb/integer-bitwise-fast-paths.md} both
 	 * implement.</li>

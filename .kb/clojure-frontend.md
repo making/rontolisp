@@ -535,13 +535,18 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
   session buffer ending in one waits, `endsInDiscard`), and a character literal takes the
   character after the backslash unconditionally (`\(` reads back what `pr` wrote; a
   backslash ends the literal, and `ClojureSession.isComplete` skips it).
-- **Doubles come from their IEEE bits** (`%clojure-rd-double`: exact integer arithmetic,
-  ties to even, `%ieee754-double-from-bits`), never `float` of the exact ratio: wasm ratio
-  components are i32 (`.kb/wasm-bignum.md`), so `(string->number "0.30000000000000004")`
-  answers `0.8473649069170281` there and `1e-300` traps (Scheme's `%scheme-decimal` still
-  does). Measured 2026-10-03: 430 values -- 300 random bit patterns, 100 random decimals,
-  subnormal, halfway and overflow edges -- equal the compiled literal (Java's
-  `parseDouble`) on all four backends. `M` decimals stay exact ratios.
+- **A double is `float` of the exact rational its digits spell**, through the prelude's
+  `%decimal-double` (shared with the Scheme reader's `%scheme-decimal`): every backend rounds
+  an exact rational once, ties to even (`.kb/wasm-bignum.md`, "Ratios"), so the run-time
+  reader answers the double the source reader's `parseDouble` compiled. A value surely past
+  either end of the double range is decided from the mantissa's bit length, so `1e400000000`
+  never builds its power of ten. Until 2026-10-03 the reader built the double from its IEEE
+  bits in Lisp (`%clojure-rd-double`) because WASM ratios held i32 components; that guard
+  estimated log10 too high for a long mantissa, and a 903-digit one worth `1e305` read as
+  infinity. Measured 2026-10-03: 1,593 values -- random bit patterns, 1-30-digit decimals with
+  exponents -340..320, exact halfway expansions, subnormal and overflow edges -- equal Java's
+  `parseDouble` on all four backends, and so do the same strings through Scheme's
+  `string->number`. `M` decimals stay exact ratios.
 - Records: a program that reads registers every record/deftype class, behind the false
   binding (`ClojureReadLowering.registration`: `(class tag fields record-p)` strings); a
   session registers what each buffer adds or redefines. So a class from a namespace
@@ -561,7 +566,9 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
 - Cost (2026-10-03, `(prn (read-string "[1 \"a\"]"))` against `(prn [1 "a"])`): wasm 32,204 ->
   103,678 B, class 61,618 -> 176,613 B. Of the wasm, ~20 KB is the regex parser (a `#"..."`
   in the input compiles at read time), ~13 KB the number parser's ratio and bignum
-  arithmetic, ~3 KB `intern`.
+  arithmetic, ~3 KB `intern`. Re-measured the same day after the shared `%decimal-double`
+  replaced the Lisp IEEE-bits conversion: wasm 118,226 -> 115,286 B, class 190,861 -> 186,835 B
+  (the plain `(prn [1 "a"])` 32,463 -> 32,112 B, class unchanged).
 
 ## Vars and metadata
 

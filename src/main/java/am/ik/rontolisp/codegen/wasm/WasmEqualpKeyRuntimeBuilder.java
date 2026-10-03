@@ -27,9 +27,7 @@ import am.ik.wasm.WasmWriter;
  * <li>a {@code TYPE_FLOAT} whose value is an INTEGER folds to that integer, read out of
  * its bits as {@code mantissa * 2^exponent} and built through {@code _int_new} /
  * {@code _big_ash}, so it is exact at every magnitude. A float with a fraction does NOT
- * fold to the ratio it equals: {@code TYPE_RATIO} holds two i32 components and cannot
- * represent a power-of-two denominator, so folding it here would make this backend
- * disagree with the others rather than agree;</li>
+ * fold to the ratio it equals, on any backend ({@code LispEquality.equalpKey});</li>
  * <li>a {@code TYPE_CONS} folds element-wise;</li>
  * <li>everything else -- an array included -- is its own key.</li>
  * </ul>

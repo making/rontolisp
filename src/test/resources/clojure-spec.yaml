@@ -4652,6 +4652,25 @@ cases:
       ((quote x) (deref x) (var x) -7)
       :none
       :a true
+  - name: read-string-reads-the-double-its-literal-is
+    # A decimal read at run time is the double the same literal compiles to
+    # (Java's parseDouble at read time): %decimal-double, the conversion the
+    # Scheme reader shares, floats the exact rational, which every backend rounds
+    # once. Its range guard decides from the mantissa's bit length only what is
+    # surely past either end, so a 903-digit mantissa worth 1e305 is no infinity.
+    # Every line is the oracle's (clj 1.12.6.1673).
+    source: |
+      (prn (map #(= (read-string %1) %2)
+                ["0.30000000000000004" "1e-300" "4.9e-324" "2.4703282292062328e-324" "1.7976931348623157e308"
+                 "123456789.123456789" "6.02214076e23" "2.2250738585072011e-308"]
+                [0.30000000000000004 1e-300 4.9e-324 2.4703282292062328e-324 1.7976931348623157e308
+                 123456789.123456789 6.02214076e23 2.2250738585072011e-308]))
+      (prn (> (read-string "1e400") 1.7976931348623157e308) (zero? (read-string "-1e-400")))
+      (prn (= (read-string (str "1" (apply str (repeat 902 \0)) "e-597")) 1.0e305))
+    expected: |
+      (true true true true true true true true)
+      true true
+      true
   - name: read-string-refuses-in-the-oracles-words
     # The end of input (empty or inside a datum), a repeated set member, an
     # unknown character name, a bad number and an unmatched closing bracket

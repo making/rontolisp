@@ -331,6 +331,14 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   touches it either. `#i` on an already-exact result (an integer, a ratio, or a decimal
   answer without `#e`) is the plain `float`/nearest-double conversion
   (`LispRatio.doubleValue()` on the Java side).
+- **An inexact decimal is the double nearest its digits**: `%scheme-decimal` hands the scanned
+  mantissa and `exponent - scale` to the prelude's `%decimal-double` (shared with the Clojure
+  reader), `float` of the exact rational, which every backend rounds once -- so
+  `"0.30000000000000004"` is that double everywhere (WASM read `0.8473649069170281` while its
+  ratio components were i32, until 2026-10-03). A value surely past the double range answers
+  from the mantissa's bit length: `(string->number "1e100000000")` built 10^100000000 for over
+  a minute on every backend before; now `+inf.0` at once, as in Gauche. Pinned by the
+  `decimal-string-to-number-is-the-nearest-double` case.
 - **An exactness prefix on an infinity or a NaN is a no-op**, matching Gauche:
   `(string->number "#e+inf.0")` is `+inf.0`, not an error and not the interpreter's
   `exact` procedure (which refuses an infinity, `.kb` "Vertical-line identifiers and the
