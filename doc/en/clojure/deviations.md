@@ -129,8 +129,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is a Namespace object), `:file` of the entry file is the path as given (the oracle
   absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
   (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
-  Deref of a macro's var signals (the oracle answers its expander function), and a
-  `clojure.core` var (`#'println`) is refused by name.
+  Deref of a macro's var signals (the oracle answers its expander function). A
+  `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
+  oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
+  with no value here (`#'*err*`, `#'*print-length*`) is refused.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.

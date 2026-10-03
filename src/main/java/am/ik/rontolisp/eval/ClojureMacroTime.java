@@ -41,6 +41,9 @@ public final class ClojureMacroTime {
 					macroEval.eval(library);
 				}
 				macroEval.eval(ClojureLowering.falseBindingForm());
+				for (LispVal counter : ClojureLowering.streamDepthForms()) {
+					macroEval.eval(counter);
+				}
 				this.evaluator = macroEval;
 			}
 			return this.evaluator.eval(form);

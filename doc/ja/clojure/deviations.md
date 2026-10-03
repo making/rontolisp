@@ -126,8 +126,9 @@
   入口ファイルの `:file` は与えたままのパスです（オラクルは絶対パスにします）。
   `def`/`defn`/`defn-`/`defmacro` 以外（`defmulti`、`deftest`、レコードのファクトリなど）で
   定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
-  上げ（オラクルは展開関数を答えます）、`clojure.core` の var（`#'println`）は名前で
-  拒否されます。
+  上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
+  `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
+  持ちます）。ここで値を持たない core の var（`#'*err*`、`#'*print-length*`）は拒否されます。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。

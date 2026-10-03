@@ -287,8 +287,8 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's, "Vars and
-  metadata") scans for a PRODUCER (`%clojure-sorted-make` and the four
+  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's and
+  `STREAM_DEPTH` the stream counters', "Vars and metadata") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
   a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
@@ -899,7 +899,33 @@ META)`; each evaluation re-points the interned var, so `=` holds. ROOT is the na
 as the site sees it (a redefined `defn`'s current version, a value cell, a signal for a
 macro); a `user` var shadowed by a local reads through a hoisted `|c%x%root|`. `lookupVar`,
 not `resolveVar`: a private var is reachable, like the oracle. A local is `Unable to
-resolve var`; a `clojure.core` var is refused.
+resolve var`.
+
+- **Core vars** (`coreVarOf`): a name no program var claims, or a `clojure.core/`
+  spelling, is `(%clojure-var "clojure.core/x" (lambda () CORE-VALUE) META)`, the value
+  `coreValueOrNull` gives `clojure.core/x`; a macro's (`ClojureCoreNames.MACROS`, the
+  oracle's 79) root signals `Can't take value of a macro`. META is `:name`/`:ns` (+
+  `:macro`) only -- the oracle's `:arglists`/`:doc`/`:added`/position would be a table
+  per core name (deviation). A core name with no value here (`*err*`, `*print-length*`,
+  `*ns*`: they are unknown names as values too) keeps the refusal `var of a clojure.core
+  var is not supported yet`. Measured 2026-10-03 (clj 1.12.6, `clj -M file` and the
+  REPL alike): `thread-bound?` of `#'*out*`/`#'*in*`/`#'*err*`/`#'*agent*` is FALSE at the
+  root -- `clojure.main` binds `*ns*`, the print/compiler flags, `*1`..`*e`, not the
+  streams -- and true under `binding`, `with-out-str`, `with-in-str` and an agent action.
+  So `#'*out*`/`#'*in*`/`#'*agent*` sites are `%clojure-var-dynamic` over a counter
+  (`%clojure-out-depth`/`-in-depth`/`-agent-depth`, defvars in `clojure.lisp`) that
+  `binding`, `with-out-str` and `sendBuild` rebind one deeper in a `let` pair; the pairs
+  are arms of `ClojureArms.Family.STREAM_DEPTH` (a fourth arm shape: the pair goes, and a
+  mention of the counter anywhere else is the producer), so a program with no such
+  site compiles byte-identically. Measured 2026-10-03: a `with-out-str` + `binding
+  [*out*]` + `send` program, `(prn [1 "a"])` with an IFn set lookup, a dynamic var's
+  `thread-bound?` and `examples/clojure/demo.clj` are byte-identical as wasm,
+  `--optimize=size`, component and class; adding
+  `(println (thread-bound? #'*out*))` to the first: wasm 43,601 -> 48,273 B, class
+  81,986 -> 87,664 B. Pinned by clojure-spec
+  `core-vars-read-their-core-value-and-the-stream-binding-depth`,
+  `ClojureArmsTest#theStreamDepthFamilyDropsTheRebindingPairsOfAProgramReadingNoCounter`,
+  `ClojureLibraryTest#aProgramReadingNoStreamDepthShedsTheRebindingPairs`.
 
 - Metadata is recorded at lower time (`ClojureVarLowering.record`, kept across session
   buffers) in the oracle's order: `:arglists`, the name's reader metadata, `:private`,
@@ -959,8 +985,8 @@ resolve var`; a `clojure.core` var is refused.
   `(:C%VAR name getter depth)`; every other var site is the plain three-element `%clojure-var`,
   so a program with no dynamic var is unchanged (wasm, `(var? #'x)` on a plain var: 21473 bytes
   before and after; one dynamic var plus a `#'` of it: 22026 -> 22106, 2026-10-03). A var without the element (non-dynamic) or
-  at depth zero is not thread-bound; a non-var signals only when reached. `#'*out*` and the
-  other core vars are not vars here (`var of a clojure.core var is not supported yet`).
+  at depth zero is not thread-bound; a non-var signals only when reached. `#'*out*`,
+  `#'*in*` and `#'*agent*` read the stream counters ("Vars and metadata", core vars).
 - `set!` of a dynamic var: past depth zero `setq`, at zero the oracle's `Can't
   change/establish root binding of: x with set` -- the counter has dynamic extent, so a
   callee outside the binding's lexical extent still sets it. The `clojure.main`-bound

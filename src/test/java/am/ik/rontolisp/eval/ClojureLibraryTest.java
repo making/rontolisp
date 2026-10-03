@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +61,28 @@ class ClojureLibraryTest {
 				"(setq x (rontolisp::%clojure-unbound \"user/x\")) (rontolisp::%clojure-str-of x \"\" nil)");
 		assertThat(defun(ClojureLibrary.process(unbound), "RONTOLISP::%CLOJURE-WRITE"))
 			.contains("(RONTOLISP::%CLOJURE-UNBOUND-P X)");
+	}
+
+	@Test
+	void aProgramReadingNoStreamDepthShedsTheRebindingPairs() {
+		// with-out-str, a binding of *out* and an agent action rebind the counters, which
+		// only a #'*out* / #'*in* / #'*agent* site reads: without one the pairs go and
+		// the
+		// program compiles as before the counters existed
+		List<LispVal> plain = Clojure.read("(println (with-out-str (print 1))) (binding [*out* *out*] (println 2))",
+				null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-OUT-DEPTH"));
+		// a program naming no library function goes through the strip too
+		List<LispVal> bare = LispReader.readAllFromString("(defvar rontolisp::%clojure-out-depth 0)"
+				+ " (let ((*standard-output* s) (rontolisp::%clojure-out-depth (+ rontolisp::%clojure-out-depth 1)))"
+				+ " (princ 1))");
+		assertThat(ClojureLibrary.process(bare).stream().map(LispVal::print))
+			.containsExactly("(LET ((*STANDARD-OUTPUT* S)) (PRINC 1))");
+		List<LispVal> read = Clojure.read("(println (with-out-str (print (thread-bound? #'*out*))))", null);
+		assertThat(ClojureLibrary.process(read).stream().map(LispVal::print))
+			.anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-OUT-DEPTH (+ RONTOLISP::%CLOJURE-OUT-DEPTH 1))"))
+			.anyMatch(text -> text.equals("(DEFVAR RONTOLISP::%CLOJURE-OUT-DEPTH 0)"));
 	}
 
 	private static String defun(List<LispVal> forms, String name) {

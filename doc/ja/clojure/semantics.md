@@ -182,7 +182,10 @@ lazy seq を realize します（空のものは `()`、無限のものは終わ
 docstring の `:doc`、名前のメタデータと attr マップ（定義の位置で評価されるため
 `^{:test (fn [] ...)}` が動きます）、`:line`/`:column`/`:file`、`:name`、`:ns` を
 与えます。[test](reference/core-test.md) はその `:test` 関数を呼びます。ローカルは var では
-なく、`clojure.core` の var は名前で拒否されます。
+ありません。プログラムの定義が占めていない名前と `clojure.core/` の綴りは core の var
+（`#'clojure.core/inc`）です。ルートは core の値で、マクロのルートはシグナルを上げ、
+メタデータは `:name`、`:ns` とマクロの `:macro` です。ここで値を持たない core の var
+（`#'*err*`、`#'*print-length*`）は拒否されます。
 
 `ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
 （単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`

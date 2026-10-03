@@ -44,8 +44,9 @@ import org.jspecify.annotations.Nullable;
  * A program that builds no sorted collection has the sorted-collection arms of its own
  * forms and of the library stripped first ({@link ClojureArms}), so it is spliced and
  * compiled exactly as before sorted collections existed; likewise the unbound-root arms
- * of a program that makes no unbound var. The interpreter keeps them: its library loads
- * once for whatever the session reads next.
+ * of a program that makes no unbound var, and the stream binding-depth counters of one
+ * that reads none. The interpreter keeps them: its library loads once for whatever the
+ * session reads next.
  */
 public final class ClojureLibrary {
 
@@ -122,7 +123,9 @@ public final class ClojureLibrary {
 
 	/**
 	 * The compile-path pre-pass: prepends the library definitions when the program
-	 * references one of its functions. A program that does not is returned unchanged.
+	 * references one of its functions, after stripping the arms of every family the
+	 * program makes no value of. A program naming neither a library function nor an arm
+	 * is returned unchanged.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the library spliced in when used
 	 */
@@ -247,7 +250,8 @@ public final class ClojureLibrary {
 			}
 			rest = cons.cdr();
 		}
-		return rest instanceof LispSymbol symbol && isClojureFunction(symbol.name());
+		return rest instanceof LispSymbol symbol
+				&& (isClojureFunction(symbol.name()) || ClojureArms.isFamilyName(symbol.name()));
 	}
 
 }

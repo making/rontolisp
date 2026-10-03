@@ -1524,8 +1524,31 @@ class ClojureLoweringTest {
 			.contains("(LAMBDA NIL (|c%x%root|))");
 		assertThatThrownBy(() -> Clojure.read("(let [q 1] #'q)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve var: q in this context");
-		assertThatThrownBy(() -> Clojure.read("#'println", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/println");
+		// a core name is the core var: its root the core value, its metadata :name/:ns
+		// (a macro's :macro), a stream special's site the depth reader thread-bound? asks
+		assertThat(lowered("#'str")).contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\" (LAMBDA NIL");
+		assertThat(lowered("(defn str [] 1) #'clojure.core/str"))
+			.contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\"");
+		assertThat(lowered("(defn str [] 1) #'str")).contains("\"user/str\"").doesNotContain("clojure.core/str");
+		assertThat(lowered("#'when")).contains("Can't take value of a macro: #'clojure.core/when")
+			.contains("(LIST :C%KEYWORD \"macro\") T");
+		assertThat(lowered("#'*out*"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL *STANDARD-OUTPUT*)")
+			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-OUT-DEPTH)");
+		assertThat(lowered("#'inc")).doesNotContain("VAR-DYNAMIC");
+		// every binding of a stream or agent special rebinds its counter one deeper
+		assertThat(lowered("(with-out-str (print 1))"))
+			.contains("(RONTOLISP::%CLOJURE-OUT-DEPTH (+ RONTOLISP::%CLOJURE-OUT-DEPTH 1))")
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-OUT-DEPTH 0)");
+		assertThat(lowered("(print 1)")).doesNotContain("DEPTH");
+		assertThat(lowered("(binding [*in* *in*] 1)"))
+			.contains("(RONTOLISP::%CLOJURE-IN-DEPTH (+ RONTOLISP::%CLOJURE-IN-DEPTH 1))");
+		assertThat(lowered("(send (agent 0) inc)"))
+			.contains("(RONTOLISP::%CLOJURE-AGENT-DEPTH (+ RONTOLISP::%CLOJURE-AGENT-DEPTH 1))");
+		assertThatThrownBy(() -> Clojure.read("#'*err*", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/*err*");
+		assertThatThrownBy(() -> Clojure.read("#'if", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve var: if in this context");
 		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/test");
 	}

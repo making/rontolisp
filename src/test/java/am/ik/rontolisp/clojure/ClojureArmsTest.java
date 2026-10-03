@@ -113,4 +113,26 @@ class ClojureArmsTest {
 			.hasMessageContaining("unbound-root test where it cannot fold");
 	}
 
+	@Test
+	void theStreamDepthFamilyDropsTheRebindingPairsOfAProgramReadingNoCounter() {
+		List<LispVal> forms = read("(defvar rontolisp::%clojure-out-depth 0)"
+				+ " (let* ((s (make-string-output-stream)) (*standard-output* s)"
+				+ " (rontolisp::%clojure-out-depth (+ rontolisp::%clojure-out-depth 1))) (f s))"
+				+ " (let ((c%agent a) (rontolisp::%clojure-agent-depth (+ rontolisp::%clojure-agent-depth 1))) a)"
+				+ " (let ((rontolisp::%clojure-in-depth (+ rontolisp::%clojure-in-depth 1))) (g))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.STREAM_DEPTH);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.STREAM_DEPTH).stream().map(LispVal::print))
+			.containsExactly("(LET* ((S (MAKE-STRING-OUTPUT-STREAM)) (*STANDARD-OUTPUT* S)) (F S))",
+					"(LET ((C%AGENT A)) A)", "(LET NIL (G))");
+		// a read of a counter anywhere else is what keeps the pairs
+		List<LispVal> read = read("(let ((rontolisp::%clojure-out-depth (+ rontolisp::%clojure-out-depth 1))) 1)"
+				+ " (lambda () rontolisp::%clojure-out-depth)");
+		assertThat(ClojureArms.scan(read, ClojureArms.Family.STREAM_DEPTH).builds()).isTrue();
+		// a let without a counter pair keeps its identity
+		List<LispVal> plain = read("(let* ((x 1) (y (+ x 1))) (h x y))");
+		assertThat(ClojureArms.strip(plain, ClojureArms.Family.STREAM_DEPTH)).isSameAs(plain);
+	}
+
 }

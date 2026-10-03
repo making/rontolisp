@@ -191,7 +191,10 @@ definition above the `#'` recorded: a `def`/`defn`/`defn-`/`defmacro` gives
 `:arglists`, the docstring as `:doc`, the name's metadata and attr map (evaluated
 where the definition stands, so `^{:test (fn [] ...)}` works), `:line`/`:column`/`:file`,
 `:name` and `:ns`; [test](reference/core-test.md) calls its `:test` fn. A local is no
-var, and a `clojure.core` var is refused by name.
+var. A name no program definition claims, or a `clojure.core/` spelling, is the core var
+(`#'clojure.core/inc`): its root is the core value, a macro's root signals, and its
+metadata is `:name`, `:ns` and a macro's `:macro`. A core var with no value here
+(`#'*err*`, `#'*print-length*`) is refused.
 
 A `ref` is the atom cell with a transaction discipline: `dosync` opens the
 extent (single-threaded, so no retries and no isolation), `alter`/`commute`

@@ -798,6 +798,16 @@ public final class ClojureLowering {
 	boolean stmEmitted;
 
 	/**
+	 * Whether the program binds or reads a stream or agent special's binding-depth
+	 * counter: the counters' definitions are spliced in once, behind the false binding
+	 * ({@link ClojureVarLowering#streamDepthRuntime}).
+	 */
+	boolean usedStreamDepth;
+
+	/** Whether the counters' definitions were already spliced in. */
+	boolean streamDepthEmitted;
+
+	/**
 	 * Whether the program uses {@code clojure.test}: the test runtime start (the report
 	 * stream, the ex-info reader) runs once, behind the false binding.
 	 */
@@ -893,6 +903,10 @@ public final class ClojureLowering {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
 		}
+		if (lowering.usedStreamDepth) {
+			// the binding-depth counters are special before anything binds them
+			lowering.forms.addAll(1, ClojureVarLowering.streamDepthRuntime());
+		}
 		if (lowering.usedTest) {
 			// the test runtime starts before anything else, like the false value
 			lowering.forms.addAll(1, ClojureTestLowering.testRuntime(lowering));
@@ -981,6 +995,12 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
+		}
+		if (this.usedStreamDepth && !this.streamDepthEmitted) {
+			// The binding-depth counters travel ahead of the buffer that first
+			// binds or reads one, like the false binding.
+			out.add(0, new ClojureTopLevel(ClojureVarLowering.streamDepthRuntime(), false));
+			this.streamDepthEmitted = true;
 		}
 		if (this.usedTest && !this.testEmitted) {
 			// The test runtime starts ahead of the buffer that first needs it,
@@ -3483,6 +3503,18 @@ public final class ClojureLowering {
 	 * program definition, library refer or class member of that spelling.
 	 */
 	LispVal coreValue(String name) {
+		LispVal value = coreValueOrNull(name);
+		if (value == null) {
+			throw new LispReadException("unknown name: " + ClojureCoreNames.PREFIX + name);
+		}
+		return value;
+	}
+
+	/**
+	 * {@link #coreValue}, or null for a core name with no value here (a macro, or a var
+	 * the subset does not implement).
+	 */
+	@Nullable LispVal coreValueOrNull(String name) {
 		switch (name) {
 			case "nth":
 				return ClojureSeqLowering.nthValue(this);
@@ -3502,7 +3534,7 @@ public final class ClojureLowering {
 		}
 		String cl = builtinValue(name);
 		if (cl == null) {
-			throw new LispReadException("unknown name: " + ClojureCoreNames.PREFIX + name);
+			return null;
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(cl));
 	}
@@ -3781,6 +3813,16 @@ public final class ClojureLowering {
 	public static LispVal falseBindingForm() {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("SETQ"), new LispSymbol(FALSE_VARIABLE),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("QUOTE"), new LispSymbol(FALSE_VALUE_NAME)));
+	}
+
+	/**
+	 * The definitions of the stream and agent specials' binding-depth counters, for the
+	 * macro-time evaluator: a macro body binding {@code *out*} (a {@code with-out-str})
+	 * rebinds one there too.
+	 * @return the forms
+	 */
+	public static List<LispVal> streamDepthForms() {
+		return ClojureVarLowering.streamDepthRuntime();
 	}
 
 	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,

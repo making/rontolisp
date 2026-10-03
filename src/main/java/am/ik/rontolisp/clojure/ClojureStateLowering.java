@@ -597,7 +597,7 @@ final class ClojureStateLowering {
 
 	/**
 	 * A {@code send} over already-lowered forms: the application with {@code *agent*}
-	 * bound to the cell, answering the cell.
+	 * bound to the cell (its binding-depth counter one deeper), answering the cell.
 	 */
 	static LispVal sendBuild(ClojureLowering ctx, LispVal cell, LispVal fun, LispVal argList, String op) {
 		return withAtom(ctx, cell, op, bound -> {
@@ -608,7 +608,8 @@ final class ClojureStateLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fun, spread)))),
 					ClojureLowerUtil.list(new LispSymbol("C%STM-CHECK"), bound, next));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(new LispSymbol("C%AGENT"), bound))),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(new LispSymbol("C%AGENT"), bound),
+							ClojureVarLowering.streamDepthPair(ctx, "*agent*"))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), update, bound));
 		});
 	}
@@ -665,9 +666,10 @@ final class ClojureStateLowering {
 	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
 	 * like {@code let}; the body reads each bound var through the var itself. Every bound
 	 * var's binding-depth counter rebinds one deeper beside it, so {@code set!} tests at
-	 * run time whether the var is thread-bound. The body lowers behind the {@code try}
-	 * barrier (the oracle wraps it in a {@code try/finally}), while the inits stay
-	 * outside it.
+	 * run time whether the var is thread-bound (a stream or agent special's counter is
+	 * the one {@code thread-bound?} reads through its core var). The body lowers behind
+	 * the {@code try} barrier (the oracle wraps it in a {@code try/finally}), while the
+	 * inits stay outside it.
 	 */
 	static LispVal bindingOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -704,6 +706,9 @@ final class ClojureStateLowering {
 				LispSymbol depth = ClojureLowering.boundDepthSym(key);
 				pairs.add(ClojureLowerUtil.list(depth,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))));
+			}
+			else {
+				pairs.add(ClojureVarLowering.streamDepthPair(ctx, name));
 			}
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
@@ -761,7 +766,8 @@ final class ClojureStateLowering {
 	 * {@code (with-out-str body...)}: the body with {@code *standard-output*} bound to a
 	 * fresh string stream, answering what it printed. The stream is built with
 	 * {@code make-string-output-stream} (never a literal {@code with-output-to-string},
-	 * which would flip a WASM module into EH mode), like {@code str}.
+	 * which would flip a WASM module into EH mode), like {@code str}. It binds
+	 * {@code *out*}, so its binding-depth counter goes one deeper too.
 	 */
 	static LispVal withOutStrOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "with-out-str needs a body");
@@ -773,7 +779,8 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(List.of(
 						ClojureLowerUtil.list(stream,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"))),
-						ClojureLowerUtil.list(new LispSymbol("*STANDARD-OUTPUT*"), stream))),
+						ClojureLowerUtil.list(new LispSymbol("*STANDARD-OUTPUT*"), stream),
+						ClojureVarLowering.streamDepthPair(ctx, "*out*"))),
 				captured);
 	}
 

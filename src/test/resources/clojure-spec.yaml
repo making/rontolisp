@@ -5563,6 +5563,33 @@ cases:
       false :refused
       false
       true 2
+  - name: core-vars-read-their-core-value-and-the-stream-binding-depth
+    # Oracle-identical (clj 1.12.6): #'name of a clojure.core name is the core var, one per
+    # name, printing #'clojure.core/name; deref and a call read its core value. thread-bound?
+    # of *out* / *in* / *agent* is false at the root (clojure.main binds none of them) and
+    # true under a binding, with-out-str and an agent action. Not compared: the oracle's
+    # core var metadata also carries :arglists, :doc and the position, and deref of a macro's
+    # var answers its expander where it signals here.
+    source: |
+      (prn (var? #'inc) #'inc #'clojure.core/str (str #'map) (= #'inc (var inc)) (= #'inc #'dec))
+      (prn (#'inc 1) (@#'inc 2) (#'map inc [1 2]) (apply #'+ [1 2]) (map #'dec [1 2]))
+      (prn (:name (meta #'inc)) (:macro (meta #'when)) (:macro (meta #'inc)) (bound? #'inc #'when #'*out*))
+      (prn (thread-bound? #'inc) (thread-bound? #'*out*) (thread-bound? #'*in*) (thread-bound? #'*agent*))
+      (prn (with-out-str (print (thread-bound? #'*out*))) (binding [*out* *out*] (thread-bound? #'*out*)))
+      (prn (binding [*in* *in*] [(thread-bound? #'*in*) (thread-bound? #'*in* #'*out*)]))
+      (def cv-agent (agent 0))
+      (send cv-agent (fn [x] (prn (thread-bound? #'*agent*)) x))
+      (await cv-agent)
+      (prn (identical? *out* @#'*out*) (let [inc 5] (#'inc inc)) (thread-bound? #'*out*))
+    expected: |
+      true #'clojure.core/inc #'clojure.core/str "#'clojure.core/map" true false
+      2 3 (2 3) 3 (0 1)
+      inc true nil true
+      false false false false
+      "true" true
+      [true false]
+      true
+      true 6 false
   - name: unbound-vars-answer-the-unbound-root
     # Oracle-identical (clj 1.12.6): a declared-never-defined name and a value-less def are
     # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v"),

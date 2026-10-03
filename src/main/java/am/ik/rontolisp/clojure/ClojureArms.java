@@ -27,7 +27,9 @@ import am.ik.rontolisp.LispVal;
  * argument, and an {@link Family#aliases} helper to the plain one it stands for. What is
  * left is exactly the form the verb lowered to before the kind existed, so such a program
  * compiles to the same bytes, and the kind's runtime is pruned with nothing left to reach
- * it.
+ * it. A binding-depth counter ({@link Family#depths}) is the fourth shape: the
+ * {@code let} pair each binding site adds to rebind it, and the program's definition of
+ * it, go from a program that never reads it.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -60,14 +62,24 @@ public final class ClojureArms {
 						"RONTOLISP::%CLOJURE-IS-VECTOR"),
 				Set.of("RONTOLISP::%CLOJURE-SORTED-MAKE", "RONTOLISP::%CLOJURE-SORTED-MAP-V",
 						"RONTOLISP::%CLOJURE-SORTED-MAP-BY-V", "RONTOLISP::%CLOJURE-SORTED-SET-V",
-						"RONTOLISP::%CLOJURE-SORTED-SET-BY-V")),
+						"RONTOLISP::%CLOJURE-SORTED-SET-BY-V"),
+				Set.of()),
 
 		/**
 		 * The unbound root of a declared-never-defined name or a value-less {@code def}:
 		 * only the store a file starts with (or a session's declare) makes one.
 		 */
 		UNBOUND("unbound-root", Set.of("RONTOLISP::%CLOJURE-UNBOUND-P"), Set.of(), Map.of(),
-				Set.of("RONTOLISP::%CLOJURE-UNBOUND"));
+				Set.of("RONTOLISP::%CLOJURE-UNBOUND"), Set.of()),
+
+		/**
+		 * The binding depth of the stream and agent specials ({@code *out*},
+		 * {@code *in*}, {@code *agent*}), which {@code thread-bound?} reads through a var
+		 * site of one: every binding of the special rebinds its counter one deeper, and
+		 * only a var site reads it.
+		 */
+		STREAM_DEPTH("stream-binding-depth", Set.of(), Set.of(), Map.of(), Set.of(), Set
+			.of("RONTOLISP::%CLOJURE-OUT-DEPTH", "RONTOLISP::%CLOJURE-IN-DEPTH", "RONTOLISP::%CLOJURE-AGENT-DEPTH"));
 
 		private final String label;
 
@@ -83,12 +95,22 @@ public final class ClojureArms {
 		/** What makes a value of the kind. */
 		final Set<String> producers;
 
-		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers) {
+		/**
+		 * The binding-depth counters: a {@code let}/{@code let*} pair rebinding one a
+		 * level deeper ({@code (counter (+ counter 1))}) and the program's top-level
+		 * {@code (defvar counter 0)} are arms, and any other mention of the counter reads
+		 * it, which is what keeps them.
+		 */
+		final Set<String> depths;
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
 			this.aliases = aliases;
 			this.producers = producers;
+			this.depths = depths;
 		}
 
 	}
@@ -132,14 +154,31 @@ public final class ClojureArms {
 	}
 
 	private static void scanInto(LispVal form, Family family, boolean[] found) {
+		if (isDepthDefinition(form, family)) {
+			found[1] = true;
+			return;
+		}
 		LispVal rest = form;
+		if (!family.depths.isEmpty() && isLet(form) && ((LispCons) form).cdr() instanceof LispCons bindings) {
+			LispVal pairs = bindings.car();
+			while (pairs instanceof LispCons cell) {
+				if (isDepthPair(cell.car(), family)) {
+					found[1] = true;
+				}
+				else {
+					scanInto(cell.car(), family, found);
+				}
+				pairs = cell.cdr();
+			}
+			rest = bindings.cdr();
+		}
 		while (rest instanceof LispCons cons) {
 			scanInto(cons.car(), family, found);
 			rest = cons.cdr();
 		}
 		if (rest instanceof LispSymbol symbol) {
 			String name = symbol.name();
-			if (family.producers.contains(name)) {
+			if (family.producers.contains(name) || family.depths.contains(name)) {
 				found[0] = true;
 			}
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)) {
@@ -162,6 +201,10 @@ public final class ClojureArms {
 		List<LispVal> out = new ArrayList<>(forms.size());
 		boolean changed = false;
 		for (LispVal form : forms) {
+			if (isDepthDefinition(form, family)) {
+				changed = true;
+				continue;
+			}
 			LispVal walked = stripper.walkCode(form);
 			changed |= walked != form;
 			out.add(walked);
@@ -212,6 +255,8 @@ public final class ClojureArms {
 							LispCons.rebuilt(fn, new LispSymbol(this.family.aliases.get(target.name())), fn.cdr()));
 				}
 				switch (name) {
+					case "LET", "LET*":
+						return walkLet(cons);
 					case "OR":
 						return walkOr(cons);
 					case "COND":
@@ -242,6 +287,28 @@ public final class ClojureArms {
 				tail = LispCons.rebuilt(cell, walkCode(cell.car()), tail);
 			}
 			return tail;
+		}
+
+		/**
+		 * {@code (let (pairs...) body...)}: a pair rebinding one of the family's
+		 * binding-depth counters goes; the rest is walked as code.
+		 */
+		private LispVal walkLet(LispCons form) {
+			LispCons walked = form;
+			if (!this.family.depths.isEmpty() && form.cdr() instanceof LispCons bindings
+					&& bindings.car() instanceof LispCons pairs) {
+				List<LispVal> kept = new ArrayList<>();
+				LispVal run = pairs;
+				while (run instanceof LispCons cell) {
+					if (!isDepthPair(cell.car(), this.family)) {
+						kept.add(cell.car());
+					}
+					run = cell.cdr();
+				}
+				walked = LispCons.rebuilt(form, form.car(),
+						LispCons.rebuilt(bindings, LispCons.rebuiltList(pairs, kept), bindings.cdr()));
+			}
+			return LispCons.rebuilt(walked, walkCode(walked.car()), walkElements(walked.cdr()));
 		}
 
 		/**
@@ -323,6 +390,55 @@ public final class ClojureArms {
 			}
 		}
 
+	}
+
+	/**
+	 * Whether a name is one the arms of some family spell (a test, a view, an alias, a
+	 * producer or a binding-depth counter): a program naming one goes through the strip.
+	 * @param symbolName the symbol name, in its canonical spelling
+	 * @return {@code true} for a family's name
+	 */
+	public static boolean isFamilyName(String symbolName) {
+		for (Family family : Family.values()) {
+			if (family.tests.contains(symbolName) || family.views.contains(symbolName)
+					|| family.aliases.containsKey(symbolName) || family.producers.contains(symbolName)
+					|| family.depths.contains(symbolName)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the top-level form is the program's definition of one of the family's
+	 * counters, {@code (defvar counter 0)}: it goes with the pairs.
+	 */
+	private static boolean isDepthDefinition(LispVal form, Family family) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFVAR")
+				&& cons.cdr() instanceof LispCons name && name.car() instanceof LispSymbol counter
+				&& family.depths.contains(counter.name()) && name.cdr() instanceof LispCons init
+				&& init.car() instanceof LispInteger zero && zero.value() == 0 && init.cdr() instanceof LispNil;
+	}
+
+	private static boolean isLet(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& (head.name().equals("LET") || head.name().equals("LET*"));
+	}
+
+	/**
+	 * Whether the binding pair rebinds one of the family's counters a level deeper:
+	 * {@code (counter (+ counter 1))}, the one shape a binding site writes.
+	 */
+	private static boolean isDepthPair(LispVal pair, Family family) {
+		if (!(pair instanceof LispCons cell) || !(cell.car() instanceof LispSymbol counter)
+				|| !family.depths.contains(counter.name()) || !(cell.cdr() instanceof LispCons initCell)
+				|| !(initCell.cdr() instanceof LispNil) || !(initCell.car() instanceof LispCons init)) {
+			return false;
+		}
+		return init.car() instanceof LispSymbol plus && plus.name().equals("+") && init.cdr() instanceof LispCons a
+				&& a.car() instanceof LispSymbol read && read.name().equals(counter.name())
+				&& a.cdr() instanceof LispCons b && b.car() instanceof LispInteger one && one.value() == 1
+				&& b.cdr() instanceof LispNil;
 	}
 
 	private static boolean isPure(LispVal arg) {
