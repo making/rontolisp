@@ -2717,6 +2717,421 @@
   (rontolisp::%clojure-check-arity args 2 2 "update-vals")
   (rontolisp::%clojure-update-vals (car args) (car (cdr args))))
 
+;;;; clojure.set: the relational set library over the set wrapper.
+;;
+;; The oracle's own algorithms (clojure/set.clj), so an answer's kind follows the
+;; same input as there: union grows its largest input, intersection shrinks its
+;; smallest, difference and select shrink the first. A set grows or shrinks in a
+;; fresh copy, nil stays nil, and an input nothing changes is answered itself. A
+;; relation is a set of maps; a member may be a record (read through its entry
+;; table), and merge / rename-keys keep the record where the oracle keeps it.
+;; Each var has a worker the call lowering (ClojureSetLowering) calls after its own
+;; arity check -- the variadic ones over a list of their sets -- and a -v entry the
+;; value lowering names, which checks the count at run time in the oracle's
+;; wording.
+
+(defun rontolisp::%clojure-set-arity (args min max name)
+  "The count of ARGS, or the oracle's arity error for clojure.set/NAME when it
+   falls outside MIN..MAX (a nil MAX has no upper bound)."
+  (let ((n (length args)))
+    (if (or (< n min) (and max (> n max)))
+        (error "Wrong number of args (~D) passed to: clojure.set/~A" n name)
+        n)))
+
+(defun rontolisp::%clojure-set-count (coll)
+  "count as the set algorithms read it: a set, map or record by its entries,
+   nil none, a vector or string by length, a seq by its realized length."
+  (cond ((null coll) 0)
+        ((rontolisp::%clojure-set-p coll) (hash-table-count (car (cdr coll))))
+        ((rontolisp::%clojure-record-p coll)
+         (hash-table-count (car (cdr (cdr (cdr coll))))))
+        ((hash-table-p coll) (hash-table-count coll))
+        ((vectorp coll) (length coll))
+        (t (length (rontolisp::%clojure-seq-all coll)))))
+
+(defun rontolisp::%clojure-set-has (coll x)
+  "contains? as the set algorithms read it: a set by member, a map or record by
+   key (found by =), a vector or string by index; nil holds nothing, anything
+   else signals."
+  (let ((miss (list nil)))
+    (cond ((null coll) nil)
+          ((rontolisp::%clojure-set-p coll)
+           (let ((table (car (cdr coll))))
+             (not
+              (eq (gethash (rontolisp::%clojure-table-key x table) table miss)
+                  miss))))
+          ((rontolisp::%clojure-record-p coll)
+           (rontolisp::%clojure-set-has (car (cdr (cdr (cdr coll)))) x))
+          ((hash-table-p coll)
+           (not
+            (eq (gethash (rontolisp::%clojure-table-key x coll) coll miss)
+                miss)))
+          ((vectorp coll) (and (integerp x) (<= 0 x) (< x (length coll))))
+          (t (error "contains? not supported on this collection")))))
+
+(defun rontolisp::%clojure-set-of (members)
+  "A fresh set of the list MEMBERS."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (x members) (rontolisp::%clojure-set-put table x))
+    (list :C%SET table)))
+
+(defun rontolisp::%clojure-set-copy (s)
+  "A fresh set wrapper holding the members of the set S (already
+   representatives, so stored as they are)."
+  (let ((table (make-hash-table :test 'equal)))
+    (maphash (lambda (k v)
+               (declare (ignore v))
+               (setf (gethash k table) k)) (car (cdr s)))
+    (list :C%SET table)))
+
+(defun rontolisp::%clojure-set-grow (base items)
+  "(reduce conj BASE ITEMS) for the list ITEMS: BASE itself when ITEMS is
+   empty; else a set gains each in a fresh copy, a vector each at its end, nil
+   or a seq each at its front; anything else signals."
+  (cond ((null items) base)
+        ((rontolisp::%clojure-set-p base)
+         (let ((out (rontolisp::%clojure-set-copy base)))
+           (dolist (x items out)
+             (rontolisp::%clojure-set-put (car (cdr out)) x))))
+        ((and (vectorp base) (not (stringp base)))
+         (coerce (append (coerce base 'list) items) 'vector))
+        ((rontolisp::%clojure-sequential-p base)
+         (let ((out (rontolisp::%clojure-seq-all base)))
+           (dolist (x items out) (setq out (cons x out)))))
+        (t (error "clojure.set needs sets"))))
+
+(defun rontolisp::%clojure-set-shrink (base drops)
+  "(reduce disj BASE DROPS) for the list DROPS: BASE itself when DROPS is empty
+   or BASE is nil; else a set loses each in a fresh copy; anything else
+   signals."
+  (cond ((or (null drops) (null base)) base)
+        ((rontolisp::%clojure-set-p base)
+         (let ((out (rontolisp::%clojure-set-copy base)))
+           (dolist (x drops out)
+             (remhash (rontolisp::%clojure-table-key x (car (cdr out)))
+                      (car (cdr out))))))
+        (t (error "disj needs a set"))))
+
+(defun rontolisp::%clojure-set-bubble (sets largest)
+  "The oracle's bubble-max-key over the list SETS by count (LARGEST true) or by
+   its negation: the last extreme set first, then the others without any copy
+   identical to it."
+  (let ((best (car sets))
+        (best-n (rontolisp::%clojure-set-count (car sets)))
+        (rest nil))
+    (dolist (s (cdr sets))
+      (let ((n (rontolisp::%clojure-set-count s)))
+        (if (if largest (>= n best-n) (<= n best-n))
+            (progn
+              (setq best s)
+              (setq best-n n)))))
+    (dolist (s sets) (if (not (eq s best)) (setq rest (cons s rest))))
+    (cons best (reverse rest))))
+
+(defun rontolisp::%clojure-set-union (sets)
+  "clojure.set/union over the list SETS: of none the empty set, of one itself,
+   of two the smaller conjoined onto the larger, of more every other set into
+   the largest."
+  (cond ((null sets) (list :C%SET (make-hash-table :test 'equal)))
+        ((null (cdr sets)) (car sets))
+        ((null (cdr (cdr sets)))
+         (let ((a (car sets)) (b (car (cdr sets))))
+           (if (< (rontolisp::%clojure-set-count a)
+                  (rontolisp::%clojure-set-count b))
+               (rontolisp::%clojure-set-grow b (rontolisp::%clojure-seq-all a))
+               (rontolisp::%clojure-set-grow a
+                                             (rontolisp::%clojure-seq-all b)))))
+        (t (let* ((bubbled (rontolisp::%clojure-set-bubble sets t))
+                  (acc (car bubbled)))
+             (dolist (s (cdr bubbled) acc)
+               (setq acc
+                     (rontolisp::%clojure-set-grow acc
+                      (rontolisp::%clojure-seq-all s))))))))
+
+(defun rontolisp::%clojure-set-union-v (&rest sets)
+  "union as a value."
+  (rontolisp::%clojure-set-union sets))
+
+(defun rontolisp::%clojure-set-intersection-2 (a b)
+  "The members of A that B holds, shrinking the smaller of the two."
+  (if (< (rontolisp::%clojure-set-count b) (rontolisp::%clojure-set-count a))
+      (rontolisp::%clojure-set-intersection-2 b a)
+      (let ((drops nil))
+        (dolist (x (rontolisp::%clojure-seq-all a))
+          (if (not (rontolisp::%clojure-set-has b x))
+              (setq drops (cons x drops))))
+        (rontolisp::%clojure-set-shrink a drops))))
+
+(defun rontolisp::%clojure-set-intersection (sets)
+  "clojure.set/intersection over the non-empty list SETS: of more than two,
+   from the smallest on."
+  (cond ((null (cdr sets)) (car sets))
+        ((null (cdr (cdr sets)))
+         (rontolisp::%clojure-set-intersection-2 (car sets) (car (cdr sets))))
+        (t (let* ((bubbled (rontolisp::%clojure-set-bubble sets nil))
+                  (acc (car bubbled)))
+             (dolist (s (cdr bubbled) acc)
+               (setq acc (rontolisp::%clojure-set-intersection-2 acc s)))))))
+
+(defun rontolisp::%clojure-set-intersection-v (&rest sets)
+  "intersection as a value."
+  (rontolisp::%clojure-set-arity sets 1 nil "intersection")
+  (rontolisp::%clojure-set-intersection sets))
+
+(defun rontolisp::%clojure-set-difference-2 (a b)
+  "A without the members B holds: walking A when it is the smaller, else
+   dropping every member of B."
+  (if (< (rontolisp::%clojure-set-count a) (rontolisp::%clojure-set-count b))
+      (let ((drops nil))
+        (dolist (x (rontolisp::%clojure-seq-all a))
+          (if (rontolisp::%clojure-set-has b x) (setq drops (cons x drops))))
+        (rontolisp::%clojure-set-shrink a drops))
+      (rontolisp::%clojure-set-shrink a (rontolisp::%clojure-seq-all b))))
+
+(defun rontolisp::%clojure-set-difference (sets)
+  "clojure.set/difference over the non-empty list SETS, left to right."
+  (let ((acc (car sets)))
+    (dolist (s (cdr sets) acc)
+      (setq acc (rontolisp::%clojure-set-difference-2 acc s)))))
+
+(defun rontolisp::%clojure-set-difference-v (&rest sets)
+  "difference as a value."
+  (rontolisp::%clojure-set-arity sets 1 nil "difference")
+  (rontolisp::%clojure-set-difference sets))
+
+(defun rontolisp::%clojure-set-select (pred xset)
+  "The members of XSET that PRED passes (a set shrunk, nil itself)."
+  (let ((drops nil))
+    (dolist (x (rontolisp::%clojure-seq-all xset))
+      (if (not (rontolisp::%clojure-filter-test pred x))
+          (setq drops (cons x drops))))
+    (rontolisp::%clojure-set-shrink xset drops)))
+
+(defun rontolisp::%clojure-set-select-v (&rest args)
+  "select as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "select")
+  (rontolisp::%clojure-set-select (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-entries (m name)
+  "The entry table of the map M (a record's own), nil for nil; anything else
+   signals in NAME's words."
+  (cond ((null m) nil)
+        ((rontolisp::%clojure-record-p m) (car (cdr (cdr (cdr m)))))
+        ((hash-table-p m) m)
+        (t (error "~A needs a map" name))))
+
+(defun rontolisp::%clojure-set-keys (m name)
+  "The keys of the map M as a list (none of nil)."
+  (let ((acc nil) (table (rontolisp::%clojure-set-entries m name)))
+    (if table
+        (maphash (lambda (k v)
+                   (declare (ignore v))
+                   (setq acc (cons k acc))) table))
+    acc))
+
+(defun rontolisp::%clojure-set-rewrap (m table)
+  "TABLE in the record M's place when M is a record, else TABLE."
+  (if (rontolisp::%clojure-record-p m)
+      (list :C%RECORD (car (cdr m)) (car (cdr (cdr m))) table
+            (car (cdr (cdr (cdr (cdr m))))))
+      table))
+
+(defun rontolisp::%clojure-set-select-keys (m ks)
+  "(select-keys M KS) for the key list KS: a fresh map of M's entries under
+   those keys, each kept under M's own key."
+  (let ((out (make-hash-table :test 'equal))
+        (miss (list nil))
+        (src (rontolisp::%clojure-set-entries m "select-keys")))
+    (if src
+        (dolist (k ks)
+          (let* ((held (rontolisp::%clojure-table-key k src))
+                 (v (gethash held src miss)))
+            (if (not (eq v miss)) (setf (gethash held out) v)))))
+    out))
+
+(defun rontolisp::%clojure-set-merge (a b)
+  "(merge A B) for two relation members: A's entries plus B's, B winning, in a
+   fresh map, kept in A's record when A is one."
+  (let ((eb (rontolisp::%clojure-set-entries b "merge")))
+    (rontolisp::%clojure-set-rewrap a
+                                    (rontolisp::%clojure-plist-table
+                                     (rontolisp::%clojure-set-entries a "merge")
+                                     (if eb
+                                         (rontolisp:hash-table-plist eb)
+                                         nil)))))
+
+(defun rontolisp::%clojure-set-project (xrel ks)
+  "The set of every member of XREL narrowed to the keys KS."
+  (let ((keys (rontolisp::%clojure-seq-all ks)))
+    (rontolisp::%clojure-set-of
+     (mapcar (lambda (x) (rontolisp::%clojure-set-select-keys x keys))
+             (rontolisp::%clojure-seq-all xrel)))))
+
+(defun rontolisp::%clojure-set-project-v (&rest args)
+  "project as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "project")
+  (rontolisp::%clojure-set-project (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-rename-keys (m kmap)
+  "M with each key of KMAP present in it renamed to KMAP's value for it, every
+   KMAP key dropped first; nil is nil. A record stays one unless a declared
+   field is dropped, like the oracle's dissoc."
+  (if (null m)
+      nil
+      (let* ((src (rontolisp::%clojure-set-entries m "rename-keys"))
+             (pairs (rontolisp::%clojure-kv-pairs kmap "rename-keys"))
+             (out
+              (rontolisp:plist-hash-table (rontolisp:hash-table-plist src)
+                                          :test 'equal))
+             (miss (list nil))
+             (record (rontolisp::%clojure-record-p m)))
+        (dolist (p pairs)
+          (remhash (rontolisp::%clojure-table-key (car p) out) out))
+        (if record
+            (dolist (f (car (cdr (cdr m))))
+              (if (eq (gethash f out miss) miss) (setq record nil))))
+        (dolist (p pairs)
+          (let ((v
+                 (gethash (rontolisp::%clojure-table-key (car p) src) src
+                          miss)))
+            (if (not (eq v miss))
+                (setf (gethash (rontolisp::%clojure-store-key (cdr p) out) out)
+                      v))))
+        (if record (rontolisp::%clojure-set-rewrap m out) out))))
+
+(defun rontolisp::%clojure-set-rename-keys-v (&rest args)
+  "rename-keys as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "rename-keys")
+  (rontolisp::%clojure-set-rename-keys (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-rename (xrel kmap)
+  "The set of every member of XREL with its keys renamed by KMAP."
+  (rontolisp::%clojure-set-of
+   (mapcar (lambda (x) (rontolisp::%clojure-set-rename-keys x kmap))
+           (rontolisp::%clojure-seq-all xrel))))
+
+(defun rontolisp::%clojure-set-rename-v (&rest args)
+  "rename as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "rename")
+  (rontolisp::%clojure-set-rename (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-index (xrel ks)
+  "A map from each distinct narrowing of XREL's members to the keys KS to the
+   set of the members narrowing to it."
+  (let ((keys (rontolisp::%clojure-seq-all ks))
+        (out (make-hash-table :test 'equal))
+        (miss (list nil)))
+    (dolist (x (rontolisp::%clojure-seq-all xrel) out)
+      (let* ((k
+              (rontolisp::%clojure-store-key
+               (rontolisp::%clojure-set-select-keys x keys) out))
+             (s (gethash k out miss)))
+        (if (eq s miss)
+            (progn
+              (setq s (list :C%SET (make-hash-table :test 'equal)))
+              (setf (gethash k out) s)))
+        (rontolisp::%clojure-set-put (car (cdr s)) x)))))
+
+(defun rontolisp::%clojure-set-index-v (&rest args)
+  "index as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "index")
+  (rontolisp::%clojure-set-index (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-map-invert (m)
+  "A fresh map from each value of M to its key."
+  (let ((out (make-hash-table :test 'equal)))
+    (dolist (kv (rontolisp::%clojure-kv-pairs m "map-invert") out)
+      (setf (gethash (rontolisp::%clojure-store-key (cdr kv) out) out)
+            (car kv)))))
+
+(defun rontolisp::%clojure-set-map-invert-v (&rest args)
+  "map-invert as a value."
+  (rontolisp::%clojure-set-arity args 1 1 "map-invert")
+  (rontolisp::%clojure-set-map-invert (car args)))
+
+(defun rontolisp::%clojure-set-join-index (r s ks rekey)
+  "The join walk: every member x of S merged onto each member of R that the
+   index of R by KS files under x's narrowing to (REKEY x)'s keys."
+  (let ((idx (rontolisp::%clojure-set-index r ks))
+        (out (make-hash-table :test 'equal))
+        (miss (list nil)))
+    (dolist (x (rontolisp::%clojure-seq-all s))
+      (let* ((k (funcall rekey x))
+             (found (gethash (rontolisp::%clojure-table-key k idx) idx miss)))
+        (if (not (eq found miss))
+            (dolist (m (rontolisp::%clojure-seq-all found))
+              (rontolisp::%clojure-set-put out
+               (rontolisp::%clojure-set-merge m x))))))
+    (list :C%SET out)))
+
+(defun rontolisp::%clojure-set-join (xrel yrel)
+  "The natural join of two relations on the keys their first members share,
+   indexing the smaller; the empty set when either is empty."
+  (if (and (rontolisp::%clojure-seq xrel) (rontolisp::%clojure-seq yrel))
+      (let* ((yfirst
+              (rontolisp::%clojure-set-entries
+               (car (rontolisp::%clojure-seq yrel)) "join"))
+             (ks nil)
+             (small
+              (<= (rontolisp::%clojure-set-count xrel)
+                  (rontolisp::%clojure-set-count yrel))))
+        (dolist (k
+                 (rontolisp::%clojure-set-keys
+                  (car (rontolisp::%clojure-seq xrel)) "join"))
+          (if (rontolisp::%clojure-set-has yfirst k) (setq ks (cons k ks))))
+        (rontolisp::%clojure-set-join-index (if small xrel yrel)
+         (if small yrel xrel) ks
+         (lambda (x) (rontolisp::%clojure-set-select-keys x ks))))
+      (list :C%SET (make-hash-table :test 'equal))))
+
+(defun rontolisp::%clojure-set-join-km (xrel yrel km)
+  "The join of two relations where KM maps XREL's keys to YREL's, indexing the
+   smaller."
+  (let* ((small
+          (<= (rontolisp::%clojure-set-count xrel)
+              (rontolisp::%clojure-set-count yrel)))
+         (k (if small (rontolisp::%clojure-set-map-invert km) km))
+         (pairs (rontolisp::%clojure-kv-pairs k "join"))
+         (from (mapcar (lambda (p) (car p)) pairs)))
+    (rontolisp::%clojure-set-join-index (if small xrel yrel)
+                                        (if small yrel xrel)
+                                        (mapcar (lambda (p) (cdr p)) pairs)
+                                        (lambda (x)
+                                          (rontolisp::%clojure-set-rename-keys
+                                           (rontolisp::%clojure-set-select-keys
+                                            x from) k)))))
+
+(defun rontolisp::%clojure-set-join-v (&rest args)
+  "join as a value: two relations, or two and a key map."
+  (if (= (rontolisp::%clojure-set-arity args 2 3 "join") 2)
+      (rontolisp::%clojure-set-join (car args) (car (cdr args)))
+      (rontolisp::%clojure-set-join-km (car args) (car (cdr args))
+                                       (car (cdr (cdr args))))))
+
+(defun rontolisp::%clojure-set-subset-p (a b)
+  "Whether every member of A is in B, the false object otherwise."
+  (let ((ok
+         (<= (rontolisp::%clojure-set-count a)
+             (rontolisp::%clojure-set-count b))))
+    (if ok
+        (dolist (x (rontolisp::%clojure-seq-all a))
+          (if (not (rontolisp::%clojure-set-has b x)) (setq ok nil))))
+    (if ok t rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-set-subset-p-v (&rest args)
+  "subset? as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "subset?")
+  (rontolisp::%clojure-set-subset-p (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-set-superset-p (a b)
+  "Whether every member of B is in A, the false object otherwise."
+  (rontolisp::%clojure-set-subset-p b a))
+
+(defun rontolisp::%clojure-set-superset-p-v (&rest args)
+  "superset? as a value."
+  (rontolisp::%clojure-set-arity args 2 2 "superset?")
+  (rontolisp::%clojure-set-subset-p (car (cdr args)) (car args)))
+
 ;;;; Metadata: with-meta and meta over an identity side table.
 ;;
 ;; A value's metadata lives in rontolisp::%clojure-meta-table, an eq table from the

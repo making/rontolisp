@@ -1709,6 +1709,30 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void clojureSetWiresLikeClojureString() {
+		assertThat(lowered("(ns t (:require [clojure.set :as s])) (s/union #{1} #{2})"))
+			.contains("RONTOLISP::%CLOJURE-SET-UNION (LIST");
+		assertThat(lowered("(ns t (:require [clojure.set :refer [subset?]])) (subset? #{1} #{2})"))
+			.contains("RONTOLISP::%CLOJURE-SET-SUBSET-P");
+		assertThat(lowered("(ns t (:use clojure.set)) (join #{} #{} {:a :b})"))
+			.contains("RONTOLISP::%CLOJURE-SET-JOIN-KM");
+		assertThat(lowered("(ns t (:require [clojure.set])) (map clojure.set/select [odd?] [#{1}])"))
+			.contains("RONTOLISP::%CLOJURE-SET-SELECT-V");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.set :as s])) (s/select odd?)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.set/select");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.set :as s])) (s/intersection)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.set/intersection");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.set :as s])) (s/join #{} #{} {} {})", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (4) passed to: clojure.set/join");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.set :as s])) (s/nope #{})", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.set/nope");
+	}
+
+	@Test
 	void regexLiteralsLowerToCompiledPatterns() {
 		assertThat(Clojure.read("#\"a+\"", null).stream().map(LispVal::print).toList().toString())
 			.contains("RONTOLISP::%CLOJURE-RE-COMPILE");

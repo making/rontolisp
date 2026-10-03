@@ -4396,3 +4396,50 @@ cases:
       1
       :vy :vy
       true nil
+  - name: clojure-set-relational-algebra
+    # clojure.set over the set wrapper, its every var as a call (alias, refer,
+    # fully-qualified) and as a value. A result's kind follows the oracle's
+    # choice of input (union grows the largest, so a vector or list there
+    # answers one; nil stays nil), relation members may be records (join's
+    # merge and rename-keys keep the record where the oracle does), and
+    # structural members find each other by =. The corpus witness is
+    # shcloj4's examples.test.sequences test-sets/test-joins. Every line matches
+    # the oracle (clj 1.12.6.1673, 2026-10-03).
+    source: |
+      (require '[clojure.set :as cset :refer [union select]])
+      (def cset-langs #{"java" "c" "d" "clojure"})
+      (def cset-bevs #{"java" "chai" "pop"})
+      (prn (union) (union nil) (union nil nil) (union #{} nil) (union nil #{}) (union nil nil #{}))
+      (prn (= (union cset-langs cset-bevs) #{"java" "c" "d" "clojure" "chai" "pop"}) (cset/difference cset-langs cset-bevs #{"c" "d"}) (cset/intersection cset-langs cset-bevs) (sort (select #(= 1 (count %)) cset-langs)))
+      (prn (union #{1} [2 3]) (union #{1} '(2 3)) (cset/intersection #{1 2} [1]) (cset/intersection #{1 2 3} #{2 3} #{3 4}) (cset/difference nil #{1}) (clojure.set/union #{1} #{1}))
+      (prn (select odd? nil) (select :a #{{:a 1} {:b 2}}) (cset/project #{{:a 1 :b 2} {:a 1 :b 3}} [:a]) (cset/rename #{{:a 1}} {:a :z}) (sort (select even? (set (range 5)))))
+      (prn (cset/rename-keys {:a 1 :b 2} {:a :b}) (cset/rename-keys nil {:a :b}) (cset/map-invert {:a 1}) (cset/map-invert nil) (cset/map-invert [:x]))
+      (prn (= (cset/index #{{:a 1 :b 2} {:a 1 :b 3} {:a 2 :b 2}} [:a]) {{:a 1} #{{:a 1 :b 2} {:a 1 :b 3}} {:a 2} #{{:a 2 :b 2}}}) (get (cset/index #{{:a 1 :b 2} {:a 2 :b 2}} [:a]) {:a 2}))
+      (def cset-composers #{{:composer "J. S. Bach" :country "Germany"} {:composer "W. A. Mozart" :country "Austria"} {:composer "Giuseppe Verdi" :country "Italy"}})
+      (def cset-nations #{{:nation "Germany" :language "German"} {:nation "Austria" :language "German"} {:nation "Italy" :language "Italian"}})
+      (prn (= (cset/join cset-composers cset-nations {:country :nation})
+              #{{:language "German", :nation "Austria", :composer "W. A. Mozart", :country "Austria"}
+                {:language "German", :nation "Germany", :composer "J. S. Bach", :country "Germany"}
+                {:language "Italian", :nation "Italy", :composer "Giuseppe Verdi", :country "Italy"}})
+           (= (cset/join #{{:a 1 :b 2}} #{{:a 1 :c 3} {:a 2 :c 4}}) #{{:a 1 :b 2 :c 3}})
+           (count (cset/join #{{:a 1} {:a 2}} #{{:c 3}}))
+           (cset/join #{} #{{:a 1}}) (cset/join nil nil))
+      (defrecord CsetR [a b])
+      (prn (instance? CsetR (first (cset/join #{(->CsetR 1 2)} #{{:a 1}}))) (instance? CsetR (cset/rename-keys (->CsetR 1 2) {:a :z})) (instance? CsetR (cset/rename-keys (assoc (->CsetR 1 2) :c 3) {:c :z})))
+      (prn (cset/subset? #{1} #{1 2}) (cset/subset? #{3} #{1 2}) (cset/superset? #{1 2} #{1}) (cset/subset? nil #{1}) (cset/subset? #{1} [1 0]))
+      (prn (map count (map union [#{1}] [#{2}])) (count (apply union [#{1} #{2} #{3}])) (reduce cset/intersection [#{1 2} #{2}]) (count (filter (partial cset/subset? #{1}) [#{1 2} #{3}])))
+      (prn (union #{[1 2]} #{'(1 2)}) (cset/difference #{[1 2] [3]} #{'(1 2)}) (cset/intersection #{{:a [1]}} #{{:a '(1)}}))
+      (prn (try (apply select [odd?]) (catch Exception e (ex-message e))))
+    expected: |
+      #{} nil nil #{} nil #{}
+      true #{"clojure"} #{"java"} ("c" "d")
+      [2 3 1] (1 2 3) [1] #{3} nil #{1}
+      nil #{{:a 1}} #{{:a 1}} #{{:z 1}} (0 2 4)
+      {:b 1} nil {1 :a} {} {:x 0}
+      true #{{:a 2, :b 2}}
+      true true 2 #{} #{}
+      true false true
+      true false true true true
+      (2) 3 #{2} 1
+      #{[1 2]} #{[3]} #{{:a [1]}}
+      "Wrong number of args (1) passed to: clojure.set/select"

@@ -263,6 +263,8 @@ sections:
             title: "Names and keywords"
           - file: clojure/reference/string.md
             title: "(clojure.string)"
+          - file: clojure/reference/clojure-set.md
+            title: "(clojure.set)"
           - file: clojure/reference/regex.md
             title: "Regular expressions"
           - file: clojure/reference/higher-order.md

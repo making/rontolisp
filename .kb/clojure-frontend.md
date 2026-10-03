@@ -105,6 +105,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
+| `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `subs` | `subseq` | |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -254,8 +255,8 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   name. Names are referred only by `use` or `:refer` (`:only`/`:exclude` narrow); a
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
-  go through one spec parser. `clojure.string`, `clojure.java.io` (`reader` only) and
-  `clojure.test` resolve; any other `clojure.*` is `unknown namespace: x`.
+  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
+  only) and `clojure.test` resolve; any other `clojure.*` is `unknown namespace: x`.
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project
@@ -575,7 +576,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
-- `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`), `ClojureReaderTest`,
+- `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
+  `clojureSetWiresLikeClojureString`), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),

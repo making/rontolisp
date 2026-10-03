@@ -74,6 +74,35 @@ class ClojureProjectNamespacesTest {
 					"""), Map.entry("src/examples/preface.clj", """
 					(ns examples.preface)
 					(println "hello")
+					"""), Map.entry("src/examples/sequences.clj", """
+					(ns examples.sequences
+					    (:require [clojure.set :refer :all]))
+					(def composers
+					  #{{:composer "J. S. Bach" :country "Germany"}
+					    {:composer "W. A. Mozart" :country "Austria"}
+					    {:composer "Giuseppe Verdi" :country "Italy"}})
+					(def nations
+					  #{{:nation "Germany" :language "German"}
+					    {:nation "Austria" :language "German"}
+					    {:nation "Italy" :language "Italian"}})
+					(def languages #{"java" "c" "d" "clojure"})
+					(def beverages #{"java" "chai" "pop"})
+					"""), Map.entry("test/examples/test/sequences.clj", """
+					(ns examples.test.sequences
+					  (:import java.io.File)
+					  (:use clojure.test clojure.set examples.sequences))
+					(deftest test-sets
+					  (are [x y] (= x y)
+					   (union languages beverages) #{"java" "c" "d" "clojure" "chai" "pop"}
+					   (difference languages beverages) #{"c" "d" "clojure"}
+					   (intersection languages beverages) #{"java"}
+					   (select #(= 1 (count %)) languages) #{"c" "d"}))
+					(deftest test-joins
+					  (are [x y] (= x y)
+					   (join composers nations {:country :nation})
+					   #{{:language "German", :nation "Austria", :composer "W. A. Mozart", :country "Austria"}
+					     {:language "German", :nation "Germany", :composer "J. S. Bach", :country "Germany"}
+					     {:language "Italian", :nation "Italy", :composer "Giuseppe Verdi", :country "Italy"}}))
 					"""), Map.entry("test/examples/test/preface.clj", """
 					(ns examples.test.preface
 					  (:use clojure.test))
@@ -238,6 +267,44 @@ class ClojureProjectNamespacesTest {
 		Files.writeString(entry, PREFACE_DRIVER);
 		assertThat(runOnWasm(entry, false)).isEqualTo(PREFACE_OUT);
 		assertThat(runOnWasm(entry, true)).isEqualTo(PREFACE_OUT);
+	}
+
+	/**
+	 * The corpus {@code examples.test.sequences} {@code test-sets} / {@code test-joins}
+	 * shape: {@code clojure.set} referred in full by {@code :refer :all} and by
+	 * {@code :use}, over the source namespace's relations (the corpus file's
+	 * {@code clojure.xml}, {@code file-seq} and {@code examples.utils} legs left out; the
+	 * {@code .length} interop spelled {@code count}, so no leg compiles a host call).
+	 */
+	private static final String SETS_DRIVER = """
+			(ns corpus.sets-driver (:use clojure.test))
+			(require 'examples.test.sequences)
+			(run-tests 'examples.test.sequences)
+			""";
+
+	private static final String SETS_OUT = """
+
+			Testing examples.test.sequences
+
+			Ran 2 tests containing 5 assertions.
+			0 failures, 0 errors.
+			""";
+
+	@Test
+	void theCorpusSetTestsRunOnTheInterpreterAndTheJvm() throws Exception {
+		Path entry = project.resolve("test").resolve("sets_driver.clj");
+		Files.writeString(entry, SETS_DRIVER);
+		assertThat(interpret(entry)).isEqualTo(SETS_OUT);
+		assertThat(runOnJvm(entry, "CorpusSets")).isEqualTo(SETS_OUT);
+	}
+
+	@Test
+	void theCorpusSetTestsRunOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = project.resolve("test").resolve("sets_driver_wasm.clj");
+		Files.writeString(entry, SETS_DRIVER);
+		assertThat(runOnWasm(entry, false)).isEqualTo(SETS_OUT);
+		assertThat(runOnWasm(entry, true)).isEqualTo(SETS_OUT);
 	}
 
 	/**

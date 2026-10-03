@@ -26,6 +26,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   per distinct value and kind. A repeated set-literal element is refused by spelling.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` is `true` where the oracle answers `false`.
+- `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
+  the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
