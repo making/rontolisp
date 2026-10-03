@@ -407,12 +407,12 @@ final class ClojureFnLowering {
 		if (n == 0) {
 			return identityValue(ctx);
 		}
-		List<LispVal> fns = new ArrayList<>();
+		List<ClojureBindingLowering.FnArg> fns = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			fns.add(ClojureBindingLowering.fnValue(ctx, items.get(i)));
+			fns.add(ClojureBindingLowering.fnArg(ctx, items.get(i)));
 		}
 		if (n == 1) {
-			return fns.get(0);
+			return fns.get(0).fun();
 		}
 		return compForm(ctx, fns);
 	}
@@ -421,18 +421,18 @@ final class ClojureFnLowering {
 	 * The composition over already-lowered functions: the rightmost spreads the
 	 * arguments, each outer wraps one result.
 	 */
-	static LispVal compForm(ClojureLowering ctx, List<LispVal> fns) {
+	static LispVal compForm(ClojureLowering ctx, List<ClojureBindingLowering.FnArg> fns) {
 		LispSymbol args = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
 		List<LispVal> names = new ArrayList<>();
-		for (LispVal fn : fns) {
+		for (ClojureBindingLowering.FnArg fn : fns) {
 			LispSymbol one = ctx.freshTemp();
-			bindings.add(ClojureLowerUtil.list(one, fn));
+			bindings.add(ClojureLowerUtil.list(one, fn.fun()));
 			names.add(one);
 		}
-		LispVal inner = ctx.applyFun(fns.get(fns.size() - 1), names.get(names.size() - 1), args);
+		LispVal inner = ctx.applyFun(fns.get(fns.size() - 1).real(), names.get(names.size() - 1), args);
 		for (int i = names.size() - 2; i >= 0; i--) {
-			inner = ctx.callFun(fns.get(i), names.get(i), List.of(inner));
+			inner = ctx.callFun(fns.get(i).real(), names.get(i), List.of(inner));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), inner));
@@ -485,11 +485,11 @@ final class ClojureFnLowering {
 	 * {@code partial}: the function over the fixed arguments plus whatever arrives. The
 	 * fixed arguments run once, behind temporaries.
 	 */
-	static LispVal partialForm(ClojureLowering ctx, LispVal fun, List<LispVal> fixed) {
+	static LispVal partialForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fun, List<LispVal> fixed) {
 		LispSymbol fn = ctx.freshTemp();
 		LispSymbol more = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(ClojureLowerUtil.list(fn, fun));
+		bindings.add(ClojureLowerUtil.list(fn, fun.fun()));
 		List<LispVal> names = new ArrayList<>();
 		for (LispVal arg : fixed) {
 			LispSymbol one = ctx.freshTemp();
@@ -500,7 +500,8 @@ final class ClojureFnLowering {
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), names), more);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, more), ctx.applyFun(fun, fn, tail)));
+						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, more),
+						ctx.applyFun(fun.real(), fn, tail)));
 	}
 
 	/** {@code partial} as a value: the function, then the fixed arguments. */
@@ -519,19 +520,19 @@ final class ClojureFnLowering {
 	 * {@code complement}: the predicate negated, answering {@code T}-or-false, like every
 	 * boolean-answering builtin.
 	 */
-	static LispVal complementForm(ClojureLowering ctx, LispVal fun) {
+	static LispVal complementForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fun) {
 		LispSymbol fn = ctx.freshTemp();
 		LispSymbol args = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
 		LispVal neg = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, ctx.applyFun(fun, fn, args)))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, ctx.applyFun(fun.real(), fn, args)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
 						ClojureLowering.TRUE_CONST, ctx.falseVariable));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fn, fun))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fn, fun.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), neg));
 	}
@@ -540,7 +541,7 @@ final class ClojureFnLowering {
 	static LispVal complementValue(ClojureLowering ctx) {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("complement-fn"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(fun),
-				complementForm(ctx, fun));
+				complementForm(ctx, ClojureBindingLowering.FnArg.of(fun)));
 	}
 
 	/**
@@ -578,7 +579,7 @@ final class ClojureFnLowering {
 	 * without the tag -- and the argument list keys by {@code =}
 	 * ({@code rontolisp::%clojure-memo-key}).
 	 */
-	static LispVal memoizeForm(ClojureLowering ctx, LispVal fun) {
+	static LispVal memoizeForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fun) {
 		LispSymbol table = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
 		LispSymbol fn = ctx.freshTemp();
@@ -598,8 +599,8 @@ final class ClojureFnLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), hit, miss),
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-											ClojureLowerUtil
-												.list(List.of(ClojureLowerUtil.list(val, ctx.applyFun(fun, fn, args)))),
+											ClojureLowerUtil.list(List
+												.of(ClojureLowerUtil.list(val, ctx.applyFun(fun.real(), fn, args)))),
 											ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 													ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
 													val),
@@ -609,14 +610,15 @@ final class ClojureFnLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-						ClojureLowerUtil.list(fn, fun))),
+						ClojureLowerUtil.list(fn, fun.fun()))),
 				inner);
 	}
 
 	/** {@code memoize} as a value: a one-argument lambda over the same cache. */
 	static LispVal memoizeValue(ClojureLowering ctx) {
 		LispSymbol fun = new LispSymbol(ClojureLowering.mangle("memoize-fn"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(fun), memoizeForm(ctx, fun));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(fun),
+				memoizeForm(ctx, ClojureBindingLowering.FnArg.of(fun)));
 	}
 
 	/**
@@ -624,7 +626,7 @@ final class ClojureFnLowering {
 	 * arguments until a non-function answers. A labels self call, so mutual thunk chains
 	 * stay constant-stack on the interpreter.
 	 */
-	static LispVal trampolineForm(ClojureLowering ctx, LispVal fun, LispVal argList) {
+	static LispVal trampolineForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fun, LispVal argList) {
 		String name = ClojureLowering.mangle("trampoline-") + (ctx.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol fn = ctx.freshTemp();
@@ -635,9 +637,9 @@ final class ClojureFnLowering {
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(got)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fn, fun))),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(fn, fun.fun()))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, ctx.applyFun(fun, fn, argList))));
+						ClojureLowerUtil.list(self, ctx.applyFun(fun.real(), fn, argList))));
 	}
 
 	/** {@code trampoline} as a value: the function, then any arguments. */
@@ -646,7 +648,7 @@ final class ClojureFnLowering {
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("trampoline-rest"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(fun, ClojureLowering.AMPERSAND_REST, rest)),
-				trampolineForm(ctx, fun, rest));
+				trampolineForm(ctx, ClojureBindingLowering.FnArg.of(fun), rest));
 	}
 
 	// Predicates and casts

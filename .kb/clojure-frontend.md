@@ -388,10 +388,19 @@ constructor and consumer, and a regex `replace` with a function replacement.
   the map and key before it); `update-in` binds it and threads `holdsRealFun`.
 - A regex `replace` with a replacement that is neither a literal string nor a real
   function form wraps it in `%clojure-re-replacement` (a string stays a string).
-- Kept on the dispatcher: `test` (the `:test` metadata value), a `defn` parameter used as
-  a function anywhere (`(defn f [g xs] (map g xs))` carries it), and the inline call-site
-  loops built by `callFun` (`every?`, `some`, `sort-by`, `group-by`, ...) over a variable
-  bound to a function: they see only the lowered symbol, not `isDirectVar`.
+- The inline loops (`every?` `some` `take-while` `drop-while` `group-by` `sort` `sort-by`
+  `merge-with`, and the closures `comp` `partial` `complement` `memoize` `trampoline`)
+  take a `ClojureBindingLowering.FnArg` (the `fnValue` plus `real`), decided from the
+  DATUM by `fnArg`/`holdsRealFun` and passed to `callFun(real, ...)`/`applyFun(real, ...)`.
+  Never ask the scope from a generated symbol: the value forms (`everyValue`, ...) build
+  `FnArg.of(parameter)`, which is real only for a `yieldsFun` form, because a value
+  lambda's `c%NAME-fn` parameter can spell a user local's name. Raw wasm, before -> after:
+  `(let [f odd?] (every? f v))` 61,251 -> 34,113; `(let [f inc] (sort-by f v))` 71,010
+  -> 43,451; `(let [f inc] ((comp f dec) 1))` 60,886 -> 38,873. Pins: `ClojureLoweringTest`
+  `inlineLoopsFuncallALocalBoundToARealFunction`, clojure-spec
+  `locals-bound-to-functions-feed-the-inline-loops`.
+- Kept on the dispatcher: `test` (the `:test` metadata value) and a `defn` parameter used
+  as a function anywhere (`(defn f [g xs] (map g xs))` carries it).
 - Measured 2026-10-03, raw wasm of a one-line program, default / `--optimize=size`, before
   -> after: `(map inc v)` 65,808 -> 43,452 / 51,352 -> 32,699; `(filter odd? v)` 65,593 ->
   38,555 / 51,339 -> 30,515 (`remove` was already 38,987); `mapv` 65,222 -> 42,880;

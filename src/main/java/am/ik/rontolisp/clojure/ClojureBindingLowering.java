@@ -957,6 +957,32 @@ final class ClojureBindingLowering {
 	}
 
 	/**
+	 * A function argument an inline loop invokes at its call site: the {@link #fnValue}
+	 * plus whether it always evaluates to a real function, so the loop funcalls it
+	 * without the IFn dispatcher.
+	 *
+	 * @param fun the lowered function form
+	 * @param real whether {@code fun} is always a real function
+	 */
+	record FnArg(LispVal fun, boolean real) {
+
+		/** A form that was lowered elsewhere: real only when it {@code yieldsFun}. */
+		static FnArg of(LispVal fun) {
+			return new FnArg(fun, ClojureLowerUtil.yieldsFun(fun));
+		}
+
+	}
+
+	/**
+	 * The {@link FnArg} of a function datum: its {@link #fnValue}, real when
+	 * {@link #holdsRealFun} -- decided here, from the datum, never from a lowered symbol.
+	 */
+	static FnArg fnArg(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return new FnArg(fun, holdsRealFun(ctx, form, fun));
+	}
+
+	/**
 	 * Whether the {@link #fnValue} of the datum always evaluates to a real function: a
 	 * form that {@link ClojureLowerUtil#yieldsFun yields one}, or a variable bound to
 	 * one.

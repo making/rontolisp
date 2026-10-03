@@ -5013,3 +5013,25 @@ cases:
       aXc aYc
       (2) (1 nil) {:a 2} [2 3] 5
       (1 nil) (1 3) [:one] [:one]
+  - name: locals-bound-to-functions-feed-the-inline-loops
+    # Oracle clj 1.12.6.1673 prints the same. The inline loops (every? some take-while
+    # drop-while group-by sort sort-by comp partial complement memoize trampoline
+    # merge-with) funcall a local bound to a real function and send any other value
+    # (a set or map local, a parameter) through the dispatcher.
+    source: |
+      (let [f odd? g inc k >] (println (every? f [1 3]) (some f [2 3]) (take-while f [1 3 4 5]) (drop-while f [1 3 4 5]) (group-by g [1 2 3]) (sort-by g k [1 3 2]) (sort k [1 3 2])))
+      (let [f inc g dec h odd?] (println ((comp f g) 1) ((partial f) 1) ((complement h) 1) ((memoize f) 1) (merge-with + {:a 1} {:a 2})))
+      (let [f + h (fn [x] (fn [] x))] (println (merge-with f {:a 1} {:a 2}) (trampoline h 3)))
+      (let [s #{1 2} m {1 10 2 20}] (println (every? s [1 2]) (some m [2 1]) (take-while s [1 2 3]) (drop-while s [1 2 3]) (group-by m [1 2]) (sort-by m [2 1]) ((comp s inc) 0) ((partial m) 1)))
+      (defn pick [f xs] (println (every? f xs) (some f xs) (take-while f xs)))
+      (pick odd? [1 3])
+      (pick {1 1 3 0} [1 3])
+      (let [every-pred inc] (println (apply every? [{1 true} [1]]) (every? every-pred [1])))
+    expected: |
+      true true (1 3) (4 5) {2 [1], 3 [2], 4 [3]} (3 2 1) (3 2 1)
+      1 2 false 2 {:a 3}
+      {:a 3} 3
+      true 20 (1 2) (3) {10 [1], 20 [2]} (1 2) 1 10
+      true true (1 3)
+      true 1 (1 3)
+      true true

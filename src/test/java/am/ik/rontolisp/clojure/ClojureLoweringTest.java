@@ -1591,6 +1591,32 @@ class ClojureLoweringTest {
 		assertThat(splicesDispatcher(plain + " (def s #{1}) (println (map s [1]))")).isTrue();
 	}
 
+	@Test
+	void inlineLoopsFuncallALocalBoundToARealFunction() {
+		// the inline loops decide directness from the datum: a local bound to a real
+		// function is funcalled, a local that may hold a collection keeps the dispatcher
+		List<String> direct = List.of("(let [f odd?] (println (every? f [1])))",
+				"(let [f odd?] (println (some f [1])))", "(let [f odd?] (println (take-while f [1])))",
+				"(let [f odd?] (println (drop-while f [1])))", "(let [f inc] (println (group-by f [2 1])))",
+				"(let [f inc] (println (sort-by f [2 1])))", "(let [f inc g >] (println (sort-by f g [2 1])))",
+				"(let [f >] (println (sort f [2 1])))", "(let [f inc] (println ((comp f dec) 1)))",
+				"(let [f inc] (println ((partial f) 1)))", "(let [f odd?] (println ((complement f) 1)))",
+				"(let [f inc] (println ((memoize f) 1)))", "(let [f inc] (println (trampoline f 1)))",
+				"(let [f +] (println (merge-with f {:a 1} {:a 2})))", "(let [f odd?] (println (map f [1])))");
+		for (String source : direct) {
+			assertThat(lowered(source)).as(source).doesNotContain("%CLOJURE-CALL");
+			assertThat(splicesDispatcher(source)).as(source).isFalse();
+		}
+		List<String> dispatched = List.of("(def s #{1}) (println (every? s [1]))",
+				"(let [s #{1}] (println (every? s [1])))", "(let [s #{1}] (println (sort-by s [2 1])))",
+				"(let [s #{1}] (println ((comp s dec) 2)))", "(defn f [g] (println (some g [1])))",
+				// a value lambda's parameter can spell a user local's name
+				"(let [every-pred inc] (println (apply every? [every-pred [1]])))");
+		for (String source : dispatched) {
+			assertThat(lowered(source)).as(source).contains("%CLOJURE-CALL");
+		}
+	}
+
 	private static boolean splicesDispatcher(String source) {
 		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false)
 			.forms()

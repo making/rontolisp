@@ -361,7 +361,7 @@ final class ClojureUpdateLowering {
 		if (n == 2) {
 			return ctx.lower(items.get(2));
 		}
-		LispVal fun = ClojureBindingLowering.fnValue(ctx, items.get(1));
+		ClojureBindingLowering.FnArg fun = ClojureBindingLowering.fnArg(ctx, items.get(1));
 		List<LispVal> maps = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
 			maps.add(ctx.lower(items.get(i)));
@@ -373,12 +373,12 @@ final class ClojureUpdateLowering {
 	 * The merge over an already-lowered function and maps: a fresh table grown map by
 	 * map, so inputs are never mutated and nil maps contribute nothing.
 	 */
-	static LispVal mergeWithForm(ClojureLowering ctx, LispVal fun, List<LispVal> maps) {
+	static LispVal mergeWithForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fun, List<LispVal> maps) {
 		LispSymbol fn = ctx.freshTemp();
 		LispSymbol acc = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(ClojureLowerUtil.list(fn, fun));
+		bindings.add(ClojureLowerUtil.list(fn, fun.fun()));
 		bindings.add(ClojureLowerUtil.list(acc, ClojureCollectionLowering.makeTable()));
 		bindings.add(ClojureLowerUtil.list(miss,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
@@ -394,7 +394,7 @@ final class ClojureUpdateLowering {
 			LispSymbol val = ctx.freshTemp();
 			LispSymbol old = ctx.freshTemp();
 			LispSymbol stored = ctx.freshTemp();
-			LispVal invoked = ctx.callFun(fun, fn, List.of(old, val));
+			LispVal invoked = ctx.callFun(fun.real(), fn, List.of(old, val));
 			// a record contributes its entries, like a map; anything opaque signals
 			// in the maphash, like the oracle
 			LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),

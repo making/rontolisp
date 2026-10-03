@@ -2479,7 +2479,21 @@ public final class ClojureLowering {
 	 * @return the invocation
 	 */
 	LispVal callFun(LispVal funForm, LispVal bound, List<LispVal> args) {
-		if (ClojureLowerUtil.yieldsFun(funForm)) {
+		return callFun(ClojureLowerUtil.yieldsFun(funForm), bound, args);
+	}
+
+	/**
+	 * {@link #callFun(LispVal, LispVal, List)} with the directness decided by the caller:
+	 * a datum-driven {@link ClojureBindingLowering#holdsRealFun} knows a local bound to a
+	 * real function, which the lowered symbol alone does not show (and which the scope
+	 * cannot be asked about from a generated parameter symbol).
+	 * @param real whether the bound value is always a real function
+	 * @param bound the bound value (a symbol)
+	 * @param args the argument forms
+	 * @return the invocation
+	 */
+	LispVal callFun(boolean real, LispVal bound, List<LispVal> args) {
+		if (real) {
 			List<LispVal> call = new ArrayList<>();
 			call.add(ClojureLowerUtil.sym("funcall"));
 			call.add(bound);
@@ -2499,7 +2513,19 @@ public final class ClojureLowering {
 	 * @return the invocation
 	 */
 	LispVal applyFun(LispVal funForm, LispVal bound, LispVal argList) {
-		if (ClojureLowerUtil.yieldsFun(funForm)) {
+		return applyFun(ClojureLowerUtil.yieldsFun(funForm), bound, argList);
+	}
+
+	/**
+	 * {@link #applyFun(LispVal, LispVal, LispVal)} with the directness decided by the
+	 * caller, like {@link #callFun(boolean, LispVal, List)}.
+	 * @param real whether the bound value is always a real function
+	 * @param bound the bound value (a symbol)
+	 * @param argList the argument-list form
+	 * @return the invocation
+	 */
+	LispVal applyFun(boolean real, LispVal bound, LispVal argList) {
+		if (real) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), bound, argList);
 		}
 		return callableApply(bound, argList);
@@ -2865,11 +2891,11 @@ public final class ClojureLowering {
 						lower(items.get(2)), false);
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
-				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "some":
 				ClojureLowerUtil.isTrue(n == 2, "some takes a predicate and a collection");
-				return ClojureFilterLowering.someForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.someForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
@@ -2882,11 +2908,11 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
 				ClojureLowerUtil.isTrue(n == 2, "take-while takes a predicate and a collection");
-				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "drop-while":
 				ClojureLowerUtil.isTrue(n == 2, "drop-while takes a predicate and a collection");
-				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "interleave":
 				return ClojureFilterLowering.interleaveOf(this, items);
@@ -2899,7 +2925,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
-				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
 			case "sort":
 				return ClojureFilterLowering.sortOf(this, items);
@@ -2951,11 +2977,11 @@ public final class ClojureLowering {
 				return ClojureFnLowering.compOf(this, items);
 			case "partial":
 				ClojureLowerUtil.isTrue(n >= 1, "partial takes a function and arguments");
-				return ClojureFnLowering.partialForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.partialForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						lowers(items, 2));
 			case "complement":
 				ClojureLowerUtil.isTrue(n == 1, "complement takes one function");
-				return ClojureFnLowering.complementForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.complementForm(this, ClojureBindingLowering.fnArg(this, items.get(1)));
 			case "constantly":
 				ClojureLowerUtil.isTrue(n == 1, "constantly takes one value");
 				return ClojureFnLowering.constantlyForm(this, lower(items.get(1)));
@@ -2964,10 +2990,10 @@ public final class ClojureLowering {
 				return lower(items.get(1));
 			case "memoize":
 				ClojureLowerUtil.isTrue(n == 1, "memoize takes one function");
-				return ClojureFnLowering.memoizeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.memoizeForm(this, ClojureBindingLowering.fnArg(this, items.get(1)));
 			case "trampoline":
 				ClojureLowerUtil.isTrue(n >= 1, "trampoline takes a function and arguments");
-				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), lowers(items, 2)));
 			case "coll?":
 				ClojureLowerUtil.isTrue(n == 1, "coll? takes one value");
