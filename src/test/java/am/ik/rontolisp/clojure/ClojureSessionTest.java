@@ -15,7 +15,11 @@ class ClojureSessionTest {
 	void aLaterBufferCallsWhatAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		assertThat(session.read("(defn twice [x] (* 2 x))").get(0).forms().stream().map(LispVal::print).toList())
-			.containsExactly("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|))");
+			.hasSize(3)
+			.startsWith("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|))")
+			.last()
+			.asString()
+			.startsWith("(RONTOLISP::%CLOJURE-VAR \"user/twice\"");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
 		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly("(|c%twice| 21)");
 	}

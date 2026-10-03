@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -827,6 +828,24 @@ final class ClojureStateLowering {
 	 * @return the form
 	 */
 	static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted) {
+		return defonceForm(ctx, items, hoisted, null);
+	}
+
+	/**
+	 * A {@code defonce} that answers like the oracle's REPL: the var when it defined one,
+	 * {@code nil} over a var that was already bound.
+	 * @param ctx the lowering
+	 * @param items the defonce datum's items
+	 * @param echo the lowered var the definition answers, built after the definition
+	 * lowered
+	 * @return the form
+	 */
+	static LispVal defonceEchoing(ClojureLowering ctx, List<LispVal> items, Supplier<LispVal> echo) {
+		return defonceForm(ctx, items, null, echo);
+	}
+
+	private static LispVal defonceForm(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted,
+			@Nullable Supplier<LispVal> echo) {
 		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "defonce");
@@ -875,8 +894,13 @@ final class ClojureStateLowering {
 									ClojureLowering.boundDepthSym(key), new LispInteger(0)))
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, value);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)), var, set);
+		if (echo != null) {
+			set = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), set, echo.get());
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+				echo != null ? ClojureLowering.NIL_CONST : var, set);
 	}
 
 	/**

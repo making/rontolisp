@@ -737,6 +737,13 @@ bracket counting over `()[]{}` (outside strings and comments) plus a reader prob
 trailing dispatch prefix. A buffer's `require` loads from the working directory's source
 path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
 
+The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
+var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the
+datum's last form; a file's definition shows nothing), the oracle's. `defonce` over a bound var
+and `defmulti` over a held multimethod answer `nil`, like the oracle. Not echoed like the oracle
+yet (measured 2026-10-03): `defprotocol` (`P`), `defrecord` (`user.R`), `declare`, a `def`
+nested in `do`/`let` (the oracle answers the var from any `def`).
+
 ## `clojure.spec`: refused
 
 `clojure.spec.alpha` stays `unknown namespace`. Its corpus users (`spec.clj`,

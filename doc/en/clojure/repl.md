@@ -7,12 +7,13 @@ would in one file: every buffer declares its top-level `def`/`defn` names before
 so a later buffer may call what an earlier one defined. An `(ns name)` or `(in-ns 'name)`
 buffer switches the `*ns*` the `::`-keywords below it resolve against, like a file's own
 `ns` form. The value echo renders in Clojure
-notation, readably.
+notation, readably; a top-level `def`, `defn`, `defn-`, `defmacro`, `defmulti` or
+`defonce` echoes the var it defined (`#'user/twice`), and a `defonce` over a bound var `nil`.
 
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
-twice
+#'user/twice
 clojure> (twice 21)
 42
 ```

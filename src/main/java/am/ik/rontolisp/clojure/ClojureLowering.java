@@ -887,7 +887,7 @@ public final class ClojureLowering {
 		}
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
-			List<LispVal> forms = topLevels(datum);
+			List<LispVal> forms = topLevels(datum, true);
 			// an ns form shows nothing, also when its requires loaded namespaces
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
@@ -1382,10 +1382,22 @@ public final class ClojureLowering {
 	 * loaded: a {@code require} anywhere in it loads the namespace before the datum runs.
 	 */
 	List<LispVal> topLevels(LispVal form) {
+		return topLevels(form, false);
+	}
+
+	/**
+	 * One top-level datum lowered, with the definitions a REPL echoes answering their
+	 * var.
+	 * @param form the datum
+	 * @param echoVars whether a top-level definition answers the var it defined, like the
+	 * oracle's REPL; a file's definition shows nothing
+	 * @return its forms, the hoisted definitions first
+	 */
+	List<LispVal> topLevels(LispVal form, boolean echoVars) {
 		List<LispVal> outer = this.hoisted;
 		this.hoisted = new ArrayList<>();
 		try {
-			List<LispVal> own = topLevelsOf(form);
+			List<LispVal> own = echoVars ? echoingTopLevelsOf(form) : topLevelsOf(form);
 			if (this.hoisted.isEmpty()) {
 				return own;
 			}
@@ -1771,6 +1783,51 @@ public final class ClojureLowering {
 		catch (LispReadException ex) {
 			throw positioned(ex, datum);
 		}
+	}
+
+	/**
+	 * {@link #topLevelsOf} for a REPL: a definition (def, defn, defn-, defmacro,
+	 * defmulti, defonce, defstruct) answers the var it defined, as the oracle prints
+	 * {@code #'user/f}. A {@code defonce} over a bound var and a {@code defmulti} over a
+	 * multimethod answer nil.
+	 */
+	private List<LispVal> echoingTopLevelsOf(LispVal form) {
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		String name = items == null ? null : definedVarName(items);
+		if (items == null || name == null) {
+			return topLevelsOf(form);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
+			try {
+				return List.of(ClojureStateLowering.defonceEchoing(this, items,
+						() -> ClojureVarLowering.definedVar(this, name)));
+			}
+			catch (LispReadException ex) {
+				throw positioned(ex, form);
+			}
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")
+				&& this.multimethods.contains(varKey(this.currentNs, name))) {
+			// the var already holds a multimethod: nothing is defined, the oracle answers
+			// nil
+			return topLevelsOf(form);
+		}
+		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
+		forms.add(ClojureVarLowering.definedVar(this, name));
+		return forms;
+	}
+
+	private static @Nullable String definedVarName(List<LispVal> items) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		String op = head.name();
+		if (!(op.equals("def") || op.equals("defn") || op.equals("defn-") || op.equals("defmacro")
+				|| op.equals("defmulti") || op.equals("defonce") || op.equals("defstruct"))) {
+			return null;
+		}
+		return ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name && !name.name().startsWith(":")
+				&& !name.name().equals("&") ? name.name() : null;
 	}
 
 	private List<LispVal> topLevelsOf(LispVal form) {

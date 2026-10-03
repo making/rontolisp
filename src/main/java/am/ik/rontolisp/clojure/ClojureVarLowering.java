@@ -212,6 +212,22 @@ final class ClojureVarLowering {
 			}
 			throw new LispReadException("Unable to resolve var: " + name + " in this context");
 		}
+		return varOfKey(ctx, key);
+	}
+
+	/**
+	 * The var a definition defined in the current namespace, as a lowered form: what a
+	 * REPL echoes for a top-level {@code def}. It needs no name resolution, so a name the
+	 * program defines over a {@code clojure.core} one is still its own var.
+	 * @param ctx the hub, after it lowered the definition
+	 * @param name the defined plain name
+	 * @return the lowered var
+	 */
+	static LispVal definedVar(ClojureLowering ctx, String name) {
+		return varOfKey(ctx, ClojureLowering.varKey(ctx.currentNs, name));
+	}
+
+	private static LispVal varOfKey(ClojureLowering ctx, String key) {
 		LispVal root;
 		ClojureLowering.Kind kind = ctx.globals.get(key);
 		if (kind == ClojureLowering.Kind.MACRO) {
