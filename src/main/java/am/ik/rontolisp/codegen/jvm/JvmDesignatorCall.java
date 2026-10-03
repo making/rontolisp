@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 
@@ -71,9 +72,12 @@ final class JvmDesignatorCall {
 	/**
 	 * The registered function a literal designator names, when it can take {@code arity}
 	 * arguments; {@code null} for every other designator.
+	 * @param fnForm the function-designator expression, unevaluated
+	 * @param arity the number of arguments every call passes
+	 * @param ctx the compilation context
+	 * @return the function, or null
 	 */
-	private static JvmLispCompiler.@Nullable FunctionInfo directTarget(LispVal fnForm, int arity,
-			JvmLispCompiler.Ctx ctx) {
+	static JvmLispCompiler.@Nullable FunctionInfo directTarget(LispVal fnForm, int arity, JvmLispCompiler.Ctx ctx) {
 		String name = FunctionDesignators.literalName(fnForm);
 		if (name == null) {
 			return null;
@@ -84,8 +88,18 @@ final class JvmDesignatorCall {
 			// car/cdr composition synthesizes a lambda, --dynamic defers to the runtime.
 			return null;
 		}
-		int required = fi.required();
-		return (fi.variadic() ? arity >= required : arity == required) ? fi : null;
+		return reaches(fi.required(), fi.variadic(), arity) ? fi : null;
+	}
+
+	/**
+	 * {@return whether a literal designator's call of {@code arity} arguments is the
+	 * direct call of a function with this lambda list}
+	 * @param required the arguments the function needs
+	 * @param variadic whether it takes a rest list
+	 * @param arity the arguments the call passes
+	 */
+	static boolean reaches(int required, boolean variadic, int arity) {
+		return variadic ? arity >= required : arity == required;
 	}
 
 	/**
@@ -96,6 +110,19 @@ final class JvmDesignatorCall {
 	 * @param args one emitter per argument
 	 */
 	void emitCall(JvmLispCompiler.Ctx ctx, String className, List<Runnable> args) {
+		this.emitCall(ctx, className, args, null);
+	}
+
+	/**
+	 * Emits the call {@code form} stands for, which may be the method's tail: a direct
+	 * call there hands a bounce its callee answers on (JvmTailBounce).
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @param args one emitter per argument
+	 * @param form the call form, or null when no form is the call (an operator's
+	 * per-element call)
+	 */
+	void emitCall(JvmLispCompiler.Ctx ctx, String className, List<Runnable> args, @Nullable LispCons form) {
 		if (this.target == null) {
 			ctx.body.aload(this.funcSlot);
 			args.forEach(Runnable::run);
@@ -107,11 +134,9 @@ final class JvmDesignatorCall {
 		// surplus linked into the rest list (JvmPhysicalArgs).
 		JvmPhysicalArgs.emit(ctx, className, this.target, args);
 		ctx.body.invokestatic(this.target.methodref());
-		if (this.target.bounceVisible()) {
-			// The callee bounces its own value tail; the value this call answers is the
-			// trampoline's (JvmTailBounce).
-			JvmTailBounce.emitUnwrap(ctx, className);
-		}
+		// The callee may answer a bounce: the value this call answers is the
+		// trampoline's, or -- the method's tail -- the bounce itself (JvmTailBounce).
+		JvmTailBounce.emitDirectCallUnwrap(this.target, form, ctx, className);
 	}
 
 }

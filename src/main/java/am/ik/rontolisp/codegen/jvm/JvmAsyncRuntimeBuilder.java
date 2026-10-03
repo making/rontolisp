@@ -201,7 +201,7 @@ final class JvmAsyncRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry longValueOf, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, @Nullable MethodRefEntry launcherRun,
-			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited, boolean hasTr) {
+			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited) {
 		// --- shared class/method references ---
 		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
 		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
@@ -364,7 +364,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(0);
 			a.getfield(fnField);
 			a.invokestatic(invoke0); // [future, v]
-			JvmTailBounce.unwrapRaw(a, cp, thisClass, objectArrayClass, hasTr);
+			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			if (mvChannel != null && vMarker != null) {
 				// The channel holds the body's extra values the moment its thunk
 				// returns (its tail settled them), on THIS thread: a body that answered
@@ -742,7 +742,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.loadConstant(0);
 			a.aaload();
 			a.invokestatic(invoke0);
-			JvmTailBounce.unwrapRaw(a, cp, thisClass, objectArrayClass, hasTr);
+			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.invokestatic(awaitSelf);
 			a.astore(3);
 			a.aload(3);

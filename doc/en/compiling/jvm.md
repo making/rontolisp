@@ -99,8 +99,11 @@ loop written as tail recursion runs at any depth, whatever its lambda list. Func
 call each other in tail position -- `defun`s, or the functions of one `labels` form (a
 Clojure `letfn`) -- jump to each other the same way: the method a call enters holds the code
 of the functions the cycle runs through. A cycle whose code would pass the 8,000 bytes of
-bytecode HotSpot compiles in one method keeps a frame per call instead. A `defun` whose tail
-calls through a function value runs in constant stack too.
+bytecode HotSpot compiles in one method keeps a frame per call instead. A tail call through a
+function value -- from a `defun`, a `lambda`, an `flet` or `labels` function, an `apply` --
+runs in constant stack too: a closure calling itself through the variable that holds it,
+closures in a table calling each other, a continuation handed to a function that calls it.
+A call inside a special binding is not in tail position, so it keeps a frame.
 
 ## Optimize (Dead-Code Elimination)
 

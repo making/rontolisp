@@ -305,7 +305,10 @@ final class JvmTailGroup {
 	 * The function a tail call names: its head, or a literal {@code #'name} funcalled.
 	 */
 	private static @Nullable String calleeName(LispCons call) {
-		String head = ((LispSymbol) call.car()).name();
+		if (!(call.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		String head = sym.name();
 		if (!LispNames.FUNCALL.equals(head)) {
 			return head;
 		}
@@ -318,10 +321,12 @@ final class JvmTailGroup {
 	 * where the emitter's tail mark reaches it -- through {@code if}, {@code progn}, a
 	 * {@code let}/{@code let*} that binds no special, the blocks and a
 	 * {@code return}/{@code return-from} reached through them, and the pass-through
-	 * lowerings ({@link JvmExprCompiler#compileExpansion}). A form it does not know ends
-	 * the walk, so a disagreement with the emitter only loses a group, or keeps a member
-	 * whose call is not a jump; it can never make a call a jump, which only the mark
-	 * does.
+	 * lowerings ({@link JvmExprCompiler#compileExpansion}) -- a call with a computed head
+	 * included. A form it does not know ends the walk, so a disagreement with the emitter
+	 * only loses a group, keeps a member whose call is not a jump, or keeps a tail
+	 * through a value a call in a defun that then bounces nowhere
+	 * ({@link JvmTailBounce#bouncingDefuns}); it can never make a call a jump or a
+	 * bounce, which only the mark does.
 	 * @param form the form
 	 * @param specials the special variables
 	 * @param locals the local function names in scope, which a call head means instead of
@@ -330,7 +335,12 @@ final class JvmTailGroup {
 	 */
 	static void tailCalls(LispVal form, Set<String> specials, Set<String> locals,
 			BiConsumer<LispCons, Set<String>> visit) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return;
+		}
+		if (!(cons.car() instanceof LispSymbol op)) {
+			// A computed head: a call too.
+			visit.accept(cons, locals);
 			return;
 		}
 		List<LispVal> parts = cons.toList();
@@ -775,6 +785,11 @@ final class JvmTailGroup {
 				landing.put(jump.exit(), land);
 			}
 			body.append(ctx.body, landing);
+			if (ctx.bouncingBodies.contains(ctx.body)) {
+				// The layout holds a member's bounce, so the class's trampoline must be
+				// written while this method is kept (JvmTailBounce).
+				ctx.bouncingBodies.add(body);
+			}
 			List<ClassDefinition.Line> own = ctx.lines();
 			// A member whose first instruction has no site of its own must not report
 			// the site the member before it ended in.
@@ -944,9 +959,11 @@ final class JvmTailGroup {
 				ctx.body.aload(target.firstParamSlot() + i);
 			}
 			ctx.body.invokestatic(callee.methodref());
-			if (!this.closures && callee.bounceVisible()) {
-				// A defun whose value tail may bounce: the unwrap its call sites carry
-				// (JvmTailBounce). A lambda never bounces.
+			if (callee.bounceVisible() && !ctx.passesBounces) {
+				// The sibling may answer a bounce, and this is the member's tail: its own
+				// callers drive the bounce whenever they check for one -- a lambda's
+				// always, a defun's when the group's may bounce, which this callee's
+				// does (JvmTailBounce).
 				JvmTailBounce.emitUnwrap(ctx, className);
 			}
 			ctx.body.areturn();

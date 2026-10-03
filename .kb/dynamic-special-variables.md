@@ -203,7 +203,9 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
   `JvmLetCompiler`.
 - No tail call through the binding: the `let` is not tail-transparent, so a self or sibling
   call inside it is a call -- no JVM jump (`JvmTailGroup.ofDefuns` stops at the lowered body's
-  special `let`, `ofLabels` drops a member whose physical parameter is special), no wasm
+  special `let`, `ofLabels` drops a member whose physical parameter is special), no JVM bounce
+  of a call through a value (the callee reads the binding,
+  `JvmLispCompilerTest#aClosuresValueTailInsideASpecialParametersBindingStaysACall`), no wasm
   `return_call`. The interpreter keeps a frame per such call too. Depth of
   `(defun deep (*y* n) (if (= n 0) ... (deep *y* (- n 1))))`: interpreter passes 10,000,
   overflows at 20,000; JVM `java Prog` passes 50,000, overflows at 100,000; wasm passes 8,000,

@@ -429,6 +429,28 @@ cases:
       self-done
       (a-done b-done)
       30000
+  - name: lambdas-and-applies-calling-through-a-value-in-tail-position-run-in-constant-stack
+    source: |
+      (define (vl-run n)
+        (let ((f #f))
+          (set! f (lambda (m) (if (= m 0) 'loop-done (f (- m 1)))))
+          (f n)))
+      (write (vl-run 200000))
+      (newline)
+      (define (vl-cps n k) (if (= n 0) (k 0) (vl-cps (- n 1) (lambda (v) (k (+ v 1))))))
+      (write (vl-cps 200000 (lambda (v) v)))
+      (newline)
+      (define (vl-rest n . more) (if (= n 0) (list 'rest-done more) (apply vl-rest (- n 1) more)))
+      (write (vl-rest 200000 1 2))
+      (newline)
+      (define (vl-apply k n) (if (= n 0) 'apply-done (apply k (list k (- n 1)))))
+      (write (vl-apply vl-apply 200000))
+      (newline)
+    expected: |
+      loop-done
+      200000
+      (rest-done (1 2))
+      apply-done
   - name: a-loop-whose-body-closes-over-its-variables-rebinds-them-per-iteration
     source: |
       (define (thunks n)

@@ -10,7 +10,7 @@ in constant stack on the JVM as it does on the interpreter
 ([interpreter-tail-calls.md](interpreter-tail-calls.md)) and on both wasm backends
 ([wasm-tail-calls.md](wasm-tail-calls.md)). Landed 2026-10-03 (`.todo/b95`). The JVM's other
 tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounce`
-([scheme-frontend.md](scheme-frontend.md), "Not members").
+([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 
 ## Mechanics (`JvmSelfTailCall`)
 
@@ -88,7 +88,10 @@ as a self tail call does. Landed 2026-10-03 (`.todo/c02`).
   (`JvmTailGroup.reducible`), that root's method dispatches instead: `iconst_0; istore m`, a
   switch on `m`, each jump storing its target's index and re-entering the switch.
 - **Bounces**: a member's method may run any member's code, so every member's
-  `FunctionInfo.bounceVisible` is the group's OR, set before Pass 2a; a lambda never bounces.
+  `FunctionInfo.bounceVisible` is the group's OR, set before Pass 2a
+  (`JvmTailBounce.bouncingDefuns`); a `labels` member is a lambda, which may always bounce.
+  An epilogue's call of a sibling hands the sibling's bounce on: the member's own callers
+  check ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - **Frames**: a rooted method's frame holds its largest member's locals, which a deep non-tail
   recursion through it pays per level.
 - `-Drontolisp.jvm.debug-tail-groups=true` prints `[tail-calls] labels A->B ...` for every
@@ -118,12 +121,14 @@ pair, Clojure's regex matcher, a multi-arity `defn`'s clause helper.
   `#aTailCallInsideASpecialParametersBindingStaysACall`;
   [dynamic-special-variables.md](dynamic-special-variables.md), "Parameters named like a
   special", has the depths.
-- A tail in a `_k$N` continuation (`JvmBodyOutliner` split a body past the method-size
-  budget): another method, so a call, one frame a round.
+- A self tail call in a `_k$N` continuation (`JvmBodyOutliner` split a body past the
+  method-size budget): another method, so a call, one frame a round (a tail through a value
+  there bounces and passes on, [jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - A tail group laid out apart (a rooted method past 8000 bytecodes): each member's tail call
   to another is a direct call, a frame a round. A jump from a member that is not rooted is a
   call into a rooted method: one frame per entry, not per round.
-- A tail `apply` of itself, and a nested `defun` (a global variable that may be reassigned).
+- A tail `apply` of itself (it bounces, [jvm-tail-bounce.md](jvm-tail-bounce.md)), and a nested
+  `defun` (a global variable that may be reassigned).
 
 ## A Clojure deviation it creates
 

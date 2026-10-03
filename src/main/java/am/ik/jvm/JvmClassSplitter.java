@@ -144,6 +144,19 @@ public final class JvmClassSplitter {
 	}
 
 	/**
+	 * The methods a shake from {@code roots} keeps -- the ones {@link #write} would write
+	 * -- asked of the definition as it stands: a generator that decides one method's body
+	 * by what the others reach asks before filling it in.
+	 * @param definition the class
+	 * @param roots the entry points to tree-shake from (names, with
+	 * {@code <init>}/{@code <clinit>} always kept)
+	 * @return per method of {@link ClassDefinition#methods()}, whether it is kept
+	 */
+	public static boolean[] reachable(ClassDefinition definition, Set<String> roots) {
+		return new Scan(definition).graph.reachable(roots);
+	}
+
+	/**
 	 * Writes the definition as one class when what it keeps fits {@code limit} entries,
 	 * else as a main class and its parts: filled to {@code limit} entries each, or to
 	 * {@link ConstantPool#MAX_INDEX} less {@link #RESERVED_ENTRIES} when {@code limit} is

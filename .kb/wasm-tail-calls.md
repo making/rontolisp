@@ -4,8 +4,9 @@ Scope: the GC WASM backend (`codegen.wasm`), Preview 1 and `--component`; both r
 core module. The JVM has three narrower counterparts -- a self tail call is a jump back to the
 method's start, a tail call within a tail group of mutually tail-calling defuns or `labels`
 functions a jump inside the method a call names
-([jvm-self-tail-calls.md](jvm-self-tail-calls.md)), a defun's tail through a value a
-trampoline bounce (`JvmTailBounce`) -- and the interpreter its own mechanism, the
+([jvm-self-tail-calls.md](jvm-self-tail-calls.md)), a tail through a value -- a defun's, a
+lambda's, an `apply`'s -- a trampoline bounce ([jvm-tail-bounce.md](jvm-tail-bounce.md)) -- and
+the interpreter its own mechanism, the
 loop in `eval` (`.kb/interpreter-tail-calls.md`); their depths are recorded below and are
 not this file's invariant. `--no-gc` is untouched (its own
 compiler never arms the flag).
@@ -105,7 +106,7 @@ fraction of the interpreter's -- `.kb/interpreter-stack.md`), interpreter 15,497
 later the same day, `.kb/interpreter-tail-calls.md`). The JVM figure became 16,201 when
 the compiled `main` moved onto a 16 MiB worker the same day
 ([interpreter-stack.md](interpreter-stack.md)), and unbounded through the trampoline of
-2026-10-03 (`JvmTailBounce`); the JVM's `labels` self loop and every other self tail call
+2026-10-03 ([jvm-tail-bounce.md](jvm-tail-bounce.md)); the JVM's `labels` self loop and every other self tail call
 answer 1,000,000 since the jump of the same day, mutual `defun`s and a `labels` pair since the
 tail groups of the same day ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
 Measured then: a self call inside a `labels`/`flet` BODY overflows here at 1,000,000 --

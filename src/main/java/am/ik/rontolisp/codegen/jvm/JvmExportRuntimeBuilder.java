@@ -221,8 +221,8 @@ final class JvmExportRuntimeBuilder {
 		boolean needBytesIn = false;
 		boolean needBytesOut = false;
 		for (JvmExportDirective decl : decls) {
-			MethodRefEntry target = java.util.Objects.requireNonNull(functions.get(decl.name())).methodref();
-			methods.add(buildWrapper(cp, decl, target, refs));
+			JvmLispCompiler.FunctionInfo function = java.util.Objects.requireNonNull(functions.get(decl.name()));
+			methods.add(buildWrapper(cp, decl, function.methodref(), function.bounceVisible(), refs));
 			for (BoundaryType t : decl.paramTypes()) {
 				needArgGuard |= t == BoundaryType.U8 || t == BoundaryType.U16 || t == BoundaryType.U32
 						|| t == BoundaryType.U64;
@@ -339,7 +339,7 @@ final class JvmExportRuntimeBuilder {
 	}
 
 	private static BuiltMethod buildWrapper(ConstantPool cp, JvmExportDirective decl, MethodRefEntry target,
-			Refs refs) {
+			boolean bounces, Refs refs) {
 		MethodCode asm = new MethodCode();
 		int slot = 0;
 		List<BoundaryType> params = decl.paramTypes();
@@ -416,6 +416,12 @@ final class JvmExportRuntimeBuilder {
 			}
 		}
 		asm.invokestatic(target);
+		// A defun whose tail goes through a value answers a bounce: the wrapper is a
+		// caller of its result like any other, so the trampoline makes that call before
+		// the answer is converted (JvmTailBounce).
+		if (bounces) {
+			JvmTailBounce.unwrapRaw(asm, cp, refs.thisClassConstant);
+		}
 		BoundaryType ret = decl.returnType();
 		switch (ret) {
 			case VOID -> {

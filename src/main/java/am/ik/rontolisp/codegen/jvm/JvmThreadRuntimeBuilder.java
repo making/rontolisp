@@ -118,7 +118,7 @@ final class JvmThreadRuntimeBuilder {
 	static ThreadRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry stringConcat,
-			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldRefEntry curThreadTlField, boolean hasTr) {
+			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldRefEntry curThreadTlField) {
 		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
 		MethodRefEntry threadOfVirtual = cp.methodRef(threadClass, "ofVirtual",
 				"()Ljava/lang/Thread$Builder$OfVirtual;");
@@ -426,7 +426,7 @@ final class JvmThreadRuntimeBuilder {
 			a.aload(0);
 			a.getfield(fnField);
 			a.invokestatic(invoke0);
-			JvmTailBounce.unwrapRaw(a, cp, thisClass, objectArrayClass, hasTr);
+			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.areturn();
 			MethodCode.Label tryEnd = a.newBoundLabel();
 			// catch (Throwable t): answer {EMARKER, t, _condTake(t)} normally -- the

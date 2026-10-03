@@ -12613,6 +12613,44 @@ cases:
       (:TOP :THROWN (1 :RET) :TOP)
       (:SET :TOP :CAPTURED :TOP)
       (:DONE "redirected")
+  - name: closures-calling-through-a-value-in-tail-position-run-in-constant-stack
+    source: |
+      ;; A closure's tail call through a value -- itself through the variable holding
+      ;; it, a partner closure, a defun handed the closure as its continuation, a state
+      ;; machine of closures in a vector, an apply of itself -- runs in constant stack
+      ;; on every backend. A call inside the binding of a parameter named like a
+      ;; special is no tail call: it still sees the binding.
+      (let ((ctv-f nil))
+        (setq ctv-f (lambda (n) (if (= n 0) :done (funcall ctv-f (- n 1)))))
+        (print (funcall ctv-f 1000000)))
+      (let ((ctv-ev nil) (ctv-od nil))
+        (setq ctv-ev (lambda (n) (if (= n 0) t (funcall ctv-od (- n 1)))))
+        (setq ctv-od (lambda (n) (if (= n 0) nil (funcall ctv-ev (- n 1)))))
+        (print (list (funcall ctv-ev 1000000) (funcall ctv-ev 1000001))))
+      (defun ctv-hop (n k) (if (= n 0) (funcall k :landed) (funcall k n)))
+      (let ((ctv-k nil))
+        (setq ctv-k (lambda (v) (if (eq v :landed) :finished (ctv-hop (- v 1) ctv-k))))
+        (print (funcall ctv-k 1000000)))
+      (let ((ctv-states (make-array 2)))
+        (setf (aref ctv-states 0)
+              (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 1) (- n 1) (+ acc 1)))))
+        (setf (aref ctv-states 1)
+              (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 0) (- n 1) acc))))
+        (print (funcall (aref ctv-states 0) 1000000 0)))
+      (let ((ctv-g nil))
+        (setq ctv-g (lambda (n &rest more) (if (= n 0) (list :applied more) (apply ctv-g (- n 1) more))))
+        (print (funcall ctv-g 1000000 :a :b)))
+      (defvar *ctv-depth* :top)
+      (defun ctv-depth () *ctv-depth*)
+      (let ((ctv-reader (lambda () (ctv-depth))))
+        (print (list (funcall (lambda (*ctv-depth*) (funcall ctv-reader)) 7) (ctv-depth))))
+    expected: |
+      :DONE
+      (T NIL)
+      :FINISHED
+      500000
+      (:APPLIED (:A :B))
+      (7 :TOP)
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list

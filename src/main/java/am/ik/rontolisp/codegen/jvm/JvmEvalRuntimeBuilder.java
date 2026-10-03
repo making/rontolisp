@@ -82,6 +82,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final MethodRefEntry applyRef;
 
+		private final @Nullable MethodRefEntry applyRawRef;
+
 		private final MethodRefEntry storeRef;
 
 		private final MethodRefEntry envLookupRef;
@@ -110,8 +112,6 @@ final class JvmEvalRuntimeBuilder {
 
 		private final ClassEntry thisClass;
 
-		private final boolean hasTrampoline;
-
 		private EvalConstants(Builder b) {
 			this.cp = Objects.requireNonNull(b.cp);
 			this.objectClass = Objects.requireNonNull(b.objectClass);
@@ -129,6 +129,7 @@ final class JvmEvalRuntimeBuilder {
 			this.objectEquals = Objects.requireNonNull(b.objectEquals);
 			this.evalRef = Objects.requireNonNull(b.evalRef);
 			this.applyRef = Objects.requireNonNull(b.applyRef);
+			this.applyRawRef = b.applyRawRef;
 			this.storeRef = Objects.requireNonNull(b.storeRef);
 			this.envLookupRef = Objects.requireNonNull(b.envLookupRef);
 			this.lookupRef = Objects.requireNonNull(b.lookupRef);
@@ -143,7 +144,6 @@ final class JvmEvalRuntimeBuilder {
 			this.arityChkRef = b.arityChkRef;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
 			this.thisClass = Objects.requireNonNull(b.thisClass);
-			this.hasTrampoline = b.hasTrampoline;
 		}
 
 		ConstantPool cp() {
@@ -247,10 +247,6 @@ final class JvmEvalRuntimeBuilder {
 			return this.thisClass;
 		}
 
-		boolean hasTrampoline() {
-			return this.hasTrampoline;
-		}
-
 		Map<String, JvmLispCompiler.FunctionInfo> functions() {
 			return this.functions;
 		}
@@ -317,6 +313,8 @@ final class JvmEvalRuntimeBuilder {
 
 			private @Nullable MethodRefEntry applyRef;
 
+			private @Nullable MethodRefEntry applyRawRef;
+
 			private @Nullable MethodRefEntry storeRef;
 
 			private @Nullable MethodRefEntry envLookupRef;
@@ -339,15 +337,8 @@ final class JvmEvalRuntimeBuilder {
 
 			private @Nullable ClassEntry thisClass;
 
-			private boolean hasTrampoline = false;
-
 			Builder thisClass(ClassEntry thisClass) {
 				this.thisClass = thisClass;
-				return this;
-			}
-
-			Builder hasTrampoline(boolean hasTrampoline) {
-				this.hasTrampoline = hasTrampoline;
 				return this;
 			}
 
@@ -429,6 +420,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder evalRef(MethodRefEntry m) {
 				this.evalRef = m;
+				return this;
+			}
+
+			Builder applyRawRef(MethodRefEntry m) {
+				this.applyRawRef = m;
 				return this;
 			}
 
@@ -848,7 +844,10 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the {@code _apply} method body.
+	 * Builds the RAW apply's body ({@link JvmTailBounce#APPLY_RAW_NAME}): {@code fn}
+	 * applied to {@code argList}, its answer a trampoline bounce when a compiled target's
+	 * own tail went through a value -- {@code _apply} checks it
+	 * ({@link #buildApplyEntry}).
 	 * @param k the constants
 	 * @param withEval whether the eval runtime is emitted beside it. Without it -- the
 	 * APPLY TIER a program with a runtime apply but no eval gets -- no interpreted
@@ -858,6 +857,25 @@ final class JvmEvalRuntimeBuilder {
 	 */
 	static MethodCode buildApply(EvalConstants k, boolean withEval) {
 		return new JvmEvalRuntimeBuilder(k).applyBody(withEval);
+	}
+
+	/**
+	 * Builds the body of {@code _apply(fn, argList)}, the entry every caller of a runtime
+	 * apply calls: the raw apply ({@link #buildApply},
+	 * {@link JvmTailBounce#APPLY_RAW_NAME}) with its answer checked for a trampoline
+	 * bounce, so the caller sees a real value. The trampoline re-enters the raw body
+	 * instead, so a chain of tail applies through values keeps no frame per hop.
+	 * @param k the constants, whose {@code applyRawRef} names the raw body
+	 * @return the method body
+	 */
+	static MethodCode buildApplyEntry(EvalConstants k) {
+		MethodCode a = new MethodCode();
+		a.aload(0);
+		a.aload(1);
+		a.invokestatic(Objects.requireNonNull(k.applyRawRef));
+		JvmTailBounce.unwrapRaw(a, k.cp(), k.thisClass());
+		a.areturn();
+		return a;
 	}
 
 	/** Builds the {@code _store} method body. */
@@ -1001,7 +1019,8 @@ final class JvmEvalRuntimeBuilder {
 		return a;
 	}
 
-	// === _apply(Object fn, Object argList) -> value ===
+	// === _applyRaw(Object fn, Object argList) -> value, or a trampoline bounce ===
+	// (_apply is this answer checked: buildApplyEntry.)
 
 	private MethodCode applyBody(boolean withEval) {
 		MethodCode a = new MethodCode();
@@ -1173,12 +1192,10 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(FN);
 		a.aload(ARGLIST);
 		a.invokestatic(this.k.invokeSpread());
-		if (this.k.hasTrampoline()) {
-			// The case answered the target's result, a trampoline bounce when the
-			// target's own tail was through a value: _apply's answer is the loop's
-			// (JvmTailBounce), so every caller of _apply sees a real value.
-			JvmTailBounce.unwrapRaw(a, this.k.cp(), this.k.thisClass(), this.k.objectArrayClass(), true);
-		}
+		// The case answered the target's result, a trampoline bounce when the target's
+		// own tail was through a value: this raw body answers it as it is, for the
+		// trampoline that re-enters here (JvmTailBounce); _apply checks it for every
+		// other caller (buildApplyEntry).
 		a.areturn();
 
 		a.labelBinding(notArr);
