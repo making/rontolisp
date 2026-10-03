@@ -497,6 +497,22 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).
+- Clojure 1.12 qualified members (`ClojureInteropLowering.memberCall`/`memberValue`, one
+  `qualifiedMember` split): `Class/.m` is `instanceCallLoweredWithClass` with the class as
+  the known receiver class (so the string/stream/boolean rules apply); `Class/new` is
+  `hostConstruction`, the one construction path `(Class. ...)`/`new` share; `R/new` of a
+  record or deftype is `->R`. Values are `arityLambda` over the public instance-method
+  arities (+1 for the target) or constructor arities; none, or variadic-only, is refused
+  at lowering (the oracle's `no matches found`). `^[types]` param tags (`paramTags`, the
+  first vector among the `%with-meta` layers) become the `java:` designator `m(T1,T2)` /
+  `C(T1)` (`tagTypes`: primitives, `ints`.../`objects`, `T/N` arrays, `_`, else
+  `resolveClass`); a tagged value has the one fixed arity, a tagged call with another
+  count is refused at lowering. Tags apply only where `ClojureLowering.hostMemberName`
+  holds (no local/var/library/project namespace claims the name); elsewhere they stay
+  plain metadata. `constructedClass` strips a designator's `(...)` so a tagged
+  construction still records the local's class. Measured 2026-10-03 vs `clj` 1.12.6:
+  the oracle refuses `^[_] Math/abs` (tags leaving several overloads); ronto leaves `_`
+  to the cost rule (user doc deviation).
 - A bare class name in value position is `(java:static "java.lang.Class" "forName"
   "<fqn>")`, the oracle's class object.
 - A string receiver answers the mapped core operation (a Lisp string is no host object).

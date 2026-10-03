@@ -287,7 +287,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
 | インターフェースだけの proxy の `toString`/`equals`/`hashCode` | `proxy cannot override ... yet` | `java:proxy` は `Object` の 3 メソッドを保つので本体は実行されない（クラスの proxy は実行する） |
-| 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
+| 可変長のみの静的メンバー、インスタンスメソッド（`Class/.m`）、コンストラクタ（`Class/new`）の値 | `... is variadic and has no value form` | `java:static`、`java:call`、`java:new` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |

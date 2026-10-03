@@ -158,6 +158,14 @@ final class ClojureCoreLowering {
 				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
 						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
 		if (!literal) {
+			LispVal tags = ClojureInteropLowering.paramTags(form);
+			if (tags != null && target instanceof LispSymbol member && ctx.hostMemberName(member.name())) {
+				// ^[types] Class/member as a value: the tags name the overload
+				LispVal tagged = ClojureInteropLowering.memberValue(ctx, member.name(), tags);
+				if (tagged != null) {
+					return tagged;
+				}
+			}
 			return ctx.lower(target);
 		}
 		List<LispVal> entries = new ArrayList<>();

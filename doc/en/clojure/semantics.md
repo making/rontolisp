@@ -287,7 +287,7 @@ Each refusal names the missing design, never `unknown name`:
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |
 | `toString`/`equals`/`hashCode` in an interface-only `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run (a class proxy runs it) |
-| a variadic-only static member as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static` |
+| a variadic-only static member, instance method (`Class/.m`) or constructor (`Class/new`) as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static`, `java:call` or `java:new` |
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::alias/kw` with an unknown alias | `Invalid token: ...` | only required aliases, the file's own ns and known namespaces resolve |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |

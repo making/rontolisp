@@ -2401,6 +2401,15 @@ public final class ClojureLowering {
 			return ClojureCoreLowering.readerMetaOf(this, form);
 		}
 		if (head instanceof LispCons) {
+			LispVal tags = ClojureInteropLowering.paramTags(head);
+			if (tags != null && ClojureLowerUtil.stripMeta(head) instanceof LispSymbol member
+					&& hostMemberName(member.name())) {
+				// (^[types] Class/member args...): the tags name the overload
+				LispVal tagged = ClojureInteropLowering.memberCall(this, member.name(), items, tags);
+				if (tagged != null) {
+					return tagged;
+				}
+			}
 			if (ClojureSeqLowering.isCollectionHead(head)) {
 				return ClojureSeqLowering.collectionCall(this, items);
 			}
@@ -3755,6 +3764,19 @@ public final class ClojureLowering {
 	 */
 	boolean known(String name) {
 		return isLocal(name) || resolveVar(name) != null;
+	}
+
+	/**
+	 * Whether a qualified name can only name a host member: no local, core spelling, var,
+	 * library var or project namespace claims it. Only there do {@code ^[types]} param
+	 * tags select an overload; anywhere else they are plain reader metadata.
+	 */
+	boolean hostMemberName(String name) {
+		int slash = qualifierSlash(name);
+		return slash > 0 && ClojureCoreNames.coreSpelling(name) == null && !known(name)
+				&& ClojureNamespaceLowering.resolveQualified(this, name) == null
+				&& ClojureNamespaceLowering.libraryRefer(this, name) == null
+				&& projectNamespaceOf(name.substring(0, slash)) == null;
 	}
 
 	boolean isFunction(String name) {

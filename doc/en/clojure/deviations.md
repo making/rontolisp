@@ -180,6 +180,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   to one, or a `..` step's declared return) and every
   overload at that arity answers a primitive boolean; any other host boolean
   keeps the shared `java:` unmarshal and prints `nil` for `false`.
+- A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
+  `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
+  overload.
 - Only `.clj` files below the source roots are read (no `.cljc`, no classpath).
 - Records and deftypes of one simple name in two namespaces share a dispatch tag, which
   `class`, protocol dispatch and `=` read.

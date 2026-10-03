@@ -9,6 +9,9 @@ interop は java: サーフェスへ低下し、インタプリタと JVM での
 | `.name / .-name` | `(.toUpperCase "hi")` | `HI` |
 | `Class/member` | `(Integer/parseInt "42")` | `42` |
 | `Class/member` (値) | `(every? Character/isWhitespace " ")` | `true` |
+| `Class/.method` | `(map String/.length ["ab" "abcd"])` | `(2 4)` |
+| `Class/new` | `(String/new "q")` | `q` |
+| `^[types]` | `(map ^[double] Math/abs [-1 2])` | `(1.0 2.0)` |
 | `new` | `(.length (new String "hi"))` | `2` |
 | `memfn` | `((memfn toUpperCase) "hi")` | `HI` |
 | `proxy` | `(.get (proxy [java.util.function.Supplier] [] (get [] "p")))` | `p` |

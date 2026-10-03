@@ -89,38 +89,178 @@ final class ClojureInteropLowering {
 						items.subList(1, items.size())));
 			}
 			String constructed = ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1));
-			LispVal wrapped = readerWrapperConstruction(ctx, constructed, items.subList(1, items.size()));
+			return hostConstruction(ctx, constructed, items.subList(1, items.size()), null);
+		}
+		return memberCall(ctx, name, items, null);
+	}
+
+	/**
+	 * A qualified member in call position, {@code (Class/member args...)}: a static call,
+	 * {@code Class/.method} an instance call on the first argument, {@code Class/new} the
+	 * construction ({@code R/new} of a record or deftype its positional constructor).
+	 * {@code tags} are the {@code ^[types]} param tags, naming the overload through the
+	 * {@code java:} parameter-tag designator; null when untagged. Null when the name is
+	 * no classlike slash form, so the call keeps falling through.
+	 */
+	static @Nullable LispVal memberCall(ClojureLowering ctx, String name, List<LispVal> items, @Nullable LispVal tags) {
+		QualifiedMember qualified = qualifiedMember(ctx, name);
+		if (qualified == null) {
+			return null;
+		}
+		List<LispVal> argDatums = items.subList(1, items.size());
+		if (qualified.typeKey() != null) {
+			// (R/new args...) constructs the record or deftype, like ->R
+			return ctx
+				.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, qualified.typeKey())), argDatums));
+		}
+		String cls = qualified.cls();
+		String member = qualified.member();
+		@Nullable List<String> types = tags == null ? null : tagTypes(ctx, tags);
+		if (member.equals("new")) {
+			checkTagCount(types, argDatums.size(), "constructor", cls, name);
+			return hostConstruction(ctx, cls, argDatums, types);
+		}
+		if (member.startsWith(".")) {
+			ClojureLowerUtil.isTrue(!argDatums.isEmpty(), name + " takes a target and arguments");
+			String method = member.substring(1);
+			checkTagCount(types, argDatums.size() - 1, "method " + method, cls, name);
+			return instanceCallLoweredWithClass(ctx, ctx.lower(argDatums.get(0)), cls, method,
+					designator(method, types), ctx.lowers(items, 2));
+		}
+		checkTagCount(types, argDatums.size(), "method " + member, cls, name);
+		if (argDatums.isEmpty() && types == null) {
+			// no arguments: the zero-argument static method when the host
+			// class has one, else the static field read (whose run-time
+			// error names an unknown member or class, like before)
+			return staticNoArg(ctx, cls, member);
+		}
+		return staticCall(ctx, cls, member, designator(member, types), ctx.lowers(items, 1));
+	}
+
+	/**
+	 * A {@code Class/member} spelling split and resolved: the class (null for a record or
+	 * deftype, whose key {@code typeKey} is), and the member as written ({@code .method},
+	 * {@code new} or a static name). Null when the head is no class, the member is empty
+	 * or slashed, or a record or deftype names anything but {@code new}.
+	 */
+	static @Nullable QualifiedMember qualifiedMember(ClojureLowering ctx, String name) {
+		int slash = name.indexOf('/');
+		if (slash <= 0) {
+			return null;
+		}
+		String head = name.substring(0, slash);
+		String member = name.substring(slash + 1);
+		if (member.isEmpty() || member.indexOf('/') >= 0 || member.equals(".")
+				|| !ClojureNamespaceLowering.isClasslike(ctx, head)) {
+			return null;
+		}
+		String type = ctx.typeKeyOf(head);
+		if (type != null) {
+			return member.equals("new") ? new QualifiedMember(head, member, type) : null;
+		}
+		return new QualifiedMember(ClojureNamespaceLowering.resolveClass(ctx, head), member, null);
+	}
+
+	/** A resolved {@code Class/member} spelling ({@link #qualifiedMember}). */
+	record QualifiedMember(String cls, String member, @Nullable String typeKey) {
+	}
+
+	/**
+	 * The {@code java:} designator of a member under param tags: the bare name untagged,
+	 * else {@code name(T1,T2)} -- the parameter-tag spelling {@code java:call},
+	 * {@code java:static} and {@code java:new} select an overload by.
+	 */
+	static String designator(String member, @Nullable List<String> types) {
+		return types == null ? member : member + "(" + String.join(",", types) + ")";
+	}
+
+	/**
+	 * The {@code ^[types]} param tags of a datum: the first vector among its reader
+	 * metadata layers, or null when it carries none.
+	 */
+	static @Nullable LispVal paramTags(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			List<LispVal> meta = ClojureLowerUtil.items(parts.get(2));
+			if (meta != null && !meta.isEmpty() && meta.get(0) == ClojureReader.VECTOR) {
+				return parts.get(2);
+			}
+			parts = ClojureLowerUtil.items(parts.get(1));
+		}
+		return null;
+	}
+
+	/**
+	 * The param tags as {@code java:} designator types: {@code _} any type, a primitive
+	 * as itself, {@code ints}/{@code longs}/... and {@code objects} the primitive and
+	 * {@code Object} arrays, {@code T/N} an {@code N}-dimensional array of {@code T}, any
+	 * other name its class (dotted, imported or {@code java.lang}).
+	 */
+	static List<String> tagTypes(ClojureLowering ctx, LispVal tags) {
+		List<LispVal> parts = ClojureLowerUtil.items(tags);
+		if (parts == null || parts.isEmpty() || parts.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("param tags take a vector of class names, not " + tags.print());
+		}
+		List<String> types = new ArrayList<>();
+		for (LispVal tag : parts.subList(1, parts.size())) {
+			if (!(tag instanceof LispSymbol named) || named.name().startsWith(":")) {
+				throw new LispReadException("param tags take class names, not " + tag.print());
+			}
+			String spelled = named.name();
+			int dims = 0;
+			int slash = spelled.lastIndexOf('/');
+			if (slash > 0 && slash < spelled.length() - 1
+					&& spelled.substring(slash + 1).chars().allMatch(Character::isDigit)) {
+				dims = Integer.parseInt(spelled.substring(slash + 1));
+				spelled = spelled.substring(0, slash);
+			}
+			String type = switch (spelled) {
+				case "_", "boolean", "byte", "char", "short", "int", "long", "float", "double" -> spelled;
+				case "booleans", "bytes", "chars", "shorts", "ints", "longs", "floats", "doubles" ->
+					spelled.substring(0, spelled.length() - 1) + "[]";
+				case "objects" -> "java.lang.Object[]";
+				default -> ClojureNamespaceLowering.resolveClass(ctx, spelled);
+			};
+			types.add(type + "[]".repeat(dims));
+		}
+		return types;
+	}
+
+	/**
+	 * Refuses a tagged call whose argument count is not the tag count, like the oracle's
+	 * compile-time {@code expected N arguments, but received M}.
+	 */
+	private static void checkTagCount(@Nullable List<String> types, int argCount, String what, String cls,
+			String spelling) {
+		if (types != null && types.size() != argCount) {
+			throw new LispReadException(spelling + ": invocation of " + what + " in class " + cls + " expected "
+					+ types.size() + " arguments, but received " + argCount);
+		}
+	}
+
+	/**
+	 * A host construction over argument datums, shared by {@code (Class. ...)},
+	 * {@code (new Class ...)} and {@code (Class/new ...)}: the reader wrappers and the
+	 * zero-argument {@code java.io.StringWriter} as streams, anything else
+	 * {@code java:new}, under the param-tag designator when tagged.
+	 */
+	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
+			@Nullable List<String> types) {
+		if (types == null) {
+			LispVal wrapped = readerWrapperConstruction(ctx, cls, argDatums);
 			if (wrapped != null) {
 				return wrapped;
 			}
-			LispVal stringWriter = stringWriterConstruction(constructed, items.size() - 1);
-			if (stringWriter != null) {
-				return stringWriter;
-			}
-			List<LispVal> args = new ArrayList<>();
-			args.add(LispString.literal(constructed));
-			args.addAll(ctx.lowers(items, 1));
-			return ClojureLowerUtil.cons(JAVA_NEW, args);
 		}
-		int slash = name.indexOf('/');
-		if (slash > 0) {
-			String head = name.substring(0, slash);
-			String tail = name.substring(slash + 1);
-			if (!tail.isEmpty() && tail.indexOf('/') < 0 && ClojureNamespaceLowering.isClasslike(ctx, head)
-					&& ctx.typeKeyOf(head) == null) {
-				String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
-				if (items.size() == 1) {
-					// no arguments: the zero-argument static method when the host
-					// class has one, else the static field read (whose run-time
-					// error names an unknown member or class, like before)
-					return staticNoArg(ctx, cls, tail);
-				}
-				List<LispVal> args = new ArrayList<>();
-				args.addAll(ctx.lowers(items, 1));
-				return staticCall(ctx, cls, tail, args);
-			}
+		LispVal stringWriter = stringWriterConstruction(cls, argDatums.size());
+		if (stringWriter != null) {
+			return stringWriter;
 		}
-		return null;
+		List<LispVal> args = new ArrayList<>();
+		args.add(LispString.literal(designator(cls, types)));
+		args.addAll(ctx.lowers(argDatums, 0));
+		return ClojureLowerUtil.cons(JAVA_NEW, args);
 	}
 
 	/**
@@ -283,9 +423,17 @@ final class ClojureInteropLowering {
 	 * when every overload at that arity answers a boolean, like every predicate value.
 	 */
 	static LispVal staticCall(ClojureLowering ctx, String cls, String member, List<LispVal> args) {
+		return staticCall(ctx, cls, member, member, args);
+	}
+
+	/**
+	 * {@link #staticCall(ClojureLowering, String, String, List)} under a {@code java:}
+	 * designator ({@link #designator}); the boolean rule still reads the bare member.
+	 */
+	static LispVal staticCall(ClojureLowering ctx, String cls, String member, String designator, List<LispVal> args) {
 		List<LispVal> call = new ArrayList<>();
 		call.add(LispString.literal(cls));
-		call.add(LispString.literal(member));
+		call.add(LispString.literal(designator));
 		call.addAll(args);
 		LispVal run = ClojureLowerUtil.cons(JAVA_STATIC, call);
 		if (staticMember(cls, member).booleanArities().contains(args.size())) {
@@ -320,32 +468,139 @@ final class ClojureInteropLowering {
 	 * over the static call (so {@code (every? Character/isWhitespace s)} runs). A member
 	 * with only variadic overloads is refused by name (no rest-spread reaches
 	 * {@code java:static}); an unknown class or member reads the field, whose run-time
-	 * error names what is missing. Null when the name is no classlike slash form, so the
-	 * call keeps falling through to the unknown-name refusal.
+	 * error names what is missing. {@code Class/.method} is a lambda taking the target
+	 * first, {@code Class/new} one constructing ({@link #memberValue}). Null when the
+	 * name is no classlike slash form, so the call keeps falling through to the
+	 * unknown-name refusal.
 	 */
 	static @Nullable LispVal interopValue(ClojureLowering ctx, String name) {
-		int slash = name.indexOf('/');
-		if (slash <= 0) {
+		return memberValue(ctx, name, null);
+	}
+
+	/**
+	 * {@link #interopValue} under optional {@code ^[types]} param tags: tagged, the
+	 * lambda takes exactly the tagged count (plus the target of an instance method) and
+	 * calls the one overload the designator names, like the oracle's tagged value.
+	 * Untagged {@code Class/.method} and {@code Class/new} dispatch per fixed arity of
+	 * the public instance methods or constructors, and a name with none is refused, like
+	 * the oracle's {@code no matches found}.
+	 */
+	static @Nullable LispVal memberValue(ClojureLowering ctx, String name, @Nullable LispVal tags) {
+		QualifiedMember qualified = qualifiedMember(ctx, name);
+		if (qualified == null) {
 			return null;
 		}
-		String head = name.substring(0, slash);
-		String tail = name.substring(slash + 1);
-		if (tail.isEmpty() || tail.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, head)
-				|| ctx.typeKeyOf(head) != null) {
-			return null;
+		if (qualified.typeKey() != null) {
+			// R/new is the record or deftype's positional constructor, like ->R
+			return ctx.lower(new LispSymbol(constructorSpelling(ctx, qualified.typeKey())));
 		}
-		String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
-		ClojureLowering.StaticMember seen = staticMember(cls, name.substring(slash + 1));
+		String cls = qualified.cls();
+		String member = qualified.member();
+		@Nullable List<String> types = tags == null ? null : tagTypes(ctx, tags);
+		if (member.equals("new")) {
+			List<Integer> arities = types != null ? List.of(types.size()) : constructorArities(cls, name);
+			return arityLambda(ctx, arities, name, args -> hostConstructionLowered(cls, args, types));
+		}
+		if (member.startsWith(".")) {
+			String method = member.substring(1);
+			List<Integer> arities = types != null ? List.of(types.size() + 1) : instanceArities(cls, method, name);
+			return arityLambda(ctx, arities, name, args -> instanceCallLoweredWithClass(ctx, args.get(0), cls, method,
+					designator(method, types), args.subList(1, args.size())));
+		}
+		if (types != null) {
+			return arityLambda(ctx, List.of(types.size()), name,
+					args -> staticCall(ctx, cls, member, designator(member, types), args));
+		}
+		ClojureLowering.StaticMember seen = staticMember(cls, member);
 		if (seen.field()) {
-			return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+			return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(member)));
 		}
 		if (!seen.arities().isEmpty()) {
-			return memberLambda(ctx, cls, tail, name, seen);
+			return arityLambda(ctx, seen.arities(), name, args -> staticCall(ctx, cls, member, args));
 		}
 		if (seen.variadic()) {
 			throw new LispReadException(name + " is variadic and has no value form");
 		}
-		return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+		return ClojureLowerUtil.cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(member)));
+	}
+
+	/**
+	 * The sorted distinct fixed arities of a class's public instance methods of that
+	 * name, each counting the target. Refuses a name with only variadic ones (no
+	 * rest-spread reaches {@code java:call}) or with none, or an unloadable class.
+	 */
+	static List<Integer> instanceArities(String className, String method, String spelling) {
+		Set<Integer> arities = new HashSet<>();
+		boolean variadic = false;
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			for (java.lang.reflect.Method candidate : found.getMethods()) {
+				if (!candidate.getName().equals(method) || java.lang.reflect.Modifier.isStatic(candidate.getModifiers())
+						|| candidate.isSynthetic()) {
+					continue;
+				}
+				if (candidate.isVarArgs()) {
+					variadic = true;
+				}
+				else {
+					arities.add(candidate.getParameterCount() + 1);
+				}
+			}
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			throw new LispReadException(spelling + ": no class " + className);
+		}
+		return sortedArities(arities, variadic, spelling,
+				"no matches found for instance method " + method + " in class " + className);
+	}
+
+	/**
+	 * The sorted distinct fixed arities of a class's public constructors, refused like
+	 * {@link #instanceArities}.
+	 */
+	static List<Integer> constructorArities(String className, String spelling) {
+		Set<Integer> arities = new HashSet<>();
+		boolean variadic = false;
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			for (java.lang.reflect.Constructor<?> candidate : found.getConstructors()) {
+				if (candidate.isVarArgs()) {
+					variadic = true;
+				}
+				else {
+					arities.add(candidate.getParameterCount());
+				}
+			}
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			throw new LispReadException(spelling + ": no class " + className);
+		}
+		return sortedArities(arities, variadic, spelling, "no matches found for constructor in class " + className);
+	}
+
+	private static List<Integer> sortedArities(Set<Integer> arities, boolean variadic, String spelling, String none) {
+		if (arities.isEmpty()) {
+			throw new LispReadException(spelling + (variadic ? " is variadic and has no value form" : ": " + none));
+		}
+		List<Integer> sorted = new ArrayList<>(arities);
+		sorted.sort(Integer::compareTo);
+		return sorted;
+	}
+
+	/**
+	 * {@link #hostConstruction} over already-lowered arguments: the zero-argument
+	 * {@code java.io.StringWriter} a string output stream, anything else
+	 * {@code java:new}.
+	 */
+	static LispVal hostConstructionLowered(String cls, List<LispVal> args, @Nullable List<String> types) {
+		LispVal stringWriter = stringWriterConstruction(cls, args.size());
+		if (stringWriter != null) {
+			return stringWriter;
+		}
+		List<LispVal> call = new ArrayList<>();
+		call.add(LispString.literal(designator(cls, types)));
+		call.addAll(args);
+		return ClojureLowerUtil.cons(JAVA_NEW, call);
 	}
 
 	/**
@@ -371,29 +626,25 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The member-as-value lambda: one {@code &rest} parameter dispatched per known fixed
-	 * arity onto the static call (the run-time overload selection picks among same-arity
-	 * overloads), any other count the wrong-argument-count error, like a multi-arity
-	 * {@code defn} dispatch. A boolean answer is {@code T}-or-false, like every predicate
-	 * value, so {@code (map Character/isWhitespace ...)} prints {@code (true false)}.
+	 * arity onto the arm {@code call} builds over that many argument forms (for a static
+	 * member the run-time overload selection picks among same-arity overloads), any other
+	 * count the wrong-argument-count error, like a multi-arity {@code defn} dispatch. The
+	 * arms answer booleans {@code T}-or-false, like every predicate value, so
+	 * {@code (map Character/isWhitespace ...)} prints {@code (true false)}.
 	 */
-	static LispVal memberLambda(ClojureLowering ctx, String cls, String member, String spelling,
-			ClojureLowering.StaticMember seen) {
+	static LispVal arityLambda(ClojureLowering ctx, List<Integer> arities, String spelling,
+			java.util.function.Function<List<LispVal>, LispVal> call) {
 		LispSymbol args = ctx.freshTemp();
 		LispSymbol count = ctx.freshTemp();
 		List<LispVal> arms = new ArrayList<>();
-		for (int arity : seen.arities()) {
-			List<LispVal> call = new ArrayList<>();
-			call.add(LispString.literal(cls));
-			call.add(LispString.literal(member));
+		for (int arity : arities) {
+			List<LispVal> argForms = new ArrayList<>();
 			for (int p = 0; p < arity; p++) {
-				call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTH"), new LispInteger(p), args));
+				argForms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTH"), new LispInteger(p), args));
 			}
-			LispVal run = ClojureLowerUtil.cons(JAVA_STATIC, call);
-			if (seen.booleanArities().contains(arity)) {
-				run = ctx.booleanAnswer(run);
-			}
-			arms.add(ClojureLowerUtil
-				.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(arity)), run));
+			arms.add(ClojureLowerUtil.list(
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(arity)),
+					call.apply(argForms)));
 		}
 		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("wrong number of arguments passed to: " + spelling))));
@@ -418,18 +669,7 @@ final class ClojureInteropLowering {
 					items.subList(2, items.size())));
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
-		LispVal wrapped = readerWrapperConstruction(ctx, cls, items.subList(2, items.size()));
-		if (wrapped != null) {
-			return wrapped;
-		}
-		LispVal stringWriter = stringWriterConstruction(cls, items.size() - 2);
-		if (stringWriter != null) {
-			return stringWriter;
-		}
-		List<LispVal> args = new ArrayList<>();
-		args.add(LispString.literal(cls));
-		args.addAll(ctx.lowers(items, 2));
-		return ClojureLowerUtil.cons(JAVA_NEW, args);
+		return hostConstruction(ctx, cls, items.subList(2, items.size()), null);
 	}
 
 	/**
@@ -518,8 +758,8 @@ final class ClojureInteropLowering {
 
 	/**
 	 * The text datum of a one-argument {@code java.io.StringReader} construction
-	 * ({@code (StringReader. text)} dotted or imported, or {@code (new StringReader
-	 * text)}), or null for anything else.
+	 * ({@code (StringReader. text)} dotted or imported, {@code (StringReader/new text)}
+	 * or {@code (new StringReader text)}), or null for anything else.
 	 */
 	static @Nullable LispVal stringReaderText(ClojureLowering ctx, LispVal datum) {
 		List<LispVal> items = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
@@ -532,6 +772,9 @@ final class ClojureInteropLowering {
 		}
 		else if (head.name().endsWith(".") && head.name().length() > 1 && items.size() == 2) {
 			spelled = head.name().substring(0, head.name().length() - 1);
+		}
+		else if (head.name().endsWith("/new") && head.name().length() > 4 && items.size() == 2) {
+			spelled = head.name().substring(0, head.name().length() - 4);
 		}
 		else {
 			return null;
@@ -947,10 +1190,20 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal instanceCallLoweredWithClass(ClojureLowering ctx, LispVal receiver, @Nullable String knownClass,
 			String method, List<LispVal> args) {
+		return instanceCallLoweredWithClass(ctx, receiver, knownClass, method, method, args);
+	}
+
+	/**
+	 * {@link #instanceCallLoweredWithClass(ClojureLowering, LispVal, String, String, List)}
+	 * with the {@code java:call} under a designator ({@link #designator}); the string,
+	 * stream and boolean rules still read the bare method.
+	 */
+	static LispVal instanceCallLoweredWithClass(ClojureLowering ctx, LispVal receiver, @Nullable String knownClass,
+			String method, String designator, List<LispVal> args) {
 		LispSymbol recv = ctx.freshTemp();
 		List<LispVal> direct = new ArrayList<>();
 		direct.add(recv);
-		direct.add(LispString.literal(method));
+		direct.add(LispString.literal(designator));
 		direct.addAll(args);
 		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
 		String cls = knownClass;
@@ -1023,7 +1276,9 @@ final class ClojureInteropLowering {
 	static @Nullable String constructedClass(LispVal receiver) {
 		if (receiver instanceof LispCons cell && ClojureLowerUtil.isSymbolNamed(cell.car(), "JAVA:NEW")
 				&& cell.cdr() instanceof LispCons rest && rest.car() instanceof LispString cls) {
-			return cls.value();
+			// a param-tagged construction names the class before its parameter types
+			int tagged = cls.value().indexOf('(');
+			return tagged < 0 ? cls.value() : cls.value().substring(0, tagged);
 		}
 		return null;
 	}

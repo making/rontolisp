@@ -18,9 +18,10 @@ import static org.junit.jupiter.api.Assumptions.abort;
 /**
  * The {@code java:} refusal of the new interop value shapes on both WASM backends: a
  * static field as a value, a member as a value, a zero-arg static call and a host-boolean
- * instance call, and a proxy over a class all compile to the undefined-function call-time
- * error (pinned here by the compile warning naming it) and trap when run. The behavior
- * itself lives in {@link ClojureInteropTest} on the interpreter and the JVM.
+ * instance call, a proxy over a class, and the qualified {@code Class/new},
+ * {@code Class/.method} and param-tagged forms all compile to the undefined-function
+ * call-time error (pinned here by the compile warning naming it) and trap when run. The
+ * behavior itself lives in {@link ClojureInteropTest} on the interpreter and the JVM.
  */
 class ClojureWasmInteropRefusalTest {
 
@@ -88,6 +89,36 @@ class ClojureWasmInteropRefusalTest {
 	void proxyOverAClassRefusesOnTheComponent() throws Exception {
 		assertRefusal("(println (.lastModified (proxy [java.io.File] [\"x\"] (lastModified [] 42))))", "JAVA:SUBCLASS",
 				true);
+	}
+
+	@Test
+	void qualifiedConstructorRefusesOnPreview1() throws Exception {
+		assertRefusal("(println (String/new \"q\"))", "JAVA:NEW", false);
+	}
+
+	@Test
+	void qualifiedConstructorRefusesOnTheComponent() throws Exception {
+		assertRefusal("(println (String/new \"q\"))", "JAVA:NEW", true);
+	}
+
+	@Test
+	void qualifiedInstanceMethodValueRefusesOnPreview1() throws Exception {
+		assertRefusal("(println (map Integer/.byteValue [1]))", "JAVA:CALL", false);
+	}
+
+	@Test
+	void qualifiedInstanceMethodValueRefusesOnTheComponent() throws Exception {
+		assertRefusal("(println (map Integer/.byteValue [1]))", "JAVA:CALL", true);
+	}
+
+	@Test
+	void taggedStaticCallRefusesOnPreview1() throws Exception {
+		assertRefusal("(println (^[double] Math/abs -1))", "JAVA:STATIC", false);
+	}
+
+	@Test
+	void taggedStaticCallRefusesOnTheComponent() throws Exception {
+		assertRefusal("(println (^[double] Math/abs -1))", "JAVA:STATIC", true);
 	}
 
 	private static void assertRefusal(String program, String surface, boolean component) throws Exception {
