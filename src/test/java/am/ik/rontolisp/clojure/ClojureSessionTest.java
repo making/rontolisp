@@ -75,20 +75,20 @@ class ClojureSessionTest {
 		// a session that reads registers each record class once, ahead of the
 		// buffer that adds it, so a literal typed later reads back as the record
 		ClojureSession session = new ClojureSession();
-		session.read("(defrecord B85S [a])");
-		List<String> reading = session.read("(read-string \"#user.B85S{:a 1}\")")
+		session.read("(defrecord RecS [a])");
+		List<String> reading = session.read("(read-string \"#user.RecS{:a 1}\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
 		assertThat(reading.get(0))
-			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85S\" \"B85S\" (\"a\") T)))");
-		List<String> later = session.read("(defrecord B85T [b]) (read-string \"1\")")
+			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecS\" \"RecS\" (\"a\") T)))");
+		List<String> later = session.read("(defrecord RecT [b]) (read-string \"1\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85T\" \"B85T\" (\"b\") T)))");
+		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecT\" \"RecT\" (\"b\") T)))");
 		assertThat(session.read("(read-string \"2\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
