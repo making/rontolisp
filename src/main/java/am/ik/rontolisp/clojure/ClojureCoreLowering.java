@@ -53,7 +53,9 @@ final class ClojureCoreLowering {
 			case "peek", "pop", "not-empty":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
-			case "empty", "double", "float", "byte", "short", "num":
+			case "empty", "double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
+					"numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
+					"unchecked-char", "unchecked-double", "unchecked-float":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
 			case "comparator":
@@ -153,7 +155,9 @@ final class ClojureCoreLowering {
 					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
 					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
 					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta", "empty", "comparator", "hash-set",
-					"double", "float", "byte", "short", "num" ->
+					"double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
+					"numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
+					"unchecked-char", "unchecked-double", "unchecked-float" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

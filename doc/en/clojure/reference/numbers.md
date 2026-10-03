@@ -47,8 +47,21 @@ The arithmetic and comparison core, plus the type predicates. The comparisons an
 | `byte` | `(byte 1.9)` | `1` |
 | `short` | `(short 1.9)` | `1` |
 | `num` | `(num 1/2)` | `1/2` |
+| `bigint` | `(bigint 7/2)` | `3` |
+| `biginteger` | `(biginteger 7/2)` | `3` |
+| `bigdec` | `(bigdec 0.5)` | `1/2` |
+| `rationalize` | `(rationalize 0.1)` | `1/10` |
+| `numerator` | `(numerator 6/4)` | `3` |
+| `denominator` | `(denominator 6/4)` | `2` |
 | `boolean` | `(boolean 1)` | `true` |
 | `char` | `(char 97)` | `a` |
 | `rand` | `(rand 5)` | a double in `[0,5)` |
 | `rand-int` | `(rand-int 1)` | `0` |
 | `unchecked-add` | `(unchecked-add 3 4)` | `7` |
+| `unchecked-int` | `(unchecked-int 2147483648)` | `-2147483648` |
+| `unchecked-long` | `(unchecked-long 7/2)` | `3` |
+| `unchecked-short` | `(unchecked-short 70000)` | `4464` |
+| `unchecked-byte` | `(unchecked-byte 200)` | `-56` |
+| `unchecked-char` | `(unchecked-char 97)` | `a` |
+| `unchecked-double` | `(unchecked-double 1)` | `1.0` |
+| `unchecked-float` | `(unchecked-float 1/2)` | `0.5` |

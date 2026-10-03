@@ -4703,6 +4703,248 @@
   "(num x): a number itself, nil as nil; anything else signals."
   (if (or (numberp x) (null x)) x (error "num needs a number")))
 
+(defun rontolisp::%clojure-wrap-bits (n bits)
+  "The integer N as a signed two's-complement value of BITS bits."
+  (let* ((m (expt 2 bits)) (r (mod n m))) (if (>= r (ash m -1)) (- r m) r)))
+
+(defun rontolisp::%clojure-unchecked-cast (x bits wide charp kind)
+  "The oracle's unchecked KIND cast of X: an integer or a ratio (truncated)
+   wraps to BITS bits, a double truncates after saturating to the int range
+   (the long range when WIDE; NaN is 0) and then wraps, a character is its
+   code when CHARP; anything else signals."
+  (cond
+   ((characterp x)
+    (if charp
+        (char-code x)
+        (error "~A" (concatenate 'string "unchecked-" kind " needs a number"))))
+   ((floatp x)
+    (rontolisp::%clojure-wrap-bits (cond ((/= x x) 0)
+                                         (wide
+                                          (cond ((>= x 9.223372036854775807e18)
+                                                 9223372036854775807)
+                                                ((<= x -9.223372036854775808e18)
+                                                 -9223372036854775808)
+                                                (t (truncate x))))
+                                         (t
+                                          (cond ((>= x 2147483647.0) 2147483647)
+                                           ((<= x -2147483648.0) -2147483648)
+                                           (t (truncate x))))) bits))
+   ((rationalp x) (rontolisp::%clojure-wrap-bits (truncate x) bits))
+   (t (error "~A" (concatenate 'string "unchecked-" kind " needs a number")))))
+
+(defun rontolisp::%clojure-unchecked-int (x)
+  "(unchecked-int x): X wrapped to a signed 32-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 32 nil t "int"))
+
+(defun rontolisp::%clojure-unchecked-long (x)
+  "(unchecked-long x): X wrapped to a signed 64-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 64 t nil "long"))
+
+(defun rontolisp::%clojure-unchecked-short (x)
+  "(unchecked-short x): X wrapped to a signed 16-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 16 nil nil "short"))
+
+(defun rontolisp::%clojure-unchecked-byte (x)
+  "(unchecked-byte x): X wrapped to a signed 8-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 8 nil nil "byte"))
+
+(defun rontolisp::%clojure-unchecked-char (x)
+  "(unchecked-char x): a character itself, a number's low 16 bits as a
+   character."
+  (cond ((characterp x) x)
+        ((realp x)
+         (code-char
+          (logand (rontolisp::%clojure-unchecked-cast x 64 t nil "char")
+                  65535)))
+        (t (error "unchecked-char needs a number or a character"))))
+
+(defun rontolisp::%clojure-unchecked-double (x)
+  "(unchecked-double x): a number widened to a double."
+  (if (numberp x) (float x) (error "unchecked-double needs a number")))
+
+(defun rontolisp::%clojure-unchecked-float (x)
+  "(unchecked-float x): a number widened to a double (doubles only here); past
+   the float range it is the infinity of its sign, like the oracle's cast."
+  (let ((d (if (numberp x) (float x) (error "unchecked-float needs a number"))))
+    (cond ((> d 3.4028234663852886e38) (* most-positive-double-float 2.0d0))
+          ((< d -3.4028234663852886e38) (* most-negative-double-float 2.0d0))
+          (t d))))
+
+(defun rontolisp::%clojure-parse-decimal (s)
+  "The exact rational a decimal string spells: an optional sign, digits with an
+   optional fraction, an optional exponent (e, E, d or D). Anything else
+   signals."
+  (let ((n (length s)) (i 0) (neg nil) (mant 0) (scale 0) (digits 0) (ex 0))
+    (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+      (setq neg (char= (char s i) #\-))
+      (setq i (+ i 1)))
+    (do ((go t))
+        ((not go))
+      (if (and (< i n) (digit-char-p (char s i)))
+          (progn
+            (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+            (setq digits (+ digits 1))
+            (setq i (+ i 1)))
+          (setq go nil)))
+    (when (and (< i n) (char= (char s i) #\.))
+      (setq i (+ i 1))
+      (do ((go t))
+          ((not go))
+        (if (and (< i n) (digit-char-p (char s i)))
+            (progn
+              (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+              (setq digits (+ digits 1))
+              (setq scale (+ scale 1))
+              (setq i (+ i 1)))
+            (setq go nil))))
+    (when (and (> digits 0) (< i n) (find (char s i) "eEdD"))
+      (let ((eneg nil) (edigits 0))
+        (setq i (+ i 1))
+        (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+          (setq eneg (char= (char s i) #\-))
+          (setq i (+ i 1)))
+        (do ((go t))
+            ((not go))
+          (if (and (< i n) (digit-char-p (char s i)))
+              (progn
+                (setq ex (+ (* ex 10) (digit-char-p (char s i))))
+                (setq edigits (+ edigits 1))
+                (setq i (+ i 1)))
+              (setq go nil)))
+        (when (= edigits 0) (setq digits 0))
+        (when eneg (setq ex (- ex)))))
+    (if (or (= digits 0) (< i n))
+        (error "~A" (concatenate 'string "Invalid decimal number: " s))
+        (let ((r (* mant (expt 10 (- ex scale))))) (if neg (- r) r)))))
+
+(defun rontolisp::%clojure-decimal-of-float (x)
+  "The exact rational of the shortest decimal a double prints as, which is
+   what the oracle's BigDecimal.valueOf reads; NaN and the infinities signal."
+  (if (rontolisp::%clojure-symbolic-float-p x)
+      (error "Infinite or NaN")
+      (rontolisp::%clojure-parse-decimal (princ-to-string x))))
+
+(defun rontolisp::%clojure-rationalize (x)
+  "(rationalize x): nil as nil, a rational itself, a double as the rational of
+   its shortest decimal (0.1 is 1/10); anything else signals."
+  (cond ((null x) nil)
+        ((rationalp x) x)
+        ((floatp x) (rontolisp::%clojure-decimal-of-float x))
+        (t (error "rationalize needs a number"))))
+
+(defun rontolisp::%clojure-bigint (x)
+  "(bigint x): a number truncated to an integer, a decimal string parsed;
+   NaN, an infinity or anything else signals."
+  (cond ((integerp x) x)
+        ((rationalp x) (truncate x))
+        ((floatp x)
+         (if (rontolisp::%clojure-symbolic-float-p x)
+             (error "Infinite or NaN")
+             (truncate x)))
+        ((stringp x) (parse-integer x))
+        (t (error "bigint needs a number or a string"))))
+
+(defun rontolisp::%clojure-biginteger (x)
+  "(biginteger x): the same integer as bigint."
+  (rontolisp::%clojure-bigint x))
+
+(defun rontolisp::%clojure-bigdec (x)
+  "(bigdec x): an integer itself, a double as the rational of its shortest
+   decimal, a ratio only when it has a finite decimal expansion, a decimal
+   string parsed; anything else signals."
+  (cond ((integerp x) x)
+        ((rationalp x)
+         (let ((d (denominator x)))
+           (do ((go t))
+               ((not go))
+             (cond ((= (mod d 2) 0) (setq d (/ d 2)))
+                   ((= (mod d 5) 0) (setq d (/ d 5)))
+                   (t (setq go nil))))
+           (if (= d 1)
+               x
+               (error
+                "Non-terminating decimal expansion; no exact representable decimal result."))))
+        ((floatp x) (rontolisp::%clojure-decimal-of-float x))
+        ((stringp x) (rontolisp::%clojure-parse-decimal x))
+        (t (error "bigdec needs a number or a string"))))
+
+(defun rontolisp::%clojure-numerator (x)
+  "(numerator x): the numerator of a ratio; anything else signals."
+  (if (and (rationalp x) (not (integerp x)))
+      (numerator x)
+      (error "numerator needs a ratio")))
+
+(defun rontolisp::%clojure-denominator (x)
+  "(denominator x): the denominator of a ratio; anything else signals."
+  (if (and (rationalp x) (not (integerp x)))
+      (denominator x)
+      (error "denominator needs a ratio")))
+
+(defun rontolisp::%clojure-unchecked-int-v (&rest args)
+  "unchecked-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-int")
+  (rontolisp::%clojure-unchecked-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-long-v (&rest args)
+  "unchecked-long as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-long")
+  (rontolisp::%clojure-unchecked-long (car args)))
+
+(defun rontolisp::%clojure-unchecked-short-v (&rest args)
+  "unchecked-short as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-short")
+  (rontolisp::%clojure-unchecked-short (car args)))
+
+(defun rontolisp::%clojure-unchecked-byte-v (&rest args)
+  "unchecked-byte as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-byte")
+  (rontolisp::%clojure-unchecked-byte (car args)))
+
+(defun rontolisp::%clojure-unchecked-char-v (&rest args)
+  "unchecked-char as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-char")
+  (rontolisp::%clojure-unchecked-char (car args)))
+
+(defun rontolisp::%clojure-unchecked-double-v (&rest args)
+  "unchecked-double as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-double")
+  (rontolisp::%clojure-unchecked-double (car args)))
+
+(defun rontolisp::%clojure-unchecked-float-v (&rest args)
+  "unchecked-float as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-float")
+  (rontolisp::%clojure-unchecked-float (car args)))
+
+(defun rontolisp::%clojure-rationalize-v (&rest args)
+  "rationalize as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "rationalize")
+  (rontolisp::%clojure-rationalize (car args)))
+
+(defun rontolisp::%clojure-bigint-v (&rest args)
+  "bigint as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bigint")
+  (rontolisp::%clojure-bigint (car args)))
+
+(defun rontolisp::%clojure-biginteger-v (&rest args)
+  "biginteger as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "biginteger")
+  (rontolisp::%clojure-biginteger (car args)))
+
+(defun rontolisp::%clojure-bigdec-v (&rest args)
+  "bigdec as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bigdec")
+  (rontolisp::%clojure-bigdec (car args)))
+
+(defun rontolisp::%clojure-numerator-v (&rest args)
+  "numerator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "numerator")
+  (rontolisp::%clojure-numerator (car args)))
+
+(defun rontolisp::%clojure-denominator-v (&rest args)
+  "denominator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "denominator")
+  (rontolisp::%clojure-denominator (car args)))
+
 (defun rontolisp::%clojure-byte-v (&rest args)
   "byte as a value."
   (rontolisp::%clojure-check-arity args 1 1 "byte")

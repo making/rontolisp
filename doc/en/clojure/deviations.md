@@ -136,8 +136,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
-- `unchecked-add` never wraps (integers are bignums); the other `unchecked-*` verbs are
-  absent.
+- `unchecked-add` never wraps (integers are bignums); the `unchecked-` casts (`int`, `long`, `short`,
+  `byte`, `char`, `double`, `float`) match the oracle; the other `unchecked-*` verbs are absent.
+- `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
+  prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
+  decimal expansion signals, like the oracle.
 - `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
   precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
   `nil` `"null"`, like the oracle.

@@ -220,11 +220,24 @@ categories:
       - { slug: byte, name: "byte" }
       - { slug: short, name: "short" }
       - { slug: num, name: "num" }
+      - { slug: bigint, name: "bigint" }
+      - { slug: biginteger, name: "biginteger" }
+      - { slug: bigdec, name: "bigdec" }
+      - { slug: rationalize, name: "rationalize" }
+      - { slug: numerator, name: "numerator" }
+      - { slug: denominator, name: "denominator" }
       - { slug: boolean, name: "boolean" }
       - { slug: char, name: "char" }
       - { slug: rand, name: "rand" }
       - { slug: rand-int, name: "rand-int" }
       - { slug: unchecked-add, name: "unchecked-add" }
+      - { slug: unchecked-int, name: "unchecked-int" }
+      - { slug: unchecked-long, name: "unchecked-long" }
+      - { slug: unchecked-short, name: "unchecked-short" }
+      - { slug: unchecked-byte, name: "unchecked-byte" }
+      - { slug: unchecked-char, name: "unchecked-char" }
+      - { slug: unchecked-double, name: "unchecked-double" }
+      - { slug: unchecked-float, name: "unchecked-float" }
   - title: "Type and collection predicates"
     index_page: clojure/reference/predicates.md
     functions:
