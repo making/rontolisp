@@ -130,7 +130,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword value takes extra arguments (a keyword-dispatched multimethod passes several) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
-| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
+| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `nil?` `false?` `true?` `boolean?` `boolean` `coll?` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `fn?` is false for keywords, sets and maps |
 | `int` `long` `char` `quot` `unchecked-add` | `truncate` (`char-code` for a char) / `code-char` / `truncate` / `+` | a non-number signals; `unchecked-add` never wraps |
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/` |
@@ -213,6 +213,12 @@ table, `%clojure-hash` -> classes) groups the representatives `=` to each other;
 - Cost on keyword-only work (wasm, medians of 3, 2026-10-03): 4M `(get m k)` with a
   variable keyword 2.10 -> 2.37 s (the call to `%clojure-table-key`), 2M two-pair `assoc`
   calls 4.68 -> 4.93 s; JVM unchanged within noise.
+- The float zeros are one key though `equal` (= `eql`) tells them apart: `%clojure-table-key` /
+  `%clojure-store-key` answer the zero the table holds (`%clojure-zero-key`), and
+  `isScalarKeyForm` does not treat a zero double literal as scalar, so the lowered sites go
+  through them. `%clojure-hash` already gives both zeros 0. Measured 2026-10-03 against the oracle:
+  `(= -0.0 0.0)` true, `(contains? #{0.0} -0.0)` true. A NaN key is untouched (the oracle itself
+  finds the same boxed NaN but not another).
 - Two vectors compare in place in `%clojure-equal` (no seq-view copies) -- the bucket scan's
   hot path.
 - Untouched on purpose: hierarchy tables (tags), protocol tables (tags), `prefer-method`'s

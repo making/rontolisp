@@ -4832,3 +4832,17 @@ cases:
     expected: |
       n1 dflt s
       other
+  - name: equality-treats-the-float-zeros-as-equal
+    # = on two doubles is numeric (Numbers.equiv): -0.0 = 0.0, NaN (two separately computed) is not = NaN,
+    # a double is never = a long. Map and set keys follow, so one zero finds the
+    # other. Every line matches the oracle (clj 1.12.6.1673, 2026-10-03).
+    source: |
+      (prn (= -0.0 0.0) (= 0.0 0) (contains? #{0.0} -0.0) (get {0.0 :z} -0.0))
+      (prn (= (/ 0.0 0.0) (/ 0.0 0.0)) (zero? -0.0) (= 1.5 1.5) (= [0.0] [-0.0]) (= {0.0 1} {-0.0 1}))
+      (let [z -0.0 p 0.0] (prn (get {p :a} z) (contains? (conj #{} p) z) (count (conj #{p} z)) (dissoc {p 1} z) (count (assoc {p 1} z 2)) (get (assoc {} p 1) z)))
+      (prn (not= 0.0 -0.0) (distinct [0.0 -0.0]) (get {[0.0] :v} [-0.0]))
+    expected: |
+      true false true :z
+      false true true true true
+      :a true 1 {} 1 1
+      false (0.0) :v

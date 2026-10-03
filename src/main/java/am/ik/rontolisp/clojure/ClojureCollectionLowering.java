@@ -167,8 +167,12 @@ final class ClojureCollectionLowering {
 	}
 
 	private static boolean isScalarLiteral(LispVal form) {
-		return form instanceof LispString || form instanceof LispInteger || form instanceof LispDouble
-				|| form instanceof LispChar || form instanceof LispNil || form instanceof LispTrue;
+		if (form instanceof LispDouble d) {
+			// the two float zeros are one key under =, not under equal
+			return d.value() != 0.0;
+		}
+		return form instanceof LispString || form instanceof LispInteger || form instanceof LispChar
+				|| form instanceof LispNil || form instanceof LispTrue;
 	}
 
 	/**

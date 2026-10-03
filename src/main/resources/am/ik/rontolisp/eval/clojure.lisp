@@ -504,8 +504,9 @@
 (defun rontolisp::%clojure-equal (a b)
   "Clojure = over two values, T or NIL: two sets by membership, two records by
    tag plus entries, a deftype or reify by identity, two maps entry by entry,
-   two sequentials element by element, anything else with equal (numbers keep
-   their category, strings and characters compare by value)."
+   two sequentials element by element, two floats numerically, anything else
+   with equal (numbers keep their category, strings and characters compare by
+   value)."
   (cond ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
          ;; two vectors read in place, without the seq view's copies
          (and (eql (length a) (length b))
@@ -530,6 +531,9 @@
         ((and (rontolisp::%clojure-sequential-p a)
               (rontolisp::%clojure-sequential-p b))
          (rontolisp::%clojure-seq-equal a b))
+        ((and (floatp a) (floatp b))
+         ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
+         (= a b))
         (t (equal a b))))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
@@ -698,21 +702,34 @@
         ((or held (null c)) held)
       (if (not (eq (gethash (car c) table miss) miss)) (setq held (car c))))))
 
+(defun rontolisp::%clojure-zero-key (k table)
+  "The float zero TABLE holds when K is the other float zero (= to K, though
+   equal tells them apart), else K."
+  (let ((other (if (eql k 0.0) (- 0.0) 0.0)) (miss (list nil)))
+    (if (and (eq (gethash k table miss) miss)
+             (not (eq (gethash other table miss) miss)))
+        other
+        k)))
+
 (defun rontolisp::%clojure-table-key (k table)
   "The key TABLE holds K under: when K is structural, the representative = to
-   it that TABLE holds; otherwise (or when TABLE holds none) K itself, which
-   then misses like any absent key."
-  (if (rontolisp::%clojure-structural-key-p k)
-      (or (rontolisp::%clojure-held-key (rontolisp::%clojure-key-class k nil)
-                                        table) k)
-      k))
+   it that TABLE holds; the float zero TABLE holds when K is the other one;
+   otherwise (or when TABLE holds none) K itself, which then misses like any
+   absent key."
+  (cond ((rontolisp::%clojure-structural-key-p k)
+         (or (rontolisp::%clojure-held-key
+              (rontolisp::%clojure-key-class k nil) table) k))
+        ((and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table))
+        (t k)))
 
 (defun rontolisp::%clojure-store-key (k table)
   "The key to store K under in TABLE: when K is structural, the representative
    = to it that TABLE already holds (its value is replaced, its key kept, like
    the oracle), else the representative of K's own kind, else K, which becomes
-   that representative; any other K is itself."
-  (if (rontolisp::%clojure-structural-key-p k)
+   that representative; a float zero is the one TABLE holds (the other zero),
+   any other K is itself."
+  (if (not (rontolisp::%clojure-structural-key-p k))
+      (if (and (floatp k) (= k 0.0)) (rontolisp::%clojure-zero-key k table) k)
       (let* ((class (rontolisp::%clojure-key-class k t))
              (held (rontolisp::%clojure-held-key class table)))
         (if held
@@ -727,8 +744,7 @@
                   (progn
                     (rplacd class (cons k (cdr class)))
                     (setf (gethash k rontolisp::%clojure-key-reps) class)
-                    k)))))
-      k))
+                    k)))))))
 
 (defun rontolisp::%clojure-set-put (table x)
   "X added to the set table TABLE as a member stored under itself (an = member
