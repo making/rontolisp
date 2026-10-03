@@ -56,6 +56,13 @@ final class ClojureCoreLowering {
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "key", "val", "map-entry?", "rseq":
+				arity(name, n, 1, 1);
+				return worker("map-entry?".equals(name) ? "map-entry-p" : name, ctx.lower(items.get(1)));
+			case "find-keyword":
+				arity(name, n, 1, 2);
+				return n == 1 ? worker(name, ctx.lower(items.get(1)))
+						: worker("find-keyword-2", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 			case "subvec":
 				arity(name, n, 2, 3);
 				return n == 2 ? worker("subvec-from", ctx.lower(items.get(1)), ctx.lower(items.get(2)))
@@ -130,10 +137,11 @@ final class ClojureCoreLowering {
 	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
 		return switch (name) {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
-					"dedupe", "replace", "find", "subvec", "partition-all", "partition-by", "min-key", "max-key",
-					"juxt", "fnil", "every-pred", "some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta",
-					"meta", "vary-meta" ->
+					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
+					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
+					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
+			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
 			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);

@@ -83,9 +83,11 @@ scan, placement) of ci-spec: 1,471-1,516 -> 1,463-1,520 ms.
 
 **Time.** bench-report, the spec corpora and a cl-ppcre scan loop: unchanged within noise.
 A bounce costs what the dispatcher call it replaces could inline away: 10M calls through two
-forwarding closures 3 -> 171-209 ms, through a `compose`d closure 137-160 -> 211-224 ms;
-Clojure's lazy `map` over 2M elements 170-183 -> 192-203 ms (its per-element lambda passes
-`%clojure-call`'s apply bounce on). A defun's bounce was already that price.
+forwarding closures 3 -> 171-209 ms, through a `compose`d closure 137-160 -> 211-224 ms. A
+defun's bounce was already that price. Clojure (develop after `.todo/c00`, whose call sites
+funcall a real function): `reduce` with a two-argument `fn`, 2M calls of a local two-argument
+`fn`, `map` over 2M elements -- unchanged within noise; before `.todo/c00` `map`'s
+per-element lambda handed `%clojure-call`'s apply bounce on, 170-183 -> 192-203 ms.
 
 ## Tests
 

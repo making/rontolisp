@@ -10,4 +10,5 @@ demangled and compare whole. `name` reads the part past the first `/`,
 | `name` | `(name :foo/bar)` | `bar` |
 | `namespace` | `(namespace :foo/bar)` | `foo` |
 | `keyword` | `(keyword "a" "b")` | `:a/b` |
+| `find-keyword` | `(find-keyword "a")` | `:a` |
 | `symbol` | `(symbol "a" "b")` | `a/b` |

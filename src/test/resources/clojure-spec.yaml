@@ -2387,6 +2387,66 @@ cases:
       [:a 1] nil [:z 3] :a 1
       ([:a 1] [:b 2] nil) [:a 1] [:a 1] 1
       :refused :refused :refused :refused
+  - name: key-and-val-read-a-map-entry
+    # Oracle-identical (clj 1.12.6): the key and value of an entry from first, find or a
+    # record; a map, a list, nil and a number signal. A plain [k v] vector is an entry
+    # here too (see map-entry-takes-any-pair).
+    source: |
+      (defrecord KR [a])
+      (prn (key (first {:a 1})) (val (first {:a 1})) (key (find {:a 1} :a)) (val (find [10 20] 1)) (key (first {nil nil})) (val (first {:a [1 2]})))
+      (prn (map key {:a 1}) (map val {:a 1}) (let [f key g val e (first {:k :v})] [(f e) (g e)]) (apply key [(first {:a 1})]) (map (juxt key val) {:a 1}))
+      (prn (key (first (->KR 1))) (val (find (->KR 1) :a)) (reduce + (map val {:a 1})) (into {} (map (fn [e] [(val e) (key e)]) {:a 1})))
+      (prn (try (key nil) (catch Exception e :refused)) (try (val {:a 1}) (catch Exception e :refused)) (try (key '(1 2)) (catch Exception e :refused)) (try (val 1) (catch Exception e :refused)))
+    expected: |
+      :a 1 :a 20 nil [1 2]
+      (:a) (1) [:k :v] :a ([:a 1])
+      :a 1 1 {1 :a}
+      :refused :refused :refused :refused
+  - name: map-entry-recognises-an-entry
+    # Oracle-identical for every value but a plain two-member vector (next case).
+    source: |
+      (prn (map-entry? (first {:a 1})) (map-entry? (find {:a 1} :a)) (map-entry? (find [1 2] 0)) (map-entry? nil) (map-entry? {:a 1}) (map-entry? 1) (map-entry? "ab") (map-entry? [1 2 3]) (map-entry? []) (map-entry? '(1 2)) (map-entry? :a))
+      (prn (filter map-entry? [(first {:a 1}) {:a 1} 3 nil]) (let [f map-entry?] (f (first {:a 1}))) (apply map-entry? [(first {:a 1})]))
+    expected: |
+      true true true false false false false false false false false
+      ([:a 1]) true true
+  - name: map-entry-takes-any-pair
+    # A deviation: an entry is a plain two-member vector here, so map-entry? and key
+    # accept a [k v] vector where the oracle answers false and signals.
+    source: |
+      (prn (map-entry? [1 2]) (key [1 2]) (val [1 2]))
+    expected: |
+      true 1 2
+  - name: rseq-reverses-a-vector
+    # Oracle-identical (clj 1.12.6): the members last first, nil when empty; nil, a list,
+    # a seq, a string and a map signal.
+    source: |
+      (prn (rseq [1 2 3]) (rseq []) (rseq [1]) (rseq (subvec [1 2 3 4] 1)) (rseq [nil nil]) (first (rseq [1 2 3])) (count (rseq [1 2 3])) (into [] (rseq [1 2 3])) (conj (rseq [1 2]) 9))
+      (prn (map rseq [[1 2] [3]]) (let [f rseq] (f [1 2 3])) (apply rseq [[4 5]]) (rseq (vec (range 5))) (rseq [[1 2] [3]]))
+      (prn (try (rseq nil) (catch Exception e :refused)) (try (rseq '(1 2)) (catch Exception e :refused)) (try (rseq "abc") (catch Exception e :refused)) (try (rseq {:a 1}) (catch Exception e :refused)) (try (rseq (seq [1 2])) (catch Exception e :refused)) (try (rseq (rseq [1 2])) (catch Exception e :refused)))
+    expected: |
+      (3 2 1) nil (1) (4 3 2) (nil nil) 3 3 [3 2 1] (9 2 1)
+      ((2 1) (3)) (3 2 1) (5 4) (4 3 2 1 0) ([3] [1 2])
+      :refused :refused :refused :refused :refused :refused
+  - name: find-keyword-answers-a-keyword-or-nil
+    # Oracle-identical for spellings the program has already used as keywords (the
+    # oracle answers nil for one never interned; see find-keyword-never-answers-nil-here).
+    source: |
+      (def fk-pair :b/c)
+      (prn (find-keyword "a") (find-keyword :a) (find-keyword 'a) (find-keyword 1) (find-keyword nil) (find-keyword "b" "c") (find-keyword nil "a") (find-keyword :a/b) (= :a (find-keyword "a")))
+      (prn (map find-keyword ["a" :a 'a 1]) (let [f find-keyword] [(f "a") (f "b" "c")]) (apply find-keyword ["b" "c"]))
+      (prn (try (find-keyword "a" nil) (catch Exception e :refused)) (try (find-keyword 1 "a") (catch Exception e :refused)) (try (find-keyword "a" 1) (catch Exception e :refused)) (try (find-keyword :a "b") (catch Exception e :refused)))
+    expected: |
+      :a :a :a nil nil :b/c :a :a/b true
+      (:a :a :a nil) [:a :b/c] :b/c
+      :refused :refused :refused :refused
+  - name: find-keyword-never-answers-nil-here
+    # A deviation: keywords are not interned, so a spelling no keyword ever used answers
+    # its keyword where the oracle answers nil.
+    source: |
+      (prn (find-keyword "zz-never-seen") (find-keyword 'zz/never-seen))
+    expected: |
+      :zz-never-seen :zz/never-seen
   - name: seq-combinators
     source: |
       (println (remove odd? [1 2 3 4]))

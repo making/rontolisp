@@ -5,11 +5,10 @@ Difficulty: High
 Every tail call through a value in a defun, a lambda or an `apply` bounces
 (`.kb/jvm-tail-bounce.md`): an `Object[]` per call and a round trip through `_tramp`'s
 megamorphic `_invoke_<n>`, which also stops the JIT from inlining the chain. Most such calls
-are shallow -- an adapter closure, a `compose`d function, a sort key, Clojure's lazy `map`
-step -- and pay that for a depth they never reach. Measured 2026-10-03 (`java Prog`, best of
-7): 10M calls through two forwarding closures 3 -> 171-209 ms, through a `compose`d closure
-137-160 -> 211-224 ms, Clojure's lazy `map` over 2M elements 170-183 -> 192-203 ms; a
-defun's value tail has paid the same since the trampoline landed.
+are shallow -- an adapter closure, a `compose`d function, a `reduce :from-end` step -- and
+pay that for a depth they never reach. Measured 2026-10-03 (`java Prog`, best of 7): 10M
+calls through two forwarding closures 3 -> 171-209 ms, through a `compose`d closure 137-160
+-> 211-224 ms; a defun's value tail has paid the same since the trampoline landed.
 
 ## Plan
 

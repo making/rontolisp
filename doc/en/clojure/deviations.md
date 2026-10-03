@@ -29,6 +29,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is the empty list, `(= [] nil)` is `true` where the oracle answers `false`.
 - `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
   the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
+- A map entry is a plain two-member vector, so `map-entry?` is `true` of every `[k v]`
+  (the oracle: `false` for one the program built) and `key`/`val` read any such vector. Keywords
+  are not interned, so `find-keyword` answers the keyword for a spelling no keyword ever used
+  (the oracle: `nil`).
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the

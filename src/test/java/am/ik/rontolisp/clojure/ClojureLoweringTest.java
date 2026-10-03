@@ -2097,6 +2097,19 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/subvec");
 		assertThatThrownBy(() -> Clojure.read("(find {})", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/find");
+		assertThatThrownBy(() -> Clojure.read("(key)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/key");
+		assertThatThrownBy(() -> Clojure.read("(val 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/val");
+		assertThatThrownBy(() -> Clojure.read("(map-entry?)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/map-entry?");
+		assertThatThrownBy(() -> Clojure.read("(rseq [] [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/rseq");
+		assertThatThrownBy(() -> Clojure.read("(find-keyword)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/find-keyword");
+		assertThatThrownBy(() -> Clojure.read("(find-keyword \"a\" \"b\" \"c\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/find-keyword");
 	}
 
 	@Test
