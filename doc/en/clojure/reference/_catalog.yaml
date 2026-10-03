@@ -279,6 +279,7 @@ categories:
       - { slug: future-p, name: "future?" }
       - { slug: realized-p, name: "realized?" }
       - { slug: bound-p, name: "bound?" }
+      - { slug: thread-bound-p, name: "thread-bound?" }
       - { slug: class-p, name: "class?" }
       - { slug: extends-p, name: "extends?" }
       - { slug: special-symbol-p, name: "special-symbol?" }

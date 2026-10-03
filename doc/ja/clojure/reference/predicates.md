@@ -60,6 +60,7 @@
 | `future?` | `(future? 1)` | `false` |
 | `realized?` | `(realized? (lazy-seq nil))` | `false` |
 | `bound?` | `(bound?)` | `true` |
+| `thread-bound?` | `(thread-bound? #'x)` | `x` の `binding` の外では `false` |
 | `class?` | `(class? 1)` | `false` |
 | `extends?` | `(extends? P R)` | `R` が `P` を実装していれば `true` |
 | `special-symbol?` | `(special-symbol? 'if)` | `true` |

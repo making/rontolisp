@@ -5532,6 +5532,35 @@ cases:
       false 1 true
       false 2 true
       false :refused :refused :refused :refused
+  - name: thread-bound-predicate-follows-the-binding-extent
+    # Oracle-identical (clj 1.12.6): true while a binding of every given var is in effect,
+    # false for a root, a non-dynamic var and an unbound var, a non-var signals (only when
+    # reached: every? stops at the first false).
+    source: |
+      (def ^:dynamic *tb-d* 1)
+      (def ^:dynamic *tb-e* 2)
+      (def tb-plain 3)
+      (defn probe [] (thread-bound? #'*tb-d*))
+      (prn (thread-bound? #'*tb-d*) (thread-bound?) (thread-bound? #'tb-plain))
+      (binding [*tb-d* 10]
+        (prn (thread-bound? #'*tb-d*) (thread-bound? #'*tb-e*) (thread-bound? #'*tb-d* #'*tb-e*) (probe) (thread-bound? #'tb-plain))
+        (binding [*tb-e* 20]
+          (prn (thread-bound? #'*tb-d* #'*tb-e*) (apply thread-bound? [#'*tb-d* #'*tb-e*]) (map thread-bound? [#'*tb-d* #'*tb-e*]))))
+      (prn (thread-bound? #'*tb-d*) (probe))
+      (prn (try (thread-bound? 1) (catch Exception e :refused)) (try (thread-bound? 'tb-plain) (catch Exception e :refused)))
+      (prn (try (thread-bound? #'*tb-e* 1) (catch Exception e :refused)) (try (binding [*tb-e* 1] (thread-bound? #'*tb-e* 1)) (catch Exception e :refused)))
+      (defn ^:dynamic *tb-f* [] 1)
+      (prn (thread-bound? #'*tb-f*))
+      (binding [*tb-f* (fn [] 2)] (prn (thread-bound? #'*tb-f*) (*tb-f*)))
+    expected: |
+      false true false
+      true false false true false
+      true true (true true)
+      false false
+      :refused :refused
+      false :refused
+      false
+      true 2
   - name: predicates-of-kinds-no-value-has-answer-false
     # Oracle-identical (clj 1.12.6): an unsorted map, vector or set is not sorted?, and no
     # chunked seq, decimal, byte array, delay, future, reader conditional, tagged literal

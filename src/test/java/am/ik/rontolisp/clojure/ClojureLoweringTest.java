@@ -1507,6 +1507,14 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [x] x) (#'f 1)")).contains("(RONTOLISP::%CLOJURE-CALL (RONTOLISP::%CLOJURE-VAR");
 		assertThat(lowered("(def x 1) (test #'x)")).contains("(RONTOLISP::%CLOJURE-VAR-TEST (RONTOLISP::%CLOJURE-VAR");
 		assertThat(lowered("(map test [])")).contains("#'RONTOLISP::%CLOJURE-VAR-TEST-V");
+		// only a dynamic var's site carries the binding-depth reader thread-bound? asks
+		assertThat(lowered("(def ^:dynamic *d* 1) (thread-bound? #'*d*)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"user/*d*\" (LAMBDA NIL |c%*d*|)")
+			.contains("(LAMBDA NIL |c%*d*%bound-depth|)")
+			.contains("RONTOLISP::%CLOJURE-IS-THREAD-BOUND");
+		assertThat(lowered("(def x 1) (thread-bound? #'x)")).doesNotContain("VAR-DYNAMIC");
+		assertThat(lowered("(def x 1) #'x")).doesNotContain("VAR-DYNAMIC");
+		assertThat(lowered("(map thread-bound? [])")).contains("#'RONTOLISP::%CLOJURE-IS-THREAD-BOUND-V");
 		// a local is no var (the oracle resolves past it): under a shadowing local
 		// the root is read through a top-level reader the local cannot shadow
 		assertThat(lowered("(def x 1) (let [x 2] #'x)")).contains("(DEFUN |c%x%root| NIL |c%x|)")

@@ -264,8 +264,15 @@ final class ClojureVarLowering {
 		else {
 			metaForm = meta.stored() ? metaSym(key) : ctx.lower(meta.datum());
 		}
-		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root), metaForm);
+		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
+		if (ctx.dynamicVars.contains(key)) {
+			// only a dynamic var's site carries the binding-depth reader thread-bound?
+			// asks, so a program with no dynamic var pays nothing for it
+			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+							ClojureLowering.boundDepthSym(key)));
+		}
+		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
 	}
 
 	/** Whether the call head is a {@code #'x} / {@code (var x)} form. */

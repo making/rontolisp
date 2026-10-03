@@ -3450,6 +3450,25 @@
   (dolist (v vars t)
     (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))))
 
+(defun rontolisp::%clojure-is-thread-bound (vars)
+  "thread-bound?: every one of VARS is a dynamic var under a binding right now.
+   A var site of a ^:dynamic var carries its binding-depth reader as a fourth
+   element, so any other var is never thread-bound, like the oracle's; anything
+   that is no var signals, like its cast. Stops at the first var that is not."
+  (let ((ok t))
+    (dolist (v vars ok)
+      (if ok
+          (progn
+            (if (not (rontolisp::%clojure-var-p v))
+                (error "thread-bound? needs vars"))
+            (let ((depth (cdr (cdr (cdr v)))))
+              (if (or (null depth) (<= (funcall (car depth)) 0))
+                  (setq ok nil))))))))
+
+(defun rontolisp::%clojure-is-thread-bound-v (&rest args)
+  "thread-bound? as a value."
+  (if (rontolisp::%clojure-is-thread-bound args) t rontolisp::%clojure-false))
+
 (defun rontolisp::%clojure-is-special-symbol (x)
   "special-symbol?: one of the oracle's special form names."
   (if (rontolisp::%clojure-real-symbol-p x)
@@ -4934,6 +4953,13 @@
           (setq v (list :C%VAR name getter))
           (setf (gethash name rontolisp::%clojure-var-table) v)))
     (rontolisp::%clojure-put-meta v meta)))
+
+(defun rontolisp::%clojure-var-dynamic (name getter meta depth)
+  "The var NAME of a ^:dynamic var: as the plain var, and DEPTH, a closure over
+   its binding-depth counter, recorded as the fourth element for thread-bound?."
+  (let ((v (rontolisp::%clojure-var name getter meta)))
+    (rplacd (cdr (cdr v)) (list depth))
+    v))
 
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."

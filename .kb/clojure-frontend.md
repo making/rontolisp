@@ -901,6 +901,13 @@ resolve var`; a `clojure.core` var is refused.
   top-level forms, for `SpecialVarCollector`); a `^:dynamic` `defn` keeps its `defun` and
   adds a `defparameter` of the function, so calls go through the value cell (`recur` and
   the arity helpers stay direct). Each `binding` rebinds the counter one deeper.
+- `thread-bound?` reads that counter through the var: the `#'x` site of a `^:dynamic` var
+  lowers to `%clojure-var-dynamic`, which adds `(lambda () counter)` as a fourth element of
+  `(:C%VAR name getter depth)`; every other var site is the plain three-element `%clojure-var`,
+  so a program with no dynamic var is unchanged (wasm, `(var? #'x)` on a plain var: 21473 bytes
+  before and after; one dynamic var plus a `#'` of it: 22026 -> 22106, 2026-10-03). A var without the element (non-dynamic) or
+  at depth zero is not thread-bound; a non-var signals only when reached. `#'*out*` and the
+  other core vars are not vars here (`var of a clojure.core var is not supported yet`).
 - `set!` of a dynamic var: past depth zero `setq`, at zero the oracle's `Can't
   change/establish root binding of: x with set` -- the counter has dynamic extent, so a
   callee outside the binding's lexical extent still sets it. The `clojure.main`-bound

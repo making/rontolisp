@@ -119,6 +119,9 @@ final class ClojurePredicateLowering {
 			case "bound?":
 				return ClojureLowerUtil.list(helperSymbol("IS-BOUND"),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
+			case "thread-bound?":
+				return ctx.booleanAnswer(ClojureLowerUtil.list(helperSymbol("IS-THREAD-BOUND"),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1))));
 			case "extends?":
 				ClojureCoreLowering.arity(name, n, 2, 2);
 				return extendsOf(ctx, items);
@@ -166,6 +169,8 @@ final class ClojurePredicateLowering {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-DISTINCT-V"));
 			case "bound?":
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-BOUND-V"));
+			case "thread-bound?":
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), helperSymbol("IS-THREAD-BOUND-V"));
 			default:
 				return null;
 		}
