@@ -4584,6 +4584,77 @@
   "rsubseq as a value."
   (rontolisp::%clojure-subseq-of args nil))
 
+(defun rontolisp::%clojure-cast-bounded (x lo hi kind)
+  "The oracle's byteCast/shortCast of X: a character's code, an integer, a ratio
+   truncated, or a double truncated toward zero, answered when it lies in LO..HI;
+   a double is compared BEFORE truncating (127.9 is out of range for a byte) and
+   NaN is out of range. Anything else signals. The refusal spells the value with
+   princ-to-string, so a program casting a byte or short splices no str path."
+  (let ((n
+         (cond ((characterp x) (char-code x))
+          ((integerp x) x)
+          ((floatp x) (if (or (/= x x) (< x lo) (> x hi)) nil (truncate x)))
+          ((numberp x) (truncate x))
+          (t (error "~A"
+              (concatenate 'string kind " needs a number or a character"))))))
+    (if (or (null n) (< n lo) (> n hi))
+        (error "~A"
+               (concatenate 'string "Value out of range for " kind ": "
+                            (princ-to-string (if (null n) x n))))
+        n)))
+
+(defun rontolisp::%clojure-byte (x)
+  "(byte x): X cast as a signed 8-bit integer."
+  (rontolisp::%clojure-cast-bounded x -128 127 "byte"))
+
+(defun rontolisp::%clojure-short (x)
+  "(short x): X cast as a signed 16-bit integer."
+  (rontolisp::%clojure-cast-bounded x -32768 32767 "short"))
+
+(defun rontolisp::%clojure-double (x)
+  "(double x): a number widened to a double; anything else signals."
+  (if (numberp x) (float x) (error "double needs a number")))
+
+(defun rontolisp::%clojure-float (x)
+  "(float x): a number widened to a double (doubles only here) that must lie in
+   the float range, like the oracle's floatCast; NaN passes."
+  (let ((d (rontolisp::%clojure-double x)))
+    (if (and (= d d)
+             (or (> d 3.4028234663852886e38) (< d -3.4028234663852886e38)))
+        (error "~A"
+               (concatenate 'string "Value out of range for float: "
+                            (princ-to-string d)))
+        d)))
+
+(defun rontolisp::%clojure-num (x)
+  "(num x): a number itself, nil as nil; anything else signals."
+  (if (or (numberp x) (null x)) x (error "num needs a number")))
+
+(defun rontolisp::%clojure-byte-v (&rest args)
+  "byte as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "byte")
+  (rontolisp::%clojure-byte (car args)))
+
+(defun rontolisp::%clojure-short-v (&rest args)
+  "short as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "short")
+  (rontolisp::%clojure-short (car args)))
+
+(defun rontolisp::%clojure-double-v (&rest args)
+  "double as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "double")
+  (rontolisp::%clojure-double (car args)))
+
+(defun rontolisp::%clojure-float-v (&rest args)
+  "float as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "float")
+  (rontolisp::%clojure-float (car args)))
+
+(defun rontolisp::%clojure-num-v (&rest args)
+  "num as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "num")
+  (rontolisp::%clojure-num (car args)))
+
 (defun rontolisp::%clojure-vector-of-long (x)
   "The oracle's longCast of X: a character's code, an integer in the long range,
    a ratio truncated, a double truncated toward zero (NaN 0) when it is in
@@ -4617,8 +4688,9 @@
 (defun rontolisp::%clojure-vector-of-1 (kind x)
   "X as the primitive slot KIND (\"int\", \"long\", ...) of a vector-of stores
    it, the oracle's cast: the integer kinds truncate a number (a character to
-   its code) and refuse one out of range, :double and :float widen to a double,
-   :char takes a character or a code, :boolean is the truthiness."
+   its code) and refuse one out of range (through longCast, unlike byte and
+   short, which compare a double first), :double and :float widen to a double
+   (:float refusing one past the float range), :char takes a character or a code, :boolean is the truthiness."
   (cond ((equal kind "long") (rontolisp::%clojure-vector-of-long x))
         ((equal kind "int")
          (let ((n (rontolisp::%clojure-vector-of-long x)))
@@ -4631,8 +4703,8 @@
         ((equal kind "byte")
          (rontolisp::%clojure-vector-of-range x
           (rontolisp::%clojure-vector-of-long x) -128 127 "byte"))
-        ((or (equal kind "double") (equal kind "float"))
-         (if (numberp x) (float x) (error "vector-of needs a number")))
+        ((equal kind "double") (rontolisp::%clojure-double x))
+        ((equal kind "float") (rontolisp::%clojure-float x))
         ((equal kind "char")
          (cond ((characterp x) x)
                ((numberp x)

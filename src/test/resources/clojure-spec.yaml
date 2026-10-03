@@ -5614,6 +5614,36 @@ cases:
       [false false true] [\a] [97] [1] [32767 -32768] [2147483647 -2147483648]
       true true ([1] [2]) [1 2]
       [1 2.5]
+  - name: primitive-casts-double-float-byte-short-and-num
+    # Oracle-identical (clj 1.12.6) but for two deviations: float answers a double (the
+    # oracle a Float, so (float 1/3) prints 0.3333333333333333 here and 0.33333334 there,
+    # which this case does not print), and the refusal texts of a cast taking a value the
+    # oracle's Java cast refuses are ours (only that it signals is pinned).
+    source: |
+      (defn pc-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (defn pc-head [f] (first (clojure.string/split (pc-msg f) #":")))
+      (defn pc-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (double 1) (double 1/2) (double 1.5) (double -3) (double ##Inf) (map double [1 2 3]) (apply double [4]))
+      (prn (float 1) (float 0.5) (float 3) (float ##NaN) (map float [1 2]))
+      (prn (byte 1.9) (byte -1.9) (byte 127) (byte -128) (byte \a) (byte 1/2) (byte 127.0) (byte 100N))
+      (prn (short 1.9) (short 32767) (short -32768) (short \a) (short 99/2) (map short [1 2.5]) (apply byte [5]))
+      (prn (num 1) (num 1.5) (num 1/2) (num nil) (map num [1 2]))
+      (println (pc-msg #(byte 200)) "|" (pc-msg #(byte -129)) "|" (pc-msg #(byte 127.9)) "|" (pc-msg #(byte ##NaN)))
+      (println (pc-msg #(short 70000)) "|" (pc-msg #(short -32769)) "|" (pc-msg #(short 32767.5)))
+      (println (pc-head #(byte 1e20)) "|" (pc-head #(short 1e20)) "|" (pc-head #(float 1e300)) "|" (pc-head #(float -1e300)) "|" (pc-head #(float 3.4028235E38)) "|" (pc-head #(float ##Inf)))
+      (println (pc-refused #(double "a")) (pc-refused #(double nil)) (pc-refused #(double \a)) (pc-refused #(float \a)) (pc-refused #(byte "a")) (pc-refused #(short nil)) (pc-refused #(num "a")) (pc-refused #(num \a)))
+      (prn (vector-of :byte 1.9) (vector-of :byte 127.9) (pc-head #(vector-of :float 1e300)))
+    expected: |
+      1.0 0.5 1.5 -3.0 ##Inf (1.0 2.0 3.0) 4.0
+      1.0 0.5 3.0 ##NaN (1.0 2.0)
+      1 -1 127 -128 97 0 127 100
+      1 32767 -32768 97 49 (1 2) 5
+      1 1.5 1/2 nil (1 2)
+      Value out of range for byte: 200 | Value out of range for byte: -129 | Value out of range for byte: 127.9 | Value out of range for byte: NaN
+      Value out of range for short: 70000 | Value out of range for short: -32769 | Value out of range for short: 32767.5
+      Value out of range for byte | Value out of range for short | Value out of range for float | Value out of range for float | Value out of range for float | Value out of range for float
+      :refused :refused :refused :refused :refused :refused :refused :refused
+      [1] [127] "Value out of range for float"
   - name: sorted-collections-refuse-like-the-oracle
     # The first three lines are the oracle's messages (clj 1.12.6); on the last the
     # oracle names Java casts (PersistentVector cannot be cast to clojure.lang.Sorted,

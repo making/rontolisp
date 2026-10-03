@@ -150,6 +150,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `()`); a test passed to `subseq` as a value is recognized by how it answers `(1 0)`,
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
   orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
+- `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
+  `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
+  refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
   given, where the oracle's keeps casting, and `:float` holds doubles.
 - `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position

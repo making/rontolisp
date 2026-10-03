@@ -42,6 +42,11 @@ The arithmetic and comparison core, plus the type predicates. The comparisons an
 | `class` | `(class "a")` | `:string` |
 | `int` | `(int 2.7)` | `2` |
 | `long` | `(long -2.7)` | `-2` |
+| `double` | `(double 1)` | `1.0` |
+| `float` | `(float 1/2)` | `0.5` |
+| `byte` | `(byte 1.9)` | `1` |
+| `short` | `(short 1.9)` | `1` |
+| `num` | `(num 1/2)` | `1/2` |
 | `boolean` | `(boolean 1)` | `true` |
 | `char` | `(char 97)` | `a` |
 | `rand` | `(rand 5)` | a double in `[0,5)` |

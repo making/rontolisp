@@ -215,6 +215,11 @@ categories:
       - { slug: class, name: "class" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }
+      - { slug: double, name: "double" }
+      - { slug: float, name: "float" }
+      - { slug: byte, name: "byte" }
+      - { slug: short, name: "short" }
+      - { slug: num, name: "num" }
       - { slug: boolean, name: "boolean" }
       - { slug: char, name: "char" }
       - { slug: rand, name: "rand" }
