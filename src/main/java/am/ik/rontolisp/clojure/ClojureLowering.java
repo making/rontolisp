@@ -772,6 +772,20 @@ public final class ClojureLowering {
 	boolean macrosEmitted;
 
 	/**
+	 * Whether the program reads ({@code read-string}, {@code read}, as calls or values):
+	 * its record and deftype classes are registered once, behind the false binding, so a
+	 * record literal the run-time reader meets builds the record.
+	 */
+	boolean usedReader;
+
+	/**
+	 * The classes a session already registered for the run-time reader, by class name: a
+	 * later buffer registers only what it adds or redefines (files register every class
+	 * at once).
+	 */
+	final Map<String, TypeDef> readRegistered = new HashMap<>();
+
+	/**
 	 * How deep lower-time macro expansion may nest before it ends with an error. Each
 	 * level is a recursive expansion (a macro whose expansion calls a macro); a wide
 	 * recursion like {@code chain} over many forms nests one level per form, so the bound
@@ -831,6 +845,14 @@ public final class ClojureLowering {
 		if (lowering.usedTest) {
 			// the test runtime starts before anything else, like the false value
 			lowering.forms.addAll(1, ClojureTestLowering.testRuntime(lowering));
+		}
+		if (lowering.usedReader) {
+			// every class of the program is readable before anything runs, like
+			// the false value: a record literal names one a later file defines too
+			LispVal registration = ClojureReadLowering.registration(lowering.types.values());
+			if (registration != null) {
+				lowering.forms.add(1, registration);
+			}
 		}
 		return lowering.forms;
 	}
@@ -911,6 +933,21 @@ public final class ClojureLowering {
 			// like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureTestLowering.testRuntime(this), false));
 			this.testEmitted = true;
+		}
+		if (this.usedReader) {
+			// The classes this buffer adds or redefines become readable ahead of
+			// it, like the false binding; earlier buffers registered theirs.
+			List<TypeDef> fresh = new ArrayList<>();
+			for (TypeDef type : this.types.values()) {
+				if (this.readRegistered.get(type.className()) != type) {
+					fresh.add(type);
+					this.readRegistered.put(type.className(), type);
+				}
+			}
+			LispVal registration = ClojureReadLowering.registration(fresh);
+			if (registration != null) {
+				out.add(0, new ClojureTopLevel(List.of(registration), false));
+			}
 		}
 		return out;
 	}

@@ -55,6 +55,14 @@ final class ClojureReader {
 
 	private static final String DELIMS = " \t\n\r\f,()[]{}\";'@^`~#";
 
+	/**
+	 * What {@link #readDatum} answers for a {@code #_} discard (the discarded datum
+	 * already read): every collection and {@link #readAll} skips it, so a discard before
+	 * a closing bracket or the end of input drops like the oracle's, and
+	 * {@link #readRequired} reads on past it.
+	 */
+	private static final LispSymbol DISCARD = new LispSymbol("%discard");
+
 	private final String source;
 
 	private final @Nullable String file;
@@ -101,11 +109,42 @@ final class ClojureReader {
 	List<LispVal> readAll() {
 		List<LispVal> forms = new ArrayList<>();
 		skipSpace();
+		this.endsInDiscard = false;
 		while (this.pos < this.source.length()) {
-			forms.add(readDatum());
+			LispVal datum = readDatum();
+			this.endsInDiscard = datum == DISCARD;
+			if (datum != DISCARD) {
+				forms.add(datum);
+			}
 			skipSpace();
 		}
 		return forms;
+	}
+
+	/**
+	 * Whether the last {@link #readAll} ended in a {@code #_} discard: a session buffer
+	 * like that waits for the datum after it, like the oracle's REPL reading on.
+	 * @return whether the text ends in a discard
+	 */
+	boolean endsInDiscard() {
+		return this.endsInDiscard;
+	}
+
+	private boolean endsInDiscard;
+
+	/**
+	 * The next datum past whitespace and {@code #_} discards: what a quote, a deref, a
+	 * var, metadata and a discard itself read. The end of input is the
+	 * {@code unexpected end of input} refusal.
+	 */
+	private LispVal readRequired() {
+		LispVal datum;
+		do {
+			skipSpace();
+			datum = readDatum();
+		}
+		while (datum == DISCARD);
+		return datum;
 	}
 
 	/**
@@ -157,15 +196,16 @@ final class ClojureReader {
 			}
 			case '@' -> {
 				next();
-				skipSpace();
-				yield list("deref", readDatum());
+				yield list("deref", readRequired());
 			}
 			case '^' -> readMeta();
 			case '#' -> readDispatch();
 			case '\\' -> readCharLiteral();
 			default -> readAtom();
 		};
-		this.offsets.putIfAbsent(datum, start);
+		if (datum != DISCARD) {
+			this.offsets.putIfAbsent(datum, start);
+		}
 		return datum;
 	}
 
@@ -176,15 +216,12 @@ final class ClojureReader {
 		}
 		if (peek() == '\'') { // var
 			next();
-			skipSpace();
-			return list("var", readDatum());
+			return list("var", readRequired());
 		}
-		if (peek() == '_') { // skip next form
+		if (peek() == '_') { // skip the next form
 			next();
-			skipSpace();
-			readDatum();
-			skipSpace();
-			return readDatum();
+			readRequired();
+			return DISCARD;
 		}
 		if (peek() == '(') {
 			return readAnonFn();
@@ -217,10 +254,8 @@ final class ClojureReader {
 	 */
 	private LispVal readMeta() {
 		next();
-		skipSpace();
-		LispVal meta = readDatum();
-		skipSpace();
-		return list(ClojureLowerUtil.READER_META, readDatum(), meta);
+		LispVal meta = readRequired();
+		return list(ClojureLowerUtil.READER_META, readRequired(), meta);
 	}
 
 	/**
@@ -276,13 +311,19 @@ final class ClojureReader {
 	 * One character literal: a single character, a lowercase name ({@code newline},
 	 * {@code space}, {@code tab}, {@code return}, {@code backspace}, {@code formfeed}), a
 	 * {@code u} plus four hex digits or an {@code o} plus one to three octal digits --
-	 * exactly the oracle's (Clojure CLI 1.12) spellings, case-sensitively. Anything else
-	 * is the oracle's {@code Unsupported character} refusal.
+	 * exactly the oracle's (Clojure CLI 1.12) spellings, case-sensitively. Like the
+	 * oracle's, the character behind the backslash belongs to the literal whatever it is
+	 * (so {@code \(}, what {@code pr} spells for the parenthesis, reads back) and a
+	 * backslash ends it ({@code [\a\b]} is two characters). Anything else is the oracle's
+	 * {@code Unsupported character} refusal.
 	 */
 	private LispVal readCharLiteral() {
 		next(); // the backslash
 		int start = this.pos;
-		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
+		if (this.pos < this.source.length()) {
+			next(); // the first character, whatever it is
+		}
+		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0 && peek() != '\\') {
 			next();
 		}
 		String token = this.source.substring(start, this.pos);
@@ -370,7 +411,10 @@ final class ClojureReader {
 				next();
 				return items;
 			}
-			items.add(readDatum());
+			LispVal datum = readDatum();
+			if (datum != DISCARD) {
+				items.add(datum);
+			}
 			skipSpace();
 		}
 	}
@@ -393,7 +437,7 @@ final class ClojureReader {
 	}
 
 	private LispVal quoted(String name) {
-		return list(name, readDatum());
+		return list(name, readRequired());
 	}
 
 	/**

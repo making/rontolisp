@@ -373,6 +373,28 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void readTakesBackWhatSpitWrote() throws Exception {
+		// b85: the book's concurrency.clj backup shape -- spit a list of records, read
+		// it back through a PushbackReader over clojure.java.io/reader -- answers = to
+		// what was written, like the oracle; read leaves the reader right after the
+		// datum. The wasm legs (a --dir preopen) live in ClojureWasmFileIoTest.
+		String path = "\"" + workDir.resolve("b85-backup.clj").toString().replace("\\", "\\\\") + "\"";
+		String prelude = "(ns b85io (:require [clojure.java.io :refer [reader]]))"
+				+ " (defrecord Message [sender text]) (def msg (->Message \"unit test\" \"test message\"))";
+		assertBothEqual(
+				prelude + " (spit " + path + " (list msg)) (println (slurp " + path + "))"
+						+ " (println (= (read (java.io.PushbackReader. (reader " + path + "))) (list msg)))",
+				"(#b85io.Message{:sender \"unit test\", :text \"test message\"})\ntrue\n");
+		assertBothEqual(prelude + " (spit " + path + " \"[1 2] :k\\nnext line\")"
+				+ " (with-open [r (java.io.PushbackReader. (reader " + path + "))]"
+				+ " (prn (read r) (read r) (.readLine r) (read r false :eof)))", "[1 2] :k \"\" next\n");
+		// a host reader is no stream: read says what it reads from
+		assertThatThrownBy(
+				() -> interpret("(let [sr (java.io.StringReader. \"1\")] (read (java.io.PushbackReader. sr)))"))
+			.hasMessageContaining("read needs a reader");
+	}
+
+	@Test
 	void filesRoundTripThroughReaderAndLineSeq() throws Exception {
 		// clojure.java.io/reader opens a buffered file-stream reader: line-seq reads
 		// it without closing (with-open owns closing, like the oracle), over the

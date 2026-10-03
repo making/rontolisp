@@ -16,7 +16,8 @@ above the definition.
 
 A record prints as its literal, like the oracle: `#user.R{:a 7}` -- the defining
 namespace (`-` spelled `_`) plus the name, the declared fields first. The literal
-reads back: `#ns.Name{:k v ...}` builds the record over the unevaluated body
+reads back, in source and through [read-string](read-string.md)/[read](read.md):
+`#ns.Name{:k v ...}` builds the record over the unevaluated body
 (missing fields `nil`, extra keys kept), `#ns.Name[v ...]` positionally (a wrong
 count is refused). The class must be a record the program defines; an undotted
 `#Name{...}` is a tagged literal and is refused, like the oracle

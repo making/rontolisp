@@ -197,11 +197,13 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は
 `*standard-output*` を文字列ストリームに束縛し（リテラルの
 `with-output-to-string` は使いません）、印字内容を答えます。`time` は
-`Elapsed time: N msecs` を報告して値を答えます。`with-open` は束縛して
+`Elapsed time: N msecs`（オラクル同様、倍精度の数）を報告して値を答えます。
+`with-open` は束縛して
 `unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
 closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
-`read-line` 越しに読みます（末尾越しはオラクル同様 `nil`）。
+`read-line` 越しに読み（末尾越しはオラクル同様 `nil`）、`(.read stream)` は次の
+文字のコードを答えます（末尾越しは `-1`）。
 lazy 入力はどの seq 動詞にも届きます。コレクション全体を辿る動詞（`count`、`last`、
 `sort`、`apply`、`reverse`、`set`、`frequencies`、`keep` 群、`reduce`、`into`）は先に
 すべて realize します（無限の入力はオラクル同様に答えを返しません）。途中で止まる動詞
@@ -252,6 +254,20 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 フィールドへの `set!` はオラクルと同じ `Cannot assign to non-mutable: ...`、
 非 dynamic なグローバルへの `set!` は実行時に
 `Can't change/establish root binding of: ... with set` をシグナルします。
+
+## 読み取り
+
+`read-string` は文字列の最初のデータを、`read` はリーダからデータを1つ、実行時に
+すべてのバックエンドで読みます。答えは同じテキストをクオートしたときの値と同じです。
+数・文字列・文字・キーワード（`::kw` は呼び出し元の名前空間で解決）・コレクションを
+同じように読み、メタデータは捨て、`#_` は読み飛ばします。レコードリテラルは
+プログラムが定義するクラスのレコードを組みます。`#=` の読み取り時評価、リーダ条件、
+タグ付きリテラルはソースと同様に拒否されます。リーダとして渡せるのは
+`clojure.java.io/reader`、`*in*`、それらや `java.io.StringReader` の上の
+`java.io.PushbackReader`/`BufferedReader` で、いずれもどのバックエンドでも
+ストリームです。`read` はリーダをデータの直後に残します。`str` はオラクル同様、
+コレクション内の文字列をクォートするので、`spit` が書いたものは読み戻せます。
+`eval` と `load-string` は提供しません。実行時にコンパイラが動かないためです。
 
 ## 未対応
 

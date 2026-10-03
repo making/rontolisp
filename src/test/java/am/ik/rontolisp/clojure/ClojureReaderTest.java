@@ -210,6 +210,32 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void aDiscardBeforeAClosingBracketOrTheEndDiscardsLikeTheOracle() {
+		// oracle (clj 1.12.6.1673): '[1 #_ 2] is [1], '(a #_ b) is (a), a map entry
+		// commented out at its end drops, and a file may end in a discard
+		assertThat(printed("[1 #_ 2]")).isEqualTo("[(|%vector| 1)]");
+		assertThat(printed("(a #_ b)")).isEqualTo("[(|a|)]");
+		assertThat(printed("{:a 1 #_ :b #_ 2}")).isEqualTo("[(|%hash-map| :|a| 1)]");
+		assertThat(printed("x #_ y")).isEqualTo("[|x|]");
+		assertThat(printed("#_ #_ a b c")).isEqualTo("[|c|]");
+		assertThat(printed("'#_ a b")).isEqualTo("[(|quote| |b|)]");
+		assertThatThrownBy(() -> read("#_")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unexpected end of input");
+	}
+
+	@Test
+	void aCharacterLiteralTakesItsFirstCharacterWhateverItIs() {
+		// oracle: the character behind the backslash belongs to the literal
+		// unconditionally, so what pr spells for a delimiter reads back; a
+		// backslash ends the literal
+		assertThat(printed("\\( \\) \\[ \\] \\{ \\} \\\" \\; \\, \\\\ \\# \\' \\@ \\^ \\` \\~"))
+			.isEqualTo(printed("\\u0028 \\u0029 \\u005B \\u005D \\u007B \\u007D \\u0022 \\u003B \\u002C \\u005C "
+					+ "\\u0023 \\u0027 \\u0040 \\u005E \\u0060 \\u007E"));
+		assertThat(printed("[\\(\\a\\b]")).isEqualTo("[(|%vector| #\\( #\\a #\\b)]");
+		assertThat(printed("\\a,")).isEqualTo("[#\\a]");
+	}
+
+	@Test
 	void legacyHashCaretMetadataReadsLikeTheCaret() {
 		assertThat(printed("#^:k v")).isEqualTo(printed("^:k v"));
 		assertThat(printed("#^{:doc \"x\"} v")).isEqualTo(printed("^{:doc \"x\"} v"));

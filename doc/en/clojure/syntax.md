@@ -7,7 +7,8 @@ with a core form or built-in; a quoted symbol demangles, so `'e2e-foo` prints `e
 ## Dispatch and comment syntax
 
 , is whitespace, as in Clojure. `#!` starts a shebang comment on the first line; `;`
-starts a line comment; `#_` skips the next form. A regex literal (`#"..."`) reads to
+starts a line comment; `#_` skips the next form (one before a closing bracket or at the
+end of the file discards too, so `[1 #_ 2]` is `[1]`). A regex literal (`#"..."`) reads to
 a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
 `(var x)`, the var of a definition (see [var](reference/var.md)); syntax-quote
 (`` ` ``, `~`, `~@`) is covered in [Semantics](semantics.md). Metadata (`^`, the legacy
@@ -20,8 +21,10 @@ literal it attaches like `with-meta` (see
 ## Characters
 
 Characters read as characters: `\a`, the lowercase `newline`/`space`/`tab`/`return`/
-`backspace`/`formfeed` names, `\uXXXX` and `\oNNN`. Anything else is an `Unsupported
-character` refusal. A character prints `\a` readably (`pr`) and `a` plainly
+`backspace`/`formfeed` names, `\uXXXX` and `\oNNN`. The character after the backslash
+belongs to the literal whatever it is, so `\(`, `\;` and `\"` read (what `pr` spells for
+them), and a backslash ends a literal (`[\a\b]` is two). Anything else is an
+`Unsupported character` refusal. A character prints `\a` readably (`pr`) and `a` plainly
 (`println`/`str`).
 
 ## Numbers

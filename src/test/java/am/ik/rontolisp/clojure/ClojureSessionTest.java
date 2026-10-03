@@ -50,6 +50,32 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aBufferRegistersForReadingOnlyTheRecordClassesItAdds() {
+		// a session that reads registers each record class once, ahead of the
+		// buffer that adds it, so a literal typed later reads back as the record
+		ClojureSession session = new ClojureSession();
+		session.read("(defrecord B85S [a])");
+		List<String> reading = session.read("(read-string \"#user.B85S{:a 1}\")")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(reading.get(0))
+			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85S\" \"B85S\" (\"a\") T)))");
+		List<String> later = session.read("(defrecord B85T [b]) (read-string \"1\")")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.B85T\" \"B85T\" (\"b\") T)))");
+		assertThat(session.read("(read-string \"2\")")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList()).noneMatch(form -> form.contains("READ-REGISTER"));
+	}
+
+	@Test
 	void aLaterBufferExpandsAMacroAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		session.setMacroEvaluator(ClojureMacroTime.create());
@@ -169,6 +195,15 @@ class ClojureSessionTest {
 		// Complete but wrong still answers true: the error belongs to read.
 		assertThat(ClojureSession.isComplete("(nope 1)")).isTrue();
 		assertThat(ClojureSession.isComplete("'")).isFalse();
+		// a character literal's first character is no bracket, quote or comment
+		assertThat(ClojureSession.isComplete("(str \\( \\[ \\{)")).isTrue();
+		assertThat(ClojureSession.isComplete("[\\; \\\" 1]")).isTrue();
+		assertThat(ClojureSession.isComplete("[\\)")).isFalse();
+		// a trailing discard waits for the datum after it, like the oracle's REPL;
+		// one inside a collection is part of it
+		assertThat(ClojureSession.isComplete("#_ 1")).isFalse();
+		assertThat(ClojureSession.isComplete("#_ 1 2")).isTrue();
+		assertThat(ClojureSession.isComplete("[1 #_ 2]")).isTrue();
 	}
 
 }

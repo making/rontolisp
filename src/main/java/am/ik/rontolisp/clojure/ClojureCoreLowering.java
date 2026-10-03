@@ -103,6 +103,8 @@ final class ClojureCoreLowering {
 				arity(name, n, 2, -1);
 				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
+			case "read-string", "read":
+				return ClojureReadLowering.callOf(ctx, name, items);
 			default:
 				return null;
 		}
@@ -122,6 +124,7 @@ final class ClojureCoreLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
+			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);
 			default -> null;
 		};
 	}
