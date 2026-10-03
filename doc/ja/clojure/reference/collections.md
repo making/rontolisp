@@ -23,6 +23,7 @@
 | `update-in` | `(update-in {:a {:b 1}} [:a :b] inc)` | `{:a {:b 2}}` |
 | `assoc-in` | `(assoc-in {} [:a :b] 1)` | `{:a {:b 1}}` |
 | `get-in` | `(get-in {:a {:b 1}} [:a :b])` | `1` |
+| `replace` | `(replace {0 :z} [0 1 0])` | `[:z 1 :z]` |
 | `select-keys` | `(select-keys {:a 1 :b 2} [:a])` | `{:a 1}` |
 | `merge-with` | `(merge-with + {:a 1} {:a 2})` | `{:a 3}` |
 | `into` | `(into [] [1 2])` | `[1 2]` |

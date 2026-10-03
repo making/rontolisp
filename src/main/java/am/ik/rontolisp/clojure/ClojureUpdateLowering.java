@@ -38,19 +38,16 @@ final class ClojureUpdateLowering {
 	}
 
 	/**
-	 * One association over already-lowered map, key and value: a fresh table over the old
-	 * pairs plus the pair, so {@code assoc} onto nil builds from empty.
+	 * One association over already-lowered map, key and value through
+	 * {@link ClojureCollectionLowering#assocAnswer}: a vector indexed, anything else a
+	 * fresh table over the old pairs plus the pair, so {@code assoc} onto nil builds from
+	 * empty.
 	 */
 	static LispVal assocPairForm(ClojureLowering ctx, LispVal map, LispVal key, LispVal val) {
 		LispSymbol one = ctx.freshTemp();
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
-				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal grown = ClojureCollectionLowering.grownTable(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), key, val));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map))),
-				ClojureCollectionLowering.rewrapAnswer(ctx, one, grown));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map))), ClojureCollectionLowering
+					.assocAnswer(ctx, one, ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), key, val)));
 	}
 
 	/** {@code update}: the key rewritten through the function and extra arguments. */
@@ -92,15 +89,11 @@ final class ClojureUpdateLowering {
 				ClojureCollectionLowering.getForm(ctx, one, at, ClojureLowering.NIL_CONST), tail);
 		LispVal next = real ? ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), fn, args)
 				: ctx.callableApply(fn, args);
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
-				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal grown = ClojureCollectionLowering.grownTable(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), at, next));
-		return ClojureLowerUtil.list(
-				ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map),
-						ClojureLowerUtil.list(at, key), ClojureLowerUtil.list(fn, fun))),
-				ClojureCollectionLowering.rewrapAnswer(ctx, one, grown));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map), ClojureLowerUtil.list(at, key),
+						ClojureLowerUtil.list(fn, fun))),
+				ClojureCollectionLowering.assocAnswer(ctx, one,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), at, next)));
 	}
 
 	/** {@code update} as a value: map, key, function and any extra arguments. */

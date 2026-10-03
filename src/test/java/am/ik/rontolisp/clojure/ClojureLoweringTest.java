@@ -2091,6 +2091,8 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/take-nth");
 		assertThatThrownBy(() -> Clojure.read("(completing)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/completing");
+		assertThatThrownBy(() -> Clojure.read("(replace {} [] [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/replace");
 	}
 
 	@Test

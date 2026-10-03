@@ -2291,6 +2291,65 @@ cases:
       1
       :dflt
       {:a 31}
+  - name: assoc-on-a-vector-replaces-or-appends-by-index
+    # Oracle-identical (clj 1.12.6): a fresh vector, the index = count appending,
+    # any other index or a non-integer key signalling; assoc onto nil still builds a map.
+    source: |
+      (def av-a (vec (range 10)))
+      (prn (assoc av-a 0 :changed) av-a)
+      (prn (assoc [0 1 2] 0 :y) (assoc [0 1] 2 :x) (assoc [0 1 2] 0 :a 2 :c) (assoc [0 1] 2 :a 3 :b) (assoc [] 0 :x))
+      (let [v [1 2 3]] (prn (assoc v 1 :x) v (vector? (assoc v 0 0))))
+      (prn (assoc nil 0 :x) (assoc (first {:a 1}) 0 :k))
+      (prn (try (assoc [0 1] 3 :x) (catch Exception e :out-of-range)) (try (assoc [0 1] -1 :x) (catch Exception e :out-of-range)) (try (assoc [0 1] 2 :a 4 :b) (catch Exception e :out-of-range)))
+      (prn (try (assoc [0 1] :a :x) (catch Exception e (ex-message e))) (try (assoc [0 1] 1.0 :x) (catch Exception e (ex-message e))))
+      (prn ((fn [f] (f [1 2] 0 :a 2 :c)) assoc) (apply assoc [1 2] [0 :a]) (map (fn [x] (assoc x 0 :z)) [[1] [2 3]]))
+    expected: |
+      [:changed 1 2 3 4 5 6 7 8 9] [0 1 2 3 4 5 6 7 8 9]
+      [:y 1 2] [0 1 :x] [:a 1 :c] [0 1 :a :b] [:x]
+      [1 :x 3] [1 2 3] true
+      {0 :x} [:k 1]
+      :out-of-range :out-of-range :out-of-range
+      "Key must be integer" "Key must be integer"
+      [:a 2 :c] [:a 2] ([:z] [:z 3])
+  - name: update-and-the-nested-verbs-reach-into-vectors
+    # Oracle-identical: update/update-in/assoc-in/get-in step through vectors by
+    # index, in calls, as values and inside maps and records.
+    source: |
+      (prn (update [1 2 3] 0 inc) (update [1 2 3] 3 (fnil inc 0)) (update [1 2 3] 1 + 10 20))
+      (prn (try (update [1 2 3] 5 (fnil inc 0)) (catch Exception e :out-of-range)))
+      (prn (update-in [[0 0] [0 0]] [1 0] inc) (update-in {:a [1 2]} [:a 1] inc))
+      (prn (assoc-in [[0 0] [0 0]] [1 0] :x) (assoc-in [[0 0] [0 0]] [2 0] :x) (assoc-in {:a [1 2]} [:a 0] :x))
+      (prn (try (assoc-in [[0 0] [0 0]] [3 0] :x) (catch Exception e :out-of-range)))
+      (prn (get-in [[0 1] [2 3]] [1 0]) (get-in [[0 1] [2 3]] [5 0] :d) (get-in {:a [{:b 1}]} [:a 0 :b]))
+      (prn (let [f update-in] (f [[0 0] [0 0]] [1 0] inc)) (let [f assoc-in] (f [[0 0] [0 0]] [1 0] :x)) (let [f update] (f [1 2] 0 inc)))
+      (defrecord AvR [v])
+      (prn (let [r (update (->AvR [1 2]) :v assoc 0 :q)] [(:v r) (instance? AvR r)]) (update {:v [1 2]} :v assoc 1 :q) (assoc {:v [1 2]} :v (assoc [1 2] 0 :q)))
+    expected: |
+      [2 2 3] [1 2 3 1] [1 32 3]
+      :out-of-range
+      [[0 0] [1 0]] {:a [1 3]}
+      [[0 0] [:x 0]] [[0 0] [0 0] {0 :x}] {:a [:x 2]}
+      :out-of-range
+      2 :d 1
+      [[0 0] [1 0]] [[0 0] [:x 0]] [2 2]
+      [[:q 2] true] {:v [1 :q]} {:v [:q 2]}
+  - name: replace-maps-through-a-map-or-a-vector
+    # Oracle-identical: a vector collection answers a vector, anything else a seq;
+    # (replace smap) is the transducer; a set smap signals like the oracle's find.
+    source: |
+      (prn (replace [:a :b] [0 1 0]) (replace {0 :z} [0 1 0]) (replace {0 :z} '(0 1 0)))
+      (prn (replace {1 nil} [1 2]) (replace nil [1 2]) (replace {1 :a} []) (replace {\a :x} "abc"))
+      (prn (replace {[1] :v} [[1] '(1)]) (replace [:a :b] [0 1 2 -1 1.0 :k]) (replace {1.0 :f} [1 1.0]))
+      (prn (replace {1 :a} (range 3)) (replace {1 :a 2 :b} (map inc [0 1])) (into [] (replace {1 :a}) [1 2 1]))
+      (prn (let [f replace] [(f {1 :a} [1 2]) (into [] (f {1 :a}) [1 2])]) (map (partial replace {1 :a}) [[1] [2]]))
+      (prn (try (replace #{1} [1 2]) (catch Exception e :refused)))
+    expected: |
+      [:a :b :a] [:z 1 :z] (:z 1 :z)
+      [nil 2] [1 2] [] (:x \b \c)
+      [:v :v] [:a :b 2 -1 1.0 :k] [1 :f]
+      (0 :a 2) (:a :b) [:a 2 :a]
+      [[:a 2] [:a 2]] ([:a] [2])
+      :refused
   - name: seq-combinators
     source: |
       (println (remove odd? [1 2 3 4]))

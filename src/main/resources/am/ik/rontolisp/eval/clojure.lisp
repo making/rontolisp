@@ -779,6 +779,33 @@
       (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
             (car (cdr p))))))
 
+(defun rontolisp::%clojure-vector-assoc (v plist)
+  "(assoc V k v ...) for a vector V: a fresh vector with PLIST's alternating
+   indexes and values applied left to right, an index equal to the count
+   appending, like the oracle; a non-integer index, one out of range or a
+   string V signals."
+  (if (stringp v) (error "assoc needs a map or a vector, not a string"))
+  (let ((out (rontolisp::%clojure-vector-copy v (length v))))
+    (do ((p plist (cdr (cdr p))))
+        ((null p) out)
+      (let ((i (car p)) (n (length out)))
+        (if (not (integerp i)) (error "Key must be integer"))
+        (if (or (< i 0) (< n i))
+            (error "Index ~D out of bounds for length ~D" i n))
+        (if (< i n)
+            (setf (aref out i) (car (cdr p)))
+            (progn
+              (setq out (rontolisp::%clojure-vector-copy out (+ n 1)))
+              (setf (aref out i) (car (cdr p)))))))))
+
+(defun rontolisp::%clojure-vector-copy (v size)
+  "A fresh vector of SIZE members holding V's members first. make-array plus
+   the aref loop links less code than copy-seq or a coerce round trip
+   (measured 2026-10-03: a map-only assoc program's wasm grows 2.5 KB through
+   this arm instead of 3.3 KB)."
+  (let ((out (make-array size)))
+    (dotimes (j (length v) out) (setf (aref out j) (aref v j)))))
+
 (defun rontolisp::%clojure-memo-key (args)
   "The argument list ARGS as a memoize table key: ARGS itself unless an
    argument is structural, else a fresh list with each structural argument
@@ -2761,6 +2788,46 @@
       (progn
         (rontolisp::%clojure-check-arity args 1 1 "dedupe")
         (rontolisp::%clojure-dedupe (car args)))))
+
+(defun rontolisp::%clojure-replacer (smap)
+  "The one-argument function replace maps with: X's value when SMAP holds X (a
+   map's or record's key under =, a vector's index), else X itself. A nil SMAP
+   holds nothing; anything else signals, like the oracle's find."
+  (let ((table
+         (cond ((hash-table-p smap) smap)
+          ((rontolisp::%clojure-record-p smap) (car (cdr (cdr (cdr smap)))))
+          (t nil)))
+        (miss (list nil)))
+    (cond (table (lambda (x)
+                   (let ((v
+                          (gethash (rontolisp::%clojure-table-key x table) table
+                                   miss)))
+                     (if (eq v miss) x v))))
+          ((null smap) (lambda (x) x))
+          ((and (vectorp smap) (not (stringp smap)))
+           (lambda (x)
+             (if (and (integerp x) (>= x 0) (< x (length smap)))
+                 (aref smap x)
+                 x)))
+          (t (error "replace needs a map or a vector")))))
+
+(defun rontolisp::%clojure-replace (smap coll)
+  "(replace SMAP COLL): a vector COLL answers a vector, anything else its seq
+   through the replacer, lazy or strict like map."
+  (let ((f (rontolisp::%clojure-replacer smap)))
+    (if (and (vectorp coll) (not (stringp coll)))
+        (coerce (mapcar f (coerce coll 'list)) 'vector)
+        (rontolisp::%clojure-map f (list coll)))))
+
+(defun rontolisp::%clojure-xf-replace (smap)
+  "(replace smap): each input through the replacer."
+  (rontolisp::%clojure-xf-map (rontolisp::%clojure-replacer smap)))
+
+(defun rontolisp::%clojure-replace-v (&rest args)
+  "replace as a value: [smap] the transducer, [smap coll] the replacement."
+  (if (= (rontolisp::%clojure-check-arity args 1 2 "replace") 1)
+      (rontolisp::%clojure-xf-replace (car args))
+      (rontolisp::%clojure-replace (car args) (car (cdr args)))))
 
 (defun rontolisp::%clojure-partition-all (n step coll)
   "COLL in runs of N every STEP members, the short tail kept. A non-positive

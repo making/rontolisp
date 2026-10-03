@@ -10,7 +10,7 @@ The one-argument arity of these seq verbs is their transducer (zero arguments fo
 `dedupe` and `distinct`), in call position and as a value: `map`, `filter`, `remove`,
 `keep`, `keep-indexed`, `map-indexed`, `take`, `drop`, `take-while`, `drop-while`,
 `take-nth`, `mapcat`, `partition-all`, `partition-by`, `interpose`, `dedupe`,
-`distinct`. `cat` is a transducer itself.
+`distinct`, `replace`. `cat` is a transducer itself.
 
 | Name | Example | Result |
 |---|---|---|

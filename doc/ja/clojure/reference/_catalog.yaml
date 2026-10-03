@@ -140,6 +140,7 @@ categories:
       - { slug: update-in, name: "update-in" }
       - { slug: assoc-in, name: "assoc-in" }
       - { slug: get-in, name: "get-in" }
+      - { slug: core-replace, name: "replace" }
       - { slug: select-keys, name: "select-keys" }
       - { slug: merge-with, name: "merge-with" }
       - { slug: into, name: "into" }

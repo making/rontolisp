@@ -315,36 +315,48 @@ final class ClojureCollectionLowering {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n >= 3 && n % 2 == 1, "assoc takes a map and key/value pairs");
 		LispSymbol map = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, ctx.lower(items.get(1))))),
+				assocAnswer(ctx, map, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2))));
+	}
+
+	/**
+	 * The association over a bound target and a form answering the alternating keys and
+	 * values, evaluated once: a vector gets its indexes replaced in a fresh vector
+	 * ({@code rontolisp::%clojure-vector-assoc}), anything else a fresh table over the
+	 * old pairs plus the new ones, later pairs winning, back in its record ({@code nil}
+	 * builds from empty). The run-time {@code vectorp} test is the map path's one extra
+	 * step. Every {@code assoc}, {@code update}, {@code update-in} and {@code assoc-in}
+	 * lowers through here.
+	 */
+	static LispVal assocAnswer(ClojureLowering ctx, LispSymbol map, LispVal plist) {
+		LispSymbol pairs = ctx.freshTemp();
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
 				ClojureProtocolLowering.typedTableOf(map), map);
 		LispVal grown = grownTable(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, src, ClojureLowering.NIL_CONST),
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, src, ClojureLowering.NIL_CONST), pairs);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, ctx.lower(items.get(1))))),
-				rewrapAnswer(ctx, map, grown));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pairs, plist))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), map),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VECTOR-ASSOC"), map, pairs),
+						rewrapAnswer(ctx, map, grown)));
 	}
 
 	/**
 	 * {@code assoc} as a value: over a map and a rest list of alternating keys and
 	 * values, grown in one copy like a call (later pairs winning, onto {@code nil} from
-	 * empty). An odd rest count signals, like a call's pair refusal.
+	 * empty, a vector indexed). An odd rest count signals, like a call's pair refusal.
 	 */
 	static LispVal assocValue(ClojureLowering ctx) {
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("assoc-map"));
 		LispSymbol pairs = new LispSymbol(ClojureLowering.mangle("assoc-pairs"));
-		LispSymbol bound = ctx.freshTemp();
-		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(bound),
-				ClojureProtocolLowering.typedTableOf(bound), bound);
-		LispVal grown = grownTable(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, src, ClojureLowering.NIL_CONST), pairs);
-		LispVal build = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, map))), rewrapAnswer(ctx, bound, grown));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("assoc takes a map and key/value pairs"));
-		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("oddp"), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)), arity,
-				build);
+		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)),
+				arity, assocAnswer(ctx, map, pairs));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(map, ClojureLowering.AMPERSAND_REST, pairs)), body);
 	}

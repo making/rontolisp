@@ -9,7 +9,7 @@
 次の seq 関数は1引数形（`dedupe` と `distinct` は0引数形）がトランスデューサーで、呼び出しでも
 値としても使えます: `map`・`filter`・`remove`・`keep`・`keep-indexed`・`map-indexed`・
 `take`・`drop`・`take-while`・`drop-while`・`take-nth`・`mapcat`・`partition-all`・
-`partition-by`・`interpose`・`dedupe`・`distinct`。`cat` はそれ自体がトランスデューサーです。
+`partition-by`・`interpose`・`dedupe`・`distinct`・`replace`。`cat` はそれ自体がトランスデューサーです。
 
 | Name | Example | Result |
 |---|---|---|
