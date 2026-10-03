@@ -2582,6 +2582,19 @@ public final class ClojureLowering {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("LET"),
 						ClojureLowerUtil.list(ClojureLowerUtil.list(vectorTemp, lower(items.get(1)))),
 						booleanAnswer(vectorRaw(vectorTemp)));
+			default:
+				return builtinSequences(name, items, n);
+		}
+	}
+
+	/**
+	 * The sequence and collection verbs, sliced out of {@link #builtin}: the dispatcher
+	 * had crossed HotSpot's {@code HugeMethodLimit} again, and it runs per call form, so
+	 * it must stay JIT-compilable. Null when the name is none of them, like
+	 * {@code builtin}.
+	 */
+	@Nullable LispVal builtinSequences(String name, List<LispVal> items, int n) {
+		switch (name) {
 			case "map":
 				ClojureLowerUtil.isTrue(n >= 2, "map takes a function and collections");
 				return ClojureSeqLowering.mapForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
@@ -2705,6 +2718,17 @@ public final class ClojureLowering {
 			case "second":
 				ClojureLowerUtil.isTrue(n == 1, "second takes one collection");
 				return ClojureSeqLowering.nthForm(this, lower(items.get(1)), new LispInteger(1), NIL_CONST);
+			default:
+				return builtinFunctions(name, items, n);
+		}
+	}
+
+	/**
+	 * The function-combinator, type and I/O verbs, sliced out of {@link #builtin} for the
+	 * same reason as {@link #builtinSequences}; ends in {@link #builtinConvenience}.
+	 */
+	@Nullable LispVal builtinFunctions(String name, List<LispVal> items, int n) {
+		switch (name) {
 			case "update":
 				return ClojureUpdateLowering.updateOf(this, items);
 			case "update-in":
