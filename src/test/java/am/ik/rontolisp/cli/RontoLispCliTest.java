@@ -1507,6 +1507,17 @@ class RontoLispCliTest {
 				(defn g [] 1)
 				(def w 2)
 				(def x 1) (def x2 2)
+				(defprotocol P (pm [x]))
+				(defrecord R [a])
+				(deftype T [a])
+				(declare q)
+				(declare qa qb)
+				(do (def v 3))
+				(let [a 1] (def u a))
+				(def nested (def inner 1))
+				(println (def shown 1))
+				(ns my-app)
+				(defrecord R2 [a])
 				""";
 		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("""
 				#'user/f
@@ -1527,6 +1538,17 @@ class RontoLispCliTest {
 				#'foo/w
 				#'foo/x
 				#'foo/x2
+				P
+				foo.R
+				foo.T
+				#'foo/q
+				#'foo/qb
+				#'foo/v
+				#'foo/u
+				#'foo/nested
+				#'foo/shown
+				nil
+				my_app.R2
 				""");
 	}
 

@@ -9,6 +9,9 @@ buffer switches the `*ns*` the `::`-keywords below it resolve against, like a fi
 `ns` form. The value echo renders in Clojure
 notation, readably; a top-level `def`, `defn`, `defn-`, `defmacro`, `defmulti` or
 `defonce` echoes the var it defined (`#'user/twice`), and a `defonce` over a bound var `nil`.
+`defprotocol` echoes its name (`P`), `defrecord` and `deftype` their class name (`user.R`),
+`declare` the last name's var, and a `def` nested in another form its var as well. In a file a
+nested `def` answers the value.
 
 ```console
 $ rontolisp --source-language clojure

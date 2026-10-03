@@ -10,6 +10,8 @@
 エコーは Clojure 記法で可読に描画されます。トップレベルの `def`・`defn`・`defn-`・`defmacro`・
 `defmulti`・`defonce` は定義した var（`#'user/twice`）をエコーし、束縛済みの var への `defonce` は
 `nil` をエコーします。
+`defprotocol` は名前（`P`）、`defrecord` と `deftype` はクラス名（`user.R`）、`declare` は最後の名前の var、
+他のフォームに入れ子になった `def` もその var をエコーします。ファイルでは入れ子の `def` は値を返します。
 
 ```console
 $ rontolisp --source-language clojure

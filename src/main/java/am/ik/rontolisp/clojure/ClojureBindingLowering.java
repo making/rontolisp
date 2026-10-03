@@ -136,6 +136,10 @@ final class ClojureBindingLowering {
 
 	static LispVal def(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		List<LispVal> forms = defForms(ctx, form, items, null);
+		if (ctx.nestedDefAnswersVar) {
+			forms = new ArrayList<>(forms);
+			forms.add(ClojureVarLowering.definedVar(ctx, ClojureLowerUtil.plainName(items.get(1), "def")));
+		}
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}

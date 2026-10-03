@@ -819,9 +819,16 @@ path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
 The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
 var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the
 datum's last form; a file's definition shows nothing), the oracle's. `defonce` over a bound var
-and `defmulti` over a held multimethod answer `nil`, like the oracle. Not echoed like the oracle
-yet (measured 2026-10-03): `defprotocol` (`P`), `defrecord` (`user.R`), `declare`, a `def`
-nested in `do`/`let` (the oracle answers the var from any `def`).
+and `defmulti` over a held multimethod answer `nil`, like the oracle. `defprotocol` answers its
+name (`P`), `defrecord`/`deftype` the class name (`my_app.R`, namespace munged), `declare` the
+last name's var. A `def` nested below the datum (`(do (def v 3))`, `(println (def x 1))`)
+answers its var too, through `ClojureLowering.nestedDefAnswersVar`, set for a session datum only.
+
+A file's nested `def` keeps answering the value, not the var (oracle divergence, kept). Measured
+2026-10-03, wasm-GC: building the var per site costs ~0.5 KB per site plus ~26 KB once (the
+`VAR` runtime a program with no `#'x` otherwise leaves out): a 7-site program grew 10.1 KB ->
+39.7 KB, 14 sites 10.2 KB -> 43.5 KB. The value of a nested `def` is read almost never, so a
+size cost on every file is not worth the parity.
 
 ## `clojure.spec`: refused
 

@@ -372,6 +372,12 @@ public final class ClojureLowering {
 	boolean tailPosition;
 
 	/**
+	 * Whether a {@code def} below a top-level datum answers the var it defined, like the
+	 * oracle's REPL; a file's nested {@code def} answers the value and builds no var.
+	 */
+	boolean nestedDefAnswersVar;
+
+	/**
 	 * How many {@code try} bodies deep the lowering sits: a {@code recur} with a
 	 * {@code try} between it and its target is the oracle's
 	 * {@code Cannot recur across try} refusal. Each target captures this depth when
@@ -1448,7 +1454,9 @@ public final class ClojureLowering {
 	 */
 	List<LispVal> topLevels(LispVal form, boolean echoVars) {
 		List<LispVal> outer = this.hoisted;
+		boolean outerEcho = this.nestedDefAnswersVar;
 		this.hoisted = new ArrayList<>();
+		this.nestedDefAnswersVar = echoVars;
 		try {
 			List<LispVal> own = echoVars ? echoingTopLevelsOf(form) : topLevelsOf(form);
 			if (this.hoisted.isEmpty()) {
@@ -1460,6 +1468,7 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.hoisted = outer;
+			this.nestedDefAnswersVar = outerEcho;
 		}
 	}
 
@@ -1491,6 +1500,8 @@ public final class ClojureLowering {
 		@Nullable String outerAnon = this.anonArgs;
 		boolean outerDispatch = this.inDispatchFn;
 		@Nullable String outerTestLocation = this.testLocation;
+		boolean outerEcho = this.nestedDefAnswersVar;
+		this.nestedDefAnswersVar = false;
 		this.scopes.clear();
 		this.scopes.add(new HashMap<>());
 		this.directScopes.clear();
@@ -1569,6 +1580,7 @@ public final class ClojureLowering {
 			this.anonArgs = outerAnon;
 			this.inDispatchFn = outerDispatch;
 			this.testLocation = outerTestLocation;
+			this.nestedDefAnswersVar = outerEcho;
 		}
 		this.hoisted.addAll(loaded);
 	}
@@ -1842,11 +1854,18 @@ public final class ClojureLowering {
 	 * {@link #topLevelsOf} for a REPL: a definition (def, defn, defn-, defmacro,
 	 * defmulti, defonce, defstruct) answers the var it defined, as the oracle prints
 	 * {@code #'user/f}. A {@code defonce} over a bound var and a {@code defmulti} over a
-	 * multimethod answer nil.
+	 * multimethod answer nil. A {@code defprotocol} answers its name, a {@code defrecord}
+	 * and a {@code deftype} their class name, a {@code declare} the last name's var.
 	 */
 	private List<LispVal> echoingTopLevelsOf(LispVal form) {
 		List<LispVal> items = ClojureLowerUtil.items(form);
 		String name = items == null ? null : definedVarName(items);
+		if (items != null && name == null) {
+			List<LispVal> answered = echoingNameForms(form, items);
+			if (answered != null) {
+				return answered;
+			}
+		}
 		if (items == null || name == null) {
 			return topLevelsOf(form);
 		}
@@ -1867,6 +1886,39 @@ public final class ClojureLowering {
 		}
 		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
 		forms.add(ClojureVarLowering.definedVar(this, name));
+		return forms;
+	}
+
+	/**
+	 * The echo of a {@code defprotocol}, {@code defrecord}, {@code deftype} or
+	 * {@code declare}: the protocol's name, the class name ({@code ns.Name}, the
+	 * namespace munged), the var of the last declared name. Null for any other form.
+	 */
+	private @Nullable List<LispVal> echoingNameForms(LispVal form, List<LispVal> items) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		boolean protocol = head.name().equals("defprotocol");
+		boolean type = head.name().equals("defrecord") || head.name().equals("deftype");
+		boolean declare = head.name().equals("declare");
+		if (!(protocol || type || declare)) {
+			return null;
+		}
+		String ns = this.currentNs;
+		List<LispVal> forms = new ArrayList<>(topLevelsOf(form));
+		try {
+			String last = ClojureLowerUtil.plainName(items.get(declare ? items.size() - 1 : 1), head.name());
+			if (declare) {
+				forms.add(ClojureVarLowering.definedVar(this, last));
+			}
+			else {
+				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
+						new LispSymbol(protocol ? last : ns.replace('-', '_') + "." + last)));
+			}
+		}
+		catch (LispReadException ex) {
+			throw positioned(ex, form);
+		}
 		return forms;
 	}
 
