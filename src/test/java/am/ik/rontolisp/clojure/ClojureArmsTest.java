@@ -136,6 +136,21 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theExceptionFamilyFoldsClassReadingAConditionWhereNoReaderIsDefined() {
+		// class reads a condition's class only where the program defines the exception
+		// reader: without it no condition can reach class, and the arm goes
+		List<LispVal> forms = read("(let* ((one x)) (cond ((stringp one) 1)"
+				+ " ((rontolisp::%clojure-exception-p one) (rontolisp::%clojure-exception-class one)) (t 2)))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.EXCEPTION);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.EXCEPTION).stream().map(LispVal::print))
+			.containsExactly("(LET* ((ONE X)) (COND ((STRINGP ONE) 1) (T 2)))");
+		List<LispVal> reader = read("(defun c%e-parts (c) (declare (ignore c)) nil)");
+		assertThat(ClojureArms.scan(reader, ClojureArms.Family.EXCEPTION).builds()).isTrue();
+	}
+
+	@Test
 	void thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch() {
 		List<LispVal> forms = read("(cond ((rontolisp::%clojure-print-deep-p x) (a))"
 				+ " ((rontolisp::%clojure-print-cut-p x) (b)) (t (rontolisp::%clojure-write-nested x r)))"

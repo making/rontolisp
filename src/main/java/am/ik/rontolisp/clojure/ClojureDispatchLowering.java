@@ -72,10 +72,33 @@ final class ClojureDispatchLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lowered));
 			case "Keyword" -> ClojureFilterLowering.keywordTest(lowered);
 			case "Symbol" -> ClojureFnLowering.symbolRaw(ctx, lowered);
-			default -> throw new LispReadException("instance? needs a core class, not " + name);
+			default -> throwableInstance(ctx, name, lowered);
 		};
 		return ctx.booleanAnswer(raw);
 	}
+
+	/**
+	 * {@code instance?} of a throwable class: whether the value is an exception or a
+	 * runtime error whose class is the class or a subclass of it (the class {@code class}
+	 * answers), or a host {@code Throwable} of it; any other class is a named refusal.
+	 */
+	private static LispVal throwableInstance(ClojureLowering ctx, String name, LispVal lowered) {
+		List<String> chain = ClojureThrowables.chainOf(ClojureNamespaceLowering.resolveClass(ctx, name));
+		if (chain == null) {
+			throw new LispReadException("instance? needs a core class, not " + name);
+		}
+		ctx.readsExceptionParts = true;
+		return ClojureLowerUtil.list(new LispSymbol(INSTANCE_OF), lowered, ClojureThrowables.quoted(chain));
+	}
+
+	/** The arm test of an exception or a runtime error ({@code clojure.lisp}). */
+	static final String EXCEPTION_P = "RONTOLISP::%CLOJURE-EXCEPTION-P";
+
+	/** The class of an exception or a runtime error, as a keyword. */
+	static final String EXCEPTION_CLASS = "RONTOLISP::%CLOJURE-EXCEPTION-CLASS";
+
+	/** {@code instance?} of a throwable class: the value and the class's chain. */
+	static final String INSTANCE_OF = "RONTOLISP::%CLOJURE-INSTANCE-OF";
 
 	/**
 	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
@@ -136,6 +159,11 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("function")));
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
 				ClojureCollectionLowering.keywordForm("atom")));
+		// an exception or a runtime error answers its class: an arm a program that can
+		// hold none sheds (ClojureArms.Family.EXCEPTION)
+		ctx.readsConditionClass = true;
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(EXCEPTION_P), one),
+				ClojureLowerUtil.list(new LispSymbol(EXCEPTION_CLASS), one)));
 		// anything else: a host object's class on the interpreter and the JVM, else the
 		// refusal (clojure.lisp; a program without java: gets the refusal alone)
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,

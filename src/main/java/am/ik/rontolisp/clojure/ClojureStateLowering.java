@@ -94,6 +94,7 @@ final class ClojureStateLowering {
 		}
 		LispVal guarded = body.isEmpty() ? ClojureLowering.NIL_CONST : tryBodyOf(ctx, body);
 		if (!catches.isEmpty()) {
+			ctx.usedCatch = true;
 			List<LispVal> handler = new ArrayList<>();
 			handler.add(ClojureLowerUtil.sym("HANDLER-CASE"));
 			handler.add(guarded);

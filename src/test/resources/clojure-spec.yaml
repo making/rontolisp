@@ -1923,6 +1923,36 @@ cases:
     expected: |
       :taken
       :taken
+  - name: class-instance-and-stack-traces-of-an-exception
+    # class of an exception or a runtime error answers its class as a keyword,
+    # the shape class answers for every kind (the oracle answers the host class,
+    # which prints without the colon); a refusal naming no class answers
+    # RuntimeException (the oracle's first of a number is an
+    # IllegalArgumentException). instance? of a throwable class is the oracle's.
+    # .printStackTrace writes the toString line to *err* (the oracle writes it
+    # and a line per frame to the process's stderr, whatever *err* is bound to)
+    # and .getStackTrace answers no frames (the oracle's thirteen here).
+    source: |
+      (println (class (ex-info "m" {})) (class (IllegalArgumentException. "x")))
+      (println (try (+ 1 "a") (catch Exception e (class e))) (try (inc nil) (catch Throwable e (class e))))
+      (println (try (first 5) (catch Exception e (class e))))
+      (println (= (class (Exception. "a")) (class (Exception. "b"))) (= (class (Exception. "a")) (class (RuntimeException. "b"))))
+      (println (instance? Exception (IllegalArgumentException. "x")) (instance? RuntimeException (Exception. "x")) (instance? clojure.lang.ExceptionInfo (ex-info "m" {})))
+      (println (try (+ 1 "a") (catch Exception e [(instance? ClassCastException e) (instance? RuntimeException e) (instance? IllegalArgumentException e)])))
+      (println (instance? Exception 5) (instance? Exception nil))
+      (println (try (throw (Exception. "boom")) (catch Exception e (binding [*err* *out*] (.printStackTrace e)) :printed)))
+      (println (count (.getStackTrace (Exception. "x"))) (seq (.getStackTrace (Exception. "x"))))
+    expected: |
+      :clojure.lang.ExceptionInfo :java.lang.IllegalArgumentException
+      :java.lang.ClassCastException :java.lang.NullPointerException
+      :java.lang.RuntimeException
+      true false
+      true false true
+      [true true false]
+      false false
+      java.lang.Exception: boom
+      :printed
+      0 nil
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance

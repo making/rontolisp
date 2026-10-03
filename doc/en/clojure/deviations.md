@@ -95,10 +95,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
   without the oracle's class prefix. A throwable construction is an exception only
   for a class that carries nothing but a message and a cause; one with members of its own
-  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class`,
-  `instance?` and every other method of an exception (`.printStackTrace`, `.getStackTrace`)
-  are refused, and `throw` of a value that is no exception is a `ClassCastException` whose
-  message is the value's rendering, where the oracle's message names the two classes.
+  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class` of an
+  exception answers its class name as a keyword (`:java.lang.Exception`, where the oracle
+  answers the host class), `:java.lang.RuntimeException` for a refusal whose condition names
+  no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
+  and a line per frame to the process's stderr, whatever `*err*` is bound to) and
+  `.getStackTrace` answers an empty vector; every other method but `.getMessage`,
+  `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
+  no exception is a `ClassCastException` whose message is the value's rendering, where the
+  oracle's message names the two classes.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword

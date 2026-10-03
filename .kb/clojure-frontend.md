@@ -205,8 +205,8 @@ Each is a real work item unless the reason says otherwise.
   ("Catching"). Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
-  tag; `class` answers a kind keyword (host classes exist on no wasm backend), a host
-  object its host class (interpreter and JVM).
+  tag; `class` answers a kind keyword (host classes exist on no wasm backend), an exception
+  its class name as a keyword, a host object its host class (interpreter and JVM).
 - Metadata: a derived value (`assoc`, `conj`, ...) starts without metadata; a symbol takes
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
@@ -249,11 +249,13 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   exception, anything else `%clojure-host-method` (host arm; the stand-in refuses with
   `No matching field found: m`), so the lowering carries no `java:` operator and wasm compiles
   it without the `JAVA:CALL` warning.
-- Deviations: `class`/`instance?`/other methods (`.printStackTrace`) of an exception are refused
-  (before, a construction was a host object on the interpreter and the JVM); a runtime error's
-  `str` has no class prefix; `throw` of a non-exception is a `ClassCastException` whose message
-  is its rendering (the oracle's names the two classes; until 2026-10-03 it signalled the
-  rendering as a plain error, which an `IllegalArgumentException` catch took).
+- Deviations: `class` answers a keyword and `.printStackTrace`/`.getStackTrace` no frames
+  ("Catching"); any other method but the three readers and `.toString` is refused (`.getClass`
+  among them: routing it through the library would splice the exception runtime into every
+  program calling `.getClass` on a value of unknown class, `.todo/c65`); a runtime error's `str` has no class
+  prefix; `throw` of a non-exception is a `ClassCastException` whose message is its rendering
+  (the oracle's names the two classes; until 2026-10-03 it signalled the rendering as a plain
+  error, which an `IllegalArgumentException` catch took).
 - Size, wasm P1, measured 2026-10-03 against the tree before: `(try (throw (ex-info ..)) (catch
   Exception e (ex-message e)))` 145,619 -> 146,474 B; a `try` reading no exception 83,311 B
   unchanged; `(.toString 5)` 51,108 -> 51,192 B (the condition disjunct);
@@ -312,15 +314,41 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   (`catchRuntime`'s reader) instead of the exception runtime, whose `define-condition` report
   reaches the printer (~100 KB of wasm). A session emits the reader while no buffer built an
   exception; the exception runtime's own `C%E-PARTS` replaces it once one does.
-- The type-error slots are read by name (`type-error-datum`/`-expected-type`, `slot-value`): ~1.5
-  KB of wasm and ~1.9 KB of class of the cost below. `%obj-ref` at the seed's indexes would save
-  it but bakes the slot order, which a condition with a mixin first parent breaks
-  (`closer-mop.lisp`'s note), so it stays by name.
+- The type-error slots are read in place (`%clojure-type-error-class`): `(%obj-ref c 0)` /
+  `(%obj-ref c 1)` behind `(%obj-is c '|%class-TYPE-ERROR| '|%class-SIMPLE-TYPE-ERROR|)`, the
+  seeded classes whose layout the seed fixes (any other type-error subclass is a plain
+  `ClassCastException`: a mixin first parent moves the slots, `closer-mop.lisp`'s note). By name
+  (`type-error-datum`, i.e. `slot-value`) splices the run-time slot dispatch: measured
+  2026-10-03, a typed catch 49,160 / 75,858 B (wasm / class) by name against 47,910 / 74,318 in
+  place, and `class` of a caught condition 66,277 / 108,075 against 60,942 / 85,338 -- by name
+  turned every stream write of the printer into an instance-unwrapping one.
 - Size, measured 2026-10-03, wasm P1 / `--optimize=size` / component / JVM class, before ->
   after: `(println (try (inc 1) (catch Exception e :x)))` 46,651 / 39,096 / 47,992 / 70,405 ->
-  49,160 / 41,485 / 52,644 / 75,858; `(try (throw (ex-info ..)) (catch Exception e (ex-message
-  e)))` 146,474 / 119,741 / 150,207 / 141,233 -> 148,048 / 121,131 / 151,809 / 145,250; a
-  `Throwable` catch, a program with no catch and `examples/clojure/demo.clj` byte-identical.
+  47,910 / 40,235 / 49,425 / 74,318; `(try (throw (ex-info ..)) (catch Exception e (ex-message
+  e)))` 146,474 / 119,741 / 150,207 / 141,233 -> 148,110 / 121,193 / 151,872 / 145,427;
+  `(println (try (+ 1 "a") (catch Throwable e (class e))))` (a refusal before) 59,197 / 48,286 /
+  60,809 / 81,081 -> 60,942 / 49,979 / 62,577 / 85,338; a `class` multimethod catching with a
+  `.printStackTrace` 184,272 / 149,696 / 188,102 / 186,565 -> 185,590 / 150,861 / 189,426 /
+  169,400 (the class no longer carries the `java:call` the method went through); a `Throwable`
+  catch, a program with no catch, a `class` multimethod with none and `examples/clojure/demo.clj`
+  byte-identical.
+- `class`, `instance?` and the stack-trace methods read the class a program can name
+  (`%clojure-condition-chain`): an exception's own, a runtime error's from
+  `%clojure-error-chain`, `RuntimeException`'s for a condition naming none (the superclass of
+  every Clojure-runtime refusal but `assert`'s). `class` answers `(:C%KEYWORD "<class>")`, the
+  keyword shape of every kind, through an arm of `classForm` ahead of the host arm
+  (`%clojure-exception-p`, family `ClojureArms.Family.EXCEPTION`, whose producer is a
+  definition of `C%E-PARTS`): a program that can hold no condition sheds it and compiles as
+  before. The catch runtime's reader therefore also travels where `class` meets a catch of
+  any class, and wherever `instance?` names a throwable class (`needsExceptionReader`).
+  `instance?` of a throwable class is `%clojure-instance-of` over the chain (exact, so a
+  refusal naming no class is an instance of RuntimeException and its superclasses only, where
+  a catch takes it whatever it names); a host `Throwable` asks the host. `.printStackTrace` /
+  `.getStackTrace` of a receiver of unknown or plain-throwable class are
+  `%clojure-print-stack-trace` (the report line to `*error-output*`) /
+  `%clojure-stack-trace` (`[]`), the host method for anything but a condition; they read no
+  slot, so they need no reader. A `defmethod` over a throwable class stays refused
+  (`dispatchClassKey`; `.todo/c65`).
 - Measured against the oracle: 52 runtime-error kinds under a catch of the oracle's class, all
   four backends alike, differ only where documented (`nth` past the end answers nil; the
   division message); the shcloj4 drivers with `catch`/`thrown?` sites (interop, exploring,
@@ -333,7 +361,11 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   (an `AssertionError` catch); `ClojureThrowablesTest`, `ClojureLoweringTest`
   `aCatchTestsItsClassThroughAPredicateOverTheClassChain`/`aCatchOfNoThrowableClassIsTheOraclesRefusal`,
   `ClojureSessionTest.aBufferDefinesThePredicateOfEachClassItCatchesFirst`,
-  `ClojureInteropTest.aThrownHostThrowableIsCaughtByItsOwnClassChain`.
+  `ClojureInteropTest.aThrownHostThrowableIsCaughtByItsOwnClassChain`; `class`/`instance?`:
+  clojure-spec `class-instance-and-stack-traces-of-an-exception`, `ClojureLoweringTest`
+  `classInstanceAndTheStackTraceMethodsReadAnExceptionsClass`, `ClojureArmsTest`
+  `theExceptionFamilyFoldsClassReadingAConditionWhereNoReaderIsDefined`,
+  `ClojureInteropTest.aHostThrowableAnswersInstanceAndItsStackTraceFromTheHost`.
 
 ## Sorted collections
 
@@ -709,6 +741,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
   is cleared by every other definition (`intern`), never by the pre-scan (`internName`).
   Static, so a `defmulti` run repeatedly inside a function still redefines.
+- An exception or a runtime error answers its class as a keyword, through the arm ahead of the
+  host one ("Catching").
 - `class`'s last arm (no Clojure kind) is `%clojure-host-class` (`clojure.lisp`): `(java:call
   x "getClass")` under `handler-case` -- `java:call` refuses every non-host value on both
   paths, so its refusal IS the host test -- else `class needs a value of a known kind`.
@@ -762,7 +796,8 @@ constructor and consumer, and a regex `replace` with a function replacement.
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
   stay `unsupported reader form`).
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
-- `instance?` takes core classes and record/deftype names, else refuses; it has no value.
+- `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
+  else refuses; it has no value.
 
 ## Java interop
 

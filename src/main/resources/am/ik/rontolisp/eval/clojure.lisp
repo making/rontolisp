@@ -860,32 +860,40 @@
 ;; (the simple-error of a Clojure refusal, a failed host call) is taken by
 ;; every catch but ExceptionInfo's, which the oracle's runtime never throws.
 
+(defun rontolisp::%clojure-type-error-class (c)
+  "The class the oracle throws where the runtime signals the type error C: a
+   ClassCastException, a NullPointerException for a nil value, an
+   IndexOutOfBoundsException for an index outside its bound, an
+   UnsupportedOperationException for a value that is no sequence (count of a
+   number), and NIL when C names no type (a host failure the JVM classifies,
+   its value unknown). The seeded type error's datum and expected type are its
+   first two slots, read in place: slot-value would splice the run-time slot
+   dispatch into every program that catches."
+  (if (%obj-is c '|%class-TYPE-ERROR| '|%class-SIMPLE-TYPE-ERROR|)
+      (let ((expected (%obj-ref c 1)))
+        (cond ((null expected) nil)
+         ((null (%obj-ref c 0)) "java.lang.NullPointerException")
+         ((and (consp expected) (eq (car expected) 'integer)
+               (consp (car (cdr (cdr expected)))))
+          "java.lang.IndexOutOfBoundsException")
+         ((eq expected 'sequence) "java.lang.UnsupportedOperationException")
+         (t "java.lang.ClassCastException")))
+      "java.lang.ClassCastException"))
+
 (defun rontolisp::%clojure-error-chain (c)
   "The class chain of the exception the oracle throws where the runtime
    signals the Common Lisp condition C, NIL when its type tells none: an
-   arithmetic error is an ArithmeticException; a type error a
-   ClassCastException, a NullPointerException for a nil value, an
-   IndexOutOfBoundsException for an index outside its bound, an
-   UnsupportedOperationException for a value that is no sequence (count of
-   a number), and none when it names no type (a host failure the JVM
-   classifies, its value unknown); a wrong argument count an ArityException;
-   a failed open a FileNotFoundException."
+   arithmetic error is an ArithmeticException, a type error the class
+   %clojure-type-error-class answers, a wrong argument count an
+   ArityException, a failed open a FileNotFoundException."
   (let ((runtime
          '("java.lang.RuntimeException" "java.lang.Exception"
            "java.lang.Throwable")))
     (cond ((typep c 'arithmetic-error)
            (cons "java.lang.ArithmeticException" runtime))
           ((typep c 'type-error)
-           (let ((expected (type-error-expected-type c)))
-             (if expected
-                 (cons (cond ((null (type-error-datum c))
-                              "java.lang.NullPointerException")
-                             ((and (consp expected) (eq (car expected) 'integer)
-                                   (consp (car (cdr (cdr expected)))))
-                              "java.lang.IndexOutOfBoundsException")
-                             ((eq expected 'sequence)
-                              "java.lang.UnsupportedOperationException")
-                             (t "java.lang.ClassCastException")) runtime))))
+           (let ((class (rontolisp::%clojure-type-error-class c)))
+             (if class (cons class runtime))))
           ((typep c 'program-error)
            (cons "clojure.lang.ArityException"
                  (cons "java.lang.IllegalArgumentException" runtime)))
@@ -916,6 +924,60 @@
               (not
                (rontolisp::%clojure-chain-has chain
                 "clojure.lang.ExceptionInfo")))))))
+
+;;;; The class of an exception: class, instance? and the stack-trace methods.
+;;
+;; class and instance? read the class the program can name: an exception's own,
+;; a runtime error's the one the oracle throws for its condition type, and
+;; RuntimeException for one whose condition names none -- the superclass of
+;; every such refusal of the Clojure runtime but assert's.
+
+(defun rontolisp::%clojure-exception-p (x)
+  "Whether X is an exception or a runtime error: a condition. class's arm
+   test, stripped from a program that can hold no condition."
+  (typep x 'condition))
+
+(defun rontolisp::%clojure-condition-chain (c)
+  "The class chain of the condition C: an exception's own, a runtime error's
+   the one the oracle throws for it, RuntimeException's when it names none."
+  (let ((parts (c%e-parts c)))
+    (if parts
+        (car parts)
+        (or (rontolisp::%clojure-error-chain c)
+            '("java.lang.RuntimeException" "java.lang.Exception"
+              "java.lang.Throwable")))))
+
+(defun rontolisp::%clojure-exception-class (c)
+  "class of an exception or a runtime error C: its class name as a keyword,
+   the shape class answers for every kind."
+  (list :c%keyword (car (rontolisp::%clojure-condition-chain c))))
+
+(defun rontolisp::%clojure-instance-of (x chain)
+  "instance? of the throwable class whose chain is CHAIN: a condition when its
+   class is that class or a subclass of it, a host Throwable by the host's own
+   test, anything else false."
+  (if (typep x 'condition)
+      (rontolisp::%clojure-chain-has (rontolisp::%clojure-condition-chain x)
+                                     (car chain))
+      (rontolisp::%clojure-host-instance-p x (car chain))))
+
+(defun rontolisp::%clojure-print-stack-trace (x)
+  ".printStackTrace: a condition writes its toString line to *err* (the oracle
+   adds a line per frame), answering nil; anything else calls the host
+   method."
+  (if (typep x 'condition)
+      (progn
+        (princ x *error-output*)
+        (terpri *error-output*)
+        nil)
+      (rontolisp::%clojure-host-method x "printStackTrace")))
+
+(defun rontolisp::%clojure-stack-trace (x)
+  ".getStackTrace: a condition carries no frames, so an empty vector;
+   anything else calls the host method."
+  (if (typep x 'condition)
+      (vector)
+      (rontolisp::%clojure-host-method x "getStackTrace")))
 
 ;;;; Equality: the = family over every value shape.
 

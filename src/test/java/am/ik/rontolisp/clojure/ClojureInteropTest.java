@@ -105,6 +105,17 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aHostThrowableAnswersInstanceAndItsStackTraceFromTheHost() throws Exception {
+		// measured against clj 1.12.6: a host throwable is no condition, so instance?
+		// asks the host and getStackTrace answers the host's frames
+		assertBothEqual(
+				"(println (instance? Exception (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (instance? RuntimeException (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (pos? (count (.getStackTrace (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"true false true\n");
+	}
+
+	@Test
 	void aThrownHostThrowableIsCaughtByItsOwnClassChain() throws Exception {
 		// measured against clj 1.12.6: the host class's superclasses, read at run time,
 		// decide the catch -- a checked exception passes a RuntimeException catch
@@ -200,13 +211,12 @@ class ClojureInteropTest {
 	}
 
 	@Test
-	void classOfAValueOfNoKnownKindStaysARefusalWithOrWithoutInterop() throws Exception {
-		// an ex-info condition is no host object: the same refusal whether the
-		// program uses interop (the host arm) or not (no java: at all)
+	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
+		// an ex-info condition is no host object: the same keyword whether the program
+		// uses interop (the host arm behind the exception arm) or not (no java: at all)
 		String plain = "(println (try (class (ex-info \"a\" {})) (catch Exception e (ex-message e))))";
-		assertBothEqual(plain, "class needs a value of a known kind\n");
-		assertBothEqual("(println (.getName String)) " + plain,
-				"java.lang.String\nclass needs a value of a known kind\n");
+		assertBothEqual(plain, ":clojure.lang.ExceptionInfo\n");
+		assertBothEqual("(println (.getName String)) " + plain, "java.lang.String\n:clojure.lang.ExceptionInfo\n");
 	}
 
 	@Test

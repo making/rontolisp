@@ -992,6 +992,30 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void classInstanceAndTheStackTraceMethodsReadAnExceptionsClass() {
+		// class carries an exception arm; with no catch and no exception nothing can
+		// reach it, so no reader travels (and the library splice strips the arm)
+		assertThat(lowered("(def x 1) (class x)")).contains("((RONTOLISP::%CLOJURE-EXCEPTION-P")
+			.contains("(RONTOLISP::%CLOJURE-EXCEPTION-CLASS")
+			.doesNotContain("C%E-PARTS");
+		// a catch of any class can hand class a condition: the reader travels
+		assertThat(lowered("(try 1 (catch Throwable e (class e)))"))
+			.contains("(DEFUN C%E-PARTS (|c|) (DECLARE (IGNORE |c|)) NIL)");
+		// instance? of a throwable class tests the class chain
+		assertThat(lowered("(def x 1) (instance? IllegalStateException x)"))
+			.contains("(RONTOLISP::%CLOJURE-INSTANCE-OF |c%x| '(\"java.lang.IllegalStateException\""
+					+ " \"java.lang.RuntimeException\" \"java.lang.Exception\" \"java.lang.Throwable\"))")
+			.contains("(DEFUN C%E-PARTS");
+		assertThatThrownBy(() -> Clojure.read("(instance? Foo 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("instance? needs a core class, not Foo");
+		// the stack-trace methods answer from the library, with no java: call
+		assertThat(lowered("(fn [e] (.printStackTrace e))")).contains("(RONTOLISP::%CLOJURE-PRINT-STACK-TRACE |c%e|)")
+			.doesNotContain("JAVA:CALL");
+		assertThat(lowered("(fn [e] (.getStackTrace e))")).contains("(RONTOLISP::%CLOJURE-STACK-TRACE |c%e|)")
+			.doesNotContain("JAVA:CALL");
+	}
+
+	@Test
 	void aCatchOfNoThrowableClassIsTheOraclesRefusal() {
 		assertThatThrownBy(() -> Clojure.read("(try 1 (catch Foo e 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve classname: Foo");

@@ -94,8 +94,12 @@
   接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
   （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
-  例外の `class`、`instance?`、その他のメソッド（`.printStackTrace`、`.getStackTrace`）は
-  拒否されます。例外でない値の `throw` は、値のレンダリングをメッセージとする
+  例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
+  クラスを返します）、クラスを示さないコンディションの拒否には `:java.lang.RuntimeException`
+  を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
+  ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
+  空のベクターを返します。`.getMessage`、`.getLocalizedMessage`、`.getCause`、`.toString`
+  以外のメソッドは拒否します。例外でない値の `throw` は、値のレンダリングをメッセージとする
   `ClassCastException` になります（オラクルのメッセージは 2 つのクラス名を挙げます）。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後

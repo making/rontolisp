@@ -65,6 +65,14 @@ final class ClojureInteropLowering {
 	static final Set<String> EXCEPTION_METHODS = Set.of("getMessage", "getLocalizedMessage", "getCause");
 
 	/**
+	 * The stack-trace methods of an exception, to the library function answering them
+	 * ({@code clojure.lisp}): a condition has no frames, so they need no exception
+	 * reader.
+	 */
+	static final Map<String, String> STACK_TRACE_METHODS = Map.of("printStackTrace",
+			"RONTOLISP::%CLOJURE-PRINT-STACK-TRACE", "getStackTrace", "RONTOLISP::%CLOJURE-STACK-TRACE");
+
+	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
 	 * {@code (Class. ...)} construction and {@code (Class/member ...)} statics. Null when
@@ -1376,6 +1384,11 @@ final class ClojureInteropLowering {
 			ctx.usedExInfo = true;
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_METHOD), receiver,
 					LispString.literal(method));
+		}
+		if (args.isEmpty() && STACK_TRACE_METHODS.containsKey(method) && (cls == null || plainThrowable(cls) != null)) {
+			// a condition answers its toString line and no frames; anything else calls
+			// the host method
+			return ClojureLowerUtil.list(new LispSymbol(STACK_TRACE_METHODS.get(method)), receiver);
 		}
 		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
 			call = ctx.booleanAnswer(call);

@@ -629,6 +629,28 @@ public final class ClojureLowering {
 	/** Whether the session already emitted the catch runtime's exception reader. */
 	boolean catchReaderEmitted;
 
+	/** Whether a {@code catch} clause of any class binds a caught condition. */
+	boolean usedCatch;
+
+	/**
+	 * Whether {@code class} may read a condition's class: its exception arm survives
+	 * where the program defines the exception reader, which a catch then needs.
+	 */
+	boolean readsConditionClass;
+
+	/** Whether {@code instance?} reads exceptions: the reader always travels. */
+	boolean readsExceptionParts;
+
+	/**
+	 * Whether the program needs the catch runtime's exception reader: it builds no
+	 * exception, and a catch tests a class, {@code instance?} tests one, or {@code class}
+	 * can read a caught condition.
+	 */
+	boolean needsExceptionReader() {
+		return !this.usedExInfo && (!this.caughtChains.isEmpty() || this.readsExceptionParts
+				|| (this.readsConditionClass && this.usedCatch));
+	}
+
 	/**
 	 * Whether the program uses hierarchies (any of {@code derive}/{@code underive}/
 	 * {@code isa?}/{@code parents}/{@code ancestors}/{@code descendants}/
@@ -912,11 +934,11 @@ public final class ClojureLowering {
 			// the ex-info runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.exInfoRuntime(lowering));
 		}
-		if (!lowering.caughtChains.isEmpty()) {
+		if (!lowering.caughtChains.isEmpty() || lowering.needsExceptionReader()) {
 			// the caught classes' predicates, and the exception reader a catch asks
 			// even where the program builds no exception
 			lowering.forms.addAll(1,
-					ClojureThrowables.catchRuntime(lowering.caughtChains.values(), !lowering.usedExInfo));
+					ClojureThrowables.catchRuntime(lowering.caughtChains.values(), lowering.needsExceptionReader()));
 		}
 		if (lowering.usedStm) {
 			// the STM runtime runs before anything else, like the false value
@@ -1016,7 +1038,7 @@ public final class ClojureLowering {
 				freshCatches.add(caught.getValue());
 			}
 		}
-		boolean reader = !this.caughtChains.isEmpty() && !this.exInfoEmitted && !this.catchReaderEmitted;
+		boolean reader = needsExceptionReader() && !this.exInfoEmitted && !this.catchReaderEmitted;
 		if (!freshCatches.isEmpty() || reader) {
 			// The predicates of the classes this buffer catches first travel ahead
 			// of it, with the exception reader while no buffer built an exception
