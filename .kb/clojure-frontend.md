@@ -608,7 +608,16 @@ The shapes are the oracle's macro expansions, lowered; the runtime is `clojure.l
 - Deviations: definition order (the oracle's is map order); `thrown?` matches any
   condition; error reports print the message without a stack trace, at the `is` line; a
   failed `thrown-with-msg?` shows the message; a host `StackOverflowError` is no CL
-  condition, so `(is (thrown? StackOverflowError ...))` ends the program (b87);
+  condition on the interpreter (`(is (thrown? StackOverflowError ...))` ends the program with
+  the CLI's one-line report) and a trap on WASM (`call stack exhausted`, no catch), but the
+  JVM landing is catch-any, so compiled JVM output runs the catch like the oracle. Measured
+  2026-10-03 over shcloj4 `examples.test.functional`: oracle and JVM `Ran 7 tests containing
+  19 assertions. 0 failures, 0 errors.`; interpreter and WASM end after the `Testing ...`
+  header. Pinned by `ClojureProjectNamespacesTest` (`aDeepNonTail...`),
+  `RontoLispCliStreamsTest` (`aClojure...StackOverflow...`) and the passing shapes in
+  `clojure-spec.yaml` (`functional-shapes-match-the-oracle`). Not fixed: a catchable depth
+  guard on every call would have to track JIT-varying frame sizes (`interpreter-stack.md`);
+  revisit only if depth guards become a product feature;
   `run-all-tests` sees only the program's namespaces.
 
 ## A session

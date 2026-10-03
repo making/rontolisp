@@ -103,6 +103,51 @@ class ClojureProjectNamespacesTest {
 					   #{{:language "German", :nation "Austria", :composer "W. A. Mozart", :country "Austria"}
 					     {:language "German", :nation "Germany", :composer "J. S. Bach", :country "Germany"}
 					     {:language "Italian", :nation "Italy", :composer "Giuseppe Verdi", :country "Italy"}}))
+					"""), Map.entry("src/examples/functional.clj", """
+					(ns examples.functional)
+					(defn stack-consuming-fibo [n]
+					  (cond
+					   (= n 0) 0
+					   (= n 1) 1
+					   :else (+ (stack-consuming-fibo (- n 1))
+					            (stack-consuming-fibo (- n 2)))))
+					(defn tail-fibo [n]
+					  (letfn [(fib [current next n]
+					            (if (zero? n)
+					              current
+					              (fib next (+ current next) (dec n))))]
+					    (fib 0N 1N n)))
+					(defn recur-fibo [n]
+					  (letfn [(fib [current next n]
+					            (if (zero? n)
+					              current
+					              (recur next (+ current next) (dec n))))]
+					    (fib 0N 1N n)))
+					(defn fibo []
+					  (map first (iterate (fn [[a b]] [b (+ a b)]) [0N 1N])))
+					(def head-fibo (lazy-cat [0N 1N] (map + head-fibo (rest head-fibo))))
+					(defn faux-curry [& args] (apply partial partial args))
+					"""), Map.entry("test/examples/test/functional.clj", """
+					(ns examples.test.functional
+					  (:use clojure.test
+					        examples.functional))
+					(def ten-fibs [0 1 1 2 3 5 8 13 21 34])
+					(deftest test-stack-crushing-fibo
+					  (is (= ten-fibs (map stack-consuming-fibo (range 0 10))))
+					  (is (thrown? StackOverflowError (stack-consuming-fibo 1000000N))))
+					(deftest test-tail-fibo
+					  (is (= ten-fibs (map tail-fibo (range 0 10))))
+					  (is (thrown? StackOverflowError (tail-fibo 1000000N))))
+					(deftest test-recur-fibo
+					  (is (= ten-fibs (map recur-fibo (range 0 10)))))
+					(deftest test-fibo
+					  (is (= ten-fibs (take 10 (fibo)))))
+					(deftest test-head-fibo
+					  (is (= ten-fibs (take 10 head-fibo))))
+					(deftest test-faux-curry
+					  (is (fn? (faux-curry + 1)))
+					  (is (fn? ((faux-curry + 1) 1)))
+					  (is (= 2 (((faux-curry + 1) 1)))))
 					"""), Map.entry("test/examples/test/preface.clj", """
 					(ns examples.test.preface
 					  (:use clojure.test))
@@ -305,6 +350,58 @@ class ClojureProjectNamespacesTest {
 		Files.writeString(entry, SETS_DRIVER);
 		assertThat(runOnWasm(entry, false)).isEqualTo(SETS_OUT);
 		assertThat(runOnWasm(entry, true)).isEqualTo(SETS_OUT);
+	}
+
+	/**
+	 * The corpus {@code examples.test.functional}: two {@code thrown?} assertions over a
+	 * million-deep non-tail call. The oracle catches the {@code StackOverflowError} and
+	 * runs every assertion. The JVM backend's landing catches any {@code Throwable}, so
+	 * it answers the oracle's summary; the interpreter's overflow is no condition and
+	 * ends the program (the CLI reports it, {@code RontoLispCliStreamsTest}); a WASM
+	 * stack exhaustion is a trap. The shapes around the two assertions run on every
+	 * backend ({@code clojure-spec.yaml}, {@code functional-shapes-match-the-oracle}).
+	 */
+	private static final String FUNCTIONAL_DRIVER = """
+			(ns corpus.functional-driver (:use clojure.test))
+			(require 'examples.test.functional)
+			(run-tests 'examples.test.functional)
+			""";
+
+	private static final String FUNCTIONAL_OUT = """
+
+			Testing examples.test.functional
+
+			Ran 6 tests containing 10 assertions.
+			0 failures, 0 errors.
+			""";
+
+	@Test
+	void aDeepNonTailCallInAThrownAssertionRunsTheCatchOnTheJvm() throws Exception {
+		Path entry = project.resolve("test").resolve("functional_driver_jvm.clj");
+		Files.writeString(entry, FUNCTIONAL_DRIVER);
+		assertThat(runOnJvm(entry, "CorpusFunctional")).isEqualTo(FUNCTIONAL_OUT);
+	}
+
+	@Test
+	void aDeepNonTailCallInAThrownAssertionEndsTheInterpretedProgram() throws Exception {
+		Path entry = project.resolve("test").resolve("functional_driver_interp.clj");
+		Files.writeString(entry, FUNCTIONAL_DRIVER);
+		assertThatThrownBy(() -> interpret(entry)).isInstanceOf(StackOverflowError.class);
+	}
+
+	@Test
+	void aDeepNonTailCallInAThrownAssertionTrapsOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = project.resolve("test").resolve("functional_driver_wasm.clj");
+		Files.writeString(entry, FUNCTIONAL_DRIVER);
+		for (boolean component : new boolean[] { false, true }) {
+			HostWasmtime.ExecResult run = wasmRun(
+					CompileFrontendAccess.clojure(Files.readString(entry), entry.toString(), true, component),
+					component);
+			assertThat(run.exitCode()).as("component=%s", component).isNotZero();
+			assertThat(run.stdout()).as("component=%s", component).isEqualTo("\nTesting examples.test.functional\n");
+			assertThat(run.stderr()).as("component=%s", component).contains("call stack exhausted");
+		}
 	}
 
 	/**
@@ -603,6 +700,13 @@ class ClojureProjectNamespacesTest {
 	}
 
 	private static String execWasm(CompileFrontendAccess.Program frontend, boolean component) throws Exception {
+		HostWasmtime.ExecResult run = wasmRun(frontend, component);
+		assertThat(run.exitCode()).as("wasmtime exit code; stderr: %s", run.stderr()).isZero();
+		return run.stdout();
+	}
+
+	private static HostWasmtime.ExecResult wasmRun(CompileFrontendAccess.Program frontend, boolean component)
+			throws Exception {
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())
@@ -610,10 +714,8 @@ class ClojureProjectNamespacesTest {
 			.compile(frontend.forms());
 		Path path = Files.createTempFile(project, "b56", component ? "-c.wasm" : ".wasm");
 		Files.write(path, module);
-		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W",
-				"exceptions=y", path.toString());
-		assertThat(run.exitCode()).as("wasmtime exit code; stderr: %s", run.stderr()).isZero();
-		return run.stdout();
+		return HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				path.toString());
 	}
 
 }
