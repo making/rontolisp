@@ -12550,6 +12550,57 @@ cases:
       (1 #(NIL))
       (NIL)
       (1 #())
+  - name: special-parameters-bind-dynamically
+    source: |
+      ;; A parameter named like a special binds it dynamically on every backend
+      ;; (CLHS 3.1.2.1.1.2): a callee reads the argument, a default sees an earlier
+      ;; parameter's binding, every exit restores it, a setq writes the binding, a
+      ;; special supplied-p variable keeps its binding, and a self or sibling call
+      ;; inside the binding is a real call, each round reading its own binding.
+      ;; The same program as SpecialParameterFixture (the backend suites).
+      (defvar *spp* :top)
+      (defvar *spp-y* :top-y)
+      (defun spp-show () *spp*)
+      (defun spp-both () (list *spp* *spp-y*))
+      (defun spp-req (*spp*) (spp-show))
+      (defun spp-two (a *spp* b *spp-y*) (list a (spp-both) b))
+      (defun spp-opt (&optional (*spp* :default)) (spp-show))
+      (defun spp-key (&key ((:x *spp*) :kdefault)) (spp-show))
+      (defun spp-rest (&rest *spp*) (spp-show))
+      (defun spp-aux (n &aux (*spp* (* n 10))) (spp-show))
+      (defun spp-dflt (*spp* &optional (seen (spp-show)) &key (also (spp-show))) (list seen also))
+      (defun spp-sp (&optional (v 1 *spp-y*)) (list v (spp-both)))
+      (print (list (spp-req 1) (spp-two :a 2 :b 3) (spp-opt) (spp-opt 4) (spp-key) (spp-key :x 5)
+                   (spp-rest 6 7) (spp-aux 8) (spp-dflt 9) (spp-sp) (spp-sp 0) (spp-both)))
+      (print (list ((lambda (*spp*) (spp-show)) 10)
+                   (funcall (lambda (*spp*) (spp-show)) 11)
+                   (flet ((fl (*spp*) (spp-show))) (fl 12))
+                   (labels ((lb (*spp* n) (if (= n 0) (spp-show) (lb (cons n *spp*) (- n 1))))) (lb nil 3))
+                   (spp-show)))
+      (defun spp-self (*spp* n) (if (= n 0) (spp-show) (spp-self (list *spp*) (- n 1))))
+      (defun spp-ev (*spp* n) (if (= n 0) (list :ev (spp-show)) (spp-od n (- n 1))))
+      (defun spp-od (k n) (if (= n 0) (list :od k (spp-show)) (spp-ev n (- n 1))))
+      (print (list (spp-self :s 3) (spp-ev :e 4) (spp-ev :e 5) (spp-show)))
+      (defun spp-err (*spp*) (error "boom"))
+      (defun spp-throw (*spp*) (throw 'spp-tag (spp-show)))
+      (defun spp-ret (*spp*) (dolist (i '(1 2)) (return-from spp-ret (list i (spp-show)))))
+      (print (list (handler-case (spp-err :err) (error () (spp-show)))
+                   (catch 'spp-tag (spp-throw :thrown))
+                   (spp-ret :ret)
+                   (spp-show)))
+      (defun spp-set (*spp*) (setq *spp* :set) (spp-show))
+      (defun spp-close (*spp*) (lambda () *spp*))
+      (print (list (spp-set :a) (spp-show) (funcall (spp-close :captured)) (spp-show)))
+      (defun spp-out (*standard-output*) (princ "redirected") :done)
+      (print (let ((s (make-string-output-stream)))
+               (list (spp-out s) (get-output-stream-string s))))
+    expected: |
+      (1 (:A (2 3) :B) :DEFAULT 4 :KDEFAULT 5 (6 7) 80 (9 9) (1 (:TOP NIL)) (0 (:TOP T)) (:TOP :TOP-Y))
+      (10 11 12 (1 2 3) :TOP)
+      ((((:S))) (:EV 1) (:OD 1 2) :TOP)
+      (:TOP :THROWN (1 :RET) :TOP)
+      (:SET :TOP :CAPTURED :TOP)
+      (:DONE "redirected")
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list

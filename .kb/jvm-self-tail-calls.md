@@ -110,6 +110,14 @@ pair, Clojure's regex matcher, a multi-arity `defn`'s clause helper.
   `unwind-protect`, `handler-case`, `handler-bind`, `restart-case`, `catch`, `progv`,
   `multiple-value-prog1`, `with-output-to-string`. Pinned by the `SPEC`/`UP`/`HC`/`CT`
   methods of the test below: each keeps its one self call.
+- A parameter named like a special: `LambdaLists.toNative` binds it by a special `let` around
+  the whole body, so no call in that body is on the mark -- a self call, a `labels` self call
+  and a sibling call all stay calls, and the group walk agrees (`ofDefuns` stops at the
+  lowered body's `let`, `ofLabels` drops a member whose physical parameter is special), so such
+  a function joins no group and a call into it is an ordinary call. Pinned by
+  `#aTailCallInsideASpecialParametersBindingStaysACall`;
+  [dynamic-special-variables.md](dynamic-special-variables.md), "Parameters named like a
+  special", has the depths.
 - A tail in a `_k$N` continuation (`JvmBodyOutliner` split a body past the method-size
   budget): another method, so a call, one frame a round.
 - A tail group laid out apart (a rooted method past 8000 bytecodes): each member's tail call

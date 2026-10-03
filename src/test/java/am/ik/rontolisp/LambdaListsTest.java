@@ -1,6 +1,7 @@
 package am.ik.rontolisp;
 
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class LambdaListsTest {
 	private static final int BUDGET = LambdaLists.MAX_PHYSICAL_PARAMS;
 
 	private static List<LispVal> desugar(String src) {
-		return LambdaLists.desugarProgram(read(src), BUDGET);
+		return LambdaLists.desugarProgram(read(src), BUDGET, Set.of());
 	}
 
 	@Test
@@ -131,8 +132,8 @@ class LambdaListsTest {
 				    (list a b)))
 				"""));
 		// With no room at all the lambda list keeps the interpreter's stepped shape.
-		LambdaLists.NativeForm nine = LambdaLists
-			.toNative(LispReader.readFromString("(p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional a)"), read("a"), BUDGET);
+		LambdaLists.NativeForm nine = LambdaLists.toNative(
+				LispReader.readFromString("(p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional a)"), read("a"), BUDGET, Set.of());
 		assertThat(nine.optionals()).isZero();
 		assertThat(nine.paramNames()).hasSize(10);
 	}
@@ -144,13 +145,14 @@ class LambdaListsTest {
 		// the prologue is never wrapped twice.
 		LispCons defun = (LispCons) desugar("(defun f (a &optional (b 2)) (list a b))").get(0);
 		List<LispVal> parts = defun.toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(2), parts.subList(3, parts.size()), BUDGET);
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(2), parts.subList(3, parts.size()), BUDGET,
+				Set.of());
 		assertThat(nf.paramNames()).containsExactly("A", "__ll_opt_0", "__ll_rest");
 		assertThat(nf.variadic()).isTrue();
 		assertThat(nf.optionals()).isEqualTo(1);
 		assertThat(nf.required()).isEqualTo(1);
 		assertThat(nf.body()).isEqualTo(parts.subList(3, parts.size()));
-		assertThat(LambdaLists.desugarProgram(List.of(defun), BUDGET).get(0)).isEqualTo(defun);
+		assertThat(LambdaLists.desugarProgram(List.of(defun), BUDGET, Set.of()).get(0)).isEqualTo(defun);
 	}
 
 	@Test
@@ -170,6 +172,69 @@ class LambdaListsTest {
 		assertThat(desugar("(defun f (&optional (a 1 ap)) (if ap ap a))").get(0).print()).contains("(AP (%SUPPLIED-P");
 		assertThat(desugar("(defun f (&optional (a 1 ap)) (setq ap nil) (if ap a 0))").get(0).print())
 			.contains("(AP (%SUPPLIED-P");
+	}
+
+	@Test
+	void aSpecialSuppliedPKeepsItsBinding() {
+		// A function the body calls reads a special supplied-p variable, which a test in
+		// place cannot answer: the binding stays, the test reads it.
+		String defun = "(defun f (&optional (a 1 *p*)) (if *p* (g) nil))";
+		assertThat(LambdaLists.desugarProgram(read(defun), BUDGET, Set.of("*P*")).get(0).print())
+			.contains("(*P* (%SUPPLIED-P |__ll_opt_0|))")
+			.contains("(IF *P* (G) NIL)");
+		assertThat(desugar(defun).get(0).print()).doesNotContain("(*P* (%SUPPLIED-P");
+	}
+
+	@Test
+	void aParameterNamedLikeASpecialIsBoundByALetAroundTheWholeBody() {
+		// A required or rest parameter named like a special takes an internal name, and
+		// one let binds the special from it around the whole body, the let* prologue
+		// included, so a default form sees the binding (CLHS 3.1.2.1.1.2); a later
+		// parameter's own special is the prologue's binding.
+		Set<String> specials = Set.of("*X*", "*R*");
+		LambdaLists.NativeForm nf = LambdaLists.toNative(
+				LispReader.readFromString("(a *x* &optional (b (g *x*)) &rest *r*)"), read("(list a b *r*)"), BUDGET,
+				specials);
+		assertThat(nf.paramNames()).containsExactly("A", "__ll_sp_1", "__ll_opt_0", "__ll_rest");
+		assertThat(nf.required()).isEqualTo(2);
+		assertThat(nf.body()).hasSize(1);
+		assertThat(nf.body().get(0).print()).isEqualTo(printed("""
+				(let ((*x* |__ll_sp_1|))
+				  (let* ((b (if (%supplied-p |__ll_opt_0|) |__ll_opt_0| (g *x*)))
+				         (*r* |__ll_rest|))
+				    (list a b *r*)))
+				"""));
+		// The physical rest parameter is one of them; a function with none comes back
+		// as it was.
+		LambdaLists.NativeForm rest = LambdaLists.toNative(LispReader.readFromString("(&rest *r*)"), read("(g)"),
+				BUDGET, specials);
+		assertThat(rest.paramNames()).containsExactly("__ll_sp_0");
+		assertThat(rest.body().get(0).print()).isEqualTo(printed("(let ((*r* |__ll_sp_0|)) (g))"));
+		List<LispVal> plainBody = read("(g a)");
+		assertThat(LambdaLists.toNative(LispReader.readFromString("(a)"), plainBody, BUDGET, specials).body())
+			.isEqualTo(plainBody);
+	}
+
+	@Test
+	void aSpecialParametersLetGoesInsideTheFunctionBlock() {
+		// desugarProgram leaves the parameter to toNative, which knows every special; a
+		// body that is one %fn-block takes the let inside it, so the result is its own
+		// fixed point: expanding it again changes nothing.
+		Set<String> specials = Set.of("*X*");
+		LispCons defun = (LispCons) LambdaLists
+			.desugarProgram(read("(defun f (*x*) (return-from f (g)))"), BUDGET, specials)
+			.get(0);
+		assertThat(defun.print()).isEqualTo(printed("(defun f (*x*) (%fn-block f (return-from f (g))))"));
+		List<LispVal> parts = defun.toList();
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(2), parts.subList(3, parts.size()), BUDGET,
+				specials);
+		assertThat(nf.paramNames()).containsExactly("__ll_sp_0");
+		assertThat(nf.body().get(0).print())
+			.isEqualTo(printed("(%fn-block f (let ((*x* |__ll_sp_0|)) (return-from f (g))))"));
+		LambdaLists.NativeForm again = LambdaLists.toNative(LispReader.readFromString("(|__ll_sp_0|)"), nf.body(),
+				BUDGET, specials);
+		assertThat(again.paramNames()).containsExactly("__ll_sp_0");
+		assertThat(again.body()).isEqualTo(nf.body());
 	}
 
 	@Test
@@ -200,7 +265,7 @@ class LambdaListsTest {
 								new LispCons(new LispSymbol(LispNames.LAMBDA_KEY),
 										new LispCons(new LispSymbol("foo"), LispNil.INSTANCE)),
 								new LispCons(new LispSymbol("foo"), LispNil.INSTANCE))));
-		List<LispVal> out = LambdaLists.desugarProgram(List.of(form), BUDGET);
+		List<LispVal> out = LambdaLists.desugarProgram(List.of(form), BUDGET, Set.of());
 		assertThat(out.get(2).print()).isEqualTo(printed("""
 				(defun |g| (&rest |__ll_rest|)
 				  (let* ((|__ll_cell_foo| (%ll-key-cell |__ll_rest| :|foo| :foo))
@@ -240,7 +305,7 @@ class LambdaListsTest {
 		// dead defuns in every hello-world, and their absence is what keeps that module
 		// byte-identical.
 		List<LispVal> program = read("(defun f (a &optional b) (list a b)) (f 1)");
-		List<LispVal> out = LambdaLists.desugarProgram(program, BUDGET);
+		List<LispVal> out = LambdaLists.desugarProgram(program, BUDGET, Set.of());
 		assertThat(out).hasSize(2);
 		assertThat(out.get(1)).isSameAs(program.get(1));
 		// A destructuring-bind or an flet spells &key where this pass does not rewrite,

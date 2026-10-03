@@ -83,6 +83,17 @@ at most its required plus optional count: a surplus argument signals the same ca
 ; => "Function expects at most 2 arguments, got 3"
 ```
 
+## Special parameters
+
+A parameter whose name is proclaimed special (by [`defvar`](defvar.md)/[`defparameter`](defparameter.md) or `(declaim (special ...))`) is bound **dynamically**, as a [`let`](let.md) of it would be: a function called during the body sees the argument, a default form sees the binding of a parameter to its left, and the previous value is restored when the call exits, however it exits. This holds for every section of the lambda list, supplied-p variables included, and for [`lambda`](lambda.md), `flet` and `labels` alike, on every backend. A call in the body of such a function is not a tail call -- the binding is undone after it returns -- so a function that recurses through one uses stack for each call.
+
+```lisp
+(defvar *scale* 1)
+(defun scaled (n) (* n *scale*))
+(defun scaled-by (*scale* n) (scaled n))
+(list (scaled-by 10 5) (scaled 5)) ; => (50 5)
+```
+
 ## setf-function names
 
 The `name` may be a `(setf name)` list instead of a plain symbol. This defines a *setf-function*: the writer invoked when `name` is used as a `setf` place. The new value is passed as the first argument (it is the last required parameter of the setf lambda list, per the Common Lisp convention), so `(setf (name arg...) value)` calls the writer with `value` followed by `arg...`. The function is also first-class through `#'(setf name)`.

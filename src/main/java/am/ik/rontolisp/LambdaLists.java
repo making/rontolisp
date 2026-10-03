@@ -2,6 +2,7 @@ package am.ik.rontolisp;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
@@ -62,6 +63,26 @@ import org.jspecify.annotations.Nullable;
  * signal an error unless {@code &allow-other-keys} is declared or the caller passes
  * {@code :allow-other-keys t}. {@code &whole} is not supported (it is only meaningful for
  * macros).
+ *
+ * <p>
+ * On the compilers a parameter whose name is proclaimed special binds DYNAMICALLY, as CL
+ * requires: a required or rest parameter named like a special is renamed to an internal
+ * one ({@value #SPECIAL_PARAM_PREFIX}N) and the special is bound from it by a {@code let}
+ * around the whole body, prologue included -- the special {@code let} the compilers
+ * already bind with a shallow save/restore over every exit -- so a default form sees the
+ * binding of every earlier parameter. The optionals, keys and auxes are bound by the
+ * prologue's {@code let*} under their own names, which binds a special one dynamically
+ * the same way. The interpreter's shape is left alone: it binds a special parameter
+ * itself.
+ *
+ * <pre>
+ * (defun f (*x* &amp;optional (y (g))) body...)
+ * ==&gt;
+ * (defun f (#sp0 &amp;optional #opt0 &amp;rest #rest)
+ *   (let ((*x* #sp0))
+ *     (let* (... (y (if (%supplied-p #opt0) #opt0 (g))))
+ *       body...)))
+ * </pre>
  */
 public final class LambdaLists {
 
@@ -75,6 +96,14 @@ public final class LambdaLists {
 	 * as already desugared when it is expanded again.
 	 */
 	private static final String OPT_VAR_PREFIX = "__ll_opt_";
+
+	/**
+	 * The prefix of the internal name a compiled function's parameter named like a
+	 * special variable takes ({@code __ll_sp_0}, ...; N is the parameter's position): the
+	 * special itself is bound from it by the {@code let} around the body
+	 * ({@link #bindSpecialParameters}).
+	 */
+	private static final String SPECIAL_PARAM_PREFIX = "__ll_sp_";
 
 	/**
 	 * The parameter budget of the interpreter's expansion: no physical optional, every
@@ -216,11 +245,23 @@ public final class LambdaLists {
 	 */
 	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
 			@Nullable String functionName) {
-		return expand(paramList, body, wrapReturnFrom, null, STEPPED, functionName);
+		return expand(paramList, body, wrapReturnFrom, null, STEPPED, functionName, Set.of());
 	}
 
+	/**
+	 * The expansion in {@code maxParams}' shape, with every physical parameter named like
+	 * one of {@code specials} bound dynamically ({@link #bindSpecialParameters}) -- in
+	 * the compilers' shape only: the interpreter's ({@link #STEPPED}) gets no specials,
+	 * since it binds such a parameter itself.
+	 */
 	private static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
-			@Nullable LispVal blockNameSym, int maxParams, @Nullable String functionName) {
+			@Nullable LispVal blockNameSym, int maxParams, @Nullable String functionName, Set<String> specials) {
+		return bindSpecialParameters(
+				desugared(paramList, body, wrapReturnFrom, blockNameSym, maxParams, functionName, specials), specials);
+	}
+
+	private static Expanded desugared(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
+			@Nullable LispVal blockNameSym, int maxParams, @Nullable String functionName, Set<String> specials) {
 		if (body.isEmpty()) {
 			// An empty function body answers nil, per CL -- dissect's
 			// (defun restarts (&optional condition)) interface stubs; without the
@@ -298,11 +339,72 @@ public final class LambdaLists {
 		letBody.addAll(body);
 		for (int i = 0; i < physical; i++) {
 			LispSymbol suppliedP = parsed.optionals().get(i).suppliedP();
-			if (suppliedP != null) {
+			// A special supplied-p variable keeps its binding: a function the body calls
+			// reads it, which a test in place cannot answer.
+			if (suppliedP != null && !specials.contains(suppliedP.name())) {
 				testSuppliedPInPlace(suppliedP, optionals.get(i), bindings, letBody);
 			}
 		}
 		return new Expanded(parsed.required(), optionals, restVar, List.of(letStar(bindings, letBody)));
+	}
+
+	/**
+	 * Binds the physical parameters of a compiled function that are named like a special
+	 * variable dynamically: each is renamed to an internal parameter
+	 * ({@value #SPECIAL_PARAM_PREFIX}N, N its position) and the special is bound from it
+	 * by one {@code let} around the whole body -- the {@code let*} prologue included, so
+	 * a default form sees it. The compilers bind a special {@code let} with a shallow
+	 * save/restore over every exit channel, and that {@code let} is not a
+	 * tail-transparent form, so a call in the body is no tail call: the binding must be
+	 * undone after it returns. A body that is one {@code %fn-block} wrap takes the
+	 * {@code let} INSIDE it, so a later expansion still finds the wrap first
+	 * ({@link #wrapReturnFrom} is idempotent on it, not on a {@code let} around it); a
+	 * {@code return-from} leaves through the restore either way. The renamed parameters
+	 * are no specials, so expanding the result again changes nothing. The physical
+	 * optionals are internal names already (their users' names are prologue bindings,
+	 * special or not). A function with no such parameter comes back as it was.
+	 */
+	private static Expanded bindSpecialParameters(Expanded e, Set<String> specials) {
+		if (specials.isEmpty()) {
+			return e;
+		}
+		List<LispVal> bindings = null;
+		List<LispSymbol> required = e.required();
+		for (int i = 0; i < required.size(); i++) {
+			LispSymbol param = required.get(i);
+			if (specials.contains(param.name())) {
+				if (bindings == null) {
+					bindings = new ArrayList<>();
+					required = new ArrayList<>(required);
+				}
+				LispSymbol renamed = new LispSymbol(SPECIAL_PARAM_PREFIX + i);
+				required.set(i, renamed);
+				bindings.add(list(param, renamed));
+			}
+		}
+		LispSymbol rest = e.rest();
+		if (rest != null && specials.contains(rest.name())) {
+			if (bindings == null) {
+				bindings = new ArrayList<>();
+			}
+			LispSymbol renamed = new LispSymbol(SPECIAL_PARAM_PREFIX + (required.size() + e.optionals().size()));
+			bindings.add(list(rest, renamed));
+			rest = renamed;
+		}
+		if (bindings == null) {
+			return e;
+		}
+		List<LispVal> body = e.body();
+		List<LispVal> fnBlock = body.size() == 1 && body.get(0) instanceof LispCons only
+				&& only.car() instanceof LispSymbol op && LispNames.FN_BLOCK_INTERNAL.equals(op.name())
+				&& only.isProperList() ? only.toList() : null;
+		List<LispVal> letParts = new ArrayList<>(body.size() + 2);
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(list(bindings.toArray(LispVal[]::new)));
+		letParts.addAll(fnBlock != null ? fnBlock.subList(2, fnBlock.size()) : body);
+		LispVal let = list(letParts.toArray(LispVal[]::new));
+		LispVal wrapped = fnBlock != null ? list(fnBlock.get(0), fnBlock.get(1), let) : let;
+		return new Expanded(required, e.optionals(), rest, List.of(wrapped));
 	}
 
 	/**
@@ -438,13 +540,15 @@ public final class LambdaLists {
 	 * {@code flet}/{@code labels} local, whose expansion builds its own {@code block}.
 	 * The rebuilt lambda list ({@code &optional #opt0 ... &rest #rest}) is one every
 	 * backend takes: a compiler as it is, the interpreter by binding a missing optional
-	 * to {@link #UNSUPPLIED}.
+	 * to {@link #UNSUPPLIED}. A parameter named like a special keeps its name here (the
+	 * expansion knows no specials, and the interpreter binds one itself); a compiler
+	 * binds it when the lambda reaches {@link #toNative}.
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
 	 * @return the physical lambda list and the prologue-wrapped body
 	 */
 	public static Expanded expandPhysical(LispVal paramList, List<LispVal> body) {
-		return expand(paramList, body, false, null, MAX_PHYSICAL_PARAMS, null);
+		return expand(paramList, body, false, null, MAX_PHYSICAL_PARAMS, null, Set.of());
 	}
 
 	/**
@@ -688,29 +792,32 @@ public final class LambdaLists {
 	 * Parses a lambda list into the {@link NativeForm} the compilers consume, desugaring
 	 * extensions when present into the compilers' shape: as many optionals as fit
 	 * {@code maxParams} beside the required parameters and the rest list travel as
-	 * parameters of their own.
+	 * parameters of their own, and a parameter named like a special variable binds it
+	 * dynamically ({@link #bindSpecialParameters}).
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
 	 * @param maxParams the most physical parameters (the closure environment not counted)
 	 * the backend lets a function take
+	 * @param specials the program's special variables
 	 * @return the native form
 	 */
-	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams) {
-		return toNative(paramList, body, maxParams, null);
+	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams, Set<String> specials) {
+		return toNative(paramList, body, maxParams, null, specials);
 	}
 
 	/**
-	 * {@link #toNative(LispVal, List, int)} for a function with a name: the
+	 * {@link #toNative(LispVal, List, int, Set)} for a function with a name: the
 	 * {@code &optional} surplus check carries it ({@link #tooManyArgsCheck}).
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
 	 * @param maxParams the most physical parameters the backend lets a function take
 	 * @param functionName the function's name, or {@code null} for an anonymous one
+	 * @param specials the program's special variables
 	 * @return the native form
 	 */
 	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams,
-			@Nullable String functionName) {
-		Expanded e = expand(paramList, body, true, null, maxParams, functionName);
+			@Nullable String functionName, Set<String> specials) {
+		Expanded e = expand(paramList, body, true, null, maxParams, functionName, specials);
 		List<String> names = new ArrayList<>(e.required().size() + e.optionals().size() + 1);
 		for (LispSymbol s : e.required()) {
 			names.add(s.name());
@@ -728,7 +835,9 @@ public final class LambdaLists {
 	 * Rewrites every {@code defun}/{@code lambda} form in the program whose parameter
 	 * list uses lambda-list keywords into the compilers' native shape via
 	 * {@link #toNative}'s expansion -- required parameters, the physical optionals that
-	 * fit {@code maxParams}, and a rest list. Quoted data is left untouched (so forms
+	 * fit {@code maxParams}, and a rest list. A required or rest parameter named like a
+	 * special keeps its name here: {@link #toNative} binds it where a compiler extracts
+	 * the function, knowing every special. Quoted data is left untouched (so forms
 	 * destined for a runtime {@code eval} keep their source shape). Used by the compilers
 	 * as a pre-pass; the interpreter expands lazily at lambda-creation time instead.
 	 *
@@ -745,15 +854,17 @@ public final class LambdaLists {
 	 * @param program the top-level forms
 	 * @param maxParams the most physical parameters the backend lets a function take
 	 * ({@link #toNative})
+	 * @param specials the special variables the program declares: a supplied-p variable
+	 * named like one keeps its binding
 	 * @return the rewritten forms
 	 */
-	public static List<LispVal> desugarProgram(List<LispVal> program, int maxParams) {
+	public static List<LispVal> desugarProgram(List<LispVal> program, int maxParams, Set<String> specials) {
 		List<LispVal> out = new ArrayList<>(program.size() + 2);
 		if (program.stream().anyMatch(LambdaLists::spellsKey)) {
 			out.addAll(runtimeDefuns());
 		}
 		for (LispVal form : program) {
-			out.add(desugar(form, maxParams));
+			out.add(desugar(form, maxParams, specials));
 		}
 		return out;
 	}
@@ -858,13 +969,14 @@ public final class LambdaLists {
 				list(new LispSymbol(LispNames.DO), bindings, endClause, body));
 	}
 
-	private static LispVal desugar(LispVal form, int maxParams) {
+	private static LispVal desugar(LispVal form, int maxParams, Set<String> specials) {
 		// A form with no lambda-list keyword and no return-from anywhere under it -- most
 		// of every program -- comes back AS IT WAS READ. Cons identity is what
 		// {@link SourceProvenance} keys a form's source position on, so a rebuild here
 		// would drop every position below the top level of a program that has nothing to
 		// desugar. The cdr spine is walked in a loop, so a long list costs no stack.
-		return LispTrees.rebuildSpine(form, node -> desugarHead(node, maxParams), node -> desugar(node, maxParams));
+		return LispTrees.rebuildSpine(form, node -> desugarHead(node, maxParams, specials),
+				node -> desugar(node, maxParams, specials));
 	}
 
 	/**
@@ -872,7 +984,7 @@ public final class LambdaLists {
 	 * atom, a quoted form, a rebuilt lambda/defun -- or {@code null} for an ordinary
 	 * cell.
 	 */
-	private static @Nullable LispVal desugarHead(LispVal form, int maxParams) {
+	private static @Nullable LispVal desugarHead(LispVal form, int maxParams, Set<String> specials) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -882,19 +994,23 @@ public final class LambdaLists {
 				return form;
 			}
 			List<LispVal> parts = cons.toList();
-			// A defun/lambda is rebuilt through expand() when its parameter list uses
-			// lambda-list keywords OR its body uses return-from (the %fn-block wrap
-			// lives in expand so the lambda compilers' toNative path shares it).
+			// A defun/lambda is rebuilt through the desugaring when its parameter list
+			// uses lambda-list keywords OR its body uses return-from (the %fn-block wrap
+			// lives there so the lambda compilers' toNative path shares it). A parameter
+			// named like a special is left for toNative to bind: it is the one that knows
+			// every special, the standard variables declared after this pass included.
 			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && (usesLambdaListKeywords(parts.get(1))
 					|| anyContainsReturnFrom(parts.subList(2, parts.size())))) {
-				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()), true, null, maxParams, null);
-				return rebuildFunction(sym, null, e, maxParams);
+				Expanded e = desugared(parts.get(1), parts.subList(2, parts.size()), true, null, maxParams, null,
+						specials);
+				return rebuildFunction(sym, null, e, maxParams, specials);
 			}
 			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && (usesLambdaListKeywords(parts.get(2))
 					|| anyContainsReturnFrom(parts.subList(3, parts.size())))) {
-				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)),
-						maxParams, parts.get(1) instanceof LispSymbol functionName ? functionName.name() : null);
-				return rebuildFunction(sym, parts.get(1), e, maxParams);
+				Expanded e = desugared(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)),
+						maxParams, parts.get(1) instanceof LispSymbol functionName ? functionName.name() : null,
+						specials);
+				return rebuildFunction(sym, parts.get(1), e, maxParams, specials);
 			}
 		}
 		return null;
@@ -999,7 +1115,8 @@ public final class LambdaLists {
 		return LispNames.LAMBDA.equals(op) || LispNames.DEFUN.equals(op);
 	}
 
-	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e, int maxParams) {
+	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e, int maxParams,
+			Set<String> specials) {
 		List<LispVal> paramParts = new ArrayList<>(e.required());
 		if (!e.optionals().isEmpty()) {
 			paramParts.add(new LispSymbol(LispNames.LAMBDA_OPTIONAL));
@@ -1016,7 +1133,7 @@ public final class LambdaLists {
 		}
 		parts.add(list(paramParts.toArray(LispVal[]::new)));
 		for (LispVal bodyForm : e.body()) {
-			parts.add(desugar(bodyForm, maxParams));
+			parts.add(desugar(bodyForm, maxParams, specials));
 		}
 		return list(parts.toArray(LispVal[]::new));
 	}

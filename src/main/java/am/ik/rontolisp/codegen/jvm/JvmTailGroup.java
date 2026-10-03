@@ -258,7 +258,9 @@ final class JvmTailGroup {
 			Set<Integer> out = new LinkedHashSet<>();
 			edges.add(out);
 			List<LispVal> lambdaParts = lambdas.get(i).toList();
-			if (lambdaParts.size() < 3) {
+			if (lambdaParts.size() < 3 || bindsSpecialParameter(lambdaParts.get(1), specials)) {
+				// A parameter named like a special is bound around the whole body
+				// (LambdaLists.toNative), so no call in it is a tail call.
 				continue;
 			}
 			int self = i;
@@ -395,6 +397,17 @@ final class JvmTailGroup {
 				}
 			}
 		}
+	}
+
+	// The expansion's lambda list is the physical one: a symbol in it named like a
+	// special is a required or rest parameter, which binds it dynamically.
+	private static boolean bindsSpecialParameter(LispVal lambdaList, Set<String> specials) {
+		for (LispVal node = lambdaList; node instanceof LispCons cell; node = cell.cdr()) {
+			if (cell.car() instanceof LispSymbol sym && specials.contains(sym.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean bindsSpecial(LispVal bindings, Set<String> specials) {

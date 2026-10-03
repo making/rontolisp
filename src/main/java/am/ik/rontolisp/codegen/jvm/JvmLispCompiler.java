@@ -1032,10 +1032,25 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		// Read before the lambda lists lose their &optional bounds.
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
-		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS);
+		// The lambda-list desugaring keeps the binding of a supplied-p variable named
+		// like a special, so it is handed the specials the program declares; a
+		// parameter named like one is bound dynamically where Pass 1 and Pass 2 extract
+		// the function (LambdaLists.toNative), against the full set collected below.
+		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS,
+				SpecialVarCollector.collectDeclared(program));
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
+		// Special (dynamically bound) variables -- the program's own and the standard
+		// ones injectMvSpillGlobal just declared. Collected over the WHOLE program: a
+		// local (declare (special x)) inside a defun body (cl-ppcre's remove-registers-p)
+		// must make x a global cell for its free readers too. Here, before Pass 1, as a
+		// parameter named like one binds it dynamically (LambdaLists.toNative). A
+		// SequencedSet, not a plain Set: this order mints the _g$ static fields, and
+		// collectDynamicallyBound copies it wholesale when the program has a progv, so
+		// an unordered set here makes the emitted class differ per JVM run
+		// (.kb/emitted-output-determinism.md).
+		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
 		ConstantPool cp = new ConstantPool();
 		ClassEntry thisClass = cp.classEntry(this.className);
 		ClassEntry objectClass = cp.classEntry("java/lang/Object");
@@ -1424,7 +1439,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
-				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
+				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons), specialVars));
 			}
 			else if (JvmExportDirective.isExportForm(expr)) {
 				exportDecls.add(JvmExportDirective.parse((LispCons) expr));
@@ -1732,8 +1747,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			// injectMvSpillGlobal, which ran before the wrappers existed).
 			wrappers = LispMacroExpander.settleWrapperLambdas(wrappers, designatedProducers);
 		}
+		// The injected runtime -- the wrappers and the shared sequence helpers below --
+		// is compiled like the program, so a parameter of it named like a special binds
+		// it too, and the dynamically-bound collection walks it beside the program.
+		List<LispVal> injectedForms = new ArrayList<>();
 		for (LispVal wrapper : wrappers) {
-			defuns.add(extractSetqLambda(wrapper));
+			inject(wrapper, defuns, injectedForms, specialVars);
 		}
 		// The shared merge sort, once per program that sorts -- from its own source or
 		// from the #'sort wrapper just added, which is why this sits here beside the
@@ -1742,13 +1761,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// nothing in. When it is absent JvmExprCompiler keeps the inline sort.
 		if (!userDefinedNames.contains(LispNames.SORT_RUNTIME)
 				&& (LispMacroExpander.programUsesSort(program) || LispMacroExpander.programUsesSort(wrappers))) {
-			defuns.add(extractSetqLambda(LispMacroExpander.sortRuntimeWrapper()));
+			inject(LispMacroExpander.sortRuntimeWrapper(), defuns, injectedForms, specialVars);
 		}
 		// The shared copy-list, once per program naming copy-list (its own source or a
 		// #'copy-list wrapper body), for the same reason as the sort above.
 		if (!userDefinedNames.contains(LispNames.COPY_LIST_RUNTIME) && (LispMacroExpander.programUsesCopyList(program)
 				|| LispMacroExpander.programUsesCopyList(wrappers))) {
-			defuns.add(extractSetqLambda(LispMacroExpander.copyListRuntimeWrapper()));
+			inject(LispMacroExpander.copyListRuntimeWrapper(), defuns, injectedForms, specialVars);
 		}
 		// The shared subseq dispatch, once per program that calls subseq -- from its own
 		// source or from a wrapper body just added, which is why this is here and not in
@@ -1771,12 +1790,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| userDefinedNames.stream().anyMatch(LispMacroExpander.sequenceOpRuntimeNames()::contains) ? List.of()
 						: LispMacroExpander.sequenceOpRuntimeWrappers(program, wrappers);
 		for (LispVal helper : seqOpHelpers) {
-			defuns.add(extractSetqLambda(helper));
+			inject(helper, defuns, injectedForms, specialVars);
 		}
 		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME) && arrayGate
 				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers)
 						|| LispMacroExpander.programUsesSubseq(seqOpHelpers))) {
-			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
+			inject(LispMacroExpander.subseqRuntimeWrapper(), defuns, injectedForms, specialVars);
 		}
 		// The shared sequence-conversion trio, beside the subseq helper for the same
 		// reason (most conversion sites live in the wrapper bodies just added). Gated on
@@ -1790,7 +1809,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& (LispMacroExpander.programUsesSeqConversion(program)
 						|| LispMacroExpander.programUsesSeqConversion(wrappers))) {
 			for (LispVal helper : LispMacroExpander.seqConversionWrappers()) {
-				defuns.add(extractSetqLambda(helper));
+				inject(helper, defuns, injectedForms, specialVars);
 			}
 		}
 		// The shared sequence check every %check-sequence site calls: one vectorp for the
@@ -1800,7 +1819,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& (LispMacroExpander.programUsesSequenceCheck(program)
 						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
 						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
-			defuns.add(extractSetqLambda(LispMacroExpander.checkSequenceRuntimeWrapper()));
+			inject(LispMacroExpander.checkSequenceRuntimeWrapper(), defuns, injectedForms, specialVars);
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.
@@ -1842,17 +1861,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				globals.add(free);
 			}
 		}
-		// Special (dynamically bound) variables. Each needs the same global backing store
-		// (a let of a special save/restores over it), so union them into the globals set
-		// before fields are minted; a let/let* of one of these names becomes a dynamic
-		// binding rather than a lexical slot (JvmLetCompiler). Collected over the WHOLE
-		// program: a local (declare (special x)) inside a defun body (cl-ppcre's
-		// remove-registers-p) must make x a global cell for its free readers too.
-		// A SequencedSet, not a plain Set: this order mints the _g$ static fields, and
-		// collectDynamicallyBound copies it wholesale when the program has a progv, so an
-		// unordered set here makes the emitted class differ per JVM run
-		// (.kb/emitted-output-determinism.md).
-		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
+		// Special (dynamically bound) variables, collected before Pass 1. Each needs the
+		// same global backing store (a let of a special save/restores over it), so union
+		// them into the globals set before fields are minted; a let/let* of one of these
+		// names becomes a dynamic binding rather than a lexical slot (JvmLetCompiler).
 		if (usesThreads) {
 			// make-thread's bindings alist names specials at runtime, and the canonical
 			// consumer (clack's handler.lisp) binds the stream specials that way -- a
@@ -1883,7 +1895,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// interpreter parity (its DynamicBindings is a ThreadLocal for the same reason).
 		// A special never let-bound keeps the bare static field, so its reads stay a
 		// single getstatic and a binding-free program compiles byte-identically.
-		SequencedSet<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(program, specialVars);
+		// The injected runtime is walked beside the program: it is compiled the same way.
+		List<LispVal> compiledForms = new ArrayList<>(program);
+		compiledForms.addAll(injectedForms);
+		SequencedSet<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(compiledForms, specialVars);
 		if (usesThreads) {
 			// Every special becomes runtime-bindable by name through make-thread's
 			// bindings alist, so each needs its _d$ ThreadLocal (the _dtl dispatch in
@@ -5459,13 +5474,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	static DefunDecl extractSetqLambda(LispVal expr) {
+	static DefunDecl extractSetqLambda(LispVal expr, Set<String> specials) {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
-				LambdaLists.MAX_PHYSICAL_PARAMS, funcName);
+				LambdaLists.MAX_PHYSICAL_PARAMS, funcName, specials);
 		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
+	}
+
+	// One injected runtime defun -- a wrapper or a shared sequence helper, a (setq name
+	// (lambda ...)) form -- into Pass 1's defuns, its form kept for the
+	// dynamically-bound collection.
+	private static void inject(LispVal setqLambda, List<DefunDecl> defuns, List<LispVal> injectedForms,
+			Set<String> specials) {
+		defuns.add(extractSetqLambda(setqLambda, specials));
+		injectedForms.add(setqLambda);
 	}
 
 	// A (rontolisp:wasm-import ...) stub: a defun of the declared arity whose body
