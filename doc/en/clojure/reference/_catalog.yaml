@@ -130,6 +130,7 @@ categories:
       - { slug: dissoc, name: "dissoc" }
       - { slug: get, name: "get" }
       - { slug: contains-p, name: "contains?" }
+      - { slug: core-find, name: "find" }
       - { slug: keys, name: "keys" }
       - { slug: vals, name: "vals" }
       - { slug: merge, name: "merge" }
@@ -147,6 +148,7 @@ categories:
       - { slug: frequencies, name: "frequencies" }
       - { slug: peek, name: "peek" }
       - { slug: pop, name: "pop" }
+      - { slug: subvec, name: "subvec" }
       - { slug: update-keys, name: "update-keys" }
       - { slug: update-vals, name: "update-vals" }
       - { slug: reduce-kv, name: "reduce-kv" }

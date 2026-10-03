@@ -2829,6 +2829,61 @@
       (rontolisp::%clojure-xf-replace (car args))
       (rontolisp::%clojure-replace (car args) (car (cdr args)))))
 
+(defun rontolisp::%clojure-subvec-index (x)
+  "The subvec bound X as an integer: an integer, or a float truncated like the
+   oracle's intValue; anything else (nil included) signals."
+  (cond ((integerp x) x)
+        ((floatp x) (truncate x))
+        (t (error "subvec needs integer bounds"))))
+
+(defun rontolisp::%clojure-subvec (v start end)
+  "(subvec V START END): a fresh vector of V's members from START up to END; a
+   non-vector V (a string included) signals, and so does a bound out of range or
+   START past END, like the oracle's IndexOutOfBoundsException."
+  (if (or (not (vectorp v)) (stringp v)) (error "subvec needs a vector"))
+  (let ((s (rontolisp::%clojure-subvec-index start))
+        (e (rontolisp::%clojure-subvec-index end)))
+    (if (or (< s 0) (< e s) (< (length v) e))
+        (error "Index out of bounds for subvec ~D ~D of length ~D" s e
+               (length v)))
+    (let ((out (make-array (- e s))))
+      (dotimes (j (- e s) out) (setf (aref out j) (aref v (+ s j)))))))
+
+(defun rontolisp::%clojure-subvec-from (v start)
+  "(subvec V START): V from START to its end."
+  (if (or (not (vectorp v)) (stringp v)) (error "subvec needs a vector"))
+  (rontolisp::%clojure-subvec v start (length v)))
+
+(defun rontolisp::%clojure-subvec-v (&rest args)
+  "subvec as a value: a vector, a start and an optional end."
+  (if (= (rontolisp::%clojure-check-arity args 2 3 "subvec") 2)
+      (rontolisp::%clojure-subvec-from (car args) (car (cdr args)))
+      (rontolisp::%clojure-subvec (car args) (car (cdr args))
+                                  (car (cdr (cdr args))))))
+
+(defun rontolisp::%clojure-find (coll key)
+  "(find COLL KEY): the entry [k v] as a vector, nil when COLL holds no KEY. A
+   map or record answers the key it stores (the = representative of a structural
+   one); a vector takes an integer index in range; nil is nil; any other COLL
+   (a set, a string, a list) signals like the oracle."
+  (cond ((null coll) nil)
+        ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
+         (let* ((table (rontolisp::%clojure-set-entries coll "find"))
+                (miss (list nil))
+                (k (rontolisp::%clojure-table-key key table))
+                (v (gethash k table miss)))
+           (if (eq v miss) nil (vector k v))))
+        ((and (vectorp coll) (not (stringp coll)))
+         (if (and (integerp key) (>= key 0) (< key (length coll)))
+             (vector key (aref coll key))
+             nil))
+        (t (error "find not supported on this type"))))
+
+(defun rontolisp::%clojure-find-v (&rest args)
+  "find as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "find")
+  (rontolisp::%clojure-find (car args) (car (cdr args))))
+
 (defun rontolisp::%clojure-partition-all (n step coll)
   "COLL in runs of N every STEP members, the short tail kept. A non-positive
    size or step signals (the oracle answers an endless seq of ())."

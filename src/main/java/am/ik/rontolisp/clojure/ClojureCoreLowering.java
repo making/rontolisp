@@ -53,6 +53,13 @@ final class ClojureCoreLowering {
 			case "peek", "pop", "not-empty":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "find":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "subvec":
+				arity(name, n, 2, 3);
+				return n == 2 ? worker("subvec-from", ctx.lower(items.get(1)), ctx.lower(items.get(2)))
+						: worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
 			case "dedupe":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
@@ -123,9 +130,9 @@ final class ClojureCoreLowering {
 	static @Nullable LispVal valueOf(ClojureLowering ctx, String name) {
 		return switch (name) {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
-					"dedupe", "replace", "partition-all", "partition-by", "min-key", "max-key", "juxt", "fnil",
-					"every-pred", "some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta", "meta",
-					"vary-meta" ->
+					"dedupe", "replace", "find", "subvec", "partition-all", "partition-by", "min-key", "max-key",
+					"juxt", "fnil", "every-pred", "some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta",
+					"meta", "vary-meta" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();

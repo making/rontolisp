@@ -2093,6 +2093,10 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/completing");
 		assertThatThrownBy(() -> Clojure.read("(replace {} [] [])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/replace");
+		assertThatThrownBy(() -> Clojure.read("(subvec [1])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/subvec");
+		assertThatThrownBy(() -> Clojure.read("(find {})", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/find");
 	}
 
 	@Test
