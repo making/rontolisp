@@ -1454,7 +1454,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_LIMB_SHR = FUNC_LIMB_SHL + 1;
 
 	// _limb_divrem_mag ((ref null eq) u, (ref null eq) v, i32 which) -> (ref null eq)
-	// array: binary long division on non-negative magnitudes (0 = quotient, 1 = rem).
+	// array: long division on non-negative magnitudes (0 = quotient, 1 = rem).
 	static final int FUNC_LIMB_DIVREM_MAG = FUNC_LIMB_SHR + 1;
 
 	// _limb_divmod_small ((ref null eq) arr, i32 d) -> i32 rem: in-place magnitude

@@ -30,6 +30,10 @@ Equality per tier -- `ref.eq`, i64 field, `_big_eq` -- wired into eq/eql/`_equal
   `_shl`/`_shr`/`_divrem_mag`/`_divmod_small`. `_limb_of` on a TYPE_BIGINT answers its OWN array
   -- read-only, `_limb_copy` before mutating. **Limbs are 32-bit because a limb product must fit
   an i64 -- core wasm has no widening 64-bit multiply.**
+- **`_limb_divrem_mag`** is Knuth's Algorithm D (Hacker's Delight `divmnu64`, 32-bit digits in i64
+  arithmetic): normalize v's top limb into fresh copies, estimate a quotient limb from two remainder
+  limbs, correct it against v's second limb (zero for a one-limb v, whose estimate is exact), multiply-
+  subtract, add back when still one too large. See "Limb division" below.
 - **`_big_*`** dispatch all three tiers with an i64 fast path FIRST: `_add`/`_sub`
   (overflow-checked, promote not wrap), `_mul`, `_neg`, `_divrem` (truncating, traps on zero
   divisor), `_mod`, `_fdiv` (truncate/floor/ceiling/round-ties-even), `_cmp`, `_and/_or/_xor/_not`,
@@ -115,6 +119,43 @@ users.
   machine): 486-593 ms -> 577-685 ms at the default level (the cross products are `_big_mul` calls
   now), 822-995 -> 1,292-1,413 ms at `--optimize=size`, which has no `_rat_new` head.
 
+## Limb division (2026-10-03)
+
+`_limb_divrem_mag` was a bit-at-a-time loop, O(bits(u) * limbs(v)): 248 us for a 1,059-bit by
+997-bit quotient, which every wide `_rat_to_f64` divides (the runtime reader's `1e-300` took 150 us).
+Algorithm D is one quotient LIMB per step: 5.5 us there; a 2,000-step `gcd` of a 634-bit and a
+562-bit integer 9.0 s -> 0.35 s (Euclid's quotients are short, the bit loop still walked every
+dividend bit); `gen_ops.py` seed 3 1.86 -> 0.21 s. Cost: the body is 759 B against 373, so a
+module that can divide limb integers grows by 386 B at every level (`bench-report` programs, whose
+footer rounds two integers, +386; zlib +386; `hello_world`, an integer `fib`: 0). Inlining the
+normalization shifts instead of calling `_limb_shl`/`_limb_shr`/`_limb_copy` saved 120 B in a module
+that had none of them. Verified against the interpreter: 18,000 truncate/floor/ceiling/round/mod/
+rem/gcd lines over operands of 1-40 limbs biased to 0/1/0x7fffffff/0x80000000/0xffffffff limbs and
+near multiples (0 differences), the b98 sweeps (0), and the add-back branch made `unreachable`
+traps on the first vector of `limbDivisionTakesItsCorrectionAndAddBackSteps`.
+
+## The runtime reader's decimal floats (2026-10-03)
+
+`WasmReadRuntimeBuilder.emitTryFloat` reads the double nearest the token, as `parseDouble` does.
+It used to accumulate the digits in f64 and scale by a power built through `* 10.0`, rounding at
+every step: `0.30000000000000004` read `0.3000000000000001`, `4.9e-324` read `0.0`,
+`1.7976931348623158e308` `Infinity`; 2,022 of 3,000 random and halfway tokens differed. Now the
+digits accumulate in an i64 below 10^17 and through `_big_grow` past it; k = exponent - fractional
+digits (the exponent clamps at 10^8). A mantissa within 2^53 with |k| <= 22 is one f64 multiply or
+divide of exact doubles; otherwise `%decimal-double`'s bit-length guard answers infinity/zero, the
+power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us for 10^300), and
+`_rat_to_f64` converts `mant * 10^k` or the UNREDUCED ratio `mant / 10^-k` (it needs no gcd).
+- 0 differences from the interpreter over the 3,000 tokens on Preview 1 (default and size), the
+  component and the JVM.
+- Speed per `read-from-string`, wasmtime, before -> after: `3.14159` and `6.02214076e23` unchanged
+  (0.55 / 0.9 us); 17 digits (`0.30000000000000004`) 1.15 -> 2.2 us; extreme exponents (`1e-300`,
+  `2.2250738585072014e-308`, `1.7976931348623157e308`) 0.75-2 -> 5.5-7.5 us -- 120-150 us with the
+  bit-loop division.
+- Size: a module that reads +748 B (`(print (read-from-string "1.5"))` 29,578 -> 30,326; 362 the
+  classifier, 386 the division it now reaches).
+- `5.` reads as a float here and on the JVM, as the integer 5 on the interpreter (CL's reading): a
+  grammar divergence this did not touch.
+
 ## Deliberate limits
 - Float -> integer conversion is EXACT on all four backends (`eval/ExactRounding`, the JVM's
   `_fdiv`/`_frat`, this backend's `_f64_fdiv`); `--no-gc` cannot follow, `(floor 1d300)` traps.
@@ -175,6 +216,8 @@ limb promotion behind an operation that can overflow: `fib` keeps ~540 B of it, 
 `.exactIntegersBeyondI64PromoteToLimbBigints`, `.isqrtIsExactBeyondTheI31Range`,
 `.aWideIntegerIsItsOwnNumeratorOverOne`, ci-spec `exact-integers-beyond-the-i64-range`. Ratios:
 `WasmLispCompilerIntegrationTest.ratioComponentsPastTheFixnumRangeStayExactAtEveryLevel`,
+`.limbDivisionTakesItsCorrectionAndAddBackSteps`, `.theRuntimeReaderReadsTheNearestDoubleOfADecimalToken`
+(ci-spec `runtime-read-decimal-token-is-the-nearest-double`),
 `.aRatioFloatsToTheNearestDoubleTiesToEven`, `.theRuntimeReaderReadsARatioPastTheFixnumRange`,
 `.rational`, `.rationalize`, `WasmRatioRuntimeBuilderTest`, `WasmStructShapeTest`, ci-spec
 `ratio-components-past-the-fixnum-range` (plus the near tie in `float-exact-comparison` and the
