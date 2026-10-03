@@ -5717,3 +5717,17 @@ cases:
     expected: |
       #{1 2} #{} #{1 2} #{[1]} 3 3
       true #{1 2} true true true (#{1} #{2}) #{#{1}}
+  - name: a-double-prints-its-exponent-marker-in-uppercase
+    # Oracle-identical (clj 1.12.6): Double.toString spells 1.0E19 and 1.5E-7; the plain
+    # range (1.0E-3 up to 1.0E7) stays positional.
+    source: |
+      (println 1.0E19 (str 1.0E19) (pr-str 1.5e-7) [1e300] -1.0E-5 (str "x" 1e20 "y"))
+      (prn 1e7 9999999.0 0.001 1.0E-4 1.2345E10 12345678.9 1.7976931348623157e308 4.9e-324 -1.0E22)
+      (println (format "%s|%s" 1.0E19 [1e-10]) (pr-str 1e20 {:a 1e-10}) (with-out-str (prn 1e300)) (with-out-str (print 2.5e-8)))
+      (println (str [1e20 1.5]) (str {:k 1e21}) (pr-str #{1e30}) (str '(1e-9)) (str ##Inf ##NaN) (pr-str ##Inf) (* 1.0 123456789012))
+    expected: |
+      1.0E19 1.0E19 1.5E-7 [1.0E300] -1.0E-5 x1.0E20y
+      1.0E7 9999999.0 0.001 1.0E-4 1.2345E10 1.23456789E7 1.7976931348623157E308 4.9E-324 -1.0E22
+      1.0E19|[1.0E-10] 1.0E20 {:a 1.0E-10} 1.0E300
+       2.5E-8
+      [1.0E20 1.5] {:k 1.0E21} #{1.0E30} (1.0E-9) InfinityNaN ##Inf 1.23456789012E11

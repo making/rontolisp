@@ -799,6 +799,12 @@ of the bare value and `format` keep `NaN`/`Infinity` (`%clojure-str-of`), a coll
 `(contains? #{##NaN} ##NaN)` false there (two reads, two boxed objects); a double here has no identity,
 so a NaN key is found by value like a computed one always was.
 
+**A double's exponent marker is uppercase** (`1.0E19`, `1.5E-7`, like `Double.toString`): the
+`%clojure-write` float arm upcases the Common Lisp printer's text (the digits and the plain range,
+1.0E-3 up to 1.0E7, were already the oracle's); `str`, `format`'s `%s` and every collection go
+through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exponent-marker-in-uppercase`
+(clj 1.12.6, 2026-10-03). The Common Lisp printer is unchanged.
+
 **`read-string`/`read` run one reader in `clojure.lisp` (`%clojure-read-from`) over the
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a

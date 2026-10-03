@@ -355,6 +355,9 @@
          ;; print and pr alike (str alone says NaN and Infinity)
          (write-string (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf"))
                        stream))
+        ;; the Common Lisp printer spells the exponent marker in lowercase; the
+        ;; oracle's Double.toString says 1.0E19 and 1.5E-7
+        ((floatp x) (write-string (string-upcase (princ-to-string x)) stream))
         ((functionp x) (write-string "#<procedure>" stream))
         (t (let ((name (rontolisp::%clojure-host-class-name x)))
              (if name (write-string name stream) (princ x stream))))))
