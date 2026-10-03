@@ -204,11 +204,13 @@ with dynamic extent; anything else is refused. `defstruct` holds its key vector
 behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
 binds `*standard-output*` to a string stream (never a literal
 `with-output-to-string`) and answers what printed; `time` reports
-`Elapsed time: N msecs` and answers its value. `with-open` binds and closes in
+`Elapsed time: N msecs` (a double count, like the oracle's) and answers its value.
+`with-open` binds and closes in
 reverse order through `unwind-protect`, calling the `close` method (Java
 closeables need the JVM, like all interop); `(. stream write x)` prints through
-`princ` on every backend, and `(.readLine stream)` reads through `read-line`
-(`nil` past the end, like the oracle).
+`princ` on every backend, `(.readLine stream)` reads through `read-line`
+(`nil` past the end, like the oracle) and `(.read stream)` answers the next
+character's code (`-1` past the end).
 
 ## Protocols, records and types
 
@@ -251,6 +253,19 @@ it at creation, and `defrecord` refuses the markers, all like the oracle.
 ClojureScript's `^:mutable` is no marker. `set!` of a local, a parameter or an
 immutable field is the oracle's `Cannot assign to non-mutable: ...`; of a non-dynamic
 global it signals `Can't change/establish root binding of: ... with set` at run time.
+
+## Reading
+
+`read-string` reads the first datum of a string and `read` one datum from a reader, at
+run time on every backend, answering what a quote of the same text answers: the same
+numbers, strings, characters, keywords (`::kw` in the calling namespace) and collections,
+metadata dropped, `#_` discarding. A record literal builds the record of a class the
+program defines; `#=` read-time evaluation, reader conditionals and tagged literals are
+refused like in source. A reader is a `clojure.java.io/reader`, `*in*`, or a
+`java.io.PushbackReader`/`BufferedReader` over one or over a `java.io.StringReader`,
+which is a stream on every backend; `read` leaves it right after the datum. `str` of a
+collection quotes the strings inside it, like the oracle's, so what `spit` writes reads
+back. `eval` and `load-string` stay absent: no compiler runs at run time.
 
 ## Not yet
 

@@ -4354,3 +4354,111 @@ cases:
       :assert-failed
       "Hello, Ann" "ab"
       1 "cd" ("Hello, x") (:no-test)
+  - name: read-string-reads-what-a-quote-reads
+    # read-string (b85) is a run-time reader over the source reader's language:
+    # the first datum of the string, answering what a quote of the same text
+    # answers (so the = line holds), ::kw in the calling namespace, a record
+    # literal of a class the program defines as that record (over its unevaluated
+    # body), #_ discards even before a closing bracket, and {:eof v} answers v for
+    # an empty string. Every line is the oracle's (clj 1.12.6.1673) except @x,
+    # which reads (deref x) like '@x does here (the oracle: clojure.core/deref).
+    source: |
+      (ns b85.read)
+      (defrecord B85R [a b])
+      (prn (read-string "(4 5)"))
+      (prn (read-string "1 2"))
+      (prn (read-string "[1 :k b85-sym \"s\\n\" \\c \\( nil true false 1/2 1.5 0x10 2r101]"))
+      (prn (read-string "{:a [1 2]}") (read-string "#{:x}") (read-string "::kw"))
+      (prn (= (read-string "(a :b [1] {:c 2} #{3} \"s\" \\c nil true false 1.5 1/2)")
+              '(a :b [1] {:c 2} #{3} "s" \c nil true false 1.5 1/2)))
+      (prn (read-string "#b85.read.B85R{:a 1 :b [2]}"))
+      (prn (read-string "#b85.read.B85R{:a 1 :c \"x\"}"))
+      (prn (= (read-string "#b85.read.B85R[1 2]") (->B85R 1 2)))
+      (prn (read-string "; note\n #_ skipped [1 #_ 2]"))
+      (prn (map read-string ["'x" "@x" "#'x" "-7"]))
+      (prn (read-string {:eof :none} "  "))
+    expected: |
+      (4 5)
+      1
+      [1 :k b85-sym "s\n" \c \( nil true false 1/2 1.5 16 5]
+      {:a [1 2]} #{:x} :b85.read/kw
+      true
+      #b85.read.B85R{:a 1, :b [2]}
+      #b85.read.B85R{:a 1, :b nil, :c "x"}
+      true
+      [1]
+      ((quote x) (deref x) (var x) -7)
+      :none
+  - name: read-string-refuses-in-the-oracles-words
+    # The end of input (empty or inside a datum), a repeated set member, an
+    # unknown character name, a bad number and an unmatched closing bracket
+    # signal with the oracle's messages; a record literal of a class the program
+    # never defined is the source reader's refusal (the oracle's
+    # ClassNotFoundException names the class).
+    source: |
+      (prn (try (read-string "") (catch Exception e (ex-message e))))
+      (prn (try (read-string "(1 2") (catch Exception e (ex-message e))))
+      (prn (try (read-string "#{1 1}") (catch Exception e (ex-message e))))
+      (prn (try (read-string "\\xyz") (catch Exception e (ex-message e))))
+      (prn (try (read-string "1a") (catch Exception e (ex-message e))))
+      (prn (try (read-string "]") (catch Exception e (ex-message e))))
+      (prn (try (read-string "#b85.read.Nope{}") (catch Exception e (ex-message e))))
+    expected: |
+      "EOF while reading"
+      "EOF while reading"
+      "Duplicate key: 1"
+      "Unsupported character: \\xyz"
+      "Invalid number: 1a"
+      "Unmatched delimiter: ]"
+      "a record literal needs a defined record class, not b85.read.Nope"
+  - name: read-takes-one-form-from-a-reader
+    # read takes one datum from a reader and leaves it right after the datum, like
+    # the oracle's PushbackReader: a PushbackReader over a StringReader is a
+    # string input stream on every backend (over a clojure.java.io/reader, the
+    # reader itself -- the file legs are ClojureInteropTest and
+    # ClojureWasmFileIoTest), .read answers the next character's code, and the
+    # end of input answers the eof value or, without one, signals. (read) reads
+    # *in*. Every line is the oracle's.
+    source: |
+      (let [r (java.io.PushbackReader. (java.io.StringReader. "(1 2) :k\n\"s\" [x]"))]
+        (prn (read r))
+        (prn (read r))
+        (prn (.read r))
+        (prn (read r) (read r))
+        (prn (read r false :eof))
+        (prn (read {:eof :done} r))
+        (prn (try (read r) (catch Exception e (ex-message e)))))
+      (prn (binding [*in* (java.io.PushbackReader. (java.io.StringReader. "42 x"))] [(read) (read)]))
+      (prn (map read [(java.io.PushbackReader. (java.io.StringReader. "[7]"))]))
+    expected: |
+      (1 2)
+      :k
+      10
+      "s" [x]
+      :eof
+      :done
+      "EOF while reading"
+      [42 x]
+      ([7])
+  - name: str-spells-a-collection-readably
+    # str of a collection is the oracle's toString: the strings inside quoted,
+    # characters with their backslash, nil spelled -- so what spit writes reads
+    # back -- while a top-level string, character or nil stays bare. join and
+    # format's %s convert through the same str.
+    source: |
+      (println (str '("a" \b nil :k)))
+      (println (str [nil "x"] {:a "s"} #{"t"}))
+      (println (clojure.string/join "," ["a" ["b"] nil \c]))
+      (println (format "%s|%s" ["a"] "b"))
+    expected: |
+      ("a" \b nil :k)
+      [nil "x"]{:a "s"}#{"t"}
+      a,["b"],,c
+      ["a"]|b
+  - name: time-reports-elapsed-milliseconds-as-a-double
+    # time reports a double millisecond count, like the oracle's nanoTime
+    # quotient, so the book's \d+\.\d+ match over the report holds.
+    source: |
+      (println (boolean (re-find #"Elapsed time: \d+\.\d+ msecs" (with-out-str (time (+ 1 2))))))
+    expected: |
+      true

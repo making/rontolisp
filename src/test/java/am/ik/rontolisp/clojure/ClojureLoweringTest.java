@@ -1868,6 +1868,49 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void readingVerbsCallTheRunTimeReaderAndARecordClassRegistersFirst() {
+		// read-string/read call the run-time reader with the calling namespace and its
+		// aliases (what ::kw resolves against); a program that reads registers its
+		// record classes behind the false binding, ahead of everything else
+		String program = lowered("(ns b85 (:require [clojure.string :as s])) (defrecord R [a]) (read-string \"1\")");
+		assertThat(program)
+			.startsWith(FALSE_BINDING + "(RONTOLISP::%CLOJURE-READ-REGISTER '((\"b85.R\" \"R\" (\"a\") T)))")
+			.contains("(RONTOLISP::%CLOJURE-READ-STRING \"1\" '(\"b85\" ")
+			.contains("(\"s\" \"clojure.string\")");
+		assertThat(lowered("(read-string {:eof 1} \"\")")).contains("(RONTOLISP::%CLOJURE-READ-STRING-OPTS ");
+		assertThat(lowered("(read)")).contains("(RONTOLISP::%CLOJURE-READ *STANDARD-INPUT* T NIL '(\"user\"))");
+		assertThat(lowered("(read *in* false :e)")).contains("(RONTOLISP::%CLOJURE-READ *STANDARD-INPUT* ");
+		assertThat(lowered("(read {} *in*)")).contains("(RONTOLISP::%CLOJURE-READ-OPTS ");
+		assertThat(lowered("(map read-string [\"1\"])")).contains("RONTOLISP::%CLOJURE-READ-STRING-V");
+		assertThat(lowered("(map read [])")).contains("RONTOLISP::%CLOJURE-READ-V");
+		// a program that never reads registers nothing
+		assertThat(lowered("(defrecord R [a])")).doesNotContain("READ-REGISTER");
+		assertThatThrownBy(() -> Clojure.read("(read-string)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/read-string");
+		assertThatThrownBy(() -> Clojure.read("(read 1 2 3 4 5)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (5) passed to: clojure.core/read");
+	}
+
+	@Test
+	void aReaderWrapperOverAStreamIsTheStream() {
+		// a PushbackReader/BufferedReader over a StringReader is a string input
+		// stream and over a clojure.java.io/reader the reader itself, so read runs on
+		// every backend; over anything else the host class stays a run-time choice
+		assertThat(lowered("(java.io.PushbackReader. (java.io.StringReader. \"x\"))"))
+			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
+		assertThat(lowered(
+				"(ns b85r (:import (java.io BufferedReader StringReader))) (BufferedReader. (new StringReader \"x\"))"))
+			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
+		assertThat(lowered(
+				"(ns b85j (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
+			.endsWith("(OPEN \"f\")");
+		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
+			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
+		// a StringReader by itself stays the host class: a Java API takes it
+		assertThat(lowered("(java.io.StringReader. \"x\")")).contains("(JAVA:NEW \"java.io.StringReader\" \"x\")");
+	}
+
+	@Test
 	void coreBacklogArityRefusalsUseTheOracleWording() {
 		assertThatThrownBy(() -> Clojure.read("(drop-last 1 2 3)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/drop-last");

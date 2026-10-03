@@ -343,6 +343,8 @@ categories:
       - { slug: slurp, name: "slurp" }
       - { slug: line-seq, name: "line-seq" }
       - { slug: reader, name: "clojure.java.io/reader" }
+      - { slug: read-string, name: "read-string" }
+      - { slug: read, name: "read" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

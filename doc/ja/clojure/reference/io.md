@@ -2,7 +2,8 @@
 
 `eval` IO 層上のファイル入口です。インタプリタと JVM で動きます。wasm では
 `open`/`with-open-file` と同じく、パスを含む `--dir` プリオープンが必要です。なければ
-open が file-error を通知します。`format` は Clojure 記法の引数で Java 形式の文字列を描画します。
+open が file-error を通知します。`read-string` と `read` は、`spit` が書いた内容を含む
+データの読み戻しを、すべてのバックエンドで行います。`format` は Clojure 記法の引数で Java 形式の文字列を描画します。
 
 | Name | Example | Result |
 |---|---|---|
@@ -10,6 +11,8 @@ open が file-error を通知します。`format` は Clojure 記法の引数で
 | `slurp` | `(slurp path)` | `"a\n"` |
 | `line-seq` | `(line-seq path-or-reader)` | `("a")` |
 | `clojure.java.io/reader` | `(jio/reader path)` | a reader |
+| `read-string` | `(read-string "[1 :k]")` | `[1 :k]` |
+| `read` | `(read (java.io.PushbackReader. (jio/reader path)))` | the first datum |
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |
 | `with-open` | `(with-open [] :ok)` | `:ok` |
 | `with-out-str` | `(with-out-str (print 1))` | `"1"` |

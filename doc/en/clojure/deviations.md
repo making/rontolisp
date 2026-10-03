@@ -7,7 +7,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `or`/`not` treat them alike, while `=` and `nil?` tell them apart; `false?`/`true?`/
   `boolean?` answer accordingly.
 - `println`/`print` join their parts with a single space and spell the three values
-  `true`/`false`/`nil`; `str` concatenates bare and spells them `true`/`false`/`""`;
+  `true`/`false`/`nil`; `str` concatenates bare and spells them `true`/`false`/`""` (a
+  collection inside it spells readably, strings quoted, like the oracle's `toString`);
   `pr`/`prn`/`pr-str` are the readable arms (strings print quoted, `pr-str` joining its
   parts with a space like `pr`). The print family answers `nil`, like the oracle.
 - Collections print in Clojure notation (`[1 :a s]`, `{:a 1}`, `#{1}`,
@@ -146,7 +147,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`java.lang.String`).
 - `with-open` closes through the `close` method, so only closeables the backend
   reaches work (Java closeables need the JVM); `time` answers its value but its
-  millisecond count never pins (only the `Elapsed time:` prefix does).
+  millisecond count never pins, and it counts whole milliseconds (`42.0`) where the
+  oracle's carries nanosecond digits.
+- `read-string`/`read` answer what a quote answers: `@x` reads `(deref x)` and a
+  syntax-quote stays unexpanded, where the oracle reads `(clojure.core/deref x)` and
+  expands it; `#(...)` reads the source reader's `(fn %anon ...)`. A record literal reads
+  for any class the program defines, also one a later `require` loads (the oracle needs
+  the class loaded first); a deftype literal is refused. `read` takes a stream -- a
+  plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
+  refuses a host reader.
 - `*out*`/`*in*` are `*standard-output*`/`*standard-input*` (rebinding rebinds the
   standard streams);
   `defonce` keeps the root on reload where `def` resets it.

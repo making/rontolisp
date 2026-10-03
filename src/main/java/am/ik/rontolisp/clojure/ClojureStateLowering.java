@@ -775,16 +775,19 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (time expr)}: the expression timed with {@code get-internal-real-time}
-	 * (milliseconds here), reporting {@code Elapsed time: N msecs} like the oracle and
-	 * answering the value. Only the value is deterministic -- the report's number never
-	 * is, so the spec pins the prefix, never the line.
+	 * (milliseconds here), reporting {@code Elapsed time: N.0 msecs} -- a double, like
+	 * the oracle's {@code nanoTime} quotient, so a {@code \d+\.\d+} match over the report
+	 * holds -- and answering the value. Only the value is deterministic -- the report's
+	 * number never is, so the spec pins the shape, never the line.
 	 */
 	static LispVal timeOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "time takes one form");
 		LispSymbol start = ctx.freshTemp();
 		LispSymbol value = ctx.freshTemp();
-		LispVal elapsed = ClojureLowerUtil.list(ClojureLowerUtil.sym("-"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("get-internal-real-time")), start);
+		LispVal elapsed = ClojureLowerUtil.list(ClojureLowerUtil.sym("float"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("-"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-internal-real-time")), start),
+				new LispDouble(1.0));
 		// the report straight to the stream, like println of one string part
 		List<LispVal> parts = new ArrayList<>();
 		parts.add(ClojureStringLowering.strOf(ctx, LispString.literal("Elapsed time: "), LispString.literal(""),

@@ -89,6 +89,10 @@ final class ClojureInteropLowering {
 						items.subList(1, items.size())));
 			}
 			String constructed = ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1));
+			LispVal wrapped = readerWrapperConstruction(ctx, constructed, items.subList(1, items.size()));
+			if (wrapped != null) {
+				return wrapped;
+			}
 			LispVal stringWriter = stringWriterConstruction(constructed, items.size() - 1);
 			if (stringWriter != null) {
 				return stringWriter;
@@ -414,6 +418,10 @@ final class ClojureInteropLowering {
 					items.subList(2, items.size())));
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
+		LispVal wrapped = readerWrapperConstruction(ctx, cls, items.subList(2, items.size()));
+		if (wrapped != null) {
+			return wrapped;
+		}
 		LispVal stringWriter = stringWriterConstruction(cls, items.size() - 2);
 		if (stringWriter != null) {
 			return stringWriter;
@@ -435,6 +443,104 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"));
 		}
 		return null;
+	}
+
+	/**
+	 * The host reader classes a construction of which over a Common Lisp character input
+	 * stream answers the stream itself: such a stream already peeks one character, which
+	 * is all {@code read} needs, so {@code (java.io.PushbackReader. (reader path))} reads
+	 * on every backend.
+	 */
+	static final Set<String> READER_WRAPPERS = Set.of("java.io.PushbackReader", "java.io.BufferedReader");
+
+	/**
+	 * A {@code java.io.PushbackReader}/{@code java.io.BufferedReader} construction (an
+	 * optional buffer size behind the reader): over a {@code java.io.StringReader}
+	 * construction a string input stream of its text, on every backend; over a Common
+	 * Lisp stream (a {@code clojure.java.io/reader}, {@code *in*}, a nested wrapper) that
+	 * stream -- decided at run time unless the argument lowers to one; over anything else
+	 * the host construction, like before. Null for any other class or count, so the call
+	 * keeps its {@code java:new} shape.
+	 * @param ctx the hub
+	 * @param cls the resolved class name
+	 * @param args the argument datums
+	 * @return the lowered construction, or null
+	 */
+	static @Nullable LispVal readerWrapperConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
+		if (!READER_WRAPPERS.contains(cls) || args.isEmpty() || args.size() > 2) {
+			return null;
+		}
+		LispVal text = stringReaderText(ctx, args.get(0));
+		LispVal reader = text != null
+				? ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-input-stream"), ctx.lower(text))
+				: ctx.lower(args.get(0));
+		if (args.size() == 1 && isStreamForm(reader)) {
+			return reader;
+		}
+		LispSymbol source = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(source, reader));
+		List<LispVal> host = new ArrayList<>();
+		host.add(LispString.literal(cls));
+		host.add(source);
+		if (args.size() == 2) {
+			LispSymbol size = ctx.freshTemp();
+			bindings.add(ClojureLowerUtil.list(size, ctx.lower(args.get(1))));
+			host.add(size);
+		}
+		LispVal body = isStreamForm(reader) ? source
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
+						ClojureLowerUtil.cons(JAVA_NEW, host));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/**
+	 * Whether a lowered form surely answers a Common Lisp character input stream: an
+	 * {@code open} (a {@code clojure.java.io/reader}), a string input stream,
+	 * {@code *standard-input*} ({@code *in*}), or a binding form ending in one (a nested
+	 * reader wrapper).
+	 */
+	static boolean isStreamForm(LispVal lowered) {
+		if (ClojureLowerUtil.isSymbolNamed(lowered, "*STANDARD-INPUT*")) {
+			return true;
+		}
+		List<LispVal> items = ClojureLowerUtil.items(lowered);
+		if (items == null || items.isEmpty()) {
+			return false;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "OPEN")
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "MAKE-STRING-INPUT-STREAM")) {
+			return true;
+		}
+		return items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), "LET*") && isStreamForm(items.get(2));
+	}
+
+	/**
+	 * The text datum of a one-argument {@code java.io.StringReader} construction
+	 * ({@code (StringReader. text)} dotted or imported, or {@code (new StringReader
+	 * text)}), or null for anything else.
+	 */
+	static @Nullable LispVal stringReaderText(ClojureLowering ctx, LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		if (items == null || items.size() < 2 || !(items.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		String spelled;
+		if (head.name().equals("new") && items.size() == 3 && items.get(1) instanceof LispSymbol named) {
+			spelled = named.name();
+		}
+		else if (head.name().endsWith(".") && head.name().length() > 1 && items.size() == 2) {
+			spelled = head.name().substring(0, head.name().length() - 1);
+		}
+		else {
+			return null;
+		}
+		if (!isClassSpelling(spelled) || ctx.typeKeyOf(spelled) != null
+				|| !ClojureNamespaceLowering.resolveClass(ctx, spelled).equals("java.io.StringReader")) {
+			return null;
+		}
+		return items.get(items.size() - 1);
 	}
 
 	/**
@@ -1042,7 +1148,8 @@ final class ClojureInteropLowering {
 	 * A stream method over an already-bound receiver: {@code write} prints through
 	 * {@code princ} (strings bare, characters as glyphs), {@code flush} finishes the
 	 * output, {@code readLine} reads through {@code read-line} (nil past the end, like
-	 * the oracle) and {@code close} closes the stream, so {@code with-open} over a
+	 * the oracle), {@code read} answers one character's code ({@code -1} past the end)
+	 * and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
 	 * without reaching {@code java:call}. {@code toString} answers a string output
 	 * stream's text so far without clearing it (b76). Null when the method maps to
@@ -1070,6 +1177,16 @@ final class ClojureInteropLowering {
 		}
 		if (method.equals("close") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv);
+		}
+		if (method.equals("read") && args.isEmpty()) {
+			// one character's code, -1 past the end, like Reader.read
+			LispSymbol c = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(ClojureLowerUtil.list(c,
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("read-char"), recv, ClojureLowering.NIL_CONST,
+									ClojureLowering.NIL_CONST))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), c,
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), c), new LispInteger(-1)));
 		}
 		if (method.equals("toString") && args.isEmpty()) {
 			// A StringWriter lowered to a string output stream (b76) answers the

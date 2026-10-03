@@ -78,7 +78,12 @@ public final class ClojureSession {
 				}
 				continue;
 			}
-			if (c == ';') {
+			if (c == '\\') {
+				// a character literal's first character, whatever it is: \( is no
+				// bracket, \; no comment, \" no string
+				i++;
+			}
+			else if (c == ';') {
 				inComment = true;
 			}
 			else if (c == '"') {
@@ -98,10 +103,12 @@ public final class ClojureSession {
 			return false;
 		}
 		// A trailing dispatch prefix (`'`, `` ` ``, `~`, `~@`, `@`, `^`, `#'`, `#_`,
-		// `#(`) still waits for its datum.
+		// `#(`) still waits for its datum, and so does a trailing discard (the oracle's
+		// REPL reads on past it).
 		try {
-			new ClojureReader(source, null).readAll();
-			return true;
+			ClojureReader reader = new ClojureReader(source, null);
+			reader.readAll();
+			return !reader.endsInDiscard();
 		}
 		catch (LispReadException ex) {
 			String message = ex.getMessage();

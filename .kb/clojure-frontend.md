@@ -96,7 +96,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse | a stream closes through `close` on every backend, anything else through the `close` interop call; an empty vector is the bare body |
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
-| `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N msecs` | only the prefix pins |
+| `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N.0 msecs` | a double like the oracle's `nanoTime` quotient (whole milliseconds here), so the book's `\d+\.\d+` match holds; only the shape pins |
 | `*out*` / `*in*` | `*standard-output*` / `*standard-input*` | `binding` rebinds either spelling, bare or `clojure.core/`-qualified |
 | `defstruct` `struct` `struct-map` | a key vector behind the name plus fresh-table builders | missing keys `nil`, too many values signal |
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
@@ -108,6 +108,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `subs` | `subseq` | |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
+| `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
 | regex `#"..."`, `re-pattern` `re-matcher` `re-find` `re-seq` `re-matches` `re-groups` | `RONTOLISP::%CLOJURE-RE-COMPILE` and the spliced matcher | "Regex" |
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
 | `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; a function form that may hold a collection is wrapped over the dispatcher at the call site, so a plain `reduce` carries no dispatcher |
@@ -130,14 +131,14 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `<` `>` `<=` `>=` `nil?` `false?` `true?` `boolean?` `boolean` `coll?` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `fn?` is false for keywords, sets and maps |
 | `int` `long` `char` `quot` `unchecked-add` | `truncate` (`char-code` for a char) / `code-char` / `truncate` / `+` | a non-number signals; `unchecked-add` never wraps |
 | `name` `namespace` `keyword` `symbol` | spliced string workers over the demangled spelling | split at the first `/` |
-| `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation |
+| `str` / `pr-str` | `concatenate` over `%clojure-str-of` parts | `nil` -> `""` (`pr-str`: `"nil"`), keywords with their colon, collections in Clojure notation -- readable inside under `str` too (strings quoted, nil spelled: the oracle's `toString`), so `spit` writes what `read` reads back |
 | `println` `print` `pr` `prn` | one `%clojure-write-datum` per part straight to `*standard-output*`, `write-char` spaces, `terpri` | answers nil; with several parts and any computed one, every part binds to a temporary first (the oracle evaluates all arguments before printing) |
 | `rand` `rand-int` `rand-nth` `shuffle` | draws from the program-owned generator (`.kb/random.md`) | no domain check; `rand-nth` of nil is nil, of an empty vector signals; `shuffle` pins membership, never order |
 | `make-array` `aget` `aset` `alength` | general arrays (`aref`, `array-dimension`) | the element class is ignored; every backend |
 | Java interop | "Java interop" | interpreter and JVM only |
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction) |
 | `comment` | `nil` | |
-| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` `read-string` `eval` |
+| refused by name | | `future` `delay` `force` `promise` `deliver` (no thread pool, memo cell or rendezvous); transients (`transient` ... `disj!`); `definterface` `gen-class` `gen-interface`; `use-fixtures`; `add-watch`/`remove-watch`; `load-string` `eval` (no compiler at run time) |
 
 ## Deviations
 
@@ -341,9 +342,11 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   "<fqn>")`, the oracle's class object.
 - A string receiver answers the mapped core operation (a Lisp string is no host object).
   Stream receivers run on every backend: `.write` -> `princ` (nil signals), `.flush`,
-  `.readLine` -> `read-line` (nil past the end), `.toString` of a string output stream ->
-  the text so far. `(new java.io.StringWriter)` with no argument is a string output
-  stream on every backend.
+  `.readLine` -> `read-line` (nil past the end), `.read` -> a character code (`-1` past
+  the end), `.toString` of a string output stream -> the text so far. `(new
+  java.io.StringWriter)` with no argument is a string output stream on every backend; a
+  `java.io.PushbackReader`/`BufferedReader` construction over a stream is that stream and
+  over a `(StringReader. s)` argument a string input stream ("Reading").
 - Host booleans: the shared unmarshal maps host false to nil (CL's only false; changing
   it would make host false truthy in `java:` programs and move all three paths plus the
   bridge parity). The lowering wraps to `T`-or-false instead where every overload at that
@@ -433,6 +436,56 @@ nothing otherwise. Greedy, reluctant and possessive quantifiers and backreferenc
 lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` signal `unsupported
 regex` at construction. Patterns print `#"..."`, matchers `#<Matcher source>`; `class`
 answers `:pattern`/`:matcher`.
+
+## Reading
+
+**`read-string`/`read` run one reader in `clojure.lisp` (`%clojure-read-from`) over the
+source reader's language, answering what a quote of the same text answers**, so `(=
+(read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
+quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
+`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst`/`##Inf` are its refusals. `::kw`
+resolves against the context each call site passes, `("ns" ("alias" "full.ns") ...)`.
+`eval`/`load-string` stay unknown names: no compiler runs at run time.
+
+- Source: a `(string . index)` cursor (`read-string`) or a CL character input stream
+  (`read`) through `peek-char`/`read-char`, so a read leaves the stream right after its
+  datum, like the oracle's `PushbackReader`. **No `unread-char`**: `ClojureLibrary` splices
+  `clojure.lisp` whole before `UnreadCharLibrary` runs, so naming it would route every
+  Clojure program's character reads through the pushback cell. One character of
+  lookahead suffices because a token ends where the oracle's does (`#` and `'` are
+  constituents, a backslash ends one); the source reader's `a#'x` split looks two ahead.
+- Where the source reader deviated from the oracle, both follow the oracle now: `#_`
+  before a closing bracket or the end of input discards (`ClojureReader.DISCARD`; a
+  session buffer ending in one waits, `endsInDiscard`), and a character literal takes the
+  character after the backslash unconditionally (`\(` reads back what `pr` wrote; a
+  backslash ends the literal, and `ClojureSession.isComplete` skips it).
+- **Doubles come from their IEEE bits** (`%clojure-rd-double`: exact integer arithmetic,
+  ties to even, `%ieee754-double-from-bits`), never `float` of the exact ratio: wasm ratio
+  components are i32 (`.kb/wasm-bignum.md`), so `(string->number "0.30000000000000004")`
+  answers `0.8473649069170281` there and `1e-300` traps (Scheme's `%scheme-decimal` still
+  does). Measured 2026-10-03: 430 values -- 300 random bit patterns, 100 random decimals,
+  subnormal, halfway and overflow edges -- equal the compiled literal (Java's
+  `parseDouble`) on all four backends. `M` decimals stay exact ratios.
+- Records: a program that reads registers every record/deftype class, behind the false
+  binding (`ClojureReadLowering.registration`: `(class tag fields record-p)` strings); a
+  session registers what each buffer adds or redefines. So a class from a namespace
+  required later still reads (the oracle needs it loaded first); an unknown class and a
+  deftype literal are the source reader's refusals.
+- Streams: `(java.io.PushbackReader. x)`/`BufferedReader.` is `x` itself when it surely is
+  a stream (`open`, a string input stream, `*standard-input*`), else a `streamp` test
+  around the `java:new`; over a `(StringReader. s)` argument it is `(make-string-input-stream
+  s)`. A `StringReader` alone stays the host class: the corpus's SAX `InputSource` takes
+  one. `read` of a host reader is refused (`read needs a reader ...`).
+- Messages: the oracle's for the end of input (`EOF while reading`, `... string`, `...
+  character`), `Unmatched delimiter: )` and the odd map; the source reader's otherwise.
+  Built messages go through `(error "~A" ...)`: a `~` in user text is no directive.
+- `str` of a collection is readable inside (the oracle's `toString`), so `spit` of a list of
+  records writes what `read` reads back -- the book's `concurrency.clj` backup, whose
+  test namespace is byte-identical to the oracle on the interpreter and the JVM.
+- Cost (2026-10-03, `(prn (read-string "[1 \"a\"]"))` against `(prn [1 "a"])`): wasm 32,204 ->
+  103,678 B, class 61,618 -> 176,613 B. Of the wasm, ~20 KB is the regex parser (a `#"..."`
+  in the input compiles at read time), ~13 KB the number parser's ratio and bignum
+  arithmetic, ~3 KB `intern`.
 
 ## Vars and metadata
 
@@ -539,6 +592,10 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - `ClojureLoweringTest` (lowered shapes and refusals), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
+- Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,
+  `ClojureLoweringTest#readingVerbs*`/`#aReaderWrapper*`, `ClojureReaderTest#aDiscard*`/
+  `#aCharacterLiteral*`, `ClojureSessionTest#aBufferRegisters*`,
+  `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
