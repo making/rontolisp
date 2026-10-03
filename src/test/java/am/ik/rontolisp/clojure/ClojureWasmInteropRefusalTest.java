@@ -122,7 +122,7 @@ class ClojureWasmInteropRefusalTest {
 	}
 
 	private static void assertRefusal(String program, String surface, boolean component) throws Exception {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		ByteArrayOutputStream warnings = new ByteArrayOutputStream();
 		byte[] module;
 		try (var _ = ThreadStdio.err(warnings)) {

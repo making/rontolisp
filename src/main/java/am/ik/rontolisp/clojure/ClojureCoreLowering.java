@@ -150,6 +150,11 @@ final class ClojureCoreLowering {
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
 			case "read-string", "read":
 				return ClojureReadLowering.callOf(ctx, name, items);
+			case "read-line":
+				// the next line of *in*, nil past the end, like the oracle's
+				arity(name, n, 0, 0);
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), new LispSymbol("*STANDARD-INPUT*"),
+						ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
 			default:
 				return null;
 		}
@@ -173,7 +178,7 @@ final class ClojureCoreLowering {
 					"unchecked-negate", "unchecked-inc-int", "unchecked-dec-int", "unchecked-negate-int",
 					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
 					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
-					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr" ->
+					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr", "read-line" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

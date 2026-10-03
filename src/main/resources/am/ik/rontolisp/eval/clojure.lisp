@@ -29,8 +29,8 @@
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; nil IS the empty list (stays nil, never ()); map/set walk order is unspecified
-;; (same as keys/vals); *print-length*/*print-level* are not honored (a routed
-;; println never passed through %print-cased either); ~S/~A on Clojure values
+;; (same as keys/vals); *print-meta* and *print-namespace-maps* are not honored
+;; (*print-length*, *print-level* and *print-readably* are); ~S/~A on Clojure values
 ;; stay Common Lisp notation (format is a CL surface); print-method/pprint stay
 ;; absent; unreadable values (functions, conditions, host objects) print #<..>,
 ;; except a host class object, which prints its name like the oracle's.
@@ -245,6 +245,149 @@
   (or (/= x x) (> x most-positive-double-float)
       (< x most-negative-double-float)))
 
+;; The print flags, read by the printer only: *print-length*, *print-level* and
+;; *print-readably* lower to these specials, and the depth counts the levels the
+;; printer is in. Every reading of them is an arm (ClojureArms PRINT_FLAGS): a
+;; program naming none of the three prints as if they did not exist.
+(defvar rontolisp::%clojure-print-length nil)
+
+(defvar rontolisp::%clojure-print-level nil)
+
+(defvar rontolisp::%clojure-print-readably t)
+
+(defvar rontolisp::%clojure-print-depth 0)
+
+(defun rontolisp::%clojure-print-readable (readable)
+  "READABLE, unless *print-readably* is logical false, under which pr writes
+   like print (strings bare, characters as glyphs), like the oracle."
+  (if (or (null rontolisp::%clojure-print-readably)
+          (eq rontolisp::%clojure-print-readably rontolisp::%clojure-false))
+      nil
+      readable))
+
+(defun rontolisp::%clojure-print-collection-p (x)
+  "Whether X prints as a collection, which *print-level* and *print-length*
+   reach: a seq, vector, map, set, sorted collection or record."
+  (cond ((rontolisp::%clojure-lazy-p x) t)
+   ((rontolisp::%clojure-keyword-p x) nil)
+   ((rontolisp::%clojure-var-p x) nil)
+   ((rontolisp::%clojure-unbound-p x) nil)
+   ((rontolisp::%clojure-atom-p x) nil)
+   ((rontolisp::%clojure-re-pattern-p x) nil)
+   ((rontolisp::%clojure-re-matcher-p x) nil)
+   (t (or (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))))))
+
+(defun rontolisp::%clojure-print-limit (n)
+  "The print flag value N as a limit: NIL for nil and false."
+  (if (eq n rontolisp::%clojure-false) nil n))
+
+(defun rontolisp::%clojure-print-deep-p (x)
+  "Whether X is a collection *print-level* levels deep: it prints as #."
+  (let ((level
+         (rontolisp::%clojure-print-limit rontolisp::%clojure-print-level)))
+    (and level (>= rontolisp::%clojure-print-depth level)
+         (rontolisp::%clojure-print-collection-p x))))
+
+(defun rontolisp::%clojure-print-cut-p (x)
+  "Whether X is a collection of more than *print-length* members: it prints
+   cut there (%clojure-write-cut). A seq realizes only past the cut."
+  (let ((n (rontolisp::%clojure-print-limit rontolisp::%clojure-print-length)))
+    (cond ((null n) nil)
+     ((not (rontolisp::%clojure-print-collection-p x)) nil)
+     ((rontolisp::%clojure-record-p x)
+      (> (hash-table-count (car (cdr (cdr (cdr x))))) n))
+     ((rontolisp::%clojure-set-p x) (> (hash-table-count (car (cdr x))) n))
+     ((rontolisp::%clojure-sorted-p x) (> (length (car (cdr (cdr (cdr x))))) n))
+     ((hash-table-p x) (> (hash-table-count x) n))
+     ((vectorp x) (> (length x) n))
+     (t (let ((s x) (i 0))
+          (do ()
+              ((or (not (consp s)) (> i n)))
+            (setq s (rontolisp::%clojure-seq-rest s))
+            (setq i (+ i 1)))
+          (> i n))))))
+
+(defun rontolisp::%clojure-record-entries (x)
+  "The (key . value) entries of the record X in its printed order: the declared
+   fields, then the extension keys in the table's walk order."
+  (let ((fields (car (cdr (cdr x))))
+        (table (car (cdr (cdr (cdr x)))))
+        (acc nil))
+    (dolist (k fields) (setq acc (cons (cons k (gethash k table)) acc)))
+    (maphash (lambda (k v)
+               (let ((declared nil))
+                 (dolist (f fields) (if (equal f k) (setq declared t)))
+                 (if (not declared) (setq acc (cons (cons k v) acc))))) table)
+    (reverse acc)))
+
+(defun rontolisp::%clojure-write-cut (x nil-replacement readable stream labels)
+  "Write the collection X with its first *print-length* members and then ...,
+   like the oracle: (0 1 ...), [1 2 ...], {:a 1, ...}, #{1 ...} and [...] at
+   zero. Each member is written one level deeper."
+  (let ((n (rontolisp::%clojure-print-limit rontolisp::%clojure-print-length))
+        (parts nil)
+        (open "(")
+        (sep " ")
+        (close ")")
+        (pairs nil))
+    (cond ((rontolisp::%clojure-record-p x)
+           (setq open
+                 (concatenate 'string "#" (car (cdr (cdr (cdr (cdr x))))) "{"))
+           (setq close "}" sep ", " pairs t)
+           (setq parts (rontolisp::%clojure-record-entries x)))
+          ((rontolisp::%clojure-set-p x)
+           (setq open "#{" close "}")
+           (maphash (lambda (k v) (setq parts (cons v parts))) (car (cdr x)))
+           (setq parts (reverse parts)))
+          ((rontolisp::%clojure-sorted-p x)
+           (let ((items (car (cdr (cdr (cdr x))))))
+             (if (car (cdr x))
+                 (setq open "#{" close "}")
+                 (setq open "{" close "}" sep ", " pairs t))
+             (dotimes (i n)
+               (let ((item (aref items i)))
+                 (setq parts
+                       (cons (if pairs (cons (aref item 0) (aref item 1)) item)
+                             parts))))
+             (setq parts (reverse parts))))
+          ((hash-table-p x)
+           (setq open "{" close "}" sep ", " pairs t)
+           (maphash (lambda (k v) (setq parts (cons (cons k v) parts))) x)
+           (setq parts (reverse parts)))
+          ((vectorp x)
+           (setq open "[" close "]")
+           (dotimes (i n) (setq parts (cons (aref x i) parts)))
+           (setq parts (reverse parts)))
+          (t (let ((s x))
+               (dotimes (i n)
+                 (setq parts (cons (car s) parts))
+                 (setq s (rontolisp::%clojure-seq-rest s)))
+               (setq parts (reverse parts)))))
+    (write-string open stream)
+    (do ((p parts (cdr p)) (i 0 (+ i 1)))
+        ((or (null p) (>= i n)))
+      (if (> i 0) (write-string sep stream))
+      (if pairs
+          (progn
+            (rontolisp::%clojure-write-nested (car (car p)) nil-replacement
+                                              readable stream labels)
+            (write-char #\Space stream)
+            (rontolisp::%clojure-write-nested (cdr (car p)) nil-replacement
+                                              readable stream labels))
+          (rontolisp::%clojure-write-nested (car p) nil-replacement readable
+                                            stream labels)))
+    (if (> n 0) (write-string sep stream))
+    (write-string "..." stream)
+    (write-string close stream)))
+
+(defun rontolisp::%clojure-write-nested
+    (x nil-replacement readable stream labels)
+  "%clojure-write of a collection's member, one *print-level* level deeper. A
+   program naming no print flag calls %clojure-write in its place (the strip's
+   alias)."
+  (let ((rontolisp::%clojure-print-depth (+ rontolisp::%clojure-print-depth 1)))
+    (rontolisp::%clojure-write x nil-replacement readable stream labels)))
+
 (defun rontolisp::%clojure-write (x nil-replacement readable stream labels)
   "Write X to STREAM in Clojure notation. READABLE selects the pr side (quoted
    strings, \\chars) vs the print side (bare); NIL-REPLACEMENT is what nil prints
@@ -252,6 +395,7 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
+        ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
          ;; realized as it prints, like the oracle: empty is (), anything
          ;; else a seq the cons arm writes, realizing each lazy tail it meets
@@ -281,6 +425,9 @@
          (write-char #\> stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
+        ((rontolisp::%clojure-print-cut-p x)
+         (rontolisp::%clojure-write-cut x nil-replacement readable stream
+                                        labels))
         ((rontolisp::%clojure-record-p x)
          (rontolisp::%clojure-write-record x nil-replacement readable stream
                                            labels))
@@ -289,13 +436,15 @@
          (let ((first t))
            (maphash (lambda (k v)
                       (if first (setq first nil) (write-char #\Space stream))
-                      (rontolisp::%clojure-write v nil-replacement readable
-                                                 stream labels)) (car (cdr x))))
+                      (rontolisp::%clojure-write-nested v nil-replacement
+                                                        readable stream labels))
+                    (car (cdr x))))
          (write-char #\} stream))
         ((rontolisp::%clojure-atom-p x)
          (write-string "#<Atom " stream)
-         (rontolisp::%clojure-write (aref (car (cdr x)) 0) nil-replacement
-                                    readable stream labels)
+         (rontolisp::%clojure-write-nested (aref (car (cdr x)) 0)
+                                           nil-replacement readable stream
+                                           labels)
          (write-char #\> stream))
         ((stringp x)
          (if readable
@@ -318,19 +467,20 @@
          (let ((first t))
            (maphash (lambda (k v)
                       (if first (setq first nil) (write-string ", " stream))
-                      (rontolisp::%clojure-write k nil-replacement readable
-                                                 stream labels)
+                      (rontolisp::%clojure-write-nested k nil-replacement
+                                                        readable stream labels)
                       (write-char #\Space stream)
-                      (rontolisp::%clojure-write v nil-replacement readable
-                                                 stream labels)) x))
+                      (rontolisp::%clojure-write-nested v nil-replacement
+                                                        readable stream labels))
+                    x))
          (write-char #\} stream))
         ((and (vectorp x) (not (stringp x)))
          (write-char #\[ stream)
          (do ((i 0 (+ i 1)))
              ((>= i (length x)))
            (if (> i 0) (write-char #\Space stream))
-           (rontolisp::%clojure-write (aref x i) nil-replacement readable stream
-                                      labels))
+           (rontolisp::%clojure-write-nested (aref x i) nil-replacement readable
+                                             stream labels))
          (write-char #\] stream))
         ;; a sorted collection is a cons wrapper, written ahead of the list arm
         ((rontolisp::%clojure-sorted-p x)
@@ -338,8 +488,8 @@
                                            labels))
         ((consp x)
          (write-char #\( stream)
-         (rontolisp::%clojure-write (car x) nil-replacement readable stream
-                                    labels)
+         (rontolisp::%clojure-write-nested (car x) nil-replacement readable
+                                           stream labels)
          (do ((rest
                (rontolisp::%clojure-seq-rest x)
                (rontolisp::%clojure-seq-rest rest)))
@@ -348,11 +498,11 @@
               (if (not (null rest))
                   (progn
                     (write-string " . " stream)
-                    (rontolisp::%clojure-write rest nil-replacement readable
-                                               stream labels))))
+                    (rontolisp::%clojure-write-nested rest nil-replacement
+                                                      readable stream labels))))
            (write-char #\Space stream)
-           (rontolisp::%clojure-write (car rest) nil-replacement readable stream
-                                      labels))
+           (rontolisp::%clojure-write-nested (car rest) nil-replacement readable
+                                             stream labels))
          (write-char #\) stream))
         ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
          ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
@@ -379,26 +529,30 @@
     (write-char #\{ stream)
     (dolist (k fields)
       (if first (setq first nil) (write-string ", " stream))
-      (rontolisp::%clojure-write k nil-replacement readable stream labels)
+      (rontolisp::%clojure-write-nested k nil-replacement readable stream
+                                        labels)
       (write-char #\Space stream)
-      (rontolisp::%clojure-write (gethash k table) nil-replacement readable
-                                 stream labels))
+      (rontolisp::%clojure-write-nested (gethash k table) nil-replacement
+                                        readable stream labels))
     (maphash (lambda (k v)
                (let ((declared nil))
                  (dolist (f fields) (if (equal f k) (setq declared t)))
                  (if (not declared)
                      (progn
                        (if first (setq first nil) (write-string ", " stream))
-                       (rontolisp::%clojure-write k nil-replacement readable
-                                                  stream labels)
+                       (rontolisp::%clojure-write-nested k nil-replacement
+                                                         readable stream labels)
                        (write-char #\Space stream)
-                       (rontolisp::%clojure-write v nil-replacement readable
-                                                  stream labels))))) table)
+                       (rontolisp::%clojure-write-nested v nil-replacement
+                                                         readable stream
+                                                         labels))))) table)
     (write-char #\} stream)))
 
 (defun rontolisp::%clojure-print (x nil-replacement readable stream)
   "Write X in Clojure notation to STREAM, with datum labels when it may cycle."
-  (rontolisp::%clojure-write x nil-replacement readable stream
+  (rontolisp::%clojure-write x nil-replacement
+                             (rontolisp::%clojure-print-readable readable)
+                             stream
                              (if (and (rontolisp::%clojure-node-p x)
                                       (rontolisp::%clojure-may-cycle-p x 1000))
                                  (rontolisp::%clojure-cycle-labels x)))
@@ -483,6 +637,11 @@
 (defun rontolisp::%clojure-pr-v (&rest args)
   "pr as a value."
   (rontolisp::%clojure-print-args args t nil))
+
+(defun rontolisp::%clojure-read-line-v (&rest args)
+  "read-line as a value: the next line of *in*, nil past the end."
+  (rontolisp::%clojure-check-arity args 0 0 "read-line")
+  (read-line *standard-input* nil nil))
 
 (defun rontolisp::%clojure-run! (f coll)
   "(run! f coll): F called on every member of COLL for effect, a lazy one
@@ -4583,18 +4742,20 @@
           (write-string "#{" stream)
           (dotimes (i (length items))
             (if (> i 0) (write-char #\Space stream))
-            (rontolisp::%clojure-write (aref items i) nil-replacement readable
-                                       stream labels))
+            (rontolisp::%clojure-write-nested (aref items i) nil-replacement
+                                              readable stream labels))
           (write-char #\} stream))
         (progn
           (write-char #\{ stream)
           (dotimes (i (length items))
             (if (> i 0) (write-string ", " stream))
-            (rontolisp::%clojure-write (aref (aref items i) 0) nil-replacement
-                                       readable stream labels)
+            (rontolisp::%clojure-write-nested (aref (aref items i) 0)
+                                              nil-replacement readable stream
+                                              labels)
             (write-char #\Space stream)
-            (rontolisp::%clojure-write (aref (aref items i) 1) nil-replacement
-                                       readable stream labels))
+            (rontolisp::%clojure-write-nested (aref (aref items i) 1)
+                                              nil-replacement readable stream
+                                              labels))
           (write-char #\} stream)))))
 
 (defun rontolisp::%clojure-sorted-need (s name)

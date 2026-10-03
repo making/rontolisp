@@ -38,12 +38,12 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The compiler flags {@code clojure.main} binds around every load (measured on the
-	 * oracle, Clojure CLI 1.12): a {@code set!} of one answers the value there, so it
-	 * answers the value here too, with no effect.
+	 * The flags {@code clojure.main} binds around every load (measured on the oracle,
+	 * Clojure CLI 1.12) that have no value here ({@link ClojureCoreSpecials} has the
+	 * rest): a {@code set!} of one answers the value there, so it answers the value here
+	 * too, with no effect.
 	 */
-	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*warn-on-reflection*", "*unchecked-math*",
-			"*print-meta*", "*print-length*", "*print-level*", "*ns*");
+	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*ns*");
 
 	/**
 	 * The tag heading a record value: a record is
@@ -520,8 +520,9 @@ final class ClojureProtocolLowering {
 	 * local or an immutable field ({@code Cannot assign to non-mutable}), a non-dynamic
 	 * global or an unbound dynamic one (the run-time
 	 * {@code Can't change/establish root binding}, after the value evaluates). A
-	 * {@code clojure.main}-bound compiler flag answers the value with no effect here. A
-	 * host field stays refused by name.
+	 * {@code clojure.core} special ({@link ClojureCoreSpecials}) assigns like a dynamic
+	 * var, a flag {@code clojure.main} binds at the top level too; {@code *ns*} answers
+	 * the value with no effect. A host field stays refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -545,7 +546,11 @@ final class ClojureProtocolLowering {
 		if (kind != null) {
 			throw new LispReadException("Cannot assign to non-mutable: " + name);
 		}
-		String key = ctx.resolveVar(name);
+		String key = name.startsWith(ClojureCoreNames.PREFIX) ? null : ctx.resolveVar(name);
+		String special = key == null ? ClojureCoreSpecials.targetName(name) : null;
+		if (special != null) {
+			return setSpecial(ctx, special, ctx.lower(items.get(2)));
+		}
 		if (key != null && !ctx.dynamicVars.contains(key)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
@@ -572,6 +577,30 @@ final class ClojureProtocolLowering {
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
 				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");
+	}
+
+	/**
+	 * {@code set!} of a {@code clojure.core} special: a flag {@code clojure.main} binds
+	 * is always thread-bound, so it assigns; any other assigns inside a {@code binding}
+	 * of it (its counter past zero), else the oracle's root-binding error. The value
+	 * evaluates once, before the test.
+	 */
+	private static LispVal setSpecial(ClojureLowering ctx, String name, LispVal value) {
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.required(name);
+		LispVal target = ctx.specialValue(special);
+		LispSymbol counter = special.counter();
+		if (counter == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), target, value);
+		}
+		ctx.usedSpecials.add(name);
+		LispSymbol temp = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(temp, value))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), counter, new LispInteger(0)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), target, temp),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
 	}
 
 	/**

@@ -1167,9 +1167,20 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2))")).contains("(LET*")
 			.contains("(|c%*d*| 5)")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
-		// a clojure.main-bound compiler flag answers the value with no effect
-		assertThat(lowered("(set! *warn-on-reflection* true)")).isEqualTo(FALSE_BINDING + "T");
-		assertThat(lowered("(set! *unchecked-math* false)")).contains("RONTOLISP::%CLOJURE-FALSE");
+		// a clojure.main-bound flag is always thread-bound, so it assigns; a flag
+		// clojure.main does not bind, and a stream, assign like a dynamic var; *ns*
+		// answers the value with no effect
+		assertThat(lowered("(set! *warn-on-reflection* true)"))
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-WARN-ON-REFLECTION RONTOLISP::%CLOJURE-FALSE)")
+			.endsWith("(SETQ RONTOLISP::%CLOJURE-WARN-ON-REFLECTION T)");
+		assertThat(lowered("(set! *unchecked-math* false)"))
+			.endsWith("(SETQ RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)");
+		assertThat(lowered("(set! *print-dup* true)")).contains("(> RONTOLISP::%CLOJURE-PRINT-DUP-DEPTH 0)")
+			.contains("(SETQ RONTOLISP::%CLOJURE-PRINT-DUP ")
+			.contains("(ERROR \"Can't change/establish root binding of: *print-dup* with set\")");
+		assertThat(lowered("(set! *out* *out*)")).contains("(> RONTOLISP::%CLOJURE-OUT-DEPTH 0)")
+			.contains("(SETQ *STANDARD-OUTPUT* ");
+		assertThat(lowered("(set! *ns* 1)")).isEqualTo(FALSE_BINDING + "1");
 		// anything else names what is missing
 		assertThatThrownBy(() -> Clojure.read("(set! *no-such-var* 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a var is not supported yet: *no-such-var*");
@@ -1545,8 +1556,17 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-IN-DEPTH (+ RONTOLISP::%CLOJURE-IN-DEPTH 1))");
 		assertThat(lowered("(send (agent 0) inc)"))
 			.contains("(RONTOLISP::%CLOJURE-AGENT-DEPTH (+ RONTOLISP::%CLOJURE-AGENT-DEPTH 1))");
-		assertThatThrownBy(() -> Clojure.read("#'*err*", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/*err*");
+		// *err* and the flags are core specials too; a flag clojure.main binds is
+		// always thread-bound
+		assertThat(lowered("#'*err*"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*err*\" (LAMBDA NIL *ERROR-OUTPUT*)")
+			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-ERR-DEPTH)");
+		assertThat(lowered("#'*assert*")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*assert*\" (LAMBDA NIL RONTOLISP::%CLOJURE-ASSERT)")
+			.contains("(LAMBDA NIL 1)")
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-ASSERT T)");
+		assertThatThrownBy(() -> Clojure.read("#'*ns*", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/*ns*");
 		assertThatThrownBy(() -> Clojure.read("#'if", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve var: if in this context");
 		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)

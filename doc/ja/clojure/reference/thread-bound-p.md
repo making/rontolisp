@@ -2,7 +2,7 @@
 
 `(thread-bound? & vars)`
 
-`clojure.core/thread-bound?`: 与えたすべての var について `binding` が有効な間だけ `true` を返します。ルート値、`^:dynamic` でない var、どの `binding` も再束縛していない `^:dynamic` var は `false` です。var でない値はオラクルと同様にシグナルを上げます（最初の未束縛の var で `false` を返すため、そこまで評価が進んだ場合のみ）。var を与えなければ `true` です。値としては任意個の var をとる関数です。`#'*out*`、`#'*in*`、`#'*agent*` はルートでは `false`（オラクルの `clojure.main` はどれも束縛しません）で、その特殊変数の `binding` の中、`with-out-str` の中（`*out*`）、エージェントのアクションの中（`*agent*`）で `true` です。それ以外の `clojure.core` の var は `false` です。
+`clojure.core/thread-bound?`: 与えたすべての var について `binding` が有効な間だけ `true` を返します。ルート値、`^:dynamic` でない var、どの `binding` も再束縛していない `^:dynamic` var は `false` です。var でない値はオラクルと同様にシグナルを上げます（最初の未束縛の var で `false` を返すため、そこまで評価が進んだ場合のみ）。var を与えなければ `true` です。値としては任意個の var をとる関数です。`#'*out*`、`#'*in*`、`#'*err*`、`#'*agent*` はルートでは `false`（オラクルの `clojure.main` はどれも束縛しません）で、その特殊変数の `binding` の中、`with-out-str` の中（`*out*`）、`with-in-str` の中（`*in*`）、エージェントのアクションの中（`*agent*`）で `true` です。`clojure.main` がスクリプトの周りで束縛するフラグ（`*print-length*`、`*assert*`、`*warn-on-reflection*` など）は常に `true`、`*print-dup*`、`*flush-on-newline*`、`*compile-files*` などそれ以外のフラグはルートでは `false` です。それ以外の `clojure.core` の var は `false` です。
 
 ```clojure
 (def ^:dynamic *tb* 1)

@@ -3,10 +3,10 @@
 `(binding [var init ...] body...)`
 
 Rebinds each var around the body with dynamic extent: code the body calls sees
-the binding, and the root returns after. Only `^:dynamic` vars (and `*out*`/`*in*`,
-already special -- bare or `clojure.core/`-qualified, since a syntax-quote
-qualifies them) may be bound; anything else is refused, like the oracle's
-non-dynamic error. A `^:dynamic` `defn` holds its function in the var, so it
+the binding, and the root returns after. Only `^:dynamic` vars and the `clojure.core`
+specials (`*out*`, `*in*`, `*err*`, `*agent*` and the flags such as `*print-length*`
+and `*assert*` -- bare or `clojure.core/`-qualified, since a syntax-quote qualifies
+them) may be bound; anything else is refused, like the oracle's non-dynamic error. A `^:dynamic` `defn` holds its function in the var, so it
 rebinds too (any other `defn` stays refused). Inits run sequentially, like `let`.
 
 ```clojure

@@ -114,8 +114,9 @@ answered `2 5 3` before).
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse | a stream closes through `close` on every backend, anything else through the `close` interop call; an empty vector is the bare body |
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
+| `with-in-str` / `read-line` | `let*` rebinding `*standard-input*` to `make-string-input-stream` (body behind the `try` barrier) / `(read-line *standard-input* nil nil)` | `read-line` as a value is `%clojure-read-line-v`; clojure-spec `with-in-str-binds-in-to-the-string-and-read-line-reads-it` |
 | `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N.0 msecs` | a double like the oracle's `nanoTime` quotient (whole milliseconds here), so the book's `\d+\.\d+` match holds; only the shape pins |
-| `*out*` / `*in*` | `*standard-output*` / `*standard-input*` | `binding` rebinds either spelling, bare or `clojure.core/`-qualified |
+| `*out*` `*in*` `*err*` `*agent*`, the flags | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>` | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
 | `defstruct` `struct` `struct-map` | a key vector behind the name plus fresh-table builders | missing keys `nil`, too many values signal |
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
 | `var` / `#'` | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)` | "Vars and metadata" |
@@ -177,7 +178,8 @@ Each is a real work item unless the reason says otherwise.
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
   while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
-  `Class@hash`; `*print-length*`/`*print-level*`, `print-method` and `pprint` are absent;
+  `Class@hash`; `*print-meta*`/`*print-namespace-maps*` are plain values (`{:a/b 1}`
+  prints so), `print-method` and `pprint` are absent;
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
@@ -287,8 +289,9 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's and
-  `STREAM_DEPTH` the stream counters', "Vars and metadata") scans for a PRODUCER (`%clojure-sorted-make` and the four
+  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's,
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", and `PRINT_FLAGS` the
+  printer's, "State") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
   a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
@@ -906,24 +909,28 @@ resolve var`.
   `coreValueOrNull` gives `clojure.core/x`; a macro's (`ClojureCoreNames.MACROS`, the
   oracle's 79) root signals `Can't take value of a macro`. META is `:name`/`:ns` (+
   `:macro`) only -- the oracle's `:arglists`/`:doc`/`:added`/position would be a table
-  per core name (deviation). A core name with no value here (`*err*`, `*print-length*`,
-  `*ns*`: they are unknown names as values too) keeps the refusal `var of a clojure.core
-  var is not supported yet`. Measured 2026-10-03 (clj 1.12.6, `clj -M file` and the
-  REPL alike): `thread-bound?` of `#'*out*`/`#'*in*`/`#'*err*`/`#'*agent*` is FALSE at the
-  root -- `clojure.main` binds `*ns*`, the print/compiler flags, `*1`..`*e`, not the
-  streams -- and true under `binding`, `with-out-str`, `with-in-str` and an agent action.
-  So `#'*out*`/`#'*in*`/`#'*agent*` sites are `%clojure-var-dynamic` over a counter
-  (`%clojure-out-depth`/`-in-depth`/`-agent-depth`, defvars in `clojure.lisp`) that
-  `binding`, `with-out-str` and `sendBuild` rebind one deeper in a `let` pair; the pairs
-  are arms of `ClojureArms.Family.STREAM_DEPTH` (a fourth arm shape: the pair goes, and a
-  mention of the counter anywhere else is the producer), so a program with no such
-  site compiles byte-identically. Measured 2026-10-03: a `with-out-str` + `binding
-  [*out*]` + `send` program, `(prn [1 "a"])` with an IFn set lookup, a dynamic var's
-  `thread-bound?` and `examples/clojure/demo.clj` are byte-identical as wasm,
-  `--optimize=size`, component and class; adding
-  `(println (thread-bound? #'*out*))` to the first: wasm 43,601 -> 48,273 B, class
-  81,986 -> 87,664 B. Pinned by clojure-spec
+  per core name (deviation). A core name with no value here (`*ns*`, `*file*`) keeps the
+  refusal `var of a clojure.core var is not supported yet`. The core specials
+  (`ClojureCoreSpecials`: the streams, `*agent*`, the flags) are `%clojure-var-dynamic`
+  sites. Measured 2026-10-03 (clj 1.12.6, `clj -M file` and the REPL alike):
+  `clojure.main` binds `*ns*`, the print/compiler flags, `*command-line-args*`, `*file*`,
+  `*1`..`*e`, not the streams, `*print-dup*`, `*flush-on-newline*`, `*compile-files*`
+  and the rarer flags -- so `thread-bound?` of `#'*out*`/`#'*in*`/`#'*err*`/`#'*agent*`
+  is FALSE at the root and true under `binding`, `with-out-str`, `with-in-str` and an
+  agent action, and of a main-bound flag always true. A special `clojure.main` does not
+  bind has a counter (`%clojure-out-depth`, `%clojure-print-dup-depth`, ... -- defvars the
+  program carries for every special it uses) that `binding`, `with-out-str`,
+  `with-in-str` and `sendBuild` rebind one deeper in a `let` pair; a main-bound flag has
+  none and its depth reader is `(lambda () 1)`. The pairs are arms of
+  `ClojureArms.Family.STREAM_DEPTH` (a fourth arm shape: the pair goes, and a mention of
+  the counter anywhere else is the producer), so a program with no such site compiles
+  byte-identically. Measured 2026-10-03: a `with-out-str` + `binding [*out*]` + `send`
+  program, `(prn [1 "a"])` with an IFn set lookup, a dynamic var's `thread-bound?` and
+  `examples/clojure/demo.clj` are byte-identical as wasm, `--optimize=size`, component and
+  class; adding `(println (thread-bound? #'*out*))` to the first: wasm 43,601 -> 48,273 B,
+  class 81,986 -> 87,664 B. Pinned by clojure-spec
   `core-vars-read-their-core-value-and-the-stream-binding-depth`,
+  `core-flag-specials-read-bind-and-assign`, `err-is-the-error-stream-and-rebinds-like-out`,
   `ClojureArmsTest#theStreamDepthFamilyDropsTheRebindingPairsOfAProgramReadingNoCounter`,
   `ClojureLibraryTest#aProgramReadingNoStreamDepthShedsTheRebindingPairs`.
 
@@ -975,7 +982,7 @@ resolve var`.
 ## State
 
 - `binding` is a `let*` over the bound names, sequential, rebinding only `^:dynamic` vars
-  and the stream specials (the oracle's non-dynamic error otherwise). A `^:dynamic`
+  and the core specials (the oracle's non-dynamic error otherwise). A `^:dynamic`
   `def`/`defonce` is a `defparameter` plus a zeroed `%bound-depth` counter special (two
   top-level forms, for `SpecialVarCollector`); a `^:dynamic` `defn` keeps its `defun` and
   adds a `defparameter` of the function, so calls go through the value cell (`recur` and
@@ -985,14 +992,36 @@ resolve var`.
   `(:C%VAR name getter depth)`; every other var site is the plain three-element `%clojure-var`,
   so a program with no dynamic var is unchanged (wasm, `(var? #'x)` on a plain var: 21473 bytes
   before and after; one dynamic var plus a `#'` of it: 22026 -> 22106, 2026-10-03). A var without the element (non-dynamic) or
-  at depth zero is not thread-bound; a non-var signals only when reached. `#'*out*`,
-  `#'*in*` and `#'*agent*` read the stream counters ("Vars and metadata", core vars).
+  at depth zero is not thread-bound; a non-var signals only when reached. A core
+  special's site reads its counter, or is always bound ("Vars and metadata", core vars).
 - `set!` of a dynamic var: past depth zero `setq`, at zero the oracle's `Can't
   change/establish root binding of: x with set` -- the counter has dynamic extent, so a
-  callee outside the binding's lexical extent still sets it. The `clojure.main`-bound
-  flags (`*warn-on-reflection*`, `*unchecked-math*`, `*print-meta*`, `*print-length*`,
-  `*print-level*`, `*ns*`) answer the value with no effect. `set!` of `*out*`/`*in*`/
-  `*agent*` or anything else is refused.
+  callee outside the binding's lexical extent still sets it. A core special with a
+  counter (`*out*`, `*err*`, `*print-dup*`, ...) assigns the same way; a main-bound flag
+  is a plain `setq` anywhere, like the oracle's top-level `(set! *print-length* 2)`.
+  `*ns*` answers the value with no effect; anything else is refused.
+- The flags hold the oracle's `clj -M` root (`ClojureCoreSpecials`: `*data-readers*`
+  `{}`, `*command-line-args*` `(cdr (%host-argv))`, `*clojure-version*` 1.12.6,
+  `*compile-path*` `"classes"`, ...). Not here: `*ns*` (no namespace value), `*file*`,
+  `*source-path*`, `*repl*` and the REPL's `*1`..`*e`. `*assert*` is a plain value:
+  `assert` ignores it (the oracle reads it at macroexpansion).
+- The printer honours `*print-length*`, `*print-level*` and `*print-readably*`: specials
+  `%clojure-print-length`/`-level`/`-readably` with library defvars too (the interpreter
+  loads the library lazily, after the program's own). `%clojure-print` passes `readable`
+  through the view `%clojure-print-readable` (false makes pr write like print, pr-str and
+  str of a collection included); `%clojure-write` gains the test arms
+  `%clojure-print-deep-p` (a collection at `%clojure-print-depth` >= level prints `#`,
+  checked before a lazy seq realizes) and `%clojure-print-cut-p` (more members than the
+  length: `%clojure-write-cut` writes the first n and `...`, realizing a seq only that
+  far), and every member write goes through the alias `%clojure-write-nested` (one level
+  deeper). Family `ClojureArms.Family.PRINT_FLAGS`, producers the three specials, so only a
+  program naming a flag pays. Measured 2026-10-03 (wasm): `(prn [1 2 3])` 32,338 B,
+  `(binding [*assert* false] ...)` around it 32,362 B, `(binding [*print-length* 2] ...)`
+  44,066 B (the cut writer, the collection test and their helpers; a dynamic `let` in the
+  library costs nothing extra). Pinned by clojure-spec
+  `print-length-level-and-readably-shape-the-printer`,
+  `ClojureArmsTest#thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch`,
+  `ClojureLibraryTest#aProgramNamingNoPrintFlagSplicesTheLibraryWithoutItsPrintArms`.
 - deftype mutable fields (`^:unsynchronized-mutable`/`^:volatile-mutable`; ClojureScript's
   `^:mutable` is no marker): a fifth element `(vector m1 ...)` in the deftype (absent
   without mutable fields), invisible to `.-field`; `defrecord` refuses the markers. An

@@ -475,6 +475,8 @@ categories:
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }
+      - { slug: with-in-str, name: "with-in-str" }
+      - { slug: read-line, name: "read-line" }
       - { slug: print-str, name: "print-str" }
       - { slug: prn-str, name: "prn-str" }
       - { slug: println-str, name: "println-str" }

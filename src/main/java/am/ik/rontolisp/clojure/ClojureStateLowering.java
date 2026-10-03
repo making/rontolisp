@@ -609,7 +609,7 @@ final class ClojureStateLowering {
 					ClojureLowerUtil.list(new LispSymbol("C%STM-CHECK"), bound, next));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(new LispSymbol("C%AGENT"), bound),
-							ClojureVarLowering.streamDepthPair(ctx, "*agent*"))),
+							ClojureVarLowering.specialDepthPair(ctx, "*agent*"))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), update, bound));
 		});
 	}
@@ -662,14 +662,15 @@ final class ClojureStateLowering {
 
 	/**
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
-	 * the oracle -- which is why only {@code ^:dynamic} vars (and
-	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
-	 * like {@code let}; the body reads each bound var through the var itself. Every bound
-	 * var's binding-depth counter rebinds one deeper beside it, so {@code set!} tests at
-	 * run time whether the var is thread-bound (a stream or agent special's counter is
-	 * the one {@code thread-bound?} reads through its core var). The body lowers behind
-	 * the {@code try} barrier (the oracle wraps it in a {@code try/finally}), while the
-	 * inits stay outside it.
+	 * the oracle -- which is why only {@code ^:dynamic} vars and the {@code clojure.core}
+	 * specials ({@link ClojureCoreSpecials}, each already a special variable) may be
+	 * bound. Inits run sequentially, like {@code let}; the body reads each bound var
+	 * through the var itself. Every bound var's binding-depth counter rebinds one deeper
+	 * beside it, so {@code set!} tests at run time whether the var is thread-bound (a
+	 * core special's counter is the one {@code thread-bound?} reads through its core var;
+	 * a flag {@code clojure.main} binds has none). The body lowers behind the {@code try}
+	 * barrier (the oracle wraps it in a {@code try/finally}), while the inits stay
+	 * outside it.
 	 */
 	static LispVal bindingOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -678,37 +679,29 @@ final class ClojureStateLowering {
 		List<LispVal> pairs = new ArrayList<>();
 		for (int i = 0; i < bindings.size(); i += 2) {
 			String name = ClojureLowerUtil.plainName(bindings.get(i), "binding");
-			// a syntax-quote qualifies the stream specials with their namespace
-			// (`*out* reads clojure.core/*out*), and the oracle binds the
-			// qualified spelling like the bare one -- normalize it before the
-			// stream test, so the pair spells the special
-			if (name.startsWith(ClojureCoreNames.PREFIX)) {
-				String core = name.substring(ClojureCoreNames.PREFIX.length());
-				if (core.equals("*out*") || core.equals("*in*") || core.equals("*agent*")) {
-					name = core;
+			// a project var (own, referred, or qualified) rebinds its own special,
+			// a core special its special variable -- a syntax-quote qualifies one
+			// (`*out* reads clojure.core/*out*), and the oracle binds the qualified
+			// spelling like the bare one; the body reads either through the var, so
+			// neither is a local
+			String key = name.startsWith(ClojureCoreNames.PREFIX) ? null : ctx.resolveVar(name);
+			String special = key == null ? ClojureCoreSpecials.targetName(name) : null;
+			LispVal init = ctx.lower(bindings.get(i + 1));
+			if (special != null) {
+				pairs.add(ClojureLowerUtil.list(ctx.specialValue(ClojureCoreSpecials.required(special)), init));
+				LispVal depth = ClojureVarLowering.specialDepthPair(ctx, special);
+				if (depth != null) {
+					pairs.add(depth);
 				}
 			}
-			boolean stream = name.equals("*out*") || name.equals("*in*") || name.equals("*agent*");
-			// a project var (own, referred, or qualified) rebinds its own special,
-			// a stream alias the special it names; the body reads either through
-			// the var, so neither is a local
-			String key = stream ? null : ctx.resolveVar(name);
-			if (!stream && (key == null || !ctx.dynamicVars.contains(key))) {
+			else if (key == null || !ctx.dynamicVars.contains(key)) {
 				throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
 			}
-			if (name.equals("*agent*")) {
-				ctx.usedStm = true;
-			}
-			LispVal init = ctx.lower(bindings.get(i + 1));
-			pairs.add(ClojureLowerUtil.list(key == null ? ClojureLowerUtil.idSym(name) : ClojureLowering.varSym(key),
-					init));
-			if (key != null) {
+			else {
+				pairs.add(ClojureLowerUtil.list(ClojureLowering.varSym(key), init));
 				LispSymbol depth = ClojureLowering.boundDepthSym(key);
 				pairs.add(ClojureLowerUtil.list(depth,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), depth, new LispInteger(1))));
-			}
-			else {
-				pairs.add(ClojureVarLowering.streamDepthPair(ctx, name));
 			}
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
@@ -780,8 +773,25 @@ final class ClojureStateLowering {
 						ClojureLowerUtil.list(stream,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"))),
 						ClojureLowerUtil.list(new LispSymbol("*STANDARD-OUTPUT*"), stream),
-						ClojureVarLowering.streamDepthPair(ctx, "*out*"))),
+						ClojureVarLowering.specialDepthPair(ctx, "*out*"))),
 				captured);
+	}
+
+	/**
+	 * {@code (with-in-str s body...)}: the body with {@code *standard-input*} bound to a
+	 * string input stream over {@code s}, so {@code read-line}, {@code read} and a
+	 * {@code .read} of {@code *in*} read it. It binds {@code *in*}, so its binding-depth
+	 * counter goes one deeper too. The body lowers behind the {@code try} barrier (the
+	 * oracle closes the reader in a {@code with-open}).
+	 */
+	static LispVal withInStrOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "with-in-str needs a string and a body");
+		List<LispVal> pairs = new ArrayList<>();
+		pairs.add(ClojureLowerUtil.list(ctx.specialValue(ClojureCoreSpecials.required("*in*")),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-input-stream"), ctx.lower(items.get(1)))));
+		pairs.add(ClojureVarLowering.specialDepthPair(ctx, "*in*"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+				barrierBody(ctx, items, 2));
 	}
 
 	/**

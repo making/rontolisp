@@ -135,4 +135,19 @@ class ClojureArmsTest {
 		assertThat(ClojureArms.strip(plain, ClojureArms.Family.STREAM_DEPTH)).isSameAs(plain);
 	}
 
+	@Test
+	void thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch() {
+		List<LispVal> forms = read("(cond ((rontolisp::%clojure-print-deep-p x) (a))"
+				+ " ((rontolisp::%clojure-print-cut-p x) (b)) (t (rontolisp::%clojure-write-nested x r)))"
+				+ " (rontolisp::%clojure-write x (rontolisp::%clojure-print-readable readable))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.PRINT_FLAGS);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.PRINT_FLAGS).stream().map(LispVal::print))
+			.containsExactly("(COND (T (RONTOLISP::%CLOJURE-WRITE X R)))", "(RONTOLISP::%CLOJURE-WRITE X READABLE)");
+		// a flag's special anywhere is what keeps them
+		List<LispVal> flagged = read("(let* ((rontolisp::%clojure-print-level 1)) (f))");
+		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_FLAGS).builds()).isTrue();
+	}
+
 }

@@ -189,7 +189,7 @@ class ClojureSpecE2eTest {
 	}
 
 	private static String runOnWasm(String program, boolean component) throws Exception {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

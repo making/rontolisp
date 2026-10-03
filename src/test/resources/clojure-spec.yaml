@@ -5644,6 +5644,90 @@ cases:
       [true false]
       true
       true 6 false
+  - name: core-flag-specials-read-bind-and-assign
+    # Oracle-identical (clj 1.12.6, clj -M file): the clojure.core flags read their root,
+    # rebind under binding and assign under set!. clojure.main binds *print-length*,
+    # *assert*, *warn-on-reflection*, *command-line-args* and the other compiler and print
+    # flags around a script, so thread-bound? is true and set! assigns at the top level;
+    # *err*, *print-dup*, *flush-on-newline* and *compile-files* it does not bind, so set!
+    # outside a binding is the root-binding error. A local of a flag's name is lexical. An
+    # earlier case sets *warn-on-reflection*, so this one sets it back first.
+    source: |
+      (prn *print-length* *print-level* *print-meta* *print-dup* *print-readably* *print-namespace-maps* *flush-on-newline*)
+      (set! *warn-on-reflection* false)
+      (prn *warn-on-reflection* *assert* *unchecked-math* *compile-files* *read-eval* *math-context* *data-readers* *default-data-reader-fn* *command-line-args* *compile-path* (:minor *clojure-version*))
+      (prn (map thread-bound? [#'*print-length* #'*assert* #'*warn-on-reflection* #'*err* #'*print-dup* #'*flush-on-newline* #'*compile-files* #'*command-line-args*]))
+      (prn (binding [*assert* false *print-dup* true] [*assert* *print-dup* (thread-bound? #'*print-dup*)]) *assert* *print-dup*)
+      (prn (try (set! *print-dup* true) (catch Exception e (ex-message e))))
+      (prn (binding [*print-dup* 1] (set! *print-dup* 2) *print-dup*) (set! *warn-on-reflection* true) *warn-on-reflection*)
+      (set! *warn-on-reflection* false)
+      (prn #'*print-length* #'clojure.core/*err* (binding [clojure.core/*unchecked-math* true] *unchecked-math*))
+      (let [*assert* 5] (prn *assert*))
+    expected: |
+      nil nil false false true true true
+      false true false false true nil {} nil nil "classes" 12
+      (true true true false false false false true)
+      [false true true] true false
+      "Can't change/establish root binding of: *print-dup* with set"
+      2 true true
+      #'clojure.core/*print-length* #'clojure.core/*err* true
+      5
+  - name: err-is-the-error-stream-and-rebinds-like-out
+    # Oracle-identical (clj 1.12.6): *err* is the error stream, a special of its own that
+    # binding rebinds and *out* can be bound to; thread-bound? of it is false at the root
+    # and set! there is the root-binding error, as for *out*.
+    source: |
+      (prn (with-out-str (binding [*err* *out*] (binding [*out* *err*] (print "via err")))))
+      (prn (identical? *err* *out*) (thread-bound? #'*err*) (binding [*err* *out*] (thread-bound? #'*err*)))
+      (prn (try (set! *err* *out*) (catch Exception e (ex-message e))) (try (set! *out* *out*) (catch Exception e (ex-message e))))
+    expected: |
+      "via err"
+      false false true
+      "Can't change/establish root binding of: *err* with set" "Can't change/establish root binding of: *out* with set"
+  - name: print-length-level-and-readably-shape-the-printer
+    # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
+    # collection or record after that many members with ... (an infinite seq realizes only
+    # as far), *print-level* prints a collection that deep as #, and *print-readably* false
+    # makes pr write like print -- for pr-str, prn-str and str of a collection too. Only
+    # single-member hash sets and maps are cut here: their walk order is unspecified. The
+    # record spells the namespace an earlier case switched to.
+    source: |
+      (binding [*print-length* 3] (prn (range 10) [1 2 3 4 5] [1 2 3] (iterate inc 0) (sorted-map 1 2 3 4 5 6 7 8) (sorted-set 5 4 3 2 1)))
+      (binding [*print-length* 0] (prn [1] [] '(1) #{1} {:a 1} 5 "s"))
+      (binding [*print-level* 2] (prn [1 [2 [3 [4]]]] '(1 (2 (3))) {:a {:b {:c 1}}} 7))
+      (binding [*print-level* 0] (prn [1 2] 5 :k "s" nil))
+      (binding [*print-length* 2 *print-level* 1] (prn [[1 2 3] [4] [5]]))
+      (binding [*print-length* 1] (prn (pr-str [1 2]) (str [1 2]) (prn-str '(1 2))))
+      (defrecord PlfR [a b c])
+      (binding [*print-length* 2] (prn (->PlfR 1 2 3)))
+      (binding [*print-readably* false] (prn "a" \b [1 "c"] nil) (prn (pr-str "x")))
+      (set! *print-length* 1) (prn [1 2]) (set! *print-length* nil) (prn [1 2])
+    expected: |
+      (0 1 2 ...) [1 2 3 ...] [1 2 3] (0 1 2 ...) {1 2, 3 4, 5 6, ...} #{1 2 3 ...}
+      [...] [] (...) #{...} {...} 5 "s"
+      [1 [2 #]] (1 (2 #)) {:a {:b #}} 7
+      # 5 :k "s" nil
+      [# # ...]
+      "[1 ...]" "[1 ...]" "(1 ...)\n"
+      #reading.PlfR{:a 1, :b 2, ...}
+      a b [1 c] nil
+      x
+      [1 ...]
+      [1 2]
+  - name: with-in-str-binds-in-to-the-string-and-read-line-reads-it
+    # Oracle-identical (clj 1.12.6): with-in-str binds *in* to a reader over the string
+    # (thread-bound inside), which read-line (nil past the end, a function value too),
+    # read and .read take from.
+    source: |
+      (prn (with-in-str "one\ntwo" [(read-line) (read-line) (read-line)]))
+      (prn (with-in-str "(+ 1 2) :k" [(read) (read)]) (with-in-str "ab" [(.read *in*) (.read *in*)]))
+      (prn (with-in-str "x" (thread-bound? #'*in*)) (thread-bound? #'*in*) (with-in-str "x"))
+      (prn (with-in-str "p\nq" (doall (repeatedly 2 read-line))))
+    expected: |
+      ["one" "two" nil]
+      [(+ 1 2) :k] [97 98]
+      true false nil
+      ("p" "q")
   - name: unbound-vars-answer-the-unbound-root
     # Oracle-identical (clj 1.12.6): a declared-never-defined name and a value-less def are
     # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v"),

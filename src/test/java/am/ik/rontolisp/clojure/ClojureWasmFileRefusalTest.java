@@ -46,7 +46,7 @@ class ClojureWasmFileRefusalTest {
 		String quoted = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
 		String program = "(ns fileref (:require [clojure.java.io :as jio]))" + "(with-open [r (jio/reader " + quoted
 				+ ")] (println (count (line-seq r))))";
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

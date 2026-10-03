@@ -185,7 +185,7 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 ありません。プログラムの定義が占めていない名前と `clojure.core/` の綴りは core の var
 （`#'clojure.core/inc`）です。ルートは core の値で、マクロのルートはシグナルを上げ、
 メタデータは `:name`、`:ns` とマクロの `:macro` です。ここで値を持たない core の var
-（`#'*err*`、`#'*print-length*`）は拒否されます。
+（`#'*ns*`、`#'*file*`）は拒否されます。
 
 `ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
 （単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`
@@ -197,9 +197,15 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `nil` を答えます。`future`/`delay`/`force`/`promise`/`deliver` は名前で拒否された
 ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
 
-`binding` は `^:dynamic` な var（と、もとから special な `*out*`/`*in*`。
-`*out*`/`*in*` は `*standard-output*`/`*standard-input*` です）を動的エクステントで再束縛します。それ以外は
-拒否されます。`defstruct` はキーベクターを名前の裏に保持します。
+`binding` は `^:dynamic` な var と `clojure.core` の特殊変数を動的エクステントで
+再束縛します。それ以外は拒否されます。`*out*`/`*in*`/`*err*` は `*standard-output*`/
+`*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
+（`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` は `{}`、
+`*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
+プリンタは `*print-length*`、`*print-level*`、`*print-readably*` に従います（それ以外は
+ただの値です）。`*ns*`、`*file*`、`*source-path*`、`*repl*`、`*1`/`*2`/`*3`/`*e` は
+ここでは値を持ちません。`with-in-str` は `*in*` を文字列リーダに束縛し、`read-line`、
+`read`、`(.read *in*)` はそこから読みます。`defstruct` はキーベクターを名前の裏に保持します。
 `struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は
 `*standard-output*` を文字列ストリームに束縛し（リテラルの
 `with-output-to-string` は使いません）、印字内容を答えます。`time` は
@@ -285,7 +291,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
-| dynamic・コアの var（`*warn-on-reflection*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先のスレッド束縛 var がない。`java:` にフィールド書き込みがない |
+| ここで値を持たない var（`*file*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
 | `future`、`future-done?`/`future-cancelled?`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |

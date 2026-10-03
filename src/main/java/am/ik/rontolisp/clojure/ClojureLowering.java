@@ -798,14 +798,14 @@ public final class ClojureLowering {
 	boolean stmEmitted;
 
 	/**
-	 * Whether the program binds or reads a stream or agent special's binding-depth
-	 * counter: the counters' definitions are spliced in once, behind the false binding
-	 * ({@link ClojureVarLowering#streamDepthRuntime}).
+	 * The {@code clojure.core} specials the program reads, binds, assigns or takes the
+	 * var of: their definitions (a flag's root, a counter) are spliced in once, behind
+	 * the false binding ({@link ClojureCoreSpecials#definitions}).
 	 */
-	boolean usedStreamDepth;
+	final Set<String> usedSpecials = new LinkedHashSet<>();
 
-	/** Whether the counters' definitions were already spliced in. */
-	boolean streamDepthEmitted;
+	/** The specials whose definitions a session already spliced in. */
+	final Set<String> emittedSpecials = new HashSet<>();
 
 	/**
 	 * Whether the program uses {@code clojure.test}: the test runtime start (the report
@@ -903,9 +903,9 @@ public final class ClojureLowering {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
 		}
-		if (lowering.usedStreamDepth) {
-			// the binding-depth counters are special before anything binds them
-			lowering.forms.addAll(1, ClojureVarLowering.streamDepthRuntime());
+		if (!lowering.usedSpecials.isEmpty()) {
+			// the specials are special before anything binds them
+			lowering.forms.addAll(1, ClojureCoreSpecials.definitions(lowering, lowering.usedSpecials));
 		}
 		if (lowering.usedTest) {
 			// the test runtime starts before anything else, like the false value
@@ -996,11 +996,13 @@ public final class ClojureLowering {
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
 		}
-		if (this.usedStreamDepth && !this.streamDepthEmitted) {
-			// The binding-depth counters travel ahead of the buffer that first
-			// binds or reads one, like the false binding.
-			out.add(0, new ClojureTopLevel(ClojureVarLowering.streamDepthRuntime(), false));
-			this.streamDepthEmitted = true;
+		Set<String> freshSpecials = new LinkedHashSet<>(this.usedSpecials);
+		freshSpecials.removeAll(this.emittedSpecials);
+		if (!freshSpecials.isEmpty()) {
+			// The specials travel ahead of the buffer that first uses one, like
+			// the false binding.
+			out.add(0, new ClojureTopLevel(ClojureCoreSpecials.definitions(this, freshSpecials), false));
+			this.emittedSpecials.addAll(freshSpecials);
 		}
 		if (this.usedTest && !this.testEmitted) {
 			// The test runtime starts ahead of the buffer that first needs it,
@@ -2390,6 +2392,9 @@ public final class ClojureLowering {
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-out-str")) {
 			return ClojureStateLowering.withOutStrOf(this, items);
 		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-in-str")) {
+			return ClojureStateLowering.withInStrOf(this, items);
+		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "time")) {
 			return ClojureStateLowering.timeOf(this, items);
 		}
@@ -3511,6 +3516,18 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * A {@code clojure.core} special's value: its special variable, which the program
+	 * then defines ({@link #usedSpecials}); the agent var needs the STM runtime.
+	 */
+	LispVal specialValue(ClojureCoreSpecials.Special special) {
+		this.usedSpecials.add(special.name());
+		if (special.name().equals("*agent*")) {
+			this.usedStm = true;
+		}
+		return special.symbol();
+	}
+
+	/**
 	 * {@link #coreValue}, or null for a core name with no value here (a macro, or a var
 	 * the subset does not implement).
 	 */
@@ -3520,13 +3537,12 @@ public final class ClojureLowering {
 				return ClojureSeqLowering.nthValue(this);
 			case "quot":
 				return ClojureSeqLowering.quotValue(this);
-			case "*out*", "*in*":
-				return ClojureLowerUtil.idSym(name);
-			case "*agent*":
-				this.usedStm = true;
-				return ClojureLowerUtil.idSym(name);
 			default:
 				break;
+		}
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null) {
+			return specialValue(special);
 		}
 		LispVal synth = valueOf(name);
 		if (synth != null) {
@@ -3584,12 +3600,10 @@ public final class ClojureLowering {
 			// that name
 			return coreValue(core);
 		}
-		if ((name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) && !isLocal(name)) {
-			// dynamic aliases, not mangled names (see idSym): always resolvable
-			if (name.equals("*agent*")) {
-				this.usedStm = true;
-			}
-			return ClojureLowerUtil.idSym(name);
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null && !isLocal(name) && resolveVar(name) == null) {
+			// a clojure.core special no program var claims: its special variable
+			return specialValue(special);
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {
@@ -3816,13 +3830,13 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The definitions of the stream and agent specials' binding-depth counters, for the
-	 * macro-time evaluator: a macro body binding {@code *out*} (a {@code with-out-str})
-	 * rebinds one there too.
+	 * The definitions of every {@code clojure.core} special, for the macro-time
+	 * evaluator: a macro body binding {@code *out*} (a {@code with-out-str}) or reading a
+	 * flag finds it there too.
 	 * @return the forms
 	 */
-	public static List<LispVal> streamDepthForms() {
-		return ClojureVarLowering.streamDepthRuntime();
+	public static List<LispVal> coreSpecialForms() {
+		return ClojureCoreSpecials.definitions(new ClojureLowering(), ClojureCoreSpecials.names());
 	}
 
 	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,

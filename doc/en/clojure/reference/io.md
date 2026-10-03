@@ -17,6 +17,8 @@ Clojure-notation arguments.
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |
 | `with-open` | `(with-open [] :ok)` | `:ok` |
 | `with-out-str` | `(with-out-str (print 1))` | `"1"` |
+| `with-in-str` | `(with-in-str "a\nb" (read-line))` | `"a"` |
+| `read-line` | `(read-line)` | the next line of `*in*` |
 | `print-str` | `(print-str 1 "a")` | `"1 a"` |
 | `prn-str` | `(prn-str 1 "a")` | `"1 \"a\"\n"` |
 | `println-str` | `(println-str 1 "a")` | `"1 a\n"` |

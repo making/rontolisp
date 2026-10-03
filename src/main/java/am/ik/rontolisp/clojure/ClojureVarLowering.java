@@ -223,9 +223,9 @@ final class ClojureVarLowering {
 	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root a
 	 * signal like a program macro's, and its metadata {@code :name}/{@code :ns} plus a
 	 * macro's {@code :macro} (the oracle's {@code :arglists}, {@code :doc} and position
-	 * are not carried). The stream and agent specials carry the binding-depth reader
-	 * {@code thread-bound?} asks ({@link #streamDepthSym}); a core var with no value here
-	 * is refused.
+	 * are not carried). A special ({@link ClojureCoreSpecials}) carries the binding-depth
+	 * reader {@code thread-bound?} asks: its counter, or one for a flag
+	 * {@code clojure.main} binds. A core var with no value here is refused.
 	 */
 	private static LispVal coreVarOf(ClojureLowering ctx, String name) {
 		String key = ClojureCoreNames.PREFIX + name;
@@ -250,9 +250,11 @@ final class ClojureVarLowering {
 		}
 		LispVal metaForm = ctx.lower(ClojureLowerUtil.list(meta));
 		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
-		LispSymbol depth = streamDepthSym(name);
-		if (depth != null) {
-			ctx.usedStreamDepth = true;
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null) {
+			ctx.usedSpecials.add(name);
+			LispSymbol counter = special.counter();
+			LispVal depth = counter == null ? new LispInteger(1) : counter;
 			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), depth));
 		}
@@ -260,34 +262,19 @@ final class ClojureVarLowering {
 	}
 
 	/**
-	 * The binding-depth counter of a stream or agent special ({@code *out*},
-	 * {@code *in*}, {@code *agent*}): zero at the root, one deeper under every
-	 * {@code binding} of the special, {@code with-out-str} for {@code *out*} and an agent
-	 * action for {@code *agent*} ({@link #streamDepthPair}). The program defines them
-	 * ({@link #streamDepthRuntime}), and one reading none sheds the definitions and the
-	 * pairs ({@link ClojureArms.Family#STREAM_DEPTH}).
-	 * @param special the special's name
-	 * @return the counter, or null for any other name
+	 * The {@code let} pair rebinding a special's binding-depth counter one deeper, beside
+	 * a binding of the special, or null for a flag {@code clojure.main} binds (always
+	 * thread-bound, so it has no counter).
+	 * @param ctx the hub, which then defines the special
+	 * @param special a {@link ClojureCoreSpecials} name
+	 * @return the pair, or null
 	 */
-	static @Nullable LispSymbol streamDepthSym(String special) {
-		return switch (special) {
-			case "*out*" -> new LispSymbol("RONTOLISP::%CLOJURE-OUT-DEPTH");
-			case "*in*" -> new LispSymbol("RONTOLISP::%CLOJURE-IN-DEPTH");
-			case "*agent*" -> new LispSymbol("RONTOLISP::%CLOJURE-AGENT-DEPTH");
-			default -> null;
-		};
-	}
-
-	/**
-	 * The {@code let} pair rebinding a stream or agent special's binding-depth counter
-	 * one deeper, beside a binding of the special.
-	 * @param ctx the hub, which then defines the counters
-	 * @param special {@code *out*}, {@code *in*} or {@code *agent*}
-	 * @return the pair
-	 */
-	static LispVal streamDepthPair(ClojureLowering ctx, String special) {
-		ctx.usedStreamDepth = true;
-		LispSymbol counter = counterOf(special);
+	static @Nullable LispVal specialDepthPair(ClojureLowering ctx, String special) {
+		ctx.usedSpecials.add(special);
+		LispSymbol counter = ClojureCoreSpecials.required(special).counter();
+		if (counter == null) {
+			return null;
+		}
 		return ClojureLowerUtil.list(counter,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), counter, new LispInteger(1)));
 	}
@@ -353,28 +340,6 @@ final class ClojureVarLowering {
 							ClojureLowering.boundDepthSym(key)));
 		}
 		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
-	}
-
-	/**
-	 * The definitions of the binding-depth counters ({@link #streamDepthSym}), each zero:
-	 * the program carries them ahead of everything else, like the false binding, so the
-	 * interpreter binds them dynamically before the library loads.
-	 * @return the {@code defvar} forms
-	 */
-	static List<LispVal> streamDepthRuntime() {
-		List<LispVal> forms = new ArrayList<>();
-		for (String special : List.of("*out*", "*in*", "*agent*")) {
-			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), counterOf(special), new LispInteger(0)));
-		}
-		return forms;
-	}
-
-	private static LispSymbol counterOf(String special) {
-		LispSymbol counter = streamDepthSym(special);
-		if (counter == null) {
-			throw new IllegalArgumentException("no binding-depth counter: " + special);
-		}
-		return counter;
 	}
 
 	/**

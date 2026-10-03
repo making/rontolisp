@@ -85,6 +85,24 @@ class ClojureLibraryTest {
 			.anyMatch(text -> text.equals("(DEFVAR RONTOLISP::%CLOJURE-OUT-DEPTH 0)"));
 	}
 
+	@Test
+	void aProgramNamingNoPrintFlagSplicesTheLibraryWithoutItsPrintArms() {
+		// the printer reads *print-length*, *print-level* and *print-readably* through
+		// arms: the interpreter keeps them, a compiled program naming none of the three
+		// gets the printer it had before they existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains(
+				"(RONTOLISP::%CLOJURE-PRINT-DEEP-P X)", "(RONTOLISP::%CLOJURE-PRINT-CUT-P X)",
+				"RONTOLISP::%CLOJURE-WRITE-NESTED");
+		List<LispVal> plain = LispReader.readAllFromString("(rontolisp::%clojure-str-of x \"\" nil)");
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("%CLOJURE-PRINT-",
+				"%CLOJURE-WRITE-NESTED");
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-PRINT")).doesNotContain("%CLOJURE-PRINT-READABLE");
+		List<LispVal> flagged = Clojure.read("(binding [*print-length* 2] (prn [1 2 3]))", null);
+		assertThat(defun(ClojureLibrary.process(flagged), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-CUT-P X)", "RONTOLISP::%CLOJURE-WRITE-NESTED");
+	}
+
 	private static String defun(List<LispVal> forms, String name) {
 		return forms.stream()
 			.map(LispVal::print)

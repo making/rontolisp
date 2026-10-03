@@ -20,8 +20,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
   as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`), an
   unbound var's root as `#<Unbound: #'user/x>` (the oracle's `#object` carries a hash).
-- `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
-  Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
+- `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
+  read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
+  `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
+  CL surface); `print-method`/`pprint` stay absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
@@ -132,7 +134,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Deref of a macro's var signals (the oracle answers its expander function). A
   `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
   oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
-  with no value here (`#'*err*`, `#'*print-length*`) is refused.
+  with no value here (`#'*ns*`, `#'*file*`) is refused.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
@@ -208,8 +210,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the class loaded first); a deftype literal is refused. `read` takes a stream -- a
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
-- `*out*`/`*in*` are `*standard-output*`/`*standard-input*` (rebinding rebinds the
-  standard streams);
+- `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
+  (rebinding rebinds the standard streams); `(prn *out*)` prints `true` (the root of
+  `*standard-output*` is `t`);
   `defonce` keeps the root on reload where `def` resets it.
 - A host-object boolean answers `false` only when the receiver's class is known
   at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound

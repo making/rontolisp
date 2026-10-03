@@ -21,9 +21,10 @@
  形（`#<Atom value>`）、関数は `#<procedure>`、`ex-info` は条件オブジェクトのまま
  （`#<C%E-EX-INFO ...>`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
  `#object` はハッシュを含みます）と印字されます。
-- `*print-length*`/`*print-level*` は考慮されず、Clojure 値に対する `~S`/`~A` は
- Common Lisp 記法のままです（`format` は CL サーフェス）。`print-method`/`pprint`
- はありません。
+- `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
+ 付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
+ Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
+ `print-method`/`pprint` はありません。
 - マップ・セット・memoize のキーは、ベクター・リスト・マップ・セットも含めて本家と同じく
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
@@ -128,7 +129,7 @@
   定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
   上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
   `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
-  持ちます）。ここで値を持たない core の var（`#'*err*`、`#'*print-length*`）は拒否されます。
+  持ちます）。ここで値を持たない core の var（`#'*ns*`、`#'*file*`）は拒否されます。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
@@ -203,8 +204,9 @@
   （オラクルは先にクラスが読み込まれている必要があります）。deftype のリテラルは
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
-- `*out*`/`*in*` は `*standard-output*`/`*standard-input*` です（再束縛は標準
-  ストリームの再束縛になります）。
+- `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
+  です（再束縛は標準ストリームの再束縛になります）。`(prn *out*)` は `true` と印字されます
+  （`*standard-output*` のルートが `t` のため）。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
 - ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
   （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または

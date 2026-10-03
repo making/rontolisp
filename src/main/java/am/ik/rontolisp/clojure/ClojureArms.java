@@ -73,13 +73,26 @@ public final class ClojureArms {
 				Set.of("RONTOLISP::%CLOJURE-UNBOUND"), Set.of()),
 
 		/**
-		 * The binding depth of the stream and agent specials ({@code *out*},
-		 * {@code *in*}, {@code *agent*}), which {@code thread-bound?} reads through a var
-		 * site of one: every binding of the special rebinds its counter one deeper, and
-		 * only a var site reads it.
+		 * The binding depth of the {@code clojure.core} specials {@code clojure.main}
+		 * does not bind ({@code *out*}, {@code *in*}, {@code *err*}, {@code *agent*} and
+		 * a few flags, {@link ClojureCoreSpecials#COUNTERS}), which {@code thread-bound?}
+		 * reads through a var site of one and {@code set!} tests: every binding of the
+		 * special rebinds its counter one deeper, and only those two read it.
 		 */
-		STREAM_DEPTH("stream-binding-depth", Set.of(), Set.of(), Map.of(), Set.of(), Set
-			.of("RONTOLISP::%CLOJURE-OUT-DEPTH", "RONTOLISP::%CLOJURE-IN-DEPTH", "RONTOLISP::%CLOJURE-AGENT-DEPTH"));
+		STREAM_DEPTH("stream-binding-depth", Set.of(), Set.of(), Map.of(), Set.of(), ClojureCoreSpecials.COUNTERS),
+
+		/**
+		 * The printer's reading of {@code *print-length*}, {@code *print-level*} and
+		 * {@code *print-readably*}: the cut of a collection past the length, the
+		 * {@code #} of one past the level, the depth each nested member is written one
+		 * deeper at, and the readable switch. Only a program naming one of the three can
+		 * set it away from its root, under which the printer writes what it wrote without
+		 * them.
+		 */
+		PRINT_FLAGS("print-flags", Set.of("RONTOLISP::%CLOJURE-PRINT-CUT-P", "RONTOLISP::%CLOJURE-PRINT-DEEP-P"),
+				Set.of("RONTOLISP::%CLOJURE-PRINT-READABLE"),
+				Map.of("RONTOLISP::%CLOJURE-WRITE-NESTED", "RONTOLISP::%CLOJURE-WRITE"),
+				ClojureCoreSpecials.PRINT_FLAGS, Set.of());
 
 		private final String label;
 
