@@ -16,9 +16,9 @@ Measured 2026-10-02, oracle `clj` 1.12.6.1673 vs exec jar at `ec836db36`:
   is a JVM `Error`, not a CL condition (`evalHandlerCase` catches
   `LispEvalException`; JVM landings catch `RuntimeException`;
   `.kb/error-handling.md`); Clojure `try` lowers to `handler-case`
-  (table row 75) and `thrown?` matches any *condition*. The CLI converts the
+  (the `try` row) and `thrown?` matches any *condition*. The CLI converts the
   overflow outside the program (`RontoLispCli.java:1796-1805`).
-  `.kb/clojure-frontend.md:571` already names this exact corpus test.
+  `.kb/clojure-frontend.md`, "clojure.test", already names this exact corpus test.
 - Everything else in the namespace passes on both: `recur-fibo` / `fibo` /
   `head-fibo` take-10, `faux-curry` -> `2`, all three `count-heads-*` -> `2`
   (`recur` is already constant-stack via `labels` self-call).
