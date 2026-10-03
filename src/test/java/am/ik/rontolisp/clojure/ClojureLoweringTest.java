@@ -327,6 +327,26 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aLiteralScalarKeySkipsTheStructuralKeyRuntime() {
+		// keyword, string and number keys key an equal table by =, so the common
+		// lookup and literal stay plain gethash/plist-hash-table
+		assertThat(lowered("(def m {:a 1 \"s\" 2 3 4}) (get m :a) (:a m) (contains? m 3) (assoc m :b 1)"))
+			.doesNotContain("%CLOJURE-TABLE-KEY")
+			.doesNotContain("%CLOJURE-STORE-KEY")
+			.contains("PLIST-HASH-TABLE");
+		assertThat(lowered("(def s #{:a}) (s :a) (contains? s :a)")).doesNotContain("%CLOJURE-SET-PUT")
+			.doesNotContain("%CLOJURE-TABLE-KEY");
+		// any other key goes through it: a lookup reads the stored = key, a store
+		// writes the representative
+		assertThat(lowered("(def m {[1 1] :a}) (get m [1 1]) (contains? m [1 1])"))
+			.contains("(RONTOLISP::%CLOJURE-PLIST-TABLE NIL")
+			.contains("(RONTOLISP::%CLOJURE-TABLE-KEY");
+		assertThat(lowered("(def s #{[1]}) (conj s [2])")).contains("(RONTOLISP::%CLOJURE-SET-PUT");
+		assertThat(lowered("(defn f [m k] (dissoc m k))")).contains("(REMHASH (RONTOLISP::%CLOJURE-TABLE-KEY");
+		assertThat(lowered("(def f (memoize (fn [v] v)))")).contains("(RONTOLISP::%CLOJURE-MEMO-KEY");
+	}
+
+	@Test
 	void seqsCoerceCollectionsThroughOneSharedView() {
 		assertThat(lowered("(seq [1 2])")).contains("%CLOJURE-SEQ");
 		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("%CLOJURE-SEQ");
@@ -519,14 +539,14 @@ class ClojureLoweringTest {
 	@Test
 	void mapVerbsLowerToTableOperations() {
 		String prelude = "(def m {:a 1}) (def v [1]) (def s #{1}) (def c '(1)) ";
-		assertThat(lowered(prelude + "(assoc m :a 1)")).contains("PLIST-HASH-TABLE").contains("APPEND");
+		assertThat(lowered(prelude + "(assoc m :a 1)")).contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered(prelude + "(dissoc m :a)")).contains("REMHASH");
 		assertThat(lowered(prelude + "(get m :a)")).contains("GETHASH");
 		assertThat(lowered(prelude + "(get m :a 9)")).contains("GETHASH");
 		assertThat(lowered(prelude + "(contains? m :a)")).contains("GETHASH").contains("COND");
 		assertThat(lowered(prelude + "(keys m)")).contains("MAPHASH");
 		assertThat(lowered(prelude + "(vals m)")).contains("MAPHASH");
-		assertThat(lowered(prelude + "(merge m m)")).contains("APPEND").contains("PLIST-HASH-TABLE");
+		assertThat(lowered(prelude + "(merge m m)")).contains("APPEND").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(merge)")).isEqualTo(FALSE_BINDING + "NIL");
 		assertThat(lowered(prelude + "(conj v 1)")).contains("COND").contains("COERCE");
 		assertThat(lowered(prelude + "(disj s 1)")).contains("REMHASH").contains(":C%SET");
@@ -1580,7 +1600,8 @@ class ClojureLoweringTest {
 	void collectionVerbsLowerToValuesAndVecCoerces() {
 		assertThat(lowered("(vec [1 2])")).contains("RONTOLISP::%CLOJURE-REALIZE-ALL").contains("COERCE");
 		assertThat(lowered("(map vec [[1]])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-REALIZE-ALL");
-		assertThat(lowered("(map assoc [{:a 1}] [:a] [2])")).contains("LAMBDA").contains("APPEND");
+		assertThat(lowered("(map assoc [{:a 1}] [:a] [2])")).contains("LAMBDA")
+			.contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(map dissoc [{:a 1}] [:a])")).contains("LAMBDA").contains("REMHASH");
 		assertThat(lowered("(map get [{:a 1}] [:a])")).contains("LAMBDA").contains("GETHASH");
 		assertThat(lowered("(map contains? [{:a 1}] [:a])")).contains("LAMBDA").contains("GETHASH");
@@ -1588,8 +1609,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map conj [[1]] [2])")).contains("LAMBDA").contains("REDUCE");
 		assertThat(lowered("(map disj [#{1}] [1])")).contains("LAMBDA").contains("REMHASH");
 		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
-		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
-		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
+		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
+		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-PLIST-TABLE");
 		assertThat(lowered("(let [b23-a (atom [1])] (swap! b23-a conj 1))")).contains("APPLY").contains("REDUCE");
 		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("vec takes one collection");

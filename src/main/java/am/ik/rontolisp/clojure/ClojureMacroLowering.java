@@ -773,7 +773,7 @@ final class ClojureMacroLowering {
 		}
 		LispVal appended = segments.size() == 1 ? segments.get(0)
 				: ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), segments);
-		return ClojureCollectionLowering.tableFromPlist(appended);
+		return ClojureCollectionLowering.grownTable(ClojureLowering.NIL_CONST, appended);
 	}
 
 	static LispVal syntaxQuotedSet(ClojureLowering ctx, List<LispVal> elements, int level,
@@ -822,8 +822,7 @@ final class ClojureMacroLowering {
 	static LispVal setSplice(ClojureLowering ctx, LispSymbol table, LispVal members) {
 		LispSymbol one = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, members)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one));
+				ClojureCollectionLowering.setPut(table, one));
 	}
 
 	/**

@@ -142,6 +142,93 @@ final class ClojureCollectionLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("rontolisp:hash-table-plist"), table);
 	}
 
+	/**
+	 * Whether a lowered key form is a literal whose {@code =} an {@code equal} table
+	 * already decides: a keyword construction, a string, number or character literal,
+	 * {@code nil}, {@code true}, or a quoted symbol or literal. Such a key skips the
+	 * structural-key runtime (clojure.lisp, "Structural keys"), so the common keyword
+	 * lookup pays nothing.
+	 */
+	static boolean isScalarKeyForm(LispVal form) {
+		if (isScalarLiteral(form)) {
+			return true;
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(form);
+		if (parts == null) {
+			return false;
+		}
+		if (parts.size() == 3 && ClojureLowerUtil.isSymbolNamed(parts.get(0), "LIST")
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(1), KEYWORD_TAG.name())
+				&& parts.get(2) instanceof LispString) {
+			return true;
+		}
+		return parts.size() == 2 && ClojureLowerUtil.isSymbolNamed(parts.get(0), "QUOTE")
+				&& (parts.get(1) instanceof LispSymbol || isScalarLiteral(parts.get(1)));
+	}
+
+	private static boolean isScalarLiteral(LispVal form) {
+		return form instanceof LispString || form instanceof LispInteger || form instanceof LispDouble
+				|| form instanceof LispChar || form instanceof LispNil || form instanceof LispTrue;
+	}
+
+	/**
+	 * The key a lookup of {@code key} reads {@code table} under: the stored key {@code =}
+	 * to it ({@code rontolisp::%clojure-table-key}), or a literal scalar key itself. Both
+	 * forms must be side-effect-free when {@code table} is named again at the site.
+	 */
+	static LispVal lookupKey(LispVal key, LispVal table) {
+		return lookupKey(key, table, isScalarKeyForm(key));
+	}
+
+	/**
+	 * {@link #lookupKey} for a key already bound to a temporary, whose literal-scalar
+	 * test the caller made on the form it bound.
+	 */
+	static LispVal lookupKey(LispVal key, LispVal table, boolean scalar) {
+		return scalar ? key : ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TABLE-KEY"), key, table);
+	}
+
+	/**
+	 * The key a store of {@code key} into {@code table} writes under
+	 * ({@code rontolisp::%clojure-store-key}: the {@code =} key the table holds, else the
+	 * program's representative), or a literal scalar key itself.
+	 */
+	static LispVal storeKey(LispVal key, LispVal table) {
+		return isScalarKeyForm(key) ? key
+				: ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STORE-KEY"), key, table);
+	}
+
+	/**
+	 * {@code (SETF (GETHASH key table) value)} with the key stored through
+	 * {@link #storeKey}.
+	 */
+	static LispVal tablePut(LispVal table, LispVal key, LispVal value) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), storeKey(key, table), table), value);
+	}
+
+	/**
+	 * One member added to a set's table, stored under itself through the structural-key
+	 * runtime ({@code rontolisp::%clojure-set-put}); a literal scalar member inline.
+	 */
+	static LispVal setPut(LispVal table, LispVal member) {
+		if (isScalarKeyForm(member)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), member, table), member);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SET-PUT"), table, member);
+	}
+
+	/**
+	 * A fresh map over {@code base}'s entries (a form answering a table or {@code nil},
+	 * copied as is) plus the alternating keys and values {@code plist} answers, each key
+	 * stored through the structural-key runtime, later pairs winning
+	 * ({@code rontolisp::%clojure-plist-table}).
+	 */
+	static LispVal grownTable(LispVal base, LispVal plist) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PLIST-TABLE"), base, plist);
+	}
+
 	/** {@code (MAKE-HASH-TABLE :TEST 'EQUAL)}. */
 	static LispVal makeTable() {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-hash-table"), ClojureLowerUtil.sym(":test"),
@@ -172,11 +259,19 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * A map construction over lowered key/value pairs: an equal table, so vector keys and
-	 * nested maps compare structurally. The pairs evaluate once each, left to right.
+	 * A map construction over lowered key/value pairs: an equal table, every key a
+	 * literal scalar ({@link #isScalarKeyForm}) placed directly, any other through the
+	 * structural-key runtime so vector keys and nested maps find each other by {@code =}.
+	 * The pairs evaluate once each, left to right.
 	 */
 	static LispVal mapBuild(List<LispVal> pairs) {
-		return tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs));
+		LispVal plist = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs);
+		for (int i = 0; i < pairs.size(); i += 2) {
+			if (!isScalarKeyForm(pairs.get(i))) {
+				return grownTable(ClojureLowering.NIL_CONST, plist);
+			}
+		}
+		return tableFromPlist(plist);
 	}
 
 	/**
@@ -200,10 +295,13 @@ final class ClojureCollectionLowering {
 		bindings.add(ClojureLowerUtil.list(table, makeTable()));
 		List<LispVal> body = new ArrayList<>();
 		for (LispVal element : elements) {
+			if (isScalarKeyForm(element)) {
+				body.add(setPut(table, element));
+				continue;
+			}
 			LispSymbol one = ctx.freshTemp();
 			bindings.add(ClojureLowerUtil.list(one, element));
-			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one));
+			body.add(setPut(table, one));
 		}
 		body.add(wrapSet(table));
 		return ClojureLowerUtil.letForm(bindings, body);
@@ -215,13 +313,12 @@ final class ClojureCollectionLowering {
 		LispSymbol map = ctx.freshTemp();
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
 				ClojureProtocolLowering.typedTableOf(map), map);
-		LispVal grown = ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"),
-				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, tablePlist(src),
-						ClojureLowering.NIL_CONST),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2))));
+		LispVal grown = grownTable(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, src, ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 2)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, ctx.lower(items.get(1))))),
-				rewrapAnswer(ctx, map, tableFromPlist(grown)));
+				rewrapAnswer(ctx, map, grown));
 	}
 
 	/**
@@ -235,12 +332,10 @@ final class ClojureCollectionLowering {
 		LispSymbol bound = ctx.freshTemp();
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(bound),
 				ClojureProtocolLowering.typedTableOf(bound), bound);
-		LispVal grown = ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), List.of(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, tablePlist(src), ClojureLowering.NIL_CONST),
-				pairs));
+		LispVal grown = grownTable(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), bound, src, ClojureLowering.NIL_CONST), pairs);
 		LispVal build = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, map))),
-				rewrapAnswer(ctx, bound, tableFromPlist(grown)));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(bound, map))), rewrapAnswer(ctx, bound, grown));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal("assoc takes a map and key/value pairs"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil
@@ -270,7 +365,8 @@ final class ClojureCollectionLowering {
 		LispSymbol copy = ctx.freshTemp();
 		List<LispVal> body = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
-			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), ctx.lower(items.get(i)), copy));
+			body.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(ctx.lower(items.get(i)), copy),
+					copy));
 		}
 		body.add(dissocAnswer(ctx, map, copy));
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(map),
@@ -321,7 +417,7 @@ final class ClojureCollectionLowering {
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(bound),
 				ClojureProtocolLowering.typedTableOf(bound), bound);
 		LispVal drops = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, keys)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), one, copy));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(one, copy), copy));
 		LispVal rebuilt = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(copy, tableFromPlist(tablePlist(src))))), drops,
 				dissocAnswer(ctx, bound, copy));
@@ -361,8 +457,8 @@ final class ClojureCollectionLowering {
 		LispSymbol dfltSym = ctx.freshTemp();
 		List<LispVal> bindings = List.of(ClojureLowerUtil.list(collSym, coll), ClojureLowerUtil.list(keySym, key),
 				ClojureLowerUtil.list(dfltSym, dflt));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), getBranches(ctx, collSym, keySym, dfltSym)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings), ClojureLowerUtil
+			.cons(ClojureLowerUtil.sym("cond"), getBranches(ctx, collSym, keySym, dfltSym, isScalarKeyForm(key))));
 	}
 
 	/**
@@ -370,18 +466,20 @@ final class ClojureCollectionLowering {
 	 * default: a set answers its member, a map its value, a vector or a string its
 	 * indexed element, anything else the default. The three arrive as side-effect-free
 	 * forms (bound temporaries, a lambda parameter), so the branches may name them more
-	 * than once.
+	 * than once. {@code scalarKey} says the key is a literal scalar
+	 * ({@link #isScalarKeyForm}), read without the structural-key runtime.
 	 */
-	static List<LispVal> getBranches(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt) {
+	static List<LispVal> getBranches(ClojureLowering ctx, LispVal coll, LispVal key, LispVal dflt, boolean scalarKey) {
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(isSetForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, setInner(coll), dflt)));
+		branches.add(ClojureLowerUtil.list(isSetForm(coll), ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+				lookupKey(key, setInner(coll), scalarKey), setInner(coll), dflt)));
 		// a record reads through its entry table, like a map; a deftype or reify is
 		// opaque and falls to the default, like the oracle
+		LispVal entries = ClojureProtocolLowering.typedTableOf(coll);
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(coll), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("gethash"), key, ClojureProtocolLowering.typedTableOf(coll), dflt)));
+			.list(ClojureLowerUtil.sym("gethash"), lookupKey(key, entries, scalarKey), entries, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, coll, dflt)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), lookupKey(key, coll, scalarKey), coll, dflt)));
 		branches.add(ClojureLowerUtil.list(indexForm(coll, key, true),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), coll, key)));
 		branches.add(ClojureLowerUtil.list(indexForm(coll, key, false),
@@ -423,6 +521,7 @@ final class ClojureCollectionLowering {
 	 * answering {@code T}-or-false.
 	 */
 	static LispVal containsForm(ClojureLowering ctx, LispVal coll, LispVal key) {
+		boolean scalar = isScalarKeyForm(key);
 		LispSymbol bound = ctx.freshTemp();
 		LispSymbol at = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
@@ -430,24 +529,26 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(miss,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)));
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(isSetForm(bound),
-				ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), at, setInner(bound), miss),
-								miss)))));
 		branches.add(
-				ClojureLowerUtil
-					.list(ClojureProtocolLowering.isRecordForm(bound),
-							ctx.booleanAnswer(
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-											ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-													ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), at,
-															ClojureProtocolLowering.typedTableOf(bound), miss),
-													miss)))));
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), bound),
+				ClojureLowerUtil.list(isSetForm(bound),
+						ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+												lookupKey(at, setInner(bound), scalar), setInner(bound), miss),
+										miss)))));
+		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(bound),
 				ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), at, bound, miss), miss)))));
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+										lookupKey(at, ClojureProtocolLowering.typedTableOf(bound), scalar),
+										ClojureProtocolLowering.typedTableOf(bound), miss),
+								miss)))));
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), bound),
+					ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), ClojureLowerUtil
+								.list(ClojureLowerUtil.sym("gethash"), lookupKey(at, bound, scalar), bound, miss),
+									miss)))));
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, true), ClojureLowering.TRUE_CONST));
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, false), ClojureLowering.TRUE_CONST));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ctx.falseVariable));
@@ -531,6 +632,7 @@ final class ClojureCollectionLowering {
 		List<LispVal> bindings = new ArrayList<>();
 		List<LispVal> present = new ArrayList<>();
 		List<LispVal> plists = new ArrayList<>();
+		LispVal base = ClojureLowering.NIL_CONST;
 		for (int i = 1; i < items.size(); i++) {
 			LispSymbol one = ctx.freshTemp();
 			bindings.add(ClojureLowerUtil.list(one, ctx.lower(items.get(i))));
@@ -539,6 +641,11 @@ final class ClojureCollectionLowering {
 			// in the plist walk, like the oracle
 			LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 					ClojureProtocolLowering.typedTableOf(one), one);
+			if (i == 1) {
+				// the first map is copied as is; the later ones join key by key
+				base = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST);
+				continue;
+			}
 			plists.add(
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, tablePlist(src), ClojureLowering.NIL_CONST));
 		}
@@ -546,7 +653,7 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), present),
 						rewrapAnswer(ctx, present.get(0),
-								tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), plists))),
+								grownTable(base, ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"), plists))),
 						ClojureLowering.NIL_CONST));
 	}
 
@@ -583,8 +690,10 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST),
 								ClojureLowerUtil.list(grown, spread))),
-						find, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
-								rewrapAnswer(ctx, first, tableFromPlist(grown)), ClojureLowering.NIL_CONST)));
+						find,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found,
+								rewrapAnswer(ctx, first, grownTable(ClojureLowering.NIL_CONST, grown)),
+								ClojureLowering.NIL_CONST)));
 	}
 
 	static LispVal conjOf(ClojureLowering ctx, List<LispVal> items) {
@@ -623,12 +732,10 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(isSetForm(collSym), setAdd(ctx, collSym, item)));
 		// onto a record the entries join the entry table and the type survives, like
 		// the oracle; onto anything opaque the oracle signals, like below
-		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(collSym),
-				rewrapAnswer(ctx, collSym, tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"),
-						List.of(tablePlist(ClojureProtocolLowering.typedTableOf(collSym)), entryPlist(ctx, item)))))));
+		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(collSym), rewrapAnswer(ctx, collSym,
+				grownTable(ClojureProtocolLowering.typedTableOf(collSym), entryPlist(ctx, item)))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), collSym),
-				tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"),
-						List.of(tablePlist(collSym), entryPlist(ctx, item))))));
+				grownTable(collSym, entryPlist(ctx, item))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), collSym),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("append"),
@@ -755,9 +862,7 @@ final class ClojureCollectionLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table), key)),
 				setInner(coll));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), item, table), item),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, setPut(table, item),
 				wrapSet(table));
 	}
 
@@ -820,7 +925,8 @@ final class ClojureCollectionLowering {
 		}
 		List<LispVal> drops = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
-			drops.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), ctx.lower(items.get(i)), table));
+			drops.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(ctx.lower(items.get(i)), table),
+					table));
 		}
 		drops.add(table);
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), drops);
@@ -848,7 +954,7 @@ final class ClojureCollectionLowering {
 				setInner(bound));
 		LispVal drops = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 				ClojureLowerUtil.list(List.of(one, members)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), one, table));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), lookupKey(one, table), table));
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops, wrapSet(table));
 		LispVal needSet = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("disj needs a set"));
@@ -880,20 +986,17 @@ final class ClojureCollectionLowering {
 		LispSymbol entry = ctx.freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
-						ClojureLowerUtil.list(List.of(one,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"), coll,
-										ClojureLowerUtil.quoted("list")))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one))));
+				ClojureLowerUtil.list(
+						ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, ClojureLowerUtil
+							.list(ClojureLowerUtil.sym("coerce"), coll, ClojureLowerUtil.quoted("list")))),
+						setPut(table, one))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
-						ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(entry,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), key, val)))),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), entry, table), entry))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+										ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(entry,
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), key, val)))),
+										setPut(table, entry))),
 						coll)));
 		branches.add(ClojureLowerUtil.list(isSetForm(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"),
@@ -908,8 +1011,7 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 						ClojureLowerUtil.list(List.of(one, ClojureSeqLowering.seqAllForm(ctx, coll))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one))));
+						setPut(table, one))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil
 					.list(List.of(ClojureLowerUtil.list(coll, lowered), ClojureLowerUtil.list(table, makeTable()))),
@@ -936,11 +1038,10 @@ final class ClojureCollectionLowering {
 		LispSymbol pairs = new LispSymbol(ClojureLowering.mangle(what + "-pairs"));
 		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 				LispString.literal(what + " takes key/value pairs"));
-		LispVal body = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("if"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)),
-					arity, tableFromPlist(pairs));
+		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)),
+				arity, grownTable(ClojureLowering.NIL_CONST, pairs));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, pairs), body);
 	}
