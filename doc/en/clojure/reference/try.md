@@ -16,7 +16,7 @@ for `nil`, an `IndexOutOfBoundsException` for an index past its bound, an
 `UnsupportedOperationException` for `count` of a value that is no collection), an arithmetic
 error an `ArithmeticException`, a wrong argument count a `clojure.lang.ArityException`, a failed
 open a `java.io.FileNotFoundException`. A runtime error whose condition names no class is taken
-by any catch but `clojure.lang.ExceptionInfo`'s ([deviations](../deviations.md)). The caught
+by any catch but `clojure.lang.ExceptionInfo`'s ([Deviations](../deviations.md)). The caught
 exception is what `ex-message`/`ex-data`/`ex-cause`, `.getMessage`/`.getCause` and `str` read.
 
 ```clojure
