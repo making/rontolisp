@@ -50,8 +50,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   names, like `catch`; an error report prints the condition's message (an `ex-info` the
   oracle's way) with no stack trace, at the `is` form's line where the oracle names the
   frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
-  oracle prints `#error {...}`; a host stack overflow is no condition and ends the
-  program. `use-fixtures` is refused by name.
+  oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
+  `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
+  the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
+  like the oracle. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);

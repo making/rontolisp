@@ -600,6 +600,43 @@ class RontoLispCliStreamsTest {
 		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
 	}
 
+	/**
+	 * A host {@code StackOverflowError} is no condition on the interpreter, so a Clojure
+	 * {@code catch StackOverflowError} / {@code thrown?} never runs its handler: the
+	 * program ends with the one-line report (the oracle catches it and goes on; the JVM
+	 * backend's landing does too, {@code ClojureProjectNamespacesTest}).
+	 */
+	@Test
+	void aClojureCatchOfAStackOverflowDoesNotRunOnTheInterpreter() throws Exception {
+		Path program = this.tempDir.resolve("overflow_catch.clj");
+		Files.writeString(program, """
+				(defn deep [n] (if (= n 0) 0 (+ 1 (deep (- n 1)))))
+				(println "before")
+				(println (try (deep 100000000) (catch StackOverflowError e :caught)))
+				(println "after")
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("before\n");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
+	@Test
+	void aClojureThrownAssertionOverAStackOverflowEndsTheInterpretedProgram() throws Exception {
+		Path program = this.tempDir.resolve("overflow_thrown.clj");
+		Files.writeString(program, """
+				(ns overflow-thrown (:use clojure.test))
+				(defn deep [n] (if (= n 0) 0 (+ 1 (deep (- n 1)))))
+				(deftest t1 (is (thrown? StackOverflowError (deep 100000000))))
+				(deftest t2 (is (= 1 1)))
+				(run-tests)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("\nTesting overflow-thrown\n");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
 	@Test
 	void anUnknownSourceLanguageFailsFast() throws Exception {
 		Path program = this.tempDir.resolve("hello.lisp");
