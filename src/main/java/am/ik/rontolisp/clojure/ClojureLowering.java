@@ -2707,15 +2707,15 @@ public final class ClojureLowering {
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
 				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+						lower(items.get(2)));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
-				return ClojureFilterLowering.keepIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+						lower(items.get(2)), true);
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
-				return ClojureFilterLowering.mapIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+				return ClojureFilterLowering.indexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+						lower(items.get(2)), false);
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
 				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
@@ -2727,11 +2727,10 @@ public final class ClojureLowering {
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
 				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+						lower(items.get(2)));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
-				return ClojureFilterLowering.distinctForm(this,
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
+				return ClojureFilterLowering.distinctForm(lower(items.get(1)));
 			case "partition":
 				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
@@ -2746,8 +2745,7 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.interleaveOf(this, items);
 			case "interpose":
 				ClojureLowerUtil.isTrue(n == 2, "interpose takes a separator and a collection");
-				return ClojureFilterLowering.interposeForm(this, lower(items.get(1)),
-						ClojureSeqLowering.seqAllForm(this, lower(items.get(2))));
+				return ClojureFilterLowering.interposeForm(lower(items.get(1)), lower(items.get(2)));
 			case "zipmap":
 				ClojureLowerUtil.isTrue(n == 2, "zipmap takes keys and values");
 				return ClojureFilterLowering.zipmapForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))),
@@ -3019,17 +3017,17 @@ public final class ClojureLowering {
 			case "re-matches" -> ClojureStringLowering.reValue(this, "re-matches", List.of(2));
 			case "re-groups" -> ClojureStringLowering.reValue(this, "re-groups", List.of(1));
 			case "keep" -> ClojureFilterLowering.keepValue(this);
-			case "keep-indexed" -> ClojureFilterLowering.keepIndexedValue(this);
-			case "map-indexed" -> ClojureFilterLowering.mapIndexedValue(this);
+			case "keep-indexed" -> ClojureFilterLowering.indexedValue(this, true);
+			case "map-indexed" -> ClojureFilterLowering.indexedValue(this, false);
 			case "every?" -> ClojureFilterLowering.everyValue(this);
 			case "some" -> ClojureFilterLowering.someValue(this);
 			case "remove" -> ClojureFilterLowering.removeValue(this);
-			case "distinct" -> ClojureFilterLowering.distinctValue(this);
-			case "partition" -> ClojureFilterLowering.partitionValue(this);
+			case "distinct" -> ClojureFilterLowering.distinctValue();
+			case "partition" -> ClojureFilterLowering.partitionValue();
 			case "take-while" -> ClojureFilterLowering.takeWhileValue(this);
 			case "drop-while" -> ClojureFilterLowering.dropWhileValue(this);
-			case "interleave" -> ClojureFilterLowering.interleaveValue(this);
-			case "interpose" -> ClojureFilterLowering.interposeValue(this);
+			case "interleave" -> ClojureFilterLowering.interleaveValue();
+			case "interpose" -> ClojureFilterLowering.interposeValue();
 			case "zipmap" -> ClojureFilterLowering.zipmapValue(this);
 			case "group-by" -> ClojureFilterLowering.groupByValue(this);
 			case "sort" -> ClojureFilterLowering.sortValue(this);

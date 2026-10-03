@@ -1029,6 +1029,185 @@
                    (rontolisp::%clojure-concat-lazy (cons (cdr s) (cdr cs))))))
       (setq cs (cdr cs)))))
 
+;; remove, keep, keep-indexed, map-indexed, distinct, interpose, partition and
+;; interleave follow the lazy-or-strict rule like map and filter: a lazy input
+;; answers a wrapper, so (take n (verb ... infinite)) answers; a strict input
+;; keeps a strict loop over the whole-collection view. A realized cons of a lazy
+;; arm holds a wrapper as its tail (never a strict cons holding one), and a run
+;; of dropped members is a loop inside one realization. A function argument is
+;; a real function: the lowering wraps a collection or keyword value in the IFn
+;; dispatcher at the call site, so a program calling these with a function
+;; never carries the dispatcher.
+
+(defun rontolisp::%clojure-keep-lazy (f coll i)
+  "The lazy arm of the dropping verbs: (F index member) over COLL's members
+   from index I, every answer but :C%SKIP kept (a CL keyword no Clojure value
+   is)."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)) (n i) (v nil))
+       (do ()
+           ((or (null s)
+                (progn
+                  (setq v (funcall f n (car s)))
+                  (not (eq v :C%SKIP))))
+            (if (null s)
+                nil
+                (cons v (rontolisp::%clojure-keep-lazy f (cdr s) (+ n 1)))))
+         (setq s (rontolisp::%clojure-seq-rest s))
+         (setq n (+ n 1)))))))
+
+(defun rontolisp::%clojure-remove (pred coll)
+  "(remove pred coll): the members PRED answers nil or false for."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-keep-lazy (lambda (i x)
+                                       (declare (ignore i))
+                                       (if (rontolisp::%clojure-truthy
+                                            (funcall pred x))
+                                           :C%SKIP x)) coll 0)
+      (remove-if (lambda (x) (rontolisp::%clojure-truthy (funcall pred x)))
+                 (rontolisp::%clojure-seq-all coll))))
+
+(defun rontolisp::%clojure-keep (f coll)
+  "(keep f coll): F's non-nil answers (false is kept, a signalling F
+   signals)."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-keep-lazy (lambda (i x)
+                                       (declare (ignore i))
+                                       (let ((v (funcall f x)))
+                                         (if (null v) :C%SKIP v))) coll 0)
+      (let ((acc nil))
+        (dolist (x (rontolisp::%clojure-seq-all coll) (reverse acc))
+          (let ((v (funcall f x))) (if v (setq acc (cons v acc))))))))
+
+(defun rontolisp::%clojure-indexed (f coll keep)
+  "(keep-indexed f coll) when KEEP, (map-indexed f coll) otherwise: F over the
+   index from 0 and each member, a nil answer dropped when KEEP."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-keep-lazy (if keep
+                                         (lambda (i x)
+                                           (let ((v (funcall f i x)))
+                                             (if (null v) :C%SKIP v)))
+                                         f) coll 0)
+      (let ((acc nil) (i 0))
+        (dolist (x (rontolisp::%clojure-seq-all coll) (reverse acc))
+          (let ((v (funcall f i x)))
+            (if (or v (not keep)) (setq acc (cons v acc))))
+          (setq i (+ i 1))))))
+
+(defun rontolisp::%clojure-distinct (coll)
+  "(distinct coll): first occurrences in order, by = membership through the
+   structural-key runtime, like a set's. A lazy cell realizes at most once, so
+   the seen table grows in member order."
+  (let ((seen (make-hash-table :test 'equal)))
+    (if (rontolisp::%clojure-lazy-p coll)
+        (rontolisp::%clojure-keep-lazy (lambda (i x)
+                                         (declare (ignore i))
+                                         (if (rontolisp::%clojure-distinct-new-p
+                                              x seen)
+                                             x
+                                             :C%SKIP)) coll 0)
+        (let ((acc nil))
+          (dolist (x (rontolisp::%clojure-seq-all coll) (reverse acc))
+            (if (rontolisp::%clojure-distinct-new-p x seen)
+                (setq acc (cons x acc))))))))
+
+(defun rontolisp::%clojure-distinct-new-p (x seen)
+  "Whether X is = to no key of the table SEEN, recording it when new."
+  (let ((k (rontolisp::%clojure-store-key x seen)))
+    (if (gethash k seen)
+        nil
+        (progn
+          (setf (gethash k seen) t)
+          t))))
+
+(defun rontolisp::%clojure-interpose (sep coll)
+  "(interpose sep coll): SEP between every two members, so one member never
+   shows it."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-interpose-lazy sep coll nil)
+      (let ((acc nil))
+        (dolist (x (rontolisp::%clojure-seq-all coll) (reverse acc))
+          (if acc (setq acc (cons sep acc)))
+          (setq acc (cons x acc))))))
+
+(defun rontolisp::%clojure-interpose-lazy (sep coll gap)
+  "The lazy arm of %clojure-interpose: SEP first when GAP and COLL still has a
+   member."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (cond ((null s) nil)
+             (gap (cons sep (rontolisp::%clojure-interpose-lazy sep s nil)))
+             (t (cons (car s)
+                      (rontolisp::%clojure-interpose-lazy sep (cdr s) t))))))))
+
+(defun rontolisp::%clojure-partition (n step coll)
+  "(partition n step coll): runs of N every STEP members, an incomplete tail
+   dropped, like the oracle. A non-positive size signals."
+  (cond ((<= n 0) (error "partition takes a positive size"))
+        ((rontolisp::%clojure-lazy-p coll)
+         (rontolisp::%clojure-partition-lazy n step coll))
+        (t (let ((s (rontolisp::%clojure-seq-all coll)) (acc nil) (part nil))
+             (do ()
+                 ((progn
+                    (setq part (rontolisp::%clojure-take n s))
+                    (< (length part) n))
+                  (reverse acc))
+               (setq acc (cons part acc))
+               (setq s (nthcdr step s)))))))
+
+(defun rontolisp::%clojure-partition-lazy (n step coll)
+  "The lazy arm of %clojure-partition (each run strict)."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let* ((s (rontolisp::%clojure-seq coll))
+            (part (rontolisp::%clojure-take n s)))
+       (if (< (length part) n)
+           nil
+           (cons part
+                 (rontolisp::%clojure-partition-lazy n step
+                  (rontolisp::%clojure-drop step s))))))))
+
+(defun rontolisp::%clojure-partition-v (&rest args)
+  "partition as a value: [n coll] or [n step coll]."
+  (if (= (rontolisp::%clojure-check-arity args 2 3 "partition") 2)
+      (rontolisp::%clojure-partition (car args) (car args) (car (cdr args)))
+      (rontolisp::%clojure-partition (car args) (car (cdr args))
+                                     (car (cdr (cdr args))))))
+
+(defun rontolisp::%clojure-interleave (colls)
+  "(interleave c1 c2 ...) over the COLLS list: each one's first member, then
+   each one's second ..., stopping at the shortest (of none, nil)."
+  (cond ((null colls) nil)
+        ((rontolisp::%clojure-any-lazy-p colls)
+         (rontolisp::%clojure-interleave-lazy colls))
+        (t (let ((seqs (mapcar #'rontolisp::%clojure-seq colls)) (acc nil))
+             (do ()
+                 ((rontolisp::%clojure-map-done-p seqs) (reverse acc))
+               (dolist (s seqs) (setq acc (cons (car s) acc)))
+               (setq seqs (mapcar #'rontolisp::%clojure-seq-rest seqs)))))))
+
+(defun rontolisp::%clojure-interleave-lazy (colls)
+  "The lazy arm of %clojure-interleave: one round per realization."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((seqs (mapcar #'rontolisp::%clojure-seq colls)))
+       (if (rontolisp::%clojure-map-done-p seqs)
+           nil
+           (rontolisp::%clojure-interleave-round
+            (rontolisp::%clojure-map-heads seqs)
+            (rontolisp::%clojure-map-tails seqs)))))))
+
+(defun rontolisp::%clojure-interleave-round (heads tails)
+  "The HEADS list one wrapper apart, then the next round over the TAILS list."
+  (cons (car heads)
+        (if (cdr heads)
+            (rontolisp::%clojure-make-lazy
+             (lambda ()
+               (rontolisp::%clojure-interleave-round (cdr heads) tails)))
+            (rontolisp::%clojure-interleave-lazy tails))))
+
 (defun rontolisp::%clojure-repeat (x)
   "The infinite seq of X."
   (rontolisp::%clojure-make-lazy

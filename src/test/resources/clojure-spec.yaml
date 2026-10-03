@@ -531,6 +531,48 @@ cases:
       nil
       boom
       nil 1
+  - name: dropping-and-stepping-verbs-answer-over-infinite-inputs
+    # Oracle clj 1.12.6.1673 prints the same. remove, keep, keep-indexed,
+    # map-indexed, distinct, interpose, partition and interleave follow the
+    # lazy-or-strict rule like map and filter: a lazy input answers a lazy seq (they
+    # answered strict lists over the whole-collection view, so an infinite input
+    # never answered, and interleave over only infinite inputs overflowed). A run
+    # of dropped members is a loop inside one realization; a set, map or keyword as
+    # the function goes through the dispatcher at the call site.
+    source: |
+      (println (take 3 (remove odd? (iterate inc 0))) (take 3 (keep #(when (even? %) (* % 10)) (iterate inc 0))))
+      (println (take 3 (keep-indexed (fn [i x] (when (odd? i) [i x])) (iterate inc 10))))
+      (println (take 3 (map-indexed vector (iterate inc 10))) (take 4 (distinct (map #(quot % 3) (iterate inc 0)))))
+      (println (take 5 (interpose :x (iterate inc 0))) (take 2 (partition 3 (iterate inc 0))) (take 2 (partition 2 3 (iterate inc 0))))
+      (println (take 5 (interleave (iterate inc 0) (repeat :a))) (take 5 (interleave [1 2] (iterate inc 0))))
+      (println (first (remove #(< % 20000) (iterate inc 0))) (first (keep #(when (> % 20000) %) (iterate inc 0))))
+      (println (first (keep-indexed (fn [i x] (when (> i 20000) x)) (iterate inc 0))) (take 2 (distinct (concat (repeat 20000 1) (iterate inc 2)))))
+      (println (nth (interleave (iterate inc 0) (iterate dec 0)) 50001) (nth (map-indexed vector (iterate inc 0)) 100))
+      (println (take 3 (rest (interleave (iterate inc 0) (repeat :a)))) (map inc (take 3 (rest (interpose 0 (iterate inc 1))))))
+      (println (take 3 (remove #{1 2} (iterate inc 0))) (take 2 (keep {1 :one 3 :three} (iterate inc 0))) (take 3 (keep :a (cycle [{:a 1} {:b 2}]))))
+      (println (take 3 ((fn [f] (f even? (iterate inc 0))) remove)) (take 4 (apply interleave [(repeat :x) (iterate inc 0)])))
+      (println (take 3 (apply distinct [(cycle [1 2 3 4])])) (take 3 (distinct (cycle [[1] [1] [2] '(2) [3]]))))
+      (println (take 2 (keep (fn [x] (if (odd? x) false nil)) (iterate inc 0))) (take 2 (remove false? (cons false (iterate inc 0)))))
+      (println (remove odd? [1 2 3 4]) (keep identity [1 nil false 2]) (keep-indexed #(when (even? %1) %2) [:a :b :c]))
+      (println (map-indexed vector "ab") (distinct [1 2 1 3 2]) (interpose ", " ["a" "b" "c"]))
+      (println (partition 2 [1 2 3 4 5]) (partition 2 1 [1 2 3]) (interleave [1 2 3] [:a :b]) (apply partition [2 [1 2 3 4 5]]))
+    expected: |
+      (0 2 4) (0 20 40)
+      ([1 11] [3 13] [5 15])
+      ([0 10] [1 11] [2 12]) (0 1 2 3)
+      (0 :x 1 :x 2) ((0 1 2) (3 4 5)) ((0 1) (3 4))
+      (0 :a 1 :a 2) (1 0 2 1)
+      20000 20001
+      20001 (1 2)
+      -25000 [100 100]
+      (:a 1 :a) (1 3 1)
+      (0 3 4) (:one :three) (1 1 1)
+      (1 3 5) (:x 0 :x 1)
+      (1 2 3) ([1] [2] [3])
+      (false false) (0 1)
+      (2 4) (1 false 2) (:a :c)
+      ([0 a] [1 b]) (1 2 3) (a ,  b ,  c)
+      ((1 2) (3 4)) ((1 2) (2 3)) (1 :a 2 :b) ((1 2) (3 4))
   - name: nth-and-quot-as-values
     # nth/quot as values are lambdas with the Clojure argument order (a bare #'NTH
     # would take the index first).
