@@ -125,6 +125,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void hostKindPredicatesTestTheHostClass() throws Exception {
+		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
+		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)
+		assertBothEqual("(prn (class? String) (class? \"a\") (class? 1) (inst? (java.util.Date.))"
+				+ " (inst? (java.time.Instant/now)) (inst? \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? \"x\")"
+				+ " (uri? (java.net.URI. \"http://a\")) (uri? \"http://a\") (map uuid? [(java.util.UUID/randomUUID) 1]))",
+				"true false false true true false true false true false (true false)\n");
+	}
+
+	@Test
 	void classOfAValueOfNoKnownKindStaysARefusalWithOrWithoutInterop() throws Exception {
 		// an ex-info condition is no host object: the same refusal whether the
 		// program uses interop (the host arm) or not (no java: at all)
@@ -137,12 +147,15 @@ class ClojureInteropTest {
 	@Test
 	void theHostArmsAddNoJavaReferenceToAProgramWithoutInterop() {
 		// a java: reference changes the JVM output (the bridge, the host guards on
-		// every accessor), so class's, the printer's and str's host arms exist only
-		// where the program has one; the java:-free stand-ins take their names
+		// every accessor), so class's, the printer's, str's and the host-kind
+		// predicates' host arms exist only where the program has one; the
+		// java:-free stand-ins take their names
 		for (boolean wasm : new boolean[] { false, true }) {
 			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
-				.clojure("(defmulti k class) (defmethod k :default [x] x)"
-						+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3))", wasm, false)
+				.clojure(
+						"(defmulti k class) (defmethod k :default [x] x)"
+								+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3) (uuid? 4) (inst? 5))",
+						wasm, false)
 				.forms()
 				.stream()
 				.map(LispVal::print)
@@ -150,6 +163,7 @@ class ClojureInteropTest {
 			assertThat(forms).noneMatch(text -> text.contains("JAVA:"));
 			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-CLASS-NAME"));
 			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-STRING"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-INSTANCE-P"));
 		}
 	}
 

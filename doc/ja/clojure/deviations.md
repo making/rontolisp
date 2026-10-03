@@ -35,6 +35,15 @@
  （本家はプログラムが作ったものに `false`）、`key`/`val` はそのようなベクターを読みます。
  キーワードはインターンされないため、`find-keyword` は一度も使われていない綴りにもそのキーワードを
  返します（本家は `nil`）。
+- 型述語は値の表現に従います。`nil` が空リストなので、`seq?`・`list?`・`coll?`・`sequential?`・
+ `counted?` は `()` に `false` を返します。strict な入力に対して操作が返す seq はリストなので、
+ `list?`・`counted?`・`realized?` はそれに `true` を返します（本家の lazy seq や chunked seq は
+ `false`）。チャンク化された seq はなく（`chunked-seq?` は常に `false`）、`iterate`/`cycle` の seq は
+ 一度強制されてから `realized?` になります。decimal と `N` のリテラルは通常の有理数なので、
+ `decimal?` は常に `false` で、`ratio?`・`integer?`・`int?` はその有理数に対して答えます
+ （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。`identical?` は数値・文字・シンボルを値で比較し
+ （`(identical? 1000 1000)` は `true`）、綴りが同じ2つのキーワードを同じオブジェクトとして扱います。
+ `bound?` はどの var にも `true` を返します（値なしの `def` は `nil` を束縛します）。
 - プログラム自身がトップレベルで定義したコア名（`(defn peek ...)`）は、定義より上の呼び出しも
  含めてファイル全体でコアの関数を隠します（オラクルでは定義より上の呼び出しはコアに届きます）。
  ローカル束縛はオラクル同様にそのスコープで隠します。

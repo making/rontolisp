@@ -133,6 +133,24 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), value));
 	}
 
+	/**
+	 * The second slot of a volatile's cell: a volatile is an atom whose cell carries it,
+	 * so every atom verb reads and writes it unchanged while {@code volatile?} tells the
+	 * two apart, like the oracle's two classes.
+	 */
+	static final LispSymbol VOLATILE_MARK = new LispSymbol(":C%VOLATILE");
+
+	static LispVal wrapVolatile(LispVal value) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ATOM_TAG,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), value, VOLATILE_MARK));
+	}
+
+	/** {@code volatile!} as a value: a one-argument lambda over the constructor. */
+	static LispVal volatileValue() {
+		LispSymbol init = new LispSymbol(ClojureLowering.mangle("volatile-init"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(init), wrapVolatile(init));
+	}
+
 	/** Whether the form holds a wrapped atom: the tag over a one-vector cell. */
 	static LispVal isAtomForm(LispVal form) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),

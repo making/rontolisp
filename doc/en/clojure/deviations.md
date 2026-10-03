@@ -33,6 +33,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (the oracle: `false` for one the program built) and `key`/`val` read any such vector. Keywords
   are not interned, so `find-keyword` answers the keyword for a spelling no keyword ever used
   (the oracle: `nil`).
+- The type predicates follow the representation. `nil` is the empty list, so `seq?`,
+  `list?`, `coll?`, `sequential?` and `counted?` answer `false` for `()`; a seq a verb answers
+  over a strict input is a list, so `list?`, `counted?` and `realized?` answer `true` for it
+  (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
+  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
+  literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
+  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
+  compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
+  two keywords of one spelling as one object. `bound?` is `true` of every var (a value-less
+  `def` binds `nil`).
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the

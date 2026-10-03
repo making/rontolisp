@@ -1761,7 +1761,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void predicatesAndCastsReadAndAnswer() {
-		assertThat(lowered("(coll? [1])")).contains("CONSP").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(coll? [1])")).contains("RONTOLISP::%CLOJURE-IS-COLL")
+			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(symbol? 'a)")).contains("SYMBOLP");
 		assertThat(lowered("(instance? String \"a\")")).contains("STRINGP");
 		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
@@ -2110,6 +2111,42 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(find-keyword \"a\" \"b\" \"c\")", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/find-keyword");
+	}
+
+	@Test
+	void typePredicatesLowerToOneTestAnsweringTrueOrFalse() {
+		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ ")
+			.contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
+		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
+		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+			.contains("\"java.util.UUID\"");
+		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
+		// a kind no value here has: false, the argument still evaluated
+		assertThat(lowered("(sorted? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(volatile! 1)")).contains(":C%VOLATILE");
+		assertThat(lowered("(atom 1)")).doesNotContain(":C%VOLATILE");
+	}
+
+	@Test
+	void typePredicatesRefuseAWrongArgumentCountInTheOraclesWords() {
+		for (String[] call : new String[][] { { "(seq?)", "0", "seq?" }, { "(map? 1 2)", "2", "map?" },
+				{ "(any? 1 2)", "2", "any?" }, { "(sorted?)", "0", "sorted?" }, { "(identical? 1)", "1", "identical?" },
+				{ "(distinct?)", "0", "distinct?" }, { "(not-any? odd?)", "1", "not-any?" },
+				{ "(not-every? odd? [] [])", "3", "not-every?" }, { "(extends? P)", "1", "extends?" },
+				{ "(NaN? 1 2)", "2", "NaN?" }, { "(qualified-symbol?)", "0", "qualified-symbol?" } }) {
+			assertThatThrownBy(() -> Clojure.read(call[0], null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (" + call[1] + ") passed to: clojure.core/" + call[2]);
+		}
+		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such protocol: Nope");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.util.Date)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("extends? needs a core type, not java.util.Date");
+		assertThatThrownBy(() -> Clojure.read("(future-done? 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("future-done? is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(map extends? [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: extends?");
 	}
 
 	@Test

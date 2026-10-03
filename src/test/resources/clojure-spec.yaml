@@ -5191,3 +5191,231 @@ cases:
       true true (1 3)
       true 1 (1 3)
       true true
+  - name: coll-is-false-for-the-tagged-wrappers
+    # Oracle-identical (clj 1.12.6): a keyword, atom, volatile, var, reduced value and
+    # pattern are no collections; a record and a lazy seq are.
+    source: |
+      (defrecord CwR [a])
+      (defn cw-f [] 1)
+      (prn (coll? :a) (coll? :a/b) (coll? (atom 1)) (coll? (volatile! 1)) (coll? #'cw-f) (coll? (reduced 1)) (coll? #"a") (coll? (->CwR 1)))
+      (prn (coll? (lazy-seq nil)) (coll? '(1)) (coll? [1]) (coll? {}) (coll? #{}) (coll? (map inc [1])) (coll? nil) (coll? "s") (coll? 1) (map coll? [:k [1]]))
+    expected: |
+      false false false false false false false true
+      true true true true true true false false false (false true)
+  - name: the-slash-symbol-has-no-namespace
+    # Oracle-identical (clj 1.12.6): the lone slash is a name, not a namespace separator.
+    source: |
+      (prn (namespace '/) (name '/) (namespace 'clojure.core//) (name 'clojure.core//) (namespace :a/b) (name :a/b))
+    expected: |
+      nil "/" "clojure.core" "/" "a" "b"
+  - name: collection-predicates-tell-the-kinds-apart
+    # Oracle-identical (clj 1.12.6) over nil, a number, a string, a keyword, a symbol, a
+    # vector, a list, a map, a set, a lazy seq, a cons onto one, a record, a deftype, an
+    # atom, a function, a var and a map entry.
+    source: |
+      (defrecord TpR [a])
+      (deftype TpT [a])
+      (defn tp-f [] 1)
+      (def tp-vals [nil 1 "s" :k 'x [1] '(1) {:a 1} #{1} (lazy-seq [1]) (cons 0 (lazy-seq [1])) (->TpR 1) (->TpT 1) (atom 1) inc #'tp-f (first {:a 1})])
+      (prn (map seq? tp-vals))
+      (prn (map sequential? tp-vals))
+      (prn (map map? tp-vals))
+      (prn (map set? tp-vals))
+      (prn (map list? tp-vals))
+      (prn (map record? tp-vals))
+      (prn (map seqable? tp-vals))
+      (prn (map associative? tp-vals))
+      (prn (map counted? tp-vals))
+      (prn (map indexed? tp-vals))
+      (prn (map reversible? tp-vals))
+      (prn (map ifn? tp-vals))
+    expected: |
+      (false false false false false false true false false true true false false false false false false)
+      (false false false false false true true false false true true false false false false false true)
+      (false false false false false false false true false false false true false false false false false)
+      (false false false false false false false false true false false false false false false false false)
+      (false false false false false false true false false false false false false false false false false)
+      (false false false false false false false false false false false true false false false false false)
+      (true false true false false true true true true true true true false false false false true)
+      (false false false false false true false true false false false true false false false false true)
+      (false false false false false true true true true false false true false false false false true)
+      (false false false false false true false false false false false false false false false false true)
+      (false false false false false true false false false false false false false false false false true)
+      (false false false true true true false true true false false false false false true true true)
+  - name: collection-predicates-in-calls-and-as-values
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (seq? '(1 2)) (seq? (seq [1 2])) (seq? (rest '(1 2 3))) (seq? (map inc (iterate inc 0))) (seq? [1]) (seq? nil) (seq? {:a 1}))
+      (prn (sequential? [1]) (sequential? '(1)) (sequential? (range 3)) (sequential? #{1}) (sequential? "ab") (sequential? nil))
+      (prn (map? {}) (map? (hash-map :a 1)) (map? (->TpR 1)) (map? [[:a 1]]) (set? #{}) (set? (set [1])) (set? {}) (record? (->TpR 2)) (record? {:a 1}))
+      (prn (list? '(1)) (list? (list 1 2)) (list? []) (list? nil) (associative? [1]) (associative? {}) (associative? '(1)) (associative? #{1}))
+      (prn (counted? [1]) (counted? {:a 1}) (counted? #{1}) (counted? '(1 2)) (counted? (lazy-seq [1])) (counted? "ab") (counted? nil))
+      (prn (indexed? [1]) (indexed? '(1)) (indexed? "ab") (reversible? [1]) (reversible? '(1)) (seqable? nil) (seqable? "") (seqable? 1) (seqable? :a))
+      (prn (ifn? inc) (ifn? :a) (ifn? 'a) (ifn? {}) (ifn? #{}) (ifn? []) (ifn? #'tp-f) (ifn? '(1)) (ifn? 1) (ifn? "s") (ifn? (->TpR 1)) (ifn? nil))
+      (let [p seq? q map?] (prn (p '(1)) (q {}) (filter set? [1 #{2} [3]]) (apply list? ['(1)]) ((comp not vector?) '(1)) (every? sequential? [[1] '(2)])))
+    expected: |
+      true true true true false false false
+      true true true false false false
+      true true true false true true false true false
+      true true false false true true false false
+      true true true true false false false
+      true false false true false true true false false
+      true true true true true true true false false false false false
+      true true (#{2}) true true true
+  - name: number-predicates-tell-the-numeric-kinds-apart
+    # Oracle-identical (clj 1.12.6); infinite? and NaN? signal on anything but a number.
+    # Decimal and N literals read as plain rationals (see
+    # decimal-and-bigint-literals-are-plain-rationals).
+    source: |
+      (def tp-nums [0 -3 7 1.5 -0.5 1/2 -2/3 99999999999999999999 9223372036854775807 -9223372036854775808 9223372036854775808 ##Inf ##-Inf ##NaN \a "1" nil])
+      (prn (map number? tp-nums))
+      (prn (map integer? tp-nums))
+      (prn (map int? tp-nums))
+      (prn (map double? tp-nums))
+      (prn (map float? tp-nums))
+      (prn (map ratio? tp-nums))
+      (prn (map rational? tp-nums))
+      (prn (map nat-int? tp-nums))
+      (prn (map pos-int? tp-nums))
+      (prn (map neg-int? tp-nums))
+      (prn (map decimal? tp-nums))
+      (prn (infinite? ##Inf) (infinite? ##-Inf) (infinite? 1.5) (infinite? 1) (infinite? 1/2) (infinite? ##NaN) (NaN? ##NaN) (NaN? 1.5) (NaN? 1) (NaN? ##Inf))
+      (prn (map infinite? [1 ##Inf]) (map NaN? [1 ##NaN]) (try (infinite? nil) (catch Exception e :refused)) (try (infinite? "a") (catch Exception e :refused)) (try (NaN? :a) (catch Exception e :refused)) (try (NaN? nil) (catch Exception e :refused)))
+    expected: |
+      (true true true true true true true true true true true true true true false false false)
+      (true true true false false false false true true true true false false false false false false)
+      (true true true false false false false false true true false false false false false false false)
+      (false false false true true false false false false false false true true true false false false)
+      (false false false true true false false false false false false true true true false false false)
+      (false false false false false true true false false false false false false false false false false)
+      (true true true false false true true true true true true false false false false false false)
+      (true false true false false false false false true false false false false false false false false)
+      (false false true false false false false false true false false false false false false false false)
+      (false true false false false false false false false true false false false false false false false)
+      (false false false false false false false false false false false false false false false false false)
+      true true false false false false true false false false
+      (false true) (false true) :refused :refused :refused :refused
+  - name: name-predicates-read-the-namespace
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (def tp-ids [:k :a/b 'x 'a/b (keyword "q" "r") (symbol "s" "t") '/ 'clojure.core// "k" nil 1 [:a]])
+      (prn (map keyword? tp-ids))
+      (prn (map ident? tp-ids))
+      (prn (map simple-ident? tp-ids))
+      (prn (map qualified-ident? tp-ids))
+      (prn (map simple-keyword? tp-ids))
+      (prn (map qualified-keyword? tp-ids))
+      (prn (map simple-symbol? tp-ids))
+      (prn (map qualified-symbol? tp-ids))
+      (prn (map char? [\a "a" 97 nil]) (keyword? ::tp-own) (qualified-keyword? ::tp-own) (simple-symbol? (gensym)) (keyword? (keyword "x")))
+    expected: |
+      (true true false false true false false false false false false false)
+      (true true true true true true true true false false false false)
+      (true false true false false false true false false false false false)
+      (false true false true true true false true false false false false)
+      (true false false false false false false false false false false false)
+      (false true false false true false false false false false false false)
+      (false false true false false false true false false false false false)
+      (false false false true false true false true false false false false)
+      (true false false false) true true true true
+  - name: any-not-any-not-every-distinct-and-identical
+    # Oracle-identical (clj 1.12.6); identical? of two numbers compares values here (see
+    # identical-compares-numbers-and-symbols-by-value).
+    source: |
+      (prn (any? nil) (any? false) (any? 1) (map any? [nil :a]))
+      (prn (not-any? odd? [2 4]) (not-any? odd? [2 3]) (not-any? odd? nil) (not-any? #{1} [2 3]) (not-any? :a [{:b 1}]))
+      (prn (not-every? odd? [1 3]) (not-every? odd? [1 2]) (not-every? odd? nil) (not-every? #{1 2} [1 2]) (not-every? :a [{:a 1} {}]))
+      (prn (not-any? odd? (iterate inc 0)) (not-every? even? (iterate inc 0)) (let [f not-any? g not-every?] [(f odd? [1]) (g odd? [1])]) (apply not-any? [even? [1 3]]))
+      (prn (distinct? 1) (distinct? 1 2) (distinct? 1 1) (distinct? 1 2 3 1) (distinct? [1] '(1)) (distinct? 1 1.0) (distinct? nil false) (distinct? :a :a) (distinct? {:a 1} {:a 1}) (apply distinct? (range 100)) (apply distinct? [1 2 1]))
+      (prn (identical? :a :a) (identical? :a :b) (let [v [1]] (identical? v v)) (identical? [1] [1]) (identical? nil nil) (identical? nil false) (identical? 1 1) (identical? \a \a) (let [m {:a 1}] (identical? m (assoc m :b 2))))
+      (let [f identical? g distinct?] (prn (f :a :a) (g 1 2 1) (map identical? [:a 1] [:a 2])))
+    expected: |
+      true true true (true true)
+      true false true true true
+      false true false false true
+      false true [false false] true
+      true true false false false true true false false true false
+      true false true false true false true true false
+      true false (true false)
+  - name: var-volatile-bound-and-realized-predicates
+    # Oracle-identical (clj 1.12.6): a volatile is no atom, a var is always bound, a lazy
+    # seq is realized once its body ran; realized? of anything but a seq signals.
+    source: |
+      (def tp-bx 1)
+      (prn (var? #'tp-bx) (var? 'tp-bx) (var? tp-bx) (var? (atom 1)) (map var? [#'tp-bx 1]))
+      (prn (volatile? (volatile! 1)) (volatile? (atom 1)) (volatile? (ref 1)) (volatile? (agent 1)) (volatile? nil) (let [v (volatile! 1)] (vswap! v inc) [(volatile? v) @v]) (map volatile? [(volatile! 0) 0]))
+      (let [v (volatile! 1)] (vreset! v 5) (prn @v (deref v) (volatile? v)))
+      (prn (bound? #'tp-bx) (bound? #'tp-bx #'tp-bx) (bound?) (try (bound? 1) (catch Exception e :refused)) (apply bound? [#'tp-bx]))
+      (let [s (lazy-seq [1 2])] (prn (realized? s) (first s) (realized? s)))
+      (let [s (map inc (iterate inc 1))] (prn (realized? s) (first s) (realized? s)))
+      (prn (realized? (lazy-seq nil)) (try (realized? [1]) (catch Exception e :refused)) (try (realized? nil) (catch Exception e :refused)) (try (realized? 1) (catch Exception e :refused)) (try (realized? (atom 1)) (catch Exception e :refused)))
+    expected: |
+      true false false false (true false)
+      true false false false false [true 2] (true false)
+      5 5 true
+      true true true :refused true
+      false 1 true
+      false 2 true
+      false :refused :refused :refused :refused
+  - name: predicates-of-kinds-no-value-has-answer-false
+    # Oracle-identical (clj 1.12.6): no sorted collection, chunked seq, decimal, byte
+    # array, delay, future, reader conditional, tagged literal or host object exists in
+    # these programs. The host kinds answer true on the interpreter and the JVM
+    # (ClojureInteropTest).
+    source: |
+      (prn (sorted? {}) (sorted? []) (chunked-seq? (lazy-seq [1])) (chunked-seq? '(1)) (decimal? 1.5) (bytes? [1]) (bytes? "s") (delay? 1) (future? 1) (reader-conditional? '(1)) (tagged-literal? 1) (class? 1) (inst? 1) (uuid? "x") (uri? "http://a"))
+      (prn (map sorted? [nil #{}]) (map delay? [nil]) (map future? [nil]) (map class? [nil]) (map inst? [nil]) (map uuid? [nil]) (map uri? [nil]))
+    expected: |
+      false false false false false false false false false false false false false false false
+      (false false) (false) (false) (false) (false) (false) (false)
+  - name: special-symbol-names-the-special-forms
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (map special-symbol? '[if def let* fn* do quote var recur loop* throw try catch finally new . set! & case* letfn* deftype* reify* monitor-enter monitor-exit]))
+      (prn (map special-symbol? '[let fn loop defn x import* when nil]) (special-symbol? "if") (special-symbol? :if) (special-symbol? 'clojure.core/if) (special-symbol? 'clojure.core/import*))
+    expected: |
+      (true true true true true true true true true true true true true true true true true true true true true true true)
+      (false false false false false false false false) false false false true
+  - name: extends-reads-the-protocol-table
+    # Oracle-identical (clj 1.12.6): an inline implementation or an extension counts; an
+    # Object extension counts for Object alone.
+    source: |
+      (defprotocol TpP (tp-m [x]))
+      (defprotocol TpQ (tp-q [x]))
+      (defrecord TpPR [a] TpP (tp-m [x] 1))
+      (defrecord TpPS [a])
+      (deftype TpPT [a])
+      (deftype TpPU [a] TpP (tp-m [x] 2))
+      (extend-type String TpP (tp-m [x] 2))
+      (extend-protocol TpQ Object (tp-q [x] 3))
+      (extend TpPS TpQ {:tp-q (fn [x] 4)})
+      (prn (extends? TpP TpPR) (extends? TpP TpPS) (extends? TpP TpPT) (extends? TpP TpPU) (extends? TpP String) (extends? TpP Long) (extends? TpQ Object) (extends? TpQ TpPS) (extends? TpP Object) (extends? TpQ TpPR))
+    expected: |
+      true false false true true false true true false false
+  - name: the-seq-predicates-follow-the-list-representation
+    # A deviation: nil is the empty list, so the seq and collection predicates answer
+    # false for () (the oracle: true); a strict seq is a list, so list? and counted? are
+    # true and realized? is true for one (the oracle: a LazySeq, false); no seq is
+    # chunked, and an iterate seq is realized only once forced.
+    source: |
+      (prn (seq? '()) (list? ()) (coll? ()) (counted? '()) (sequential? ()) (seqable? ()))
+      (prn (list? (map inc [1 2])) (list? (range 3)) (list? (seq [1 2])) (list? (rest [1 2 3])) (counted? (map inc [1])) (chunked-seq? (seq [1 2])) (realized? (map inc [1 2])) (realized? (iterate inc 1)))
+    expected: |
+      false false false false false true
+      true true true true true false true false
+  - name: decimal-and-bigint-literals-are-plain-rationals
+    # A deviation: 1.5M reads as the exact ratio 3/2 and 1M, 2N as integers, so decimal?
+    # is false and ratio?, integer? and int? answer for the rational (the oracle: true
+    # false false false).
+    source: |
+      (prn (decimal? 1.5M) (ratio? 1.5M) (integer? 1M) (int? 2N) (rational? 1.5M))
+    expected: |
+      false true true true true
+  - name: identical-compares-numbers-and-symbols-by-value
+    # A deviation: identical? is eql here, so two numbers or two symbols of one value are
+    # identical (the oracle: false for boxed 1000, 1.5 and two read symbols), while two
+    # empty map literals are two tables (the oracle: one constant).
+    source: |
+      (prn (identical? 1000 1000) (identical? 'a 'a) (identical? 1.5 1.5) (identical? {} {}))
+    expected: |
+      true true true false

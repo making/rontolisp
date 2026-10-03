@@ -2293,7 +2293,7 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "volatile!")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "volatile! takes an initial value");
-			return ClojureStateLowering.wrapAtom(lower(items.get(1)));
+			return ClojureStateLowering.wrapVolatile(lower(items.get(1)));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ref")) {
 			return ClojureStateLowering.refOf(this, items);
@@ -3056,9 +3056,6 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n >= 1, "trampoline takes a function and arguments");
 				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), lowers(items, 2)));
-			case "coll?":
-				ClojureLowerUtil.isTrue(n == 1, "coll? takes one value");
-				return booleanAnswer(ClojureFnLowering.collRaw(this, lower(items.get(1))));
 			case "string?":
 				ClojureLowerUtil.isTrue(n == 1, "string? takes one value");
 				return booleanAnswer(plain("stringp", items));
@@ -3193,6 +3190,10 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "fn? takes one argument");
 				return booleanAnswer(plain("functionp", items));
 			default:
+				LispVal predicate = ClojurePredicateLowering.callOf(this, name, items);
+				if (predicate != null) {
+					return predicate;
+				}
 				LispVal core = ClojureCoreLowering.callOf(this, name, items);
 				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
 		}
@@ -3314,7 +3315,6 @@ public final class ClojureLowering {
 			case "identity" -> ClojureFnLowering.identityValue(this);
 			case "memoize" -> ClojureFnLowering.memoizeValue(this);
 			case "trampoline" -> ClojureFnLowering.trampolineValue(this);
-			case "coll?" -> ClojureFnLowering.collValue(this);
 			case "string?" -> ClojureFnLowering.stringPredValue(this);
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
@@ -3323,7 +3323,8 @@ public final class ClojureLowering {
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
-			case "atom", "volatile!" -> ClojureStateLowering.atomValue(this);
+			case "atom" -> ClojureStateLowering.atomValue(this);
+			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);
 			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this);
 			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this);
@@ -3356,6 +3357,10 @@ public final class ClojureLowering {
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
 			default -> {
+				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
+				if (predicate != null) {
+					yield predicate;
+				}
 				LispVal core = ClojureCoreLowering.valueOf(this, name);
 				yield core != null ? core : ClojureTransducerLowering.valueOf(name);
 			}

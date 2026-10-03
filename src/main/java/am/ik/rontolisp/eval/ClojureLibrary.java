@@ -47,8 +47,9 @@ public final class ClojureLibrary {
 	 * the library's host arms, one {@code defun} per arm, each defining the same name and
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
-	 * {@code %clojure-host-class-name} (the printer) and {@code %clojure-host-string}
-	 * ({@code str}) answer NIL.
+	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-string}
+	 * ({@code str}) and {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
+	 * {@code uri?}, {@code class?}) answer NIL.
 	 */
 	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
@@ -59,6 +60,9 @@ public final class ClojureLibrary {
 			  nil)
 			(defun rontolisp::%clojure-host-string (x)
 			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-instance-p (x class-name)
+			  (declare (ignore x class-name))
 			  nil)
 			""";
 

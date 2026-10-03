@@ -59,7 +59,8 @@
       (and (consp x) (eq (car x) :C%REIFY))))
 
 (defun rontolisp::%clojure-atom-p (x)
-  "Whether X is the (:C%ATOM #(value)) cell the lowering lowers atoms to."
+  "Whether X is the (:C%ATOM #(value)) cell the lowering lowers atoms to (a
+   volatile's cell carries a second slot, #(value :C%VOLATILE))."
   (and (consp x) (eq (car x) :C%ATOM) (consp (cdr x))
        (and (vectorp (car (cdr x))) (not (stringp (car (cdr x)))))
        (null (cdr (cdr x)))))
@@ -456,6 +457,16 @@
       (handler-case (if (equal (java:call (java:call x "getClass") "getName")
                                "java.lang.Class")
                         (java:call x "getName"))
+        (error () nil))))
+
+(defun rontolisp::%clojure-host-instance-p (x class-name)
+  "Whether X is a host object of the class CLASS-NAME (inst?, uuid?, uri?,
+   class?). A host arm like %clojure-host-class: a program with no java:
+   operator gets a body answering NIL, since no host object exists there."
+  (if (not (rontolisp::%clojure-lisp-value-p x))
+      (handler-case (java:call
+                     (java:static "java.lang.Class" "forName" class-name)
+                     "isInstance" x)
         (error () nil))))
 
 (defun rontolisp::%clojure-host-string (x)
@@ -1577,12 +1588,16 @@
         name)))
 
 (defun rontolisp::%clojure-split-name (s)
-  "The part of the S spelling past the first slash (the whole S when none)."
-  (let ((at (search "/" s))) (if at (subseq s (+ at 1)) s)))
+  "The part of the S spelling past the first slash (the whole S when none, or
+   when S is the lone slash, the oracle's symbol /)."
+  (let ((at (search "/" s)))
+    (if (and at (not (equal s "/"))) (subseq s (+ at 1)) s)))
 
 (defun rontolisp::%clojure-split-namespace (s)
-  "The part of the S spelling before the first slash, or NIL when none."
-  (let ((at (search "/" s))) (if at (subseq s 0 at) nil)))
+  "The part of the S spelling before the first slash, or NIL when none (the
+   lone slash, the oracle's symbol /, has none)."
+  (let ((at (search "/" s)))
+    (if (and at (not (equal s "/"))) (subseq s 0 at) nil)))
 
 (defun rontolisp::%clojure-name (x)
   "The name of X: a string itself, a keyword's spelling past the slash, a
@@ -3205,6 +3220,170 @@
   (rontolisp::%clojure-check-arity args 2 2 "update-vals")
   (rontolisp::%clojure-update-vals (car args)
    (rontolisp::%clojure-as-fn (car (cdr args)))))
+
+;;;; Type and collection predicates.
+;;
+;; Each answers a CL boolean; the lowering (ClojurePredicateLowering) wraps the
+;; call in (if ... T false), so a predicate as a value is a one-argument lambda
+;; over the same test. A tagged wrapper is a list whose car is a CL keyword,
+;; which no user list holds, so a list test excludes keywords, atoms, vars,
+;; records, patterns and the other wrappers. nil is the empty list here, so
+;; every seq and collection test answers false for it, like the oracle's nil;
+;; its () answers true there.
+
+(defun rontolisp::%clojure-is-list (x)
+  "list?: a list that is no tagged wrapper. A strict seq shares the
+   representation (what map or filter of a strict input answers), so it is one
+   too, where the oracle's is a LazySeq."
+  (and (consp x) (not (keywordp (car x)))))
+
+(defun rontolisp::%clojure-is-seq (x)
+  "seq?: a list or a lazy seq."
+  (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-lazy-p x)))
+
+(defun rontolisp::%clojure-is-vector (x)
+  "A Clojure vector: a CL vector that is no string (indexed?, reversible?)."
+  (and (vectorp x) (not (stringp x))))
+
+(defun rontolisp::%clojure-is-sequential (x)
+  "sequential?: a list, a lazy seq or a vector."
+  (or (rontolisp::%clojure-is-seq x) (rontolisp::%clojure-is-vector x)))
+
+(defun rontolisp::%clojure-is-map (x)
+  "map?: a map or a record."
+  (or (hash-table-p x) (rontolisp::%clojure-record-p x)))
+
+(defun rontolisp::%clojure-is-coll (x)
+  "coll?: a list, lazy seq, vector, map, set or record."
+  (or (rontolisp::%clojure-is-sequential x) (rontolisp::%clojure-is-map x)
+      (rontolisp::%clojure-set-p x)))
+
+(defun rontolisp::%clojure-is-seqable (x)
+  "seqable?: what seq takes -- nil, a string or a collection."
+  (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)))
+
+(defun rontolisp::%clojure-is-associative (x)
+  "associative?: a map, a record or a vector."
+  (or (rontolisp::%clojure-is-map x) (rontolisp::%clojure-is-vector x)))
+
+(defun rontolisp::%clojure-is-counted (x)
+  "counted?: a list, vector, map, set or record; a lazy seq is not."
+  (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-is-vector x)
+      (rontolisp::%clojure-is-map x) (rontolisp::%clojure-set-p x)))
+
+(defun rontolisp::%clojure-is-ifn (x)
+  "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
+   IFn, like the oracle's."
+  (or (functionp x) (rontolisp::%clojure-keyword-p x)
+      (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
+      (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
+      (rontolisp::%clojure-var-p x)))
+
+(defun rontolisp::%clojure-is-int (x)
+  "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
+  (and (integerp x) (<= -9223372036854775808 x 9223372036854775807)))
+
+(defun rontolisp::%clojure-is-nat-int (x)
+  "nat-int?: an int? that is not negative."
+  (and (rontolisp::%clojure-is-int x) (>= x 0)))
+
+(defun rontolisp::%clojure-is-pos-int (x)
+  "pos-int?: an int? above zero."
+  (and (rontolisp::%clojure-is-int x) (> x 0)))
+
+(defun rontolisp::%clojure-is-neg-int (x)
+  "neg-int?: an int? below zero."
+  (and (rontolisp::%clojure-is-int x) (< x 0)))
+
+(defun rontolisp::%clojure-is-ratio (x)
+  "ratio?: a rational that is no integer."
+  (and (rationalp x) (not (integerp x))))
+
+(defun rontolisp::%clojure-is-infinite (x)
+  "infinite?: a double past either end of the range; any other number is
+   finite, anything else signals, like the oracle's cast."
+  (if (numberp x)
+      (and (floatp x)
+       (or (> x most-positive-double-float) (< x most-negative-double-float)))
+      (error "infinite? needs a number")))
+
+(defun rontolisp::%clojure-is-nan (x)
+  "NaN?: a double that is not = to itself; anything else that is no number
+   signals, like the oracle's cast."
+  (if (numberp x) (and (floatp x) (/= x x)) (error "NaN? needs a number")))
+
+(defun rontolisp::%clojure-is-ident (x)
+  "ident?: a keyword or a symbol."
+  (or (rontolisp::%clojure-keyword-p x) (rontolisp::%clojure-real-symbol-p x)))
+
+(defun rontolisp::%clojure-is-qualified (x keywords symbols qualified)
+  "Whether X is a keyword (KEYWORDS true) or a symbol (SYMBOLS true) whose
+   namespace is present (QUALIFIED true) or absent: the simple-/qualified-
+   ident, keyword and symbol predicates."
+  (if (or (and keywords (rontolisp::%clojure-keyword-p x))
+          (and symbols (rontolisp::%clojure-real-symbol-p x)))
+      (if (rontolisp::%clojure-namespace x) qualified (not qualified))
+      nil))
+
+(defun rontolisp::%clojure-is-volatile (x)
+  "volatile?: the atom cell volatile! builds, which carries a second slot."
+  (and (rontolisp::%clojure-atom-p x) (= (length (car (cdr x))) 2)))
+
+(defun rontolisp::%clojure-is-realized (x)
+  "realized?: whether the lazy seq X has run its body. A list (what the seq
+   verbs answer over a strict input) is realized; anything else signals, like
+   the oracle's cast."
+  (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
+        ((rontolisp::%clojure-is-list x) t)
+        (t (error "realized? needs a lazy seq"))))
+
+(defun rontolisp::%clojure-is-bound (vars)
+  "bound?: every one of VARS is a var holding a value. A var here always has
+   one (a value-less def binds nil), so anything that is a var answers true;
+   anything else signals, like the oracle's cast."
+  (dolist (v vars t)
+    (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))))
+
+(defun rontolisp::%clojure-is-special-symbol (x)
+  "special-symbol?: one of the oracle's special form names."
+  (if (rontolisp::%clojure-real-symbol-p x)
+      (let ((s (rontolisp::%clojure-symbol-full-name x)) (found nil))
+        (dolist (f '("def" "loop*" "recur" "if" "case*" "let*" "letfn*" "do"
+                     "fn*" "quote" "var" "clojure.core/import*" "." "set!"
+                     "deftype*" "reify*" "try" "throw" "monitor-enter"
+                     "monitor-exit" "catch" "finally" "new" "&") found)
+          (if (equal s f) (setq found t))))
+      nil))
+
+(defun rontolisp::%clojure-is-identical (a b)
+  "identical?: eql, except that two keywords of one spelling are one object,
+   like the oracle's interned keywords (here each is a fresh list). Numbers and
+   characters compare by value."
+  (if (and (rontolisp::%clojure-keyword-p a) (rontolisp::%clojure-keyword-p b))
+      (equal (car (cdr a)) (car (cdr b)))
+      (eql a b)))
+
+(defun rontolisp::%clojure-is-distinct (xs)
+  "distinct?: no two of XS are =, through the structural-key runtime like
+   distinct."
+  (let ((seen (make-hash-table :test 'equal)) (ok t))
+    (dolist (x xs ok)
+      (if (and ok (not (rontolisp::%clojure-distinct-new-p x seen)))
+          (setq ok nil)))))
+
+(defun rontolisp::%clojure-is-distinct-v (&rest args)
+  "distinct? as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "distinct?")
+  (if (rontolisp::%clojure-is-distinct args) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-is-bound-v (&rest args)
+  "bound? as a value."
+  (rontolisp::%clojure-is-bound args))
+
+(defun rontolisp::%clojure-is-inst (x)
+  "inst?: a host java.util.Date or java.time.Instant."
+  (or (rontolisp::%clojure-host-instance-p x "java.util.Date")
+      (rontolisp::%clojure-host-instance-p x "java.time.Instant")))
 
 ;;;; clojure.set: the relational set library over the set wrapper.
 ;;

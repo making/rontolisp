@@ -15,3 +15,8 @@ Equality with unsorted maps/sets follows the oracle (`(= (sorted-map :a 1) {:a 1
 
 Decide the representation by measuring: the wasm size and speed of programs that use no sorted collection must not change.
 Pin in `clojure-spec.yaml` on all four backends, and add `doc/{en,ja}/clojure/reference` pages with catalog entries.
+
+The type predicates answer `false` for every value today (no sorted collection exists):
+`sorted?` must become true of both kinds, `reversible?` true of both (the oracle's `rseq` takes them),
+and `map?`/`set?`/`coll?`/`seqable?`/`counted?`/`associative?` (map only)/`ifn?` must see them
+(`ClojurePredicateLowering`, the `%clojure-is-*` helpers in `clojure.lisp`).

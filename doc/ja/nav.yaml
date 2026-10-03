@@ -249,6 +249,8 @@ sections:
             title: "マップ・セット・ベクター"
           - file: clojure/reference/numbers.md
             title: "数値と述語"
+          - file: clojure/reference/predicates.md
+            title: "型・コレクション述語"
           - file: clojure/reference/state.md
             title: "状態"
           - file: clojure/reference/multimethods.md

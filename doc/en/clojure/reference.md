@@ -15,6 +15,7 @@ has them.
 | [Maps, sets and vectors](reference/collections.md) | The persistent collection verbs over `equal` hash tables |
 | [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline`, `juxt`/`fnil`/`every-pred`/`some-fn`/`min-key`/`max-key` |
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
+| [Type and collection predicates](reference/predicates.md) | `seq?`/`map?`/`keyword?`/`int?` and the other kind tests, `identical?`, `distinct?`, `extends?` |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |
 | [Multimethods and hierarchies](reference/multimethods.md) | `defmulti`/`defmethod`, `derive` and the hierarchy reads |
 | [Protocols, records and types](reference/protocols.md) | `defprotocol`/`defrecord`/`deftype`, `reify`, the `extend` family and `satisfies?` |

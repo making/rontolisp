@@ -653,33 +653,6 @@ final class ClojureFnLowering {
 
 	// Predicates and casts
 
-	/**
-	 * Whether the lowered value is a collection: a list, vector, map or set. Nil and the
-	 * false object are no collections, like the oracle -- and neither are strings, even
-	 * though the runtime stores them as vectors (like {@code vector?} sees).
-	 */
-	static LispVal collRaw(ClojureLowering ctx, LispVal lowered) {
-		LispSymbol one = ctx.freshTemp();
-		LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStringLowering.isRegexForm(one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), one),
-						ClojureCollectionLowering.isSetForm(one)));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))), test);
-	}
-
-	/** {@code coll?} as a value: a one-argument lambda answering {@code T}-or-false. */
-	static LispVal collValue(ClojureLowering ctx) {
-		LispSymbol one = new LispSymbol(ClojureLowering.mangle("coll-one"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-				ctx.booleanAnswer(collRaw(ctx, one)));
-	}
-
 	/** {@code string?} as a value: a one-argument lambda answering {@code T}-or-false. */
 	static LispVal stringPredValue(ClojureLowering ctx) {
 		LispSymbol one = new LispSymbol(ClojureLowering.mangle("string-one"));
