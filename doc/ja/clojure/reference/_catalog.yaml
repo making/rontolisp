@@ -299,6 +299,21 @@ categories:
       - { slug: escape, name: "clojure.string/escape" }
       - { slug: re-quote-replacement, name: "clojure.string/re-quote-replacement" }
       - { slug: reverse, name: "clojure.string/reverse" }
+  - title: "(clojure.set)"
+    index_page: clojure/reference/clojure-set.md
+    functions:
+      - { slug: set-union, name: "clojure.set/union" }
+      - { slug: set-intersection, name: "clojure.set/intersection" }
+      - { slug: set-difference, name: "clojure.set/difference" }
+      - { slug: set-select, name: "clojure.set/select" }
+      - { slug: set-project, name: "clojure.set/project" }
+      - { slug: set-rename-keys, name: "clojure.set/rename-keys" }
+      - { slug: set-rename, name: "clojure.set/rename" }
+      - { slug: set-index, name: "clojure.set/index" }
+      - { slug: set-map-invert, name: "clojure.set/map-invert" }
+      - { slug: set-join, name: "clojure.set/join" }
+      - { slug: set-subset-p, name: "clojure.set/subset?" }
+      - { slug: set-superset-p, name: "clojure.set/superset?" }
   - title: "正規表現"
     index_page: clojure/reference/regex.md
     functions:

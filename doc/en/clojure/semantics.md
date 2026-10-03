@@ -133,7 +133,9 @@ effect (a lazy one realizes) and answers `nil`, `doall` answers the collection i
 
 A vector literal is a `vector` call; a map literal an `equal` hash table, never mutated in
 place -- every verb builds a fresh one, so persistence holds observably; a set literal the
-same table with each member stored under itself, wrapped so verbs tell a set from a map. A
+same table with each member stored under itself, wrapped so verbs tell a set from a map.
+Keys find each other by `=`: a vector, list, map or set key is stored under the first `=`
+key of its kind the program stored, so an `equal` table finds it. A
 keyword is its spelling wrapped as `(:C%KEYWORD name)`: data compared by `equal`, and in
 call position (`(:k m)`, with an optional default) or as a function value the map lookup.
 Arrays are general: `(make-array Class dim...)` builds a general array ignoring the

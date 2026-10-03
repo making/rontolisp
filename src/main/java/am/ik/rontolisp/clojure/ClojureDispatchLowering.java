@@ -531,7 +531,8 @@ final class ClojureDispatchLowering {
 				ClojureLowerUtil.list(miss,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
 				ClojureLowerUtil.list(found,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), disp, methods, miss)))),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+								ClojureCollectionLowering.lookupKey(disp, methods), methods, miss)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), missForm,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), found, args)));
@@ -616,9 +617,7 @@ final class ClojureDispatchLowering {
 							lambda),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, lambda)));
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), dispatchKeyForm(ctx, keyDatum), methods),
-				lambda);
+		return ClojureCollectionLowering.tablePut(methods, dispatchKeyForm(ctx, keyDatum), lambda);
 	}
 
 	static LispVal removeMethodOf(ClojureLowering ctx, List<LispVal> items) {
@@ -636,7 +635,8 @@ final class ClojureDispatchLowering {
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key))));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), dispatchKeyForm(ctx, keyDatum), methods),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
+						ClojureCollectionLowering.lookupKey(dispatchKeyForm(ctx, keyDatum), methods), methods),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
 	}
 
@@ -644,7 +644,8 @@ final class ClojureDispatchLowering {
 		ClojureLowerUtil.isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
 		String name = ClojureLowerUtil.plainName(items.get(1), "get-method");
 		LispSymbol methods = tableGlobal(multimethodKey(ctx, name), "%methods");
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), dispatchKeyForm(ctx, items.get(2)), methods,
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+				ClojureCollectionLowering.lookupKey(dispatchKeyForm(ctx, items.get(2)), methods), methods,
 				ClojureLowering.NIL_CONST);
 	}
 

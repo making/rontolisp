@@ -20,10 +20,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`).
 - `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
   Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
-- Vector and table keys compare by identity, so a vector key misses a lookup its oracle
-  answers; a repeated set-literal element is refused by spelling. `=` itself compares
-  vectors, lists and lazy seqs element-wise like the oracle, and since `nil` is the empty
-  list, `(= [] nil)` is `true` where the oracle answers `false`.
+- A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
+  sets included, but a stored collection key is the first `=` key of its kind (vector,
+  list, lazy seq) the program stored, so its metadata and the spelling of a nested
+  member follow that earlier object; those keys stay alive for the whole run, one
+  per distinct value and kind. A repeated set-literal element is refused by spelling.
+  `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
+  is the empty list, `(= [] nil)` is `true` where the oracle answers `false`.
+- `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
+  the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
@@ -49,8 +54,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   program. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
-- Multimethod dispatch values compare like `equal` table keys (vectors by identity --
-  literal vector pairs still dispatch element-wise through the hierarchy search);
+- Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
   `class` answers for it, merging every numeric spelling into `:number` (where the

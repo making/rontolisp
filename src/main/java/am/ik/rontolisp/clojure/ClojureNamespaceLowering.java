@@ -28,9 +28,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * Namespace forms of the Clojure lowering: ns/require/use/import, the loading of project
  * namespaces from the source path ({@link ClojureSourcePath}) and the libraries that are
- * lowerings ({@code clojure.string}, {@code clojure.java.io}, {@code clojure.test}).
- * Which var a name names is the hub's ({@link ClojureLowering#resolveVar}); this slice
- * wires the aliases and refers it reads.
+ * lowerings ({@code clojure.string}, {@code clojure.set}, {@code clojure.java.io},
+ * {@code clojure.test}). Which var a name names is the hub's
+ * ({@link ClojureLowering#resolveVar}); this slice wires the aliases and refers it reads.
  *
  * <p>
  * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
@@ -44,12 +44,16 @@ final class ClojureNamespaceLowering {
 	/**
 	 * A known-namespace call: the vars {@code ns} resolution already vetted, over the
 	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the core
-	 * string operations, {@code clojure.java.io} to the file-stream runtime.
+	 * string operations, {@code clojure.set} to the set runtime, {@code clojure.java.io}
+	 * to the file-stream runtime.
 	 */
 	static LispVal namespaceCall(ClojureLowering ctx, ClojureLowering.VarRef ref, List<LispVal> items,
 			@Nullable LispVal form) {
 		if (ref.ns().equals(ClojureTestLowering.NAMESPACE)) {
 			return ClojureTestLowering.testCall(ctx, ref.var(), items, form);
+		}
+		if (ref.ns().equals(ClojureSetLowering.NAMESPACE)) {
+			return ClojureSetLowering.setCall(ctx, ref.var(), items);
 		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioCall(ctx, ref.var(), items);
@@ -59,12 +63,15 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * A known-namespace var as a function value: {@code clojure.string} lowers through
-	 * the call lowering per arity, {@code clojure.java.io/reader} is a one-argument
-	 * lambda over the same open.
+	 * the call lowering per arity, {@code clojure.set} names its runtime entry,
+	 * {@code clojure.java.io/reader} is a one-argument lambda over the same open.
 	 */
 	static LispVal namespaceValue(ClojureLowering ctx, ClojureLowering.VarRef ref) {
 		if (ref.ns().equals(ClojureTestLowering.NAMESPACE)) {
 			return ClojureTestLowering.testValue(ctx, ref.var());
+		}
+		if (ref.ns().equals(ClojureSetLowering.NAMESPACE)) {
+			return ClojureSetLowering.setValue(ref.var());
 		}
 		if (ref.ns().equals("clojure.java.io")) {
 			return jioValue(ctx, ref.var());
@@ -102,15 +109,17 @@ final class ClojureNamespaceLowering {
 
 	/**
 	 * The namespaces whose vars lower to core forms: {@code clojure.string},
-	 * {@code clojure.java.io} and {@code clojure.test}.
+	 * {@code clojure.set}, {@code clojure.java.io} and {@code clojure.test}.
 	 */
 	static boolean isKnownNamespace(String ns) {
-		return ns.equals("clojure.string") || ns.equals("clojure.java.io") || ns.equals(ClojureTestLowering.NAMESPACE);
+		return ns.equals("clojure.string") || ns.equals(ClojureSetLowering.NAMESPACE) || ns.equals("clojure.java.io")
+				|| ns.equals(ClojureTestLowering.NAMESPACE);
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
 	static boolean isKnownVar(String ns, String var) {
 		return ns.equals("clojure.string") && STRING_VARS.contains(var)
+				|| ns.equals(ClojureSetLowering.NAMESPACE) && ClojureSetLowering.VARS.contains(var)
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var)
 				|| ns.equals(ClojureTestLowering.NAMESPACE) && ClojureTestLowering.VARS.contains(var);
 	}
@@ -125,6 +134,9 @@ final class ClojureNamespaceLowering {
 		}
 		if (ns.equals(ClojureTestLowering.NAMESPACE)) {
 			return ClojureTestLowering.VARS;
+		}
+		if (ns.equals(ClojureSetLowering.NAMESPACE)) {
+			return ClojureSetLowering.VARS;
 		}
 		return STRING_VARS;
 	}

@@ -45,13 +45,12 @@ final class ClojureUpdateLowering {
 		LispSymbol one = ctx.freshTemp();
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal grown = ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"),
-				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one,
-						ClojureCollectionLowering.tablePlist(src), ClojureLowering.NIL_CONST),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), key, val)));
+		LispVal grown = ClojureCollectionLowering.grownTable(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), key, val));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map))),
-				ClojureCollectionLowering.rewrapAnswer(ctx, one, ClojureCollectionLowering.tableFromPlist(grown)));
+				ClojureCollectionLowering.rewrapAnswer(ctx, one, grown));
 	}
 
 	/** {@code update}: the key rewritten through the function and extra arguments. */
@@ -81,14 +80,13 @@ final class ClojureUpdateLowering {
 				ClojureCollectionLowering.getForm(ctx, one, at, ClojureLowering.NIL_CONST), tail));
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTableOf(one), one);
-		LispVal grown = ClojureLowerUtil.cons(ClojureLowerUtil.sym("append"),
-				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one,
-						ClojureCollectionLowering.tablePlist(src), ClojureLowering.NIL_CONST),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), at, next)));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map), ClojureLowerUtil.list(at, key),
-						ClojureLowerUtil.list(fn, fun))),
-				ClojureCollectionLowering.rewrapAnswer(ctx, one, ClojureCollectionLowering.tableFromPlist(grown)));
+		LispVal grown = ClojureCollectionLowering.grownTable(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, src, ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), at, next));
+		return ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, map),
+						ClojureLowerUtil.list(at, key), ClojureLowerUtil.list(fn, fun))),
+				ClojureCollectionLowering.rewrapAnswer(ctx, one, grown));
 	}
 
 	/** {@code update} as a value: map, key, function and any extra arguments. */
@@ -293,17 +291,21 @@ final class ClojureUpdateLowering {
 		LispSymbol out = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
+		LispSymbol held = ctx.freshTemp();
 		LispVal keep = ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, out), got);
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), held, out), got);
 		LispSymbol src = ctx.freshTemp();
-		LispVal gather = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
-				ClojureLowerUtil.list(List.of(one, keys)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, src, miss)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss), ClojureLowering.NIL_CONST,
-								keep)));
+		// the entry keeps the map's own key, like the oracle's find
+		LispVal gather = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, keys)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+							ClojureLowerUtil.list(List.of(
+									ClojureLowerUtil.list(held, ClojureCollectionLowering.lookupKey(one, src)),
+									ClojureLowerUtil.list(got,
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), held, src, miss)))),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss),
+									ClojureLowering.NIL_CONST, keep)));
 		// a record reads through its entry table and answers a plain map, like the
 		// oracle; anything opaque signals, like the oracle
 		LispVal norm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(whole),
@@ -374,20 +376,23 @@ final class ClojureUpdateLowering {
 			LispSymbol key = ctx.freshTemp();
 			LispSymbol val = ctx.freshTemp();
 			LispSymbol old = ctx.freshTemp();
+			LispSymbol stored = ctx.freshTemp();
 			LispVal invoked = ctx.callFun(fun, fn, List.of(old, val));
 			// a record contributes its entries, like a map; anything opaque signals
 			// in the maphash, like the oracle
 			LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
 					ClojureProtocolLowering.typedTableOf(one), one);
-			LispVal join = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil
-				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)), ClojureLowerUtil.list(
-						ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(old,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, acc, miss)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, acc),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), old, miss), val, invoked)))),
+			LispVal join = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
+					ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil
+						.list(List.of(ClojureLowerUtil.list(stored, ClojureCollectionLowering.storeKey(key, acc)),
+								ClojureLowerUtil.list(old,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, acc, miss)))),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, acc),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), old, miss), val,
+											invoked)))),
 					src);
 			merges.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), one, join, ClojureLowering.NIL_CONST));
 		}
@@ -414,6 +419,7 @@ final class ClojureUpdateLowering {
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol val = ctx.freshTemp();
 		LispSymbol old = ctx.freshTemp();
+		LispSymbol stored = ctx.freshTemp();
 		LispSymbol found = ctx.freshTemp();
 		LispSymbol probe = ctx.freshTemp();
 		// a record contributes its entries, like a map; anything opaque signals
@@ -421,18 +427,22 @@ final class ClojureUpdateLowering {
 		LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left);
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(head),
 				ClojureProtocolLowering.typedTableOf(head), head);
-		LispVal join = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)), ClojureLowerUtil.list(
-					ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil
-						.list(old, ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, acc, miss)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, acc),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), old, miss), val,
-									ctx.callableApply(fn,
-											ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), List.of(old, val))))))),
-				src);
+		LispVal join = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)), ClojureLowerUtil.list(
+						ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List.of(
+								ClojureLowerUtil.list(stored, ClojureCollectionLowering.storeKey(key, acc)),
+								ClojureLowerUtil.list(old,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, acc, miss)))),
+						ClojureLowerUtil
+							.list(ClojureLowerUtil.sym("setf"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym(
+											"gethash"), stored, acc),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), old, miss), val,
+											ctx.callableApply(fn, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"),
+													List.of(old, val))))))),
+					src);
 		LispVal answer = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), found, ClojureCollectionLowering
 			.rewrapAnswer(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), maps), acc),
 				ClojureLowering.NIL_CONST);
@@ -525,18 +535,19 @@ final class ClojureUpdateLowering {
 		LispSymbol miss = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol old = ctx.freshTemp();
+		LispSymbol stored = ctx.freshTemp();
 		LispVal bump = ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), old, miss), new LispInteger(1),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), old, new LispInteger(1))));
-		LispVal step = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, seq)),
-					ClojureLowerUtil
-						.list(ClojureLowerUtil.sym("let"),
-								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(old,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table, miss)))),
-								bump));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, seq)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+						ClojureLowerUtil.list(List.of(
+								ClojureLowerUtil.list(stored, ClojureCollectionLowering.storeKey(one, table)),
+								ClojureLowerUtil.list(old,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table, miss)))),
+						bump));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()),
 						ClojureLowerUtil.list(miss,

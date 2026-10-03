@@ -3,8 +3,7 @@
 `(distinct coll)` / `(distinct)`
 
 Answers `coll`'s seq view with later duplicates dropped, first occurrences kept
-in order. Membership is `equal` (vectors key by identity, like the table
-runtime). As a value a one-argument lambda.
+in order. Membership is `=`, like a set's. As a value a one-argument lambda.
 
 `(distinct)` is its [transducer](transducers.md), as a value too.
 

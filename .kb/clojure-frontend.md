@@ -46,7 +46,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
-| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares |
+| `{k v}` | an `equal` hash table (`rontolisp:plist-hash-table`), never mutated: every verb builds a fresh one | the shared runtime (`.kb/hash-tables.md`), so persistence holds on all four backends with no per-backend code; a persistent-map library would add a representation every backend prints, hashes and compares. Collection keys go through "Structural keys" |
 | `#{..}` | `(:C%SET table)`, each member under itself | a repeated literal element is refused by spelling (`Duplicate key`) |
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
@@ -105,6 +105,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `defmulti` `defmethod` hierarchies `defprotocol` `defrecord` `deftype` `reify` `extend*` `satisfies?` `instance?` `class` | "Dispatch" | |
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
+| `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
 | `subs` | `subseq` | |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
@@ -126,7 +127,7 @@ lowering, checking the oracle's arities) unless its row says otherwise.
 | `update` `update-in` `assoc-in` `get-in` `merge` `merge-with` `into` | fresh tables over the old pairs | `update-in` with no keys refused; `assoc-in` builds missing levels; `(merge)`/`merge-with` of no maps is nil; `into` targets lists/vectors/maps/sets through the reduce runtime, `(into to xform from)` is `%clojure-into-xf` |
 | `assoc` `dissoc` `get` `contains?` `keys` `vals` `conj` `disj` `hash-map` `array-map` | table operations | `assoc` onto nil builds; odd pairs refused (at run time for values); `get` reads maps, records, sets (the member), vectors, strings, nil (a list or deftype answers the default); `conj` of a set onto a map adds its members one level deep, anything else onto a map signals; `(conj)` is `[]` |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword value takes extra arguments (a keyword-dispatched multimethod passes several) |
-| `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list with `equal` |
+| `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, else `equal`. One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `nil?` `false?` `true?` `boolean?` `boolean` `coll?` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `fn?` is false for keywords, sets and maps |
 | `int` `long` `char` `quot` `unchecked-add` | `truncate` (`char-code` for a char) / `code-char` / `truncate` / `+` | a non-number signals; `unchecked-add` never wraps |
@@ -154,9 +155,9 @@ Each is a real work item unless the reason says otherwise.
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
-- Hash keys: vector and table keys compare by identity (the runtime's `equal` on an array
-  or table), so `(get {[:a] 1} [:a])` misses and a set of maps never finds an equal map.
-  `=` itself is structural.
+- Structural keys: a stored collection key is the first `=` key of its kind the program
+  stored, so its metadata and a nested member's spelling follow that object; the
+  representatives live for the whole run, one per distinct value and kind.
 - `(= [] nil)` is true (the oracle: false). `(empty? false)` is false (the oracle signals).
 - Seqs: `rest`/`next` of empty is `nil` (the oracle prints `()`); `nth` past the end
   answers `nil` where the oracle throws; a strict input to `for`
@@ -177,6 +178,45 @@ Each is a real work item unless the reason says otherwise.
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
   odd trailing `cond` arm.
+
+## Structural keys
+
+**A map, set, memo or method-table key finds an `=` key, though the tables are `equal`
+tables whose `equal` is identity on a vector or table.** No backend has a custom-test
+table, so `clojure.lisp` ("Structural keys") stores every structural key (non-string
+vector, list, lazy seq, map, set, record) under a REPRESENTATIVE: the first `=` key of its
+kind (vector / lazy seq / list / other) the program stored. `%clojure-key-classes` (equal
+table, `%clojure-hash` -> classes) groups the representatives `=` to each other;
+`%clojure-key-reps` (eq table) maps a representative to its class without hashing.
+
+- `%clojure-table-key k table` (lookups, `remhash`) answers the representative TABLE holds,
+  else K; `%clojure-store-key k table` (stores) answers the one TABLE holds (its key kept,
+  the value replaced, like the oracle's `(assoc {[1 2] :a} '(1 2) :b)` -> `{[1 2] :b}`),
+  else K's own kind's, else makes K one. A class keeps one representative per kind so a
+  list key stays a list in a fresh table after an `=` vector keyed another.
+- Lowering helpers (`ClojureCollectionLowering`): `lookupKey`/`storeKey`/`tablePut`/
+  `setPut`/`grownTable` (`%clojure-plist-table base plist`: BASE copied as is -- its keys are
+  representatives -- plus re-keyed pairs). A literal scalar key (`isScalarKeyForm`: keyword
+  construction, string/number/char literal, nil, true, quoted symbol) skips the runtime, so
+  `(:a m)`, `{:a 1}` and `:keys` destructuring keep plain `gethash`/`plist-hash-table`.
+- `%clojure-hash` agrees with `%clojure-equal` (a sequential folds its members whatever its
+  kind, a map or set sums its entries); a fold step is `h * 1021 + e` under a 2^20 mask, so
+  every intermediate stays a wasm fixnum (< 2^30) and `[x y]` pairs below 1021 never
+  collide (the first cut, `* 31` under 2^24, put ~4.6 grid keys per bucket).
+- The eq table also makes the module slotted (`programMakesIdentityHashTable`,
+  `.kb/hash-tables.md`), so a vector or table key of an `equal` table is placed by identity
+  instead of bucket 0. Measured 2026-10-03 (wasmtime, one run): a 22,500-vector set plus
+  22,500 lookups and a `frequencies` took 114.6 s on wasm before (bucket 0, wrong answers)
+  and 0.73 s after; JVM 0.33 -> 0.50 s, interpreter 3.6 -> 6.8 s.
+- Cost on keyword-only work (wasm, medians of 3, 2026-10-03): 4M `(get m k)` with a
+  variable keyword 2.10 -> 2.37 s (the call to `%clojure-table-key`), 2M two-pair `assoc`
+  calls 4.68 -> 4.93 s; JVM unchanged within noise.
+- Two vectors compare in place in `%clojure-equal` (no seq-view copies) -- the bucket scan's
+  hot path.
+- Untouched on purpose: hierarchy tables (tags), protocol tables (tags), `prefer-method`'s
+  `(x . y)` keys, record field reads (keywords).
+- Pinned by `clojure-spec.yaml` `structural-keys-find-equal-collections` (oracle-identical)
+  and `ClojureLoweringTest.aLiteralScalarKeySkipsTheStructuralKeyRuntime`.
 
 ## recur
 
@@ -216,8 +256,8 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   name. Names are referred only by `use` or `:refer` (`:only`/`:exclude` narrow); a
   `require` with a bare `:only` refers nothing, like the oracle's `load-lib`. `:reload`,
   `:reload-all`, `:verbose` flags; quoted libspecs and prefix lists `(prefix [sub ...])`
-  go through one spec parser. `clojure.string`, `clojure.java.io` (`reader` only) and
-  `clojure.test` resolve; any other `clojure.*` is `unknown namespace: x`.
+  go through one spec parser. `clojure.string`, `clojure.set`, `clojure.java.io` (`reader`
+  only) and `clojure.test` resolve; any other `clojure.*` is `unknown namespace: x`.
 - **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
   `ns` form marks its namespace loaded AFTER its clauses (marking first hid the cycle),
   so a single-file program's later `(:require [a])` reads nothing. Any other project
@@ -443,8 +483,12 @@ answers `:pattern`/`:matcher`.
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst`/`##Inf` are its refusals. `::kw`
-resolves against the context each call site passes, `("ns" ("alias" "full.ns") ...)`.
+`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst`/`##Inf` are its refusals. A read map
+or set stores its keys through "Structural keys" (`%clojure-plist-table`,
+`%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
+literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
+"full.ns") ...)`, plus the libraries `isKnownNamespace` names (mirrored in
+`%clojure-rd-alias`).
 `eval`/`load-string` stay unknown names: no compiler runs at run time.
 
 - Source: a `(string . index)` cursor (`read-string`) or a CL character input stream
@@ -589,7 +633,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
-- `ClojureLoweringTest` (lowered shapes and refusals), `ClojureReaderTest`,
+- `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
+  `clojureSetWiresLikeClojureString`), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,

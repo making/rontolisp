@@ -245,8 +245,8 @@ final class ClojureFilterLowering {
 
 	/**
 	 * {@code distinct}: the seq view with later duplicates dropped, first occurrences
-	 * kept in order. Membership is {@code equal} (vectors key by identity, like the table
-	 * runtime).
+	 * kept in order. Membership is {@code =}, through the structural-key runtime like a
+	 * set's.
 	 */
 	static LispVal distinctForm(ClojureLowering ctx, LispVal seq) {
 		String name = ClojureLowering.mangle("distinct-") + (ctx.counter++);
@@ -256,22 +256,24 @@ final class ClojureFilterLowering {
 		LispSymbol rest = ctx.freshTemp();
 		LispSymbol acc = ctx.freshTemp();
 		LispSymbol one = ctx.freshTemp();
+		LispSymbol stored = ctx.freshTemp();
 		LispVal keep = ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table), one),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table),
+						ClojureLowering.TRUE_CONST),
 				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), one, acc)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List
-							.of(ClojureLowerUtil.list(one, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), one, table, miss), miss),
-								keep, ClojureLowerUtil.list(self,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest), acc))));
+		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil
+			.sym("null"), rest), ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc), ClojureLowerUtil.list(
+					ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(List
+						.of(ClojureLowerUtil.list(one, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)),
+								ClojureLowerUtil.list(stored, ClojureCollectionLowering.storeKey(one, table)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), stored, table, miss), miss),
+							keep, ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), rest),
+									acc))));
 		LispVal binding = new LispCons(self,
 				new LispCons(ClojureLowerUtil.list(List.of(rest, acc)), ClojureLowerUtil.cons(step, List.of())));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
@@ -535,9 +537,8 @@ final class ClojureFilterLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), valRest)),
 				table,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), keyRest), table),
+						ClojureCollectionLowering.tablePut(table,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), keyRest),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), valRest)),
 						ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(keyRest),
 								ClojureSeqLowering.seqRestForm(valRest))));
@@ -571,7 +572,8 @@ final class ClojureFilterLowering {
 		LispVal collect = ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"),
 				ClojureLowerUtil.list(List.of(one, seq)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(key, keyed))),
+						ClojureLowerUtil.list(
+								List.of(ClojureLowerUtil.list(key, ClojureCollectionLowering.storeKey(keyed, table)))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), one, ClojureLowerUtil

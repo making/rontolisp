@@ -243,7 +243,8 @@ modules).
   (`WasmHashTableCompiler.pushKeyHash`) and `_hash_resize`, for every key; and `_hash`'s
   `TYPE_CELL` arm in a slotted module, so a vector or table key of an `equal` table -- whose
   `equal` IS identity -- is placed by it too. A cons in an `equal` table still hashes
-  structurally.
+  structurally. A Clojure program storing a collection key gets the slot through
+  `%clojure-key-reps`, an eq table (`.kb/clojure-frontend.md`, "Structural keys").
 - **`TYPE_CLOSURE` carries the slot too, since 2026-09-17** (`.todo/854`): a fourth
   `ref.test` arm in `WasmIdentityHashRuntimeBuilder.build`, the slot as the closure's
   THIRD field (`WasmEmitHelper.emitNewClosure`, every closure-allocation site --

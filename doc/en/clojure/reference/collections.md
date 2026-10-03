@@ -1,6 +1,6 @@
 # Maps, sets and vectors
 
-A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Vector and table keys compare by identity. Arrays are general:
+A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Keys compare by `=`, so a vector, list, map or set key finds an equal one. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
 `aset`, and measures through `alength`.
 

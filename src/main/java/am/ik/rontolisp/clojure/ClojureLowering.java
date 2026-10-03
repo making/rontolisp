@@ -125,11 +125,11 @@ import org.jspecify.annotations.Nullable;
  * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
  * anything else through its printed rendering; dispatch is a method table plus a
  * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * and refers ({@code clojure.string} over the core string operations,
- * {@code clojure.java.io} for {@code reader} only, a project namespace's file lowered
- * once ahead of the form that requires it); interop lowers to the {@code java:} surface.
- * A {@code defmacro} is a compile-time expander (one lambda over the call's argument
- * list, the same function the runtime table entry holds for
+ * and refers ({@code clojure.string} over the core string operations, {@code clojure.set}
+ * over its spliced runtime, {@code clojure.java.io} for {@code reader} only, a project
+ * namespace's file lowered once ahead of the form that requires it); interop lowers to
+ * the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
+ * over the call's argument list, the same function the runtime table entry holds for
  * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
  * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
  * splicing over the mangled namespace ({@code x#} one gensym per expansion);

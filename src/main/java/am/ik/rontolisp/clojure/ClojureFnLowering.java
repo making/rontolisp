@@ -71,7 +71,7 @@ final class ClojureFnLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest))))),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
-								ClojureCollectionLowering.getBranches(ctx, coll, key, dflt))));
+								ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))));
 	}
 
 	/**
@@ -566,7 +566,8 @@ final class ClojureFnLowering {
 	/**
 	 * {@code memoize}: the function cached behind an {@code equal} table, so repeated
 	 * arguments run once. The table lives in the closure -- the atom cell's shape,
-	 * without the tag -- and the argument list keys structurally.
+	 * without the tag -- and the argument list keys by {@code =}
+	 * ({@code rontolisp::%clojure-memo-key}).
 	 */
 	static LispVal memoizeForm(ClojureLowering ctx, LispVal fun) {
 		LispSymbol table = ctx.freshTemp();
@@ -575,21 +576,26 @@ final class ClojureFnLowering {
 		LispSymbol args = ctx.freshTemp();
 		LispSymbol hit = ctx.freshTemp();
 		LispSymbol val = ctx.freshTemp();
-		LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(hit,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), args, table, miss)))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), hit, miss),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-										ClojureLowerUtil
-											.list(List.of(ClojureLowerUtil.list(val, ctx.callableApply(fn, args)))),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), args, table),
-												val),
-										val),
-								hit)));
+		LispSymbol key = ctx.freshTemp();
+		LispVal inner = ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+							ClojureLowerUtil.list(List.of(
+									ClojureLowerUtil.list(key,
+											ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MEMO-KEY"),
+													args)),
+									ClojureLowerUtil.list(hit,
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table, miss)))),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), hit, miss),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+											ClojureLowerUtil
+												.list(List.of(ClojureLowerUtil.list(val, ctx.callableApply(fn, args)))),
+											ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+													ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
+													val),
+											val),
+									hit)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.makeTable()),
 						ClojureLowerUtil.list(miss,

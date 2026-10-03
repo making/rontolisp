@@ -209,12 +209,15 @@ final class ClojureSeqLowering {
 		}
 		LispSymbol set = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
+		LispVal keyForm = ctx.lower(items.get(1));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil
 					.list(List.of(ClojureLowerUtil.list(set, ClojureCollectionLowering.setBuild(ctx, lowered)),
-							ClojureLowerUtil.list(key, ctx.lower(items.get(1))))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, ClojureCollectionLowering.setInner(set),
-						dflt));
+							ClojureLowerUtil.list(key, keyForm))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+						ClojureCollectionLowering.lookupKey(key, ClojureCollectionLowering.setInner(set),
+								ClojureCollectionLowering.isScalarKeyForm(keyForm)),
+						ClojureCollectionLowering.setInner(set), dflt));
 	}
 
 	/**
@@ -257,7 +260,8 @@ final class ClojureSeqLowering {
 			read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil
 						.list(List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.setBuild(ctx, lowered)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), arg,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+							ClojureCollectionLowering.lookupKey(arg, ClojureCollectionLowering.setInner(table)),
 							ClojureCollectionLowering.setInner(table), dflt));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),

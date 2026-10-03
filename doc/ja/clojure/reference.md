@@ -21,6 +21,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
 | [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
+| [(clojure.set)](reference/clojure-set.md) | 関係演算の集合ライブラリ: `union`/`intersection`/`difference`、`select`/`project`/`rename`、`index`/`join`、`subset?`/`superset?` |
 | [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
 | [トランスデューサー](reference/transducers.md) | `transduce`・`eduction`・`sequence`・`completing`、`reduced` とその仲間、`cat`、seq 関数の1引数形 |

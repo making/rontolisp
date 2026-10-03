@@ -922,9 +922,8 @@ final class ClojureStateLowering {
 		LispSymbol index = ctx.freshTemp();
 		LispVal fill = ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
 				ClojureLowerUtil.list(List.of(index, want)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots, index), table),
+				ClojureCollectionLowering.tablePut(table,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots, index),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), index, have),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), index, vals),
@@ -956,13 +955,10 @@ final class ClojureStateLowering {
 		run.add(ClojureLowerUtil.sym("progn"));
 		run.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
 				ClojureLowerUtil.list(List.of(index, ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), slots))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots, index), table),
-						ClojureLowering.NIL_CONST)));
+				ClojureCollectionLowering.tablePut(table,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots, index), ClojureLowering.NIL_CONST)));
 		for (int i = 0; i < pairs.size(); i += 2) {
-			run.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), pairs.get(i), table), pairs.get(i + 1)));
+			run.add(ClojureCollectionLowering.tablePut(table, pairs.get(i), pairs.get(i + 1)));
 		}
 		run.add(table);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),

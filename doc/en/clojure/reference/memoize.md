@@ -3,7 +3,7 @@
 `(memoize f)`
 
 Answers `f` cached behind an `equal` table, so repeated arguments run once --
-the argument list keys structurally. The table lives in the closure. As a value
+the argument list keys by `=`. The table lives in the closure. As a value
 a one-argument lambda over the same cache.
 
 ```clojure

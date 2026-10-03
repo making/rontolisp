@@ -8,8 +8,8 @@ directly. Otherwise the dispatcher searches every method the value descends from
 multimethod's hierarchy: the strictly most specific wins, `prefer-method` breaks the remaining
 ties, and an unbroken tie signals `Multiple methods ...`.
 
-Dispatch values compare like `equal` table keys -- vectors by identity, so a vector dispatch
-value reaches its method through the hierarchy search, element by element. A dispatch value
+Dispatch values compare like map keys, by `=`, so a vector dispatch value hits its method
+directly. A dispatch value
 may name a host class (`String`, `Number`, `java.util.Map`,
 `clojure.lang.IPersistentVector`, ...) and stores under the keyword `class` answers for it,
 so `class` multis dispatch to it; a true nil maps onto the `(:C%NIL)` marker
@@ -18,7 +18,7 @@ method, like the oracle, and
 `Object` matches every value past the search but ahead of the default.
 
 Deviation: every numeric class spelling merges into `:number`, where the oracle tells `Long`
-from `Double`; vector dispatch values compare by identity, not structurally.
+from `Double`.
 
 ```clojure
 (defmulti m :shape)
