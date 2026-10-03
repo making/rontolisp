@@ -125,5 +125,5 @@ defuns, `apply`, a lambda head, `labels`, `return-from`, and `progn`/`let`/`let*
 (a session and a file, 300,000 deep); `LispEvaluatorHotMethodSizeTest`. The REPL's
 recovery after an overflow stays pinned by
 `RontoLispCliStreamsTest.aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions`. The
-wasm side of the same programs: `.kb/wasm-tail-calls.md`; compiled JVM output stays
-bounded by its 16 MiB worker, about 16,000 such calls (`.kb/interpreter-stack.md`).
+wasm side of the same programs: `.kb/wasm-tail-calls.md`; compiled JVM output runs them
+in constant stack through its trampoline since 2026-10-03 (`.kb/jvm-tail-bounce.md`).

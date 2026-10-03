@@ -17715,7 +17715,10 @@ class JvmLispCompilerTest {
 		// the two-argument complement closures and the arity-0/2 dispatchers reachable
 		// through _tramp, +5,321 B here; mapcar's per-element call makes this program
 		// trampolined while the &optional probe below stays direct.
-		assertThat(classBytes.length).isLessThan(16_500);
+		// 10,651 (from 15,542) since the trampoline is written only when a method the
+		// shake keeps bounces: nothing here does, so _unw answers its argument and
+		// _tramp goes with what only it reached.
+		assertThat(classBytes.length).isLessThan(11_000);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -22896,8 +22899,8 @@ class JvmLispCompilerTest {
 				(print *counter*)
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
-		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", "_store", "_envLookup",
-				"_lookup");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", JvmTailBounce.APPLY_RAW_NAME,
+				"_store", "_envLookup", "_lookup");
 		assertThat(classBytes.length).isLessThan(8_000);
 		assertThat(runClass(classBytes)).isEqualTo("1");
 	}
@@ -22929,7 +22932,8 @@ class JvmLispCompilerTest {
 				(print (app 'car '(9 8)))
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
-		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", "_store", "_envLookup");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", JvmTailBounce.APPLY_RAW_NAME,
+				"_store", "_envLookup");
 		assertThat(runClass(classBytes)).isEqualTo("3\n9");
 	}
 
@@ -22948,9 +22952,10 @@ class JvmLispCompilerTest {
 
 	@Test
 	void aRuntimeApplyGetsTheApplyTierNotTheInterpreter() throws Exception {
-		// _apply and the spread dispatcher, but no _eval/_store/_envLookup: an eval-free
-		// program holds no interpreted closure and no _fenv binding. Through a symbol,
-		// past the per-arity ceiling, and through multiple-value-call's spread.
+		// The raw apply and the spread dispatcher, but no _eval/_store/_envLookup: an
+		// eval-free program holds no interpreted closure and no _fenv binding. Through a
+		// symbol, past the per-arity ceiling, and through multiple-value-call's spread.
+		// AP's tail apply bounces, so the trampoline is what re-enters the raw apply.
 		String program = """
 				(defun ap (f l) (apply f l))
 				(print (ap 'list '(1 2)))
@@ -22958,7 +22963,8 @@ class JvmLispCompilerTest {
 				(print (multiple-value-call (car (list #'list)) (values 1 2) (floor 7 2)))
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
-		assertThat(declaredMethodNames(classBytes)).contains("_apply").doesNotContain("_eval", "_store", "_envLookup");
+		assertThat(declaredMethodNames(classBytes)).contains(JvmTailBounce.APPLY_RAW_NAME)
+			.doesNotContain("_eval", "_store", "_envLookup");
 		assertThat(runClass(classBytes)).isEqualTo("(1 2)\n78\n(1 2 3 1)");
 	}
 
@@ -22970,7 +22976,7 @@ class JvmLispCompilerTest {
 				(print (multiple-value-call #'k (values 1 2) 3))
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
-		assertThat(declaredMethodNames(classBytes)).doesNotContain("_apply", "_eval");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_apply", JvmTailBounce.APPLY_RAW_NAME, "_eval");
 		assertThat(runClass(classBytes)).isEqualTo("(1 2 3)\n(1 2 3)");
 	}
 
@@ -23029,6 +23035,184 @@ class JvmLispCompilerTest {
 		int growth = topLevelCodeLength(trampolined) - topLevelCodeLength(direct);
 		assertThat(growth).as("bytes the unwrap adds over %d call sites", sites).isLessThan(sites * 4 + 100);
 		assertThat(runClass(trampolined)).isEqualTo("200\nDONE");
+	}
+
+	/**
+	 * The closures whose tail calls go through a value, as the ci-spec case runs them.
+	 */
+	private static final String CLOSURE_TAIL_CALLS = """
+			(let ((ctv-f nil))
+			  (setq ctv-f (lambda (n) (if (= n 0) :done (funcall ctv-f (- n 1)))))
+			  (print (funcall ctv-f 1000000)))
+			(let ((ctv-ev nil) (ctv-od nil))
+			  (setq ctv-ev (lambda (n) (if (= n 0) t (funcall ctv-od (- n 1)))))
+			  (setq ctv-od (lambda (n) (if (= n 0) nil (funcall ctv-ev (- n 1)))))
+			  (print (list (funcall ctv-ev 1000000) (funcall ctv-ev 1000001))))
+			(defun ctv-hop (n k) (if (= n 0) (funcall k :landed) (funcall k n)))
+			(let ((ctv-k nil))
+			  (setq ctv-k (lambda (v) (if (eq v :landed) :finished (ctv-hop (- v 1) ctv-k))))
+			  (print (funcall ctv-k 1000000)))
+			(let ((ctv-states (make-array 2)))
+			  (setf (aref ctv-states 0)
+			        (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 1) (- n 1) (+ acc 1)))))
+			  (setf (aref ctv-states 1)
+			        (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 0) (- n 1) acc))))
+			  (print (funcall (aref ctv-states 0) 1000000 0)))
+			""";
+
+	@Test
+	void aLambdasTailCallThroughAValueRunsInConstantStack() throws Exception {
+		// A closure's tail call through a value -- itself through the variable holding
+		// it, a partner closure, a defun handed the closure as its continuation, a state
+		// machine of closures in a vector -- bounces through the trampoline as a defun's
+		// does (JvmTailBounce), so a depth the frame-per-call chain overflowed on the
+		// 16 MiB worker runs. The continuation's tail call of CTV-HOP is a direct call
+		// whose bounce passes on as the closure's own answer: unwrapped there, each
+		// round would keep the closure's frame under the trampoline it drives.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(CLOSURE_TAIL_CALLS));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> lambdas = declaredMethodNames(classBytes).stream().filter(n -> n.startsWith("_lambda_")).toList();
+		assertThat(lambdas.stream().filter(n -> bounceSitesIn(classBytes, n) > 0).count())
+			.as("the self loop, the pair and the two states bounce")
+			.isGreaterThanOrEqualTo(5);
+		List<String> hopCallers = lambdas.stream().filter(n -> ownCallsIn(classBytes, n, "CTV-HOP") > 0).toList();
+		assertThat(hopCallers).hasSize(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, hopCallers.get(0), "CTV-HOP")).isZero();
+		assertThat(runClass(classBytes)).isEqualTo(":DONE\n(T NIL)\n:FINISHED\n500000");
+	}
+
+	@Test
+	void everyFormTheTailMarkPassesHandsABounceOnAndAPlainTailNeedsNoCheck() throws Exception {
+		// A defun answers a bounce where the tail mark reaches a call through a value --
+		// through every form that hands its value on (JvmTailGroup.tailCalls) -- and
+		// where its tail calls such a defun directly (RB-HOP hands RB-IF's on): each runs
+		// a chain through a closure 300,000 rounds deep. A tail the mark reaches no such
+		// call through answers no bounce, so its callers carry no check.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun rb-if (f n) (if (> n -1) (funcall f n) :if))
+				(defun rb-progn (f n) (progn 1 (funcall f n)))
+				(defun rb-let (f n) (let ((m n)) (funcall f m)))
+				(defun rb-let* (f n) (let* ((m n) (k m)) (funcall f k)))
+				(defun rb-cond (f n) (cond ((< n 0) :neg) (t (funcall f n))))
+				(defun rb-case (f n) (case n (-1 :neg) (otherwise (funcall f n))))
+				(defun rb-typecase (f n) (typecase n (integer (funcall f n)) (t :other)))
+				(defun rb-and (f n) (and (>= n 0) (funcall f n)))
+				(defun rb-or (f n) (or (< n -5) (funcall f n)))
+				(defun rb-when (f n) (when (>= n 0) (funcall f n)))
+				(defun rb-unless (f n) (unless (< n 0) (funcall f n)))
+				(defun rb-block (f n) (block b (when (< n 0) (return-from b :neg)) (funcall f n)))
+				(defun rb-return-from (f n) (block b (return-from b (funcall f n))))
+				(defun rb-the (f n) (the t (funcall f n)))
+				(defun rb-locally (f n) (locally (funcall f n)))
+				(defun rb-flet (f n) (flet ((g (m) (funcall f m))) (g n)))
+				(defun rb-hop (f n) (rb-if f n))
+				(defun rb-run (op)
+				  (let ((k nil))
+				    (setq k (lambda (m) (if (= m 0) :done (funcall op k (- m 1)))))
+				    (funcall k 300000)))
+				(print (mapcar #'rb-run (list #'rb-if #'rb-progn #'rb-let #'rb-let* #'rb-cond #'rb-case #'rb-typecase
+				                              #'rb-and #'rb-or #'rb-when #'rb-unless #'rb-block #'rb-return-from
+				                              #'rb-the #'rb-locally #'rb-flet #'rb-hop)))
+				(defun rb-plain (n) (do ((i 0 (1+ i))) ((>= i n) i)))
+				(defun rb-callers (f) (list (rb-plain 3) (rb-if f -2)))
+				(print (rb-callers #'identity))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-HOP", "RB-IF")).as("RB-IF's bounce passes on").isZero();
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-CALLERS", "RB-PLAIN")).isZero();
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-CALLERS", "RB-IF")).isEqualTo(1);
+		assertThat(runClass(classBytes)).isEqualTo("(" + ":DONE ".repeat(16) + ":DONE)\n(3 :IF)");
+	}
+
+	@Test
+	void aTailApplyThroughAValueBouncesWithItsArgumentListUnspread() throws Exception {
+		// (apply f ...) over a computed designator in tail position bounces as
+		// {FALSE, f, list}, and the trampoline re-enters the raw apply with it
+		// (JvmTailBounce.emitSpreadBounce): a closure applying itself and a defun
+		// applying the closure that calls it run 1,000,000 deep. _apply itself still
+		// answers a real value, to a Java caller among others.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(let ((f nil))
+				  (setq f (lambda (n &rest more) (if (= n 0) (list :done more) (apply f (- n 1) more))))
+				  (print (funcall f 1000000 :a :b)))
+				(defun ap-step (g n) (if (= n 0) :stepped (apply g (list (- n 1)))))
+				(let ((k nil))
+				  (setq k (lambda (n) (ap-step k n)))
+				  (print (funcall k 1000000)))
+				(print (apply (car (list #'list)) 1 '(2 3)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "_tramp", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "_apply", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "AP-STEP", "_apply")).isZero();
+		assertThat(runClass(classBytes)).isEqualTo("(:DONE (:A :B))\n:STEPPED\n(1 2 3)");
+		// The Clojure front end calls every value through %clojure-call's apply.
+		byte[] clojure = new am.ik.rontolisp.cli.JvmSourceCompiler("Test").sourceLanguage("clojure").compile("""
+				(defn run [n] (let [f (atom nil)] (reset! f (fn [m] (if (= m 0) :done (@f (dec m))))) (@f n)))
+				(println (run 1000000))
+				""", null).classBytes();
+		assertThat(runClass(clojure)).isEqualTo(":done");
+	}
+
+	@Test
+	void aTailCallOfALiteralDesignatorIsADirectCallNotABounce() throws Exception {
+		// (funcall #'name ...) names its target: the call is the direct invokestatic its
+		// head-position spelling compiles to (JvmDesignatorCall), never a bounce, in a
+		// defun's tail and a closure's alike. A bounce of the callee passes on.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun lit-b (x) (list :b x))
+				(defun lit-a (x) (funcall #'lit-b x))
+				(defun lit-v (f x) (funcall f x))
+				(defun lit-c (f x) (if x (funcall #'lit-v f x) :none))
+				(print (list (lit-a 1) (funcall (lambda (y) (funcall #'lit-b y)) 2)
+				             (lit-c #'lit-a 3) (lit-c #'lit-a nil)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(bounceSitesIn(classBytes, "LIT-A")).isZero();
+		assertThat(ownCallsIn(classBytes, "LIT-A", "LIT-B")).isEqualTo(1);
+		assertThat(bounceSitesIn(classBytes, "LIT-C")).isZero();
+		assertThat(ownCallsIn(classBytes, "LIT-C", "LIT-V")).isEqualTo(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, "LIT-C", "LIT-V")).as("LIT-V's bounce passes on").isZero();
+		assertThat(runClass(classBytes)).isEqualTo("((:B 1) (:B 2) (:B 3) :NONE)");
+	}
+
+	@Test
+	void theTrampolineIsWrittenOnlyWhenAMethodThatBouncesSurvivesTheShake() throws Exception {
+		// Every dispatcher call site checks for a bounce, and the class carries _tramp
+		// only when a method the shake keeps can make one: otherwise _unw answers its
+		// argument and _tramp -- with every dispatcher arity it names and the closures
+		// only those reach -- goes away.
+		byte[] none = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
+		assertThat(declaredMethodNames(none)).contains("_unw").doesNotContain("_tramp");
+		assertThat(codeLengthOf(none, "_unw")).isEqualTo(2);
+		assertThat(runClass(none)).isEqualTo("(1 4 9)");
+		byte[] live = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(let ((f nil)) (setq f (lambda (n) (if (= n 0) :done (funcall f (- n 1))))) (print (funcall f 300000)))
+				"""));
+		assertThat(declaredMethodNames(live)).contains("_unw", "_tramp");
+		assertThat(runClass(live)).isEqualTo(":DONE");
+	}
+
+	@Test
+	void aClosuresValueTailInsideASpecialParametersBindingStaysACall() throws Exception {
+		// The binding a parameter named like a special makes is undone after the body
+		// returns, so the call in the body's tail runs inside it: no bounce, and the
+		// callee reads the argument (LambdaLists.toNative).
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defvar *ctv-depth* :top)
+				(defun ctv-depth () *ctv-depth*)
+				(let ((reader (lambda () (ctv-depth))))
+				  (print (list (funcall (lambda (*ctv-depth*) (funcall reader)) 7) (ctv-depth))))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> binders = declaredMethodNames(classBytes).stream()
+			.filter(n -> n.startsWith("_lambda_") && ownCallsIn(classBytes, n, "_invoke_0") > 0)
+			.toList();
+		assertThat(binders).hasSize(1);
+		assertThat(bounceSitesIn(classBytes, binders.get(0))).isZero();
+		assertThat(runClass(classBytes)).isEqualTo("(7 :TOP)");
 	}
 
 	@Test
@@ -23169,6 +23353,29 @@ class JvmLispCompilerTest {
 		assertThat(declaredMethodNames(classBytes)).as("the split actually happened").contains("_k$0");
 		assertThat(jumpsToEntry(classBytes, "BIG")).isZero();
 		assertThat(compileAndRun(forms)).isEqualTo(String.valueOf(51 * 400));
+	}
+
+	@Test
+	void aTailThroughAValueInASplitOffContinuationHandsItsBounceOn() throws Exception {
+		// A closure's body past the method-size budget ends in a _k$N continuation whose
+		// tail calls through a value: the continuation bounces, and the closure, whose
+		// callers all check, answers the bounce unchecked -- no frame a round, 1,000,000
+		// deep (JvmTailBounce).
+		StringBuilder sb = new StringBuilder("(let ((f nil))\n  (setq f (lambda (n acc)\n    (let ((a 0))\n");
+		for (int k = 0; k < 400; k++) {
+			sb.append("      (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+		}
+		sb.append("      (if (= n 0) (list :done acc) (funcall f (- n 1) (mod (+ acc a) 7))))))\n");
+		sb.append("  (print (funcall f 1000000 0)))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> split = declaredMethodNames(classBytes).stream()
+			.filter(n -> n.startsWith("_lambda_") && ownCallsIn(classBytes, n, "_k$0") > 0)
+			.toList();
+		assertThat(split).as("the split actually happened").hasSize(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, split.get(0), "_k$0")).isZero();
+		assertThat(runClass(classBytes)).isEqualTo("(:DONE 1)");
 	}
 
 	private static final String MUTUAL_PAIRS = """
@@ -23402,6 +23609,61 @@ class JvmLispCompilerTest {
 			}
 		}
 		return jumps;
+	}
+
+	/** The bounces method {@code method} makes: its reads of the marker of the array. */
+	private static int bounceSitesIn(byte[] classBytes, String method) {
+		int sites = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction field
+						&& field.owner().asInternalName().equals("java/lang/Boolean")
+						&& field.name().equalsString("TRUE")) {
+					sites++;
+				}
+			}
+		}
+		return sites;
+	}
+
+	/**
+	 * The calls method {@code method} makes to {@code callee} whose result {@code _unw}
+	 * checks next.
+	 */
+	private static int unwrapsAfterCallsTo(byte[] classBytes, String method, String callee) {
+		int unwraps = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			boolean afterCall = false;
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (!(element instanceof java.lang.classfile.Instruction)) {
+					continue;
+				}
+				boolean unwrap = element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString("_unw");
+				if (afterCall && unwrap) {
+					unwraps++;
+				}
+				afterCall = element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString(callee);
+			}
+		}
+		return unwraps;
+	}
+
+	/** The code length of method {@code method}. */
+	private static int codeLengthOf(byte[] classBytes, String method) {
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (model.methodName().equalsString(method)) {
+				return model.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength();
+			}
+		}
+		throw new AssertionError("no method " + method);
 	}
 
 	/** The code length summed over {@code main} and the {@code _top$N} chunks. */

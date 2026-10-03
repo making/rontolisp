@@ -57,9 +57,7 @@ final class JvmApplyCompiler {
 					ctx.body.aload(tailSlot);
 				}
 				ctx.body.invokestatic(fi.methodref());
-				if (fi.bounceVisible()) {
-					JvmTailBounce.emitUnwrap(ctx, className);
-				}
+				JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
 				return;
 			}
 			if (fi != null) {
@@ -78,9 +76,7 @@ final class JvmApplyCompiler {
 				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
 				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
 				ctx.body.invokestatic(fi.methodref());
-				if (fi.bounceVisible()) {
-					JvmTailBounce.emitUnwrap(ctx, className);
-				}
+				JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
 				return;
 			}
 		}
@@ -109,6 +105,13 @@ final class JvmApplyCompiler {
 			ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 			ctx.body.aload(argSlots.get(k)).aastore().dup().iconst_1().aload(curSlot).aastore();
 			ctx.body.astore(curSlot);
+		}
+
+		if (ctx.tailBounce && ctx.tailMark == cons) {
+			// The method's true tail through a value: bounce with the list unspread, and
+			// the trampoline applies it in its own frame (JvmTailBounce).
+			JvmTailBounce.emitSpreadBounce(ctx, funcSlot, curSlot);
+			return;
 		}
 
 		// _apply(func, argList)

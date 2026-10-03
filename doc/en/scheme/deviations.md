@@ -6,10 +6,9 @@
   `java Prog`) -- where a named `let` or `do`, a direct self or mutual tail call, and
   a tail call through a procedure value (an argument, a variable, any computed
   designator: the callee's own tail call re-enters through the class's trampoline
-  instead of stacking a frame) all run in constant stack. A tail `apply` keeps one
-  frame pair per hop. Recursion NOT in tail position uses one Java frame per two
-  calls, and the compiled `main` runs on a 16 MiB worker (`-Drontolisp.stack` raises
-  it).
+  instead of stacking a frame) all run in constant stack, a tail `apply` included.
+  Recursion NOT in tail position uses one Java frame per two calls, and the compiled
+  `main` runs on a 16 MiB worker (`-Drontolisp.stack` raises it).
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.

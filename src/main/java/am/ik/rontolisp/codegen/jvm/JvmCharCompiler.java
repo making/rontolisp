@@ -163,6 +163,7 @@ final class JvmCharCompiler {
 					}
 				}));
 		ctx.body.invokestatic(helper.methodref());
+		JvmTailBounce.emitDirectCallUnwrap(helper, null, ctx, className);
 	}
 
 	/**

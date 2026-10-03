@@ -205,7 +205,7 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   limits.
   A check repeated at every call site belongs in a shared helper, not inline: the
   trampoline's bounce unwrap inline (~22 B/site) took the corpus's largest form past the
-  headroom (2026-10-03); as `invokestatic _unw` it is 3 B ([scheme-frontend.md](scheme-frontend.md)).
+  headroom (2026-10-03); as `invokestatic _unw` it is 3 B ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 
 ## Generated data must not become pool entries
 - **Read the text back; do not scan it** (`ClUnicodeTables`): a scanned table cost ~208,000 pool

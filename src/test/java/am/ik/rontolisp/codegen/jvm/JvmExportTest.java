@@ -99,6 +99,19 @@ class JvmExportTest {
 	}
 
 	@Test
+	void anExportedDefunWhoseTailCallsThroughAValueAnswersThatCallsValue() throws Exception {
+		// The defun's tail call through a value bounces (JvmTailBounce), and the wrapper
+		// is a caller of its result like any other: it lets the trampoline make the
+		// call before converting the answer.
+		Class<?> clazz = compileToClass("""
+				(defvar *twice* (lambda (x) (* x 2)))
+				(defun twice (x) (funcall *twice* x))
+				(rontolisp:jvm-export 'twice :params '(:s64) :returns :s64)
+				""");
+		assertThat(clazz.getMethod("twice", long.class).invoke(null, 21L)).isEqualTo(42L);
+	}
+
+	@Test
 	void aResultTheDeclaredTypeCannotStateThrowsInsteadOfWrapping() throws Exception {
 		Class<?> clazz = compileToClass("""
 				(defun big (x) (+ x 1000))

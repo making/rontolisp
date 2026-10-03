@@ -189,6 +189,16 @@ final class JvmBodyOutliner {
 		}
 	}
 
+	/** Whether every item left in the queue is a cleanup with no code to run. */
+	private static boolean onlyCompileTimeCleanups(Tail tail) {
+		for (Entry remaining : tail.queue) {
+			if (!(remaining.item() instanceof Cleanup cleanup) || cleanup.runtime()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private static boolean readyToSplit(Tail tail, JvmLispCompiler.Ctx ctx) {
 		if (ctx.body.size() < CODE_BUDGET) {
 			return false;
@@ -278,11 +288,18 @@ final class JvmBodyOutliner {
 			}
 		}
 		ctx.body.invokestatic(ref);
-		// The continuation's result is this method's: unwrap a bounce it ends in.
-		JvmTailBounce.emitUnwrap(ctx, className);
+		// The continuation's result is this method's: a bounce it ends in passes on
+		// when nothing but scope bookkeeping follows here and this method's callers
+		// unwrap; a dynamic-binding restore still to run drives it first, inside the
+		// binding (JvmTailBounce).
+		if (!ctx.passesBounces || !ctx.unwindScopes.isEmpty() || !onlyCompileTimeCleanups(tail)) {
+			JvmTailBounce.emitUnwrap(ctx, className);
+		}
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
 		cont.tailBounce = ctx.tailBounce;
+		// The method split from it is the continuation's one caller, and it unwraps.
+		cont.passesBounces = ctx.tailBounce;
 		// The continuation is the same function, part way through: the uncaught report
 		// names it and locates its code as it would the method it was split from.
 		cont.continueFunction(ctx);

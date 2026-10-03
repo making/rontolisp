@@ -39,10 +39,12 @@ final class JvmFunctionCallCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2;
-		if (ctx.tailBounce && ctx.tailMark == cons) {
+		if (ctx.tailBounce && ctx.tailMark == cons
+				&& JvmDesignatorCall.directTarget(parts.get(1), arity, ctx) == null) {
 			// The method's true tail through a value: bounce instead of calling, and the
 			// trampoline loop above drives the call in its own frame
-			// (JvmTailBounce).
+			// (JvmTailBounce). A literal designator names its target, so that call
+			// stays the direct one below.
 			JvmTailBounce.emitBounce(parts.get(1), parts, 2, ctx, className);
 			return;
 		}
@@ -54,7 +56,7 @@ final class JvmFunctionCallCompiler {
 			LispVal arg = parts.get(i);
 			args.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 		}
-		call.emitCall(ctx, className, args);
+		call.emitCall(ctx, className, args, cons);
 	}
 
 	/**
@@ -103,11 +105,9 @@ final class JvmFunctionCallCompiler {
 			}
 			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
 			ctx.body.invokestatic(fi.methodref());
-			if (fi.bounceVisible()) {
-				// The callee bounces its own value tail; its result here is the
-				// trampoline's answer (JvmTailBounce).
-				JvmTailBounce.emitUnwrap(ctx, className);
-			}
+			// The callee may answer a bounce: driven here, or -- this method's tail --
+			// handed on to callers that drive it (JvmTailBounce).
+			JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to

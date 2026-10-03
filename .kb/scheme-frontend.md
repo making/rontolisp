@@ -1718,9 +1718,11 @@ outside such a cycle changes: a program with none lowers byte-identically.
   helper that hands a bounce to `_tramp`); spelled out inline it cost ~22 bytes a site and
   took the ci-spec corpus's largest top-level form to 68,454 B, past the 64 KB method limit
   (2026-10-03, CI red at `ec836db36`). One frame per tail chain plus the dispatcher's; the
-  state machine below runs 1,000,000 deep. A tail `apply` keeps a frame pair per hop,
-  and a call the Lisp-2 rewrite lowers to a fresh funcall cons (a Common Lisp variable
-  head) keeps a real frame -- the mark cannot survive the rewrite.
+  state machine below runs 1,000,000 deep. A call the Lisp-2 rewrite lowers to a fresh
+  funcall cons (a Common Lisp variable head) keeps a real frame -- the mark cannot survive
+  the rewrite. A `lambda`'s tail through a value and a tail `apply` kept a frame pair per
+  hop until `.todo/c08` the same day; both bounce now (an `apply` with its argument list
+  unspread), and the mechanism is [jvm-tail-bounce.md](jvm-tail-bounce.md)'s.
 - **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
   non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
   47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
