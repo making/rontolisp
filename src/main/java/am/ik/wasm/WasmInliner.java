@@ -357,13 +357,20 @@ public final class WasmInliner {
 		// `return`: what the callee answered is what the caller returns, whatever the
 		// caller's code after the site was for -- the emitter's tail sites are followed
 		// only by value-passing `end`s and `br`s, but a dispatcher case falls through
-		// into the NEXT case's body, which the return keeps out of reach.
+		// into the NEXT case's body, which the return keeps out of reach. There the
+		// moved body's own exits keep their shape: a `return` returns from the caller and
+		// a `return_call X` replaces the caller's frame, as the callee's had been
+		// replaced
+		// -- X answers the callee's results, which are the caller's. A plain call there
+		// would leave a caller frame under X per link of a chain (a dispatcher arm
+		// calling
+		// back through the dispatcher).
 		boolean tailSite = callerCode.get(at).op == OP_RETURN_CALL;
 		Body calleeBody = WasmCodeModel.decode(calleeEntry, types);
 		List<Instr> moved = calleeBody.code();
 		FuncType calleeType = types.func(calleeTypeIdx);
 		int params = calleeType.params().size();
-		Shape shape = shapeOf(moved, params, callee);
+		Shape shape = shapeOf(moved, params, callee, tailSite);
 		if (shape == null) {
 			return null;
 		}
@@ -453,11 +460,13 @@ public final class WasmInliner {
 				writeBlockType(out, calleeType.results());
 			}
 		}
-		writeMovedBody(out, calleeEntry, moved, skip, params, slot, substitute, localBase, shape.needsBlock());
+		writeMovedBody(out, calleeEntry, moved, skip, params, slot, substitute, localBase, shape.needsBlock(),
+				tailSite);
 		if (shape.needsBlock()) {
 			out.write(OP_END);
 		}
-		if (tailSite) {
+		// A body ending in a tail call kept as one has nothing left to fall off its end.
+		if (tailSite && !(moved.size() >= 2 && moved.get(moved.size() - 2).op == OP_RETURN_CALL)) {
 			out.write(OP_RETURN);
 		}
 		WasmSections.writeRaw(out, WasmSections.slice(callerEntry, callerCode.get(at).end, callerEntry.length));
@@ -469,7 +478,7 @@ public final class WasmInliner {
 	private record Shape(int[] reads, int[] writes, boolean stackHandOver, boolean needsBlock) {
 	}
 
-	private static @Nullable Shape shapeOf(List<Instr> code, int params, int callee) {
+	private static @Nullable Shape shapeOf(List<Instr> code, int params, int callee, boolean tailSite) {
 		int[] reads = new int[params];
 		int[] writes = new int[params];
 		boolean needsBlock = false;
@@ -496,11 +505,13 @@ public final class WasmInliner {
 						writes[(int) in.a]++;
 					}
 				}
-				case OP_RETURN -> needsBlock = true;
+				// At a tail site a `return` stays one (merge).
+				case OP_RETURN -> needsBlock |= !tailSite;
 				// A tail call leaves the callee's frame as a `return` does; moved into
-				// the caller it becomes a plain call and a branch out of the wrapping
-				// block (writeMovedBody), which keeps the stack exactly as deep as the
-				// tail call kept it: the callee's frame is gone either way.
+				// the caller at a plain call site it becomes a plain call and a branch
+				// out of the wrapping block (writeMovedBody), which keeps the stack
+				// exactly as deep as the tail call kept it: the callee's frame is gone
+				// either way. At a tail site it stays a tail call (merge).
 				case OP_RETURN_CALL -> {
 					if (in.a == callee) {
 						return null; // recursive: the moved body would call a dead entry
@@ -509,7 +520,7 @@ public final class WasmInliner {
 					// end, at depth 0) falls off the end as a plain call would: no block.
 					// Every forwarder is this shape, and the block would cost what the
 					// move saves.
-					needsBlock |= !isTrailing(code, k, depth);
+					needsBlock |= !tailSite && !isTrailing(code, k, depth);
 				}
 				case OP_BR, OP_BR_IF -> needsBlock |= in.a >= depth;
 				// br_on_cast / br_on_cast_fail: a conditional branch like br_if.
@@ -550,11 +561,12 @@ public final class WasmInliner {
 
 	// The callee's instructions, renumbered into the caller: a parameter read becomes its
 	// slot or its argument's own instruction, a local becomes its shifted index, and a
-	// `return` becomes a branch to the wrapping block. Everything else is copied verbatim
-	// -- including a `br` whose label already names the function body, which the wrapper
-	// block silently takes over.
+	// `return` becomes a branch to the wrapping block, a `return_call` a plain call (both
+	// only off a tail site, see merge). Everything else is copied verbatim -- including a
+	// `br` whose label already names the function body, which the wrapper block silently
+	// takes over.
 	private static void writeMovedBody(ByteArrayOutputStream out, byte[] entry, List<Instr> code, int skip, int params,
-			int[] slot, byte[][] substitute, int localBase, boolean needsBlock) {
+			int[] slot, byte[][] substitute, int localBase, boolean needsBlock, boolean tailSite) {
 		int depth = 0;
 		for (int k = 0; k < code.size() - 1; k++) {
 			Instr in = code.get(k);
@@ -579,11 +591,11 @@ public final class WasmInliner {
 						WasmSections.writeU(out, localBase + index - params);
 					}
 				}
-				else if (in.op == OP_RETURN && needsBlock) {
+				else if (in.op == OP_RETURN && needsBlock && !tailSite) {
 					out.write(OP_BR);
 					WasmSections.writeU(out, depth);
 				}
-				else if (in.op == OP_RETURN_CALL) {
+				else if (in.op == OP_RETURN_CALL && !tailSite) {
 					// The callee's frame is gone either way: as a plain call here the
 					// stack is exactly as deep as the tail call left it. Only a
 					// non-trailing one needs the branch out (shapeOf); a trailing one

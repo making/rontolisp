@@ -28829,4 +28829,42 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("DONE");
 	}
 
+	@Test
+	void aBuiltInMacroInTailPositionHandsTheTailOnToItsExpansion() throws Exception {
+		// The expansion IS the form, so a cond/case/when/typecase/multiple-value-bind/
+		// destructuring-bind/symbol-macrolet/flet/labels in tail position compiles its
+		// own tail as a return_call, as the if and let it expands into would; so does
+		// the value of a return out of a dolist in tail position, and a call through a
+		// value from a cond clause. 300,000 deep: each was a plain call before.
+		assertThat(compileAndRun("""
+				(defun via-cond (n) (cond ((= n 0) :cond) (t (via-case (- n 1)))))
+				(defun via-case (n) (case 1 (1 (when t (via-typecase n)))))
+				(defun via-typecase (n) (typecase n (integer (via-cond n))))
+				(defun via-mvb (n) (multiple-value-bind (q) (floor n 1) (if (= q 0) :mvb (via-mvb (- q 1)))))
+				(defun via-db (n) (destructuring-bind (a) (list n) (if (= a 0) :db (via-db (- a 1)))))
+				(defun via-sm (n) (symbol-macrolet ((m n)) (if (= m 0) :sm (via-sm (- m 1)))))
+				(defun via-flet (n) (flet ((d (x) (- x 1))) (if (= n 0) :flet (via-flet (d n)))))
+				(defun via-labels (n) (labels ((d (x) (- x 1))) (if (= n 0) :labels (via-labels (d n)))))
+				(defun via-dolist (n) (dolist (x (list 1)) (return (if (= n 0) :dolist (via-dolist (- n 1))))))
+				(defun call-it (f args) (cond ((functionp f) (apply f args)) (t :not-a-function)))
+				(defun via-value (self n) (if (= n 0) :value (call-it self (list self (- n 1)))))
+				(print (list (via-cond 300000) (via-mvb 300000) (via-db 300000) (via-sm 300000) (via-flet 300000)
+				             (via-labels 300000) (via-dolist 300000) (via-value #'via-value 300000)))
+				""")).isEqualTo("(:COND :MVB :DB :SM :FLET :LABELS :DOLIST :VALUE)");
+	}
+
+	@Test
+	void aLambdaInlinedIntoTheDispatcherStillTailCallsThroughIt() throws Exception {
+		// Each link of the chain is a lambda whose one call site is a dispatcher arm, so
+		// the inliner moves its body there (a return_call site): its own tail call back
+		// through the dispatcher must stay a return_call, or every link keeps a
+		// dispatcher frame.
+		String chain = """
+				(defun mk (k n) (if (= n 0) k (mk (lambda (v) (funcall k v)) (- n 1))))
+				(print (funcall (mk (lambda (v) v) 100000) :cps))
+				""";
+		assertThat(compileAndRun(chain)).isEqualTo(":CPS");
+		assertThat(compileAndRunComponent(chain)).isEqualTo(":CPS");
+	}
+
 }

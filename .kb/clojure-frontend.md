@@ -575,14 +575,18 @@ body lowers). `loop` inits are sequential and destructure.
   near 150,000 rounds, a `defn` near 200,000, a `letfn` pair near 150,000). A call through
   a value in tail position -- `%clojure-call`'s `apply`, a call site's `funcall` of a real
   function -- bounces through the JVM's trampoline ([jvm-tail-bounce.md](jvm-tail-bounce.md)): a `fn`
-  in an atom calling itself runs 1,000,000 deep on the JVM and the interpreter, and traps on
-  wasm and the component (`.todo/c01`). The spec's
+  in an atom calling itself runs 1,000,000 deep on every backend (wasm and the component
+  since 2026-10-03: `%clojure-call`'s `apply` sits in a `cond` clause, which wasm compiled as
+  no tail before, `.kb/wasm-tail-calls.md`). The spec's
   `deep-recur-answers-on-every-backend` runs a `loop` 1,000,000 deep on all four,
   `letfn-mutual-tail-calls-run-in-constant-stack` a `letfn` pair.
 - A multi-arity `defn`'s fixed clause recurs to its own helper (`c%f%<n>`), never through
   the dispatch defun -- that round trip was a mutual recursion of two functions, a tail group
   on the JVM now but a self jump is cheaper. A multi-arity `fn`'s clauses are arms of one
-  lambda, so its `recur` re-enters the dispatch, a self call of that lambda.
+  lambda, so its `recur` re-enters the dispatch, a self call of that lambda; the dispatch on
+  the argument count is a `cond`, so the `recur` is a tail of the lambda only where `cond`'s
+  clause bodies are (wasm since 2026-10-03; `deep-recur-answers-on-every-backend` runs one
+  300,000 deep).
 
 ## Namespaces and project files
 

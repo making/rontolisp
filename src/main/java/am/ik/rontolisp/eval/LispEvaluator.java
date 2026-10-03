@@ -6750,6 +6750,12 @@ public final class LispEvaluator {
 								break;
 							}
 							case LispNames.RETURN_FROM:
+								// An exit to a block this frame owns ends the frame
+								// with its value form's value: that form is the tail.
+								if (properLength == 3 && exitsOwnedBlock(((LispCons) cons.cdr()).car(), env, owner)) {
+									next = ((LispCons) ((LispCons) cons.cdr()).cdr()).car();
+									break dispatch;
+								}
 								result = evalReturnFrom(cons, env);
 								break frame;
 							case LispNames.CATCH:
@@ -6762,6 +6768,10 @@ public final class LispEvaluator {
 								result = evalUnwindProtect(cons, env);
 								break frame;
 							case LispNames.RETURN:
+								if (properLength == 2 && exitsOwnedBlock(LispNil.INSTANCE, env, owner)) {
+									next = ((LispCons) cons.cdr()).car();
+									break dispatch;
+								}
 								throw blockExit(NIL_BLOCK, evalReturnValue(cons, env), env);
 							case LispNames.PROG1:
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandProg1);
@@ -11482,6 +11492,19 @@ public final class LispEvaluator {
 		}
 		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : singleValue(LispNil.INSTANCE);
 		throw blockExit(blockName(parts.get(1)), value, env);
+	}
+
+	/**
+	 * Whether an exit to the block {@code designator} names, from {@code env}, lands on a
+	 * block of the frame whose exit target is {@code owner} -- the frame's own
+	 * continuation, so the exit's value form may replace the frame
+	 * ({@code .kb/interpreter-tail-calls.md}). An invalid designator answers false and
+	 * keeps the exit's own error.
+	 */
+	private static boolean exitsOwnedBlock(LispVal designator, Environment env, @Nullable Environment owner) {
+		return owner != null
+				&& (designator instanceof LispNil || designator instanceof LispSymbol sym && !sym.isKeyword())
+				&& env.findBlock(blockName(designator)) == owner;
 	}
 
 	/**
