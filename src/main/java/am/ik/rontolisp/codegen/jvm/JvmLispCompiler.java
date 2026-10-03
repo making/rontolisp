@@ -4991,9 +4991,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	// sites are resolved against the class files (and the bridge emitted when one needs
 	// it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
-		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
-				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_SUBCLASS)) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
+		for (String operator : LispNames.JAVA_OPERATORS_QUALIFIED) {
+			if (programUsesSymbol(program, operator)) {
 				return true;
 			}
 		}

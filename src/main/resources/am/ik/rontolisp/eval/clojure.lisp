@@ -414,6 +414,16 @@
   (rontolisp::%clojure-print x nil-replacement readable *standard-output*)
   nil)
 
+(defun rontolisp::%clojure-host-class (x)
+  "class of a value of no Clojure kind: a host object's class (the oracle's
+   answer), anything else the refusal. java:call refuses every value that is no
+   host object, so its refusal IS the host test, the same one on the interpreter
+   and the JVM. eval/ClojureLibrary splices a refusal-only body instead into a
+   program with no java: operator, where no host object can exist: a java:
+   reference changes the JVM output and is a call-time error on wasm."
+  (handler-case (java:call x "getClass")
+    (error () (error "class needs a value of a known kind"))))
+
 ;;;; Equality: the = family over every value shape.
 
 (defun rontolisp::%clojure-sequential-p (x)

@@ -21,6 +21,27 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferDefmultiOfAMultimethodKeepsTheEarlierOne() {
+		// the oracle's defmulti defines only when the var holds no multimethod, so a
+		// REPL re-entry changes nothing (neither the dispatch function nor the table)
+		ClojureSession session = new ClojureSession();
+		session.read("(defmulti b99sess :k)");
+		List<String> again = session.read("(defmulti b99sess :j :default :other)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(again).noneMatch(form -> form.contains("b99sess"));
+		session.read("(defn b99sess [x] x)");
+		List<String> redefined = session.read("(defmulti b99sess :j)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(redefined).anyMatch(form -> form.contains("|c%b99sess%methods|"));
+	}
+
+	@Test
 	void aLaterBufferMemoizesWhatAnEarlierOneDefined() {
 		// (def p (memoize p)) in a later buffer captures the earlier buffer's
 		// function cell, like the same two forms in one file.

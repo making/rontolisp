@@ -6,6 +6,8 @@ multimethod を定義します。ディスパッチ値をキーとするメソ�
 
 デフォルトメソッドなしのミスは `No method in <name> for dispatch value: <value>` をシグナルします。ディスパッチ検索は完全一致の先を階層を通って広げます（`defmethod` を見てください）。
 
+すでに multimethod を保持する名前への `defmulti` は、オラクルと同じく何も変えません。メソッド・ディスパッチ関数・デフォルトはそのまま残ります。その間に同じ名前の別の定義（`defn`・`def` 等）があれば、次の `defmulti` は再び定義します。
+
 `class` ディスパッチは `class` が答える種類キーワード（`:string`、`:number`、`:map`、…）
 の上で走るので、ホストの綴りが同じ行を指します。`String`、`Number`（すべての数値綴りは
 `:number` にまとまります。オラクルは `Long` と `Double` を区別します）、`java.util.Map`

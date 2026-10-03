@@ -80,10 +80,11 @@ final class ClojureDispatchLowering {
 	/**
 	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
 	 * which no wasm backend has -- the keyword names the kind instead, on every backend
-	 * alike. Inside a {@code defmulti} dispatch function (see
-	 * {@link #defmultiForms(List)}) a nil answers nil itself instead, so the dispatcher's
-	 * null test maps it onto the nil method's marker while an explicit {@code :nil}
-	 * keyword keeps its row, like the oracle.
+	 * alike. A value of no Clojure kind answers its host class when it is a host object
+	 * (interpreter and JVM), else the refusal. Inside a {@code defmulti} dispatch
+	 * function (see {@link #defmultiForms(List)}) a nil answers nil itself instead, so
+	 * the dispatcher's null test maps it onto the nil method's marker while an explicit
+	 * {@code :nil} keyword keeps its row, like the oracle.
 	 */
 	static LispVal classForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
@@ -129,8 +130,10 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("function")));
 		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(one),
 				ClojureCollectionLowering.keywordForm("atom")));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("error"), LispString.literal("class needs a value of a known kind"))));
+		// anything else: a host object's class on the interpreter and the JVM, else the
+		// refusal (clojure.lisp; a program without java: gets the refusal alone)
+		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-CLASS"), one)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
@@ -485,7 +488,13 @@ final class ClojureDispatchLowering {
 				default -> throw new LispReadException("defmulti option " + opt.name() + " is not supported yet");
 			}
 		}
+		if (ctx.multimethods.contains(ClojureLowering.varKey(ctx.currentNs, name))) {
+			// the var already holds a multimethod: the oracle keeps it, methods,
+			// dispatch function and default alike
+			return List.of(ClojureLowering.NIL_CONST);
+		}
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ctx.multimethods.add(key);
 		ctx.globals.put(key, ClojureLowering.Kind.FUNCTION);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		LispSymbol fn = ClojureLowering.varSym(key);

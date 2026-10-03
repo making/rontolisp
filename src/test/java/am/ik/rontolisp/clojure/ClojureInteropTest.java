@@ -88,6 +88,44 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void classOfAHostObjectIsItsHostClassSoDispatchReachesTheDefault() throws Exception {
+		assertBothEqual("(println (= java.io.File (class (java.io.File. \"foo\"))))", "true\n");
+		assertBothEqual("(println (.getName (class (java.io.File. \"foo\"))))", "java.io.File\n");
+		assertBothEqual("(println (.getName ((comp class identity) (java.io.File. \"foo\"))))", "java.io.File\n");
+		// the book's my-print: a host object misses every class row and lands on
+		// :default, whose .toString reaches the host method (oracle #<foo>)
+		assertBothEqual("(defmulti b99-mp class) (defmethod b99-mp String [s] s)"
+				+ " (defmethod b99-mp Number [n] (str \"n\" (.toString n)))"
+				+ " (defmethod b99-mp :default [x] (str \"#<\" (.toString x) \">\"))"
+				+ " (println (b99-mp 42) (b99-mp (java.io.File. \"foo\")))", "n42 #<foo>\n");
+		assertBothEqual("(defmulti b99-mo class) (defmethod b99-mo Object [x] :object)"
+				+ " (println (b99-mo (java.io.File. \"foo\")))", ":object\n");
+	}
+
+	@Test
+	void classOfAValueOfNoKnownKindStaysARefusalWithOrWithoutInterop() throws Exception {
+		// an ex-info condition is no host object: the same refusal whether the
+		// program uses interop (the host arm) or not (no java: at all)
+		String plain = "(println (try (class (ex-info \"a\" {})) (catch Exception e (ex-message e))))";
+		assertBothEqual(plain, "class needs a value of a known kind\n");
+		assertBothEqual("(println (.getName String)) " + plain,
+				"java.lang.String\nclass needs a value of a known kind\n");
+	}
+
+	@Test
+	void classAddsNoJavaReferenceToAProgramWithoutInterop() {
+		// a java: reference changes the JVM output (the bridge, the host guards on
+		// every accessor), so the host arm exists only where the program has one
+		for (boolean wasm : new boolean[] { false, true }) {
+			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
+				.clojure("(defmulti b99-k class) (defmethod b99-k :default [x] x) (println (b99-k 1) (class [1]))",
+						wasm, false)
+				.forms();
+			assertThat(forms.stream().map(LispVal::print).filter(text -> text.contains("JAVA:"))).isEmpty();
+		}
+	}
+
+	@Test
 	void staticFieldsAnswerAsValues() throws Exception {
 		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
 		// value, through an import

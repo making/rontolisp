@@ -173,7 +173,8 @@ Each is a real work item unless the reason says otherwise.
   so its message is lost (b66).
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
-  tag; `class` answers a kind keyword (host classes exist on no wasm backend).
+  tag; `class` answers a kind keyword (host classes exist on no wasm backend), a host
+  object its host class (interpreter and JVM).
 - Metadata: a derived value (`assoc`, `conj`, ...) starts without metadata; a symbol takes
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
@@ -341,6 +342,21 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   a class spelling to the keyword `class` answers for it, `nil` to the `(:C%NIL)` marker
   (the dispatcher maps a true nil there, so no table keys on nil and a literal `:nil` keeps
   its own row), `Object` to `:object` plus the slot, literal vectors element by element.
+- A `defmulti` of a var that holds a multimethod lowers to `nil`, like the oracle's (the
+  corpus's second `(defmulti my-print class :default :everything-else)` keeps the first's
+  methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
+  is cleared by every other definition (`intern`), never by the pre-scan (`internName`).
+  Static, so a `defmulti` run repeatedly inside a function still redefines.
+- `class`'s last arm (no Clojure kind) is `%clojure-host-class` (`clojure.lisp`): `(java:call
+  x "getClass")` under `handler-case` -- `java:call` refuses every non-host value on both
+  paths, so its refusal IS the host test -- else `class needs a value of a known kind`.
+  `ClojureLibrary.process` splices a refusal-only body when the program names no `java:`
+  operator (`LispNames.JAVA_OPERATORS_QUALIFIED`, the list `JvmLispCompiler.
+  programUsesAnyJavaOp` reads), since a `java:` reference changes the JVM output; the
+  interpreter always has the host body. A host object then misses every class row and
+  reaches `Object`, then `:default`. Measured 2026-10-03, shcloj4
+  `examples.test.multimethods`: 2 errors before (`.toString 42`, `class` of a `File`),
+  byte-identical to the oracle after on the interpreter and the JVM.
 - A `class` call in the dispatch function answers nil for nil, so the marker is hit --
   bare, wrapped, through a named `defn`/`def`'d function (the `defmulti` re-lowers its
   recorded definition with the dispatch lowering) or nested inline (inlined at the call
@@ -390,6 +406,12 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
 - A bare class name in value position is `(java:static "java.lang.Class" "forName"
   "<fqn>")`, the oracle's class object.
 - A string receiver answers the mapped core operation (a Lisp string is no host object).
+  `.toString` of a number, character, symbol (booleans too), cons, array, table or
+  function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
+  backend (`ClojureInteropLowering.valueToString`); nil signals (the oracle's NPE); only
+  what is left reaches `java:call`. The stream arm's non-string-stream branch reaches the
+  same test, since `streamp` answers true for `t` (the terminal's designator, and
+  Clojure's `true`).
   Stream receivers run on every backend: `.write` -> `princ` (nil signals), `.flush`,
   `.readLine` -> `read-line` (nil past the end), `.read` -> a character code (`-1` past
   the end), `.toString` of a string output stream -> the text so far. `(new

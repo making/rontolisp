@@ -114,7 +114,7 @@
   拒否されます。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
-  タグのキーワードで答えます。
+  タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
 - `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
   他のクラスは誤答の代わりに名前付きで拒否されます。
 - `unchecked-add` は折り返しません（整数は bignum です）。他の `unchecked-*` は未対応です。

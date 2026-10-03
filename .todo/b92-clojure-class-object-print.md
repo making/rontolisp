@@ -14,7 +14,10 @@ printer, `JavaBridgeTemplate`); the oracle (`clj` 1.12.6.1673) prints
   needs a Class test that adds no `java:` reference to wasm programs
   (`.kb/java-interop.md`); the printers are shared with Common Lisp, whose
   `#<java java.lang.Class>` must stay unless the cross-language change is
-  taken deliberately.
+  taken deliberately. The mechanism exists since `%clojure-host-class`: a
+  `clojure.lisp` defun with a `java:` body, swapped for a `java:`-free one by
+  `ClojureLibrary.process` in a program that names no `java:` operator
+  (`HOST_ARM_REFUSALS`); a printer host arm can be another entry there.
 - `str` spells `class <name>`, print/pr-str the bare name.
 - Pin in `ClojureInteropTest` (interpreter + JVM), update
   `.kb/clojure-frontend.md` and the `class-member` reference page (en + ja),

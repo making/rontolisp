@@ -706,6 +706,13 @@ public final class ClojureLowering {
 	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
+	 * The vars a {@code defmulti} defined, by var key, until another definition of the
+	 * name: a {@code defmulti} of one of them is a no-op, like the oracle's, which
+	 * defines only when the var holds no multimethod yet.
+	 */
+	final Set<String> multimethods = new HashSet<>();
+
+	/**
 	 * The binding-depth counter of a dynamic var: a special beside the var itself, zero
 	 * at the root and rebound one deeper by every {@code binding} of the var, so
 	 * {@code set!} tests at run time whether the var is thread-bound. Defined beside the
@@ -1067,7 +1074,7 @@ public final class ClojureLowering {
 	 */
 	private void preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
 		String name = ClojureLowerUtil.plainName(nameDatum, what);
-		this.globals.put(intern(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
+		this.globals.put(internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
 	}
 
 	/**
@@ -1146,6 +1153,13 @@ public final class ClojureLowering {
 	 * @return its var key
 	 */
 	String intern(String name, boolean isPrivate) {
+		String key = internName(name, isPrivate);
+		this.multimethods.remove(key);
+		return key;
+	}
+
+	/** {@link #intern} without ending a multimethod: the pre-scan defines nothing. */
+	private String internName(String name, boolean isPrivate) {
 		ClojureNsState here = ns();
 		here.interns.put(name, isPrivate);
 		here.refers.remove(name);

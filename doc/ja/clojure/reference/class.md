@@ -5,7 +5,9 @@
 値の種類をキーワードで返します。`:map`・`:vector`・`:set`・`:list`・`:string`・
 `:number`・`:keyword`・`:symbol`・`:char`・`:boolean`・`:nil`・`:function`・`:atom` です。
 オラクルはホストクラスを返しますが、wasm バックエンドにはないため、全バックエンド共通で
-種類名のキーワードを返します。record/deftype はタグのキーワードを返します。値としては1引数ラムダです。
+種類名のキーワードを返します。record/deftype はタグのキーワードを返します。ホストオブジェクトは
+インタプリタと JVM でホストクラスを返すため、それに対する `class` ディスパッチは `Object` か
+`:default` のメソッドに届きます。値としては1引数ラムダです。
 
 ```clojure
 (println (class "a") (class 1)) ; :string :number

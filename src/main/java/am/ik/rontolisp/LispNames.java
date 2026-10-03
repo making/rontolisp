@@ -7566,6 +7566,15 @@ public final class LispNames {
 	/** {@code java:subclass}, qualified. */
 	public static final String JAVA_SUBCLASS_QUALIFIED = JAVA_PKG + ":" + JAVA_SUBCLASS;
 
+	/**
+	 * The {@code java:} operators, qualified. A program naming none of them holds no host
+	 * object: the JVM backend emits no {@code java:} runtime for it, and the Clojure
+	 * library splices its host arms out of it.
+	 */
+	public static final java.util.List<String> JAVA_OPERATORS_QUALIFIED = java.util.List.of(JAVA_NEW_QUALIFIED,
+			JAVA_CALL_QUALIFIED, JAVA_STATIC_QUALIFIED, JAVA_FIELD_QUALIFIED, JAVA_PROXY_QUALIFIED,
+			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED);
+
 	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
 	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;
 

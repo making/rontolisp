@@ -4789,3 +4789,46 @@ cases:
       1
       5
       3
+  - name: tostring-of-a-value-is-its-str-spelling
+    # .toString of a value that is no host object answers what the oracle's
+    # toString answers -- str's spelling, a collection readable inside -- on every
+    # backend, so the book's (defmethod my-print Number [n] (.toString n)) runs
+    # without reaching java:. A nil receiver signals, like the oracle's
+    # NullPointerException.
+    source: |
+      (println (.toString 42) (.toString :k) (.toString [1 "a"]))
+      (println (.toString 1.5) (.toString \c) (.toString '(1 "b")) (.toString {:a "s"}) (.toString #{\x}))
+      (println (.toString true) (.toString false) (.toString 'b99-sym) (.toString 1/2) (.toString (.toString 7)))
+      (println (.toString [nil \c "s"]))
+      (defmulti b99-print class)
+      (defmethod b99-print Number [n] (str "n:" (.toString n)))
+      (println (b99-print 42))
+      (println (try (.toString (let [x nil] x)) (catch Exception e "caught")))
+    expected: |
+      42 :k [1 "a"]
+      1.5 c (1 "b") {:a "s"} #{\x}
+      true false b99-sym 1/2 7
+      [nil \c "s"]
+      n:42
+      caught
+  - name: a-second-defmulti-of-a-multimethod-is-a-no-op
+    # The oracle's defmulti defines only when the var holds no multimethod yet, so
+    # the book's second (defmulti my-print class :default :everything-else) keeps
+    # the first one's methods, dispatch function and default; a method added
+    # after it still registers. A definition of another kind in between makes the
+    # next defmulti define again.
+    source: |
+      (defmulti b99-mm class)
+      (defmethod b99-mm Number [n] (str "n" n))
+      (defmethod b99-mm :default [x] "dflt")
+      (defmulti b99-mm :k :default :other)
+      (defmethod b99-mm :other [x] "other")
+      (defmethod b99-mm String [x] "s")
+      (println (b99-mm 1) (b99-mm :k) (b99-mm "a"))
+      (defn b99-mm2 [x] x)
+      (defmulti b99-mm2 :k :default :other)
+      (defmethod b99-mm2 :other [x] "other")
+      (println (b99-mm2 {:k 1}))
+    expected: |
+      n1 dflt s
+      other
