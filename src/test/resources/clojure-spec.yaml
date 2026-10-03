@@ -999,6 +999,18 @@ cases:
       true
       true
       :refused
+  - name: conj-onto-a-hash-map-takes-nil-and-refuses-a-wrapper
+    # Oracle-identical (clj 1.12.6): a nil item adds nothing; a keyword, symbol or
+    # atom is no map entry.
+    source: |
+      (defn conj-nil-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-nil-try #(conj {:a 1} nil)) (conj-nil-try #(conj {:a 1} nil [:b 2])) (conj-nil-try #(into {:a 1} [nil [:b 2]])) (conj-nil-try #(merge {:a 1} nil {:b 2})))
+      (println (conj-nil-try #(conj {} :a)) (conj-nil-try #(conj {} 'a)) (conj-nil-try #(into {} [:a])) (conj-nil-try #(conj {} (atom 1))) (conj-nil-try #(conj (sorted-map) :a)) (conj-nil-try #(conj (sorted-map :b 1) nil)))
+      (println (conj-nil-try #(conj {} nil)) (conj-nil-try #(conj {:a 1} {:a 2} nil)))
+    expected: |
+      {:a 1} {:a 1, :b 2} {:a 1, :b 2} {:a 1, :b 2}
+      :refused :refused :refused :refused :refused {:b 1}
+      {} {:a 2}
   - name: disj-removes-set-members
     source: |
       (println (count (disj #{1 2 3} 2)))

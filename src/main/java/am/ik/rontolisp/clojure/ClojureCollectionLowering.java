@@ -826,11 +826,14 @@ final class ClojureCollectionLowering {
 	}
 
 	/**
-	 * The entries one conjoined item adds to a map, as a plist: a map's own pairs, a
-	 * two-vector's or two-list's pair, or a set's members each as an entry.
+	 * The entries one conjoined item adds to a map, as a plist: none of nil, a map's own
+	 * pairs, a two-vector's or two-list's pair, or a set's members each as an entry.
 	 */
 	static LispVal entryPlist(ClojureLowering ctx, LispVal item) {
 		List<LispVal> branches = new ArrayList<>();
+		// a nil item adds nothing, like the oracle
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), item),
+				ClojureLowering.NIL_CONST));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), item),
 				tablePlist(item)));
 		branches.add(ClojureLowerUtil.list(
@@ -844,6 +847,11 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), item),
+						// a keyword, atom, regex... is a cons wrapper whose car is a CL
+						// keyword: no entry
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), item))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), isSetForm(item)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), item)),
@@ -899,6 +907,11 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), key),
+						// a keyword, atom, regex... is a cons wrapper whose car is a CL
+						// keyword: no entry
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), key))),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), isSetForm(key)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)),
