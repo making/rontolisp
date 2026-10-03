@@ -10,7 +10,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `true`/`false`/`nil`; `str` concatenates bare and spells them `true`/`false`/`""` (a
   collection inside it spells readably, strings quoted, like the oracle's `toString`);
   `pr`/`prn`/`pr-str` are the readable arms (strings print quoted, `pr-str` joining its
-  parts with a space like `pr`). The print family answers `nil`, like the oracle.
+  parts with a space like `pr`); `print-str`/`prn-str`/`println-str` are the same arms answered as a
+  string. The print family answers `nil`, like the oracle.
 - Collections print in Clojure notation (`[1 :a s]`, `{:a 1}`, `#{1}`,
   `(true false nil :k)`); a quoted symbol demangles from behind `c%`. `nil` stays `nil`
   (never `()`), and map/set walk order stays unspecified (same as `keys`/`vals`), so only

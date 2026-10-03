@@ -1797,6 +1797,31 @@ cases:
 
       nil
       ("a" 1)
+  - name: print-str-prn-str-and-println-str-answer-what-print-writes
+    # The string arms of print/prn/println: parts joined by a space, nil spelled
+    # nil, a collection printing its strings bare under print-str/println-str and
+    # quoted under prn-str; prn-str and println-str end with a newline. The parts
+    # evaluate first, so what one prints goes to the real output.
+    source: |
+      (println (pr-str (print-str 1 "a" ["a" \b nil])))
+      (println (pr-str (prn-str 1 "a" ["a" \b nil] nil)))
+      (println (pr-str (println-str 1 "a" ["a"] nil)))
+      (println (pr-str (print-str)) (pr-str (prn-str)) (pr-str (println-str)))
+      (println (pr-str (print-str nil) (print-str "x")))
+      (println (pr-str (apply println-str [1 2]) (map prn-str ["a" 1])))
+      (println (pr-str (println-str "a\nb")))
+      (println (pr-str (with-out-str (prn (print-str (do (print "in") 1))))))
+      (println (pr-str (str (println-str {:a "s"}))))
+    expected: |
+      "1 a [a b nil]"
+      "1 \"a\" [\"a\" \\b nil] nil\n"
+      "1 a [a] nil\n"
+      "" "\n" "\n"
+      "nil" "x"
+      "1 2\n" ("\"a\"\n" "1\n")
+      "a\nb\n"
+      "in\"1\"\n"
+      "{:a s}\n"
   - name: collections-nest-in-clojure-notation
     # Vectors, maps, sets and lists nest with their own brackets; nil stays nil
     # (never ()).

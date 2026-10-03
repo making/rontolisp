@@ -176,6 +176,13 @@ public final class ClojureLowering {
 	 */
 	static final LispSymbol CLOJURE_WRITE_DATUM = new LispSymbol("RONTOLISP::%CLOJURE-WRITE-DATUM");
 
+	/**
+	 * The library string builder behind {@code print-str}/{@code prn-str}/
+	 * {@code println-str}: a list of values, a readable flag and a newline flag in, the
+	 * printed text out.
+	 */
+	static final LispSymbol CLOJURE_PRINT_STR = new LispSymbol("RONTOLISP::%CLOJURE-PRINT-STR");
+
 	static final LispSymbol ELSE = new LispSymbol(":else");
 
 	final List<LispVal> forms = new ArrayList<>();
@@ -2790,6 +2797,12 @@ public final class ClojureLowering {
 				return ClojureStringLowering.strCall(this, items);
 			case "pr-str":
 				return ClojureStringLowering.prStrCall(this, items);
+			case "print-str":
+				return ClojureStringLowering.printStrCall(this, items, false, false);
+			case "prn-str":
+				return ClojureStringLowering.printStrCall(this, items, true, true);
+			case "println-str":
+				return ClojureStringLowering.printStrCall(this, items, false, true);
 			case "println":
 				return ClojureStringLowering.printCall(this, items, true);
 			case "print":
@@ -3225,6 +3238,9 @@ public final class ClojureLowering {
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
 			case "str" -> ClojureStringLowering.strValue(this);
 			case "pr-str" -> ClojureStringLowering.prStrValue(this);
+			case "print-str" -> ClojureStringLowering.printStrValue(false, false);
+			case "prn-str" -> ClojureStringLowering.printStrValue(true, true);
+			case "println-str" -> ClojureStringLowering.printStrValue(false, true);
 			case "seq" -> ClojureSeqLowering.seqValue(this);
 			case "first" -> ClojureSeqLowering.firstValue(this);
 			case "rest", "next" -> ClojureSeqLowering.restValue(this);

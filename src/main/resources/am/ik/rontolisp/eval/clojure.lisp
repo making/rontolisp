@@ -439,6 +439,18 @@
   (rontolisp::%clojure-print x nil-replacement readable *standard-output*)
   nil)
 
+(defun rontolisp::%clojure-print-str (parts readable newline)
+  "The print-str/prn-str/println-str building block: PARTS printed to a fresh
+   string stream, single spaces between, nil spelled nil, a trailing newline
+   under NEWLINE, and the text answered. The parts are evaluated by the caller,
+   so what they print goes to the real output, not into the answer."
+  (let ((stream (make-string-output-stream)) (first t))
+    (dolist (x parts)
+      (if first (setq first nil) (write-char #\Space stream))
+      (rontolisp::%clojure-print x "nil" readable stream))
+    (if newline (terpri stream))
+    (get-output-stream-string stream)))
+
 (defun rontolisp::%clojure-host-class (x)
   "class of a value of no Clojure kind: a host object's class (the oracle's
    answer), anything else the refusal. java:call refuses every value that is no
