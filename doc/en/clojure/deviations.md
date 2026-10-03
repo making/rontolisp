@@ -143,9 +143,6 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   which `with-open` closes) and answers strictly either way (the oracle takes a
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
-- `sort` without a comparator orders numbers, strings, characters and keywords; anything
-  else (or mixed kinds) signals, where the oracle sorts by `compare` (which orders `nil`,
-  booleans, symbols and vectors too).
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
   copies it (an association costs the collection's size, like a hash map's); `nth` steps
   through one where the oracle refuses; `class` answers `:map`/`:set`; a `subseq` or

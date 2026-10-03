@@ -134,7 +134,7 @@ answered `2 5 3` before).
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil and false are empty, anything else signals; `cons` onto a lazy collection answers a wrapper |
 | `nth` / `second` | `%clojure-nth` | a vector or string indexed directly, anything else stepped; past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
-| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `sort` orders numbers, strings, chars and keywords (else signals), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
+| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of a deftype/reify signals; `empty?` realizes one level; `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
@@ -230,6 +230,16 @@ before the library splice.
   signals. `sort`/`sort-by` with a comparator read the same rule (before 2026-10-03 a
   number was truthy, so `(sort (fn [a b] (- a b)) xs)` answered garbage; pinned by
   `sort-reads-a-comparator-answering-a-number`).
+- The default order of `sort`/`sort-by` is `(neg? (compare a b))` (`defaultCmpBody`), with
+  `<` kept inline for two numbers (`sort-without-a-comparator-orders-by-compare`). Measured
+  2026-10-03 on `(sort xs)` over 100,000 pseudo-random integers, twice per run: the
+  previous inline `<`/`string<`/`char<`/keyword `cond` 2.76 s interpreter, 0.36 s JVM; compare
+  alone 6.10 s and 0.45 s (the interpreter pays a runtime call per comparison, 2.2x); compare
+  with the `<` number arm 2.82 s and 0.39-0.44 s, so the arm stays. Strings need no arm: 50,000
+  strings 21.0 s before, 17.9 s compare alone (interpreter), JVM 0.40 -> 0.25 s. Size of
+  a program sorting numbers, strings, a `sort-by` and keywords: JVM class 81,011 -> 88,225 B,
+  wasm 46,499 -> 51,458 B (the compare runtime is spliced once a program sorts; compare alone
+  87,630 / 51,248, number arm plus string arm 90,695 / 53,181).
 - `subseq`/`rsubseq` (`%clojure-subseq`, `-5`): the oracle's two paths -- a test leading
   away from the start (`>`/`>=`, `<`/`<=` for rsubseq) starts at the key through the
   oracle's `seqFrom`, any other walks from the start while it holds. The oracle picks the
@@ -290,6 +300,7 @@ before the library splice.
   `sorted-map-by-and-sorted-set-by-order-through-a-comparator`,
   `subseq-and-rsubseq-walk-a-bounded-range`, `sorted-collections-and-the-type-predicates`,
   `compare-orders-like-the-oracle`, `sort-reads-a-comparator-answering-a-number`,
+  `sort-without-a-comparator-orders-by-compare`,
   `vector-of-stores-each-member-as-its-primitive`, `sorted-collections-refuse-like-the-oracle`,
   `clojure-set-grows-and-shrinks-a-sorted-set`,
   `sorted-collections-carry-metadata-and-travel-through-macros` (oracle-identical but for
