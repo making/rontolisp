@@ -4579,3 +4579,20 @@ cases:
       (println (boolean (re-find #"Elapsed time: \d+\.\d+ msecs" (with-out-str (time (+ 1 2))))))
     expected: |
       true
+  - name: a-computed-head-answers-like-a-collection-or-keyword-call
+    # A call whose head is a compound form that yields a set, map, vector or
+    # keyword answers through the same IFn dispatch a bound local does.
+    source: |
+      (println ((set [1]) 1))
+      (println ((hash-map :a 1) :a))
+      (println ((vec [1 2]) 0))
+      (println ((identity {:a 1}) :a))
+      (println ((first [:a]) {:a 5}))
+      (println ((comp inc inc) 1))
+    expected: |
+      1
+      1
+      1
+      1
+      5
+      3

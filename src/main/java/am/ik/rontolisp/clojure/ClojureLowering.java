@@ -2231,9 +2231,7 @@ public final class ClojureLowering {
 			if (ClojureVarLowering.isVarForm(head)) {
 				return ClojureVarLowering.callOf(this, items);
 			}
-			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("funcall"), lowers(items, 0)); // ((fn
-																								// ...)
-																								// args)
+			return computedHeadCall(items);
 		}
 		if (head == ClojureReader.VECTOR) {
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowers(items, 1));
@@ -2319,6 +2317,24 @@ public final class ClojureLowering {
 
 	/** The parameter shape of one clause datum, read without lowering anything. */
 	record ParamShape(boolean variadic, int fixed) {
+	}
+
+	/**
+	 * A call whose head is a compound form: a head that lowers to a function value is
+	 * called directly, any other (a call result that may be a set, map, vector or
+	 * keyword) goes through the prelude dispatcher like a bound local does.
+	 */
+	private LispVal computedHeadCall(List<LispVal> items) {
+		LispVal fun = lower(items.get(0));
+		List<LispVal> args = lowers(items, 1);
+		if (ClojureLowerUtil.isDirectFun(fun)) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(ClojureLowerUtil.sym("funcall"));
+			call.add(fun);
+			call.addAll(args);
+			return ClojureLowerUtil.list(call);
+		}
+		return callableApply(fun, ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
 	}
 
 	/**
