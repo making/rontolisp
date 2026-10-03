@@ -310,16 +310,19 @@ final class ClojureUpdateLowering {
 			.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, keys)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 							ClojureLowerUtil.list(List.of(
-									ClojureLowerUtil.list(held, ClojureCollectionLowering.lookupKey(one, src)),
+									ClojureLowerUtil.list(held,
+											ClojureCollectionLowering.lookupKey(
+													ClojureCollectionLowering.storedKey(one, whole), src, false)),
 									ClojureLowerUtil.list(got,
 											ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), held, src, miss)))),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss),
 									ClojureLowering.NIL_CONST, keep)));
-		// a record reads through its entry table and answers a plain map, like the
-		// oracle; anything opaque signals, like the oracle
+		// a record reads through its entry table and a sorted map through a table of its
+		// entries (an arm a program building no sorted collection sheds), each answering
+		// a plain map, like the oracle; anything opaque signals, like the oracle
 		LispVal norm = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(whole),
-				ClojureProtocolLowering.typedTableOf(whole), whole);
+				ClojureProtocolLowering.typedTableOf(whole), sortedEntries(whole, "select-keys"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, map),
 						ClojureLowerUtil.list(miss,
@@ -388,10 +391,11 @@ final class ClojureUpdateLowering {
 			LispSymbol old = ctx.freshTemp();
 			LispSymbol stored = ctx.freshTemp();
 			LispVal invoked = ctx.callFun(fun.real(), fn, List.of(old, val));
-			// a record contributes its entries, like a map; anything opaque signals
-			// in the maphash, like the oracle
+			// a record contributes its entries, like a map, and so does a sorted map (an
+			// arm a program building no sorted collection sheds); anything opaque
+			// signals in the maphash, like the oracle
 			LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
-					ClojureProtocolLowering.typedTableOf(one), one);
+					ClojureProtocolLowering.typedTableOf(one), sortedEntries(one, "merge-with"));
 			LispVal join = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
 					ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil
@@ -409,8 +413,23 @@ final class ClojureUpdateLowering {
 		merges.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), syms),
 				ClojureCollectionLowering.rewrapAnswer(ctx, syms.get(0), acc), ClojureLowering.NIL_CONST));
+		// a sorted first map is the accumulator the oracle's reduce grows, keys found by
+		// its comparator (an arm a program building no sorted collection sheds)
+		LispVal sorted = ClojureSortedLowering.runtime("sorted-merge-with",
+				fun.real() ? fn : ClojureLowering.realFun(fn),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), syms));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), merges));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(syms.get(0)),
+						sorted, ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), merges)));
+	}
+
+	/**
+	 * A map a verb walks with {@code maphash}: a sorted map as a table of its entries (an
+	 * arm a program building no sorted collection sheds), anything else itself.
+	 */
+	static LispVal sortedEntries(LispVal map, String verb) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(map),
+				ClojureSortedLowering.runtime("sorted-table", map, LispString.literal(verb)), map);
 	}
 
 	/**
@@ -432,11 +451,14 @@ final class ClojureUpdateLowering {
 		LispSymbol stored = ctx.freshTemp();
 		LispSymbol found = ctx.freshTemp();
 		LispSymbol probe = ctx.freshTemp();
-		// a record contributes its entries, like a map; anything opaque signals
-		// in the maphash, like the oracle (the mergeWithForm precedent)
+		// a record contributes its entries, like a map, and so does a sorted map (an arm
+		// a program building no sorted collection sheds); anything opaque signals in the
+		// maphash, like the oracle (the mergeWithForm precedent)
 		LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left);
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(head),
-				ClojureProtocolLowering.typedTableOf(head), head);
+				ClojureProtocolLowering.typedTableOf(head),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(head),
+						ClojureSortedLowering.runtime("sorted-table", head, LispString.literal("merge-with")), head));
 		LispVal join = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)), ClojureLowerUtil.list(
@@ -471,15 +493,20 @@ final class ClojureUpdateLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), found), probe),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), found, probe)));
+		LispVal walk = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureCollectionLowering.makeTable()),
+						ClojureLowerUtil.list(miss,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
+						ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST))),
+				find, ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
+						ClojureLowerUtil.list(self, maps)));
+		// a sorted first map is the accumulator, like the call (an arm a program building
+		// no sorted collection sheds)
+		LispVal first = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), maps);
+		LispVal sorted = ClojureSortedLowering.runtime("sorted-merge-with", ClojureLowering.realFun(fn), maps);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, maps)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureCollectionLowering.makeTable()),
-								ClojureLowerUtil.list(miss,
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-								ClojureLowerUtil.list(found, ClojureLowering.NIL_CONST))),
-						find, ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"),
-								ClojureLowerUtil.list(List.of(binding)), ClojureLowerUtil.list(self, maps))));
+				ClojureLowerUtil.list(List.of(fn, ClojureLowering.AMPERSAND_REST, maps)), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(first), sorted, walk));
 	}
 
 	/**

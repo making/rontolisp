@@ -10,16 +10,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `true`/`false`/`nil`; `str` concatenates bare and spells them `true`/`false`/`""` (a
   collection inside it spells readably, strings quoted, like the oracle's `toString`);
   `pr`/`prn`/`pr-str` are the readable arms (strings print quoted, `pr-str` joining its
-  parts with a space like `pr`). The print family answers `nil`, like the oracle.
+  parts with a space like `pr`); `print-str`/`prn-str`/`println-str` are the same arms answered as a
+  string. The print family answers `nil`, like the oracle.
 - Collections print in Clojure notation (`[1 :a s]`, `{:a 1}`, `#{1}`,
   `(true false nil :k)`); a quoted symbol demangles from behind `c%`. `nil` stays `nil`
   (never `()`), and map/set walk order stays unspecified (same as `keys`/`vals`), so only
   single-entry maps and single-member sets print deterministically. A value that closes a
   cycle prints with a datum label (`#0=(1 . #0#)`), like Scheme's `write`; sharing
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
-  as `#<procedure>`, an `ex-info` as its condition object (`#<C%E-EX-INFO ...>`).
-- `*print-length*`/`*print-level*` are not honored, and `~S`/`~A` on Clojure values stay
-  Common Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent.
+  as `#<procedure>`, an exception as its `toString` (`clojure.lang.ExceptionInfo: m {}`;
+  the oracle prints `#error {...}`), an unbound var's root as `#<Unbound: #'user/x>` (the
+  oracle's `#object` carries a hash).
+- `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
+  read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
+  `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
+  CL surface); `print-method`/`pprint` stay absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested
@@ -30,9 +35,19 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
   the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A map entry is a plain two-member vector, so `map-entry?` is `true` of every `[k v]`
-  (the oracle: `false` for one the program built) and `key`/`val` read any such vector. Keywords
+  (the oracle: `false` for one the program built) and `key`/`val` read any such vector. For the same reason `(conj {} #{[1 2]})`,
+  `(conj {} (seq [[1 2]]))` and `(merge {} (seq [[1 2]]))` answer `{1 2}` (the oracle: `ClassCastException`, the members must be real entries). Keywords
   are not interned, so `find-keyword` answers the keyword for a spelling no keyword ever used
   (the oracle: `nil`).
+- The type predicates follow the representation. `nil` is the empty list, so `seq?`,
+  `list?`, `coll?`, `sequential?` and `counted?` answer `false` for `()`; a seq a verb answers
+  over a strict input is a list, so `list?`, `counted?` and `realized?` answer `true` for it
+  (the oracle's lazy or chunked seq: `false`); no seq is chunked (`chunked-seq?` is always
+  `false`), and an `iterate`/`cycle` seq is `realized?` only once forced. A decimal or `N`
+  literal is a plain rational, so `decimal?` is always `false` and `ratio?`, `integer?` and
+  `int?` answer for the rational (`(ratio? 1.5M)`, `(int? 2N)` are `true`). `identical?`
+  compares numbers, characters and symbols by value (`(identical? 1000 1000)` is `true`) and
+  two keywords of one spelling as one object.
 - A program's own top-level definition of a core name (`(defn peek ...)`) shadows the
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
@@ -57,8 +72,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   fails.
 - `clojure.test` runs the tests in definition order (the oracle's order is its
   namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
-  names, like `catch`; an error report prints the condition's message (an `ex-info` the
-  oracle's way) with no stack trace, at the `is` form's line where the oracle names the
+  names, like `catch`; an error report prints the exception's `toString` (a runtime error
+  its report) with no stack trace, at the `is` form's line where the oracle names the
   frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
@@ -66,6 +81,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   like the oracle. `use-fixtures` is refused by name.
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
+- An exception is a condition carrying a class name, a message, data and a cause. A runtime
+  error is the Common Lisp condition the runtime signals, whose message is the Common Lisp
+  report (`(.getMessage e)` of a failed `(inc nil)` is `+: The value NIL is not of type
+  NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
+  without the oracle's class prefix. A throwable construction is an exception only
+  for a class that carries nothing but a message and a cause; one with members of its own
+  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class`,
+  `instance?` and every other method of an exception (`.printStackTrace`, `.getStackTrace`)
+  are refused, and `throw` of a value that is no exception signals its rendering where the
+  oracle refuses it.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
@@ -117,15 +142,23 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is a Namespace object), `:file` of the entry file is the path as given (the oracle
   absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
   (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
-  Deref of a macro's var signals (the oracle answers its expander function), and a
-  `clojure.core` var (`#'println`) is refused by name.
+  Deref of a macro's var signals (the oracle answers its expander function). A
+  `clojure.core` var's metadata is only `:name`, `:ns` and a macro's `:macro` (the
+  oracle's also carries `:arglists`, `:doc`, `:added` and the position), and a core var
+  with no value here (`#'*ns*`, `#'*file*`) is refused.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
-- `unchecked-add` never wraps (integers are bignums); the other `unchecked-*` verbs are
-  absent.
+- The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
+  (`int`, `long`, `short`, `byte`, `char`, `double`, `float`) match the oracle, with one deviation:
+  an integer past 64 bits is a plain integer here, so the oracle's unwrapped bigint operand
+  (`(unchecked-add 9223372036854775807N 1)`) wraps too. `inc`, `dec` and the checked verbs never
+  overflow (integers are bignums).
+- `bigint` and `biginteger` answer a plain integer, and `bigdec` a plain rational (`(bigdec "1.5")`
+  prints `3/2`, the oracle `1.5M`), like the `N` and `M` literals; `bigdec` of a ratio with an infinite
+  decimal expansion signals, like the oracle.
 - `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
   precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
   `nil` `"null"`, like the oracle.
@@ -133,8 +166,20 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   which `with-open` closes) and answers strictly either way (the oracle takes a
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
-- `sort` without a comparator orders numbers, strings, characters and keywords; anything
-  else (or mixed kinds) signals.
+- A sorted map or set orders, prints and finds keys like the oracle's, but every verb
+  copies it (an association costs the collection's size, like a hash map's); `nth` steps
+  through one where the oracle refuses; `class` answers `:map`/`:set`; a `subseq` or
+  `rsubseq` walking from the first member that finds nothing answers `nil` (the oracle
+  `()`); a test passed to `subseq` as a value is recognized by how it answers `(1 0)`,
+  `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
+  orders strings by code point (the oracle by UTF-16 unit, which differs past U+FFFF).
+- `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
+  `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
+  refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
+- `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
+  given, where the oracle's keeps casting, and `:float` holds doubles.
+- `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position
+  of `rest`), so it carries no metadata, and of a map entry `[]` (the oracle `nil`).
 - `partition` takes no pad. `partition-all` with a non-positive size or step signals,
   where the oracle answers an endless seq of `()`. `pmap` is `map`, run in order on the
   calling thread. `take-nth` with a zero step signals, and its seq arity steps by the
@@ -176,8 +221,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the class loaded first); a deftype literal is refused. `read` takes a stream -- a
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
-- `*out*`/`*in*` are `*standard-output*`/`*standard-input*` (rebinding rebinds the
-  standard streams);
+- `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
+  (rebinding rebinds the standard streams); `(prn *out*)` prints `true` (the root of
+  `*standard-output*` is `t`);
   `defonce` keeps the root on reload where `def` resets it.
 - A host-object boolean answers `false` only when the receiver's class is known
   at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound

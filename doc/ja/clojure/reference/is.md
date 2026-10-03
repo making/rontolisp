@@ -27,5 +27,5 @@ strings differ
 expected: (= "a" "b")
   actual: (not (= "a" "b"))
 false
-boom
+clojure.lang.ExceptionInfo: boom {}
 ```

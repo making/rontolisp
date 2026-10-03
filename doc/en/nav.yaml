@@ -249,6 +249,8 @@ sections:
             title: "Maps, sets and vectors"
           - file: clojure/reference/numbers.md
             title: "Numbers and predicates"
+          - file: clojure/reference/predicates.md
+            title: "Type and collection predicates"
           - file: clojure/reference/state.md
             title: "State"
           - file: clojure/reference/multimethods.md

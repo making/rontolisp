@@ -151,10 +151,29 @@ final class ClojureNamespaceLowering {
 			"capitalize", "trim", "triml", "trimr", "trim-newline", "blank?", "starts-with?", "ends-with?", "includes?",
 			"index-of", "last-index-of", "replace", "replace-first", "escape", "re-quote-replacement", "reverse");
 
-	/** The {@code java.lang} classes a simple name resolves to without an import. */
-	static final Set<String> JAVA_LANG = Set.of("Object", "String", "Integer", "Long", "Double", "Float", "Boolean",
-			"Character", "Byte", "Short", "Math", "System", "Class", "Thread", "Exception", "RuntimeException", "Error",
-			"StringBuilder", "Number", "Comparable", "CharSequence");
+	/**
+	 * The {@code java.lang} classes a simple name resolves to without an import: the
+	 * oracle's fixed default-import list (not every {@code java.lang} class -- {@code
+	 * AutoCloseable}, {@code Record} and {@code Module} are unresolved there too).
+	 */
+	static final Set<String> JAVA_LANG = Set.of("AbstractMethodError", "Appendable", "ArithmeticException",
+			"ArrayIndexOutOfBoundsException", "ArrayStoreException", "AssertionError", "Boolean", "Byte", "Character",
+			"CharSequence", "Class", "ClassCastException", "ClassCircularityError", "ClassFormatError", "ClassLoader",
+			"ClassNotFoundException", "CloneNotSupportedException", "Cloneable", "Comparable", "Deprecated", "Double",
+			"Enum", "EnumConstantNotPresentException", "Error", "Exception", "ExceptionInInitializerError", "Float",
+			"IllegalAccessError", "IllegalAccessException", "IllegalArgumentException", "IllegalMonitorStateException",
+			"IllegalStateException", "IllegalThreadStateException", "IncompatibleClassChangeError",
+			"IndexOutOfBoundsException", "InheritableThreadLocal", "InstantiationError", "InstantiationException",
+			"Integer", "InternalError", "InterruptedException", "Iterable", "LinkageError", "Long", "Math",
+			"NegativeArraySizeException", "NoClassDefFoundError", "NoSuchFieldError", "NoSuchFieldException",
+			"NoSuchMethodError", "NoSuchMethodException", "NullPointerException", "Number", "NumberFormatException",
+			"Object", "OutOfMemoryError", "Override", "Package", "Process", "ProcessBuilder", "Readable", "Runnable",
+			"Runtime", "RuntimeException", "RuntimePermission", "SecurityException", "SecurityManager", "Short",
+			"StackOverflowError", "StackTraceElement", "StrictMath", "String", "StringBuffer", "StringBuilder",
+			"StringIndexOutOfBoundsException", "SuppressWarnings", "System", "Thread", "ThreadDeath", "ThreadGroup",
+			"ThreadLocal", "Throwable", "TypeNotPresentException", "UnknownError", "UnsatisfiedLinkError",
+			"UnsupportedClassVersionError", "UnsupportedOperationException", "VerifyError", "VirtualMachineError",
+			"Void");
 
 	/**
 	 * Whether a core name is visible: everything outside a

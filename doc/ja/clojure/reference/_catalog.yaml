@@ -109,6 +109,7 @@ categories:
       - { slug: partition-by, name: "partition-by" }
       - { slug: take-nth, name: "take-nth" }
       - { slug: not-empty, name: "not-empty" }
+      - { slug: empty, name: "empty" }
       - { slug: pmap, name: "pmap" }
   - title: "反復"
     index_page: clojure/reference/iteration.md
@@ -118,6 +119,7 @@ categories:
       - { slug: for, name: "for" }
       - { slug: dorun, name: "dorun" }
       - { slug: doall, name: "doall" }
+      - { slug: run-bang, name: "run!" }
   - title: "マップ・セット・ベクター"
     index_page: clojure/reference/collections.md
     functions:
@@ -126,6 +128,7 @@ categories:
       - { slug: vec, name: "vec" }
       - { slug: hash-map, name: "hash-map" }
       - { slug: array-map, name: "array-map" }
+      - { slug: hash-set, name: "hash-set" }
       - { slug: assoc, name: "assoc" }
       - { slug: dissoc, name: "dissoc" }
       - { slug: get, name: "get" }
@@ -156,6 +159,15 @@ categories:
       - { slug: update-keys, name: "update-keys" }
       - { slug: update-vals, name: "update-vals" }
       - { slug: reduce-kv, name: "reduce-kv" }
+      - { slug: sorted-map, name: "sorted-map" }
+      - { slug: sorted-map-by, name: "sorted-map-by" }
+      - { slug: sorted-set, name: "sorted-set" }
+      - { slug: sorted-set-by, name: "sorted-set-by" }
+      - { slug: subseq, name: "subseq" }
+      - { slug: rsubseq, name: "rsubseq" }
+      - { slug: compare, name: "compare" }
+      - { slug: comparator, name: "comparator" }
+      - { slug: vector-of, name: "vector-of" }
       - { slug: defstruct, name: "defstruct" }
       - { slug: struct, name: "struct" }
       - { slug: struct-map, name: "struct-map" }
@@ -204,11 +216,102 @@ categories:
       - { slug: class, name: "class" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }
+      - { slug: double, name: "double" }
+      - { slug: float, name: "float" }
+      - { slug: byte, name: "byte" }
+      - { slug: short, name: "short" }
+      - { slug: num, name: "num" }
+      - { slug: bigint, name: "bigint" }
+      - { slug: biginteger, name: "biginteger" }
+      - { slug: bigdec, name: "bigdec" }
+      - { slug: rationalize, name: "rationalize" }
+      - { slug: numerator, name: "numerator" }
+      - { slug: denominator, name: "denominator" }
       - { slug: boolean, name: "boolean" }
       - { slug: char, name: "char" }
       - { slug: rand, name: "rand" }
       - { slug: rand-int, name: "rand-int" }
       - { slug: unchecked-add, name: "unchecked-add" }
+      - { slug: unchecked-subtract, name: "unchecked-subtract" }
+      - { slug: unchecked-multiply, name: "unchecked-multiply" }
+      - { slug: unchecked-inc, name: "unchecked-inc" }
+      - { slug: unchecked-dec, name: "unchecked-dec" }
+      - { slug: unchecked-negate, name: "unchecked-negate" }
+      - { slug: unchecked-add-int, name: "unchecked-add-int" }
+      - { slug: unchecked-subtract-int, name: "unchecked-subtract-int" }
+      - { slug: unchecked-multiply-int, name: "unchecked-multiply-int" }
+      - { slug: unchecked-inc-int, name: "unchecked-inc-int" }
+      - { slug: unchecked-dec-int, name: "unchecked-dec-int" }
+      - { slug: unchecked-negate-int, name: "unchecked-negate-int" }
+      - { slug: unchecked-divide-int, name: "unchecked-divide-int" }
+      - { slug: unchecked-remainder-int, name: "unchecked-remainder-int" }
+      - { slug: unchecked-int, name: "unchecked-int" }
+      - { slug: unchecked-long, name: "unchecked-long" }
+      - { slug: unchecked-short, name: "unchecked-short" }
+      - { slug: unchecked-byte, name: "unchecked-byte" }
+      - { slug: unchecked-char, name: "unchecked-char" }
+      - { slug: unchecked-double, name: "unchecked-double" }
+      - { slug: unchecked-float, name: "unchecked-float" }
+  - title: "型・コレクション述語"
+    index_page: clojure/reference/predicates.md
+    functions:
+      - { slug: seq-p, name: "seq?" }
+      - { slug: sequential-p, name: "sequential?" }
+      - { slug: map-p, name: "map?" }
+      - { slug: set-p, name: "set?" }
+      - { slug: list-p, name: "list?" }
+      - { slug: record-p, name: "record?" }
+      - { slug: sorted-p, name: "sorted?" }
+      - { slug: seqable-p, name: "seqable?" }
+      - { slug: associative-p, name: "associative?" }
+      - { slug: counted-p, name: "counted?" }
+      - { slug: indexed-p, name: "indexed?" }
+      - { slug: reversible-p, name: "reversible?" }
+      - { slug: ifn-p, name: "ifn?" }
+      - { slug: chunked-seq-p, name: "chunked-seq?" }
+      - { slug: number-p, name: "number?" }
+      - { slug: integer-p, name: "integer?" }
+      - { slug: int-p, name: "int?" }
+      - { slug: double-p, name: "double?" }
+      - { slug: float-p, name: "float?" }
+      - { slug: decimal-p, name: "decimal?" }
+      - { slug: ratio-p, name: "ratio?" }
+      - { slug: rational-p, name: "rational?" }
+      - { slug: nat-int-p, name: "nat-int?" }
+      - { slug: pos-int-p, name: "pos-int?" }
+      - { slug: neg-int-p, name: "neg-int?" }
+      - { slug: infinite-p, name: "infinite?" }
+      - { slug: nan-p, name: "NaN?" }
+      - { slug: keyword-p, name: "keyword?" }
+      - { slug: ident-p, name: "ident?" }
+      - { slug: simple-ident-p, name: "simple-ident?" }
+      - { slug: qualified-ident-p, name: "qualified-ident?" }
+      - { slug: simple-keyword-p, name: "simple-keyword?" }
+      - { slug: qualified-keyword-p, name: "qualified-keyword?" }
+      - { slug: simple-symbol-p, name: "simple-symbol?" }
+      - { slug: qualified-symbol-p, name: "qualified-symbol?" }
+      - { slug: char-p, name: "char?" }
+      - { slug: bytes-p, name: "bytes?" }
+      - { slug: any-p, name: "any?" }
+      - { slug: not-any-p, name: "not-any?" }
+      - { slug: not-every-p, name: "not-every?" }
+      - { slug: distinct-p, name: "distinct?" }
+      - { slug: identical-p, name: "identical?" }
+      - { slug: inst-p, name: "inst?" }
+      - { slug: uuid-p, name: "uuid?" }
+      - { slug: uri-p, name: "uri?" }
+      - { slug: var-p, name: "var?" }
+      - { slug: volatile-p, name: "volatile?" }
+      - { slug: delay-p, name: "delay?" }
+      - { slug: future-p, name: "future?" }
+      - { slug: realized-p, name: "realized?" }
+      - { slug: bound-p, name: "bound?" }
+      - { slug: thread-bound-p, name: "thread-bound?" }
+      - { slug: class-p, name: "class?" }
+      - { slug: extends-p, name: "extends?" }
+      - { slug: special-symbol-p, name: "special-symbol?" }
+      - { slug: reader-conditional-p, name: "reader-conditional?" }
+      - { slug: tagged-literal-p, name: "tagged-literal?" }
   - title: "状態"
     index_page: clojure/reference/state.md
     functions:
@@ -266,6 +369,7 @@ categories:
       - { slug: ex-info, name: "ex-info" }
       - { slug: ex-data, name: "ex-data" }
       - { slug: ex-message, name: "ex-message" }
+      - { slug: ex-cause, name: "ex-cause" }
       - { slug: assert, name: "assert" }
   - title: "名前空間"
     index_page: clojure/reference/namespaces.md
@@ -372,6 +476,11 @@ categories:
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }
+      - { slug: with-in-str, name: "with-in-str" }
+      - { slug: read-line, name: "read-line" }
+      - { slug: print-str, name: "print-str" }
+      - { slug: prn-str, name: "prn-str" }
+      - { slug: println-str, name: "println-str" }
   - title: "Java interop"
     index_page: clojure/reference/interop.md
     functions:

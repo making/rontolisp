@@ -812,14 +812,16 @@ cases:
       (println "after-ns")
     expected: |
       after-ns
-  - name: def-without-a-value-is-nil-and-defn-is-called-directly
+  - name: def-without-a-value-is-unbound-and-defn-is-called-directly
+    # Oracle-identical (clj 1.12.6): a value-less def interns an unbound var. Its root
+    # prints #<Unbound: #'corpus-ns/dv-no-val> (the oracle's #object carries a hash).
     source: |
       (def dv-no-val)
-      (println dv-no-val)
+      (println (str dv-no-val) (bound? #'dv-no-val))
       (defn dv-twice [x] (* 2 x))
       (println (dv-twice 21))
     expected: |
-      nil
+      Unbound: #'corpus-ns/dv-no-val false
       42
   - name: def-lone-string-is-the-value-not-a-docstring
     # A docstring only counts with a value behind it: (def g "hello") binds
@@ -1003,6 +1005,65 @@ cases:
       true
       true
       :refused
+  - name: conj-onto-a-hash-map-takes-nil-and-refuses-a-wrapper
+    # Oracle-identical (clj 1.12.6): a nil item adds nothing; a keyword, symbol or
+    # atom is no map entry.
+    source: |
+      (defn conj-nil-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-nil-try #(conj {:a 1} nil)) (conj-nil-try #(conj {:a 1} nil [:b 2])) (conj-nil-try #(into {:a 1} [nil [:b 2]])) (conj-nil-try #(merge {:a 1} nil {:b 2})))
+      (println (conj-nil-try #(conj {} :a)) (conj-nil-try #(conj {} 'a)) (conj-nil-try #(into {} [:a])) (conj-nil-try #(conj {} (atom 1))) (conj-nil-try #(conj (sorted-map) :a)) (conj-nil-try #(conj (sorted-map :b 1) nil)))
+      (println (conj-nil-try #(conj {} nil)) (conj-nil-try #(conj {:a 1} {:a 2} nil)))
+    expected: |
+      {:a 1} {:a 1, :b 2} {:a 1, :b 2} {:a 1, :b 2}
+      :refused :refused :refused :refused :refused {:b 1}
+      {} {:a 2}
+  - name: conj-onto-a-map-refuses-a-list-and-a-set-of-non-entries
+    # Oracle-identical (clj 1.12.6): only a map, a [k v] vector and nil are entries of
+    # a direct item, so a list is none, `(k v)` included; a conjoined set's members are
+    # cast to map entries, which a map, list, nil or string member is not. (A vector
+    # member of a set stays accepted: an entry is a plain two-vector here.)
+    source: |
+      (defn conj-list-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-list-try #(conj {} '(1 2))) (conj-list-try #(into {} ['(1 2)])) (conj-list-try #(merge {} '(1 2))) (conj-list-try #(conj {:a 1} (list :b 2))) (conj-list-try #(conj {} '(1))) (conj-list-try #(conj {} '())))
+      (println (conj-list-try #(conj (sorted-map) '(1 2))) (conj-list-try #(into (sorted-map) ['(1 2)])) (conj-list-try #(merge (sorted-map :a 1) '(:b 2))))
+      (println (conj-list-try #(conj {} #{{1 2}})) (conj-list-try #(conj {} #{nil})) (conj-list-try #(conj {} #{'(1 2)})) (conj-list-try #(conj (sorted-map) #{{1 2}})) (conj-list-try #(conj (sorted-map) (sorted-set '(1 2)))))
+      (println (conj-list-try #(conj {} "ab")) (conj-list-try #(conj (sorted-map) "ab")) (conj-list-try #(into {} #{[1 2]})) (conj-list-try #(conj {} {1 2} [3 4])) (conj-list-try #(conj (sorted-map) {1 2})))
+    expected: |
+      :refused :refused :refused :refused :refused {}
+      :refused :refused :refused
+      :refused :refused :refused :refused :refused
+      :refused :refused {1 2} {1 2, 3 4} {1 2}
+  - name: conj-onto-a-map-takes-a-sorted-map-and-a-seq-of-entries
+    # Oracle-identical (clj 1.12.6): a sorted map is a Map, and a seq (strict or lazy) of
+    # real map entries is walked entry by entry. A seq of plain vectors is accepted here
+    # (an entry is a plain two-vector) and refused by the oracle, so it is not pinned.
+    source: |
+      (defn conj-seq-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (conj-seq-try #(conj {} (sorted-map 1 2))) (conj-seq-try #(conj {:a 1} (sorted-map :b 2 :c 3))) (conj-seq-try #(conj {} (sorted-map))) (conj-seq-try #(conj (sorted-map) (sorted-map 1 2))))
+      (println (conj-seq-try #(conj {} (seq {1 2}))) (conj-seq-try #(= {1 2, 3 4} (conj {} (map identity {1 2 3 4})))) (conj-seq-try #(conj {:a 1} (seq {:b 2}))) (conj-seq-try #(conj {} (seq {}))) (conj-seq-try #(conj {} (lazy-seq (seq {5 6})))))
+      (println (conj-seq-try #(conj (sorted-map) (seq {1 2}))) (conj-seq-try #(conj (sorted-map) (map identity {1 2 3 4}))))
+      (println (conj-seq-try #(conj {} (seq [1 2]))) (conj-seq-try #(conj {} (seq [(first {1 2}) 3]))) (conj-seq-try #(conj {} (seq ["ab"]))) (conj-seq-try #(conj {} :a)) (conj-seq-try #(conj {} (atom 1))))
+    expected: |
+      {1 2} {:a 1, :b 2, :c 3} {} {1 2}
+      {1 2} true {:a 1, :b 2} {} {5 6}
+      {1 2} {1 2, 3 4}
+      :refused :refused :refused :refused :refused
+  - name: merge-takes-an-entry-vector-and-a-seq-of-entries-after-the-first-map
+    # Oracle-identical (clj 1.12.6): merge is conj folded over the maps, so a later item
+    # is a map, a sorted map, a [k v] vector or a seq of entries, nil adding nothing; a
+    # record keeps contributing its entries. A list of non-entries is refused.
+    source: |
+      (defrecord MRec [a])
+      (defn merge-try [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (println (merge-try #(merge {} (seq {1 2}))) (merge-try #(merge {} [1 2])) (merge-try #(merge (sorted-map) (seq {1 2}))) (merge-try #(merge {} (sorted-map 1 2))))
+      (println (merge-try #(merge {:a 1} [:b 2] (seq {:c 3}) nil {:d 4})) (merge-try #(merge (sorted-map :a 1) [:b 2])) (merge-try #(merge nil [1 2])) (merge-try #(merge {} (map identity {5 6}))))
+      (println (merge-try #((fn [f] (f {} [1 2] (seq {3 4}))) merge)) (merge-try #((fn [f] (f (sorted-map :a 1) (seq {:b 2}) [:c 3])) merge)) (merge-try #((fn [f] (f {} (->MRec 1))) merge)) (merge-try #(:a (merge {} (->MRec 1)))))
+      (println (merge-try #(merge {} [1])) (merge-try #(merge {} [1 2 3])) (merge-try #(merge {} (seq [1 2]))) (merge-try #(merge {} "ab")) (merge-try #((fn [f] (f {} [1])) merge)))
+    expected: |
+      {1 2} {1 2} {1 2} {1 2}
+      {:a 1, :b 2, :c 3, :d 4} {:a 1, :b 2} {1 2} {5 6}
+      {1 2, 3 4} {:a 1, :b 2, :c 3} {:a 1} 1
+      :refused :refused :refused :refused :refused
   - name: disj-removes-set-members
     source: |
       (println (count (disj #{1 2 3} 2)))
@@ -1739,8 +1800,56 @@ cases:
       nil
       got-plain
       (1 nil)
-      (m nope)
+      (m nil)
       2
+  - name: get-message-reads-a-caught-runtime-error
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a caught runtime error is a
+    # condition, and .getMessage/.getLocalizedMessage answer its message like
+    # ex-message; .toString and str answer an exception's toString.
+    source: |
+      (println (try (assoc [0 1] :a :x) (catch Exception e (.getMessage e))))
+      (println (try (assoc [0 1] :a :x) (catch Exception e (.getLocalizedMessage e))))
+      (println (try (throw (ex-info "boom" {})) (catch Exception e (. e getMessage))))
+      (println (map #(.getMessage %) [(ex-info "a" {}) (ex-info "b" {})]))
+      (prn (str (ex-info "x" {:a 1})) (.toString (ex-info "y" {})))
+      (prn (ex-cause (ex-info "a" {})) (.getCause (ex-info "a" {})))
+    expected: |
+      Key must be integer
+      Key must be integer
+      boom
+      (a b)
+      "clojure.lang.ExceptionInfo: x {:a 1}" "clojure.lang.ExceptionInfo: y {}"
+      nil nil
+  - name: throwable-constructions-are-exceptions-on-every-backend
+    # Oracle-identical (clj 1.12.6, 2026-10-03): a java.lang throwable built with
+    # a message, a cause or both is an exception ex-message, ex-data, ex-cause,
+    # .getMessage, .getCause, str and throw read the oracle's way.
+    source: |
+      (prn (ex-message (Exception. "boo")) (ex-data (Exception. "boo")) (.getMessage (Exception.)))
+      (prn (try (throw (Exception. "boo")) (catch Exception e (ex-message e))))
+      (prn (try (throw (IllegalArgumentException. "bad arg")) (catch IllegalArgumentException e (.getMessage e))))
+      (prn (str (Exception. "boo")) (str (Exception.)) (.toString (RuntimeException. "r")))
+      (prn (.getMessage (Exception. (IllegalStateException. "inner"))))
+      (prn (ex-message (ex-cause (Exception. "outer" (IllegalStateException. "inner")))))
+      (prn (ex-message (.getCause (new RuntimeException "o" (Exception. "i")))))
+      (prn (ex-message (ex-cause (ex-info "a" {} (Exception. "c")))) (ex-data (ex-info "x" nil)))
+      (prn (map ex-cause [(Exception. "x") "s" nil]))
+      (prn (.getMessage (Throwable. "th")) (ex-message (Error. "er")) (str (ArithmeticException. "ar")))
+      (prn (try (throw (try (throw (Exception. "inner")) (catch Exception e e))) (catch Exception f (str f))))
+      (prn (try (Exception. 5) (catch Exception e (ex-message e))))
+    expected: |
+      "boo" nil nil
+      "boo"
+      "bad arg"
+      "java.lang.Exception: boo" "java.lang.Exception" "java.lang.RuntimeException: r"
+      "java.lang.IllegalStateException: inner"
+      "inner"
+      "i"
+      "c" {}
+      (nil nil nil)
+      "th" "er" "java.lang.ArithmeticException: ar"
+      "java.lang.Exception: inner"
+      "No matching ctor found for class java.lang.Exception"
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance
@@ -1789,6 +1898,31 @@ cases:
 
       nil
       ("a" 1)
+  - name: print-str-prn-str-and-println-str-answer-what-print-writes
+    # The string arms of print/prn/println: parts joined by a space, nil spelled
+    # nil, a collection printing its strings bare under print-str/println-str and
+    # quoted under prn-str; prn-str and println-str end with a newline. The parts
+    # evaluate first, so what one prints goes to the real output.
+    source: |
+      (println (pr-str (print-str 1 "a" ["a" \b nil])))
+      (println (pr-str (prn-str 1 "a" ["a" \b nil] nil)))
+      (println (pr-str (println-str 1 "a" ["a"] nil)))
+      (println (pr-str (print-str)) (pr-str (prn-str)) (pr-str (println-str)))
+      (println (pr-str (print-str nil) (print-str "x")))
+      (println (pr-str (apply println-str [1 2]) (map prn-str ["a" 1])))
+      (println (pr-str (println-str "a\nb")))
+      (println (pr-str (with-out-str (prn (print-str (do (print "in") 1))))))
+      (println (pr-str (str (println-str {:a "s"}))))
+    expected: |
+      "1 a [a b nil]"
+      "1 \"a\" [\"a\" \\b nil] nil\n"
+      "1 a [a] nil\n"
+      "" "\n" "\n"
+      "nil" "x"
+      "1 2\n" ("\"a\"\n" "1\n")
+      "a\nb\n"
+      "in\"1\"\n"
+      "{:a s}\n"
   - name: collections-nest-in-clojure-notation
     # Vectors, maps, sets and lists nest with their own brackets; nil stays nil
     # (never ()).
@@ -2093,6 +2227,60 @@ cases:
       [7 8]
       2
       (2 3) 3
+  - name: print-family-and-run-bang-as-values
+    # println/print/prn/pr and run! are function values: passed to map/run!/apply
+    # they print like the call (single spaces, println/prn end the line, prn/pr
+    # print readably) and answer nil; run! calls a function on every member for
+    # effect and answers nil, and #'println reads the same value.
+    source: |
+      (dorun (map prn [1 "a"]))
+      (run! println [1 2])
+      (run! print [3 4])
+      (println)
+      (run! pr ["x" :k])
+      (println)
+      (println (run! inc [1 2]) (run! println []) (run! println nil))
+      (apply println [1 "a" :b nil])
+      (apply prn [1 "a" :b nil])
+      (apply print ["a" "b"])
+      (apply pr ["a" "b"])
+      (println)
+      (println (println) (print) (prn))
+      (println (doall (map println [1])) (apply pr []))
+      (run! #(println % %) [5 6])
+      (run! (partial println "p") [7])
+      (def lazy-run-seen (atom []))
+      (run! #(swap! lazy-run-seen conj %) (lazy-seq [8 9]))
+      (println @lazy-run-seen)
+      (println (doall (map run! [println] [[1]])))
+      (let [f println] (f "via" "let"))
+      ((var println) "via var")
+      (#'prn "via var")
+    expected: |
+      1
+      "a"
+      1
+      2
+      34
+      "x":k
+      nil nil nil
+      1 a :b nil
+      1 "a" :b nil
+      a b"a" "b"
+
+
+      nil nil nil
+      1
+      (nil) nil
+      5 5
+      6 6
+      p 7
+      [8 9]
+      1
+      (nil)
+      via let
+      via var
+      "via var"
   - name: defmacro-unless-expands-before-backends
     # A defmacro is a compile-time expander plus its runtime table entry: call sites
     # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
@@ -4238,6 +4426,66 @@ cases:
       Wrong number of args (2) passed to: clojure.core/reduce-kv
       (2 3 4) (11 22) nil (2 3)
       (true true true false) (false true) true
+  - name: a-keyword-or-symbol-called-dynamically-checks-its-argument-count
+    # a keyword or symbol reaching the call dispatcher (a local, a parameter,
+    # apply, a quoted symbol head, a seq worker) takes one or two arguments;
+    # any other count signals the oracle's message: the keyword's own
+    # spelling, clojure.lang.Symbol for a symbol. A literal keyword head is
+    # refused at lower time. Every line matches the oracle (clj 1.12.6,
+    # 2026-10-03).
+    source: |
+      (defn kc [f & a] (try (apply f a) (catch Exception e (ex-message e))))
+      (prn (kc :a {:a 1}) (kc :a {} 9) (kc 'a {'a 1}) (kc 'a {} 9))
+      (println (kc :a))
+      (println (kc :a 1 2 3))
+      (println (kc :x/y))
+      (println (kc 'a))
+      (println (kc 'a 1 2 3))
+      (println (try (let [f 'a] (f)) (catch Exception e (ex-message e))))
+      (println (try ('a 1 2 3) (catch Exception e (ex-message e))))
+      (println (try (let [f :b] (f 1 2 3)) (catch Exception e (ex-message e))))
+      (println (try (doall (map (fn [f] (f)) [:a])) (catch Exception e (ex-message e))))
+      (prn ((fn [f] (f {:a 1})) :a) ((fn [f] (f {} 7)) 'a))
+    expected: |
+      1 9 1 9
+      Wrong number of args (0) passed to: :a
+      Wrong number of args (3) passed to: :a
+      Wrong number of args (0) passed to: :x/y
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (3) passed to: :b
+      Wrong number of args (0) passed to: :a
+      1 7
+  - name: a-keyword-or-symbol-dispatch-function-checks-its-argument-count
+    # a defmulti whose dispatch function is a keyword or a quoted symbol is
+    # called with every argument of the multimethod call, so it takes one or
+    # two; any other count signals the oracle's message (the keyword's own
+    # spelling, clojure.lang.Symbol for a symbol). Every line matches the
+    # oracle (clj 1.12.6, 2026-10-03).
+    source: |
+      (defmulti ka :shape)
+      (defmethod ka :sq [m & r] [:sq (count r)])
+      (defmethod ka :default [m & r] [:dflt (count r)])
+      (defmulti sa 'shape)
+      (defmethod sa 1 [m & r] [:one (count r)])
+      (defmethod sa :default [m & r] [:dflt (count r)])
+      (prn (ka {:shape :sq}) (ka {:shape :sq} 1) (ka {:shape :zz} 1))
+      (prn (sa {'shape 1}) (sa {'shape 1} 1) (sa {} 7))
+      (println (try (ka {:shape :sq} 1 2) (catch Exception e (ex-message e))))
+      (println (try (ka) (catch Exception e (ex-message e))))
+      (println (try (sa {'shape 1} 1 2) (catch Exception e (ex-message e))))
+      (println (try (sa) (catch Exception e (ex-message e))))
+      (println (try (map :a [{:a 1}] [{:a 2}]) (catch Exception e (ex-message e))))
+    expected: |
+      [:sq 0] [:sq 1] [:dflt 1]
+      [:one 0] [:one 1] [:dflt 1]
+      Wrong number of args (3) passed to: :shape
+      Wrong number of args (0) passed to: :shape
+      Wrong number of args (3) passed to: clojure.lang.Symbol
+      Wrong number of args (0) passed to: clojure.lang.Symbol
+      (1)
   - name: into-transduce-and-composition
     # a transducer is the oracle's function from a reducing function to a
     # reducing function, so comp composes left to right, a program's own
@@ -5173,6 +5421,37 @@ cases:
       aXc aYc
       (2) (1 nil) {:a 2} [2 3] 5
       (1 nil) (1 3) [:one] [:one]
+  - name: a-symbol-as-a-function-looks-itself-up-like-a-keyword
+    # Oracle clj 1.12.6.1673 prints the same. A symbol is an IFn: a set answers
+    # the member, a map/sorted map the value, anything else the default; in call
+    # position, through a seq worker, apply, a local and a def.
+    source: |
+      (println ('a {'a 1}) ('a {'b 1}) ('a {'b 1} :d) ('a #{'a}) ('a #{'b}) ('a #{'b} :d) ('a [1]) ('a nil) ('a 1) ('a "s") ('a '(a)))
+      (println (map 'a [{'a 2} {'b 3}]) (apply 'a [{'a 1}]) (let [f 'a] (f {'a 9})) (filter 'a [{'a 1} {}]))
+      (println ('a (sorted-map 'a 1)) ('a (sorted-set 'a)) ('a {'a false}) ('a/b {'a/b 3}) ('a {'a/b 3}) ('a {'a nil} :d))
+      (def sy-a 'a)
+      (defn sy-call [f m] (f m))
+      (println (sy-a {'a 5}) ((first '[a b]) {'a 6}) (some 'a [{'b 1} {'a 2}]) (sy-call 'a {'a 7}) (ifn? 'a))
+    expected: |
+      1 nil :d a nil :d nil nil nil nil nil
+      (2 nil) 1 9 ({a 1})
+      1 a false 3 nil nil
+      5 6 2 7 true
+  - name: a-record-is-no-function
+    # Oracle clj 1.12.6.1673 prints the same: a record is no IFn, so calling one
+    # (directly, through a local or a seq worker) throws; a keyword reads it.
+    source: |
+      (defrecord NfR [a])
+      (def nf-r (->NfR 1))
+      (println (try ((->NfR 1) :a) (catch Exception e :refused)))
+      (println (try (nf-r :a) (catch Exception e :refused)))
+      (println (try (doall (map nf-r [:a])) (catch Exception e :refused)))
+      (println (ifn? nf-r) (:a nf-r))
+    expected: |
+      :refused
+      :refused
+      :refused
+      false 1
   - name: locals-bound-to-functions-feed-the-inline-loops
     # Oracle clj 1.12.6.1673 prints the same. The inline loops (every? some take-while
     # drop-while group-by sort sort-by comp partial complement memoize trampoline
@@ -5195,3 +5474,850 @@ cases:
       true true (1 3)
       true 1 (1 3)
       true true
+  - name: coll-is-false-for-the-tagged-wrappers
+    # Oracle-identical (clj 1.12.6): a keyword, atom, volatile, var, reduced value and
+    # pattern are no collections; a record and a lazy seq are.
+    source: |
+      (defrecord CwR [a])
+      (defn cw-f [] 1)
+      (prn (coll? :a) (coll? :a/b) (coll? (atom 1)) (coll? (volatile! 1)) (coll? #'cw-f) (coll? (reduced 1)) (coll? #"a") (coll? (->CwR 1)))
+      (prn (coll? (lazy-seq nil)) (coll? '(1)) (coll? [1]) (coll? {}) (coll? #{}) (coll? (map inc [1])) (coll? nil) (coll? "s") (coll? 1) (map coll? [:k [1]]))
+    expected: |
+      false false false false false false false true
+      true true true true true true false false false (false true)
+  - name: the-slash-symbol-has-no-namespace
+    # Oracle-identical (clj 1.12.6): the lone slash is a name, not a namespace separator.
+    source: |
+      (prn (namespace '/) (name '/) (namespace 'clojure.core//) (name 'clojure.core//) (namespace :a/b) (name :a/b))
+    expected: |
+      nil "/" "clojure.core" "/" "a" "b"
+  - name: collection-predicates-tell-the-kinds-apart
+    # Oracle-identical (clj 1.12.6) over nil, a number, a string, a keyword, a symbol, a
+    # vector, a list, a map, a set, a lazy seq, a cons onto one, a record, a deftype, an
+    # atom, a function, a var and a map entry.
+    source: |
+      (defrecord TpR [a])
+      (deftype TpT [a])
+      (defn tp-f [] 1)
+      (def tp-vals [nil 1 "s" :k 'x [1] '(1) {:a 1} #{1} (lazy-seq [1]) (cons 0 (lazy-seq [1])) (->TpR 1) (->TpT 1) (atom 1) inc #'tp-f (first {:a 1})])
+      (prn (map seq? tp-vals))
+      (prn (map sequential? tp-vals))
+      (prn (map map? tp-vals))
+      (prn (map set? tp-vals))
+      (prn (map list? tp-vals))
+      (prn (map record? tp-vals))
+      (prn (map seqable? tp-vals))
+      (prn (map associative? tp-vals))
+      (prn (map counted? tp-vals))
+      (prn (map indexed? tp-vals))
+      (prn (map reversible? tp-vals))
+      (prn (map ifn? tp-vals))
+    expected: |
+      (false false false false false false true false false true true false false false false false false)
+      (false false false false false true true false false true true false false false false false true)
+      (false false false false false false false true false false false true false false false false false)
+      (false false false false false false false false true false false false false false false false false)
+      (false false false false false false true false false false false false false false false false false)
+      (false false false false false false false false false false false true false false false false false)
+      (true false true false false true true true true true true true false false false false true)
+      (false false false false false true false true false false false true false false false false true)
+      (false false false false false true true true true false false true false false false false true)
+      (false false false false false true false false false false false false false false false false true)
+      (false false false false false true false false false false false false false false false false true)
+      (false false false true true true false true true false false false false false true true true)
+  - name: collection-predicates-in-calls-and-as-values
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (seq? '(1 2)) (seq? (seq [1 2])) (seq? (rest '(1 2 3))) (seq? (map inc (iterate inc 0))) (seq? [1]) (seq? nil) (seq? {:a 1}))
+      (prn (sequential? [1]) (sequential? '(1)) (sequential? (range 3)) (sequential? #{1}) (sequential? "ab") (sequential? nil))
+      (prn (map? {}) (map? (hash-map :a 1)) (map? (->TpR 1)) (map? [[:a 1]]) (set? #{}) (set? (set [1])) (set? {}) (record? (->TpR 2)) (record? {:a 1}))
+      (prn (list? '(1)) (list? (list 1 2)) (list? []) (list? nil) (associative? [1]) (associative? {}) (associative? '(1)) (associative? #{1}))
+      (prn (counted? [1]) (counted? {:a 1}) (counted? #{1}) (counted? '(1 2)) (counted? (lazy-seq [1])) (counted? "ab") (counted? nil))
+      (prn (indexed? [1]) (indexed? '(1)) (indexed? "ab") (reversible? [1]) (reversible? '(1)) (seqable? nil) (seqable? "") (seqable? 1) (seqable? :a))
+      (prn (ifn? inc) (ifn? :a) (ifn? 'a) (ifn? {}) (ifn? #{}) (ifn? []) (ifn? #'tp-f) (ifn? '(1)) (ifn? 1) (ifn? "s") (ifn? (->TpR 1)) (ifn? nil))
+      (let [p seq? q map?] (prn (p '(1)) (q {}) (filter set? [1 #{2} [3]]) (apply list? ['(1)]) ((comp not vector?) '(1)) (every? sequential? [[1] '(2)])))
+    expected: |
+      true true true true false false false
+      true true true false false false
+      true true true false true true false true false
+      true true false false true true false false
+      true true true true false false false
+      true false false true false true true false false
+      true true true true true true true false false false false false
+      true true (#{2}) true true true
+  - name: number-predicates-tell-the-numeric-kinds-apart
+    # Oracle-identical (clj 1.12.6); infinite? and NaN? signal on anything but a number.
+    # Decimal and N literals read as plain rationals (see
+    # decimal-and-bigint-literals-are-plain-rationals).
+    source: |
+      (def tp-nums [0 -3 7 1.5 -0.5 1/2 -2/3 99999999999999999999 9223372036854775807 -9223372036854775808 9223372036854775808 ##Inf ##-Inf ##NaN \a "1" nil])
+      (prn (map number? tp-nums))
+      (prn (map integer? tp-nums))
+      (prn (map int? tp-nums))
+      (prn (map double? tp-nums))
+      (prn (map float? tp-nums))
+      (prn (map ratio? tp-nums))
+      (prn (map rational? tp-nums))
+      (prn (map nat-int? tp-nums))
+      (prn (map pos-int? tp-nums))
+      (prn (map neg-int? tp-nums))
+      (prn (map decimal? tp-nums))
+      (prn (infinite? ##Inf) (infinite? ##-Inf) (infinite? 1.5) (infinite? 1) (infinite? 1/2) (infinite? ##NaN) (NaN? ##NaN) (NaN? 1.5) (NaN? 1) (NaN? ##Inf))
+      (prn (map infinite? [1 ##Inf]) (map NaN? [1 ##NaN]) (try (infinite? nil) (catch Exception e :refused)) (try (infinite? "a") (catch Exception e :refused)) (try (NaN? :a) (catch Exception e :refused)) (try (NaN? nil) (catch Exception e :refused)))
+    expected: |
+      (true true true true true true true true true true true true true true false false false)
+      (true true true false false false false true true true true false false false false false false)
+      (true true true false false false false false true true false false false false false false false)
+      (false false false true true false false false false false false true true true false false false)
+      (false false false true true false false false false false false true true true false false false)
+      (false false false false false true true false false false false false false false false false false)
+      (true true true false false true true true true true true false false false false false false)
+      (true false true false false false false false true false false false false false false false false)
+      (false false true false false false false false true false false false false false false false false)
+      (false true false false false false false false false true false false false false false false false)
+      (false false false false false false false false false false false false false false false false false)
+      true true false false false false true false false false
+      (false true) (false true) :refused :refused :refused :refused
+  - name: name-predicates-read-the-namespace
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (def tp-ids [:k :a/b 'x 'a/b (keyword "q" "r") (symbol "s" "t") '/ 'clojure.core// "k" nil 1 [:a]])
+      (prn (map keyword? tp-ids))
+      (prn (map ident? tp-ids))
+      (prn (map simple-ident? tp-ids))
+      (prn (map qualified-ident? tp-ids))
+      (prn (map simple-keyword? tp-ids))
+      (prn (map qualified-keyword? tp-ids))
+      (prn (map simple-symbol? tp-ids))
+      (prn (map qualified-symbol? tp-ids))
+      (prn (map char? [\a "a" 97 nil]) (keyword? ::tp-own) (qualified-keyword? ::tp-own) (simple-symbol? (gensym)) (keyword? (keyword "x")))
+    expected: |
+      (true true false false true false false false false false false false)
+      (true true true true true true true true false false false false)
+      (true false true false false false true false false false false false)
+      (false true false true true true false true false false false false)
+      (true false false false false false false false false false false false)
+      (false true false false true false false false false false false false)
+      (false false true false false false true false false false false false)
+      (false false false true false true false true false false false false)
+      (true false false false) true true true true
+  - name: any-not-any-not-every-distinct-and-identical
+    # Oracle-identical (clj 1.12.6); identical? of two numbers compares values here (see
+    # identical-compares-numbers-and-symbols-by-value).
+    source: |
+      (prn (any? nil) (any? false) (any? 1) (map any? [nil :a]))
+      (prn (not-any? odd? [2 4]) (not-any? odd? [2 3]) (not-any? odd? nil) (not-any? #{1} [2 3]) (not-any? :a [{:b 1}]))
+      (prn (not-every? odd? [1 3]) (not-every? odd? [1 2]) (not-every? odd? nil) (not-every? #{1 2} [1 2]) (not-every? :a [{:a 1} {}]))
+      (prn (not-any? odd? (iterate inc 0)) (not-every? even? (iterate inc 0)) (let [f not-any? g not-every?] [(f odd? [1]) (g odd? [1])]) (apply not-any? [even? [1 3]]))
+      (prn (distinct? 1) (distinct? 1 2) (distinct? 1 1) (distinct? 1 2 3 1) (distinct? [1] '(1)) (distinct? 1 1.0) (distinct? nil false) (distinct? :a :a) (distinct? {:a 1} {:a 1}) (apply distinct? (range 100)) (apply distinct? [1 2 1]))
+      (prn (identical? :a :a) (identical? :a :b) (let [v [1]] (identical? v v)) (identical? [1] [1]) (identical? nil nil) (identical? nil false) (identical? 1 1) (identical? \a \a) (let [m {:a 1}] (identical? m (assoc m :b 2))))
+      (let [f identical? g distinct?] (prn (f :a :a) (g 1 2 1) (map identical? [:a 1] [:a 2])))
+    expected: |
+      true true true (true true)
+      true false true true true
+      false true false false true
+      false true [false false] true
+      true true false false false true true false false true false
+      true false true false true false true true false
+      true false (true false)
+  - name: var-volatile-bound-and-realized-predicates
+    # Oracle-identical (clj 1.12.6): a volatile is no atom, a defined var is bound, a lazy
+    # seq is realized once its body ran; realized? of anything but a seq signals.
+    source: |
+      (def tp-bx 1)
+      (prn (var? #'tp-bx) (var? 'tp-bx) (var? tp-bx) (var? (atom 1)) (map var? [#'tp-bx 1]))
+      (prn (volatile? (volatile! 1)) (volatile? (atom 1)) (volatile? (ref 1)) (volatile? (agent 1)) (volatile? nil) (let [v (volatile! 1)] (vswap! v inc) [(volatile? v) @v]) (map volatile? [(volatile! 0) 0]))
+      (let [v (volatile! 1)] (vreset! v 5) (prn @v (deref v) (volatile? v)))
+      (prn (bound? #'tp-bx) (bound? #'tp-bx #'tp-bx) (bound?) (try (bound? 1) (catch Exception e :refused)) (apply bound? [#'tp-bx]))
+      (let [s (lazy-seq [1 2])] (prn (realized? s) (first s) (realized? s)))
+      (let [s (map inc (iterate inc 1))] (prn (realized? s) (first s) (realized? s)))
+      (prn (realized? (lazy-seq nil)) (try (realized? [1]) (catch Exception e :refused)) (try (realized? nil) (catch Exception e :refused)) (try (realized? 1) (catch Exception e :refused)) (try (realized? (atom 1)) (catch Exception e :refused)))
+    expected: |
+      true false false false (true false)
+      true false false false false [true 2] (true false)
+      5 5 true
+      true true true :refused true
+      false 1 true
+      false 2 true
+      false :refused :refused :refused :refused
+  - name: thread-bound-predicate-follows-the-binding-extent
+    # Oracle-identical (clj 1.12.6): true while a binding of every given var is in effect,
+    # false for a root, a non-dynamic var and an unbound var, a non-var signals (only when
+    # reached: every? stops at the first false).
+    source: |
+      (def ^:dynamic *tb-d* 1)
+      (def ^:dynamic *tb-e* 2)
+      (def tb-plain 3)
+      (defn probe [] (thread-bound? #'*tb-d*))
+      (prn (thread-bound? #'*tb-d*) (thread-bound?) (thread-bound? #'tb-plain))
+      (binding [*tb-d* 10]
+        (prn (thread-bound? #'*tb-d*) (thread-bound? #'*tb-e*) (thread-bound? #'*tb-d* #'*tb-e*) (probe) (thread-bound? #'tb-plain))
+        (binding [*tb-e* 20]
+          (prn (thread-bound? #'*tb-d* #'*tb-e*) (apply thread-bound? [#'*tb-d* #'*tb-e*]) (map thread-bound? [#'*tb-d* #'*tb-e*]))))
+      (prn (thread-bound? #'*tb-d*) (probe))
+      (prn (try (thread-bound? 1) (catch Exception e :refused)) (try (thread-bound? 'tb-plain) (catch Exception e :refused)))
+      (prn (try (thread-bound? #'*tb-e* 1) (catch Exception e :refused)) (try (binding [*tb-e* 1] (thread-bound? #'*tb-e* 1)) (catch Exception e :refused)))
+      (defn ^:dynamic *tb-f* [] 1)
+      (prn (thread-bound? #'*tb-f*))
+      (binding [*tb-f* (fn [] 2)] (prn (thread-bound? #'*tb-f*) (*tb-f*)))
+    expected: |
+      false true false
+      true false false true false
+      true true (true true)
+      false false
+      :refused :refused
+      false :refused
+      false
+      true 2
+  - name: core-vars-read-their-core-value-and-the-stream-binding-depth
+    # Oracle-identical (clj 1.12.6): #'name of a clojure.core name is the core var, one per
+    # name, printing #'clojure.core/name; deref and a call read its core value. thread-bound?
+    # of *out* / *in* / *agent* is false at the root (clojure.main binds none of them) and
+    # true under a binding, with-out-str and an agent action. Not compared: the oracle's
+    # core var metadata also carries :arglists, :doc and the position, and deref of a macro's
+    # var answers its expander where it signals here.
+    source: |
+      (prn (var? #'inc) #'inc #'clojure.core/str (str #'map) (= #'inc (var inc)) (= #'inc #'dec))
+      (prn (#'inc 1) (@#'inc 2) (#'map inc [1 2]) (apply #'+ [1 2]) (map #'dec [1 2]))
+      (prn (:name (meta #'inc)) (:macro (meta #'when)) (:macro (meta #'inc)) (bound? #'inc #'when #'*out*))
+      (prn (thread-bound? #'inc) (thread-bound? #'*out*) (thread-bound? #'*in*) (thread-bound? #'*agent*))
+      (prn (with-out-str (print (thread-bound? #'*out*))) (binding [*out* *out*] (thread-bound? #'*out*)))
+      (prn (binding [*in* *in*] [(thread-bound? #'*in*) (thread-bound? #'*in* #'*out*)]))
+      (def cv-agent (agent 0))
+      (send cv-agent (fn [x] (prn (thread-bound? #'*agent*)) x))
+      (await cv-agent)
+      (prn (identical? *out* @#'*out*) (let [inc 5] (#'inc inc)) (thread-bound? #'*out*))
+    expected: |
+      true #'clojure.core/inc #'clojure.core/str "#'clojure.core/map" true false
+      2 3 (2 3) 3 (0 1)
+      inc true nil true
+      false false false false
+      "true" true
+      [true false]
+      true
+      true 6 false
+  - name: core-flag-specials-read-bind-and-assign
+    # Oracle-identical (clj 1.12.6, clj -M file): the clojure.core flags read their root,
+    # rebind under binding and assign under set!. clojure.main binds *print-length*,
+    # *assert*, *warn-on-reflection*, *command-line-args* and the other compiler and print
+    # flags around a script, so thread-bound? is true and set! assigns at the top level;
+    # *err*, *print-dup*, *flush-on-newline* and *compile-files* it does not bind, so set!
+    # outside a binding is the root-binding error. A local of a flag's name is lexical. An
+    # earlier case sets *warn-on-reflection*, so this one sets it back first.
+    source: |
+      (prn *print-length* *print-level* *print-meta* *print-dup* *print-readably* *print-namespace-maps* *flush-on-newline*)
+      (set! *warn-on-reflection* false)
+      (prn *warn-on-reflection* *assert* *unchecked-math* *compile-files* *read-eval* *math-context* *data-readers* *default-data-reader-fn* *command-line-args* *compile-path* (:minor *clojure-version*))
+      (prn (map thread-bound? [#'*print-length* #'*assert* #'*warn-on-reflection* #'*err* #'*print-dup* #'*flush-on-newline* #'*compile-files* #'*command-line-args*]))
+      (prn (binding [*assert* false *print-dup* true] [*assert* *print-dup* (thread-bound? #'*print-dup*)]) *assert* *print-dup*)
+      (prn (try (set! *print-dup* true) (catch Exception e (ex-message e))))
+      (prn (binding [*print-dup* 1] (set! *print-dup* 2) *print-dup*) (set! *warn-on-reflection* true) *warn-on-reflection*)
+      (set! *warn-on-reflection* false)
+      (prn #'*print-length* #'clojure.core/*err* (binding [clojure.core/*unchecked-math* true] *unchecked-math*))
+      (let [*assert* 5] (prn *assert*))
+    expected: |
+      nil nil false false true true true
+      false true false false true nil {} nil nil "classes" 12
+      (true true true false false false false true)
+      [false true true] true false
+      "Can't change/establish root binding of: *print-dup* with set"
+      2 true true
+      #'clojure.core/*print-length* #'clojure.core/*err* true
+      5
+  - name: err-is-the-error-stream-and-rebinds-like-out
+    # Oracle-identical (clj 1.12.6): *err* is the error stream, a special of its own that
+    # binding rebinds and *out* can be bound to; thread-bound? of it is false at the root
+    # and set! there is the root-binding error, as for *out*.
+    source: |
+      (prn (with-out-str (binding [*err* *out*] (binding [*out* *err*] (print "via err")))))
+      (prn (identical? *err* *out*) (thread-bound? #'*err*) (binding [*err* *out*] (thread-bound? #'*err*)))
+      (prn (try (set! *err* *out*) (catch Exception e (ex-message e))) (try (set! *out* *out*) (catch Exception e (ex-message e))))
+    expected: |
+      "via err"
+      false false true
+      "Can't change/establish root binding of: *err* with set" "Can't change/establish root binding of: *out* with set"
+  - name: print-length-level-and-readably-shape-the-printer
+    # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
+    # collection or record after that many members with ... (an infinite seq realizes only
+    # as far), *print-level* prints a collection that deep as #, and *print-readably* false
+    # makes pr write like print -- for pr-str, prn-str and str of a collection too. Only
+    # single-member hash sets and maps are cut here: their walk order is unspecified. The
+    # record spells the namespace an earlier case switched to.
+    source: |
+      (binding [*print-length* 3] (prn (range 10) [1 2 3 4 5] [1 2 3] (iterate inc 0) (sorted-map 1 2 3 4 5 6 7 8) (sorted-set 5 4 3 2 1)))
+      (binding [*print-length* 0] (prn [1] [] '(1) #{1} {:a 1} 5 "s"))
+      (binding [*print-level* 2] (prn [1 [2 [3 [4]]]] '(1 (2 (3))) {:a {:b {:c 1}}} 7))
+      (binding [*print-level* 0] (prn [1 2] 5 :k "s" nil))
+      (binding [*print-length* 2 *print-level* 1] (prn [[1 2 3] [4] [5]]))
+      (binding [*print-length* 1] (prn (pr-str [1 2]) (str [1 2]) (prn-str '(1 2))))
+      (defrecord PlfR [a b c])
+      (binding [*print-length* 2] (prn (->PlfR 1 2 3)))
+      (binding [*print-readably* false] (prn "a" \b [1 "c"] nil) (prn (pr-str "x")))
+      (set! *print-length* 1) (prn [1 2]) (set! *print-length* nil) (prn [1 2])
+    expected: |
+      (0 1 2 ...) [1 2 3 ...] [1 2 3] (0 1 2 ...) {1 2, 3 4, 5 6, ...} #{1 2 3 ...}
+      [...] [] (...) #{...} {...} 5 "s"
+      [1 [2 #]] (1 (2 #)) {:a {:b #}} 7
+      # 5 :k "s" nil
+      [# # ...]
+      "[1 ...]" "[1 ...]" "(1 ...)\n"
+      #reading.PlfR{:a 1, :b 2, ...}
+      a b [1 c] nil
+      x
+      [1 ...]
+      [1 2]
+  - name: with-in-str-binds-in-to-the-string-and-read-line-reads-it
+    # Oracle-identical (clj 1.12.6): with-in-str binds *in* to a reader over the string
+    # (thread-bound inside), which read-line (nil past the end, a function value too),
+    # read and .read take from.
+    source: |
+      (prn (with-in-str "one\ntwo" [(read-line) (read-line) (read-line)]))
+      (prn (with-in-str "(+ 1 2) :k" [(read) (read)]) (with-in-str "ab" [(.read *in*) (.read *in*)]))
+      (prn (with-in-str "x" (thread-bound? #'*in*)) (thread-bound? #'*in*) (with-in-str "x"))
+      (prn (with-in-str "p\nq" (doall (repeatedly 2 read-line))))
+    expected: |
+      ["one" "two" nil]
+      [(+ 1 2) :k] [97 98]
+      true false nil
+      ("p" "q")
+  - name: unbound-vars-answer-the-unbound-root
+    # Oracle-identical (clj 1.12.6): a declared-never-defined name and a value-less def are
+    # unbound vars -- deref and the name answer the unbound root (truthy, str "Unbound: #'v"),
+    # calling it signals, bound? is false until a definition binds it, defonce binds it. A
+    # value-less def or declare leaves a bound root alone; declare adds :declared to the
+    # metadata and a ^:dynamic declare rebinds. The root prints #<Unbound: #'v> (the
+    # oracle's #object carries a hash).
+    source: |
+      (declare ub-y)
+      (def ub-v #'ub-y)
+      (prn (bound? #'ub-y) (bound? ub-v) (var? ub-v) ub-v (str @ub-v) (str ub-y) (bound?))
+      (prn (= @ub-v @ub-v) (= @ub-v ub-y) (nil? @ub-v) (if ub-y :truthy :falsy) (bound? ub-v 1) (try (bound? 1 ub-v) (catch Exception e :refused)) (map bound? [ub-v]))
+      (prn (try (ub-y 1) (catch Exception e (ex-message e))) (try (#'ub-y) (catch Exception e (ex-message e))) (try (@ub-v 1 2) (catch Exception e (ex-message e))))
+      (prn (:declared (meta #'ub-y)) (:name (meta ub-v)))
+      (def ub-z)
+      (prn (bound? #'ub-z) (str ub-z) (try (ub-z) (catch Exception e (ex-message e))))
+      (defonce ub-z 9)
+      (prn ub-z (bound? #'ub-z))
+      (def ub-w 1)
+      (def ub-w)
+      (declare ub-w)
+      (prn ub-w (bound? #'ub-w) (:declared (meta #'ub-w)))
+      (declare ub-q)
+      (defn ub-rq [] ub-q)
+      (prn (bound? #'ub-q) (str (ub-rq)) (:declared (meta #'ub-q)))
+      (def ub-q 7)
+      (prn (bound? #'ub-q) (ub-rq) (:declared (meta #'ub-q)))
+      (defmacro ub-m [] 1)
+      (declare ub-f)
+      (defn ub-g [x] (ub-f x))
+      (defn ub-f [x] (* x 2))
+      (prn (bound? #'ub-m #'ub-g #'ub-f) (ub-g 4))
+      (declare ^:dynamic *ub-d*)
+      (prn (bound? #'*ub-d*) (thread-bound? #'*ub-d*))
+      (binding [*ub-d* 2] (prn *ub-d* (bound? #'*ub-d*) (thread-bound? #'*ub-d*)))
+      (def ^:dynamic *ub-e*)
+      (prn (bound? #'*ub-e*))
+      (binding [*ub-e* 3] (prn *ub-e* (bound? #'*ub-e*)))
+      (prn (bound? #'*ub-e*) (str *ub-e*))
+    expected: |
+      false false true #'reading/ub-y "Unbound: #'reading/ub-y" "Unbound: #'reading/ub-y" true
+      true true false :truthy false :refused (false)
+      "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y" "Attempting to call unbound fn: #'reading/ub-y"
+      true ub-y
+      false "Unbound: #'reading/ub-z" "Attempting to call unbound fn: #'reading/ub-z"
+      9 true
+      1 true true
+      false "Unbound: #'reading/ub-q" true
+      true 7 nil
+      true 8
+      false false
+      2 true true
+      false
+      3 true
+      false "Unbound: #'reading/*ub-e*"
+  - name: predicates-of-kinds-no-value-has-answer-false
+    # Oracle-identical (clj 1.12.6): an unsorted map, vector or set is not sorted?, and no
+    # chunked seq, decimal, byte array, delay, future, reader conditional, tagged literal
+    # or host object exists in these programs. The host kinds answer true on the
+    # interpreter and the JVM (ClojureInteropTest); sorted? of a sorted collection is
+    # sorted-collections-and-the-type-predicates.
+    source: |
+      (prn (sorted? {}) (sorted? []) (chunked-seq? (lazy-seq [1])) (chunked-seq? '(1)) (decimal? 1.5) (bytes? [1]) (bytes? "s") (delay? 1) (future? 1) (reader-conditional? '(1)) (tagged-literal? 1) (class? 1) (inst? 1) (uuid? "x") (uri? "http://a"))
+      (prn (map sorted? [nil #{}]) (map delay? [nil]) (map future? [nil]) (map class? [nil]) (map inst? [nil]) (map uuid? [nil]) (map uri? [nil]))
+    expected: |
+      false false false false false false false false false false false false false false false
+      (false false) (false) (false) (false) (false) (false) (false)
+  - name: special-symbol-names-the-special-forms
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (map special-symbol? '[if def let* fn* do quote var recur loop* throw try catch finally new . set! & case* letfn* deftype* reify* monitor-enter monitor-exit]))
+      (prn (map special-symbol? '[let fn loop defn x import* when nil]) (special-symbol? "if") (special-symbol? :if) (special-symbol? 'clojure.core/if) (special-symbol? 'clojure.core/import*))
+    expected: |
+      (true true true true true true true true true true true true true true true true true true true true true true true)
+      (false false false false false false false false) false false false true
+  - name: extends-reads-the-protocol-table
+    # Oracle-identical (clj 1.12.6): an inline implementation or an extension counts; an
+    # Object extension counts for Object alone.
+    source: |
+      (defprotocol TpP (tp-m [x]))
+      (defprotocol TpQ (tp-q [x]))
+      (defrecord TpPR [a] TpP (tp-m [x] 1))
+      (defrecord TpPS [a])
+      (deftype TpPT [a])
+      (deftype TpPU [a] TpP (tp-m [x] 2))
+      (extend-type String TpP (tp-m [x] 2))
+      (extend-protocol TpQ Object (tp-q [x] 3))
+      (extend TpPS TpQ {:tp-q (fn [x] 4)})
+      (prn (extends? TpP TpPR) (extends? TpP TpPS) (extends? TpP TpPT) (extends? TpP TpPU) (extends? TpP String) (extends? TpP Long) (extends? TpQ Object) (extends? TpQ TpPS) (extends? TpP Object) (extends? TpQ TpPR))
+    expected: |
+      true false false true true false true true false false
+  - name: extend-takes-a-package-qualified-class-spelling
+    # Oracle-identical (clj 1.12.6): extend-protocol, extend-type, extend and extends? take
+    # java.lang./clojure.lang./java.util. spellings the way defmethod does; java.lang.Object
+    # is the Object default row.
+    source: |
+      (defprotocol QcP (qc-m [x]))
+      (defprotocol QcQ (qc-q [x]))
+      (defprotocol QcR (qc-r [x]))
+      (extend-protocol QcP java.lang.String (qc-m [s] :str) clojure.lang.IPersistentMap (qc-m [m] :map) java.lang.Object (qc-m [_] :other))
+      (extend-type clojure.lang.Keyword QcQ (qc-q [k] :kw))
+      (extend java.lang.Boolean QcR {:qc-r (fn [b] :bool)})
+      (prn (qc-m "x") (qc-m {:a 1}) (qc-m 1) (qc-q :a) (qc-r true))
+      (prn (extends? QcP java.lang.String) (extends? QcP clojure.lang.IPersistentMap) (extends? QcP String) (extends? QcQ clojure.lang.Keyword) (extends? QcQ java.lang.String) (extends? QcP java.lang.Object))
+    expected: |
+      :str :map :other :kw :bool
+      true true true true false true
+  - name: the-seq-predicates-follow-the-list-representation
+    # A deviation: nil is the empty list, so the seq and collection predicates answer
+    # false for () (the oracle: true); a strict seq is a list, so list? and counted? are
+    # true and realized? is true for one (the oracle: a LazySeq, false); no seq is
+    # chunked, and an iterate seq is realized only once forced.
+    source: |
+      (prn (seq? '()) (list? ()) (coll? ()) (counted? '()) (sequential? ()) (seqable? ()))
+      (prn (list? (map inc [1 2])) (list? (range 3)) (list? (seq [1 2])) (list? (rest [1 2 3])) (counted? (map inc [1])) (chunked-seq? (seq [1 2])) (realized? (map inc [1 2])) (realized? (iterate inc 1)))
+    expected: |
+      false false false false false true
+      true true true true true false true false
+  - name: decimal-and-bigint-literals-are-plain-rationals
+    # A deviation: 1.5M reads as the exact ratio 3/2 and 1M, 2N as integers, so decimal?
+    # is false and ratio?, integer? and int? answer for the rational (the oracle: true
+    # false false false).
+    source: |
+      (prn (decimal? 1.5M) (ratio? 1.5M) (integer? 1M) (int? 2N) (rational? 1.5M))
+    expected: |
+      false true true true true
+  - name: identical-compares-numbers-and-symbols-by-value
+    # A deviation: identical? is eql here, so two numbers or two symbols of one value are
+    # identical (the oracle: false for boxed 1000, 1.5 and two read symbols), while two
+    # empty map literals are two tables (the oracle: one constant).
+    source: |
+      (prn (identical? 1000 1000) (identical? 'a 'a) (identical? 1.5 1.5) (identical? {} {}))
+    expected: |
+      true true true false
+  - name: sorted-map-and-sorted-set-print-in-comparator-order
+    # Oracle-identical (clj 1.12.6): compare orders the keys (nil first, numbers across
+    # their kinds, vectors by length first); of keys comparing equal the first stays and,
+    # in a map, the last value wins.
+    source: |
+      (prn (sorted-map :b 1 :a 2 :c 3) (sorted-set 3 1 2) (sorted-map) (sorted-set))
+      (prn (sorted-map :a 1 :a 2) (sorted-set 1 1.0) (sorted-set 1.0 1) (sorted-map 1 :x 1.0 :y))
+      (prn (sorted-set nil 1 2) (sorted-map nil 1 :a 2) (sorted-set [1 2] [1 1] [0 5 6]) (sorted-set 1 2.5 3/2 -1))
+      (prn (sorted-set "b" "a" "ab") (sorted-set \c \a) (sorted-set true false) (sorted-set 'b 'a 'a/b) (sorted-set :b :a :a/b :c/a))
+      (println (sorted-map :a "x") (str (sorted-map :a 1 :b "x")) (pr-str (sorted-set "a" "b")))
+      (prn (apply sorted-map [:b 1 :a 2]) (apply sorted-set [3 1 2]) (map sorted-set [3 1]))
+    expected: |
+      {:a 2, :b 1, :c 3} #{1 2 3} {} #{}
+      {:a 2} #{1} #{1.0} {1 :y}
+      #{nil 1 2} {nil 1, :a 2} #{[1 1] [1 2] [0 5 6]} #{-1 1 3/2 2.5}
+      #{"a" "ab" "b"} #{\a \c} #{false true} #{a b a/b} #{:a :b :a/b :c/a}
+      {:a x} {:a 1, :b "x"} #{"a" "b"}
+      {:a 2, :b 1} #{1 2 3} (#{3} #{1})
+  - name: sorted-collections-look-up-through-their-comparator
+    # Oracle-identical (clj 1.12.6): a key comparing equal to a stored one finds it, so
+    # 1.0 finds 1; an empty sorted map compares nothing.
+    source: |
+      (prn (get (sorted-map 1 :a) 1.0) (get (sorted-map) "x") (get (sorted-set 1 2) 2.0) (contains? (sorted-set 1 2) 2.0) (contains? (sorted-map :a 1) :b))
+      (prn ((sorted-set 1 2) 2) ((sorted-map :a 1) :a) ((sorted-map :a 1) :b :dflt) (:a (sorted-map :a 1)) (:b (sorted-map :a 1) :d))
+      (prn (find (sorted-map :a 1) :a) (find (sorted-map :a 1) :b) (get-in (sorted-map :a (sorted-map :b 1)) [:a :b]))
+      (prn (let [{:keys [a b]} (sorted-map :a 1 :b 2)] [a b]) (let [{x 1.0} (sorted-map 1 :one)] x) (map get [(sorted-map :a 1)] [:a]) (filter (sorted-set 1 3) [1 2 3]))
+    expected: |
+      :a nil 2 true false
+      2 1 :dflt 1 :d
+      [:a 1] nil 1
+      [1 2] :one (1) (1 3)
+  - name: sorted-collections-grow-and-shrink-in-order
+    # Oracle-identical (clj 1.12.6): every verb answers a sorted collection under the
+    # same comparator, keeping a stored key a new one compares equal to; select-keys
+    # answers a plain map, like the oracle's.
+    source: |
+      (prn (assoc (sorted-map :b 1) :a 2) (assoc (sorted-map :b 1) :b 2 :c 3) (assoc (sorted-map 1 :a) 1.0 :b))
+      (prn (dissoc (sorted-map :b 1 :a 2) :a) (dissoc (sorted-map :b 1 :a 2) :z) (dissoc (sorted-map) "z") (dissoc (sorted-map 1 :a 2 :b) 1.0))
+      (prn (conj (sorted-set 2) 1) (conj (sorted-set 2) 2.0) (conj (sorted-map :b 1) [:a 2]) (conj (sorted-map :b 1) {:a 2 :c 3}) (conj (sorted-map :b 1) nil))
+      (prn (disj (sorted-set 1 2 3) 2) (disj (sorted-set 1 2 3) 2.0) (disj (sorted-set 1 2 3) 5))
+      (prn (into (sorted-map) {:b 1 :a 2}) (into (sorted-set) [3 1 2]) (into [] (sorted-set 3 1 2)) (into (sorted-map-by >) {1 :a 2 :b}))
+      (prn (merge (sorted-map :b 1) {:a 2}) (merge {} (sorted-map :a 2)) (merge-with + (sorted-map :b 1) {:b 2 :a 2}) (merge-with + (sorted-map 1 1) {1.0 2}))
+      (prn (update (sorted-map :a 1) :a inc) (assoc-in (sorted-map) [:a :b] 1) (update-in (sorted-map :a {:b 1}) [:a :b] inc))
+      (prn (select-keys (sorted-map :a 1 :b 2) [:b]) (select-keys (sorted-map 1 :a) [1.0]))
+      (prn (apply assoc (sorted-map :b 1) [:a 2]) (apply dissoc (sorted-map :a 1 :b 2) [:a]) (apply disj (sorted-set 1 2 3) [1 2]) (reduce conj (sorted-set) [3 1 2]))
+      (prn (apply merge [(sorted-map :b 1) {:a 2}]) (apply merge-with + [(sorted-map :b 1) {:b 2 :a 2}]) (map dissoc [(sorted-map 1 :a 2 :b)] [1.0]))
+    expected: |
+      {:a 2, :b 1} {:b 2, :c 3} {1 :b}
+      {:b 1} {:a 2, :b 1} {} {2 :b}
+      #{1 2} #{2} {:a 2, :b 1} {:a 2, :b 1, :c 3} {:b 1}
+      #{1 3} #{1 3} #{1 2 3}
+      {:a 2, :b 1} #{1 2 3} [1 2 3] {2 :b, 1 :a}
+      {:a 2, :b 1} {:a 2} {:a 2, :b 3} {1 3}
+      {:a 2} {:a {:b 1}} {:a {:b 2}}
+      {:b 2} {1 :a}
+      {:a 2, :b 1} {:b 2} #{3} #{1 2 3}
+      {:a 2, :b 1} {:a 2, :b 3} ({2 :b})
+  - name: sorted-collections-seq-in-order
+    # Oracle-identical (clj 1.12.6): seq, rseq, keys and vals walk the comparator's
+    # order, and every seq verb reads a sorted collection through them.
+    source: |
+      (prn (seq (sorted-map :b 1 :a 2)) (seq (sorted-map)) (seq (sorted-set)) (first (sorted-set 3 1 2)) (first (sorted-map :b 1 :a 2)))
+      (prn (rest (sorted-set 3 1 2)) (next (sorted-set 1)) (last (sorted-set 3 1 2)) (rseq (sorted-map :b 1 :a 2)) (rseq (sorted-map)) (rseq (sorted-set 1 2 3)))
+      (prn (keys (sorted-map :b 1 :a 2)) (vals (sorted-map :b 1 :a 2)) (keys (sorted-map)) (vals (sorted-map)) (map keys [(sorted-map :b 1 :a 2)]) (map rseq [(sorted-set 1 2)]))
+      (prn (count (sorted-map :b 1 :a 2)) (count (sorted-set)) (empty? (sorted-set)) (empty? (sorted-map :a 1)) (not-empty (sorted-set)) (not-empty (sorted-set 1)))
+      (prn (map inc (sorted-set 3 1 2)) (filter odd? (sorted-set 3 1 2)) (reduce + (sorted-set 1 2 3)) (reduce (fn [acc [k v]] (+ acc v)) 0 (sorted-map :a 1 :b 2)))
+      (prn (reduce-kv (fn [acc k v] (conj acc k)) [] (sorted-map :b 1 :a 2)) (vec (sorted-set 3 1 2)) (sort (sorted-set 3 1 2)) (for [x (sorted-set 3 1 2)] (* x 10)))
+      (prn (map key (sorted-map :b 1 :a 2)) (map val (sorted-map :b 1 :a 2)) (apply + (sorted-set 1 2 3)) (let [[[k v]] (seq (sorted-map :b 1 :a 2))] [k v]))
+      (doseq [[k v] (sorted-map :b 2 :a 1)] (println k v))
+    expected: |
+      ([:a 2] [:b 1]) nil nil 1 [:a 2]
+      (2 3) nil 3 ([:b 1] [:a 2]) nil (3 2 1)
+      (:a :b) (2 1) nil nil ((:a :b)) ((2 1))
+      2 0 true false nil #{1}
+      (2 3 4) (1 3) 6 3
+      [:a :b] [1 2 3] (1 2 3) (10 20 30)
+      (:a :b) (2 1) 6 [:a 2]
+      :a 1
+      :b 2
+  - name: sorted-collections-equal-and-key-like-their-unsorted-kind
+    # Oracle-identical (clj 1.12.6): = compares on the first argument's side, so the
+    # comparator finds 1.0 in a sorted collection where a hash one keeps it apart; as a
+    # key a sorted collection finds an = hash one and keeps the sorted spelling.
+    source: |
+      (prn (= (sorted-map :a 1) {:a 1}) (= {:a 1} (sorted-map :a 1)) (= (sorted-set 1) #{1}) (= #{1} (sorted-set 1)))
+      (prn (= (sorted-set 1) #{1.0}) (= #{1.0} (sorted-set 1)) (= (sorted-map 1 :a) {1.0 :a}) (= {1.0 :a} (sorted-map 1 :a)))
+      (prn (= (sorted-map 1 2) (sorted-map-by > 1 2)) (= (sorted-set 1 2) (sorted-set-by > 1 2)) (= (sorted-set 1 2) [1 2]) (not= (sorted-map :a 1) {:a 2}))
+      (prn (contains? #{(sorted-set 1 2)} #{1 2}) (get {(sorted-map :a 1) :x} {:a 1}) (keys (assoc {} (sorted-set 2 1) :b)) (distinct [(sorted-set 1) #{1}]))
+    expected: |
+      true true true true
+      true false false true
+      true true false true
+      true :x (#{1 2}) (#{1})
+  - name: sorted-map-by-and-sorted-set-by-order-through-a-comparator
+    # Oracle-identical (clj 1.12.6): a comparator answering a boolean is less-than (its
+    # false asks the reversed call), one answering a number is read by its integer part
+    # (0.5 is equal), and keys it calls equal collapse into the first.
+    source: |
+      (prn (sorted-map-by > 1 :a 2 :b 3 :c) (sorted-set-by > 1 2 3) (sorted-map-by compare :b 1 :a 2) (sorted-map-by #(compare %2 %1) :b 1 :a 2 :c 3))
+      (prn (sorted-set-by (fn [a b] (compare (count a) (count b))) "ab" "cd" "x") (sorted-map-by (fn [a b] (compare (count a) (count b))) "ab" 1 "cd" 2))
+      (prn (sorted-set-by (fn [a b] 0.5) 1 2) (sorted-set-by (fn [a b] (- a b)) 3 1 2) (sorted-set-by (fn [a b] (> a b)) 3 1 2) (apply sorted-map-by > [1 :a 2 :b]))
+      (prn (sorted-set-by compare '(1 2)) (conj (sorted-set-by >) 1 3 2) (assoc (sorted-map-by >) 1 :a 2 :b))
+    expected: |
+      {3 :c, 2 :b, 1 :a} #{3 2 1} {:a 2, :b 1} {:c 3, :b 1, :a 2}
+      #{"x" "ab"} {"ab" 2}
+      #{1} #{1 2 3} #{3 2 1} {2 :b, 1 :a}
+      #{(1 2)} #{3 2 1} {2 :b, 1 :a}
+  - name: subseq-and-rsubseq-walk-a-bounded-range
+    # Oracle-identical (clj 1.12.6) but for the last line: a > or >= test (a < or <=
+    # for rsubseq) starts at the key, any other walks from the start while it holds,
+    # each in the comparator's order; a test passed as a value is recognized by how it
+    # answers. Where nothing passes after a walk from the start the oracle prints its
+    # empty lazy seq, (), and here nil, like every strict seq verb.
+    source: |
+      (prn (subseq (sorted-set 1 2 3) > 1) (subseq (sorted-set 1 2 3) >= 2) (subseq (sorted-set 1 2 3) < 3) (subseq (sorted-set 1 2 3) <= 2) (subseq (sorted-set 1 2 3) > 5))
+      (prn (subseq (sorted-set 1 2 3 4 5) > 1 < 4) (subseq (sorted-set 1 2 3 4 5) >= 2 <= 4) (subseq (sorted-set 1 2 3 4 5) > 10 < 20))
+      (prn (rsubseq (sorted-set 1 2 3) < 3) (rsubseq (sorted-set 1 2 3) > 1) (rsubseq (sorted-set 1 2 3) <= 2) (rsubseq (sorted-set 1 2 3 4 5) > 1 < 4) (rsubseq (sorted-set 1 2 3 4 5) >= 2 <= 4))
+      (prn (subseq (sorted-map :a 1 :b 2 :c 3) > :a) (rsubseq (sorted-map :a 1 :b 2 :c 3) < :c) (subseq (sorted-set-by > 1 2 3) > 2) (subseq (sorted-set-by > 1 2 3) < 2))
+      (prn (let [t >] (subseq (sorted-set 1 2 3) t 1)) (subseq (sorted-set) > 1) (subseq (sorted-set 1 2 3) > 1.5) (apply subseq [(sorted-set 1 2 3) >= 2]) (apply rsubseq [(sorted-set 1 2 3) < 3]))
+      (prn (subseq (sorted-set 1 2 3) < 0) (rsubseq (sorted-set 1 2 3) > 5))
+    expected: |
+      (2 3) (2 3) (1 2) (1 2) nil
+      (2 3) (2 3 4) nil
+      (2 1) (3 2) (2 1) (3 2) (4 3 2)
+      ([:b 2] [:c 3]) ([:b 2] [:a 1]) (1) (3)
+      (2 3) nil (2 3) (2 3) (2 1)
+      nil nil
+  - name: sorted-collections-and-the-type-predicates
+    # Oracle-identical (clj 1.12.6) but for class: here it answers the kind keyword (a
+    # sorted map is :map, a sorted set :set), the oracle its host class
+    # (clojure.lang.PersistentTreeMap, ...PersistentTreeSet).
+    source: |
+      (prn (sorted? (sorted-map)) (sorted? (sorted-set)) (sorted? {}) (reversible? (sorted-map)) (reversible? (sorted-set)) (reversible? []) (reversible? {}))
+      (prn (map? (sorted-map)) (set? (sorted-set)) (map? (sorted-set)) (set? (sorted-map)) (coll? (sorted-set)) (seqable? (sorted-set)) (counted? (sorted-set)) (counted? (sorted-map)))
+      (prn (associative? (sorted-map)) (associative? (sorted-set)) (ifn? (sorted-set)) (ifn? (sorted-map)) (sequential? (sorted-set)) (seq? (sorted-set)) (vector? (sorted-set)) (list? (sorted-set)) (fn? (sorted-set)) (record? (sorted-map)))
+      (prn (map sorted? [(sorted-map) {}]) (filter set? [(sorted-set) #{} {}]) (class (sorted-map)) (class (sorted-set)))
+    expected: |
+      true true false true true true false
+      true true false false true true true true
+      true false true true false false false false false false
+      (true false) (#{} #{}) :map :set
+  - name: compare-orders-like-the-oracle
+    # Oracle-identical (clj 1.12.6): numbers by value across their kinds, strings,
+    # keywords and symbols as compareTo (the difference of the first differing
+    # characters; a name without a namespace first), false before true, nil before
+    # anything, vectors by length then member by member.
+    source: |
+      (prn (compare 1 2) (compare 2 1) (compare 1 1.0) (compare "a" "c") (compare "abc" "ab") (compare :a :c) (compare :a :a/b) (compare :b/a :a/b) (compare 'a 'c) (compare \a \c))
+      (prn (compare false true) (compare nil 1) (compare 1 nil) (compare nil nil) (compare [1 2] [1 3]) (compare [1 2] [1 2 3]) (compare [1 2 3] [9 9]) (compare ##NaN 1) (compare 1/2 0.5) (compare [] []))
+      (prn (map compare [1 2] [2 1]) (sort compare [3 1 2]) (sort #(compare %2 %1) [3 1 2]) (sort-by identity #(compare %2 %1) [3 1 2]) (apply compare ["b" "a"]))
+    expected: |
+      -1 1 0 -2 1 -2 -1 1 -2 -2
+      -1 -1 1 0 -1 -1 1 0 0 0
+      (-1 1) (1 2 3) (3 2 1) (3 2 1) 1
+  - name: sort-reads-a-comparator-answering-a-number
+    # Oracle-identical (clj 1.12.6): a comparator answering a number orders by its
+    # integer part's sign (it was read by truthiness, so every number meant less).
+    source: |
+      (prn (sort (fn [a b] (- a b)) [3 1 2 5 4]) (sort-by - (fn [a b] (- a b)) [3 1 2]) (sort > [3 1 2]) (sort (fn [a b] (* 0.5 (- a b))) [2 1]) (sort-by count compare ["ccc" "a" "bb"]))
+    expected: |
+      (1 2 3 4 5) (3 2 1) (3 2 1) (2 1) ("a" "bb" "ccc")
+  - name: sort-without-a-comparator-orders-by-compare
+    # Oracle-identical (clj 1.12.6): the default order is compare's, so nil, booleans,
+    # symbols and vectors sort too; kinds with no common order refuse (the message
+    # differs: the oracle names a Java cast).
+    source: |
+      (prn (sort [[1 2] [0 1]]) (sort [:b nil :a]) (sort [true false]) (sort ['b 'a]))
+      (prn (sort [3 1.5 2 1/2]) (sort ["b" "a" "ab"]) (sort [\b \a]) (sort [:b/a :a :b]) (sort ['b/a 'a 'b]))
+      (prn (sort [[1 2 3] [9] [1 3] [1 2]]) (sort-by first [[2 :a] [1 :b]]) (sort-by :k [{:k nil} {:k 2} {:k 1}]) (sort-by identity [nil nil 1]))
+      (prn (sort [1]) (apply sort [[2 1]]) (map sort [[2 1] [:b :a]]))
+      (defn sort-refusal [f] (try (pr-str (f)) (catch Exception e :refused)))
+      (prn (sort-refusal #(sort [1 "a"])) (sort-refusal #(sort [[1] '(2)])) (sort-refusal #(sort [:a 1])) (sort-refusal #(sort-by identity [{:a 1} {:a 2}])))
+    expected: |
+      ([0 1] [1 2]) (nil :a :b) (false true) (a b)
+      (1/2 1.5 2 3) ("a" "ab" "b") (\a \b) (:a :b :b/a) (a b b/a)
+      ([9] [1 2] [1 3] [1 2 3]) ([1 :b] [2 :a]) ({:k nil} {:k 1} {:k 2}) (nil nil 1)
+      (1) (1 2) ((1 2) (:a :b))
+      :refused :refused :refused :refused
+  - name: vector-of-stores-each-member-as-its-primitive
+    # Oracle-identical (clj 1.12.6) but for the last line: the answer is an ordinary
+    # vector, so a later conj or assoc stores its value as given (the oracle's Vec keeps
+    # casting: [1 2]).
+    source: |
+      (prn (vector-of :int 1 2) (vector-of :int 1.7 -1.7) (vector-of :long 1 2) (vector-of :double 1 2) (vector-of :float 1 2) (vector-of :char 97 98) (vector-of :char \a))
+      (prn (vector-of :boolean true false) (vector-of :boolean 1) (vector-of :int) (vector-of :double 1/2) (vector-of :long 1.5) (vector-of :int ##NaN))
+      (prn (vector-of :boolean false nil 0) (vector-of :char 97.6) (vector-of :int \a) (vector-of :byte 1.9) (vector-of :short 32767 -32768) (vector-of :int 2147483647 -2147483648))
+      (prn (= (vector-of :int 1 2) [1 2]) (vector? (vector-of :int 1 2)) (map (partial vector-of :int) [1 2]) (apply vector-of :int [1 2.5]))
+      (prn (conj (vector-of :int 1) 2.5))
+    expected: |
+      [1 2] [1 -1] [1 2] [1.0 2.0] [1.0 2.0] [\a \b] [\a]
+      [true false] [true] [] [0.5] [1] [0]
+      [false false true] [\a] [97] [1] [32767 -32768] [2147483647 -2147483648]
+      true true ([1] [2]) [1 2]
+      [1 2.5]
+  - name: primitive-casts-double-float-byte-short-and-num
+    # Oracle-identical (clj 1.12.6) but for two deviations: float answers a double (the
+    # oracle a Float, so (float 1/3) prints 0.3333333333333333 here and 0.33333334 there,
+    # which this case does not print), and the refusal texts of a cast taking a value the
+    # oracle's Java cast refuses are ours (only that it signals is pinned).
+    source: |
+      (defn pc-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (defn pc-head [f] (first (clojure.string/split (pc-msg f) #":")))
+      (defn pc-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (double 1) (double 1/2) (double 1.5) (double -3) (double ##Inf) (map double [1 2 3]) (apply double [4]))
+      (prn (float 1) (float 0.5) (float 3) (float ##NaN) (map float [1 2]))
+      (prn (byte 1.9) (byte -1.9) (byte 127) (byte -128) (byte \a) (byte 1/2) (byte 127.0) (byte 100N))
+      (prn (short 1.9) (short 32767) (short -32768) (short \a) (short 99/2) (map short [1 2.5]) (apply byte [5]))
+      (prn (num 1) (num 1.5) (num 1/2) (num nil) (map num [1 2]))
+      (println (pc-msg #(byte 200)) "|" (pc-msg #(byte -129)) "|" (pc-msg #(byte 127.9)) "|" (pc-msg #(byte ##NaN)))
+      (println (pc-msg #(short 70000)) "|" (pc-msg #(short -32769)) "|" (pc-msg #(short 32767.5)))
+      (println (pc-head #(byte 1e20)) "|" (pc-head #(short 1e20)) "|" (pc-head #(float 1e300)) "|" (pc-head #(float -1e300)) "|" (pc-head #(float 3.4028235E38)) "|" (pc-head #(float ##Inf)))
+      (println (pc-refused #(double "a")) (pc-refused #(double nil)) (pc-refused #(double \a)) (pc-refused #(float \a)) (pc-refused #(byte "a")) (pc-refused #(short nil)) (pc-refused #(num "a")) (pc-refused #(num \a)))
+      (prn (vector-of :byte 1.9) (vector-of :byte 127.9) (pc-head #(vector-of :float 1e300)))
+    expected: |
+      1.0 0.5 1.5 -3.0 ##Inf (1.0 2.0 3.0) 4.0
+      1.0 0.5 3.0 ##NaN (1.0 2.0)
+      1 -1 127 -128 97 0 127 100
+      1 32767 -32768 97 49 (1 2) 5
+      1 1.5 1/2 nil (1 2)
+      Value out of range for byte: 200 | Value out of range for byte: -129 | Value out of range for byte: 127.9 | Value out of range for byte: NaN
+      Value out of range for short: 70000 | Value out of range for short: -32769 | Value out of range for short: 32767.5
+      Value out of range for byte | Value out of range for short | Value out of range for float | Value out of range for float | Value out of range for float | Value out of range for float
+      :refused :refused :refused :refused :refused :refused :refused :refused
+      [1] [127] "Value out of range for float"
+  - name: number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts
+    # Oracle-identical (clj 1.12.6) in the values; the representation deviates (see
+    # decimal-and-bigint-literals-are-plain-rationals), so a bigint prints through str and a
+    # bigdec through double, and the refusal texts are ours (only that it signals is pinned).
+    # bigdec of a double and rationalize read the shortest decimal the double prints as
+    # (0.1 is 1/10, not the nearest ratio of its bits).
+    source: |
+      (defn nc-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (map #(str (bigint %)) [1 1.5 -1.5 1/2 7/2 -7/2 1e20 "123" "-45" 1N 1.5M -0.9]) (map #(str (biginteger %)) [1 1.5 7/2 "12"]) (str (apply bigint [3])))
+      (prn (map #(double (bigdec %)) [1 1.5 1/2 0.1 "1.5" "0.25" "1e3" "-.5" 2N 1e20 1e-5 123.456 -7/8 3/20]) (apply double [(bigdec 1)]))
+      (prn (rationalize 0.5) (rationalize 1) (rationalize 1/2) (rationalize 0.1) (rationalize 1.5) (rationalize nil) (str (rationalize 3.0)) (rationalize 1e-5) (rationalize 0.3333333333333333) (rationalize -0.25) (rationalize 123.456) (str (rationalize 1e20)) (rationalize 1.5M) (map rationalize [0.5 2]))
+      (prn (numerator 1/2) (denominator 1/2) (numerator 6/4) (denominator -3/6) (numerator -3/6) (map numerator [1/2 3/4]) (map denominator [1/2 3/4]) (apply numerator [5/3]))
+      (prn (unchecked-int 1) (unchecked-int 2.7) (unchecked-int -2.7) (unchecked-int 3000000000) (unchecked-int -3000000000) (unchecked-int 2147483648) (unchecked-int 1/2) (unchecked-int \a) (unchecked-int 1e20) (unchecked-int -1e20) (unchecked-int ##NaN) (unchecked-int ##Inf) (unchecked-int 100000000000000000000) (map unchecked-int [4294967297 5]))
+      (prn (unchecked-long 1) (unchecked-long 2.7) (unchecked-long 9223372036854775807) (unchecked-long 9223372036854775808) (unchecked-long 1e20) (unchecked-long -1e20) (unchecked-long ##NaN) (unchecked-long 7/2) (unchecked-long -9223372036854775809) (unchecked-long 100000000000000000000) (map unchecked-long [18446744073709551617 5]))
+      (prn (unchecked-short 1) (unchecked-short 70000) (unchecked-short 32768) (unchecked-short -32769) (unchecked-short 2.7) (unchecked-short 1e20) (unchecked-short 1/2) (unchecked-short 3000000000) (map unchecked-short [65537 5]))
+      (prn (unchecked-byte 200) (unchecked-byte 128) (unchecked-byte -129) (unchecked-byte 127.9) (unchecked-byte 1e20) (unchecked-byte 3000000000) (unchecked-byte 1/2) (unchecked-byte -1.9) (map unchecked-byte [200 1]))
+      (prn (unchecked-double 1) (unchecked-double 1/2) (unchecked-double 1.5) (unchecked-double 100000000000000000000) (unchecked-float 1) (unchecked-float 1/2) (unchecked-float 1.5) (unchecked-float 1e300) (unchecked-float -1e300) (unchecked-float ##NaN) (map unchecked-double [1 2]) (map unchecked-float [1 2]))
+      (prn (unchecked-char 97) (unchecked-char 97.5) (unchecked-char \a) (int (unchecked-char 65537)) (int (unchecked-char -1)) (int (unchecked-char 1e20)) (int (unchecked-char 1/2)) (map unchecked-char [98 99]) (apply unchecked-char [100]))
+      (prn (map nc-refused [#(bigint nil) #(bigint \a) #(bigint "a") #(bigint ##NaN) #(bigint ##Inf) #(biginteger nil) #(bigdec nil) #(bigdec \a) #(bigdec ##NaN) #(bigdec 1/3) #(bigdec "a") #(rationalize "a") #(rationalize ##NaN) #(rationalize ##Inf) #(numerator 4) #(denominator 4) #(numerator 1.5) #(numerator nil) #(denominator "a")]))
+      (prn (map nc-refused [#(unchecked-int nil) #(unchecked-int "a") #(unchecked-long \a) #(unchecked-long nil) #(unchecked-short \a) #(unchecked-byte \a) #(unchecked-byte nil) #(unchecked-double \a) #(unchecked-double nil) #(unchecked-float \a) #(unchecked-char nil) #(unchecked-char "a")]))
+    expected: |
+      ("1" "1" "-1" "0" "3" "-3" "100000000000000000000" "123" "-45" "1" "1" "0") ("1" "1" "3" "12") "3"
+      (1.0 1.5 0.5 0.1 1.5 0.25 1000.0 -0.5 2.0 1.0E20 1.0E-5 123.456 -0.875 0.15) 1.0
+      1/2 1 1/2 1/10 3/2 nil "3" 1/100000 3333333333333333/10000000000000000 -1/4 15432/125 "100000000000000000000" 3/2 (1/2 2)
+      1 2 3 2 -1 (1 3) (2 4) 5
+      1 2 -2 -1294967296 1294967296 -2147483648 0 97 2147483647 -2147483648 0 2147483647 1661992960 (1 5)
+      1 2 9223372036854775807 -9223372036854775808 9223372036854775807 -9223372036854775808 0 3 9223372036854775807 7766279631452241920 (1 5)
+      1 4464 -32768 32767 2 -1 0 24064 (1 5)
+      -56 -128 127 127 -1 0 0 -1 (-56 1)
+      1.0 0.5 1.5 1.0E20 1.0 0.5 1.5 ##Inf ##-Inf ##NaN (1.0 2.0) (1.0 2.0)
+      \a \a \a 1 65535 65535 0 (\b \c) \d
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+  - name: unchecked-arithmetic-verbs-wrap-at-long-and-int-width
+    # Oracle-identical (clj 1.12.6) for every integer a long holds: the long verbs wrap at 64 bits,
+    # the -int verbs cast their arguments to int (a double or ratio truncates, one past the int range
+    # signals) and wrap at 32. Deviation, not pinned here: an integer past 64 bits is a plain integer
+    # here, where the oracle keeps a bigint literal unwrapped (see unchecked-add in deviations.md).
+    # The refusal texts are ours (only that it signals is pinned).
+    source: |
+      (defn uv-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (unchecked-add 9223372036854775807 1) (unchecked-add -9223372036854775808 -1) (unchecked-add 1 2) (unchecked-add 1.5 2) (unchecked-add 1/2 1) (unchecked-add 1.5 1/2) (unchecked-add ##Inf 1) (unchecked-add 4611686018427387904 4611686018427387904))
+      (prn (unchecked-subtract -9223372036854775808 1) (unchecked-subtract 9223372036854775807 -1) (unchecked-subtract 3 1) (unchecked-subtract 1.5 1) (unchecked-subtract 1/2 1))
+      (prn (unchecked-multiply 9223372036854775807 2) (unchecked-multiply 4611686018427387904 4) (unchecked-multiply 3 4) (unchecked-multiply 1.5 2) (unchecked-multiply 3037000500 3037000500) (unchecked-multiply -9223372036854775808 -1))
+      (prn (unchecked-inc 9223372036854775807) (unchecked-inc 1) (unchecked-inc 1.5) (unchecked-inc 1/2) (unchecked-dec -9223372036854775808) (unchecked-dec 1) (unchecked-dec 1.5) (unchecked-dec 1/2))
+      (prn (unchecked-negate -9223372036854775808) (unchecked-negate 5) (unchecked-negate 1.5) (unchecked-negate 1/2) (unchecked-negate 0) (unchecked-negate -0.0) (unchecked-negate -5))
+      (prn (unchecked-add-int 2147483647 1) (unchecked-add-int 1 2) (unchecked-add-int 1.5 1) (unchecked-add-int 1/2 1) (unchecked-add-int -2147483648 -1) (unchecked-add-int 2147483647 2147483647))
+      (prn (unchecked-subtract-int -2147483648 1) (unchecked-subtract-int 5 3) (unchecked-subtract-int 2147483647 -1) (unchecked-subtract-int 7.9 2.9))
+      (prn (unchecked-multiply-int 65536 65536) (unchecked-multiply-int 46341 46341) (unchecked-multiply-int 3 4) (unchecked-multiply-int -2147483648 -1) (unchecked-multiply-int 2.9 3.9))
+      (prn (unchecked-negate-int -2147483648) (unchecked-negate-int 5) (unchecked-negate-int 0) (unchecked-negate-int 2.9) (unchecked-inc-int 2147483647) (unchecked-inc-int 1) (unchecked-dec-int -2147483648) (unchecked-dec-int 1))
+      (prn (unchecked-divide-int 7 2) (unchecked-divide-int -7 2) (unchecked-divide-int 7 -2) (unchecked-divide-int -2147483648 -1) (unchecked-divide-int 7.9 2) (unchecked-divide-int 0 5))
+      (prn (unchecked-remainder-int 7 2) (unchecked-remainder-int -7 2) (unchecked-remainder-int 7 -2) (unchecked-remainder-int -2147483648 -1) (unchecked-remainder-int 7 2.9) (unchecked-remainder-int 0 5))
+      (prn (map unchecked-inc [1 2]) (map unchecked-dec [1 2]) (map unchecked-negate [1 2]) (map unchecked-inc-int [1 2]) (map unchecked-dec-int [1 2]) (map unchecked-negate-int [1 2]))
+      (prn (reduce unchecked-add [1 2 3]) (reduce unchecked-subtract [10 2 3]) (reduce unchecked-multiply [1 2 3]) (reduce unchecked-add 0 [9223372036854775807 1]) (reduce unchecked-multiply 1 (range 1 30)) (apply unchecked-subtract [5 3]))
+      (prn (reduce unchecked-add-int [1 2 3]) (reduce unchecked-subtract-int [10 2 3]) (reduce unchecked-multiply-int 1 (range 1 20)) (reduce unchecked-add-int 0 [2147483647 1]) (map unchecked-divide-int [7 8] [2 3]) (map unchecked-remainder-int [7 8] [2 3]))
+      (prn (loop [i 0 h 1125899906842597] (if (< i 20) (recur (inc i) (unchecked-add (unchecked-multiply h 31) i)) h)))
+      (prn (loop [i 0 h 17] (if (< i 20) (recur (inc i) (unchecked-add-int (unchecked-multiply-int h 31) i)) h)))
+      (prn (map uv-refused [#(unchecked-add nil 1) #(unchecked-add 1 nil) #(unchecked-add \a 1) #(unchecked-add "a" 1) #(unchecked-subtract nil 1) #(unchecked-multiply "a" 2) #(unchecked-multiply 2 \a) #(unchecked-inc nil) #(unchecked-inc "a") #(unchecked-dec nil) #(unchecked-dec \a) #(unchecked-negate nil) #(unchecked-negate "a")]))
+      (prn (map uv-refused [#(unchecked-add-int nil 1) #(unchecked-add-int 1 nil) #(unchecked-add-int \a 1) #(unchecked-add-int "a" 1) #(unchecked-add-int 2147483648 1) #(unchecked-add-int 1 -2147483649) #(unchecked-add-int 4294967297 1) #(unchecked-subtract-int 3000000000 1) #(unchecked-multiply-int 3000000000 1) #(unchecked-inc-int 3000000000) #(unchecked-inc-int nil) #(unchecked-dec-int -3000000000) #(unchecked-dec-int \a) #(unchecked-negate-int 2147483648) #(unchecked-negate-int "a")]))
+      (prn (map uv-refused [#(unchecked-divide-int 7 0) #(unchecked-divide-int 7 0.5) #(unchecked-remainder-int 7 0) #(unchecked-remainder-int 7 0.5) #(unchecked-divide-int nil 2) #(unchecked-divide-int 7 nil) #(unchecked-remainder-int \a 2) #(unchecked-remainder-int 7 "a") #(unchecked-divide-int 2147483648 1) #(unchecked-remainder-int 7 2147483648)]))
+      (prn (map uv-refused [#(apply unchecked-add [1]) #(apply unchecked-add [1 2 3]) #(apply unchecked-inc []) #(apply unchecked-inc [1 2]) #(apply unchecked-negate []) #(apply unchecked-add-int [1]) #(apply unchecked-inc-int [1 2]) #(apply unchecked-divide-int [1]) #(apply unchecked-remainder-int [1 2 3]) #(apply unchecked-subtract []) #(apply unchecked-multiply [1 2 3]) #(apply unchecked-dec-int []) #(apply unchecked-negate-int [1 2]) #(apply unchecked-dec [1 2])]))
+    expected: |
+      -9223372036854775808 9223372036854775807 3 3.5 3/2 2.0 ##Inf -9223372036854775808
+      9223372036854775807 -9223372036854775808 2 0.5 -1/2
+      -2 0 12 3.0 -9223372036709301616 -9223372036854775808
+      -9223372036854775808 2 2.5 3/2 9223372036854775807 0 0.5 -1/2
+      -9223372036854775808 -5 -1.5 -1/2 0 0.0 5
+      -2147483648 3 2 1 2147483647 -2
+      2147483647 2 -2147483648 5
+      0 -2147479015 12 -2147483648 6
+      -2147483648 -5 0 -2 -2147483648 2 2147483647 0
+      3 -3 -3 -2147483648 3 0
+      1 -1 1 0 1 0
+      (2 3) (0 1) (-1 -2) (2 3) (0 1) (-1 -2)
+      6 5 6 -9223372036854775808 -7055958792655077376 2
+      6 5 109641728 -2147483648 (3 2) (1 2)
+      -6598722044477124753
+      1102119323
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+  - name: bigint-and-bigdec-strings-refuse-surrounding-whitespace
+    # Oracle-identical (clj 1.12.6): BigInteger and BigDecimal parse the whole string, so a space,
+    # tab or newline on either side refuses; a leading sign is accepted.
+    source: |
+      (defn bw-refused [f] (try (f) :no (catch Exception e :refused)))
+      (prn (map #(str (bigint %)) ["12" "+12" "-12" "0" "007" "-0"]) (map #(str (biginteger %)) ["12" "+12"]))
+      (prn (map bw-refused [#(bigint " 12 ") #(bigint " 12") #(bigint "12 ") #(bigint "\t12") #(bigint "12\n") #(bigint "1 2") #(bigint "") #(bigint " ") #(bigint "-") #(bigint "+") #(bigint "1_0") #(bigint "1.5") #(bigint "0x1F") #(biginteger " 12") #(biginteger "12 ")]))
+      (prn (map #(double (bigdec %)) ["1.5" "+1.5" "-1.5" ".5" "1." "1e3" "1E+3" "0"]))
+      (prn (map bw-refused [#(bigdec " 1.5") #(bigdec "1.5 ") #(bigdec "\t1.5") #(bigdec "1.5\n") #(bigdec "1 .5") #(bigdec "") #(bigdec " ") #(bigdec "-") #(bigdec "+") #(bigdec "1e") #(bigdec "1_0") #(bigdec "a")]))
+    expected: |
+      ("12" "12" "-12" "0" "7" "0") ("12" "12")
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+      (1.5 1.5 -1.5 0.5 1.0 1000.0 1000.0 0.0)
+      (:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused)
+  - name: sorted-collections-refuse-like-the-oracle
+    # The first three lines are the oracle's messages (clj 1.12.6); on the last the
+    # oracle names Java casts (PersistentVector cannot be cast to clojure.lang.Sorted,
+    # Keyword to java.util.Comparator, to java.lang.Number).
+    source: |
+      (defn sc-msg [f] (try (pr-str (f)) (catch Exception e (ex-message e))))
+      (println (sc-msg #(sorted-map :a)) "|" (sc-msg #(sorted-map nil)))
+      (println (sc-msg #(sorted-set '(1 2))) "|" (sc-msg #(conj (sorted-set) {:a 1})) "|" (sc-msg #(assoc (sorted-map) (sorted-set 1) 1)))
+      (println (sc-msg #(vector-of :foo 1)) "|" (sc-msg #(vector-of :byte 200)) "|" (sc-msg #(vector-of :short 70000)) "|" (sc-msg #(vector-of :int 3000000000)) "|" (sc-msg #(vector-of :char 65536)))
+      (println (sc-msg #(subseq [1 2 3] > 1)) "|" (sc-msg #(sorted-set-by :foo 1)) "|" (sc-msg #(compare 1 :a)) "|" (sc-msg #(get (sorted-map :a 1) 1)))
+    expected: |
+      No value supplied for key: :a | No value supplied for key: null
+      Default comparator requires nil, Number, or Comparable: (1 2) | Default comparator requires nil, Number, or Comparable: {:a 1} | Default comparator requires nil, Number, or Comparable: #{1}
+      Unrecognized type :foo | Value out of range for byte: 200 | Value out of range for short: 70000 | integer overflow | Value out of range for char: 65536
+      subseq needs a sorted collection | a sorted collection needs a comparator function | compare needs two values of one comparable kind | compare needs two values of one comparable kind
+  - name: clojure-set-grows-and-shrinks-a-sorted-set
+    # Oracle-identical (clj 1.12.6): union grows the larger input, so a sorted set
+    # stays one, and rename-keys keeps a sorted map sorted.
+    source: |
+      (prn (clojure.set/union (sorted-set 1 2) #{3}) (clojure.set/union #{3} (sorted-set 1 2)) (clojure.set/difference (sorted-set 1 2 3) #{3 2}) (clojure.set/intersection (sorted-set 1 2 3) #{2}))
+      (prn (clojure.set/subset? (sorted-set 1) #{1 2}) (clojure.set/superset? (sorted-set 1 2) #{1}) (clojure.set/select odd? (sorted-set 1 2 3)) (clojure.set/rename-keys (sorted-map :a 1 :b 2) {:a :c}))
+    expected: |
+      #{1 2 3} #{1 2 3} #{1} #{2}
+      true true #{1 3} {:b 2, :c 1}
+  - name: sorted-collections-carry-metadata-and-travel-through-macros
+    # Oracle-identical (clj 1.12.6): with-meta keeps the order, and a macro answering a
+    # sorted collection gives back a literal of its kind, which is unsorted, like the
+    # oracle's compiler.
+    source: |
+      (defmacro sc-sorted [] (sorted-map-by > :a 1))
+      (prn (meta (with-meta (sorted-map :a 1) {:m 1})) (with-meta (sorted-set 2 1) {:m 1}) (sc-sorted) (sorted? (sc-sorted)))
+    expected: |
+      {:m 1} #{1 2} {:a 1} false
+  - name: empty-answers-the-empty-collection-of-its-kind
+    # Oracle-identical (clj 1.12.6): a vector, map, set or sorted collection answers an empty
+    # one (a sorted one keeping its comparator), carrying the metadata; a string, nil and
+    # anything that is no collection answer nil; a record refuses. Not pinned: a list, a seq
+    # and a map entry (nil and [] here, () and nil in the oracle).
+    source: |
+      (defrecord EmptyRec [a])
+      (prn (empty [1 2]) (empty {:a 1}) (empty #{1}) (empty "ab") (empty nil) (empty 1) (empty :a) (empty false))
+      (prn (map empty [[1] {1 2} #{1} "ab" nil]) (= (empty [1]) []) (conj (empty [1 2]) 3) (assoc (empty {:a 1}) :b 2) (conj (empty #{1}) 2))
+      (prn (empty (sorted-set 3 1)) (empty (sorted-map :a 1)) (conj (empty (sorted-set-by > 3 1)) 1 2 3) (assoc (empty (sorted-map-by > 1 :a)) 1 :x 2 :y))
+      (prn (sorted? (empty (sorted-set 1))) (map? (empty (sorted-map :a 1))) (set? (empty (sorted-set 1))) (count (empty (sorted-map :a 1))))
+      (prn (meta (empty (with-meta [1] {:a 1}))) (meta (empty (with-meta {1 2} {:b 1}))) (meta (empty (with-meta #{1} {:c 1}))) (meta (empty (with-meta (sorted-set 1) {:a 1}))) (meta (empty [1])))
+      (prn (empty (atom 1)) (try (empty (->EmptyRec 1)) (catch Exception e (some? (re-find #"^Can't create empty: .*EmptyRec$" (ex-message e))))) (try (apply empty []) (catch Exception e :refused)))
+    expected: |
+      [] {} #{} nil nil nil nil nil
+      ([] {} #{} nil nil) true [3] {:b 2} #{2}
+      #{} {} #{3 2 1} {2 :y, 1 :x}
+      true true true 0
+      {:a 1} {:b 1} {:c 1} {:a 1} nil
+      nil true :refused
+  - name: comparator-answers-minus-one-one-or-zero-from-a-predicate
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (sort (comparator >) [1 3 2]) (sort (comparator (fn [a b] (< (count a) (count b)))) ["ccc" "a" "bb"]) (sort (comparator <) [3 1 2]))
+      (prn ((comparator <) 1 2) ((comparator <) 2 1) ((comparator <) 1 1) ((comparator (fn [a b] nil)) 1 1) ((comparator (fn [a b] (= a 1))) 1 2) ((comparator (fn [a b] (= a 1))) 2 1))
+      (prn (sorted-set-by (comparator >) 1 3 2) (sorted-map-by (comparator >) 1 :a 2 :b) (map (comparator >) [1 2] [2 1]) (sort-by - (comparator >) [1 3 2]))
+      (prn (try (apply comparator []) (catch Exception e :refused)) (try (apply comparator [< <]) (catch Exception e :refused)) (try ((comparator false?) 1 2) (catch Exception e :refused)))
+    expected: |
+      (3 2 1) ("a" "bb" "ccc") (1 2 3)
+      -1 1 0 0 -1 1
+      #{3 2 1} {2 :b, 1 :a} (1 -1) (1 2 3)
+      :refused :refused :refused
+  - name: hash-set-builds-a-set-of-its-arguments
+    # Oracle-identical (clj 1.12.6).
+    source: |
+      (prn (hash-set 1 2) (hash-set) (hash-set 1 1 2) (hash-set [1] [1]) (count (hash-set :a "b" nil :a)) (count (hash-set 1 2 3 1)))
+      (prn (= (apply hash-set [1 2 3]) #{1 2 3}) (conj (hash-set 1) 2) (contains? (hash-set 1 2) 2) (= (hash-set 1 2) #{2 1}) (set? (hash-set)) (map hash-set [1 2]) (hash-set (sorted-set 1)))
+    expected: |
+      #{1 2} #{} #{1 2} #{[1]} 3 3
+      true #{1 2} true true true (#{1} #{2}) #{#{1}}
+  - name: a-double-prints-its-exponent-marker-in-uppercase
+    # Oracle-identical (clj 1.12.6): Double.toString spells 1.0E19 and 1.5E-7; the plain
+    # range (1.0E-3 up to 1.0E7) stays positional.
+    source: |
+      (println 1.0E19 (str 1.0E19) (pr-str 1.5e-7) [1e300] -1.0E-5 (str "x" 1e20 "y"))
+      (prn 1e7 9999999.0 0.001 1.0E-4 1.2345E10 12345678.9 1.7976931348623157e308 4.9e-324 -1.0E22)
+      (println (format "%s|%s" 1.0E19 [1e-10]) (pr-str 1e20 {:a 1e-10}) (with-out-str (prn 1e300)) (with-out-str (print 2.5e-8)))
+      (println (str [1e20 1.5]) (str {:k 1e21}) (pr-str #{1e30}) (str '(1e-9)) (str ##Inf ##NaN) (pr-str ##Inf) (* 1.0 123456789012))
+    expected: |
+      1.0E19 1.0E19 1.5E-7 [1.0E300] -1.0E-5 x1.0E20y
+      1.0E7 9999999.0 0.001 1.0E-4 1.2345E10 1.23456789E7 1.7976931348623157E308 4.9E-324 -1.0E22
+      1.0E19|[1.0E-10] 1.0E20 {:a 1.0E-10} 1.0E300
+       2.5E-8
+      [1.0E20 1.5] {:k 1.0E21} #{1.0E30} (1.0E-9) InfinityNaN ##Inf 1.23456789012E11

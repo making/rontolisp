@@ -64,4 +64,5 @@ seq は任意のコレクション上のリストビューです:strict なコ�
 | `partition-by` | `(partition-by odd? [1 3 2])` | `((1 3) (2))` |
 | `take-nth` | `(take-nth 2 [1 2 3])` | `(1 3)` |
 | `not-empty` | `(not-empty [])` | `nil` |
+| `empty` | `(empty [1 2])` | `[]` |
 | `pmap` | `(pmap inc [1 2])` | `(2 3)` |

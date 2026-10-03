@@ -99,13 +99,16 @@ class ClojureLoweringTest {
 	void headPositionCallsToVariablesReachTheValueCell() {
 		// a parameter may hold a collection, so its call goes through the prelude
 		// dispatcher (which funcalls real functions); a let/def binding of a real
-		// function stays a direct funcall, like a declared name stays direct
+		// function stays a direct funcall; a declared-never-defined name calls its
+		// unbound root, which signals like the oracle's
 		assertThat(lowered("(defn call-it [f x] (f x))"))
 			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (RONTOLISP::%CLOJURE-CALL |c%f| (LIST |c%x|)))");
 		assertThat(lowered("(let [g inc] (g 1))")).contains("(FUNCALL |c%g| 1)");
 		assertThat(lowered("(let [s #{:h}] (s :h))")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
-		assertThat(lowered("(declare u) (u 1)")).contains("(|c%u| 1)").doesNotContain("FUNCALL");
+		assertThat(lowered("(declare u) (u 1)")).contains("(SETQ |c%u| (RONTOLISP::%CLOJURE-UNBOUND \"user/u\"))",
+				"(RONTOLISP::%CLOJURE-CALL |c%u| (LIST 1))");
+		assertThat(lowered("(declare u) (defn u [x] x) (u 1)")).contains("(|c%u| 1)").doesNotContain("UNBOUND");
 	}
 
 	@Test
@@ -849,11 +852,19 @@ class ClojureLoweringTest {
 			.hasMessageContaining("defmethod needs a core class, not Instant");
 		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("isa? takes a child and a parent");
-		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("MAKE-CONDITION").contains("C%E-EX-INFO");
-		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("C%E-DATA");
-		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("C%E-MESSAGE");
+		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("RONTOLISP::%CLOJURE-EX-INFO")
+			.contains("(DEFINE-CONDITION C%E-EXCEPTION")
+			.contains("MAKE-CONDITION");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("RONTOLISP::%CLOJURE-EX-DATA");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("RONTOLISP::%CLOJURE-EX-MESSAGE");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-cause e)")).contains("RONTOLISP::%CLOJURE-EX-CAUSE");
+		assertThat(lowered("(Exception. \"m\")"))
+			.contains("(RONTOLISP::%CLOJURE-EXCEPTION-NEW-1 \"java.lang.Exception\" \"m\")")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(.getMessage (ex-info \"m\" {}))")).contains("RONTOLISP::%CLOJURE-EXCEPTION-METHOD")
+			.doesNotContain("JAVA:CALL");
 		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\")", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("ex-info takes a message and a data map");
+			.hasMessageContaining("ex-info takes a message, a data map and an optional cause");
 	}
 
 	@Test
@@ -942,7 +953,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(try 1 (catch Exception e 2) (finally 3))")).contains("HANDLER-CASE")
 			.contains("UNWIND-PROTECT")
 			.contains("(ERROR (|c%e|)");
-		assertThat(lowered("(throw \"boom\")")).contains("C%E-THROW");
+		assertThat(lowered("(throw \"boom\")")).contains("RONTOLISP::%CLOJURE-THROW");
 	}
 
 	@Test
@@ -1164,9 +1175,20 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2))")).contains("(LET*")
 			.contains("(|c%*d*| 5)")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
-		// a clojure.main-bound compiler flag answers the value with no effect
-		assertThat(lowered("(set! *warn-on-reflection* true)")).isEqualTo(FALSE_BINDING + "T");
-		assertThat(lowered("(set! *unchecked-math* false)")).contains("RONTOLISP::%CLOJURE-FALSE");
+		// a clojure.main-bound flag is always thread-bound, so it assigns; a flag
+		// clojure.main does not bind, and a stream, assign like a dynamic var; *ns*
+		// answers the value with no effect
+		assertThat(lowered("(set! *warn-on-reflection* true)"))
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-WARN-ON-REFLECTION RONTOLISP::%CLOJURE-FALSE)")
+			.endsWith("(SETQ RONTOLISP::%CLOJURE-WARN-ON-REFLECTION T)");
+		assertThat(lowered("(set! *unchecked-math* false)"))
+			.endsWith("(SETQ RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)");
+		assertThat(lowered("(set! *print-dup* true)")).contains("(> RONTOLISP::%CLOJURE-PRINT-DUP-DEPTH 0)")
+			.contains("(SETQ RONTOLISP::%CLOJURE-PRINT-DUP ")
+			.contains("(ERROR \"Can't change/establish root binding of: *print-dup* with set\")");
+		assertThat(lowered("(set! *out* *out*)")).contains("(> RONTOLISP::%CLOJURE-OUT-DEPTH 0)")
+			.contains("(SETQ *STANDARD-OUTPUT* ");
+		assertThat(lowered("(set! *ns* 1)")).isEqualTo(FALSE_BINDING + "1");
 		// anything else names what is missing
 		assertThatThrownBy(() -> Clojure.read("(set! *no-such-var* 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a var is not supported yet: *no-such-var*");
@@ -1507,14 +1529,54 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [x] x) (#'f 1)")).contains("(RONTOLISP::%CLOJURE-CALL (RONTOLISP::%CLOJURE-VAR");
 		assertThat(lowered("(def x 1) (test #'x)")).contains("(RONTOLISP::%CLOJURE-VAR-TEST (RONTOLISP::%CLOJURE-VAR");
 		assertThat(lowered("(map test [])")).contains("#'RONTOLISP::%CLOJURE-VAR-TEST-V");
+		// only a dynamic var's site carries the binding-depth reader thread-bound? asks
+		assertThat(lowered("(def ^:dynamic *d* 1) (thread-bound? #'*d*)"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"user/*d*\" (LAMBDA NIL |c%*d*|)")
+			.contains("(LAMBDA NIL |c%*d*%bound-depth|)")
+			.contains("RONTOLISP::%CLOJURE-IS-THREAD-BOUND");
+		assertThat(lowered("(def x 1) (thread-bound? #'x)")).doesNotContain("VAR-DYNAMIC");
+		assertThat(lowered("(def x 1) #'x")).doesNotContain("VAR-DYNAMIC");
+		assertThat(lowered("(map thread-bound? [])")).contains("#'RONTOLISP::%CLOJURE-IS-THREAD-BOUND-V");
 		// a local is no var (the oracle resolves past it): under a shadowing local
 		// the root is read through a top-level reader the local cannot shadow
 		assertThat(lowered("(def x 1) (let [x 2] #'x)")).contains("(DEFUN |c%x%root| NIL |c%x|)")
 			.contains("(LAMBDA NIL (|c%x%root|))");
 		assertThatThrownBy(() -> Clojure.read("(let [q 1] #'q)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve var: q in this context");
-		assertThatThrownBy(() -> Clojure.read("#'println", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/println");
+		// a core name is the core var: its root the core value, its metadata :name/:ns
+		// (a macro's :macro), a stream special's site the depth reader thread-bound? asks
+		assertThat(lowered("#'str")).contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\" (LAMBDA NIL");
+		assertThat(lowered("(defn str [] 1) #'clojure.core/str"))
+			.contains("(RONTOLISP::%CLOJURE-VAR \"clojure.core/str\"");
+		assertThat(lowered("(defn str [] 1) #'str")).contains("\"user/str\"").doesNotContain("clojure.core/str");
+		assertThat(lowered("#'when")).contains("Can't take value of a macro: #'clojure.core/when")
+			.contains("(LIST :C%KEYWORD \"macro\") T");
+		assertThat(lowered("#'*out*"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL *STANDARD-OUTPUT*)")
+			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-OUT-DEPTH)");
+		assertThat(lowered("#'inc")).doesNotContain("VAR-DYNAMIC");
+		// every binding of a stream or agent special rebinds its counter one deeper
+		assertThat(lowered("(with-out-str (print 1))"))
+			.contains("(RONTOLISP::%CLOJURE-OUT-DEPTH (+ RONTOLISP::%CLOJURE-OUT-DEPTH 1))")
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-OUT-DEPTH 0)");
+		assertThat(lowered("(print 1)")).doesNotContain("DEPTH");
+		assertThat(lowered("(binding [*in* *in*] 1)"))
+			.contains("(RONTOLISP::%CLOJURE-IN-DEPTH (+ RONTOLISP::%CLOJURE-IN-DEPTH 1))");
+		assertThat(lowered("(send (agent 0) inc)"))
+			.contains("(RONTOLISP::%CLOJURE-AGENT-DEPTH (+ RONTOLISP::%CLOJURE-AGENT-DEPTH 1))");
+		// *err* and the flags are core specials too; a flag clojure.main binds is
+		// always thread-bound
+		assertThat(lowered("#'*err*"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*err*\" (LAMBDA NIL *ERROR-OUTPUT*)")
+			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-ERR-DEPTH)");
+		assertThat(lowered("#'*assert*")).contains(
+				"(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*assert*\" (LAMBDA NIL RONTOLISP::%CLOJURE-ASSERT)")
+			.contains("(LAMBDA NIL 1)")
+			.contains("(DEFVAR RONTOLISP::%CLOJURE-ASSERT T)");
+		assertThatThrownBy(() -> Clojure.read("#'*ns*", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/*ns*");
+		assertThatThrownBy(() -> Clojure.read("#'if", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve var: if in this context");
 		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/test");
 	}
@@ -1761,7 +1823,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void predicatesAndCastsReadAndAnswer() {
-		assertThat(lowered("(coll? [1])")).contains("CONSP").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(coll? [1])")).contains("RONTOLISP::%CLOJURE-IS-COLL")
+			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(symbol? 'a)")).contains("SYMBOLP");
 		assertThat(lowered("(instance? String \"a\")")).contains("STRINGP");
 		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
@@ -2110,6 +2173,108 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(find-keyword \"a\" \"b\" \"c\")", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Wrong number of args (3) passed to: clojure.core/find-keyword");
+	}
+
+	@Test
+	void typePredicatesLowerToOneTestAnsweringTrueOrFalse() {
+		assertThat(lowered("(fn [x] (seq? x))")).contains("(RONTOLISP::%CLOJURE-IS-SEQ ")
+			.contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(fn [x] (number? x))")).contains("(NUMBERP ");
+		assertThat(lowered("(fn [x] (qualified-keyword? x))")).contains("(RONTOLISP::%CLOJURE-IS-QUALIFIED ");
+		assertThat(lowered("(fn [x] (uuid? x))")).contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+			.contains("\"java.util.UUID\"");
+		assertThat(lowered("(map map? [1])")).contains("LAMBDA").contains("(RONTOLISP::%CLOJURE-IS-MAP ");
+		// a kind no value here has: false, the argument still evaluated
+		assertThat(lowered("(delay? [1])")).contains("PROGN").contains("RONTOLISP::%CLOJURE-FALSE");
+		// the sorted-aware tests: sorted? its own, set? and reversible? the helpers a
+		// program building no sorted collection calls as the plain ones
+		assertThat(lowered("(fn [x] (sorted? x))")).contains("(RONTOLISP::%CLOJURE-IS-SORTED ");
+		assertThat(lowered("(fn [x] (set? x))")).contains("(RONTOLISP::%CLOJURE-IS-SET ");
+		assertThat(lowered("(fn [x] (reversible? x))")).contains("(RONTOLISP::%CLOJURE-IS-REVERSIBLE ");
+		assertThat(lowered("(volatile! 1)")).contains(":C%VOLATILE");
+		assertThat(lowered("(atom 1)")).doesNotContain(":C%VOLATILE");
+	}
+
+	@Test
+	void sortedVerbsAreOneWorkerCallEach() {
+		assertThat(lowered("(sorted-map :b 1 :a 2)"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-MAKE NIL NIL (LIST (LIST :C%KEYWORD \"b\") 1");
+		assertThat(lowered("(sorted-set-by > 3 1)")).contains("(RONTOLISP::%CLOJURE-SORTED-MAKE T (LAMBDA");
+		// a literal core test is its keyword, which picks the oracle's path the way its
+		// identity check does; anything else is a real function
+		assertThat(lowered("(def s (sorted-set 1)) (subseq s > 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ |c%s| :> 1 T)");
+		assertThat(lowered("(def s (sorted-set 1)) (rsubseq s >= 1 clojure.core/< 3)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ-5 |c%s| :>= 1 :< 3 NIL)");
+		assertThat(lowered("(def s (sorted-set 1)) (defn t [a b] true) (subseq s t 1)"))
+			.contains("(RONTOLISP::%CLOJURE-SUBSEQ |c%s| #'|c%t| 1 T)");
+		assertThat(lowered("(compare 1 2)")).contains("(RONTOLISP::%CLOJURE-COMPARE 1 2)");
+		assertThat(lowered("(vector-of :int 1 2)"))
+			.contains("(RONTOLISP::%CLOJURE-VECTOR-OF (LIST :C%KEYWORD \"int\") (LIST 1 2))");
+		assertThat(lowered("(map compare [1] [2])")).contains("#'RONTOLISP::%CLOJURE-COMPARE-V");
+		assertThat(lowered("(apply sorted-map-by [> 1 2])")).contains("#'RONTOLISP::%CLOJURE-SORTED-MAP-BY-V");
+		for (String[] call : new String[][] { { "(subseq (sorted-set) > 1 <)", "4", "subseq" },
+				{ "(rsubseq (sorted-set) >)", "2", "rsubseq" }, { "(compare 1)", "1", "compare" },
+				{ "(sorted-map-by)", "0", "sorted-map-by" }, { "(sorted-set-by)", "0", "sorted-set-by" },
+				{ "(vector-of)", "0", "vector-of" } }) {
+			assertThatThrownBy(() -> Clojure.read(call[0], null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (" + call[1] + ") passed to: clojure.core/" + call[2]);
+		}
+	}
+
+	@Test
+	void aProgramBuildingNoSortedCollectionCarriesNoneOfItsArms() {
+		// the map and set verbs carry an arm for a sorted collection; a program that
+		// builds none has them stripped before the splice, so neither its own forms nor
+		// the library it splices name the sorted runtime
+		String plain = "(def m {:a 1}) (def s #{1}) (println (get m :a) (m :a) (:a m) (contains? m :a) (count m)"
+				+ " (empty? s) (assoc m :b 2) (dissoc m :a) (conj s 2) (disj s 1) (keys m) (vals m) (merge m {:c 3})"
+				+ " (merge-with + m m) (select-keys m [:a]) (into {} m) (= m {:a 1}) (rseq [1 2]) (set? s)"
+				+ " (reversible? []) (class m) (seq s) (first m) (rand-nth [1]) (shuffle [1]) (find m :a)"
+				+ " (reduce-kv (fn [a k v] v) 0 m) (clojure.set/union s #{2}) (sort > [1 2]))"
+				+ " (println (apply dissoc m [:a]) (apply disj s [1]) (apply merge [m]) (apply merge-with + [m m]))";
+		String pruned = prunedForms(plain);
+		assertThat(pruned).doesNotContain("%CLOJURE-SORTED")
+			.doesNotContain("%CLOJURE-IS-SET")
+			.doesNotContain("%CLOJURE-IS-REVERSIBLE")
+			.contains("(RONTOLISP::%CLOJURE-SET-P ")
+			.contains("(RONTOLISP::%CLOJURE-IS-VECTOR ");
+		// one sorted collection and every arm stays, the runtime with them
+		assertThat(prunedForms(plain + " (println (sorted-set 1))")).contains("(DEFUN RONTOLISP::%CLOJURE-SORTED-MAKE ")
+			.contains("(RONTOLISP::%CLOJURE-SORTED-P ")
+			.contains("(RONTOLISP::%CLOJURE-IS-SET ");
+		// a value form of a constructor counts too
+		assertThat(prunedForms("(println (apply sorted-set [1]))")).contains("(DEFUN RONTOLISP::%CLOJURE-SORTED-SET-V ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-WRITE-SORTED ");
+	}
+
+	private static String prunedForms(String source) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false)
+			.forms()
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void typePredicatesRefuseAWrongArgumentCountInTheOraclesWords() {
+		for (String[] call : new String[][] { { "(seq?)", "0", "seq?" }, { "(map? 1 2)", "2", "map?" },
+				{ "(any? 1 2)", "2", "any?" }, { "(sorted?)", "0", "sorted?" }, { "(identical? 1)", "1", "identical?" },
+				{ "(distinct?)", "0", "distinct?" }, { "(not-any? odd?)", "1", "not-any?" },
+				{ "(not-every? odd? [] [])", "3", "not-every?" }, { "(extends? P)", "1", "extends?" },
+				{ "(NaN? 1 2)", "2", "NaN?" }, { "(qualified-symbol?)", "0", "qualified-symbol?" } }) {
+			assertThatThrownBy(() -> Clojure.read(call[0], null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (" + call[1] + ") passed to: clojure.core/" + call[2]);
+		}
+		assertThatThrownBy(() -> Clojure.read("(extends? Nope String)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such protocol: Nope");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.util.Date)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("extends? needs a core type, not java.util.Date");
+		assertThatThrownBy(() -> Clojure.read("(future-done? 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("future-done? is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(map extends? [])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: extends?");
 	}
 
 	@Test

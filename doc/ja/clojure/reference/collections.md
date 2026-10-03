@@ -1,6 +1,6 @@
 # マップ・セット・ベクター
 
-マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。
+マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。キーは `=` で比較されるので、ベクター・リスト・マップ・セットのキーも等しいキーを見つけます。ソート済みのマップとセット（`sorted-map`・`sorted-set` とその `-by` 形）は、エントリーを `compare` か比較関数の順に保ち、その順序でキーを探します。マップとセットの操作はどれもソート済みのものを返し、`subseq`/`rsubseq` はその一部の範囲を走査します。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。
 
 | Name | Example | Result |
 |---|---|---|
@@ -9,6 +9,7 @@
 | `vec` | `(vec '(1 2))` | `[1 2]` |
 | `hash-map` | `(hash-map :a 1)` | `{:a 1}` |
 | `array-map` | `(array-map :a 1)` | `{:a 1}` |
+| `hash-set` | `(hash-set 1 2 1)` | `#{1 2}` |
 | `assoc` | `(assoc {:a 1} :b 2)` | `{:a 1, :b 2}` |
 | `dissoc` | `(dissoc {:a 1} :a)` | `{}` |
 | `get` | `(get {:a 1} :b :none)` | `:none` |
@@ -39,6 +40,15 @@
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |
 | `update-vals` | `(update-vals {:a 1} inc)` | `{:a 2}` |
 | `reduce-kv` | `(reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2})` | `3` |
+| `sorted-map` | `(sorted-map :b 1 :a 2)` | `{:a 2, :b 1}` |
+| `sorted-map-by` | `(sorted-map-by > 1 :a 2 :b)` | `{2 :b, 1 :a}` |
+| `sorted-set` | `(sorted-set 3 1 2)` | `#{1 2 3}` |
+| `sorted-set-by` | `(sorted-set-by > 1 3 2)` | `#{3 2 1}` |
+| `subseq` | `(subseq (sorted-set 1 2 3) > 1)` | `(2 3)` |
+| `rsubseq` | `(rsubseq (sorted-set 1 2 3) < 3)` | `(2 1)` |
+| `compare` | `(compare "a" "c")` | `-2` |
+| `comparator` | `(sort (comparator >) [1 3 2])` | `(3 2 1)` |
+| `vector-of` | `(vector-of :int 1.5 2)` | `[1 2]` |
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct-map` | `(do (defstruct s :a) (:a (struct-map s :a 1)))` | `1` |

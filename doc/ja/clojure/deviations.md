@@ -10,6 +10,7 @@
  出力します。`str` は素の連結で `true`/`false`/`""` と綴ります（`str` の中の
  コレクションは、オラクルの `toString` 同様、文字列をクォートした可読の綴りです）。`pr`/`prn`/`pr-str` は
  可読の系列です（文字列はクォート付きで印字、`pr-str` は `pr` と同様スペース区切り）。
+ `print-str`/`prn-str`/`println-str` は同じ系列を文字列で答えます。
  print 系はオラクルと同様に `nil` を返します。
 - コレクションは Clojure 記法で印字されます（`[1 :a s]`、`{:a 1}`、`#{1}`、
  `(true false nil :k)`）。クオートされたシンボルは `c%` の後ろからマングル解除されます。
@@ -17,11 +18,13 @@
  （`keys`/`vals` と同じ）なので、1 エントリの map と 1 メンバーの set だけが決定的に
  印字されます。循環を閉じる値は Scheme の `write` と同様のデータラベル
  （`#0=(1 . #0#)`）で印字され、循環なしの共有は 2 度印字されます。atom は可読でない
- 形（`#<Atom value>`）、関数は `#<procedure>`、`ex-info` は条件オブジェクトのまま
- （`#<C%E-EX-INFO ...>`）印字されます。
-- `*print-length*`/`*print-level*` は考慮されず、Clojure 値に対する `~S`/`~A` は
- Common Lisp 記法のままです（`format` は CL サーフェス）。`print-method`/`pprint`
- はありません。
+ 形（`#<Atom value>`）、関数は `#<procedure>`、例外はその `toString`
+ （`clojure.lang.ExceptionInfo: m {}`。オラクルは `#error {...}`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
+ `#object` はハッシュを含みます）と印字されます。
+- `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
+ 付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
+ Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
+ `print-method`/`pprint` はありません。
 - マップ・セット・memoize のキーは、ベクター・リスト・マップ・セットも含めて本家と同じく
  `=` で一致するキーを見つけます。ただし格納されるコレクションのキーは、プログラムが最初に
  格納した同じ種類（ベクター・リスト・遅延 seq）の `=` なキーなので、メタデータと入れ子の
@@ -33,8 +36,18 @@
  `[k v]` メンバーをそこへ conj します。`clojure.set` の結果はメタデータを持ちません。
 - マップエントリは単なる2要素のベクターなので、`map-entry?` はすべての `[k v]` に対して `true` を返し
  （本家はプログラムが作ったものに `false`）、`key`/`val` はそのようなベクターを読みます。
+ 同じ理由で `(conj {} #{[1 2]})` と `(conj {} (seq [[1 2]]))`・`(merge {} (seq [[1 2]]))` は `{1 2}` を返します（本家は `ClassCastException`。要素は本物のエントリでなければなりません）。
  キーワードはインターンされないため、`find-keyword` は一度も使われていない綴りにもそのキーワードを
  返します（本家は `nil`）。
+- 型述語は値の表現に従います。`nil` が空リストなので、`seq?`・`list?`・`coll?`・`sequential?`・
+ `counted?` は `()` に `false` を返します。strict な入力に対して操作が返す seq はリストなので、
+ `list?`・`counted?`・`realized?` はそれに `true` を返します（本家の lazy seq や chunked seq は
+ `false`）。チャンク化された seq はなく（`chunked-seq?` は常に `false`）、`iterate`/`cycle` の seq は
+ 一度強制されてから `realized?` になります。decimal と `N` のリテラルは通常の有理数なので、
+ `decimal?` は常に `false` で、`ratio?`・`integer?`・`int?` はその有理数に対して答えます
+ （`(ratio? 1.5M)` と `(int? 2N)` は `true`）。`identical?` は数値・文字・シンボルを値で比較し
+ （`(identical? 1000 1000)` は `true`）、綴りが同じ2つのキーワードを同じオブジェクトとして扱います。
+
 - プログラム自身がトップレベルで定義したコア名（`(defn peek ...)`）は、定義より上の呼び出しも
  含めてファイル全体でコアの関数を隠します（オラクルでは定義より上の呼び出しはコアに届きます）。
  ローカル束縛はオラクル同様にそのスコープで隠します。
@@ -58,7 +71,7 @@
   は失敗します。
 - `clojure.test` はテストを定義順に実行します（本家の順序は名前空間のマップの順です）。
   `thrown?`/`thrown-with-msg?` は `catch` と同じく、クラス名に関わらずどのコンディションにも
-  一致します。エラー報告はコンディションのメッセージ（`ex-info` は本家の形）を表示し、
+  一致します。エラー報告は例外の `toString`（実行時エラーはその report）を表示し、
   スタックトレースは表示しません。位置は `is` 式の行で、本家は例外を投げたフレームを示します。
   失敗した `thrown-with-msg?` はコンディションのメッセージを表示し、本家は `#error {...}` を
   表示します。ホストのスタックオーバーフロー（`catch StackOverflowError`、
@@ -67,6 +80,16 @@
   JVM バックエンドだけです。`use-fixtures` は名前を挙げて拒否します。
 - `try` の catch 節は順に catch-all です:最初の節がどの条件も扱います（オラクルは
  クラスでディスパッチ）。catch 変数は Common Lisp の条件を束縛します。
+- 例外はクラス名、メッセージ、データ、cause を持つコンディションです。実行時エラーは
+  ランタイムがシグナルする Common Lisp のコンディションで、そのメッセージは Common Lisp の
+  report（失敗した `(inc nil)` の `(.getMessage e)` は `+: The value NIL is not of type
+  NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
+  接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
+  cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
+  （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
+  例外の `class`、`instance?`、その他のメソッド（`.printStackTrace`、`.getStackTrace`）は
+  拒否され、例外でない値の `throw` はオラクルが拒否するところでそのレンダリングを
+  シグナルします。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
  `prefer-method` の選択に従います。ホストクラス上の `defmethod` は `class` が答える
@@ -114,22 +137,43 @@
   入口ファイルの `:file` は与えたままのパスです（オラクルは絶対パスにします）。
   `def`/`defn`/`defn-`/`defmacro` 以外（`defmulti`、`deftest`、レコードのファクトリなど）で
   定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
-  上げ（オラクルは展開関数を答えます）、`clojure.core` の var（`#'println`）は名前で
-  拒否されます。
+  上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
+  `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
+  持ちます）。ここで値を持たない core の var（`#'*ns*`、`#'*file*`）は拒否されます。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
 - `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
   他のクラスは誤答の代わりに名前付きで拒否されます。
-- `unchecked-add` は折り返しません（整数は bignum です）。他の `unchecked-*` は未対応です。
+- `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換（`int`・`long`・`short`・
+  `byte`・`char`・`double`・`float`）と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは
+  通常の整数なので、オラクルでは折り返されない bigint のオペランド
+  （`(unchecked-add 9223372036854775807N 1)`）も折り返します。`inc`・`dec` と検査付きの演算は
+  桁あふれしません（整数は bignum です）。
+- `bigint` と `biginteger` は通常の整数、`bigdec` は通常の有理数を返します（`(bigdec "1.5")` は
+  `3/2` と表示され、オラクルは `1.5M`）。`N`・`M` リテラルと同じです。10進展開が無限になる比の
+  `bigdec` はオラクル同様シグナルします。
 - `format` は `%s`・`%d`・`%x`・`%X`・`%o`・`%c`・`%b`・`%f`・`%%`・`%n` を描画します
   （幅・浮動小数点精度付き）。`%e`・`%g`・フラグ・非リテラルは名前付きで拒否されます。
   `%s` の `nil` はオラクル同様 `"null"` です。
 - `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
   `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
   `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
-- 比較関数なしの `sort` は数値・文字列・文字・キーワードを順序付けます。それ以外
-  （混在を含む）はシグナルします。
+- ソート済みのマップとセットは、順序付け・表示・キーの検索がオラクルと同じですが、どの操作も
+  コピーを作ります（関連付けにはハッシュマップと同じくコレクションの大きさ分のコストが
+  かかります）。`nth` はオラクルが拒否する場面でも要素を順にたどり、`class` は `:map`/`:set`
+  を返します。先頭から走査して何も残らない `subseq`/`rsubseq` は `nil` を返します（オラクルは
+  `()`）。値として `subseq` に渡したテストは `(1 0)`・`(0 0)`・`(-1 0)` への答え方で判別します
+  （オラクルはコアの関数との同一性で判別します）。`compare` は文字列をコードポイントで比べます
+  （オラクルは UTF-16 の単位で比べるので、U+FFFF を超える文字で答えが変わります）。
+- `float` は倍精度の値を返すので、`(float 1/3)` は `0.3333333333333333` です（オラクルの Float は
+  `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。`int` と `long` は
+  切り捨てるだけで、範囲外の値を拒否しません（オラクルは `integer overflow`、
+  `Value out of range for long: ...`）。
+- `vector-of` は通常のベクターを返します。あとの `conj` や `assoc` は値をそのまま格納し
+  （オラクルは型変換を続けます）、`:float` も倍精度で保持します。
+- リスト・遅延シーケンス・シーケンスの `empty` は `nil` を返し（オラクルは `()`。`rest` と同じ、空を
+  `nil` とする扱い）、メタデータも持ちません。マップエントリの `empty` は `[]` です（オラクルは `nil`）。
 - `partition` に pad はありません。非正のサイズや step の `partition-all` はシグナルします
   （オラクルは `()` の無限 seq を返します）。`pmap` は `map` で、呼び出し元のスレッドで順に
   走ります。`take-nth` は step が 0 だとシグナルし、seq 形は負の step を絶対値で進みます。
@@ -170,8 +214,9 @@
   （オラクルは先にクラスが読み込まれている必要があります）。deftype のリテラルは
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
-- `*out*`/`*in*` は `*standard-output*`/`*standard-input*` です（再束縛は標準
-  ストリームの再束縛になります）。
+- `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
+  です（再束縛は標準ストリームの再束縛になります）。`(prn *out*)` は `true` と印字されます
+  （`*standard-output*` のルートが `t` のため）。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
 - ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
   （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または

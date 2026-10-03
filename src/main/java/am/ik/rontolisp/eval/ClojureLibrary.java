@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,6 +17,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -37,6 +39,14 @@ import org.jspecify.annotations.Nullable;
  * a lowered Clojure program does -- gets the definitions prepended, and
  * {@link LibraryDefunPruner} drops the ones it does not reach.</li>
  * </ul>
+ *
+ * <p>
+ * A program that builds no sorted collection has the sorted-collection arms of its own
+ * forms and of the library stripped first ({@link ClojureArms}), so it is spliced and
+ * compiled exactly as before sorted collections existed; likewise the unbound-root arms
+ * of a program that makes no unbound var, and the stream binding-depth counters of one
+ * that reads none. The interpreter keeps them: its library loads once for whatever the
+ * session reads next.
  */
 public final class ClojureLibrary {
 
@@ -47,8 +57,11 @@ public final class ClojureLibrary {
 	 * the library's host arms, one {@code defun} per arm, each defining the same name and
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
-	 * {@code %clojure-host-class-name} (the printer) and {@code %clojure-host-string}
-	 * ({@code str}) answer NIL.
+	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-string}
+	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
+	 * {@code uri?}, {@code class?}) and {@code %clojure-host-throwable} (an exception's
+	 * view of a value) answer NIL, and {@code %clojure-host-method} ({@code .getMessage}
+	 * of a value that is no exception) refuses.
 	 */
 	private static final String HOST_ARMS_WITHOUT_JAVA = """
 			(defun rontolisp::%clojure-host-class (x)
@@ -60,6 +73,15 @@ public final class ClojureLibrary {
 			(defun rontolisp::%clojure-host-string (x)
 			  (declare (ignore x))
 			  nil)
+			(defun rontolisp::%clojure-host-instance-p (x class-name)
+			  (declare (ignore x class-name))
+			  nil)
+			(defun rontolisp::%clojure-host-throwable (x)
+			  (declare (ignore x))
+			  nil)
+			(defun rontolisp::%clojure-host-method (x method)
+			  (declare (ignore x))
+			  (error (concatenate 'string "No matching field found: " method)))
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;
@@ -109,19 +131,70 @@ public final class ClojureLibrary {
 
 	/**
 	 * The compile-path pre-pass: prepends the library definitions when the program
-	 * references one of its functions. A program that does not is returned unchanged.
+	 * references one of its functions, after stripping the arms of every family the
+	 * program makes no value of. A program naming neither a library function nor an arm
+	 * is returned unchanged.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		for (LispVal form : program) {
-			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(usesJava(program) ? forms() : formsWithoutHostArms());
-				out.addAll(program);
-				return out;
+		if (!referencesAny(program)) {
+			return program;
+		}
+		// an arm names the library too, so the reference is asked again once they go
+		List<LispVal> body = program;
+		Set<ClojureArms.Family> made = EnumSet.noneOf(ClojureArms.Family.class);
+		for (ClojureArms.Family family : ClojureArms.Family.values()) {
+			ClojureArms.Scan scan = ClojureArms.scan(body, family);
+			if (scan.builds()) {
+				made.add(family);
+			}
+			else if (scan.strips()) {
+				body = ClojureArms.strip(body, family);
 			}
 		}
-		return program;
+		if (body != program && !referencesAny(body)) {
+			return body;
+		}
+		List<LispVal> out = new ArrayList<>(library(usesJava(body), made));
+		out.addAll(body);
+		return out;
+	}
+
+	private static boolean referencesAny(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (references(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The library a program splices: with or without the host arms, and with the arms of
+	 * only the families whose values the program makes (one that builds no sorted
+	 * collection takes no sorted-collection arm).
+	 */
+	private static List<LispVal> library(boolean java, Set<ClojureArms.Family> made) {
+		List<LispVal> library = java ? forms() : formsWithoutHostArms();
+		StringBuilder key = new StringBuilder(java ? "default" : "without-host-arms");
+		List<ClojureArms.Family> stripped = new ArrayList<>();
+		for (ClojureArms.Family family : ClojureArms.Family.values()) {
+			if (!made.contains(family)) {
+				key.append(" without-").append(family.name());
+				stripped.add(family);
+			}
+		}
+		if (stripped.isEmpty()) {
+			return library;
+		}
+		return FORMS.computeIfAbsent(key.toString(), ignored -> {
+			List<LispVal> out = library;
+			for (ClojureArms.Family family : stripped) {
+				out = ClojureArms.strip(out, family);
+			}
+			return List.copyOf(out);
+		});
 	}
 
 	/**
@@ -185,7 +258,8 @@ public final class ClojureLibrary {
 			}
 			rest = cons.cdr();
 		}
-		return rest instanceof LispSymbol symbol && isClojureFunction(symbol.name());
+		return rest instanceof LispSymbol symbol
+				&& (isClojureFunction(symbol.name()) || ClojureArms.isFamilyName(symbol.name()));
 	}
 
 }

@@ -53,12 +53,36 @@ final class ClojureCoreLowering {
 			case "peek", "pop", "not-empty":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "empty", "double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
+					"numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
+					"unchecked-char", "unchecked-double", "unchecked-float":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "unchecked-inc", "unchecked-dec", "unchecked-negate", "unchecked-inc-int", "unchecked-dec-int",
+					"unchecked-negate-int":
+				arity(name, n, 1, 1);
+				return worker(name, ctx.lower(items.get(1)));
+			case "unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
+					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
+					"unchecked-remainder-int":
+				arity(name, n, 2, 2);
+				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			case "comparator":
+				arity(name, n, 1, 1);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)));
+			case "hash-set":
+				return worker("set-of", ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 			case "find":
 				arity(name, n, 2, 2);
 				return worker(name, ctx.lower(items.get(1)), ctx.lower(items.get(2)));
-			case "key", "val", "map-entry?", "rseq":
+			case "key", "val", "map-entry?":
 				arity(name, n, 1, 1);
 				return worker("map-entry?".equals(name) ? "map-entry-p" : name, ctx.lower(items.get(1)));
+			case "rseq":
+				// a sorted map or set walks backwards through its items vector (a view a
+				// program building no sorted collection sheds, ClojureArms)
+				arity(name, n, 1, 1);
+				return worker(name, worker("sorted-items", ctx.lower(items.get(1))));
 			case "find-keyword":
 				arity(name, n, 1, 2);
 				return n == 1 ? worker(name, ctx.lower(items.get(1)))
@@ -104,6 +128,9 @@ final class ClojureCoreLowering {
 				arity(name, n, 3, 3);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)),
 						ctx.lower(items.get(3)));
+			case "run!":
+				arity(name, n, 2, 2);
+				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)), ctx.lower(items.get(2)));
 			case "pmap":
 				arity(name, n, 2, -1);
 				return ClojureSeqLowering.mapForm(ctx, ClojureBindingLowering.realFnValue(ctx, items.get(1)),
@@ -123,6 +150,11 @@ final class ClojureCoreLowering {
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
 			case "read-string", "read":
 				return ClojureReadLowering.callOf(ctx, name, items);
+			case "read-line":
+				// the next line of *in*, nil past the end, like the oracle's
+				arity(name, n, 0, 0);
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), new LispSymbol("*STANDARD-INPUT*"),
+						ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
 			default:
 				return null;
 		}
@@ -139,7 +171,14 @@ final class ClojureCoreLowering {
 			case "drop-last", "split-at", "split-with", "take-last", "nthnext", "nthrest", "peek", "pop", "not-empty",
 					"dedupe", "replace", "find", "subvec", "key", "val", "rseq", "find-keyword", "partition-all",
 					"partition-by", "min-key", "max-key", "juxt", "fnil", "every-pred", "some-fn", "update-keys",
-					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
+					"update-vals", "reduce-kv", "with-meta", "meta", "vary-meta", "empty", "comparator", "hash-set",
+					"double", "float", "byte", "short", "num", "bigint", "biginteger", "bigdec", "rationalize",
+					"numerator", "denominator", "unchecked-int", "unchecked-long", "unchecked-short", "unchecked-byte",
+					"unchecked-char", "unchecked-double", "unchecked-float", "unchecked-inc", "unchecked-dec",
+					"unchecked-negate", "unchecked-inc-int", "unchecked-dec-int", "unchecked-negate-int",
+					"unchecked-add", "unchecked-subtract", "unchecked-multiply", "unchecked-add-int",
+					"unchecked-subtract-int", "unchecked-multiply-int", "unchecked-divide-int",
+					"unchecked-remainder-int", "run!", "println", "print", "prn", "pr", "read-line" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);

@@ -432,54 +432,44 @@ final class ClojureFilterLowering {
 			LispSymbol right = ctx.freshTemp();
 			LispSymbol got = ctx.freshTemp();
 			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
-			LispVal truthy = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+			LispVal before = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil
 						.list(List.of(ClojureLowerUtil.list(got, ctx.callFun(cmp.real(), fun, List.of(left, right))))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+					comparatorBefore(ctx, got));
 			pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(left, right)),
-					truthy);
+					before);
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("sort"), coll, pred));
 	}
 
 	/**
-	 * The default comparator: numbers with {@code <}, strings with {@code string<},
-	 * characters with {@code char<}, keywords by spelling; anything else signals instead
-	 * of answering wrongly.
+	 * Whether a comparator's answer, bound to {@code got}, puts its first argument before
+	 * its second: the oracle's {@code AFunction.compare} read the way a sort reads it --
+	 * a number when its integer part is negative ({@code compare}, {@code (- a b)}),
+	 * anything else when it is truthy ({@code <}, {@code >}).
+	 */
+	static LispVal comparatorBefore(ClojureLowering ctx, LispSymbol got) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), got),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("<="), got, new LispInteger(-1)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
+						ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+	}
+
+	/**
+	 * The default comparator, {@code (fn [a b] (neg? (compare a b)))}: the oracle sorts
+	 * by {@code compare}, so nil, booleans, symbols and vectors order too and two values
+	 * of no common order signal.
 	 */
 	static LispVal defaultCmpFn(ClojureLowering ctx) {
 		LispSymbol left = new LispSymbol(ClojureLowering.mangle("sort-a"));
 		LispSymbol right = new LispSymbol(ClojureLowering.mangle("sort-b"));
-		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("string<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("char<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), keywordTest(left), keywordTest(right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("string<"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), right))));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("error"), LispString.literal("sort needs mutually comparable elements"))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(left, right)),
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
+				defaultCmpBody(ctx, left, right));
 	}
 
 	/** Whether the bound value is a keyword wrapper. */
@@ -554,12 +544,7 @@ final class ClojureFilterLowering {
 			LispVal invoked = ctx.callFun(cmp.real(), fun, List.of(keyedLeft, keyedRight));
 			bindings.add(ClojureLowerUtil.list(fun, cmp.fun()));
 			predBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-							ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST));
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))), comparatorBefore(ctx, got));
 		}
 		LispVal pred = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(left, right)), predBody);
@@ -567,32 +552,19 @@ final class ClojureFilterLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("sort"), coll, pred));
 	}
 
-	/** The default comparison over two already-lowered key forms. */
+	/**
+	 * The default comparison over two already-lowered key forms: {@code compare}'s order
+	 * "is first less than second", with {@code <} answering two numbers (the same answer,
+	 * without the call into the runtime: the kind nearly every sort holds).
+	 */
 	static LispVal defaultCmpBody(ClojureLowering ctx, LispVal left, LispVal right) {
-		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), left),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("string<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("char<"), left, right)));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), keywordTest(left), keywordTest(right)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("string<"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), left),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), right))));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("error"), LispString.literal("sort needs mutually comparable elements"))));
-		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), left, right),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("<"), ClojureSortedLowering.runtime("compare", left, right),
+						new LispInteger(0)));
 	}
 
 	/** {@code sort-by} as a value: key, then one or two more arguments. */

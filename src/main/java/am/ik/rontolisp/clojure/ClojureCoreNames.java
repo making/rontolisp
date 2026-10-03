@@ -22,7 +22,7 @@ final class ClojureCoreNames {
 	/** The namespace part of a core-qualified spelling, slash included. */
 	static final String PREFIX = "clojure.core/";
 
-	private static final Set<String> NAMES = Set.of("""
+	static final Set<String> NAMES = Set.of("""
 			* *' *1 *2 *3 *agent* *allow-unresolved-vars* *assert* *clojure-version* *command-line-args*
 			*compile-files* *compile-path* *compiler-options* *data-readers* *default-data-reader-fn* *e
 			*err* *file* *flush-on-newline* *fn-loader* *in* *math-context* *ns* *out* *print-dup*
@@ -97,6 +97,25 @@ final class ClojureCoreNames {
 			with-local-vars with-meta with-open with-out-str with-precision with-redefs with-redefs-fn
 			xml-seq zero? zipmap
 			""".strip().split("\\s+"));
+
+	/**
+	 * The public vars of {@code clojure.core} that are macros ({@code :macro} in their
+	 * metadata), from the same {@code ns-publics} of the oracle (79 names).
+	 */
+	static final Set<String> MACROS = Set.of("""
+			-> ->> .. amap and areduce as-> assert binding bound-fn case comment cond cond-> cond->> condp
+			declare definline definterface defmacro defmethod defmulti defn defn- defonce defprotocol
+			defrecord defstruct deftype delay doseq dosync dotimes doto extend-protocol extend-type fn for
+			future gen-class gen-interface if-let if-not if-some import io! lazy-cat lazy-seq let letfn
+			locking loop memfn ns or proxy proxy-super pvalues refer-clojure reify some-> some->> sync time
+			vswap! when when-first when-let when-not when-some while with-bindings with-in-str
+			with-loading-context with-local-vars with-open with-out-str with-precision with-redefs
+			""".strip().split("\\s+"));
+
+	/** Whether the {@code clojure.core} var of this name is a macro's. */
+	static boolean isMacro(String name) {
+		return MACROS.contains(name);
+	}
 
 	/** Whether {@code clojure.core} has a public var of this name. */
 	static boolean contains(String name) {

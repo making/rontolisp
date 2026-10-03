@@ -1,6 +1,6 @@
 # Maps, sets and vectors
 
-A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Keys compare by `=`, so a vector, list, map or set key finds an equal one. Arrays are general:
+A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Keys compare by `=`, so a vector, list, map or set key finds an equal one. A sorted map or set (`sorted-map`, `sorted-set`, their `-by` forms) keeps its entries in `compare` or comparator order instead, finds keys by that order, and every map and set verb answers one again; `subseq`/`rsubseq` walk a bounded range of it. Arrays are general:
 `(make-array Class dim...)` ignores the class, reads through `aget`, writes through
 `aset`, and measures through `alength`.
 
@@ -11,6 +11,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `vec` | `(vec '(1 2))` | `[1 2]` |
 | `hash-map` | `(hash-map :a 1)` | `{:a 1}` |
 | `array-map` | `(array-map :a 1)` | `{:a 1}` |
+| `hash-set` | `(hash-set 1 2 1)` | `#{1 2}` |
 | `assoc` | `(assoc {:a 1} :b 2)` | `{:a 1, :b 2}` |
 | `dissoc` | `(dissoc {:a 1} :a)` | `{}` |
 | `get` | `(get {:a 1} :b :none)` | `:none` |
@@ -41,6 +42,15 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `update-keys` | `(update-keys {:a 1} name)` | `{"a" 1}` |
 | `update-vals` | `(update-vals {:a 1} inc)` | `{:a 2}` |
 | `reduce-kv` | `(reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2})` | `3` |
+| `sorted-map` | `(sorted-map :b 1 :a 2)` | `{:a 2, :b 1}` |
+| `sorted-map-by` | `(sorted-map-by > 1 :a 2 :b)` | `{2 :b, 1 :a}` |
+| `sorted-set` | `(sorted-set 3 1 2)` | `#{1 2 3}` |
+| `sorted-set-by` | `(sorted-set-by > 1 3 2)` | `#{3 2 1}` |
+| `subseq` | `(subseq (sorted-set 1 2 3) > 1)` | `(2 3)` |
+| `rsubseq` | `(rsubseq (sorted-set 1 2 3) < 3)` | `(2 1)` |
+| `compare` | `(compare "a" "c")` | `-2` |
+| `comparator` | `(sort (comparator >) [1 3 2])` | `(3 2 1)` |
+| `vector-of` | `(vector-of :int 1.5 2)` | `[1 2]` |
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct-map` | `(do (defstruct s :a) (:a (struct-map s :a 1)))` | `1` |

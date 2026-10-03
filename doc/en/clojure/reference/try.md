@@ -5,8 +5,9 @@
 Evaluates the body expressions and answers the last one. `try` guards a `handler-case` inside an
 `unwind-protect`: the `finally` body runs on the way out, and the answer survives it. Each catch
 clause lowers to the catch-all error clause -- the classes are not distinguished, the clauses are
-tried in order and the first one wins; its variable binds the Common Lisp condition, which
-`ex-data`/`ex-message` read.
+tried in order and the first one wins; its variable binds the exception (a runtime error is the
+Common Lisp condition), which `ex-message`/`ex-data`/`ex-cause`, `.getMessage`/`.getCause` and
+`str` read.
 
 ```clojure
 (println (try 1 (catch Exception e 2) (finally nil))) ; 1

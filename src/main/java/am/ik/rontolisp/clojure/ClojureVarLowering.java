@@ -192,7 +192,8 @@ final class ClojureVarLowering {
 	 * {@code #'x} / {@code (var x)}: the interned var of a program definition, its root
 	 * read through a closure over the name's value here and its metadata the newest
 	 * definition's. Locals are no vars (the oracle resolves past them), and another
-	 * namespace's private var is reachable, like the oracle's.
+	 * namespace's private var is reachable, like the oracle's. A name no program var
+	 * claims, or a {@code clojure.core/} spelling, is the core var ({@link #coreVarOf}).
 	 * @param ctx the hub
 	 * @param items the form, head included
 	 * @return the lowered var
@@ -203,16 +204,79 @@ final class ClojureVarLowering {
 			throw new LispReadException("var takes a symbol: " + items.get(1).print());
 		}
 		String name = target.name();
-		String key = ClojureCoreNames.coreSpelling(name) != null ? null : ctx.lookupVar(name);
-		if (key == null) {
-			String core = ClojureCoreNames.coreSpelling(name);
-			if (core != null || ClojureCoreNames.contains(name)) {
-				throw new LispReadException("var of a clojure.core var is not supported yet: #'"
-						+ ClojureCoreNames.PREFIX + (core != null ? core : name));
-			}
+		String core = ClojureCoreNames.coreSpelling(name);
+		String key = core != null ? null : ctx.lookupVar(name);
+		if (key != null) {
+			return varOfKey(ctx, key);
+		}
+		if (core == null && ClojureCoreNames.contains(name)) {
+			core = name;
+		}
+		if (core == null) {
 			throw new LispReadException("Unable to resolve var: " + name + " in this context");
 		}
-		return varOfKey(ctx, key);
+		return coreVarOf(ctx, core);
+	}
+
+	/**
+	 * The var of a {@code clojure.core} name: interned as {@code clojure.core/name}, its
+	 * root the name's core value (what {@code clojure.core/name} reads), a macro's root a
+	 * signal like a program macro's, and its metadata {@code :name}/{@code :ns} plus a
+	 * macro's {@code :macro} (the oracle's {@code :arglists}, {@code :doc} and position
+	 * are not carried). A special ({@link ClojureCoreSpecials}) carries the binding-depth
+	 * reader {@code thread-bound?} asks: its counter, or one for a flag
+	 * {@code clojure.main} binds. A core var with no value here is refused.
+	 */
+	private static LispVal coreVarOf(ClojureLowering ctx, String name) {
+		String key = ClojureCoreNames.PREFIX + name;
+		boolean macro = ClojureCoreNames.isMacro(name);
+		LispVal root;
+		if (macro) {
+			root = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+					LispString.literal("Can't take value of a macro: #'" + key));
+		}
+		else {
+			root = ctx.coreValueOrNull(name);
+			if (root == null) {
+				throw new LispReadException("var of a clojure.core var is not supported yet: #'" + key);
+			}
+		}
+		List<LispVal> meta = new ArrayList<>(List.of(new LispSymbol("%hash-map"), keyword("name"),
+				ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol(name)), keyword("ns"),
+				ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol("clojure.core"))));
+		if (macro) {
+			meta.add(keyword("macro"));
+			meta.add(new LispSymbol("true"));
+		}
+		LispVal metaForm = ctx.lower(ClojureLowerUtil.list(meta));
+		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null) {
+			ctx.usedSpecials.add(name);
+			LispSymbol counter = special.counter();
+			LispVal depth = counter == null ? new LispInteger(1) : counter;
+			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), depth));
+		}
+		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
+	}
+
+	/**
+	 * The {@code let} pair rebinding a special's binding-depth counter one deeper, beside
+	 * a binding of the special, or null for a flag {@code clojure.main} binds (always
+	 * thread-bound, so it has no counter).
+	 * @param ctx the hub, which then defines the special
+	 * @param special a {@link ClojureCoreSpecials} name
+	 * @return the pair, or null
+	 */
+	static @Nullable LispVal specialDepthPair(ClojureLowering ctx, String special) {
+		ctx.usedSpecials.add(special);
+		LispSymbol counter = ClojureCoreSpecials.required(special).counter();
+		if (counter == null) {
+			return null;
+		}
+		return ClojureLowerUtil.list(counter,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), counter, new LispInteger(1)));
 	}
 
 	/**
@@ -249,6 +313,9 @@ final class ClojureVarLowering {
 			}
 			root = ClojureLowerUtil.list(reader);
 		}
+		else if (kind == ClojureLowering.Kind.DECLARED && ctx.session) {
+			root = sessionDeclaredRoot(ClojureLowering.varSym(key));
+		}
 		else {
 			root = ClojureLowering.varSym(key);
 		}
@@ -264,8 +331,108 @@ final class ClojureVarLowering {
 		else {
 			metaForm = meta.stored() ? metaSym(key) : ctx.lower(meta.datum());
 		}
-		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root), metaForm);
+		LispVal getter = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(), root);
+		if (ctx.dynamicVars.contains(key)) {
+			// only a dynamic var's site carries the binding-depth reader thread-bound?
+			// asks, so a program with no dynamic var pays nothing for it
+			return ClojureLowerUtil.list(runtime("VAR-DYNAMIC"), LispString.literal(key), getter, metaForm,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+							ClojureLowering.boundDepthSym(key)));
+		}
+		return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(key), getter, metaForm);
+	}
+
+	/**
+	 * {@code (declare name...)}: each name interned with no definition (one met later
+	 * replaces it), its var's metadata the oracle's {@code :declared true} over the
+	 * name's, and its root left alone when bound, else the unbound root. A
+	 * {@code ^:dynamic} name rebinds like a dynamic {@code def}'s: its declaim and
+	 * binding-depth counter go top-level ahead of the datum.
+	 * @param ctx the hub
+	 * @param form the declare datum (its position for the metadata)
+	 * @param items the form, head included
+	 * @return the lowered form, answering nil
+	 */
+	static LispVal declareForm(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		List<LispVal> forms = new ArrayList<>();
+		LispVal declared = ClojureLowerUtil.list(new LispSymbol("%hash-map"), keyword("declared"),
+				new LispSymbol("true"));
+		for (int i = 1; i < items.size(); i++) {
+			LispVal nameDatum = items.get(i);
+			String key = ctx.internDeclared(ClojureLowerUtil.plainName(nameDatum, "declare"),
+					ClojureLowerUtil.nameIsPrivate(nameDatum));
+			ctx.globals.putIfAbsent(key, ClojureLowering.Kind.DECLARED);
+			ctx.unboundCapable.add(key);
+			forms.addAll(record(ctx, key, form, nameDatum, null, null, declared, false, false));
+			if (ClojureLowerUtil.nameIsDynamic(nameDatum) && ctx.dynamicVars.add(key)) {
+				ctx.hoisted.add(ClojureLowering.declaimSpecial(ClojureLowering.varSym(key),
+						ClojureLowering.boundDepthSym(key)));
+				ctx.hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
+						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
+			}
+			ClojureLowering.Kind kind = ctx.globals.get(key);
+			if (kind == ClojureLowering.Kind.DECLARED || kind == ClojureLowering.Kind.VARIABLE) {
+				// a function's or a macro's root is no value cell
+				LispVal root = unboundRoot(ctx, key);
+				if (root != null) {
+					forms.add(root);
+				}
+			}
+		}
+		if (forms.isEmpty()) {
+			return ClojureLowering.NIL_CONST;
+		}
+		forms.add(ClojureLowering.NIL_CONST);
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
+	}
+
+	/**
+	 * The unbound root of a var a {@code declare} or a value-less {@code def} names. A
+	 * file is one closed program, so its value cell holds the root from the program's
+	 * start ({@link #unboundRootInits}) and the site lowers to nothing: a definition
+	 * above the site has replaced it by then, and one below it still finds it, like the
+	 * oracle's interned var. A session cannot place anything ahead of an earlier buffer,
+	 * so its site stores the root when the cell is still unbound.
+	 * @param ctx the hub
+	 * @param key the var key
+	 * @return the session's store, or null for a file
+	 */
+	static @Nullable LispVal unboundRoot(ClojureLowering ctx, String key) {
+		ctx.unboundCapable.add(key);
+		if (!ctx.session) {
+			ctx.unboundRoots.add(key);
+			return null;
+		}
+		LispSymbol var = ClojureLowering.varSym(key);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, unboundOf(key)));
+	}
+
+	/** The stores a file's program starts with: each unbound var's root into its cell. */
+	static List<LispVal> unboundRootInits(Iterable<String> keys) {
+		List<LispVal> inits = new ArrayList<>();
+		for (String key : keys) {
+			inits.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), unboundOf(key)));
+		}
+		return inits;
+	}
+
+	private static LispVal unboundOf(String key) {
+		return ClojureLowerUtil.list(runtime("UNBOUND"), LispString.literal(key));
+	}
+
+	/**
+	 * A session's read of a name only declared so far: the function a later buffer's
+	 * {@code defn} defined, else the value cell (a later {@code def}'s value, or the
+	 * unbound root). The session runs on the interpreter, where both probes are cheap.
+	 */
+	static LispVal sessionDeclaredRoot(LispSymbol var) {
+		LispVal quoted = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("fboundp"), quoted),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), var), var);
 	}
 
 	/** Whether the call head is a {@code #'x} / {@code (var x)} form. */

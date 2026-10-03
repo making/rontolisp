@@ -38,12 +38,12 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The compiler flags {@code clojure.main} binds around every load (measured on the
-	 * oracle, Clojure CLI 1.12): a {@code set!} of one answers the value there, so it
-	 * answers the value here too, with no effect.
+	 * The flags {@code clojure.main} binds around every load (measured on the oracle,
+	 * Clojure CLI 1.12) that have no value here ({@link ClojureCoreSpecials} has the
+	 * rest): a {@code set!} of one answers the value there, so it answers the value here
+	 * too, with no effect.
 	 */
-	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*warn-on-reflection*", "*unchecked-math*",
-			"*print-meta*", "*print-length*", "*print-level*", "*ns*");
+	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*ns*");
 
 	/**
 	 * The tag heading a record value: a record is
@@ -207,6 +207,12 @@ final class ClojureProtocolLowering {
 				ClojureCollectionLowering.keywordForm("map")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), one),
 				ClojureCollectionLowering.keywordForm("vector")));
+		// a sorted map or set dispatches as a map or set (its wrapper is a cons): an arm
+		// a program building no sorted collection sheds
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(one),
+				ClojureCollectionLowering.keywordForm("map")));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
+				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
@@ -514,8 +520,9 @@ final class ClojureProtocolLowering {
 	 * local or an immutable field ({@code Cannot assign to non-mutable}), a non-dynamic
 	 * global or an unbound dynamic one (the run-time
 	 * {@code Can't change/establish root binding}, after the value evaluates). A
-	 * {@code clojure.main}-bound compiler flag answers the value with no effect here. A
-	 * host field stays refused by name.
+	 * {@code clojure.core} special ({@link ClojureCoreSpecials}) assigns like a dynamic
+	 * var, a flag {@code clojure.main} binds at the top level too; {@code *ns*} answers
+	 * the value with no effect. A host field stays refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -539,7 +546,11 @@ final class ClojureProtocolLowering {
 		if (kind != null) {
 			throw new LispReadException("Cannot assign to non-mutable: " + name);
 		}
-		String key = ctx.resolveVar(name);
+		String key = name.startsWith(ClojureCoreNames.PREFIX) ? null : ctx.resolveVar(name);
+		String special = key == null ? ClojureCoreSpecials.targetName(name) : null;
+		if (special != null) {
+			return setSpecial(ctx, special, ctx.lower(items.get(2)));
+		}
 		if (key != null && !ctx.dynamicVars.contains(key)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
@@ -566,6 +577,30 @@ final class ClojureProtocolLowering {
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
 				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");
+	}
+
+	/**
+	 * {@code set!} of a {@code clojure.core} special: a flag {@code clojure.main} binds
+	 * is always thread-bound, so it assigns; any other assigns inside a {@code binding}
+	 * of it (its counter past zero), else the oracle's root-binding error. The value
+	 * evaluates once, before the test.
+	 */
+	private static LispVal setSpecial(ClojureLowering ctx, String name, LispVal value) {
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.required(name);
+		LispVal target = ctx.specialValue(special);
+		LispSymbol counter = special.counter();
+		if (counter == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), target, value);
+		}
+		ctx.usedSpecials.add(name);
+		LispSymbol temp = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(temp, value))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), counter, new LispInteger(0)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), target, temp),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
 	}
 
 	/**
@@ -820,20 +855,19 @@ final class ClojureProtocolLowering {
 		}
 		fill.add(wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 				LispString.literal(def.className())));
-		LispVal whole = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("let*"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
-							ClojureLowerUtil.list(pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), src,
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isRecordForm(src),
-											ClojureCollectionLowering.tablePlist(typedTableOf(src)),
-											ClojureCollectionLowering.tablePlist(src)),
-									ClojureLowering.NIL_CONST)),
-							ClojureLowerUtil.list(miss,
-									ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-							ClojureLowerUtil.list(List
-								.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.tableFromPlist(pairs)))),
-							ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
+		LispVal whole = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
+						ClojureLowerUtil.list(pairs, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), src,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isRecordForm(src),
+										ClojureCollectionLowering.tablePlist(typedTableOf(src)),
+										ClojureCollectionLowering.entriesPlist(src, src)),
+								ClojureLowering.NIL_CONST)),
+						ClojureLowerUtil.list(miss,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(
+								List.of(ClojureLowerUtil.list(table, ClojureCollectionLowering.tableFromPlist(pairs)))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "map->" + name)),
 				ClojureLowerUtil.list(List.of(src)), whole);
@@ -906,12 +940,13 @@ final class ClojureProtocolLowering {
 	/**
 	 * Maps an {@code extend} target name to its dispatch-key form, or null for
 	 * {@code Object} (the default row). Record and deftype names answer their tags; host
-	 * kinds answer the {@code class} keyword spelling, so dispatch agrees with
-	 * {@code class}; anything else (a {@code java.time.Instant}, a {@code Date}, ...) is
-	 * a named refusal.
+	 * kinds answer the {@code class} keyword spelling (a {@code java.lang.}/
+	 * {@code clojure.lang.} qualified or imported spelling too, like a {@code defmethod}
+	 * dispatch value), so dispatch agrees with {@code class}; anything else (a
+	 * {@code java.time.Instant}, a {@code Date}, ...) is a named refusal.
 	 */
 	static @Nullable LispVal extendKeyForm(ClojureLowering ctx, String typeName, String what) {
-		if (typeName.equals("Object")) {
+		if (ClojureDispatchLowering.isObjectClassName(ctx, typeName)) {
 			return null;
 		}
 		if (typeName.equals("nil")) {
@@ -921,21 +956,10 @@ final class ClojureProtocolLowering {
 		if (type != null) {
 			return typeTagForm(type.tagSpelling());
 		}
-		String kind = switch (typeName) {
-			case "String", "CharSequence" -> "string";
-			case "Number", "Long", "Double", "Integer", "Float", "Short", "Byte" -> "number";
-			case "Boolean" -> "boolean";
-			case "Keyword" -> "keyword";
-			case "Symbol" -> "symbol";
-			case "Character", "Char" -> "char";
-			case "Map", "IPersistentMap" -> "map";
-			case "Vector", "IPersistentVector" -> "vector";
-			case "Set", "IPersistentSet" -> "set";
-			case "List", "Seq", "Sequential", "Collection", "IPersistentList", "IPersistentCollection" -> "list";
-			case "Fn", "IFn", "Function" -> "function";
-			case "Atom" -> "atom";
-			default -> null;
-		};
+		// a package-qualified or imported spelling resolves like a defmethod dispatch
+		// value
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, typeName);
+		String kind = ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
 		if (kind == null) {
 			throw new LispReadException(what + " needs a core type, not " + typeName);
 		}

@@ -124,6 +124,12 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("pattern")));
 		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isMatcherForm(one),
 				ClojureCollectionLowering.keywordForm("matcher")));
+		// a sorted map or set is a map or set to class (its wrapper is a cons): an arm a
+		// program building no sorted collection sheds
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(one),
+				ClojureCollectionLowering.keywordForm("map")));
+		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
+				ClojureCollectionLowering.keywordForm("set")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
@@ -164,14 +170,6 @@ final class ClojureDispatchLowering {
 	static LispVal intValue(ClojureLowering ctx) {
 		LispSymbol one = new LispSymbol(ClojureLowering.mangle("int-one"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one), intForm(ctx, one));
-	}
-
-	/** {@code unchecked-add} as a value: addition without the overflow check. */
-	static LispVal uncheckedAddValue(ClojureLowering ctx) {
-		LispSymbol first = new LispSymbol(ClojureLowering.mangle("unchecked-a"));
-		LispSymbol second = new LispSymbol(ClojureLowering.mangle("unchecked-b"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(first, second)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), first, second));
 	}
 
 	// IO entry points: spit/slurp/line-seq over the eval IO layer (plus the
@@ -532,16 +530,19 @@ final class ClojureDispatchLowering {
 		// nil onto the marker while an explicit `:nil` keyword keeps its keyword row,
 		// like the oracle; a shadowed `class` is the caller's own function.
 		LispVal nilTest = ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), raw);
-		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(List.of(
-				ClojureLowerUtil.list(raw, ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), dispatchFn, args)),
-				ClojureLowerUtil.list(disp,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
-								ClojureCollectionLowering.nilMarkerForm(), raw)),
-				ClojureLowerUtil.list(miss,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
-				ClojureLowerUtil.list(found,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureCollectionLowering.lookupKey(disp, methods), methods, miss)))),
+		LispVal dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(
+						ClojureLowerUtil.list(raw,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
+										ClojureLowering.realFun(dispatchFn), args)),
+						ClojureLowerUtil.list(disp,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), nilTest,
+										ClojureCollectionLowering.nilMarkerForm(), raw)),
+						ClojureLowerUtil.list(miss,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)),
+						ClojureLowerUtil.list(found,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+										ClojureCollectionLowering.lookupKey(disp, methods), methods, miss)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), missForm,
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), found, args)));

@@ -76,7 +76,8 @@ final class ClojureBindingLowering {
 		// The value lowers against the OLD binding, so (def p (memoize p)) after a
 		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
 		// the still-unbound value cell; only then does the name become a VARIABLE.
-		LispVal value = items.size() == at + 1 ? ctx.lower(items.get(at)) : ClojureLowering.NIL_CONST;
+		boolean valueless = items.size() == at;
+		LispVal value = valueless ? ClojureLowering.NIL_CONST : ctx.lower(items.get(at));
 		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
 		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
@@ -92,6 +93,11 @@ final class ClojureBindingLowering {
 		}
 		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, nameDatum, null, doc, attrMap, false,
 				false);
+		if (valueless) {
+			// the oracle's (def x) interns x and leaves a bound root alone; an
+			// unbound one holds the unbound root
+			return valuelessDefForms(ctx, key, dynamic, metaStore, hoisted);
+		}
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
 			// and proclaims it, so binding rebinds it with dynamic extent; the
@@ -118,6 +124,31 @@ final class ClojureBindingLowering {
 		}
 		return withMetaStore(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value),
 				metaStore);
+	}
+
+	/**
+	 * A value-less {@code def}: the unbound root where the var has none yet, and for a
+	 * {@code ^:dynamic} one the declaim and the binding-depth counter a valued one adds,
+	 * without a store of the root.
+	 */
+	private static List<LispVal> valuelessDefForms(ClojureLowering ctx, String key, boolean dynamic,
+			List<LispVal> metaStore, @Nullable List<LispVal> hoisted) {
+		LispVal root = ClojureVarLowering.unboundRoot(ctx, key);
+		List<LispVal> forms = new ArrayList<>(metaStore);
+		if (dynamic) {
+			List<LispVal> special = List.of(
+					ClojureLowering.declaimSpecial(ClojureLowering.varSym(key), ClojureLowering.boundDepthSym(key)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+							new LispInteger(0)));
+			if (hoisted != null) {
+				hoisted.addAll(special);
+			}
+			else {
+				forms.addAll(special);
+			}
+		}
+		forms.add(root != null ? root : ClojureLowering.NIL_CONST);
+		return forms;
 	}
 
 	/**
@@ -151,15 +182,6 @@ final class ClojureBindingLowering {
 	static boolean isAttrMap(LispVal datum) {
 		List<LispVal> parts = ClojureLowerUtil.items(datum);
 		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map");
-	}
-
-	static LispVal declareForm(ClojureLowering ctx, List<LispVal> items) {
-		for (int i = 1; i < items.size(); i++) {
-			String key = ctx.internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
-					ClojureLowerUtil.nameIsPrivate(items.get(i)));
-			ctx.globals.putIfAbsent(key, ClojureLowering.Kind.FUNCTION);
-		}
-		return ClojureLowering.NIL_CONST;
 	}
 
 	/**
@@ -1014,6 +1036,9 @@ final class ClojureBindingLowering {
 			}
 			if (ctx.isFunction(s.name())) {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.symOf(s.name()));
+			}
+			if (ctx.session && ctx.isDeclaredOnly(s.name())) {
+				return ClojureVarLowering.sessionDeclaredRoot(ctx.symOf(s.name()));
 			}
 			return ctx.symOf(s.name());
 		}

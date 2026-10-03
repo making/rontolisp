@@ -11,9 +11,10 @@ and no name reaches a core-form case label. `defn` is a `defun` called directly;
 head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable holding
 a real function is a `funcall` of the value cell, so `(defn call-it [f x] (f x))` runs;
 a variable that may hold a collection goes through the prelude dispatcher instead
-(`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords
-through their lookup, like `IFn`); a `declare`d-but-never-defined name keeps its
-direct-call error. `def` is a top-level `setq` -- inside a body it
+(`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords/symbols
+through their lookup, like `IFn`; a keyword or symbol takes one or two arguments and signals the arity error otherwise); calling a `declare`d-but-never-defined name
+signals the oracle's `Attempting to call unbound fn` (in the REPL the call stays direct,
+since a later input may define it). `def` is a top-level `setq` -- inside a body it
 still sets the global when the body runs.
 
 `defn` with several arities is one `defun` per arity plus a dispatch `defun` picking by
@@ -190,7 +191,10 @@ definition above the `#'` recorded: a `def`/`defn`/`defn-`/`defmacro` gives
 `:arglists`, the docstring as `:doc`, the name's metadata and attr map (evaluated
 where the definition stands, so `^{:test (fn [] ...)}` works), `:line`/`:column`/`:file`,
 `:name` and `:ns`; [test](reference/core-test.md) calls its `:test` fn. A local is no
-var, and a `clojure.core` var is refused by name.
+var. A name no program definition claims, or a `clojure.core/` spelling, is the core var
+(`#'clojure.core/inc`): its root is the core value, a macro's root signals, and its
+metadata is `:name`, `:ns` and a macro's `:macro`. A core var with no value here
+(`#'*ns*`, `#'*file*`) is refused.
 
 A `ref` is the atom cell with a transaction discipline: `dosync` opens the
 extent (single-threaded, so no retries and no isolation), `alter`/`commute`
@@ -203,9 +207,15 @@ answer the agent; `*agent*` is bound while one runs. `await` rendezvous and
 stay refused by name, and so does `proxy-super` (proxy methods take no super
 handle).
 
-`binding` rebinds `^:dynamic` vars (and `*out*`/`*in*`, which are `*standard-output*`/
-`*standard-input*`)
-with dynamic extent; anything else is refused. `defstruct` holds its key vector
+`binding` rebinds `^:dynamic` vars and the `clojure.core` specials with dynamic
+extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`/
+`*standard-input*`/`*error-output*`; the flags hold the oracle's values under
+`clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` `{}`,
+`*command-line-args*` the program's arguments, `*clojure-version*` 1.12.6, ...), and
+the printer honours `*print-length*`, `*print-level*` and `*print-readably*` (the
+others are plain values). `*ns*`, `*file*`, `*source-path*`, `*repl*` and
+`*1`/`*2`/`*3`/`*e` have no value here. `with-in-str` binds `*in*` to a string
+reader, which `read-line`, `read` and `(.read *in*)` take from. `defstruct` holds its key vector
 behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
 binds `*standard-output*` to a string stream (never a literal
 `with-output-to-string`) and answers what printed; `time` reports
@@ -282,8 +292,8 @@ Each refusal names the missing design, never `unknown name`:
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
-| `set!` of a dynamic or core var (`*warn-on-reflection*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no thread-bound var to assign; the `java:` surface has no field write |
-| `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
+| `set!` of a var with no value here (`*file*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
+| `future`, `future-done?`/`future-cancelled?`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |
 | `toString`/`equals`/`hashCode` in an interface-only `proxy` | `proxy cannot override ... yet` | `java:proxy` keeps `Object`'s three, so the body would never run (a class proxy runs it) |

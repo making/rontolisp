@@ -121,15 +121,16 @@ import org.jspecify.annotations.Nullable;
  * one-vector cell ({@code atom} builds it, {@code deref} reads it,
  * {@code swap!}/{@code reset!}/ {@code compare-and-set!} rewrite it); errors are
  * {@code handler-case} inside {@code unwind-protect} ({@code try}, every catch class
- * catch-all) with {@code throw} over {@code error} -- an {@code ex-info} value signals as
- * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
- * anything else through its printed rendering; dispatch is a method table plus a
- * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * and refers ({@code clojure.string} over the core string operations, {@code clojure.set}
- * over its spliced runtime, {@code clojure.java.io} for {@code reader} only, a project
- * namespace's file lowered once ahead of the form that requires it); interop lowers to
- * the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
- * over the call's argument list, the same function the runtime table entry holds for
+ * catch-all) with {@code throw} over {@code error} -- an exception (an {@code ex-info}, a
+ * throwable construction, a caught condition, a host {@code Throwable}) signals as a
+ * condition carrying its class, message, data and cause, anything else through its
+ * printed rendering; dispatch is a method table plus a dispatcher {@code defun}
+ * ({@code defmulti}/{@code defmethod}); namespaces wire aliases and refers
+ * ({@code clojure.string} over the core string operations, {@code clojure.set} over its
+ * spliced runtime, {@code clojure.java.io} for {@code reader} only, a project namespace's
+ * file lowered once ahead of the form that requires it); interop lowers to the
+ * {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda over
+ * the call's argument list, the same function the runtime table entry holds for
  * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
  * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
  * splicing over the mangled namespace ({@code x#} one gensym per expansion);
@@ -163,8 +164,7 @@ public final class ClojureLowering {
 
 	/**
 	 * The library string builder behind {@code str}/{@code pr-str} parts, the
-	 * {@code clojure.string/join} elements, {@code throw} of a non-{@code ex-info} value,
-	 * {@code ex-message} of one, and the multimethod miss messages: the value's
+	 * {@code clojure.string/join} elements and the multimethod miss messages: the value's
 	 * Clojure-notation string, so no backend prints the wrappers.
 	 */
 	static final LispSymbol CLOJURE_STR_OF = new LispSymbol("RONTOLISP::%CLOJURE-STR-OF");
@@ -175,6 +175,13 @@ public final class ClojureLowering {
 	 * {@code *standard-output*}, answering nil.
 	 */
 	static final LispSymbol CLOJURE_WRITE_DATUM = new LispSymbol("RONTOLISP::%CLOJURE-WRITE-DATUM");
+
+	/**
+	 * The library string builder behind {@code print-str}/{@code prn-str}/
+	 * {@code println-str}: a list of values, a readable flag and a newline flag in, the
+	 * printed text out.
+	 */
+	static final LispSymbol CLOJURE_PRINT_STR = new LispSymbol("RONTOLISP::%CLOJURE-PRINT-STR");
 
 	static final LispSymbol ELSE = new LispSymbol(":else");
 
@@ -204,6 +211,25 @@ public final class ClojureLowering {
 	 * across buffers, like the globals.
 	 */
 	final Map<String, ClojureVarLowering.VarMeta> varMetas = new HashMap<>();
+
+	/**
+	 * The var keys whose value cell may hold the unbound root: a {@code declare}d name
+	 * and a value-less {@code def}, pre-scanned and lowered. A {@code defonce} of one
+	 * tests the root too, so it binds an unbound var.
+	 */
+	final Set<String> unboundCapable = new HashSet<>();
+
+	/**
+	 * The var keys a file starts with the unbound root in their value cell, in lowering
+	 * order (see {@link ClojureVarLowering#unboundRoot}).
+	 */
+	final Set<String> unboundRoots = new LinkedHashSet<>();
+
+	/**
+	 * Whether this lowering reads a session's buffers one at a time: no pre-scan sees a
+	 * later buffer, so a name only declared so far may still be defined.
+	 */
+	boolean session;
 
 	/**
 	 * The var keys whose top-level root reader a {@code #'} site under a shadowing local
@@ -772,6 +798,16 @@ public final class ClojureLowering {
 	boolean stmEmitted;
 
 	/**
+	 * The {@code clojure.core} specials the program reads, binds, assigns or takes the
+	 * var of: their definitions (a flag's root, a counter) are spliced in once, behind
+	 * the false binding ({@link ClojureCoreSpecials#definitions}).
+	 */
+	final Set<String> usedSpecials = new LinkedHashSet<>();
+
+	/** The specials whose definitions a session already spliced in. */
+	final Set<String> emittedSpecials = new HashSet<>();
+
+	/**
 	 * Whether the program uses {@code clojure.test}: the test runtime start (the report
 	 * stream, the ex-info reader) runs once, behind the false binding.
 	 */
@@ -867,6 +903,10 @@ public final class ClojureLowering {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
 		}
+		if (!lowering.usedSpecials.isEmpty()) {
+			// the specials are special before anything binds them
+			lowering.forms.addAll(1, ClojureCoreSpecials.definitions(lowering, lowering.usedSpecials));
+		}
 		if (lowering.usedTest) {
 			// the test runtime starts before anything else, like the false value
 			lowering.forms.addAll(1, ClojureTestLowering.testRuntime(lowering));
@@ -879,6 +919,8 @@ public final class ClojureLowering {
 				lowering.forms.add(1, registration);
 			}
 		}
+		// every unbound var holds its root before anything runs, like the false value
+		lowering.forms.addAll(1, ClojureVarLowering.unboundRootInits(lowering.unboundRoots));
 		return lowering.forms;
 	}
 
@@ -892,6 +934,7 @@ public final class ClojureLowering {
 	 * @return the lowered datums, in order
 	 */
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
+		this.session = true;
 		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
 		// A buffer's pre-scan must not clobber what earlier buffers already
@@ -952,6 +995,14 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.stmRuntime(this), false));
 			this.stmEmitted = true;
+		}
+		Set<String> freshSpecials = new LinkedHashSet<>(this.usedSpecials);
+		freshSpecials.removeAll(this.emittedSpecials);
+		if (!freshSpecials.isEmpty()) {
+			// The specials travel ahead of the buffer that first uses one, like
+			// the false binding.
+			out.add(0, new ClojureTopLevel(ClojureCoreSpecials.definitions(this, freshSpecials), false));
+			this.emittedSpecials.addAll(freshSpecials);
 		}
 		if (this.usedTest && !this.testEmitted) {
 			// The test runtime starts ahead of the buffer that first needs it,
@@ -1042,7 +1093,10 @@ public final class ClojureLowering {
 			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			preDeclare(items.get(1), "def", Kind.VARIABLE, false);
+			String key = preDeclare(items.get(1), "def", Kind.VARIABLE, false);
+			if (items.size() == 2) {
+				this.unboundCapable.add(key);
+			}
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")) {
@@ -1090,7 +1144,8 @@ public final class ClojureLowering {
 			for (int i = 1; i < items.size(); i++) {
 				String key = internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
 						ClojureLowerUtil.nameIsPrivate(items.get(i)));
-				this.globals.putIfAbsent(key, Kind.FUNCTION);
+				this.globals.putIfAbsent(key, Kind.DECLARED);
+				this.unboundCapable.add(key);
 			}
 		}
 	}
@@ -1114,9 +1169,11 @@ public final class ClojureLowering {
 	 * The pre-scan half of a definition: the name interned in the current namespace under
 	 * its kind, so a form above the definition (or a later buffer) resolves it.
 	 */
-	private void preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
+	private String preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
 		String name = ClojureLowerUtil.plainName(nameDatum, what);
-		this.globals.put(internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
+		String key = internName(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum));
+		this.globals.put(key, kind);
+		return key;
 	}
 
 	/**
@@ -2157,7 +2214,7 @@ public final class ClojureLowering {
 			return ClojureBindingLowering.letfn(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "declare")) {
-			return ClojureBindingLowering.declareForm(this, items);
+			return ClojureVarLowering.declareForm(this, form, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "->")) {
 			return ClojureLoopLowering.threadFirst(this, items);
@@ -2250,31 +2307,19 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "throw")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "throw takes one form");
-			// an ex-info value signals as its own condition (carrying the data);
-			// anything else signals through its printed rendering, like before
-			this.usedExInfo = true;
-			LispSymbol thrown = freshTemp();
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(thrown, lower(items.get(1))))),
-					ClojureLowerUtil.list(new LispSymbol("C%E-THROW"), thrown));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.THROW);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-info")) {
-			ClojureLowerUtil.isTrue(items.size() == 3, "ex-info takes a message and a data map");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-condition"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), new LispSymbol("C%E-EX-INFO")),
-					ClojureLowerUtil.sym(":message"), lower(items.get(1)), ClojureLowerUtil.sym(":data"),
-					lower(items.get(2)));
+			return ClojureStateLowering.exInfoOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-data")) {
-			ClojureLowerUtil.isTrue(items.size() == 2, "ex-data takes one exception");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(new LispSymbol("C%E-DATA"), lower(items.get(1)));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_DATA);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ex-message")) {
-			ClojureLowerUtil.isTrue(items.size() == 2, "ex-message takes one exception");
-			this.usedExInfo = true;
-			return ClojureLowerUtil.list(new LispSymbol("C%E-MESSAGE"), lower(items.get(1)));
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_MESSAGE);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "ex-cause")) {
+			return ClojureStateLowering.exReaderOf(this, items, ClojureStateLowering.EX_CAUSE);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "atom")) {
 			return ClojureStateLowering.atomOf(this, items);
@@ -2293,7 +2338,7 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "volatile!")) {
 			ClojureLowerUtil.isTrue(items.size() == 2, "volatile! takes an initial value");
-			return ClojureStateLowering.wrapAtom(lower(items.get(1)));
+			return ClojureStateLowering.wrapVolatile(lower(items.get(1)));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "ref")) {
 			return ClojureStateLowering.refOf(this, items);
@@ -2334,6 +2379,9 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "with-out-str")) {
 			return ClojureStateLowering.withOutStrOf(this, items);
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "with-in-str")) {
+			return ClojureStateLowering.withInStrOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "time")) {
 			return ClojureStateLowering.timeOf(this, items);
@@ -2715,11 +2763,13 @@ public final class ClojureLowering {
 		for (int i = 1; i < items.size(); i++) {
 			args.add(lower(items.get(i)));
 		}
-		if (!isFunction(name)) {
+		if (!isFunction(name) && !(this.session && isDeclaredOnly(name))) {
 			// a parameter, a let/loop binding or a def'd variable holds the
 			// function in the VALUE cell (Lisp-2): a direct call would read the
 			// function cell and miss, so call through funcall instead. A defn
-			// (and a declare, which keeps its current error) stays direct. A
+			// stays direct, and so does a session's declared name (a later
+			// buffer may define it); a file's declared-never-defined name calls
+			// its unbound root, which signals like the oracle's. A
 			// variable whose value may hold a collection goes through the
 			// prelude dispatcher instead, which funcalls real functions.
 			if (!isDirectVar(name)) {
@@ -2790,6 +2840,12 @@ public final class ClojureLowering {
 				return ClojureStringLowering.strCall(this, items);
 			case "pr-str":
 				return ClojureStringLowering.prStrCall(this, items);
+			case "print-str":
+				return ClojureStringLowering.printStrCall(this, items, false, false);
+			case "prn-str":
+				return ClojureStringLowering.printStrCall(this, items, true, true);
+			case "println-str":
+				return ClojureStringLowering.printStrCall(this, items, false, true);
 			case "println":
 				return ClojureStringLowering.printCall(this, items, true);
 			case "print":
@@ -3056,9 +3112,6 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n >= 1, "trampoline takes a function and arguments");
 				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), lowers(items, 2)));
-			case "coll?":
-				ClojureLowerUtil.isTrue(n == 1, "coll? takes one value");
-				return booleanAnswer(ClojureFnLowering.collRaw(this, lower(items.get(1))));
 			case "string?":
 				ClojureLowerUtil.isTrue(n == 1, "string? takes one value");
 				return booleanAnswer(plain("stringp", items));
@@ -3073,9 +3126,6 @@ public final class ClojureLowering {
 			case "int", "long":
 				ClojureLowerUtil.isTrue(n == 1, name + " takes one value");
 				return ClojureDispatchLowering.intForm(this, lower(items.get(1)));
-			case "unchecked-add":
-				ClojureLowerUtil.isTrue(n == 2, "unchecked-add takes two numbers");
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("+"), lower(items.get(1)), lower(items.get(2)));
 			case "spit":
 				return ClojureStringLowering.spitOf(this, items);
 			case "slurp":
@@ -3193,6 +3243,14 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "fn? takes one argument");
 				return booleanAnswer(plain("functionp", items));
 			default:
+				LispVal predicate = ClojurePredicateLowering.callOf(this, name, items);
+				if (predicate != null) {
+					return predicate;
+				}
+				LispVal sorted = ClojureSortedLowering.callOf(this, name, items);
+				if (sorted != null) {
+					return sorted;
+				}
 				LispVal core = ClojureCoreLowering.callOf(this, name, items);
 				return core != null ? core : ClojureTransducerLowering.callOf(this, name, items);
 		}
@@ -3220,6 +3278,9 @@ public final class ClojureLowering {
 				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), x));
 			case "str" -> ClojureStringLowering.strValue(this);
 			case "pr-str" -> ClojureStringLowering.prStrValue(this);
+			case "print-str" -> ClojureStringLowering.printStrValue(false, false);
+			case "prn-str" -> ClojureStringLowering.printStrValue(true, true);
+			case "println-str" -> ClojureStringLowering.printStrValue(false, true);
 			case "seq" -> ClojureSeqLowering.seqValue(this);
 			case "first" -> ClojureSeqLowering.firstValue(this);
 			case "rest", "next" -> ClojureSeqLowering.restValue(this);
@@ -3314,16 +3375,15 @@ public final class ClojureLowering {
 			case "identity" -> ClojureFnLowering.identityValue(this);
 			case "memoize" -> ClojureFnLowering.memoizeValue(this);
 			case "trampoline" -> ClojureFnLowering.trampolineValue(this);
-			case "coll?" -> ClojureFnLowering.collValue(this);
 			case "string?" -> ClojureFnLowering.stringPredValue(this);
 			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
 			case "int", "long" -> ClojureDispatchLowering.intValue(this);
-			case "unchecked-add" -> ClojureDispatchLowering.uncheckedAddValue(this);
 			case "spit" -> ClojureStringLowering.spitValue(this);
 			case "slurp" -> ClojureStringLowering.slurpValue(this);
 			case "line-seq" -> ClojureStringLowering.lineSeqValue(this);
-			case "atom", "volatile!" -> ClojureStateLowering.atomValue(this);
+			case "atom" -> ClojureStateLowering.atomValue(this);
+			case "volatile!" -> ClojureStateLowering.volatileValue();
 			case "deref" -> ClojureStateLowering.derefValue(this);
 			case "swap!", "vswap!" -> ClojureStateLowering.swapValue(this);
 			case "reset!", "vreset!" -> ClojureStateLowering.resetValue(this);
@@ -3350,12 +3410,21 @@ public final class ClojureLowering {
 			case "some?" -> ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
 			case "not" -> ClojureFnLowering.notValue(this);
-			case "ex-data" -> ClojureStateLowering.exHelperValue(this, "C%E-DATA");
-			case "ex-message" -> ClojureStateLowering.exHelperValue(this, "C%E-MESSAGE");
+			case "ex-data" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_DATA);
+			case "ex-message" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_MESSAGE);
+			case "ex-cause" -> ClojureStateLowering.exHelperValue(this, ClojureStateLowering.EX_CAUSE);
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);
 			case "macroexpand-1" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND_1);
 			case "macroexpand" -> ClojureMacroLowering.macroexpandValue(this, ClojureMacroLowering.MACROEXPAND);
 			default -> {
+				LispVal predicate = ClojurePredicateLowering.valueOf(this, name);
+				if (predicate != null) {
+					yield predicate;
+				}
+				LispVal sorted = ClojureSortedLowering.valueOf(name);
+				if (sorted != null) {
+					yield sorted;
+				}
 				LispVal core = ClojureCoreLowering.valueOf(this, name);
 				yield core != null ? core : ClojureTransducerLowering.valueOf(name);
 			}
@@ -3428,18 +3497,41 @@ public final class ClojureLowering {
 	 * program definition, library refer or class member of that spelling.
 	 */
 	LispVal coreValue(String name) {
+		LispVal value = coreValueOrNull(name);
+		if (value == null) {
+			throw new LispReadException("unknown name: " + ClojureCoreNames.PREFIX + name);
+		}
+		return value;
+	}
+
+	/**
+	 * A {@code clojure.core} special's value: its special variable, which the program
+	 * then defines ({@link #usedSpecials}); the agent var needs the STM runtime.
+	 */
+	LispVal specialValue(ClojureCoreSpecials.Special special) {
+		this.usedSpecials.add(special.name());
+		if (special.name().equals("*agent*")) {
+			this.usedStm = true;
+		}
+		return special.symbol();
+	}
+
+	/**
+	 * {@link #coreValue}, or null for a core name with no value here (a macro, or a var
+	 * the subset does not implement).
+	 */
+	@Nullable LispVal coreValueOrNull(String name) {
 		switch (name) {
 			case "nth":
 				return ClojureSeqLowering.nthValue(this);
 			case "quot":
 				return ClojureSeqLowering.quotValue(this);
-			case "*out*", "*in*":
-				return ClojureLowerUtil.idSym(name);
-			case "*agent*":
-				this.usedStm = true;
-				return ClojureLowerUtil.idSym(name);
 			default:
 				break;
+		}
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null) {
+			return specialValue(special);
 		}
 		LispVal synth = valueOf(name);
 		if (synth != null) {
@@ -3447,7 +3539,7 @@ public final class ClojureLowering {
 		}
 		String cl = builtinValue(name);
 		if (cl == null) {
-			throw new LispReadException("unknown name: " + ClojureCoreNames.PREFIX + name);
+			return null;
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.sym(cl));
 	}
@@ -3497,12 +3589,10 @@ public final class ClojureLowering {
 			// that name
 			return coreValue(core);
 		}
-		if ((name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) && !isLocal(name)) {
-			// dynamic aliases, not mangled names (see idSym): always resolvable
-			if (name.equals("*agent*")) {
-				this.usedStm = true;
-			}
-			return ClojureLowerUtil.idSym(name);
+		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
+		if (special != null && !isLocal(name) && resolveVar(name) == null) {
+			// a clojure.core special no program var claims: its special variable
+			return specialValue(special);
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {
@@ -3542,6 +3632,9 @@ public final class ClojureLowering {
 		}
 		if (isFunction(name)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
+		}
+		if (this.session && isDeclaredOnly(name)) {
+			return ClojureVarLowering.sessionDeclaredRoot(symOf(name));
 		}
 		return symOf(name);
 	}
@@ -3725,6 +3818,16 @@ public final class ClojureLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("QUOTE"), new LispSymbol(FALSE_VALUE_NAME)));
 	}
 
+	/**
+	 * The definitions of every {@code clojure.core} special, for the macro-time
+	 * evaluator: a macro body binding {@code *out*} (a {@code with-out-str}) or reading a
+	 * flag finds it there too.
+	 * @return the forms
+	 */
+	public static List<LispVal> coreSpecialForms() {
+		return ClojureCoreSpecials.definitions(new ClojureLowering(), ClojureCoreSpecials.names());
+	}
+
 	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,
 	// prefer-method and defmulti :hierarchy over one shared runtime
 
@@ -3790,6 +3893,20 @@ public final class ClojureLowering {
 			}
 		}
 		return globalKind(name) == Kind.FUNCTION;
+	}
+
+	/**
+	 * Whether the name resolves to a var only {@code declare}d so far: no local binds it
+	 * and no definition has been seen. Its root is the value cell, which holds the
+	 * unbound root until a definition binds it.
+	 */
+	boolean isDeclaredOnly(String name) {
+		for (Map<String, Kind> scope : this.scopes) {
+			if (scope.containsKey(name)) {
+				return false;
+			}
+		}
+		return globalKind(name) == Kind.DECLARED;
 	}
 
 	boolean isMacro(String name) {
@@ -3907,11 +4024,16 @@ public final class ClojureLowering {
 	enum Kind {
 
 		/**
+		 * {@code DECLARED}: a global only {@code declare}d so far (a definition replaces
+		 * it). A file's is never defined, so it is an unbound var; a session's may be
+		 * defined by a later buffer.
+		 *
+		 * <p>
 		 * {@code MUTABLE_FIELD}: a deftype's {@code ^:unsynchronized-mutable}/
 		 * {@code ^:volatile-mutable} field inside one of its inline methods, read and
 		 * {@code set!} through the instance's slot ({@link #mutableFieldPlaces}).
 		 */
-		VARIABLE, FUNCTION, MACRO, MUTABLE_FIELD
+		VARIABLE, FUNCTION, MACRO, MUTABLE_FIELD, DECLARED
 
 	}
 

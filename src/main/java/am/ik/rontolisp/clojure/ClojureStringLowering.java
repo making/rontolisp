@@ -783,6 +783,35 @@ final class ClojureStringLowering {
 						interposed));
 	}
 
+	/**
+	 * {@code print-str}/{@code prn-str}/{@code println-str}: what the matching print call
+	 * would write, answered as a string. The parts evaluate in the caller (what they
+	 * print goes to the real output) and the library builder prints them to a private
+	 * stream, so no {@code *standard-output*} rebinding is involved.
+	 */
+	static LispVal printStrCall(ClojureLowering ctx, List<LispVal> items, boolean readable, boolean newline) {
+		List<LispVal> parts = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			parts.add(ctx.lower(items.get(i)));
+		}
+		return printStrOf(new LispCons(ClojureLowerUtil.sym("list"), ClojureLowerUtil.list(parts)), readable, newline);
+	}
+
+	/**
+	 * {@code print-str}/{@code prn-str}/{@code println-str} as a value: over any arity.
+	 */
+	static LispVal printStrValue(boolean readable, boolean newline) {
+		LispSymbol args = new LispSymbol(ClojureLowering.mangle("print-str-args"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args), printStrOf(args, readable, newline));
+	}
+
+	private static LispVal printStrOf(LispVal parts, boolean readable, boolean newline) {
+		return ClojureLowerUtil.list(ClojureLowering.CLOJURE_PRINT_STR, parts,
+				readable ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST,
+				newline ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
+	}
+
 	static LispVal strCall(ClojureLowering ctx, List<LispVal> items) {
 		if (items.size() == 1) {
 			return LispString.literal("");

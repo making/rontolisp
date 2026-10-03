@@ -25,6 +25,23 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aDeclaredNameStaysOpenForALaterBuffer() {
+		// a later buffer may define what an earlier one only declared: the declare
+		// stores the unbound root only into an unbound cell, a call stays direct and a
+		// value read takes the function cell once a defn filled it
+		ClojureSession session = new ClojureSession();
+		assertThat(forms(session.read("(declare later)"))).anyMatch(form -> form
+			.contains("(UNLESS (BOUNDP '|c%later|) (SETQ |c%later| (RONTOLISP::%CLOJURE-UNBOUND \"user/later\")))"));
+		assertThat(forms(session.read("(later 1)"))).contains("(|c%later| 1)");
+		assertThat(forms(session.read("(map later [1])")))
+			.anyMatch(form -> form.contains("(IF (FBOUNDP '|c%later|) #'|c%later| |c%later|)"));
+	}
+
+	private static List<String> forms(List<ClojureTopLevel> tops) {
+		return tops.stream().flatMap(top -> top.forms().stream()).map(LispVal::print).toList();
+	}
+
+	@Test
 	void aLaterBufferDefmultiOfAMultimethodKeepsTheEarlierOne() {
 		// the oracle's defmulti defines only when the var holds no multimethod, so a
 		// REPL re-entry changes nothing (neither the dispatch function nor the table)

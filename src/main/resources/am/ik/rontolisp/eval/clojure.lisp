@@ -29,11 +29,12 @@
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; nil IS the empty list (stays nil, never ()); map/set walk order is unspecified
-;; (same as keys/vals); *print-length*/*print-level* are not honored (a routed
-;; println never passed through %print-cased either); ~S/~A on Clojure values
+;; (same as keys/vals); *print-meta* and *print-namespace-maps* are not honored
+;; (*print-length*, *print-level* and *print-readably* are); ~S/~A on Clojure values
 ;; stay Common Lisp notation (format is a CL surface); print-method/pprint stay
-;; absent; unreadable values (functions, conditions, host objects) print #<..>,
-;; except a host class object, which prints its name like the oracle's.
+;; absent; unreadable values (functions, host objects) print #<..>, except a
+;; host class object, which prints its name like the oracle's; a condition prints
+;; its report (an exception's is its toString).
 
 (defun rontolisp::%clojure-keyword-p (x)
   "Whether X is the (:C%KEYWORD spelling) wrapper the lowering lowers keywords to."
@@ -59,7 +60,8 @@
       (and (consp x) (eq (car x) :C%REIFY))))
 
 (defun rontolisp::%clojure-atom-p (x)
-  "Whether X is the (:C%ATOM #(value)) cell the lowering lowers atoms to."
+  "Whether X is the (:C%ATOM #(value)) cell the lowering lowers atoms to (a
+   volatile's cell carries a second slot, #(value :C%VOLATILE))."
   (and (consp x) (eq (car x) :C%ATOM) (consp (cdr x))
        (and (vectorp (car (cdr x))) (not (stringp (car (cdr x)))))
        (null (cdr (cdr x)))))
@@ -244,6 +246,149 @@
   (or (/= x x) (> x most-positive-double-float)
       (< x most-negative-double-float)))
 
+;; The print flags, read by the printer only: *print-length*, *print-level* and
+;; *print-readably* lower to these specials, and the depth counts the levels the
+;; printer is in. Every reading of them is an arm (ClojureArms PRINT_FLAGS): a
+;; program naming none of the three prints as if they did not exist.
+(defvar rontolisp::%clojure-print-length nil)
+
+(defvar rontolisp::%clojure-print-level nil)
+
+(defvar rontolisp::%clojure-print-readably t)
+
+(defvar rontolisp::%clojure-print-depth 0)
+
+(defun rontolisp::%clojure-print-readable (readable)
+  "READABLE, unless *print-readably* is logical false, under which pr writes
+   like print (strings bare, characters as glyphs), like the oracle."
+  (if (or (null rontolisp::%clojure-print-readably)
+          (eq rontolisp::%clojure-print-readably rontolisp::%clojure-false))
+      nil
+      readable))
+
+(defun rontolisp::%clojure-print-collection-p (x)
+  "Whether X prints as a collection, which *print-level* and *print-length*
+   reach: a seq, vector, map, set, sorted collection or record."
+  (cond ((rontolisp::%clojure-lazy-p x) t)
+   ((rontolisp::%clojure-keyword-p x) nil)
+   ((rontolisp::%clojure-var-p x) nil)
+   ((rontolisp::%clojure-unbound-p x) nil)
+   ((rontolisp::%clojure-atom-p x) nil)
+   ((rontolisp::%clojure-re-pattern-p x) nil)
+   ((rontolisp::%clojure-re-matcher-p x) nil)
+   (t (or (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))))))
+
+(defun rontolisp::%clojure-print-limit (n)
+  "The print flag value N as a limit: NIL for nil and false."
+  (if (eq n rontolisp::%clojure-false) nil n))
+
+(defun rontolisp::%clojure-print-deep-p (x)
+  "Whether X is a collection *print-level* levels deep: it prints as #."
+  (let ((level
+         (rontolisp::%clojure-print-limit rontolisp::%clojure-print-level)))
+    (and level (>= rontolisp::%clojure-print-depth level)
+         (rontolisp::%clojure-print-collection-p x))))
+
+(defun rontolisp::%clojure-print-cut-p (x)
+  "Whether X is a collection of more than *print-length* members: it prints
+   cut there (%clojure-write-cut). A seq realizes only past the cut."
+  (let ((n (rontolisp::%clojure-print-limit rontolisp::%clojure-print-length)))
+    (cond ((null n) nil)
+     ((not (rontolisp::%clojure-print-collection-p x)) nil)
+     ((rontolisp::%clojure-record-p x)
+      (> (hash-table-count (car (cdr (cdr (cdr x))))) n))
+     ((rontolisp::%clojure-set-p x) (> (hash-table-count (car (cdr x))) n))
+     ((rontolisp::%clojure-sorted-p x) (> (length (car (cdr (cdr (cdr x))))) n))
+     ((hash-table-p x) (> (hash-table-count x) n))
+     ((vectorp x) (> (length x) n))
+     (t (let ((s x) (i 0))
+          (do ()
+              ((or (not (consp s)) (> i n)))
+            (setq s (rontolisp::%clojure-seq-rest s))
+            (setq i (+ i 1)))
+          (> i n))))))
+
+(defun rontolisp::%clojure-record-entries (x)
+  "The (key . value) entries of the record X in its printed order: the declared
+   fields, then the extension keys in the table's walk order."
+  (let ((fields (car (cdr (cdr x))))
+        (table (car (cdr (cdr (cdr x)))))
+        (acc nil))
+    (dolist (k fields) (setq acc (cons (cons k (gethash k table)) acc)))
+    (maphash (lambda (k v)
+               (let ((declared nil))
+                 (dolist (f fields) (if (equal f k) (setq declared t)))
+                 (if (not declared) (setq acc (cons (cons k v) acc))))) table)
+    (reverse acc)))
+
+(defun rontolisp::%clojure-write-cut (x nil-replacement readable stream labels)
+  "Write the collection X with its first *print-length* members and then ...,
+   like the oracle: (0 1 ...), [1 2 ...], {:a 1, ...}, #{1 ...} and [...] at
+   zero. Each member is written one level deeper."
+  (let ((n (rontolisp::%clojure-print-limit rontolisp::%clojure-print-length))
+        (parts nil)
+        (open "(")
+        (sep " ")
+        (close ")")
+        (pairs nil))
+    (cond ((rontolisp::%clojure-record-p x)
+           (setq open
+                 (concatenate 'string "#" (car (cdr (cdr (cdr (cdr x))))) "{"))
+           (setq close "}" sep ", " pairs t)
+           (setq parts (rontolisp::%clojure-record-entries x)))
+          ((rontolisp::%clojure-set-p x)
+           (setq open "#{" close "}")
+           (maphash (lambda (k v) (setq parts (cons v parts))) (car (cdr x)))
+           (setq parts (reverse parts)))
+          ((rontolisp::%clojure-sorted-p x)
+           (let ((items (car (cdr (cdr (cdr x))))))
+             (if (car (cdr x))
+                 (setq open "#{" close "}")
+                 (setq open "{" close "}" sep ", " pairs t))
+             (dotimes (i n)
+               (let ((item (aref items i)))
+                 (setq parts
+                       (cons (if pairs (cons (aref item 0) (aref item 1)) item)
+                             parts))))
+             (setq parts (reverse parts))))
+          ((hash-table-p x)
+           (setq open "{" close "}" sep ", " pairs t)
+           (maphash (lambda (k v) (setq parts (cons (cons k v) parts))) x)
+           (setq parts (reverse parts)))
+          ((vectorp x)
+           (setq open "[" close "]")
+           (dotimes (i n) (setq parts (cons (aref x i) parts)))
+           (setq parts (reverse parts)))
+          (t (let ((s x))
+               (dotimes (i n)
+                 (setq parts (cons (car s) parts))
+                 (setq s (rontolisp::%clojure-seq-rest s)))
+               (setq parts (reverse parts)))))
+    (write-string open stream)
+    (do ((p parts (cdr p)) (i 0 (+ i 1)))
+        ((or (null p) (>= i n)))
+      (if (> i 0) (write-string sep stream))
+      (if pairs
+          (progn
+            (rontolisp::%clojure-write-nested (car (car p)) nil-replacement
+                                              readable stream labels)
+            (write-char #\Space stream)
+            (rontolisp::%clojure-write-nested (cdr (car p)) nil-replacement
+                                              readable stream labels))
+          (rontolisp::%clojure-write-nested (car p) nil-replacement readable
+                                            stream labels)))
+    (if (> n 0) (write-string sep stream))
+    (write-string "..." stream)
+    (write-string close stream)))
+
+(defun rontolisp::%clojure-write-nested
+    (x nil-replacement readable stream labels)
+  "%clojure-write of a collection's member, one *print-level* level deeper. A
+   program naming no print flag calls %clojure-write in its place (the strip's
+   alias)."
+  (let ((rontolisp::%clojure-print-depth (+ rontolisp::%clojure-print-depth 1)))
+    (rontolisp::%clojure-write x nil-replacement readable stream labels)))
+
 (defun rontolisp::%clojure-write (x nil-replacement readable stream labels)
   "Write X to STREAM in Clojure notation. READABLE selects the pr side (quoted
    strings, \\chars) vs the print side (bare); NIL-REPLACEMENT is what nil prints
@@ -251,6 +396,7 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
+        ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
          ;; realized as it prints, like the oracle: empty is (), anything
          ;; else a seq the cons arm writes, realizing each lazy tail it meets
@@ -274,8 +420,15 @@
         ((rontolisp::%clojure-var-p x)
          (write-string "#'" stream)
          (write-string (car (cdr x)) stream))
+        ((rontolisp::%clojure-unbound-p x)
+         (write-string "#<Unbound: #'" stream)
+         (write-string (car (cdr x)) stream)
+         (write-char #\> stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
+        ((rontolisp::%clojure-print-cut-p x)
+         (rontolisp::%clojure-write-cut x nil-replacement readable stream
+                                        labels))
         ((rontolisp::%clojure-record-p x)
          (rontolisp::%clojure-write-record x nil-replacement readable stream
                                            labels))
@@ -284,13 +437,15 @@
          (let ((first t))
            (maphash (lambda (k v)
                       (if first (setq first nil) (write-char #\Space stream))
-                      (rontolisp::%clojure-write v nil-replacement readable
-                                                 stream labels)) (car (cdr x))))
+                      (rontolisp::%clojure-write-nested v nil-replacement
+                                                        readable stream labels))
+                    (car (cdr x))))
          (write-char #\} stream))
         ((rontolisp::%clojure-atom-p x)
          (write-string "#<Atom " stream)
-         (rontolisp::%clojure-write (aref (car (cdr x)) 0) nil-replacement
-                                    readable stream labels)
+         (rontolisp::%clojure-write-nested (aref (car (cdr x)) 0)
+                                           nil-replacement readable stream
+                                           labels)
          (write-char #\> stream))
         ((stringp x)
          (if readable
@@ -313,24 +468,29 @@
          (let ((first t))
            (maphash (lambda (k v)
                       (if first (setq first nil) (write-string ", " stream))
-                      (rontolisp::%clojure-write k nil-replacement readable
-                                                 stream labels)
+                      (rontolisp::%clojure-write-nested k nil-replacement
+                                                        readable stream labels)
                       (write-char #\Space stream)
-                      (rontolisp::%clojure-write v nil-replacement readable
-                                                 stream labels)) x))
+                      (rontolisp::%clojure-write-nested v nil-replacement
+                                                        readable stream labels))
+                    x))
          (write-char #\} stream))
         ((and (vectorp x) (not (stringp x)))
          (write-char #\[ stream)
          (do ((i 0 (+ i 1)))
              ((>= i (length x)))
            (if (> i 0) (write-char #\Space stream))
-           (rontolisp::%clojure-write (aref x i) nil-replacement readable stream
-                                      labels))
+           (rontolisp::%clojure-write-nested (aref x i) nil-replacement readable
+                                             stream labels))
          (write-char #\] stream))
+        ;; a sorted collection is a cons wrapper, written ahead of the list arm
+        ((rontolisp::%clojure-sorted-p x)
+         (rontolisp::%clojure-write-sorted x nil-replacement readable stream
+                                           labels))
         ((consp x)
          (write-char #\( stream)
-         (rontolisp::%clojure-write (car x) nil-replacement readable stream
-                                    labels)
+         (rontolisp::%clojure-write-nested (car x) nil-replacement readable
+                                           stream labels)
          (do ((rest
                (rontolisp::%clojure-seq-rest x)
                (rontolisp::%clojure-seq-rest rest)))
@@ -339,17 +499,20 @@
               (if (not (null rest))
                   (progn
                     (write-string " . " stream)
-                    (rontolisp::%clojure-write rest nil-replacement readable
-                                               stream labels))))
+                    (rontolisp::%clojure-write-nested rest nil-replacement
+                                                      readable stream labels))))
            (write-char #\Space stream)
-           (rontolisp::%clojure-write (car rest) nil-replacement readable stream
-                                      labels))
+           (rontolisp::%clojure-write-nested (car rest) nil-replacement readable
+                                             stream labels))
          (write-char #\) stream))
         ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
          ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
          ;; print and pr alike (str alone says NaN and Infinity)
          (write-string (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf"))
                        stream))
+        ;; the Common Lisp printer spells the exponent marker in lowercase; the
+        ;; oracle's Double.toString says 1.0E19 and 1.5E-7
+        ((floatp x) (write-string (string-upcase (princ-to-string x)) stream))
         ((functionp x) (write-string "#<procedure>" stream))
         (t (let ((name (rontolisp::%clojure-host-class-name x)))
              (if name (write-string name stream) (princ x stream))))))
@@ -367,26 +530,30 @@
     (write-char #\{ stream)
     (dolist (k fields)
       (if first (setq first nil) (write-string ", " stream))
-      (rontolisp::%clojure-write k nil-replacement readable stream labels)
+      (rontolisp::%clojure-write-nested k nil-replacement readable stream
+                                        labels)
       (write-char #\Space stream)
-      (rontolisp::%clojure-write (gethash k table) nil-replacement readable
-                                 stream labels))
+      (rontolisp::%clojure-write-nested (gethash k table) nil-replacement
+                                        readable stream labels))
     (maphash (lambda (k v)
                (let ((declared nil))
                  (dolist (f fields) (if (equal f k) (setq declared t)))
                  (if (not declared)
                      (progn
                        (if first (setq first nil) (write-string ", " stream))
-                       (rontolisp::%clojure-write k nil-replacement readable
-                                                  stream labels)
+                       (rontolisp::%clojure-write-nested k nil-replacement
+                                                         readable stream labels)
                        (write-char #\Space stream)
-                       (rontolisp::%clojure-write v nil-replacement readable
-                                                  stream labels))))) table)
+                       (rontolisp::%clojure-write-nested v nil-replacement
+                                                         readable stream
+                                                         labels))))) table)
     (write-char #\} stream)))
 
 (defun rontolisp::%clojure-print (x nil-replacement readable stream)
   "Write X in Clojure notation to STREAM, with datum labels when it may cycle."
-  (rontolisp::%clojure-write x nil-replacement readable stream
+  (rontolisp::%clojure-write x nil-replacement
+                             (rontolisp::%clojure-print-readable readable)
+                             stream
                              (if (and (rontolisp::%clojure-node-p x)
                                       (rontolisp::%clojure-may-cycle-p x 1000))
                                  (rontolisp::%clojure-cycle-labels x)))
@@ -417,6 +584,8 @@
                 (rontolisp::%clojure-re-pat-source x))
                ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
                 (princ-to-string x))
+               ((rontolisp::%clojure-unbound-p x)
+                (concatenate 'string "Unbound: #'" (car (cdr x))))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -430,6 +599,63 @@
    building block. Answers NIL, so a print call's value is nil like the oracle."
   (rontolisp::%clojure-print x nil-replacement readable *standard-output*)
   nil)
+
+(defun rontolisp::%clojure-print-str (parts readable newline)
+  "The print-str/prn-str/println-str building block: PARTS printed to a fresh
+   string stream, single spaces between, nil spelled nil, a trailing newline
+   under NEWLINE, and the text answered. The parts are evaluated by the caller,
+   so what they print goes to the real output, not into the answer."
+  (let ((stream (make-string-output-stream)) (first t))
+    (dolist (x parts)
+      (if first (setq first nil) (write-char #\Space stream))
+      (rontolisp::%clojure-print x "nil" readable stream))
+    (if newline (terpri stream))
+    (get-output-stream-string stream)))
+
+(defun rontolisp::%clojure-print-args (parts readable newline)
+  "The println/print/prn/pr family as one function over the PARTS list: each
+   part written to *standard-output* in Clojure notation, single spaces between,
+   a trailing newline under NEWLINE; answers nil."
+  (let ((first t))
+    (dolist (x parts)
+      (if first (setq first nil) (write-char #\Space))
+      (rontolisp::%clojure-write-datum x "nil" readable))
+    (if newline (terpri))
+    nil))
+
+(defun rontolisp::%clojure-println-v (&rest args)
+  "println as a value."
+  (rontolisp::%clojure-print-args args nil t))
+
+(defun rontolisp::%clojure-print-v (&rest args)
+  "print as a value."
+  (rontolisp::%clojure-print-args args nil nil))
+
+(defun rontolisp::%clojure-prn-v (&rest args)
+  "prn as a value."
+  (rontolisp::%clojure-print-args args t t))
+
+(defun rontolisp::%clojure-pr-v (&rest args)
+  "pr as a value."
+  (rontolisp::%clojure-print-args args t nil))
+
+(defun rontolisp::%clojure-read-line-v (&rest args)
+  "read-line as a value: the next line of *in*, nil past the end."
+  (rontolisp::%clojure-check-arity args 0 0 "read-line")
+  (read-line *standard-input* nil nil))
+
+(defun rontolisp::%clojure-run! (f coll)
+  "(run! f coll): F called on every member of COLL for effect, a lazy one
+   realizing member by member; answers nil."
+  (do ((s (rontolisp::%clojure-seq coll) (rontolisp::%clojure-seq-rest s)))
+      ((null s) nil)
+    (funcall f (car s))))
+
+(defun rontolisp::%clojure-run!-v (&rest args)
+  "run! as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "run!")
+  (rontolisp::%clojure-run! (rontolisp::%clojure-as-fn (car args))
+                            (car (cdr args))))
 
 (defun rontolisp::%clojure-host-class (x)
   "class of a value of no Clojure kind: a host object's class (the oracle's
@@ -458,6 +684,16 @@
                         (java:call x "getName"))
         (error () nil))))
 
+(defun rontolisp::%clojure-host-instance-p (x class-name)
+  "Whether X is a host object of the class CLASS-NAME (inst?, uuid?, uri?,
+   class?). A host arm like %clojure-host-class: a program with no java:
+   operator gets a body answering NIL, since no host object exists there."
+  (if (not (rontolisp::%clojure-lisp-value-p x))
+      (handler-case (java:call
+                     (java:static "java.lang.Class" "forName" class-name)
+                     "isInstance" x)
+        (error () nil))))
+
 (defun rontolisp::%clojure-host-string (x)
   "X's toString when X is a host object, str's answer (a class object's is
    \"class java.lang.String\"), else NIL. The host test is the getClass
@@ -470,6 +706,124 @@
                            t)
              (error () nil)))
       (java:call x "toString")))
+
+;;;; Exceptions: what a program throws, catches and reads.
+;;
+;; An exception is a condition on every backend. A runtime error is the Common
+;; Lisp condition the runtime signals; ex-info, a throwable construction
+;; ((Exception. "m"), ...) and a thrown host Throwable are an exception
+;; condition of the program's exception runtime (clojure/ClojureStateLowering
+;; exInfoRuntime): its class name, message, data and cause. These functions
+;; read and build one through that runtime's two functions, C%E-NEW (class
+;; message data cause) and C%E-PARTS (the four, or NIL for any other value), so
+;; only a program whose lowering emitted the runtime reaches them. The
+;; condition's report is the oracle's toString, so str, .toString and an error
+;; report spell it without a function of their own.
+
+(defun rontolisp::%clojure-exception-string (class message data)
+  "The oracle's toString of an exception of CLASS: ExceptionInfo's
+   \"clojure.lang.ExceptionInfo: message data\", any other class's
+   \"class: message\", the class alone without a message."
+  (cond ((equal class "clojure.lang.ExceptionInfo")
+         (concatenate 'string class ": "
+                      (rontolisp::%clojure-str-of message "null" nil) " "
+                      (rontolisp::%clojure-str-of data "nil" nil)))
+        ((null message) class)
+        (t (concatenate 'string class ": "
+                        (rontolisp::%clojure-str-of message "" nil)))))
+
+(defun rontolisp::%clojure-host-throwable (x)
+  "(class-name message cause) when X is a host Throwable, else NIL. A host arm
+   like %clojure-host-class: a program with no java: operator gets a body
+   answering NIL, since no host object exists there."
+  (if (rontolisp::%clojure-host-instance-p x "java.lang.Throwable")
+      (list (java:call (java:call x "getClass") "getName")
+            (java:call x "getMessage") (java:call x "getCause"))))
+
+(defun rontolisp::%clojure-exception-of (x)
+  "X as an exception: a condition itself, a host Throwable a new exception
+   carrying its class, message and cause, anything else NIL."
+  (if (typep x 'condition)
+      x
+      (let ((parts (rontolisp::%clojure-host-throwable x)))
+        (if parts
+            (c%e-new (car parts) (car (cdr parts)) nil
+             (rontolisp::%clojure-exception-of (car (cdr (cdr parts)))))))))
+
+(defun rontolisp::%clojure-throw (x)
+  "throw: an exception signals itself (a caught one rethrows unchanged, a host
+   Throwable as its exception); anything else signals its Clojure rendering,
+   so a thrown string keeps its text (the oracle refuses one)."
+  (let ((e (rontolisp::%clojure-exception-of x)))
+    (if e (error e) (error "~a" (rontolisp::%clojure-str-of x "nil" nil)))))
+
+(defun rontolisp::%clojure-ex-message (x)
+  "ex-message and .getMessage: an exception's message (nil when it has none),
+   a runtime error's report, NIL for anything that is no exception."
+  (let ((e (rontolisp::%clojure-exception-of x)))
+    (if e
+        (let ((parts (c%e-parts e)))
+          (if parts (car (cdr parts)) (format nil "~a" e))))))
+
+(defun rontolisp::%clojure-ex-data (x)
+  "ex-data: an exception's data (ex-info's map), NIL for anything else."
+  (car (cdr (cdr (c%e-parts x)))))
+
+(defun rontolisp::%clojure-ex-cause (x)
+  "ex-cause and .getCause: an exception's cause, NIL for a runtime error and
+   for anything that is no exception."
+  (let ((e (rontolisp::%clojure-exception-of x)))
+    (if e (car (cdr (cdr (cdr (c%e-parts e))))))))
+
+(defun rontolisp::%clojure-cause-of (x)
+  "A cause argument: NIL, or an exception; anything else is the oracle's
+   refusal."
+  (if (null x)
+      nil
+      (or (rontolisp::%clojure-exception-of x)
+          (error
+           (concatenate 'string "cannot cast "
+                        (rontolisp::%clojure-str-of x "nil" t)
+                        " to class java.lang.Throwable")))))
+
+(defun rontolisp::%clojure-ex-info (message data cause)
+  "(ex-info message data cause): an ExceptionInfo; nil data is {}, like the
+   oracle's."
+  (c%e-new "clojure.lang.ExceptionInfo" message
+           (if (null data) (make-hash-table :test 'equal) data)
+           (rontolisp::%clojure-cause-of cause)))
+
+(defun rontolisp::%clojure-exception-new (class message cause)
+  "(Class. message cause) of a throwable CLASS (both nil when absent): MESSAGE
+   a string or nil and CAUSE an exception or nil, else the oracle's refusal."
+  (if (or (null message) (stringp message))
+      (c%e-new class message nil (rontolisp::%clojure-cause-of cause))
+      (error (concatenate 'string "No matching ctor found for class " class))))
+
+(defun rontolisp::%clojure-exception-new-1 (class x)
+  "(Class. x) of a throwable CLASS taking a message or a cause (the lowering
+   calls %clojure-exception-new for one taking a message only): an exception X
+   is the cause and its toString the message, anything else the message."
+  (let ((cause (rontolisp::%clojure-exception-of x)))
+    (if cause
+        (c%e-new class (format nil "~a" cause) nil cause)
+        (rontolisp::%clojure-exception-new class x nil))))
+
+(defun rontolisp::%clojure-exception-method (x method)
+  "(.getMessage x), (.getLocalizedMessage x) or (.getCause x) of a receiver of
+   no known class: a condition answers from its exception, anything else calls
+   the host METHOD."
+  (if (typep x 'condition)
+      (if (equal method "getCause")
+          (rontolisp::%clojure-ex-cause x)
+          (rontolisp::%clojure-ex-message x))
+      (rontolisp::%clojure-host-method x method)))
+
+(defun rontolisp::%clojure-host-method (x method)
+  "X's zero-argument host METHOD. A host arm like %clojure-host-class: a
+   program with no java: operator gets a body refusing, since no host object
+   exists there."
+  (java:call x method))
 
 ;;;; Equality: the = family over every value shape.
 
@@ -547,6 +901,8 @@
         ((and (floatp a) (floatp b))
          ;; numeric, like Numbers.equiv: the zeros are equal, NaN is not
          (= a b))
+        ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
+         (rontolisp::%clojure-sorted-equal a b))
         (t (equal a b))))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
@@ -602,8 +958,10 @@
   (cond ((consp k)
          (let ((h (car k)))
            (cond ((eq h :C%KEYWORD) nil)
-            ((keywordp h) (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)))
-            (t t))))
+                 ((keywordp h)
+                  (or (eq h :C%SET) (eq h :C%LAZY) (eq h :C%RECORD)
+                      (rontolisp::%clojure-sorted-p k)))
+                 (t t))))
         ((vectorp k) (not (stringp k)))
         (t (hash-table-p k))))
 
@@ -648,25 +1006,26 @@
                            1048575)))
            h))
         ((consp x)
-         (cond ((rontolisp::%clojure-keyword-p x)
-                (logand (+ 11 (rontolisp::%clojure-hash-string (car (cdr x))))
-                        1048575))
-               ((rontolisp::%clojure-set-p x)
-                (rontolisp::%clojure-hash-entries (car (cdr x)) t))
-               ((rontolisp::%clojure-record-p x)
-                (logand (+ (rontolisp::%clojure-hash (car (cdr x)))
-                           (rontolisp::%clojure-hash-entries
-                            (car (cdr (cdr (cdr x)))) nil)) 1048575))
-               ((rontolisp::%clojure-sequential-p x)
-                (let ((h 1) (s (rontolisp::%clojure-seq x)))
-                  (do ()
-                      ((null s) h)
-                    (setq h
-                          (logand
-                           (+ (* h 1021) (rontolisp::%clojure-hash (car s)))
-                           1048575))
-                    (setq s (rontolisp::%clojure-seq (cdr s))))))
-               (t 0)))
+         (cond
+          ((rontolisp::%clojure-keyword-p x)
+           (logand (+ 11 (rontolisp::%clojure-hash-string (car (cdr x))))
+                   1048575))
+          ((rontolisp::%clojure-set-p x)
+           (rontolisp::%clojure-hash-entries (car (cdr x)) t))
+          ((rontolisp::%clojure-record-p x)
+           (logand (+ (rontolisp::%clojure-hash (car (cdr x)))
+                      (rontolisp::%clojure-hash-entries
+                       (car (cdr (cdr (cdr x)))) nil)) 1048575))
+          ((rontolisp::%clojure-sequential-p x)
+           (let ((h 1) (s (rontolisp::%clojure-seq x)))
+             (do ()
+                 ((null s) h)
+               (setq h
+                     (logand (+ (* h 1021) (rontolisp::%clojure-hash (car s)))
+                             1048575))
+               (setq s (rontolisp::%clojure-seq (cdr s))))))
+          ((rontolisp::%clojure-sorted-p x) (rontolisp::%clojure-sorted-hash x))
+          (t 0)))
         ((characterp x) (char-code x))
         ((symbolp x) (rontolisp::%clojure-hash-string (symbol-name x)))
         ((floatp x)
@@ -677,13 +1036,16 @@
         ((hash-table-p x) (rontolisp::%clojure-hash-entries x nil))
         (t 0)))
 
+;; A sorted collection is kind 4: = to a hash map or set of the same entries, yet
+;; printed in its own order, so a key keeps the kind it was stored as.
 (defun rontolisp::%clojure-key-kind (k)
   "The kind a representative keeps for structural K: 0 a vector, 1 a lazy
    seq, 2 a list, 3 anything else (= already tells maps, sets and records
    apart)."
   (cond ((vectorp k) 0)
         ((rontolisp::%clojure-lazy-p k) 1)
-        ((consp k) (if (keywordp (car k)) 3 2))
+        ((consp k)
+         (if (keywordp (car k)) (if (rontolisp::%clojure-sorted-p k) 4 3) 2))
         (t 3)))
 
 (defun rontolisp::%clojure-key-class (k create)
@@ -765,19 +1127,23 @@
   (let ((k (rontolisp::%clojure-store-key x table)))
     (setf (gethash k table) k)))
 
+;; A sorted map BASE answers a sorted map (%clojure-sorted-assoc): assoc and merge
+;; onto one keep its order.
 (defun rontolisp::%clojure-plist-table (base plist)
   "A fresh map: BASE's entries (a table copied as is, or nil) plus PLIST's
    alternating keys and values left to right, each key stored through
    %clojure-store-key, later pairs winning."
-  (let ((out
-         (if base
-             (rontolisp:plist-hash-table (rontolisp:hash-table-plist base)
-                                         :test 'equal)
-             (make-hash-table :test 'equal))))
-    (do ((p plist (cdr (cdr p))))
-        ((null p) out)
-      (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
-            (car (cdr p))))))
+  (if (rontolisp::%clojure-sorted-p base)
+      (rontolisp::%clojure-sorted-assoc base plist)
+      (let ((out
+             (if base
+                 (rontolisp:plist-hash-table (rontolisp:hash-table-plist base)
+                                             :test 'equal)
+                 (make-hash-table :test 'equal))))
+        (do ((p plist (cdr (cdr p))))
+            ((null p) out)
+          (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
+                (car (cdr p)))))))
 
 (defun rontolisp::%clojure-vector-assoc (v plist)
   "(assoc V k v ...) for a vector V: a fresh vector with PLIST's alternating
@@ -824,9 +1190,11 @@
 (defun rontolisp::%clojure-call (f args)
   "Apply F to the argument list ARGS: real functions through apply, collection
    values through their lookup, like the oracle's IFn. Sets answer the member,
-   maps the value, vectors the indexed element, keywords the table-aware read --
-   each with the next argument as the default (nil without one). Strings are no
-   functions, like the oracle, and anything else signals."
+   maps the value, vectors the indexed element, keywords and symbols the
+   table-aware read -- each with the next argument as the default (nil without
+   one); a keyword or symbol with any other argument count signals the oracle's
+   arity error. Strings are no functions, like the oracle, and anything else
+   signals."
   (cond ((functionp f) (apply f args))
         ((rontolisp::%clojure-set-p f)
          (gethash (rontolisp::%clojure-table-key (car args) (car (cdr f)))
@@ -834,20 +1202,30 @@
         ((hash-table-p f)
          (gethash (rontolisp::%clojure-table-key (car args) f) f
                   (if (cdr args) (car (cdr args)) nil)))
-        ((rontolisp::%clojure-record-p f)
-         (gethash
-          (rontolisp::%clojure-table-key (car args) (car (cdr (cdr (cdr f)))))
-          (car (cdr (cdr (cdr f)))) (if (cdr args) (car (cdr args)) nil)))
         ((and (vectorp f) (not (stringp f)))
          (let ((i (car args)))
            (if (and (integerp i) (<= 0 i) (< i (length f)))
                (elt f i)
                (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-keyword-p f)
-         (rontolisp::%clojure-call-keyword f (car args)
-          (if (cdr args) (car (cdr args)) nil)))
+         (if (or (null args) (cdr (cdr args)))
+             (error "Wrong number of args (~D) passed to: :~A" (length args)
+                    (car (cdr f)))
+             (rontolisp::%clojure-call-keyword f (car args)
+              (if (cdr args) (car (cdr args)) nil))))
+        ((rontolisp::%clojure-real-symbol-p f)
+         (if (or (null args) (cdr (cdr args)))
+             (error "Wrong number of args (~D) passed to: clojure.lang.Symbol"
+                    (length args))
+             (rontolisp::%clojure-call-keyword f (car args)
+              (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-var-p f)
          (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
+        ((rontolisp::%clojure-sorted-p f)
+         (rontolisp::%clojure-sorted-get f (car args)
+                                         (if (cdr args) (car (cdr args)) nil)))
+        ((rontolisp::%clojure-unbound-p f)
+         (error "Attempting to call unbound fn: #'~A" (car (cdr f))))
         (t (error "not a function"))))
 
 (defun rontolisp::%clojure-as-fn (f)
@@ -858,13 +1236,15 @@
   (if (functionp f) f (lambda (&rest args) (rontolisp::%clojure-call f args))))
 
 (defun rontolisp::%clojure-call-keyword (k coll dflt)
-  "The keyword K read through COLL: sets answer the member, maps the value,
-   records their entry table, anything else the default (a keyword never indexes
+  "The keyword or symbol K read through COLL: sets answer the member, maps the
+   value, records their entry table, anything else the default (neither indexes
    a vector or a string)."
   (cond ((rontolisp::%clojure-set-p coll) (gethash k (car (cdr coll)) dflt))
         ((rontolisp::%clojure-record-p coll)
          (gethash k (car (cdr (cdr (cdr coll)))) dflt))
         ((hash-table-p coll) (gethash k coll dflt))
+        ((rontolisp::%clojure-sorted-p coll)
+         (rontolisp::%clojure-sorted-get coll k dflt))
         (t dflt)))
 
 ;;;; Lazy seqs: memoized-thunk wrappers over the strict seq view.
@@ -919,7 +1299,11 @@
    ;; too, so the oracle signals instead of seqing (the conj-guard
    ;; precedent)
    ((rontolisp::%clojure-atom-p coll) (error "seq needs a collection"))
-   ((consp coll) coll)
+   ;; a sorted collection is a cons wrapper: its arm costs no other kind a test
+   ((consp coll)
+    (if (rontolisp::%clojure-sorted-p coll)
+        (rontolisp::%clojure-sorted-seq coll)
+        coll))
    ((vectorp coll) (coerce coll 'list))
    ((stringp coll) (coerce coll 'list))
    ((hash-table-p coll)
@@ -1577,12 +1961,16 @@
         name)))
 
 (defun rontolisp::%clojure-split-name (s)
-  "The part of the S spelling past the first slash (the whole S when none)."
-  (let ((at (search "/" s))) (if at (subseq s (+ at 1)) s)))
+  "The part of the S spelling past the first slash (the whole S when none, or
+   when S is the lone slash, the oracle's symbol /)."
+  (let ((at (search "/" s)))
+    (if (and at (not (equal s "/"))) (subseq s (+ at 1)) s)))
 
 (defun rontolisp::%clojure-split-namespace (s)
-  "The part of the S spelling before the first slash, or NIL when none."
-  (let ((at (search "/" s))) (if at (subseq s 0 at) nil)))
+  "The part of the S spelling before the first slash, or NIL when none (the
+   lone slash, the oracle's symbol /, has none)."
+  (let ((at (search "/" s)))
+    (if (and at (not (equal s "/"))) (subseq s 0 at) nil)))
 
 (defun rontolisp::%clojure-name (x)
   "The name of X: a string itself, a keyword's spelling past the slash, a
@@ -2762,6 +3150,55 @@
   (rontolisp::%clojure-check-arity args 1 1 "not-empty")
   (rontolisp::%clojure-not-empty (car args)))
 
+;; empty carries X's metadata over, like the oracle's empty (a list, a lazy seq
+;; and a seq answer nil, the empty-as-nil position of rest and next, so they have
+;; none to carry). The sorted arm keeps the comparator and the kind.
+(defun rontolisp::%clojure-empty (x)
+  "The empty collection of X's kind: a vector, map, set or sorted collection
+   answers a fresh empty one carrying X's metadata and, for a sorted one, its
+   comparator; a record signals; a list, a seq, a string and anything that is
+   no collection answer nil."
+  (cond ((hash-table-p x)
+         (rontolisp::%clojure-put-meta (make-hash-table :test 'equal)
+                                       (rontolisp::%clojure-meta x)))
+        ((rontolisp::%clojure-record-p x)
+         (error "~A"
+                (concatenate 'string "Can't create empty: "
+                             (car (cdr (cdr (cdr (cdr x))))))))
+        ((rontolisp::%clojure-set-p x)
+         (rontolisp::%clojure-put-meta
+          (list :C%SET (make-hash-table :test 'equal))
+          (rontolisp::%clojure-meta x)))
+        ((rontolisp::%clojure-sorted-p x)
+         (rontolisp::%clojure-put-meta
+          (rontolisp::%clojure-sorted-with x (vector))
+          (rontolisp::%clojure-meta x)))
+        ((and (vectorp x) (not (stringp x)))
+         (rontolisp::%clojure-put-meta (vector) (rontolisp::%clojure-meta x)))
+        (t nil)))
+
+(defun rontolisp::%clojure-empty-v (&rest args)
+  "empty as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "empty")
+  (rontolisp::%clojure-empty (car args)))
+
+(defun rontolisp::%clojure-comparator (pred)
+  "(comparator pred): a function answering -1 when (pred a b) holds, else 1 when
+   (pred b a) does, else 0."
+  (lambda (a b)
+    (cond ((rontolisp::%clojure-truthy (funcall pred a b)) -1)
+          ((rontolisp::%clojure-truthy (funcall pred b a)) 1)
+          (t 0))))
+
+(defun rontolisp::%clojure-comparator-v (&rest args)
+  "comparator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "comparator")
+  (rontolisp::%clojure-comparator (car args)))
+
+(defun rontolisp::%clojure-hash-set-v (&rest xs)
+  "hash-set as a value: the set of its arguments, a repeated one kept once."
+  (rontolisp::%clojure-set-of xs))
+
 (defun rontolisp::%clojure-dedupe (coll)
   "COLL without consecutive = duplicates."
   (rontolisp::%clojure-lazy-or-strict coll
@@ -2809,6 +3246,8 @@
              (if (and (integerp x) (>= x 0) (< x (length smap)))
                  (aref smap x)
                  x)))
+          ((rontolisp::%clojure-sorted-map-p smap)
+           (lambda (x) (rontolisp::%clojure-sorted-get smap x x)))
           (t (error "replace needs a map or a vector")))))
 
 (defun rontolisp::%clojure-replace (smap coll)
@@ -2877,6 +3316,8 @@
          (if (and (integerp key) (>= key 0) (< key (length coll)))
              (vector key (aref coll key))
              nil))
+        ((rontolisp::%clojure-sorted-p coll)
+         (rontolisp::%clojure-sorted-find coll key))
         (t (error "find not supported on this type"))))
 
 (defun rontolisp::%clojure-find-v (&rest args)
@@ -2930,10 +3371,11 @@
   (let ((out nil))
     (dotimes (i (length v) out) (setq out (cons (aref v i) out)))))
 
+;; A sorted collection walks backwards through its items vector, like a call.
 (defun rontolisp::%clojure-rseq-v (&rest args)
   "rseq as a value."
   (rontolisp::%clojure-check-arity args 1 1 "rseq")
-  (rontolisp::%clojure-rseq (car args)))
+  (rontolisp::%clojure-rseq (rontolisp::%clojure-sorted-items (car args))))
 
 (defun rontolisp::%clojure-find-keyword (x)
   "(find-keyword X): the keyword for a keyword, symbol or string, nil for
@@ -3156,6 +3598,8 @@
            (dotimes (i (length coll))
              (setq acc (cons (cons i (aref coll i)) acc)))
            (reverse acc)))
+        ((rontolisp::%clojure-sorted-map-p coll)
+         (rontolisp::%clojure-sorted-kv-pairs coll))
         (t (error "~A needs a map or a vector" name))))
 
 (defun rontolisp::%clojure-reduce-kv (f init coll)
@@ -3206,6 +3650,205 @@
   (rontolisp::%clojure-update-vals (car args)
    (rontolisp::%clojure-as-fn (car (cdr args)))))
 
+;;;; Type and collection predicates.
+;;
+;; Each answers a CL boolean; the lowering (ClojurePredicateLowering) wraps the
+;; call in (if ... T false), so a predicate as a value is a one-argument lambda
+;; over the same test. A tagged wrapper is a list whose car is a CL keyword,
+;; which no user list holds, so a list test excludes keywords, atoms, vars,
+;; records, patterns and the other wrappers. nil is the empty list here, so
+;; every seq and collection test answers false for it, like the oracle's nil;
+;; its () answers true there.
+
+(defun rontolisp::%clojure-is-list (x)
+  "list?: a list that is no tagged wrapper. A strict seq shares the
+   representation (what map or filter of a strict input answers), so it is one
+   too, where the oracle's is a LazySeq."
+  (and (consp x) (not (keywordp (car x)))))
+
+(defun rontolisp::%clojure-is-seq (x)
+  "seq?: a list or a lazy seq."
+  (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-lazy-p x)))
+
+(defun rontolisp::%clojure-is-vector (x)
+  "A Clojure vector: a CL vector that is no string (indexed?, reversible?)."
+  (and (vectorp x) (not (stringp x))))
+
+(defun rontolisp::%clojure-is-sequential (x)
+  "sequential?: a list, a lazy seq or a vector."
+  (or (rontolisp::%clojure-is-seq x) (rontolisp::%clojure-is-vector x)))
+
+;; Every collection predicate takes a sorted map or set too (an arm).
+(defun rontolisp::%clojure-is-map (x)
+  "map?: a map or a record."
+  (or (hash-table-p x) (rontolisp::%clojure-record-p x)
+      (rontolisp::%clojure-sorted-map-p x)))
+
+(defun rontolisp::%clojure-is-coll (x)
+  "coll?: a list, lazy seq, vector, map, set or record."
+  (or (rontolisp::%clojure-is-sequential x) (rontolisp::%clojure-is-map x)
+      (rontolisp::%clojure-set-p x) (rontolisp::%clojure-sorted-set-p x)))
+
+(defun rontolisp::%clojure-is-seqable (x)
+  "seqable?: what seq takes -- nil, a string or a collection."
+  (or (null x) (stringp x) (rontolisp::%clojure-is-coll x)))
+
+(defun rontolisp::%clojure-is-associative (x)
+  "associative?: a map, a record or a vector."
+  (or (rontolisp::%clojure-is-map x) (rontolisp::%clojure-is-vector x)))
+
+(defun rontolisp::%clojure-is-counted (x)
+  "counted?: a list, vector, map, set or record; a lazy seq is not."
+  (or (rontolisp::%clojure-is-list x) (rontolisp::%clojure-is-vector x)
+      (rontolisp::%clojure-is-map x) (rontolisp::%clojure-set-p x)
+      (rontolisp::%clojure-sorted-set-p x)))
+
+(defun rontolisp::%clojure-is-ifn (x)
+  "ifn?: a function, keyword, symbol, map, set, vector or var. A record is no
+   IFn, like the oracle's."
+  (or (functionp x) (rontolisp::%clojure-keyword-p x)
+      (rontolisp::%clojure-real-symbol-p x) (hash-table-p x)
+      (rontolisp::%clojure-set-p x) (rontolisp::%clojure-is-vector x)
+      (rontolisp::%clojure-var-p x) (rontolisp::%clojure-sorted-p x)))
+
+(defun rontolisp::%clojure-is-int (x)
+  "int?: an integer a long holds (the oracle's Long, Integer, Short, Byte)."
+  (and (integerp x) (<= -9223372036854775808 x 9223372036854775807)))
+
+(defun rontolisp::%clojure-is-nat-int (x)
+  "nat-int?: an int? that is not negative."
+  (and (rontolisp::%clojure-is-int x) (>= x 0)))
+
+(defun rontolisp::%clojure-is-pos-int (x)
+  "pos-int?: an int? above zero."
+  (and (rontolisp::%clojure-is-int x) (> x 0)))
+
+(defun rontolisp::%clojure-is-neg-int (x)
+  "neg-int?: an int? below zero."
+  (and (rontolisp::%clojure-is-int x) (< x 0)))
+
+(defun rontolisp::%clojure-is-ratio (x)
+  "ratio?: a rational that is no integer."
+  (and (rationalp x) (not (integerp x))))
+
+(defun rontolisp::%clojure-is-infinite (x)
+  "infinite?: a double past either end of the range; any other number is
+   finite, anything else signals, like the oracle's cast."
+  (if (numberp x)
+      (and (floatp x)
+       (or (> x most-positive-double-float) (< x most-negative-double-float)))
+      (error "infinite? needs a number")))
+
+(defun rontolisp::%clojure-is-nan (x)
+  "NaN?: a double that is not = to itself; anything else that is no number
+   signals, like the oracle's cast."
+  (if (numberp x) (and (floatp x) (/= x x)) (error "NaN? needs a number")))
+
+(defun rontolisp::%clojure-is-ident (x)
+  "ident?: a keyword or a symbol."
+  (or (rontolisp::%clojure-keyword-p x) (rontolisp::%clojure-real-symbol-p x)))
+
+(defun rontolisp::%clojure-is-qualified (x keywords symbols qualified)
+  "Whether X is a keyword (KEYWORDS true) or a symbol (SYMBOLS true) whose
+   namespace is present (QUALIFIED true) or absent: the simple-/qualified-
+   ident, keyword and symbol predicates."
+  (if (or (and keywords (rontolisp::%clojure-keyword-p x))
+          (and symbols (rontolisp::%clojure-real-symbol-p x)))
+      (if (rontolisp::%clojure-namespace x) qualified (not qualified))
+      nil))
+
+(defun rontolisp::%clojure-is-volatile (x)
+  "volatile?: the atom cell volatile! builds, which carries a second slot."
+  (and (rontolisp::%clojure-atom-p x) (= (length (car (cdr x))) 2)))
+
+(defun rontolisp::%clojure-is-realized (x)
+  "realized?: whether the lazy seq X has run its body. A list (what the seq
+   verbs answer over a strict input) is realized; anything else signals, like
+   the oracle's cast."
+  (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
+        ((rontolisp::%clojure-is-list x) t)
+        (t (error "realized? needs a lazy seq"))))
+
+(defun rontolisp::%clojure-is-bound (vars)
+  "bound?: every one of VARS is a var whose root is no unbound marker (a
+   declared-never-defined name, a value-less def). A macro's var (:macro in its
+   metadata, the oracle's own mark) is bound without taking its root, which
+   signals. Anything that is no var signals, like the oracle's cast; stops at
+   the first var that is not bound, like its every?."
+  (let ((ok t))
+    (dolist (v vars ok)
+      (if ok
+          (progn
+            (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))
+            (let ((root
+                   (if (rontolisp::%clojure-truthy
+                        (rontolisp::%clojure-call-keyword
+                         (list :C%KEYWORD "macro") (rontolisp::%clojure-meta v)
+                         nil))
+                       nil
+                       (rontolisp::%clojure-var-get v))))
+              (if (rontolisp::%clojure-unbound-p root) (setq ok nil))))))))
+
+(defun rontolisp::%clojure-is-thread-bound (vars)
+  "thread-bound?: every one of VARS is a dynamic var under a binding right now.
+   A var site of a ^:dynamic var carries its binding-depth reader as a fourth
+   element, so any other var is never thread-bound, like the oracle's; anything
+   that is no var signals, like its cast. Stops at the first var that is not."
+  (let ((ok t))
+    (dolist (v vars ok)
+      (if ok
+          (progn
+            (if (not (rontolisp::%clojure-var-p v))
+                (error "thread-bound? needs vars"))
+            (let ((depth (cdr (cdr (cdr v)))))
+              (if (or (null depth) (<= (funcall (car depth)) 0))
+                  (setq ok nil))))))))
+
+(defun rontolisp::%clojure-is-thread-bound-v (&rest args)
+  "thread-bound? as a value."
+  (if (rontolisp::%clojure-is-thread-bound args) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-is-special-symbol (x)
+  "special-symbol?: one of the oracle's special form names."
+  (if (rontolisp::%clojure-real-symbol-p x)
+      (let ((s (rontolisp::%clojure-symbol-full-name x)) (found nil))
+        (dolist (f '("def" "loop*" "recur" "if" "case*" "let*" "letfn*" "do"
+                     "fn*" "quote" "var" "clojure.core/import*" "." "set!"
+                     "deftype*" "reify*" "try" "throw" "monitor-enter"
+                     "monitor-exit" "catch" "finally" "new" "&") found)
+          (if (equal s f) (setq found t))))
+      nil))
+
+(defun rontolisp::%clojure-is-identical (a b)
+  "identical?: eql, except that two keywords of one spelling are one object,
+   like the oracle's interned keywords (here each is a fresh list). Numbers and
+   characters compare by value."
+  (if (and (rontolisp::%clojure-keyword-p a) (rontolisp::%clojure-keyword-p b))
+      (equal (car (cdr a)) (car (cdr b)))
+      (eql a b)))
+
+(defun rontolisp::%clojure-is-distinct (xs)
+  "distinct?: no two of XS are =, through the structural-key runtime like
+   distinct."
+  (let ((seen (make-hash-table :test 'equal)) (ok t))
+    (dolist (x xs ok)
+      (if (and ok (not (rontolisp::%clojure-distinct-new-p x seen)))
+          (setq ok nil)))))
+
+(defun rontolisp::%clojure-is-distinct-v (&rest args)
+  "distinct? as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "distinct?")
+  (if (rontolisp::%clojure-is-distinct args) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-is-bound-v (&rest args)
+  "bound? as a value."
+  (if (rontolisp::%clojure-is-bound args) t rontolisp::%clojure-false))
+
+(defun rontolisp::%clojure-is-inst (x)
+  "inst?: a host java.util.Date or java.time.Instant."
+  (or (rontolisp::%clojure-host-instance-p x "java.util.Date")
+      (rontolisp::%clojure-host-instance-p x "java.time.Instant")))
+
 ;;;; clojure.set: the relational set library over the set wrapper.
 ;;
 ;; The oracle's own algorithms (clojure/set.clj), so an answer's kind follows the
@@ -3231,12 +3874,13 @@
   "count as the set algorithms read it: a set, map or record by its entries,
    nil none, a vector or string by length, a seq by its realized length."
   (cond ((null coll) 0)
-        ((rontolisp::%clojure-set-p coll) (hash-table-count (car (cdr coll))))
-        ((rontolisp::%clojure-record-p coll)
-         (hash-table-count (car (cdr (cdr (cdr coll))))))
-        ((hash-table-p coll) (hash-table-count coll))
-        ((vectorp coll) (length coll))
-        (t (length (rontolisp::%clojure-seq-all coll)))))
+   ((rontolisp::%clojure-set-p coll) (hash-table-count (car (cdr coll))))
+   ((rontolisp::%clojure-record-p coll)
+    (hash-table-count (car (cdr (cdr (cdr coll))))))
+   ((hash-table-p coll) (hash-table-count coll))
+   ((vectorp coll) (length coll))
+   ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-count coll))
+   (t (length (rontolisp::%clojure-seq-all coll)))))
 
 (defun rontolisp::%clojure-set-has (coll x)
   "contains? as the set algorithms read it: a set by member, a map or record by
@@ -3256,6 +3900,8 @@
             (eq (gethash (rontolisp::%clojure-table-key x coll) coll miss)
                 miss)))
           ((vectorp coll) (and (integerp x) (<= 0 x) (< x (length coll))))
+          ((rontolisp::%clojure-sorted-p coll)
+           (rontolisp::%clojure-sorted-contains coll x))
           (t (error "contains? not supported on this collection")))))
 
 (defun rontolisp::%clojure-set-of (members)
@@ -3287,6 +3933,10 @@
         ((rontolisp::%clojure-sequential-p base)
          (let ((out (rontolisp::%clojure-seq-all base)))
            (dolist (x items out) (setq out (cons x out)))))
+        ((rontolisp::%clojure-sorted-set-p base)
+         (let ((out base))
+           (dolist (x items out)
+             (setq out (rontolisp::%clojure-sorted-conj out x)))))
         (t (error "clojure.set needs sets"))))
 
 (defun rontolisp::%clojure-set-shrink (base drops)
@@ -3299,6 +3949,12 @@
            (dolist (x drops out)
              (remhash (rontolisp::%clojure-table-key x (car (cdr out)))
                       (car (cdr out))))))
+        ((rontolisp::%clojure-sorted-set-p base)
+         (let ((table (car (cdr (rontolisp::%clojure-sorted-hashed base)))))
+           (dolist (x drops)
+             (remhash (rontolisp::%clojure-table-key
+                       (rontolisp::%clojure-sorted-key x base) table) table))
+           (rontolisp::%clojure-sorted-shrunk (list :C%SET table) base)))
         (t (error "disj needs a set"))))
 
 (defun rontolisp::%clojure-set-bubble (sets largest)
@@ -3407,6 +4063,8 @@
   (cond ((null m) nil)
         ((rontolisp::%clojure-record-p m) (car (cdr (cdr (cdr m)))))
         ((hash-table-p m) m)
+        ((rontolisp::%clojure-sorted-map-p m)
+         (rontolisp::%clojure-sorted-table m name))
         (t (error "~A needs a map" name))))
 
 (defun rontolisp::%clojure-set-keys (m name)
@@ -3418,12 +4076,13 @@
                    (setq acc (cons k acc))) table))
     acc))
 
+;; A sorted map M takes TABLE back as a sorted map under its comparator.
 (defun rontolisp::%clojure-set-rewrap (m table)
   "TABLE in the record M's place when M is a record, else TABLE."
   (if (rontolisp::%clojure-record-p m)
       (list :C%RECORD (car (cdr m)) (car (cdr (cdr m))) table
             (car (cdr (cdr (cdr (cdr m))))))
-      table))
+      (rontolisp::%clojure-sorted-rewrap table m)))
 
 (defun rontolisp::%clojure-set-select-keys (m ks)
   "(select-keys M KS) for the key list KS: a fresh map of M's entries under
@@ -3486,7 +4145,9 @@
             (if (not (eq v miss))
                 (setf (gethash (rontolisp::%clojure-store-key (cdr p) out) out)
                       v))))
-        (if record (rontolisp::%clojure-set-rewrap m out) out))))
+        (if record
+            (rontolisp::%clojure-set-rewrap m out)
+            (rontolisp::%clojure-sorted-rewrap out m)))))
 
 (defun rontolisp::%clojure-set-rename-keys-v (&rest args)
   "rename-keys as a value."
@@ -3621,6 +4282,1299 @@
   (rontolisp::%clojure-set-arity args 2 2 "superset?")
   (rontolisp::%clojure-set-subset-p (car (cdr args)) (car args)))
 
+;;;; Sorted collections: sorted-map, sorted-set, their -by forms, subseq and
+;;;; rsubseq, and compare, their default order; vector-of beside them.
+;;
+;; A sorted collection is (:C%SORTED setp cmp items): SETP true for a set, NIL for
+;; a map; CMP the comparator function a -by form took, or NIL for compare, which
+;; then also refuses a key that is neither nil, a number nor Comparable, like the
+;; oracle's default comparator; ITEMS a simple vector in comparator order, a set's
+;; members or a map's [k v] entries (seq answers the entries themselves). Like a
+;; hash map it is never mutated: each verb answers a fresh one, copying ITEMS (an
+;; association costs O(n), as a hash map's copy does). A lookup is a binary search
+;; under the comparator, so a key comparing equal to a stored one finds it --
+;; (get (sorted-map 1 :a) 1.0) is :a -- and an association keeps the stored key,
+;; like the oracle's tree.
+;;
+;; Every other verb reaches this through an arm testing %clojure-sorted-p,
+;; %clojure-sorted-map-p or %clojure-sorted-set-p, or through a pass-through view
+;; answering its first argument for anything that is no sorted collection
+;; (%clojure-sorted-key, %clojure-sorted-items, %clojure-sorted-hashed,
+;; %clojure-sorted-shrunk, %clojure-sorted-rewrap): the lowering's inline map and
+;; set verbs, and this file's printer, =, hash, seq, IFn, assoc, find, reduce-kv,
+;; replace and clojure.set. A program that builds no sorted collection has every
+;; arm and view stripped before the splice (clojure/ClojureArms: a test
+;; folds to false, a view to its first argument), so it compiles to the bytes it
+;; did before sorted collections existed. Hence the shape each arm keeps: its test
+;; names a variable (or a car/cdr of one) and is a cond clause's test, an if's
+;; test or a disjunct of an or; a view's other arguments are variables too. An arm
+;; added to an existing defun leaves its docstring as it was: the JVM backend keeps
+;; every docstring in the class it writes, so a changed one changes that class.
+
+(defun rontolisp::%clojure-sorted-p (x)
+  "Whether X is a sorted map or set: the (:C%SORTED setp cmp items) wrapper."
+  (and (consp x) (eq (car x) :C%SORTED)))
+
+(defun rontolisp::%clojure-sorted-map-p (x)
+  "Whether X is a sorted map."
+  (and (consp x) (eq (car x) :C%SORTED) (null (car (cdr x)))))
+
+(defun rontolisp::%clojure-sorted-set-p (x)
+  "Whether X is a sorted set."
+  (and (consp x) (eq (car x) :C%SORTED) (not (null (car (cdr x))))))
+
+(defun rontolisp::%clojure-is-sorted (x)
+  "sorted?: a sorted map or set."
+  (declare (ignorable x))
+  (if (rontolisp::%clojure-sorted-p x) t nil))
+
+(defun rontolisp::%clojure-is-set (x)
+  "set?: a set or a sorted set. A program that builds no sorted collection
+   calls %clojure-set-p in its place (the strip's alias)."
+  (or (rontolisp::%clojure-set-p x) (rontolisp::%clojure-sorted-set-p x)))
+
+(defun rontolisp::%clojure-is-reversible (x)
+  "reversible?: what rseq takes -- a vector, a sorted map or a sorted set. A
+   program that builds no sorted collection calls %clojure-is-vector in its
+   place (the strip's alias)."
+  (or (rontolisp::%clojure-is-vector x) (rontolisp::%clojure-sorted-p x)))
+
+(defun rontolisp::%clojure-compare-strings (a b)
+  "The oracle's String.compareTo: the difference of the first character codes
+   that differ, else of the lengths."
+  (let ((n (min (length a) (length b))) (i 0) (d 0))
+    (do ()
+        ((or (/= d 0) (>= i n)) (if (/= d 0) d (- (length a) (length b))))
+      (setq d (- (char-code (char a i)) (char-code (char b i))))
+      (setq i (+ i 1)))))
+
+(defun rontolisp::%clojure-compare-names (a b)
+  "The oracle's Symbol.compareTo over two spellings: one without a namespace
+   before one with, then the namespaces, then the names, each as compareTo."
+  (let ((na (rontolisp::%clojure-split-namespace a))
+        (nb (rontolisp::%clojure-split-namespace b)))
+    (cond ((equal a b) 0)
+          ((and (null na) nb) -1)
+          ((and na (null nb)) 1)
+          (t (let ((c (if na (rontolisp::%clojure-compare-strings na nb) 0)))
+               (if (/= c 0)
+                   c
+                   (rontolisp::%clojure-compare-strings
+                    (rontolisp::%clojure-split-name a)
+                    (rontolisp::%clojure-split-name b))))))))
+
+(defun rontolisp::%clojure-compare-vectors (a b)
+  "The oracle's vector compareTo: the shorter first, else the first member pair
+   compare tells apart."
+  (cond ((< (length a) (length b)) -1)
+        ((> (length a) (length b)) 1)
+        (t (let ((c 0) (i 0) (n (length a)))
+             (do ()
+                 ((or (/= c 0) (>= i n)) c)
+               (setq c (rontolisp::%clojure-compare (aref a i) (aref b i)))
+               (setq i (+ i 1)))))))
+
+(defun rontolisp::%clojure-compare (a b)
+  "compare, the oracle's Util.compare over the values here: nil before anything,
+   numbers by value across their kinds (1 and 1.0 are 0, NaN against anything
+   0), strings, keywords and symbols as compareTo (the difference of the first
+   characters that differ; a name without a namespace first), characters by
+   their difference, false before true, vectors by length and then member by
+   member. Two values of different kinds, or of a kind with no order (a list, a
+   map, a set, a function ...), signal."
+  (cond ((eq a b) 0)
+   ((null a) -1)
+   ((null b) 1)
+   ((and (numberp a) (numberp b)) (cond ((< a b) -1) ((< b a) 1) (t 0)))
+   ((and (stringp a) (stringp b)) (rontolisp::%clojure-compare-strings a b))
+   ((and (characterp a) (characterp b)) (- (char-code a) (char-code b)))
+   ((and (or (eq a t) (eq a rontolisp::%clojure-false))
+         (or (eq b t) (eq b rontolisp::%clojure-false)))
+    (if (eq a t) 1 -1))
+   ((and (rontolisp::%clojure-keyword-p a) (rontolisp::%clojure-keyword-p b))
+    (rontolisp::%clojure-compare-names (car (cdr a)) (car (cdr b))))
+   ((and (rontolisp::%clojure-real-symbol-p a)
+         (rontolisp::%clojure-real-symbol-p b))
+    (rontolisp::%clojure-compare-names (rontolisp::%clojure-symbol-full-name a)
+     (rontolisp::%clojure-symbol-full-name b)))
+   ((and (vectorp a) (not (stringp a)) (vectorp b) (not (stringp b)))
+    (rontolisp::%clojure-compare-vectors a b))
+   (t (error "compare needs two values of one comparable kind"))))
+
+(defun rontolisp::%clojure-compare-v (&rest args)
+  "compare as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "compare")
+  (rontolisp::%clojure-compare (car args) (car (cdr args))))
+
+(defun rontolisp::%clojure-comparable-p (x)
+  "Whether X is a value compare orders: nil, a number, a string, a character, a
+   boolean, a keyword, a symbol or a vector -- the oracle's nil, Number or
+   Comparable."
+  (or (symbolp x) (numberp x) (stringp x) (characterp x)
+      (rontolisp::%clojure-keyword-p x) (and (vectorp x) (not (stringp x)))))
+
+(defun rontolisp::%clojure-cmp-call (cmp a b)
+  "The order the comparator function CMP puts A and B in, the oracle's
+   AFunction.compare: true is -1; false asks (CMP B A), 1 when that is truthy,
+   else 0; a number is its integer part (0.5 is 0, NaN 0); anything else, nil
+   included, signals."
+  (let ((r (funcall cmp a b)))
+    (cond ((eq r t) -1)
+          ((eq r rontolisp::%clojure-false)
+           (if (rontolisp::%clojure-truthy (funcall cmp b a)) 1 0))
+          ((integerp r) r)
+          ((floatp r)
+           (cond ((/= r r) 0)
+                 ((> r 2147483647) 2147483647)
+                 ((< r -2147483648) -2147483648)
+                 (t (truncate r))))
+          ((numberp r) (truncate r))
+          (t (error "a comparator answers a number or a boolean")))))
+
+(defun rontolisp::%clojure-sorted-order (cmp a b)
+  "The order of A and B under a sorted collection's comparator CMP: its
+   function, or compare when CMP is NIL."
+  (if cmp
+      (rontolisp::%clojure-cmp-call cmp a b)
+      (rontolisp::%clojure-compare a b)))
+
+(defun rontolisp::%clojure-sorted-check (cmp k)
+  "K, or the oracle's refusal when CMP is NIL (compare orders) and K is no
+   value compare orders."
+  (if (or cmp (rontolisp::%clojure-comparable-p k))
+      k
+      (error "~A"
+             (concatenate 'string
+              "Default comparator requires nil, Number, or Comparable: "
+              (rontolisp::%clojure-str-of k "null" nil)))))
+
+(defun rontolisp::%clojure-sorted-item-key (s item)
+  "The key of ITEM in the sorted collection S: the member itself in a set, the
+   entry's key in a map."
+  (if (car (cdr s)) item (aref item 0)))
+
+(defun rontolisp::%clojure-sorted-search (s k)
+  "Where the key K sits in the sorted collection S: the index of the member or
+   entry whose key compares equal to it, else (- -1 i) for the index i it sorts
+   in at. The comparator is asked (cmp K stored), like the oracle's tree."
+  (let* ((cmp (car (cdr (cdr s))))
+         (items (car (cdr (cdr (cdr s)))))
+         (lo 0)
+         (hi (- (length items) 1))
+         (found nil))
+    (do ()
+        ((or found (> lo hi)) (if found found (- -1 lo)))
+      (let* ((mid (truncate (+ lo hi) 2))
+             (c
+              (rontolisp::%clojure-sorted-order cmp k
+               (rontolisp::%clojure-sorted-item-key s (aref items mid)))))
+        (cond ((< c 0) (setq hi (- mid 1)))
+              ((> c 0) (setq lo (+ mid 1)))
+              (t (setq found mid)))))))
+
+(defun rontolisp::%clojure-sorted-with (s items)
+  "A sorted collection of S's kind and comparator holding the vector ITEMS."
+  (list :C%SORTED (car (cdr s)) (car (cdr (cdr s))) items))
+
+(defun rontolisp::%clojure-sorted-insert (s i item)
+  "A copy of the sorted collection S with ITEM inserted at index I."
+  (let* ((items (car (cdr (cdr (cdr s)))))
+         (n (length items))
+         (out (make-array (+ n 1))))
+    (dotimes (j i) (setf (aref out j) (aref items j)))
+    (setf (aref out i) item)
+    (do ((j i (+ j 1)))
+        ((>= j n))
+      (setf (aref out (+ j 1)) (aref items j)))
+    (rontolisp::%clojure-sorted-with s out)))
+
+(defun rontolisp::%clojure-sorted-replace (s i item)
+  "A copy of the sorted collection S with its item at index I replaced by ITEM."
+  (let* ((items (car (cdr (cdr (cdr s))))) (out (make-array (length items))))
+    (dotimes (j (length items)) (setf (aref out j) (aref items j)))
+    (setf (aref out i) item)
+    (rontolisp::%clojure-sorted-with s out)))
+
+(defun rontolisp::%clojure-sorted-make (setp cmp items)
+  "A sorted set (SETP true) of the member list ITEMS, or a sorted map of the
+   plist ITEMS, under the comparator function CMP (NIL for compare). One stable
+   sort orders them, so of keys comparing equal the first stays and, in a map,
+   the last value wins: the oracle's conj after conj, assoc after assoc. A key
+   without a value, a CMP that is no function and, under compare, a key it does
+   not order signal like the oracle."
+  (if (and cmp (not (functionp cmp)))
+      (error "a sorted collection needs a comparator function"))
+  (let ((entries nil))
+    (if setp
+        (dolist (x items)
+          (setq entries
+                (cons (rontolisp::%clojure-sorted-check cmp x) entries)))
+        (do ((p items (cdr (cdr p))))
+            ((null p))
+          (if (null (cdr p))
+              (error "~A"
+                     (concatenate 'string "No value supplied for key: "
+                      (rontolisp::%clojure-str-of (car p) "null" nil))))
+          (setq entries
+                (cons (vector (rontolisp::%clojure-sorted-check cmp (car p))
+                              (car (cdr p))) entries))))
+    (let ((sorted
+           (stable-sort (nreverse entries)
+                        (lambda (a b)
+                          (< (rontolisp::%clojure-sorted-order cmp
+                              (if setp a (aref a 0)) (if setp b (aref b 0)))
+                             0))))
+          (out nil))
+      (dolist (x sorted)
+        (if (and out
+                 (= 0
+                    (rontolisp::%clojure-sorted-order cmp
+                     (if setp (car out) (aref (car out) 0))
+                     (if setp x (aref x 0)))))
+            (if (not setp) (setf (aref (car out) 1) (aref x 1)))
+            (setq out (cons x out))))
+      (list :C%SORTED setp cmp (coerce (nreverse out) 'vector)))))
+
+(defun rontolisp::%clojure-sorted-map-v (&rest kvs)
+  "sorted-map as a value."
+  (rontolisp::%clojure-sorted-make nil nil kvs))
+
+(defun rontolisp::%clojure-sorted-map-by-v (&rest args)
+  "sorted-map-by as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "sorted-map-by")
+  (rontolisp::%clojure-sorted-make nil (car args) (cdr args)))
+
+(defun rontolisp::%clojure-sorted-set-v (&rest xs)
+  "sorted-set as a value."
+  (rontolisp::%clojure-sorted-make t nil xs))
+
+(defun rontolisp::%clojure-sorted-set-by-v (&rest args)
+  "sorted-set-by as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "sorted-set-by")
+  (rontolisp::%clojure-sorted-make t (car args) (cdr args)))
+
+(defun rontolisp::%clojure-sorted-put (s k v)
+  "The sorted map S with V under K: the entry whose key compares equal to K
+   keeps that key and takes V, else a fresh entry sorts in."
+  (let ((i (rontolisp::%clojure-sorted-search s k)))
+    (if (>= i 0)
+        (rontolisp::%clojure-sorted-replace s i
+         (vector (aref (aref (car (cdr (cdr (cdr s)))) i) 0) v))
+        (rontolisp::%clojure-sorted-insert s (- -1 i)
+         (vector (rontolisp::%clojure-sorted-check (car (cdr (cdr s))) k) v)))))
+
+(defun rontolisp::%clojure-sorted-assoc (s plist)
+  "(assoc S k v ...) for the sorted collection S: each pair in turn through
+   %clojure-sorted-put; a sorted set signals, like the oracle."
+  (if (car (cdr s)) (error "assoc needs a map or a vector, not a set"))
+  (let ((out s))
+    (do ((p plist (cdr (cdr p))))
+        ((null p) out)
+      (setq out (rontolisp::%clojure-sorted-put out (car p) (car (cdr p)))))))
+
+(defun rontolisp::%clojure-sorted-entry-plist (item one)
+  "The entries conj adds to a map from ITEM, as a plist: none of nil, the pair
+   of a [k v] vector, a map's or record's entries, and -- ONE false -- a set's
+   members each a [k v] vector (the oracle casts them to map entries); anything
+   else, a list included, signals."
+  (cond (one
+         (if (and (vectorp item) (not (stringp item)) (= (length item) 2))
+             (list (aref item 0) (aref item 1))
+             (error "conj needs a map entry: a map, a [k v] vector or nil")))
+        ((null item) nil)
+        ((and (vectorp item) (not (stringp item)) (= (length item) 2))
+         (list (aref item 0) (aref item 1)))
+        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((rontolisp::%clojure-sorted-map-p item)
+         (rontolisp::%clojure-sorted-plist item))
+        ((rontolisp::%clojure-record-p item)
+         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+        ((or (rontolisp::%clojure-set-p item)
+             (rontolisp::%clojure-sorted-set-p item))
+         (let ((acc nil))
+           (dolist (m (rontolisp::%clojure-strict-seq item) acc)
+             (setq acc
+                   (append acc (rontolisp::%clojure-sorted-entry-plist m t))))))
+        ((consp item) (rontolisp::%clojure-seq-entry-plist item))
+        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+
+(defun rontolisp::%clojure-seq-entry-plist (item)
+  "The entries a sorted map or a seq (strict or lazy) ITEM adds to a map, as a
+   plist: a sorted map's pairs in order, a seq's members each a [k v] vector
+   (a map entry is a plain two-vector here, so a seq of vectors is accepted
+   where the oracle casts to Map.Entry); any other member signals."
+  (if (rontolisp::%clojure-sorted-map-p item)
+      (rontolisp::%clojure-sorted-plist item)
+      (let ((acc nil) (s (rontolisp::%clojure-seq item)))
+        (do ()
+            ((null s) (reverse acc))
+          (let ((m (car s)))
+            (if (and (vectorp m) (not (stringp m)) (= (length m) 2))
+                (setq acc (cons (aref m 1) (cons (aref m 0) acc)))
+                (error "conj needs a map entry: a map, a [k v] vector or nil")))
+          (setq s (rontolisp::%clojure-seq-rest s))))))
+
+(defun rontolisp::%clojure-merge-entry-plist (item)
+  "The entries a later merge ITEM adds, as a plist (merge is conj folded over the
+   maps): none of nil, a map's or record's pairs, a [k v] vector's pair, a sorted
+   map's pairs, or the members of a set or seq each a [k v] vector; anything else,
+   a list of non-entries included, signals."
+  (cond ((null item) nil)
+        ((hash-table-p item) (rontolisp:hash-table-plist item))
+        ((and (vectorp item) (not (stringp item)) (= (length item) 2))
+         (list (aref item 0) (aref item 1)))
+        ((rontolisp::%clojure-record-p item)
+         (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
+        ((consp item) (rontolisp::%clojure-seq-entry-plist item))
+        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+
+(defun rontolisp::%clojure-sorted-conj (s item)
+  "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member
+   compares equal to it (that member stays); a map gains ITEM's entries
+   (%clojure-sorted-entry-plist), nil adding nothing, like the oracle."
+  (if (car (cdr s))
+      (let ((i (rontolisp::%clojure-sorted-search s item)))
+        (if (>= i 0)
+            s
+            (rontolisp::%clojure-sorted-insert s (- -1 i)
+             (rontolisp::%clojure-sorted-check (car (cdr (cdr s))) item))))
+      (rontolisp::%clojure-sorted-assoc s
+       (rontolisp::%clojure-sorted-entry-plist item nil))))
+
+(defun rontolisp::%clojure-sorted-get (s k dflt)
+  "K looked up in the sorted collection S: a set answers the member comparing
+   equal to K, a map that key's value, else DFLT."
+  (let ((i (rontolisp::%clojure-sorted-search s k)))
+    (if (>= i 0)
+        (let ((item (aref (car (cdr (cdr (cdr s)))) i)))
+          (if (car (cdr s)) item (aref item 1)))
+        dflt)))
+
+(defun rontolisp::%clojure-sorted-contains (s k)
+  "Whether the sorted collection S holds a key comparing equal to K."
+  (>= (rontolisp::%clojure-sorted-search s k) 0))
+
+(defun rontolisp::%clojure-sorted-find (s k)
+  "(find S K): the stored [k v] entry of the sorted map S whose key compares
+   equal to K, nil when none; a sorted set signals, like the oracle."
+  (if (car (cdr s)) (error "find not supported on this type"))
+  (let ((i (rontolisp::%clojure-sorted-search s k)))
+    (if (>= i 0) (aref (car (cdr (cdr (cdr s)))) i) nil)))
+
+(defun rontolisp::%clojure-sorted-count (s)
+  "The member or entry count of the sorted collection S."
+  (length (car (cdr (cdr (cdr s))))))
+
+(defun rontolisp::%clojure-sorted-seq (s)
+  "The seq of the sorted collection S in order: its members or [k v] entries,
+   nil when it is empty."
+  (coerce (car (cdr (cdr (cdr s)))) 'list))
+
+(defun rontolisp::%clojure-sorted-items (x)
+  "The ITEMS vector of X in order when it is a sorted collection, else X: the
+   view rseq reads, so its vector arm walks a sorted collection backwards."
+  (if (rontolisp::%clojure-sorted-p x) (car (cdr (cdr (cdr x)))) x))
+
+(defun rontolisp::%clojure-sorted-keys (s which)
+  "The keys (WHICH 0) or values (WHICH 1) of the sorted map S in order, nil
+   when it is empty; a sorted set signals, like the oracle."
+  (if (car (cdr s))
+      (error (if (= which 0) "keys needs a map" "vals needs a map")))
+  (let ((acc nil) (items (car (cdr (cdr (cdr s))))))
+    (do ((i (- (length items) 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc (cons (aref (aref items i) which) acc)))))
+
+(defun rontolisp::%clojure-sorted-plist (s)
+  "The entries of the sorted map S as a plist, in order."
+  (let ((acc nil) (items (car (cdr (cdr (cdr s))))))
+    (do ((i (- (length items) 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc
+       (cons (aref (aref items i) 0) (cons (aref (aref items i) 1) acc))))))
+
+(defun rontolisp::%clojure-sorted-kv-pairs (s)
+  "The (key . value) pairs of the sorted map S, in order."
+  (let ((acc nil) (items (car (cdr (cdr (cdr s))))))
+    (do ((i (- (length items) 1) (- i 1)))
+        ((< i 0) acc)
+      (setq acc
+       (cons (cons (aref (aref items i) 0) (aref (aref items i) 1)) acc)))))
+
+(defun rontolisp::%clojure-sorted-table (s name)
+  "A fresh map of the sorted map S's entries, each key stored through the
+   structural-key runtime: what a verb written over hash tables walks
+   (dissoc's copy, select-keys, the later maps of merge-with), whose lookups
+   pass through %clojure-sorted-key first, so a key comparing equal finds its
+   entry. A sorted set signals in NAME's words."
+  (if (car (cdr s)) (error "~A needs a map" name))
+  (rontolisp::%clojure-plist-table nil (rontolisp::%clojure-sorted-plist s)))
+
+(defun rontolisp::%clojure-sorted-hashed (x)
+  "X as a hash set of its members when it is a sorted set, else X: the view
+   disj's copy reads (its drops pass through %clojure-sorted-key, its answer
+   through %clojure-sorted-shrunk)."
+  (if (rontolisp::%clojure-sorted-set-p x)
+      (let ((table (make-hash-table :test 'equal))
+            (items (car (cdr (cdr (cdr x))))))
+        (dotimes (i (length items))
+          (rontolisp::%clojure-set-put table (aref items i)))
+        (list :C%SET table))
+      x))
+
+(defun rontolisp::%clojure-sorted-key (k coll)
+  "The key the sorted collection COLL stores for K, the one comparing equal to
+   it, else K (COLL no sorted collection, or holding none): the view a lookup
+   takes, ahead of %clojure-table-key, into a table of COLL's entries or
+   members (dissoc, disj, select-keys)."
+  (if (rontolisp::%clojure-sorted-p coll)
+      (let ((i (rontolisp::%clojure-sorted-search coll k)))
+        (if (>= i 0)
+            (rontolisp::%clojure-sorted-item-key coll
+             (aref (car (cdr (cdr (cdr coll)))) i))
+            k))
+      k))
+
+(defun rontolisp::%clojure-sorted-shrunk (x orig)
+  "X -- the hash map or hash set dissoc or disj built over a table of ORIG's
+   entries or members, the dropped ones removed -- back as ORIG's kind when
+   ORIG is sorted: ORIG's items X still holds, in order. Else X."
+  (if (rontolisp::%clojure-sorted-p orig)
+      (let* ((setp (car (cdr orig)))
+             (table (if setp (car (cdr x)) x))
+             (items (car (cdr (cdr (cdr orig)))))
+             (miss (list nil))
+             (kept nil))
+        (dotimes (i (length items))
+          (let ((item (aref items i)))
+            (if (not
+                 (eq (gethash (rontolisp::%clojure-table-key
+                               (if setp item (aref item 0)) table) table miss)
+                     miss))
+                (setq kept (cons item kept)))))
+        (rontolisp::%clojure-sorted-with orig (coerce (nreverse kept) 'vector)))
+      x))
+
+(defun rontolisp::%clojure-sorted-rewrap (x orig)
+  "X -- a hash map a clojure.set verb built from ORIG's entries -- as a sorted
+   map under ORIG's comparator when ORIG is a sorted map and X a hash map, else
+   X."
+  (if (rontolisp::%clojure-sorted-map-p orig)
+      (if (hash-table-p x)
+          (rontolisp::%clojure-sorted-make nil (car (cdr (cdr orig)))
+                                           (rontolisp:hash-table-plist x))
+          x)
+      x))
+
+(defun rontolisp::%clojure-sorted-merge-with (f maps)
+  "(merge-with F maps...) whose first map is sorted, the oracle's reduce of
+   merge-entry: every later map's entries join it in turn, F (a real function)
+   over the old and the new value where a key comparing equal arrives again,
+   so the answer stays sorted under its comparator."
+  (let ((acc (car maps)))
+    (dolist (m (cdr maps) acc)
+      (if m
+          (dolist (kv (rontolisp::%clojure-kv-pairs m "merge-with"))
+            (let ((i (rontolisp::%clojure-sorted-search acc (car kv))))
+              (setq acc
+                    (rontolisp::%clojure-sorted-put acc (car kv)
+                                                    (if (>= i 0)
+                                                        (funcall f
+                                                                 (aref
+                                                                  (aref
+                                                                   (car
+                                                                    (cdr
+                                                                     (cdr
+                                                                      (cdr
+                                                                       acc))))
+                                                                   i) 1)
+                                                                 (cdr kv))
+                                                        (cdr kv))))))))))
+
+(defun rontolisp::%clojure-sorted-lookup (coll k miss)
+  "K's value in the map COLL (its member in a set), MISS when COLL holds none:
+   a sorted collection by its comparator, a hash map or set by =."
+  (if (rontolisp::%clojure-sorted-p coll)
+      (rontolisp::%clojure-sorted-get coll k miss)
+      (let ((table (if (hash-table-p coll) coll (car (cdr coll)))))
+        (gethash (rontolisp::%clojure-table-key k table) table miss))))
+
+(defun rontolisp::%clojure-sorted-equal (a b)
+  "= when A or B is a sorted collection, the oracle's equiv on A's side: two
+   sets (hash or sorted) of one count are = when A holds every member of B, two
+   maps when B holds every key of A under an = value -- each lookup by its own
+   collection's comparator, or by = in a hash one, as there. Anything else is
+   unequal."
+  (let ((miss (list nil)) (ok t))
+    (cond ((and (or (rontolisp::%clojure-set-p a)
+                    (rontolisp::%clojure-sorted-set-p a))
+                (or (rontolisp::%clojure-set-p b)
+                    (rontolisp::%clojure-sorted-set-p b)))
+           (if (= (rontolisp::%clojure-set-count a)
+                  (rontolisp::%clojure-set-count b))
+               (dolist (m (rontolisp::%clojure-strict-seq b) ok)
+                 (if (and ok
+                      (eq (rontolisp::%clojure-sorted-lookup a m miss) miss))
+                     (setq ok nil)))
+               nil))
+          ((and (or (hash-table-p a) (rontolisp::%clojure-sorted-map-p a))
+                (or (hash-table-p b) (rontolisp::%clojure-sorted-map-p b)))
+           (if (= (rontolisp::%clojure-set-count a)
+                  (rontolisp::%clojure-set-count b))
+               (dolist (kv (rontolisp::%clojure-kv-pairs a "=") ok)
+                 (if ok
+                     (let ((w
+                            (rontolisp::%clojure-sorted-lookup b (car kv)
+                                                               miss)))
+                       (if (or (eq w miss)
+                               (not (rontolisp::%clojure-equal (cdr kv) w)))
+                           (setq ok nil)))))
+               nil))
+          (t nil))))
+
+(defun rontolisp::%clojure-sorted-hash (s)
+  "%clojure-hash of the sorted collection S: what a hash set or map of the same
+   members or entries answers (%clojure-hash-entries), since = holds between
+   them."
+  (let* ((setp (car (cdr s)))
+         (items (car (cdr (cdr (cdr s)))))
+         (h (if setp 3 5)))
+    (dotimes (i (length items) h)
+      (setq h
+            (logand (+ h
+                       (if setp
+                           (rontolisp::%clojure-hash (aref items i))
+                           (logand (+ (* 1021
+                                         (rontolisp::%clojure-hash
+                                          (aref (aref items i) 0)))
+                                      (rontolisp::%clojure-hash
+                                       (aref (aref items i) 1))) 1048575)))
+                    1048575)))))
+
+(defun rontolisp::%clojure-write-sorted
+    (x nil-replacement readable stream labels)
+  "Write the sorted collection X in order, like the oracle: #{a b} for a set,
+   {k v, k v} for a map."
+  (let ((items (car (cdr (cdr (cdr x))))))
+    (if (car (cdr x))
+        (progn
+          (write-string "#{" stream)
+          (dotimes (i (length items))
+            (if (> i 0) (write-char #\Space stream))
+            (rontolisp::%clojure-write-nested (aref items i) nil-replacement
+                                              readable stream labels))
+          (write-char #\} stream))
+        (progn
+          (write-char #\{ stream)
+          (dotimes (i (length items))
+            (if (> i 0) (write-string ", " stream))
+            (rontolisp::%clojure-write-nested (aref (aref items i) 0)
+                                              nil-replacement readable stream
+                                              labels)
+            (write-char #\Space stream)
+            (rontolisp::%clojure-write-nested (aref (aref items i) 1)
+                                              nil-replacement readable stream
+                                              labels))
+          (write-char #\} stream)))))
+
+(defun rontolisp::%clojure-sorted-need (s name)
+  "S, or NAME's refusal when it is no sorted collection."
+  (if (rontolisp::%clojure-sorted-p s)
+      s
+      (error "~A needs a sorted collection" name)))
+
+(defun rontolisp::%clojure-sorted-test (test)
+  "The test of subseq or rsubseq as one of the core tests (:< :<= :> :>=):
+   itself when the lowering passed one for a literal <, <=, > or >=, else the
+   core test a function answers like on (1 0), (0 0) and (-1 0) -- the core
+   functions as values, which the oracle tells apart by identity -- else the
+   function itself."
+  (if (keywordp test)
+      test
+      (let ((p (rontolisp::%clojure-truthy (funcall test 1 0)))
+            (z (rontolisp::%clojure-truthy (funcall test 0 0)))
+            (n (rontolisp::%clojure-truthy (funcall test -1 0))))
+        (cond ((and (not p) (not z) n) :<)
+              ((and (not p) z n) :<=)
+              ((and p (not z) (not n)) :>)
+              ((and p z (not n)) :>=)
+              (t test)))))
+
+(defun rontolisp::%clojure-sorted-passes (s test bound item)
+  "Whether ITEM's key passes TEST against the key BOUND under the sorted
+   collection S's comparator, the oracle's mk-bound-fn: a core test reads the
+   order's sign, a function is called on the order and 0."
+  (let ((c
+         (rontolisp::%clojure-sorted-order (car (cdr (cdr s)))
+          (rontolisp::%clojure-sorted-item-key s item) bound)))
+    (cond ((eq test :<) (< c 0))
+          ((eq test :<=) (<= c 0))
+          ((eq test :>) (> c 0))
+          ((eq test :>=) (>= c 0))
+          (t (rontolisp::%clojure-truthy (funcall test c 0))))))
+
+(defun rontolisp::%clojure-sorted-walk (s from ascending test bound)
+  "The items of the sorted collection S from index FROM on, ASCENDING or not,
+   while each passes TEST against BOUND (every one when TEST is NIL), as a
+   strict list (nil when none)."
+  (let ((items (car (cdr (cdr (cdr s))))) (acc nil) (i from) (done nil))
+    (do ()
+        ((or done (< i 0) (>= i (length items))) (nreverse acc))
+      (if (or (null test)
+              (rontolisp::%clojure-sorted-passes s test bound (aref items i)))
+          (progn
+            (setq acc (cons (aref items i) acc))
+            (setq i (if ascending (+ i 1) (- i 1))))
+          (setq done t)))))
+
+(defun rontolisp::%clojure-sorted-from (s test bound ascending)
+  "The walk the oracle's seqFrom BOUND starts, ASCENDING or not: from the first
+   item whose key is not before BOUND (not after it, descending), that item
+   dropped when it fails TEST against BOUND; -1 past either end."
+  (let* ((i (rontolisp::%clojure-sorted-search s bound))
+         (n (length (car (cdr (cdr (cdr s))))))
+         (at (cond ((>= i 0) i) (ascending (- -1 i)) (t (- (- -1 i) 1)))))
+    (cond ((or (< at 0) (>= at n)) -1)
+          ((rontolisp::%clojure-sorted-passes s test bound
+            (aref (car (cdr (cdr (cdr s)))) at))
+           at)
+          (ascending (+ at 1))
+          (t (- at 1)))))
+
+(defun rontolisp::%clojure-subseq (s test key ascending)
+  "(subseq S TEST KEY) when ASCENDING, else (rsubseq S TEST KEY), the oracle's
+   two paths: a test leading away from the walk's start (> or >= ascending, <
+   or <= descending) starts at KEY; any other walks from the start while it
+   holds. A strict list, nil when nothing passes."
+  (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
+  (let ((test (rontolisp::%clojure-sorted-test test)))
+    (if (if ascending
+            (or (eq test :>) (eq test :>=))
+            (or (eq test :<) (eq test :<=)))
+        (rontolisp::%clojure-sorted-walk s
+         (rontolisp::%clojure-sorted-from s test key ascending) ascending nil
+         nil)
+        (rontolisp::%clojure-sorted-walk s
+         (if ascending 0 (- (rontolisp::%clojure-sorted-count s) 1)) ascending
+         test key))))
+
+(defun rontolisp::%clojure-subseq-5
+    (s start-test start-key end-test end-key ascending)
+  "(subseq S start-test start-key end-test end-key) when ASCENDING, else the
+   rsubseq of the same five: the walk from the leading bound's key (the start
+   ascending, the end descending), its first item dropped when it fails that
+   bound, while the other bound holds."
+  (rontolisp::%clojure-sorted-need s (if ascending "subseq" "rsubseq"))
+  (rontolisp::%clojure-sorted-walk s
+                                   (rontolisp::%clojure-sorted-from s
+                                    (if ascending start-test end-test)
+                                    (if ascending start-key end-key) ascending)
+                                   ascending (if ascending end-test start-test)
+                                   (if ascending end-key start-key)))
+
+(defun rontolisp::%clojure-subseq-of (args ascending)
+  "subseq (ASCENDING) or rsubseq as a value: the collection and one bound or
+   two."
+  (let ((n
+         (rontolisp::%clojure-check-arity args 3 5
+                                          (if ascending "subseq" "rsubseq"))))
+    (cond ((= n 3)
+           (rontolisp::%clojure-subseq (car args) (car (cdr args))
+                                       (car (cdr (cdr args))) ascending))
+          ((= n 5)
+           (rontolisp::%clojure-subseq-5 (car args) (car (cdr args))
+                                         (car (cdr (cdr args)))
+                                         (car (cdr (cdr (cdr args))))
+                                         (car (cdr (cdr (cdr (cdr args)))))
+                                         ascending))
+          (t (rontolisp::%clojure-arity-error n
+              (if ascending "subseq" "rsubseq"))))))
+
+(defun rontolisp::%clojure-subseq-v (&rest args)
+  "subseq as a value."
+  (rontolisp::%clojure-subseq-of args t))
+
+(defun rontolisp::%clojure-rsubseq-v (&rest args)
+  "rsubseq as a value."
+  (rontolisp::%clojure-subseq-of args nil))
+
+(defun rontolisp::%clojure-cast-bounded (x lo hi kind)
+  "The oracle's byteCast/shortCast of X: a character's code, an integer, a ratio
+   truncated, or a double truncated toward zero, answered when it lies in LO..HI;
+   a double is compared BEFORE truncating (127.9 is out of range for a byte) and
+   NaN is out of range. Anything else signals. The refusal spells the value with
+   princ-to-string, so a program casting a byte or short splices no str path."
+  (let ((n
+         (cond ((characterp x) (char-code x))
+          ((integerp x) x)
+          ((floatp x) (if (or (/= x x) (< x lo) (> x hi)) nil (truncate x)))
+          ((numberp x) (truncate x))
+          (t (error "~A"
+              (concatenate 'string kind " needs a number or a character"))))))
+    (if (or (null n) (< n lo) (> n hi))
+        (error "~A"
+               (concatenate 'string "Value out of range for " kind ": "
+                            (princ-to-string (if (null n) x n))))
+        n)))
+
+(defun rontolisp::%clojure-byte (x)
+  "(byte x): X cast as a signed 8-bit integer."
+  (rontolisp::%clojure-cast-bounded x -128 127 "byte"))
+
+(defun rontolisp::%clojure-short (x)
+  "(short x): X cast as a signed 16-bit integer."
+  (rontolisp::%clojure-cast-bounded x -32768 32767 "short"))
+
+(defun rontolisp::%clojure-double (x)
+  "(double x): a number widened to a double; anything else signals."
+  (if (numberp x) (float x) (error "double needs a number")))
+
+(defun rontolisp::%clojure-float (x)
+  "(float x): a number widened to a double (doubles only here) that must lie in
+   the float range, like the oracle's floatCast; NaN passes."
+  (let ((d (rontolisp::%clojure-double x)))
+    (if (and (= d d)
+             (or (> d 3.4028234663852886e38) (< d -3.4028234663852886e38)))
+        (error "~A"
+               (concatenate 'string "Value out of range for float: "
+                            (princ-to-string d)))
+        d)))
+
+(defun rontolisp::%clojure-num (x)
+  "(num x): a number itself, nil as nil; anything else signals."
+  (if (or (numberp x) (null x)) x (error "num needs a number")))
+
+(defun rontolisp::%clojure-wrap-bits (n bits)
+  "The integer N as a signed two's-complement value of BITS bits (a mask, not a
+   division: `mod` over a bignum linked about 20 KB of wasm)."
+  (let* ((m (ash 1 bits)) (r (logand n (- m 1))))
+    (if (>= r (ash m -1)) (- r m) r)))
+
+(defun rontolisp::%clojure-unchecked-cast (x bits wide charp kind)
+  "The oracle's unchecked KIND cast of X: an integer or a ratio (truncated)
+   wraps to BITS bits, a double truncates after saturating to the int range
+   (the long range when WIDE; NaN is 0) and then wraps, a character is its
+   code when CHARP; anything else signals."
+  (cond
+   ((characterp x)
+    (if charp
+        (char-code x)
+        (error "~A" (concatenate 'string "unchecked-" kind " needs a number"))))
+   ((floatp x)
+    (rontolisp::%clojure-wrap-bits (cond ((/= x x) 0)
+                                         (wide
+                                          (cond ((>= x 9.223372036854775807e18)
+                                                 9223372036854775807)
+                                                ((<= x -9.223372036854775808e18)
+                                                 -9223372036854775808)
+                                                (t (truncate x))))
+                                         (t
+                                          (cond ((>= x 2147483647.0) 2147483647)
+                                           ((<= x -2147483648.0) -2147483648)
+                                           (t (truncate x))))) bits))
+   ((rationalp x) (rontolisp::%clojure-wrap-bits (truncate x) bits))
+   (t (error "~A" (concatenate 'string "unchecked-" kind " needs a number")))))
+
+(defun rontolisp::%clojure-unchecked-int (x)
+  "(unchecked-int x): X wrapped to a signed 32-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 32 nil t "int"))
+
+(defun rontolisp::%clojure-unchecked-long (x)
+  "(unchecked-long x): X wrapped to a signed 64-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 64 t nil "long"))
+
+(defun rontolisp::%clojure-unchecked-short (x)
+  "(unchecked-short x): X wrapped to a signed 16-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 16 nil nil "short"))
+
+(defun rontolisp::%clojure-unchecked-byte (x)
+  "(unchecked-byte x): X wrapped to a signed 8-bit integer."
+  (rontolisp::%clojure-unchecked-cast x 8 nil nil "byte"))
+
+(defun rontolisp::%clojure-unchecked-char (x)
+  "(unchecked-char x): a character itself, a number's low 16 bits as a
+   character."
+  (cond ((characterp x) x)
+        ((realp x)
+         (code-char
+          (logand (rontolisp::%clojure-unchecked-cast x 64 t nil "char")
+                  65535)))
+        (t (error "unchecked-char needs a number or a character"))))
+
+(defun rontolisp::%clojure-unchecked-double (x)
+  "(unchecked-double x): a number widened to a double."
+  (if (numberp x) (float x) (error "unchecked-double needs a number")))
+
+(defun rontolisp::%clojure-unchecked-float (x)
+  "(unchecked-float x): a number widened to a double (doubles only here); past
+   the float range it is the infinity of its sign, like the oracle's cast."
+  (let ((d (if (numberp x) (float x) (error "unchecked-float needs a number"))))
+    (cond ((> d 3.4028234663852886e38) (* most-positive-double-float 2.0d0))
+          ((< d -3.4028234663852886e38) (* most-negative-double-float 2.0d0))
+          (t d))))
+
+(defun rontolisp::%clojure-parse-decimal (s)
+  "The exact rational a decimal string spells: an optional sign, digits with an
+   optional fraction, an optional exponent (e, E, d or D). Anything else
+   signals."
+  (let ((n (length s)) (i 0) (neg nil) (mant 0) (scale 0) (digits 0) (ex 0))
+    (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+      (setq neg (char= (char s i) #\-))
+      (setq i (+ i 1)))
+    (do ((go t))
+        ((not go))
+      (if (and (< i n) (digit-char-p (char s i)))
+          (progn
+            (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+            (setq digits (+ digits 1))
+            (setq i (+ i 1)))
+          (setq go nil)))
+    (when (and (< i n) (char= (char s i) #\.))
+      (setq i (+ i 1))
+      (do ((go t))
+          ((not go))
+        (if (and (< i n) (digit-char-p (char s i)))
+            (progn
+              (setq mant (+ (* mant 10) (digit-char-p (char s i))))
+              (setq digits (+ digits 1))
+              (setq scale (+ scale 1))
+              (setq i (+ i 1)))
+            (setq go nil))))
+    (when (and (> digits 0) (< i n) (find (char s i) "eEdD"))
+      (let ((eneg nil) (edigits 0))
+        (setq i (+ i 1))
+        (when (and (< i n) (or (char= (char s i) #\-) (char= (char s i) #\+)))
+          (setq eneg (char= (char s i) #\-))
+          (setq i (+ i 1)))
+        (do ((go t))
+            ((not go))
+          (if (and (< i n) (digit-char-p (char s i)))
+              (progn
+                (setq ex (+ (* ex 10) (digit-char-p (char s i))))
+                (setq edigits (+ edigits 1))
+                (setq i (+ i 1)))
+              (setq go nil)))
+        (when (= edigits 0) (setq digits 0))
+        (when eneg (setq ex (- ex)))))
+    (if (or (= digits 0) (< i n))
+        (error "~A" (concatenate 'string "Invalid decimal number: " s))
+        (let ((r (* mant (expt 10 (- ex scale))))) (if neg (- r) r)))))
+
+(defun rontolisp::%clojure-decimal-of-float (x)
+  "The exact rational of the shortest decimal a double prints as, which is
+   what the oracle's BigDecimal.valueOf reads; NaN and the infinities signal."
+  (if (rontolisp::%clojure-symbolic-float-p x)
+      (error "Infinite or NaN")
+      (rontolisp::%clojure-parse-decimal (princ-to-string x))))
+
+(defun rontolisp::%clojure-rationalize (x)
+  "(rationalize x): nil as nil, a rational itself, a double as the rational of
+   its shortest decimal (0.1 is 1/10); anything else signals."
+  (cond ((null x) nil)
+        ((rationalp x) x)
+        ((floatp x) (rontolisp::%clojure-decimal-of-float x))
+        (t (error "rationalize needs a number"))))
+
+(defun rontolisp::%clojure-bigint (x)
+  "(bigint x): a number truncated to an integer, a decimal string parsed;
+   NaN, an infinity or anything else signals."
+  (cond ((integerp x) x)
+        ((rationalp x) (truncate x))
+        ((floatp x)
+         (if (rontolisp::%clojure-symbolic-float-p x)
+             (error "Infinite or NaN")
+             (truncate x)))
+        ((stringp x)
+         ;; parse-integer skips surrounding whitespace, BigInteger refuses it: the
+         ;; string must start on a sign or a digit and end on a digit
+         (let ((n (length x)))
+           (when (or (= n 0)
+                     (not
+                      (or (digit-char-p (char x 0)) (char= (char x 0) #\+)
+                          (char= (char x 0) #\-)))
+                     (not (digit-char-p (char x (- n 1)))))
+             (error "~A" (concatenate 'string "Invalid integer: " x)))
+           (parse-integer x)))
+        (t (error "bigint needs a number or a string"))))
+
+(defun rontolisp::%clojure-biginteger (x)
+  "(biginteger x): the same integer as bigint."
+  (rontolisp::%clojure-bigint x))
+
+(defun rontolisp::%clojure-bigdec (x)
+  "(bigdec x): an integer itself, a double as the rational of its shortest
+   decimal, a ratio only when it has a finite decimal expansion, a decimal
+   string parsed; anything else signals."
+  (cond ((integerp x) x)
+        ((rationalp x)
+         (let ((d (denominator x)))
+           (do ((go t))
+               ((not go))
+             (cond ((= (mod d 2) 0) (setq d (/ d 2)))
+                   ((= (mod d 5) 0) (setq d (/ d 5)))
+                   (t (setq go nil))))
+           (if (= d 1)
+               x
+               (error
+                "Non-terminating decimal expansion; no exact representable decimal result."))))
+        ((floatp x) (rontolisp::%clojure-decimal-of-float x))
+        ((stringp x) (rontolisp::%clojure-parse-decimal x))
+        (t (error "bigdec needs a number or a string"))))
+
+(defun rontolisp::%clojure-numerator (x)
+  "(numerator x): the numerator of a ratio; anything else signals."
+  (if (and (rationalp x) (not (integerp x)))
+      (numerator x)
+      (error "numerator needs a ratio")))
+
+(defun rontolisp::%clojure-denominator (x)
+  "(denominator x): the denominator of a ratio; anything else signals."
+  (if (and (rationalp x) (not (integerp x)))
+      (denominator x)
+      (error "denominator needs a ratio")))
+
+(defun rontolisp::%clojure-unchecked-int-v (&rest args)
+  "unchecked-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-int")
+  (rontolisp::%clojure-unchecked-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-long-v (&rest args)
+  "unchecked-long as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-long")
+  (rontolisp::%clojure-unchecked-long (car args)))
+
+(defun rontolisp::%clojure-unchecked-short-v (&rest args)
+  "unchecked-short as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-short")
+  (rontolisp::%clojure-unchecked-short (car args)))
+
+(defun rontolisp::%clojure-unchecked-byte-v (&rest args)
+  "unchecked-byte as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-byte")
+  (rontolisp::%clojure-unchecked-byte (car args)))
+
+(defun rontolisp::%clojure-unchecked-char-v (&rest args)
+  "unchecked-char as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-char")
+  (rontolisp::%clojure-unchecked-char (car args)))
+
+(defun rontolisp::%clojure-unchecked-double-v (&rest args)
+  "unchecked-double as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-double")
+  (rontolisp::%clojure-unchecked-double (car args)))
+
+(defun rontolisp::%clojure-unchecked-float-v (&rest args)
+  "unchecked-float as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-float")
+  (rontolisp::%clojure-unchecked-float (car args)))
+
+(defun rontolisp::%clojure-wrap-long (n)
+  "The integer N as a signed 64-bit value; any other number passes. The mask and
+   the bounds are literals on purpose: a generic wrap over a computed mask ran an
+   overflowing hash loop 6x slower on the JVM."
+  (if (and (integerp n) (not (<= -9223372036854775808 n 9223372036854775807)))
+      (let ((r (logand n 18446744073709551615)))
+        (if (>= r 9223372036854775808) (- r 18446744073709551616) r))
+      n))
+
+(defun rontolisp::%clojure-wrap-int (n)
+  "The integer N as a signed 32-bit value."
+  (if (<= -2147483648 n 2147483647)
+      n
+      (let ((r (logand n 4294967295)))
+        (if (>= r 2147483648) (- r 4294967296) r))))
+
+(defun rontolisp::%clojure-int-arg (x)
+  "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
+   double (truncated) inside the int range; anything else signals."
+  (cond ((integerp x)
+         (if (<= -2147483648 x 2147483647) x (error "integer overflow")))
+        ((floatp x)
+         (if (and (>= x -2147483648.0) (<= x 2147483647.0))
+             (truncate x)
+             (error "Value out of range for int")))
+        ((rationalp x) (rontolisp::%clojure-int-arg (truncate x)))
+        (t (error "int needs a number"))))
+
+(defun rontolisp::%clojure-unchecked-add (a b)
+  "(unchecked-add a b): the sum, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (+ a b)))
+
+(defun rontolisp::%clojure-unchecked-subtract (a b)
+  "(unchecked-subtract a b): the difference, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- a b)))
+
+(defun rontolisp::%clojure-unchecked-multiply (a b)
+  "(unchecked-multiply a b): the product, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (* a b)))
+
+(defun rontolisp::%clojure-unchecked-inc (x)
+  "(unchecked-inc x): X plus one, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (+ x 1)))
+
+(defun rontolisp::%clojure-unchecked-dec (x)
+  "(unchecked-dec x): X minus one, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- x 1)))
+
+(defun rontolisp::%clojure-unchecked-negate (x)
+  "(unchecked-negate x): minus X, an integer wrapped to 64 bits."
+  (rontolisp::%clojure-wrap-long (- x)))
+
+(defun rontolisp::%clojure-unchecked-add-int (a b)
+  "(unchecked-add-int a b): the sum of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (+ (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-subtract-int (a b)
+  "(unchecked-subtract-int a b): the difference of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (- (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-multiply-int (a b)
+  "(unchecked-multiply-int a b): the product of two ints wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int
+   (* (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
+
+(defun rontolisp::%clojure-unchecked-inc-int (x)
+  "(unchecked-inc-int x): the int X plus one, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (+ (rontolisp::%clojure-int-arg x) 1)))
+
+(defun rontolisp::%clojure-unchecked-dec-int (x)
+  "(unchecked-dec-int x): the int X minus one, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x) 1)))
+
+(defun rontolisp::%clojure-unchecked-negate-int (x)
+  "(unchecked-negate-int x): minus the int X, wrapped to 32 bits."
+  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x))))
+
+(defun rontolisp::%clojure-unchecked-divide-int (a b)
+  "(unchecked-divide-int a b): the truncated quotient of two ints, wrapped to
+   32 bits (only -2147483648 / -1 wraps); a zero divisor signals."
+  (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
+    (if (= y 0)
+        (error "Divide by zero")
+        (rontolisp::%clojure-wrap-int (truncate x y)))))
+
+(defun rontolisp::%clojure-unchecked-remainder-int (a b)
+  "(unchecked-remainder-int a b): the remainder of two ints, signed like the
+   dividend; a zero divisor signals."
+  (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
+    (if (= y 0) (error "Divide by zero") (rem x y))))
+
+(defun rontolisp::%clojure-unchecked-inc-v (&rest args)
+  "unchecked-inc as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-inc")
+  (rontolisp::%clojure-unchecked-inc (car args)))
+
+(defun rontolisp::%clojure-unchecked-dec-v (&rest args)
+  "unchecked-dec as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-dec")
+  (rontolisp::%clojure-unchecked-dec (car args)))
+
+(defun rontolisp::%clojure-unchecked-negate-v (&rest args)
+  "unchecked-negate as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-negate")
+  (rontolisp::%clojure-unchecked-negate (car args)))
+
+(defun rontolisp::%clojure-unchecked-inc-int-v (&rest args)
+  "unchecked-inc-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-inc-int")
+  (rontolisp::%clojure-unchecked-inc-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-dec-int-v (&rest args)
+  "unchecked-dec-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-dec-int")
+  (rontolisp::%clojure-unchecked-dec-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-negate-int-v (&rest args)
+  "unchecked-negate-int as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "unchecked-negate-int")
+  (rontolisp::%clojure-unchecked-negate-int (car args)))
+
+(defun rontolisp::%clojure-unchecked-add-v (&rest args)
+  "unchecked-add as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-add")
+  (rontolisp::%clojure-unchecked-add (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-subtract-v (&rest args)
+  "unchecked-subtract as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-subtract")
+  (rontolisp::%clojure-unchecked-subtract (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-multiply-v (&rest args)
+  "unchecked-multiply as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-multiply")
+  (rontolisp::%clojure-unchecked-multiply (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-add-int-v (&rest args)
+  "unchecked-add-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-add-int")
+  (rontolisp::%clojure-unchecked-add-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-subtract-int-v (&rest args)
+  "unchecked-subtract-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-subtract-int")
+  (rontolisp::%clojure-unchecked-subtract-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-multiply-int-v (&rest args)
+  "unchecked-multiply-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-multiply-int")
+  (rontolisp::%clojure-unchecked-multiply-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-divide-int-v (&rest args)
+  "unchecked-divide-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-divide-int")
+  (rontolisp::%clojure-unchecked-divide-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-unchecked-remainder-int-v (&rest args)
+  "unchecked-remainder-int as a value."
+  (rontolisp::%clojure-check-arity args 2 2 "unchecked-remainder-int")
+  (rontolisp::%clojure-unchecked-remainder-int (car args) (cadr args)))
+
+(defun rontolisp::%clojure-rationalize-v (&rest args)
+  "rationalize as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "rationalize")
+  (rontolisp::%clojure-rationalize (car args)))
+
+(defun rontolisp::%clojure-bigint-v (&rest args)
+  "bigint as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bigint")
+  (rontolisp::%clojure-bigint (car args)))
+
+(defun rontolisp::%clojure-biginteger-v (&rest args)
+  "biginteger as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "biginteger")
+  (rontolisp::%clojure-biginteger (car args)))
+
+(defun rontolisp::%clojure-bigdec-v (&rest args)
+  "bigdec as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bigdec")
+  (rontolisp::%clojure-bigdec (car args)))
+
+(defun rontolisp::%clojure-numerator-v (&rest args)
+  "numerator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "numerator")
+  (rontolisp::%clojure-numerator (car args)))
+
+(defun rontolisp::%clojure-denominator-v (&rest args)
+  "denominator as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "denominator")
+  (rontolisp::%clojure-denominator (car args)))
+
+(defun rontolisp::%clojure-byte-v (&rest args)
+  "byte as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "byte")
+  (rontolisp::%clojure-byte (car args)))
+
+(defun rontolisp::%clojure-short-v (&rest args)
+  "short as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "short")
+  (rontolisp::%clojure-short (car args)))
+
+(defun rontolisp::%clojure-double-v (&rest args)
+  "double as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "double")
+  (rontolisp::%clojure-double (car args)))
+
+(defun rontolisp::%clojure-float-v (&rest args)
+  "float as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "float")
+  (rontolisp::%clojure-float (car args)))
+
+(defun rontolisp::%clojure-num-v (&rest args)
+  "num as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "num")
+  (rontolisp::%clojure-num (car args)))
+
+(defun rontolisp::%clojure-vector-of-long (x)
+  "The oracle's longCast of X: a character's code, an integer in the long range,
+   a ratio truncated, a double truncated toward zero (NaN 0) when it is in
+   range; anything else signals, so does a value out of range."
+  (let ((n
+         (cond ((characterp x) (char-code x))
+               ((integerp x) x)
+               ((floatp x)
+                (cond ((/= x x) 0)
+                      ((or (> x 9.223372036854775807e18)
+                           (< x -9.223372036854775808e18))
+                       nil)
+                      (t (truncate x))))
+               ((numberp x) (truncate x))
+               (t (error "vector-of needs a number or a character")))))
+    (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
+        (error "~A"
+               (concatenate 'string "Value out of range for long: "
+                            (rontolisp::%clojure-str-of x "null" nil)))
+        n)))
+
+(defun rontolisp::%clojure-vector-of-range (x n lo hi kind)
+  "N (X's integer value) when it lies in LO..HI, else the oracle's refusal for
+   the primitive KIND, spelling X."
+  (if (or (< n lo) (> n hi))
+      (error "~A"
+             (concatenate 'string "Value out of range for " kind ": "
+                          (rontolisp::%clojure-str-of x "null" nil)))
+      n))
+
+(defun rontolisp::%clojure-vector-of-1 (kind x)
+  "X as the primitive slot KIND (\"int\", \"long\", ...) of a vector-of stores
+   it, the oracle's cast: the integer kinds truncate a number (a character to
+   its code) and refuse one out of range (through longCast, unlike byte and
+   short, which compare a double first), :double and :float widen to a double
+   (:float refusing one past the float range), :char takes a character or a code, :boolean is the truthiness."
+  (cond ((equal kind "long") (rontolisp::%clojure-vector-of-long x))
+        ((equal kind "int")
+         (let ((n (rontolisp::%clojure-vector-of-long x)))
+           (if (or (< n -2147483648) (> n 2147483647))
+               (error "integer overflow")
+               n)))
+        ((equal kind "short")
+         (rontolisp::%clojure-vector-of-range x
+          (rontolisp::%clojure-vector-of-long x) -32768 32767 "short"))
+        ((equal kind "byte")
+         (rontolisp::%clojure-vector-of-range x
+          (rontolisp::%clojure-vector-of-long x) -128 127 "byte"))
+        ((equal kind "double") (rontolisp::%clojure-double x))
+        ((equal kind "float") (rontolisp::%clojure-float x))
+        ((equal kind "char")
+         (cond ((characterp x) x)
+               ((numberp x)
+                (code-char
+                 (rontolisp::%clojure-vector-of-range x
+                                                      (cond ((not (floatp x))
+                                                             (truncate x))
+                                                            ((/= x x) 0)
+                                                            ((> x 65535) 65536)
+                                                            ((< x 0) -1)
+                                                            (t (truncate x))) 0
+                                                      65535 "char")))
+               (t (error "vector-of needs a number or a character"))))
+        (t (if (rontolisp::%clojure-truthy x) t rontolisp::%clojure-false))))
+
+(defun rontolisp::%clojure-vector-of (type items)
+  "(vector-of TYPE items...): an ordinary vector of ITEMS each stored as the
+   primitive TYPE (:int :long :float :double :byte :short :char :boolean)
+   would hold it (%clojure-vector-of-1); any other TYPE signals, like the
+   oracle. Later conj and assoc store their values as given (the oracle keeps
+   casting), and :float holds doubles."
+  (let ((kind (if (rontolisp::%clojure-keyword-p type) (car (cdr type)) "")))
+    (if (not
+         (or (equal kind "int") (equal kind "long") (equal kind "float")
+             (equal kind "double") (equal kind "byte") (equal kind "short")
+             (equal kind "char") (equal kind "boolean")))
+        (error "~A"
+               (concatenate 'string "Unrecognized type "
+                            (rontolisp::%clojure-str-of type "" nil))))
+    (let ((out (make-array (length items))) (i 0))
+      (dolist (x items out)
+        (setf (aref out i) (rontolisp::%clojure-vector-of-1 kind x))
+        (setq i (+ i 1))))))
+
+(defun rontolisp::%clojure-vector-of-v (&rest args)
+  "vector-of as a value."
+  (rontolisp::%clojure-check-arity args 1 nil "vector-of")
+  (rontolisp::%clojure-vector-of (car args) (cdr args)))
+
 ;;;; Metadata: with-meta and meta over an identity side table.
 ;;
 ;; A value's metadata lives in rontolisp::%clojure-meta-table, an eq table from the
@@ -3645,7 +5599,8 @@
 
 (defun rontolisp::%clojure-check-meta (m)
   "M, or the oracle's refusal when it is neither nil nor a map."
-  (if (or (null m) (hash-table-p m) (rontolisp::%clojure-record-p m))
+  (if (or (null m) (hash-table-p m) (rontolisp::%clojure-record-p m)
+          (rontolisp::%clojure-sorted-map-p m))
       m
       (error "with-meta takes a map as metadata")))
 
@@ -3673,7 +5628,9 @@
               (not (rontolisp::%clojure-atom-p x))
               (not
                (member (car x)
-                '(:C%TYPE :C%PATTERN :C%MATCHER :C%REDUCED :C%NIL :C%VAR))))
+                       '(:C%TYPE :C%PATTERN :C%MATCHER
+                                 :C%REDUCED :C%NIL
+                                 :C%VAR :C%UNBOUND))))
          (rontolisp::%clojure-put-meta (copy-list x) m))
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
@@ -3716,7 +5673,11 @@
     (if m
         (let ((f
                (gethash method
-                        (if (hash-table-p m) m (car (cdr (cdr (cdr m))))))))
+                        (if (hash-table-p m)
+                            m
+                            (if (rontolisp::%clojure-sorted-map-p m)
+                                (rontolisp::%clojure-sorted-table m "meta")
+                                (car (cdr (cdr (cdr m)))))))))
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
 
@@ -3729,7 +5690,13 @@
 ;; the root through it; its metadata lives in %clojure-meta-table like any other
 ;; value's. Each site hands both in: the lowering records a definition's
 ;; metadata at lower time (docstring, arglists, position, name metadata), and a
-;; site lowered after a redefinition sees the newest one.
+;; site lowered after a redefinition sees the newest one. An unbound var's root
+;; is the (:C%UNBOUND "ns/name") marker its value cell holds from the start of
+;; the program (a declared-never-defined name, a value-less def), like the
+;; oracle's Var$Unbound: truthy, str "Unbound: #'ns/name", calling it signals.
+;; Each test of one (%clojure-unbound-p over a variable, in a foldable place) is
+;; an arm a program that makes none sheds, like a sorted-collection arm
+;; (clojure/ClojureArms, the UNBOUND family).
 
 (defvar rontolisp::%clojure-var-table
   nil
@@ -3753,9 +5720,24 @@
           (setf (gethash name rontolisp::%clojure-var-table) v)))
     (rontolisp::%clojure-put-meta v meta)))
 
+(defun rontolisp::%clojure-var-dynamic (name getter meta depth)
+  "The var NAME of a ^:dynamic var: as the plain var, and DEPTH, a closure over
+   its binding-depth counter, recorded as the fourth element for thread-bound?."
+  (let ((v (rontolisp::%clojure-var name getter meta)))
+    (rplacd (cdr (cdr v)) (list depth))
+    v))
+
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."
   (funcall (car (cdr (cdr v)))))
+
+(defun rontolisp::%clojure-unbound (name)
+  "The unbound root of the var NAME (\"ns/name\")."
+  (list :C%UNBOUND name))
+
+(defun rontolisp::%clojure-unbound-p (x)
+  "Whether X is an unbound var's root."
+  (and (consp x) (eq (car x) :C%UNBOUND)))
 
 (defun rontolisp::%clojure-var-test (v)
   "clojure.core/test: call the fn at :test in V's metadata, answering :ok, or
@@ -4258,11 +6240,6 @@
   nil
   "The stream test reports go to: *standard-output* when the runtime started.")
 
-(defvar rontolisp::%clojure-test-ex-info
-  nil
-  "A function answering (message . data) for an ex-info condition, NIL for any
-   other, so an error report spells ex-info the oracle's way.")
-
 (defvar rontolisp::%clojure-test-registry
   nil
   "The tests per namespace, in definition order: ((ns (name . fn) ...) ...).")
@@ -4279,11 +6256,9 @@
   nil
   "The testing context strings in effect, innermost first.")
 
-(defun rontolisp::%clojure-test-init (ex-info)
-  "Start the test runtime: reports go to the stream *standard-output* is now,
-   and EX-INFO answers (message . data) for an ex-info condition."
+(defun rontolisp::%clojure-test-init ()
+  "Start the test runtime: reports go to the stream *standard-output* is now."
   (setq rontolisp::%clojure-test-out *standard-output*)
-  (setq rontolisp::%clojure-test-ex-info ex-info)
   nil)
 
 (defun rontolisp::%clojure-test-truthy-p (x)
@@ -4344,31 +6319,22 @@
   (rontolisp::%clojure-test-header "FAIL" msg loc)
   (rontolisp::%clojure-test-expected-actual expected actual))
 
-(defun rontolisp::%clojure-test-ex-info-of (e)
-  "(message . data) when E is an ex-info condition, NIL otherwise."
-  (if rontolisp::%clojure-test-ex-info
-      (funcall rontolisp::%clojure-test-ex-info e)
-      nil))
-
 (defun rontolisp::%clojure-test-describe (e)
-  "The actual line of an error report: an ex-info condition the oracle's way
-   (its class and message, then the data on a line of its own), anything else
-   its report."
-  (let ((info (rontolisp::%clojure-test-ex-info-of e)))
-    (if info
+  "The actual line of an error report: an ExceptionInfo the oracle's way (its
+   class and message, then the data on a line of its own), anything else its
+   report, an exception's toString."
+  (let ((parts (c%e-parts e)))
+    (if (and parts (equal (car parts) "clojure.lang.ExceptionInfo"))
         (concatenate 'string "clojure.lang.ExceptionInfo: "
-                     (rontolisp::%clojure-str-of (car info) "nil" nil)
-                     (string #\Newline)
-                     (rontolisp::%clojure-str-of (cdr info) "nil" t))
+         (rontolisp::%clojure-str-of (car (cdr parts)) "nil" nil)
+         (string #\Newline)
+         (rontolisp::%clojure-str-of (car (cdr (cdr parts))) "nil" t))
         (format nil "~a" e))))
 
 (defun rontolisp::%clojure-test-message (e)
-  "The message a thrown-with-msg? pattern searches: an ex-info condition's own
-   message, anything else its report."
-  (let ((info (rontolisp::%clojure-test-ex-info-of e)))
-    (if info
-        (rontolisp::%clojure-str-of (car info) "" nil)
-        (format nil "~a" e))))
+  "The message a thrown-with-msg? pattern searches: the exception's message,
+   a runtime error's report."
+  (rontolisp::%clojure-str-of (rontolisp::%clojure-ex-message e) "" nil))
 
 (defun rontolisp::%clojure-test-error (expected e msg loc)
   "Report one error: the condition E escaped an assertion (or a test body)."

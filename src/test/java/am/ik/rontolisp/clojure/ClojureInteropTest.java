@@ -66,6 +66,45 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void everyDefaultImportedJavaLangClassResolvesWithoutAnImport() throws Exception {
+		// the oracle's default imports (clj 1.12.6): the common throwables construct and
+		// catch by name
+		assertBothEqual("(println (.getMessage (IllegalStateException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (new IllegalArgumentException \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ArithmeticException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (UnsupportedOperationException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (IndexOutOfBoundsException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (NullPointerException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ClassCastException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (Throwable. \"boo\")))", "boo\n");
+		assertBothEqual(
+				"(println (try (throw (IllegalStateException. \"boo\")) (catch IllegalStateException e :caught)))",
+				":caught\n");
+		assertBothEqual("(println (.getMessage (NumberFormatException. \"boo\")) (.length (StringBuffer. \"ab\")))",
+				"boo 2\n");
+	}
+
+	@Test
+	void aThrownHostThrowableKeepsItsClassAndMessage() throws Exception {
+		// answers measured against clj 1.12.6: a throwable with members of its own
+		// stays a host object, and throw hands catch an exception carrying its
+		// class, message and cause
+		assertBothEqual(
+				"(prn (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (catch Exception e [(.getMessage e) (ex-message e) (str e) (ex-data e)])))",
+				"[\"bad: in\" \"bad: in\" \"java.net.URISyntaxException: bad: in\" nil]\n");
+		assertBothEqual(
+				"(prn (ex-message (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (ex-message (ex-cause (Exception. \"o\" (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"\"bad: in\" \"bad: in\"\n");
+		assertBothEqual("(require '[clojure.test :refer [is]])"
+				+ " (prn (ex-message (is (thrown-with-msg? Exception #\"bad\" (throw (java.net.URISyntaxException. \"in\" \"bad\"))))))",
+				"\"bad: in\"\n");
+		// a host object of another kind keeps its own getMessage
+		assertBothEqual("(prn (try (.getMessage (java.io.File. \"x\")) (catch Exception e :refused)))", ":refused\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
@@ -141,6 +180,16 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void hostKindPredicatesTestTheHostClass() throws Exception {
+		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
+		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)
+		assertBothEqual("(prn (class? String) (class? \"a\") (class? 1) (inst? (java.util.Date.))"
+				+ " (inst? (java.time.Instant/now)) (inst? \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? \"x\")"
+				+ " (uri? (java.net.URI. \"http://a\")) (uri? \"http://a\") (map uuid? [(java.util.UUID/randomUUID) 1]))",
+				"true false false true true false true false true false (true false)\n");
+	}
+
+	@Test
 	void classOfAValueOfNoKnownKindStaysARefusalWithOrWithoutInterop() throws Exception {
 		// an ex-info condition is no host object: the same refusal whether the
 		// program uses interop (the host arm) or not (no java: at all)
@@ -153,12 +202,15 @@ class ClojureInteropTest {
 	@Test
 	void theHostArmsAddNoJavaReferenceToAProgramWithoutInterop() {
 		// a java: reference changes the JVM output (the bridge, the host guards on
-		// every accessor), so class's, the printer's and str's host arms exist only
-		// where the program has one; the java:-free stand-ins take their names
+		// every accessor), so class's, the printer's, str's and the host-kind
+		// predicates' host arms exist only where the program has one; the
+		// java:-free stand-ins take their names
 		for (boolean wasm : new boolean[] { false, true }) {
 			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
-				.clojure("(defmulti k class) (defmethod k :default [x] x)"
-						+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3))", wasm, false)
+				.clojure(
+						"(defmulti k class) (defmethod k :default [x] x)"
+								+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3) (uuid? 4) (inst? 5))",
+						wasm, false)
 				.forms()
 				.stream()
 				.map(LispVal::print)
@@ -166,6 +218,7 @@ class ClojureInteropTest {
 			assertThat(forms).noneMatch(text -> text.contains("JAVA:"));
 			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-CLASS-NAME"));
 			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-STRING"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-INSTANCE-P"));
 		}
 	}
 

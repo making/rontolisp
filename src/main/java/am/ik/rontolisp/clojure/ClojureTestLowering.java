@@ -75,25 +75,16 @@ final class ClojureTestLowering {
 
 	/**
 	 * The runtime the program runs first when it uses {@code clojure.test}: the report
-	 * stream captured (the oracle's {@code *test-out*}) and the ex-info reader the error
-	 * report spells the oracle's way.
+	 * stream captured (the oracle's {@code *test-out*}).
 	 */
 	static List<LispVal> testRuntime(ClojureLowering ctx) {
-		LispSymbol e = new LispSymbol("e");
-		LispVal exInfo = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(e),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO?"), e),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-								ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO-MESSAGE"), e),
-								ClojureLowerUtil.list(new LispSymbol("C%E-EX-INFO-DATA"), e)),
-						ClojureLowering.NIL_CONST));
-		return List.of(ClojureLowerUtil.list(new LispSymbol(INIT), exInfo));
+		return List.of(ClojureLowerUtil.list(new LispSymbol(INIT)));
 	}
 
 	/** Marks the program as a {@code clojure.test} user: the runtime travels with it. */
 	static void use(ClojureLowering ctx) {
 		ctx.usedTest = true;
-		ctx.usedExInfo = true; // the error report reads ex-info conditions
+		ctx.usedExInfo = true; // the error report reads exceptions
 	}
 
 	/**
@@ -308,6 +299,8 @@ final class ClojureTestLowering {
 				case FUNCTION -> true;
 				case MACRO, MUTABLE_FIELD -> false; // a field is never global
 				case VARIABLE -> ctx.globalDirectFuns.contains(key);
+				// a session's may be defined by a later buffer; a file's is unbound
+				case DECLARED -> ctx.session;
 			};
 		}
 		if (name.indexOf('/') > 0) {

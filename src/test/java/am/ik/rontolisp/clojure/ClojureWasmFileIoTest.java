@@ -61,7 +61,7 @@ class ClojureWasmFileIoTest {
 				+ "))" + "(with-open [r (jio/reader " + words + ")] (println (count (line-seq r))))" + "(spit " + out
 				+ " (list (->Rec 1 \"x\")))" + "(with-open [r (java.io.PushbackReader. (jio/reader " + out + "))]"
 				+ " (prn (read r) (read r false :eof)))";
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

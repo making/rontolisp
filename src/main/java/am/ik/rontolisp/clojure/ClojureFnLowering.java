@@ -50,28 +50,39 @@ final class ClojureFnLowering {
 	 * default, so {@code (map :k coll)} reads the key out of each member and a
 	 * keyword-dispatched multimethod called with several arguments dispatches on the
 	 * lookup with the second call argument as the default, like the oracle (the
-	 * dispatcher applies the dispatch function to every call argument). The key lowers
-	 * once, behind a temporary; the collection is the lambda's first parameter and the
-	 * default reads the rest list once -- the same rest-tolerant shape the map/vector/set
-	 * siblings lower to. Trailing arguments past the default are ignored, like those
-	 * siblings (a lenient superset: the oracle signals past two).
+	 * dispatcher applies the dispatch function to every call argument). Any other
+	 * argument count signals the oracle's {@code Wrong number of args} error, like a
+	 * keyword reaching the call dispatcher. The key lowers once, behind a temporary; the
+	 * argument list is read once for the collection and the default.
 	 * @param keyDatum the keyword datum
 	 * @return the form
 	 */
 	static LispVal keywordFn(ClojureLowering ctx, LispVal keyDatum) {
+		LispSymbol args = ctx.freshTemp();
 		LispSymbol coll = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-				ClojureLowerUtil.list(List.of(coll, ClojureLowering.AMPERSAND_REST, rest)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
-						ClojureLowerUtil.list(key, ctx.lower(keyDatum)),
-						ClojureLowerUtil.list(dflt, ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest))))),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
-								ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))));
+		LispVal arityError = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+				LispString.literal("Wrong number of args (~D) passed to: :~A"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)));
+		LispVal badCount = ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List
+			.of(ClojureLowering.AMPERSAND_REST, args)), ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(key, ctx.lower(keyDatum)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), badCount, arityError, ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(List.of(
+								ClojureLowerUtil.list(coll, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)),
+								ClojureLowerUtil.list(dflt,
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+														ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
+												ClojureLowering.NIL_CONST)))),
+								ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
+										ClojureCollectionLowering.getBranches(ctx, coll, key, dflt, true))))));
 	}
 
 	/**
@@ -357,7 +368,8 @@ final class ClojureFnLowering {
 						ClojureLowering.NIL_CONST),
 				ClojureLowerUtil
 					.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureCollectionLowering.isSetForm(whole),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole)), refusal),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole),
+							ClojureSortedLowering.sortedTest(whole)), refusal),
 				ClojureLowerUtil.list(seqable, pick), ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, refusal)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, lowered))), check);
@@ -387,6 +399,7 @@ final class ClojureFnLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), whole),
 								refusal),
 						ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(whole), refusal),
+						ClojureLowerUtil.list(ClojureSortedLowering.sortedMapTest(whole), refusal),
 						ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, shuffled)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(whole, lowered))), check);
@@ -652,33 +665,6 @@ final class ClojureFnLowering {
 	}
 
 	// Predicates and casts
-
-	/**
-	 * Whether the lowered value is a collection: a list, vector, map or set. Nil and the
-	 * false object are no collections, like the oracle -- and neither are strings, even
-	 * though the runtime stores them as vectors (like {@code vector?} sees).
-	 */
-	static LispVal collRaw(ClojureLowering ctx, LispVal lowered) {
-		LispSymbol one = ctx.freshTemp();
-		LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStringLowering.isRegexForm(one)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), one),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), one),
-						ClojureCollectionLowering.isSetForm(one)));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))), test);
-	}
-
-	/** {@code coll?} as a value: a one-argument lambda answering {@code T}-or-false. */
-	static LispVal collValue(ClojureLowering ctx) {
-		LispSymbol one = new LispSymbol(ClojureLowering.mangle("coll-one"));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
-				ctx.booleanAnswer(collRaw(ctx, one)));
-	}
 
 	/** {@code string?} as a value: a one-argument lambda answering {@code T}-or-false. */
 	static LispVal stringPredValue(ClojureLowering ctx) {

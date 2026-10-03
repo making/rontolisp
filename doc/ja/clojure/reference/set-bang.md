@@ -10,9 +10,11 @@
 スレッドローカルな値に設定され、その値を返します。束縛内で呼ばれる関数からでも
 同様です。いかなる束縛の外側では、値の評価後に実行時エラー
 `Can't change/establish root binding of: ... with set` をシグナルします。これは非
-dynamic グローバルの `set!` と同じエラーです。`clojure.main` が束縛するコンパイラ
-フラグ（`*warn-on-reflection*`、`*unchecked-math*`、`*print-meta*`、
-`*print-length*`、`*print-level*`、`*ns*`）は値をそのまま返し、効果はありません。
+dynamic グローバルの `set!` と同じエラーです。`clojure.core` の特殊変数（`*out*`、
+`*err*`、`*print-dup*` など）も同様に代入しますが、`clojure.main` がスクリプトの周りで
+束縛するフラグ（`*warn-on-reflection*`、`*unchecked-math*`、`*print-length*`、
+`*print-level*`、`*assert*` など）は常に束縛されているため、オラクル同様どこでも
+`set!` で代入できます。`*ns*` は値をそのまま返し、効果はありません。
 
 それ以外の代入先はオラクル同様に拒否されます。ローカル・パラメータ・不変フィールドは
 `Cannot assign to non-mutable: ...`、ホストフィールドはまだサポートしていません

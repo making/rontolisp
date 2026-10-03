@@ -6,7 +6,8 @@ Adds rows to a protocol's table without redefining the type: one stored lambda p
 method per type, like `defmethod` rows (a repeated type's later rows win, like the
 oracle). Targets are the kinds `class` answers (`String`, `Number`, `Boolean`,
 `Keyword`, `Symbol`, `Character`, `Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil`
-and `Object` as the miss default) and known record/deftype names; anything else
+and `Object` as the miss default; package-qualified spellings such as `java.lang.String` or
+`clojure.lang.IPersistentMap` too) and known record/deftype names; anything else
 (an `Instant`, a `Date`, ...) is a named refusal.
 
 ```clojure
