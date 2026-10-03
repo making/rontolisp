@@ -16,7 +16,10 @@ deep; the compiled JVM answers all three (`.kb/jvm-self-tail-calls.md`):
 - wasm and the component: a Clojure multi-arity `fn` clause's `recur`,
   `((fn m ([n] (if (zero? n) :ok (recur (dec n)))) ([a b] (+ a b))) 1000000)`, traps,
   while a Common Lisp transcription of its lowered IR (a `&rest` labels lambda dispatching
-  on `length`) answers -- cause not identified.
+  on `length`) answers -- cause not identified. A plain Clojure call through a value traps
+  the same way, `(let [f (atom nil)] (reset! f (fn [m] (if (= m 0) :done (@f (dec m)))))
+  (@f 1000000))`, where the interpreter and the JVM answer (measured the same day): every
+  such call goes through `%clojure-call`'s `apply`.
 
 ## Plan
 
