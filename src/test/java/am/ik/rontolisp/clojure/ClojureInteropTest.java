@@ -66,6 +66,25 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void everyDefaultImportedJavaLangClassResolvesWithoutAnImport() throws Exception {
+		// the oracle's default imports (clj 1.12.6): the common throwables construct and
+		// catch by name
+		assertBothEqual("(println (.getMessage (IllegalStateException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (new IllegalArgumentException \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ArithmeticException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (UnsupportedOperationException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (IndexOutOfBoundsException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (NullPointerException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ClassCastException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (Throwable. \"boo\")))", "boo\n");
+		assertBothEqual(
+				"(println (try (throw (IllegalStateException. \"boo\")) (catch IllegalStateException e :caught)))",
+				":caught\n");
+		assertBothEqual("(println (.getMessage (NumberFormatException. \"boo\")) (.length (StringBuffer. \"ab\")))",
+				"boo 2\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");

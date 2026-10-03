@@ -1,6 +1,6 @@
 # Java interop
 
-Interop lowers to the `java:` surface and runs on the interpreter and the JVM only -- the wasm backends reject `java:`. Class names resolve dotted as written, through `:import`, or through `java.lang`. A string receiver answers the mapped core operation (a Lisp string is no host object), and `.toString` of any value that is no host object its `str` spelling, on every backend. `str` of a host object answers its `toString`; printing one shows `#<java C>`, except a class object, which prints its name.
+Interop lowers to the `java:` surface and runs on the interpreter and the JVM only -- the wasm backends reject `java:`. Class names resolve dotted as written, through `:import`, or through `java.lang` (the oracle's default-import list: the common throwables such as `IllegalStateException` are there, `AutoCloseable` is not). A string receiver answers the mapped core operation (a Lisp string is no host object), and `.toString` of any value that is no host object its `str` spelling, on every backend. `str` of a host object answers its `toString`; printing one shows `#<java C>`, except a class object, which prints its name.
 
 | Name | Example | Result |
 |---|---|---|

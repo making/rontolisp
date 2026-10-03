@@ -648,7 +648,11 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
 
 - `(. obj m args)`/`(.m obj args)` instance, `(. Class m args)`/`(Class/m args)` static,
   `(Class. args)`/`(new Class args)`, `(Class/FIELD)`, `(.-f obj)`, `..`, `memfn`. Classes
-  resolve dotted, imported or `java.lang`. A zero-argument `(Class/m)` is the static method
+  resolve dotted, imported or `java.lang` (`ClojureNamespaceLowering.JAVA_LANG` is the oracle's
+  fixed default-import list read off `(ns-imports 'user)` on clj 1.12.6, 2026-10-03: the common
+  throwables included, `AutoCloseable`/`Record`/`Module` not -- the oracle does not resolve them
+  either). A throwable construction (`Exception.` included) is `java:new`, so wasm refuses it
+  like every host class (measured 2026-10-03: `JAVA:NEW is undefined`). A zero-argument `(Class/m)` is the static method
   when the class has one, else the field. A bare `Class/member` value reads the static
   field, else answers a lambda dispatching per fixed arity (a variadic-only member is
   refused).
