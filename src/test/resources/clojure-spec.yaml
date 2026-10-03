@@ -2609,6 +2609,59 @@ cases:
       5
       true
       false
+  - name: a-local-named-like-a-dynamic-var-stays-lexical
+    # A local spelled like a ^:dynamic var (a parameter of every arity, a let,
+    # loop, letfn, for, doseq, dotimes, catch or if-let binding, a destructured
+    # name, a deftype field) is its own lexical local: a function called in its
+    # scope reads the var, the local reads its own value, and a binding inside it
+    # rebinds the var. That holds for a local written above the var's definition
+    # (the special proclamation is program-wide). A local *out* is a plain value,
+    # not the stream. Every line matches the oracle (Clojure CLI 1.12) byte for
+    # byte.
+    source: |
+      (declare lexdyn-show)
+      (defn lexdyn-early [*lexdyn*] [(lexdyn-show) *lexdyn*])
+      (def ^:dynamic *lexdyn* 1)
+      (defn lexdyn-show [] *lexdyn*)
+      (defn lexdyn-f [*lexdyn*] (lexdyn-show))
+      (println (lexdyn-f 2) (lexdyn-early 3))
+      (println (let [*lexdyn* 5] (lexdyn-show)) (binding [*lexdyn* 7] (lexdyn-show)))
+      (println ((fn [*lexdyn*] (lexdyn-show)) 3))
+      (defn lexdyn-multi ([*lexdyn*] (lexdyn-show)) ([a *lexdyn*] [a (lexdyn-show) *lexdyn*]))
+      (println (lexdyn-multi 2) (lexdyn-multi 3 4))
+      (println (let [[*lexdyn* b] [5 6]] [(lexdyn-show) *lexdyn* b]))
+      (println (let [{:keys [*lexdyn*]} {:*lexdyn* 8}] [(lexdyn-show) *lexdyn*]))
+      (println (loop [*lexdyn* 0 acc []] (if (< *lexdyn* 2) (recur (inc *lexdyn*) (conj acc (lexdyn-show) *lexdyn*)) acc)))
+      (println (letfn [(g [*lexdyn*] (lexdyn-show))] (g 9)))
+      (println (for [*lexdyn* [10 11]] [(lexdyn-show) *lexdyn*]))
+      (doseq [*lexdyn* [12]] (println (lexdyn-show) *lexdyn*))
+      (dotimes [*lexdyn* 1] (println (lexdyn-show) *lexdyn*))
+      (println (try (throw (ex-info "e" {})) (catch Exception *lexdyn* (lexdyn-show))))
+      (println (if-let [*lexdyn* 13] [(lexdyn-show) *lexdyn*] :no))
+      (println (let [*lexdyn* 15] (binding [*lexdyn* 16] [(lexdyn-show) *lexdyn*])))
+      (println (map (fn [*lexdyn*] (lexdyn-show)) [1 2]))
+      (defprotocol LexdynP (lexdyn-pm [this]))
+      (deftype LexdynT [*lexdyn*] LexdynP (lexdyn-pm [this] [(lexdyn-show) *lexdyn*]))
+      (println (lexdyn-pm (->LexdynT 6)))
+      (println (let [*out* 5] [*out* (with-out-str (print "p"))]))
+    expected: |
+      1 [1 3]
+      1 7
+      1
+      1 [3 1 4]
+      [1 5 6]
+      [1 8]
+      [1 0 1 1]
+      1
+      ([1 10] [1 11])
+      1 12
+      1 0
+      1
+      [1 13]
+      [16 15]
+      (1 1)
+      [1 6]
+      [5 p]
   - name: agents-send-synchronously
     # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
     # and the estimate combines deterministically. Sends apply at once (there is

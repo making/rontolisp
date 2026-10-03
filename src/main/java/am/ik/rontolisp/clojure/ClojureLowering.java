@@ -706,6 +706,18 @@ public final class ClojureLowering {
 	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
+	 * The identifiers whose own symbol ({@link ClojureLowerUtil#idSym}) is a special
+	 * variable: the stream and agent aliases, and every {@code ^:dynamic} var of
+	 * {@code user} (whose var symbol is the bare mangled name). A local of one of these
+	 * names binds {@link #localSym}, so it stays lexical like the oracle's instead of
+	 * rebinding the special. Filled by the pre-scan of every datum, nested definitions
+	 * included: the special proclamation is program-wide, so a var defined below a local
+	 * counts. A macro expansion adds none, since a symbol carries no metadata through
+	 * one.
+	 */
+	final Set<String> shadowedSpecials = new HashSet<>(Set.of("*out*", "*in*", "*agent*"));
+
+	/**
 	 * The vars a {@code defmulti} defined, by var key, until another definition of the
 	 * name: a {@code defmulti} of one of them is a no-op, like the oracle's, which
 	 * defines only when the var holds no multimethod yet.
@@ -968,6 +980,7 @@ public final class ClojureLowering {
 			for (LispVal datum : datums) {
 				try {
 					declareOne(datum);
+					scanDynamicDefinitions(datum);
 				}
 				catch (LispReadException ex) {
 					throw positioned(ex, datum);
@@ -976,6 +989,29 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.currentNs = ns;
+		}
+	}
+
+	/**
+	 * Records into {@link #shadowedSpecials} every {@code ^:dynamic} {@code def},
+	 * {@code defn} or {@code defonce} of {@code user} the datum holds, at any depth: what
+	 * a local of that name must not bind, wherever the definition stands.
+	 */
+	private void scanDynamicDefinitions(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items == null) {
+			return;
+		}
+		if (items.size() >= 2 && items.get(0) instanceof LispSymbol head
+				&& (head.name().equals("def") || head.name().equals("defn") || head.name().equals("defn-")
+						|| head.name().equals("defonce"))
+				&& ClojureLowerUtil.nameIsDynamic(items.get(1))
+				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name
+				&& varSym(varKey(this.currentNs, name.name())).equals(ClojureLowerUtil.idSym(name.name()))) {
+			this.shadowedSpecials.add(name.name());
+		}
+		for (LispVal item : items) {
+			scanDynamicDefinitions(item);
 		}
 	}
 
@@ -1349,13 +1385,30 @@ public final class ClojureLowering {
 	 */
 	LispSymbol symOf(String name) {
 		if (isLocal(name)) {
-			return ClojureLowerUtil.idSym(name);
+			return localSym(name);
 		}
 		String key = resolveVar(name);
 		if (key != null && this.globals.get(key) == Kind.FUNCTION && this.defnCounts.getOrDefault(key, 0) > 1) {
 			return currentDefnSym(key);
 		}
 		return key != null ? varSym(key) : ClojureLowerUtil.idSym(name);
+	}
+
+	/**
+	 * The symbol a local of this name binds and reads: its own mangled name, or, when
+	 * that name is a special variable's ({@link #shadowedSpecials}), the name behind a
+	 * lone-{@code %} suffix no identifier spells, so the local binds lexically and a
+	 * function called in its scope still reads the var. Every binding site of a local
+	 * (parameters, {@code let}, {@code loop}, destructuring, {@code letfn}, ...) and
+	 * {@link #symOf} go through here.
+	 * @param name the local's plain name
+	 * @return the symbol
+	 */
+	LispSymbol localSym(String name) {
+		if (this.shadowedSpecials.contains(name)) {
+			return new LispSymbol(mangle(name) + "%local");
+		}
+		return ClojureLowerUtil.idSym(name);
 	}
 
 	/**
@@ -3338,7 +3391,7 @@ public final class ClojureLowering {
 			// that name
 			return coreValue(core);
 		}
-		if (name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) {
+		if ((name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) && !isLocal(name)) {
 			// dynamic aliases, not mangled names (see idSym): always resolvable
 			if (name.equals("*agent*")) {
 				this.usedStm = true;
@@ -3724,7 +3777,7 @@ public final class ClojureLowering {
 	List<LispVal> capturedBindings(List<String> names, LispVal lowered) {
 		List<LispVal> bindings = new ArrayList<>();
 		for (String name : names) {
-			LispSymbol local = ClojureLowerUtil.idSym(name);
+			LispSymbol local = localSym(name);
 			if (ClojureLowerUtil.mentions(lowered, local.name())) {
 				bindings.add(ClojureLowerUtil.list(local, mutableFieldPlace(name)));
 			}

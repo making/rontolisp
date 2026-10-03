@@ -646,8 +646,8 @@ final class ClojureInteropLowering {
 			String pname = ClojureLowerUtil.plainName(items.get(i), "memfn");
 			ClojureLowerUtil.isTrue(seen.add(pname), "memfn argument names must be distinct: " + pname);
 			scope.put(pname, ClojureLowering.Kind.VARIABLE);
-			params.add(ClojureLowerUtil.idSym(pname));
-			argForms.add(ClojureLowerUtil.idSym(pname));
+			params.add(ctx.localSym(pname));
+			argForms.add(ctx.localSym(pname));
 		}
 		return ctx.inScope(scope, () -> ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(params), instanceCallLowered(ctx, recv, method, argForms)));
@@ -719,7 +719,7 @@ final class ClojureInteropLowering {
 				String pname = ClojureLowerUtil.plainName(params.get(j), "proxy");
 				ClojureLowerUtil.isTrue(seen.add(pname), "proxy parameter names must be distinct: " + pname);
 				scope.put(pname, ClojureLowering.Kind.VARIABLE);
-				fnParams.add(ClojureLowerUtil.idSym(pname));
+				fnParams.add(ctx.localSym(pname));
 			}
 			Map<String, ClojureLowering.Kind> use = new HashMap<>(scope);
 			LispVal run = ctx
@@ -826,7 +826,7 @@ final class ClojureInteropLowering {
 			}
 			methodNames.add(methodName);
 		}
-		LispSymbol thisSym = ClojureLowerUtil.idSym("this");
+		LispSymbol thisSym = ctx.localSym("this");
 		LispSymbol got = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
 		LispVal miss = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
@@ -852,7 +852,7 @@ final class ClojureInteropLowering {
 				String pname = ClojureLowerUtil.plainName(params.get(j), "proxy");
 				ClojureLowerUtil.isTrue(seen.add(pname), "proxy parameter names must be distinct: " + pname);
 				scope.put(pname, ClojureLowering.Kind.VARIABLE);
-				fnParams.add(ClojureLowerUtil.idSym(pname));
+				fnParams.add(ctx.localSym(pname));
 			}
 			Map<String, ClojureLowering.Kind> use = new HashMap<>(scope);
 			ctx.proxyMethods.push(new ClojureLowering.ProxyMethod(thisSym));

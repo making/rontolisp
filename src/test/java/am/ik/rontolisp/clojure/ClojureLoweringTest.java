@@ -35,6 +35,20 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aLocalNamedLikeASpecialBindsASymbolOfItsOwn() {
+		// a local spelled like a user ^:dynamic var -- even one defined below it --
+		// or like a stream alias binds c%name%local, so it stays lexical; the var
+		// keeps its symbol, and a local named like nothing special is untouched
+		assertThat(lowered("(defn f [*x*] *x*) (def ^:dynamic *x* 1)"))
+			.contains("(DEFUN |c%f| (|c%*x*%local|) |c%*x*%local|)");
+		assertThat(lowered("(def ^:dynamic *x* 1) (let [*x* 2] (binding [*x* 3] *x*))"))
+			.contains("(LET* ((|c%*x*%local| 2)) (LET* ((|c%*x*| 3)");
+		assertThat(lowered("(let [*out* 5] *out*)")).contains("(LET* ((|c%*out*%local| 5)) |c%*out*%local|)");
+		assertThat(lowered("(defn f [*x*] *x*)")).contains("(DEFUN |c%f| (|c%*x*|) |c%*x*|)");
+		assertThat(lowered("(ns other) (def ^:dynamic *x* 1) (defn f [*x*] *x*)")).contains("(|c%*x*|) |c%*x*|)");
+	}
+
+	@Test
 	void defLoneStringIsTheValueNotADocstring() {
 		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| \"hello\")\n|c%x|");
 		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");

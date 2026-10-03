@@ -123,12 +123,12 @@ final class ClojureLoopLowering {
 		return ctx.inScope(scope, () -> {
 			List<LispVal> form = new ArrayList<>();
 			form.add(ClojureLowerUtil.sym("let"));
-			form.add(ClojureLowerUtil
-				.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.idSym(temp), ctx.lower(items.get(1))))));
+			form.add(
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ctx.localSym(temp), ctx.lower(items.get(1))))));
 			for (int i = 2; i < items.size(); i++) {
 				form.add(ctx.lower(threadInsert(items.get(i), ref, false)));
 			}
-			form.add(ClojureLowerUtil.idSym(temp));
+			form.add(ctx.localSym(temp));
 			return ClojureLowerUtil.list(form);
 		});
 	}
@@ -245,7 +245,7 @@ final class ClojureLoopLowering {
 		// the body answers nil through the loop, never the target: a recur inside
 		// one is not in tail position, like the oracle
 		return ctx.inScope(scope, () -> ClojureLowerUtil.list(ClojureLowerUtil.sym("dotimes"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.idSym(name), count)), ctx.nonTailBody(items, 2)));
+				ClojureLowerUtil.list(List.of(ctx.localSym(name), count)), ctx.nonTailBody(items, 2)));
 	}
 
 	/**
@@ -318,7 +318,7 @@ final class ClojureLoopLowering {
 		if (level.pattern() instanceof LispSymbol) {
 			String name = ClojureLowerUtil.plainName(level.pattern(), "for");
 			bound = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), element))), wrap);
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ctx.localSym(name), element))), wrap);
 		}
 		else {
 			List<LispVal> pairs = new ArrayList<>();
@@ -421,7 +421,7 @@ final class ClojureLoopLowering {
 		if (pattern instanceof LispSymbol) {
 			String name = ClojureLowerUtil.plainName(pattern, owner);
 			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), head))), wrap);
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(ctx.localSym(name), head))), wrap);
 		}
 		else {
 			LispSymbol temp = ctx.freshTemp();
@@ -449,7 +449,7 @@ final class ClojureLoopLowering {
 			LispVal pattern = ClojureLowerUtil.stripMeta(bindings.get(i));
 			if (pattern instanceof LispSymbol) {
 				String name = ClojureLowerUtil.plainName(pattern, owner + " :let");
-				pairs.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(name), ctx.lower(bindings.get(i + 1))));
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), ctx.lower(bindings.get(i + 1))));
 				scope.put(name, ClojureLowering.Kind.VARIABLE);
 				continue;
 			}

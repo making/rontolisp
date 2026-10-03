@@ -42,7 +42,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 
 | Clojure | representation | notes |
 |---|---|---|
-| identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`) |
+| identifier `foo` | symbol `c%foo`; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix keeps every name off `LispNames` case labels, lambda-list keywords and `T`/`NIL`; spelling verbatim (`Foo` and `foo` apart); `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace. Generated names add a lone `%` suffix no identifier spells (`%2`/`%*` arity helpers, `%defN`, `%macro`, `%bound-depth`, `%loaded`, `%init-N`, `%meta`, `%root`, `%local`) |
 | `nil` / `true` | `NIL` / `T` | `nil` IS the empty list |
 | `false` | the value of `rontolisp::%clojure-false`, a distinct non-`NIL` symbol spelled `false` | the `#f` treatment of `scheme.lisp`; every lowered test is an explicit null-or-false check on a temporary |
 | `:foo`, `:a/b` | `(:C%KEYWORD "foo")`, spelling verbatim | compared by `equal`; `::kw` / `::alias/kw` resolve at lower time against the current namespace (an unknown alias is the oracle's `Invalid token`) |
@@ -62,6 +62,22 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 Predicates answer `T`-or-false, as calls and as values, so `(map odd? [1 2])` prints
 `(true false)`. Every core verb also names a function value (a lambda over the same
 lowering, checking the oracle's arities) unless its row says otherwise.
+
+## Locals named like a special
+
+A local is lexical in the oracle, but a local spelled like a `^:dynamic` var of `user` would
+lower to the var's own symbol, a `defparameter`'d special, and so bind it dynamically (a
+function called in its scope would read the local). `localSym` gives such a local
+`c%name%local` instead; every binding site (parameters, `let`, `loop`, destructuring,
+`letfn`, `for`/`doseq`/`dotimes`, `catch`, `with-open`, `if-let`, deftype fields, ...) and
+`symOf` go through it, `binding` keeps the var's symbol. The names are `shadowedSpecials`:
+`*out*`/`*in*`/`*agent*` (aliases of specials) plus every `^:dynamic` `def`/`defn`/
+`defonce` of `user` the pre-scan (`declare`) finds at any depth -- the proclamation is
+program-wide, so a var defined below the local counts. Only a colliding local is renamed:
+a program without one lowers byte-identically. A namespaced var (`c%ns/name`) never
+collides. Measured 2026-10-03: `(defn f [*x*] (show))`, `(let [*x* 5] (show))`,
+`((fn [*x*] (show)) 3)` answer the var's `1` on all four backends, like the oracle (they
+answered `2 5 3` before).
 
 ## The lowering table
 
@@ -170,12 +186,9 @@ Each is a real work item unless the reason says otherwise.
 - The whole-file pre-scan makes a definition shadow calls ABOVE it (the oracle's reach the
   core verb); a body defined above a `defn` redefinition still calls the older one (only
   `^:dynamic` names see the newest).
-- A local named like a `^:dynamic` var (a fn parameter, a `let`/`loop` binding) is the var's
-  own CL symbol (`ClojureLowerUtil.idSym`), a `defparameter`'d special, so it binds the var
-  dynamically: a function called in its scope reads the local's value (the oracle: the var).
-  A `let` did so on every backend; a parameter on the interpreter, and on the compilers since
-  special-named parameters bind dynamically (2026-10-03, `.kb/dynamic-special-variables.md`)
-  -- they answered the oracle by accident before (`.todo/c13`).
+- In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
+  it is defined (a function called in its scope reads the local's value; the oracle: the
+  var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
 - `catch` is catch-all; a thrown host `Throwable` reaches handlers as an opaque host object,
   so its message is lost (b66).
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;

@@ -205,19 +205,15 @@ final class ClojureStringLowering {
 					callItems.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "nth"), ref,
 							new LispInteger(i)));
 				}
-				arms.add(
-						ClojureLowerUtil.list(
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
-												ClojureLowerUtil.idSym(plain)),
-										new LispInteger(arity)),
-								reCall(ctx, name, callItems)));
+				arms.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ctx.localSym(plain)),
+						new LispInteger(arity)), reCall(ctx, name, callItems)));
 			}
 			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 							LispString.literal(name + " called with wrong number of arguments"))));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ClojureLowerUtil.idSym(plain))),
+					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ctx.localSym(plain))),
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms));
 		});
 	}
@@ -241,19 +237,15 @@ final class ClojureStringLowering {
 					callItems.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "nth"), ref,
 							new LispInteger(i)));
 				}
-				arms.add(
-						ClojureLowerUtil.list(
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
-												ClojureLowerUtil.idSym(plain)),
-										new LispInteger(arity)),
-								stringCall(ctx, var, callItems)));
+				arms.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("="),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ctx.localSym(plain)),
+						new LispInteger(arity)), stringCall(ctx, var, callItems)));
 			}
 			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 							LispString.literal(var + " called with wrong number of arguments"))));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ClojureLowerUtil.idSym(plain))),
+					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ctx.localSym(plain))),
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms));
 		});
 	}
