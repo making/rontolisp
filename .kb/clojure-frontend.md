@@ -488,7 +488,7 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 ## The IFn dispatcher stays at the call site
 
 **A spliced runtime worker funcalls its function argument; the lowering hands it a real
-function.** `rontolisp::%clojure-call` (the IFn dispatcher: sets, maps, vectors, keywords,
+function.** `rontolisp::%clojure-call` (the IFn dispatcher: sets, maps, vectors, keywords, symbols,
 vars) drags the structural-key runtime behind it, about 26 KB of raw wasm, so one worker
 naming it put it in every program that used the verb. The workers: `map` `filter` `mapv`
 `filterv` `mapcat` `iterate` `repeatedly` `keep` `keep-indexed` `map-indexed` `remove`
@@ -503,7 +503,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `every-pred`, `some-fn`, `completing`, the `%clojure-xf-*` constructors), or a variable
   bound to one (`isDirectVar`). Anything else goes through `ClojureLowering.realFun`:
   `(rontolisp::%clojure-as-fn x)`, which answers a function as itself and wraps any other
-  value in a rest lambda over the dispatcher. A worker added to `FUNCTION_WORKERS` must
+  value in a rest lambda over the dispatcher. A symbol reads like a keyword
+  (`%clojure-call-keyword`: set member, map/sorted/record entry, else the default); a record
+  is no IFn and signals, like the oracle (and `ifn?`). A worker added to `FUNCTION_WORKERS` must
   answer a `lambda` on every path.
 - A verb's VALUE (`(apply map ...)`, the `-v` entries) wraps its parameter at run time
   through `%clojure-as-fn`, so using a verb as a value carries the dispatcher.

@@ -866,9 +866,9 @@
 (defun rontolisp::%clojure-call (f args)
   "Apply F to the argument list ARGS: real functions through apply, collection
    values through their lookup, like the oracle's IFn. Sets answer the member,
-   maps the value, vectors the indexed element, keywords the table-aware read --
-   each with the next argument as the default (nil without one). Strings are no
-   functions, like the oracle, and anything else signals."
+   maps the value, vectors the indexed element, keywords and symbols the
+   table-aware read -- each with the next argument as the default (nil without
+   one). Strings are no functions, like the oracle, and anything else signals."
   (cond ((functionp f) (apply f args))
         ((rontolisp::%clojure-set-p f)
          (gethash (rontolisp::%clojure-table-key (car args) (car (cdr f)))
@@ -876,16 +876,15 @@
         ((hash-table-p f)
          (gethash (rontolisp::%clojure-table-key (car args) f) f
                   (if (cdr args) (car (cdr args)) nil)))
-        ((rontolisp::%clojure-record-p f)
-         (gethash
-          (rontolisp::%clojure-table-key (car args) (car (cdr (cdr (cdr f)))))
-          (car (cdr (cdr (cdr f)))) (if (cdr args) (car (cdr args)) nil)))
         ((and (vectorp f) (not (stringp f)))
          (let ((i (car args)))
            (if (and (integerp i) (<= 0 i) (< i (length f)))
                (elt f i)
                (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-keyword-p f)
+         (rontolisp::%clojure-call-keyword f (car args)
+          (if (cdr args) (car (cdr args)) nil)))
+        ((rontolisp::%clojure-real-symbol-p f)
          (rontolisp::%clojure-call-keyword f (car args)
           (if (cdr args) (car (cdr args)) nil)))
         ((rontolisp::%clojure-var-p f)
@@ -903,8 +902,8 @@
   (if (functionp f) f (lambda (&rest args) (rontolisp::%clojure-call f args))))
 
 (defun rontolisp::%clojure-call-keyword (k coll dflt)
-  "The keyword K read through COLL: sets answer the member, maps the value,
-   records their entry table, anything else the default (a keyword never indexes
+  "The keyword or symbol K read through COLL: sets answer the member, maps the
+   value, records their entry table, anything else the default (neither indexes
    a vector or a string)."
   (cond ((rontolisp::%clojure-set-p coll) (gethash k (car (cdr coll)) dflt))
         ((rontolisp::%clojure-record-p coll)

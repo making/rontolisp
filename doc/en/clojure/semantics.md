@@ -11,7 +11,7 @@ and no name reaches a core-form case label. `defn` is a `defun` called directly;
 head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable holding
 a real function is a `funcall` of the value cell, so `(defn call-it [f x] (f x))` runs;
 a variable that may hold a collection goes through the prelude dispatcher instead
-(`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords
+(`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords/symbols
 through their lookup, like `IFn`); a `declare`d-but-never-defined name keeps its
 direct-call error. `def` is a top-level `setq` -- inside a body it
 still sets the global when the body runs.
