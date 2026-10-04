@@ -3,13 +3,14 @@
 `(deftype Name [fields...] Protocol (method [target & args] body...) ...)`
 
 deftype を定義します。マップ動詞には不透明な、レコード形の値です。不透明な
-`:C%TYPE` タグでレコードと同じ4要素形を共有します。読みは外れ（`get` は既定値を
+`:C%TYPE` タグでレコードと同じ形（クラス名を含む）を共有します。読みは外れ（`get` は既定値を
 答え）、書きと `seq`・`count`・`empty?` はシグナルを上げ、`=` は同一性です
 （いずれもオラクル同様）。位置指定コンストラクタ `->Name` のみ lower されます
 （オラクルは deftype に `map->Name` を定義しません）。`(Name. ...)` は書き換わり
 ます。インラインのメソッド本体には `defrecord` 同様フィールドがローカルとして
 見えます。`^:unsynchronized-mutable` または `^:volatile-mutable` を付けたフィールドは
-それらのメソッド専用で、メソッドは [`set!`](set-bang.md) で代入します。名前は
+それらのメソッド専用で、メソッドは [`set!`](set-bang.md) で代入します。インスタンス
+呼び出しはインラインのメソッドと不変フィールドに届きます（[`.name`](dot-name.md)）。名前は
 ファイル全体の事前走査に参加します。
 
 ```clojure

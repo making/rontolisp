@@ -140,8 +140,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
   maps print deterministically.
 - A deftype's `^:volatile-mutable` field is the same plain slot as an
-  `^:unsynchronized-mutable` one (no cross-thread ordering). `.-field` of a mutable
-  field signals `No such field: ...` (the oracle: `No matching field found: ...`).
+  `^:unsynchronized-mutable` one (no cross-thread ordering).
 - `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).
@@ -197,7 +196,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
   entries and a hash map past them, by size alone. `nil` is the empty list here, so a
   collection method answers on it (`(.count nil)` is `0`) where the oracle throws a
-  `NullPointerException`; any other method on `nil` is one.
+  `NullPointerException`; any other method on `nil` is one. On a record, deftype or reify,
+  a name that is no protocol method and no field of a record or deftype the program defined
+  is refused that way too, where the oracle says `No matching field found`; a site lowered
+  before a later REPL input defines a record or deftype does not see its methods or
+  fields.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts

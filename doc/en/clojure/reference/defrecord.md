@@ -11,7 +11,8 @@ oracle). `=` compares two records by tag plus entries and never equals a plain m
 Two constructors lower to mangled functions: `->Name` positionally (a wrong count
 signals) and `map->Name` from a map (missing fields default to `nil`, extra entries
 kept); `(Name. ...)` rewrites to `->Name`. Inline method bodies see the fields as
-locals. The name joins the whole-file pre-scan, so a constructor call may stand
+locals, and an instance call reaches the inline methods and the declared fields
+([`.name`](dot-name.md)). The name joins the whole-file pre-scan, so a constructor call may stand
 above the definition.
 
 A record prints as its literal, like the oracle: `#user.R{:a 7}` -- the defining

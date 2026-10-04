@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Function;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -20,6 +21,13 @@ import org.jspecify.annotations.Nullable;
  * every other method on such a value is refused by name instead of reaching
  * {@code java:call}, which takes no Lisp value but a string, number, character or
  * {@code t}.
+ *
+ * <p>
+ * A record, deftype or reify is such a value too, and its class also has the protocol
+ * methods its body implements and, for a record or deftype, its declared fields: a site
+ * naming one of those ({@link TypedMembers}) calls the method's dispatcher or reads the
+ * field, and refuses any other name on such a value in the oracle's words, since its
+ * class is fully known. A site naming none pays nothing for them.
  *
  * <p>
  * A row maps a method at one arity to arms: the kinds that answer it (a one-argument
@@ -196,26 +204,75 @@ final class ClojureValueMethodLowering {
 	 * @return the form
 	 */
 	static LispVal valueArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args, LispVal call) {
-		LispVal arm = mappedArm(ctx, method, recv, args);
-		if (arm == null) {
-			arm = refusal(recv, method, false, args);
-		}
+		List<Arm> arms = ROWS.get(method + "/" + args.size());
+		// a row at another arity: the method exists, so the refusal is the oracle's own
+		boolean known = arms != null || ROWS.keySet().stream().anyMatch(key -> key.startsWith(method + "/"));
+		TypedMembers typed = typedMembers(ctx, method, args.size());
+		LispVal arm = arms == null && typed == null ? refusal(recv, method, known, args)
+				: boundArm(ctx, method, recv, args, arms == null ? List.of() : arms, known, typed);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
 	}
 
-	private static @Nullable LispVal mappedArm(ClojureLowering ctx, String method, LispSymbol recv,
-			List<LispVal> args) {
-		List<Arm> arms = ROWS.get(method + "/" + args.size());
-		if (arms == null) {
-			for (String key : ROWS.keySet()) {
-				if (key.startsWith(method + "/")) {
-					// the method exists at another arity: the oracle's own refusal
-					return refusal(recv, method, true, args);
-				}
+	/**
+	 * What a site's method name is on a record, deftype or reify: the protocols declaring
+	 * it at the site's arity, each with the record and deftype classes whose body
+	 * implements it ({@code classes}; a reify is read at run time), and whether it is an
+	 * immutable declared field a zero-argument call reads.
+	 */
+	private record TypedMembers(List<InlineCall> calls, boolean field) {
+
+	}
+
+	/** One protocol a site's method may call: its var key and definition. */
+	private record InlineCall(String protocolKey, ClojureLowering.ProtocolDef def, List<String> classes) {
+
+	}
+
+	/**
+	 * The typed members a site's method name may reach, or null when it names no protocol
+	 * method (at any arity) and no declared field of a known record or deftype: such a
+	 * site is lowered as before. The protocols and types are the lowering's, so a type
+	 * defined later in another buffer of a session is not seen.
+	 */
+	private static @Nullable TypedMembers typedMembers(ClojureLowering ctx, String method, int n) {
+		boolean named = false;
+		List<InlineCall> calls = new ArrayList<>();
+		for (Map.Entry<String, ClojureLowering.ProtocolDef> protocol : new TreeMap<>(ctx.protocols).entrySet()) {
+			Integer arity = protocol.getValue().arities().get(method);
+			if (arity == null) {
+				continue;
 			}
-			return null;
+			named = true;
+			if (arity == n + 1) {
+				String inline = ClojureLowering.inlineMethodKey(protocol.getKey(), method);
+				List<String> classes = ctx.types.values()
+					.stream()
+					.filter(type -> type.inlineMethods().contains(inline))
+					.map(ClojureLowering.TypeDef::className)
+					.sorted()
+					.toList();
+				calls.add(new InlineCall(protocol.getKey(), protocol.getValue(), classes));
+			}
 		}
+		boolean field = false;
+		for (ClojureLowering.TypeDef type : ctx.types.values()) {
+			if (type.fields().contains(method)) {
+				named = true;
+				field |= n == 0 && !type.mutableFields().contains(method);
+			}
+		}
+		return named ? new TypedMembers(calls, field) : null;
+	}
+
+	/**
+	 * The arm over the receiver and arguments bound to this class's locals: the typed
+	 * members first (a body's own method, then the mapped rows, then a declared field),
+	 * then the refusal -- in the oracle's words on a record, deftype or reify when the
+	 * site names a typed member, since its class is fully known.
+	 */
+	private static LispVal boundArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args,
+			List<Arm> arms, boolean known, @Nullable TypedMembers typed) {
 		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
 		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
 		for (int i = 0; i < args.size(); i++) {
@@ -233,13 +290,55 @@ final class ClojureValueMethodLowering {
 			}
 			List<LispVal> clauses = new ArrayList<>();
 			clauses.add(ClojureLowerUtil.sym("cond"));
+			if (typed != null) {
+				for (InlineCall call : typed.calls()) {
+					clauses.add(inlineClause(call, method, self, locals));
+				}
+			}
 			for (Arm arm : arms) {
 				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));
 			}
-			clauses.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, refusal(self, method, true, locals)));
+			if (typed != null && typed.field()) {
+				LispVal key = ClojureCollectionLowering.keywordForm(method);
+				clauses.add(ClojureLowerUtil.list(
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DECLARED-FIELD-P"), self, key),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key,
+								ClojureProtocolLowering.typedTableOf(self))));
+			}
+			LispVal fallback = refusal(self, method, known, locals);
+			if (typed != null && !known) {
+				fallback = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RECORD-P"), self),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-OPAQUE-P"), self)),
+						refusal(self, method, true, locals), fallback);
+			}
+			clauses.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, fallback));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 					ClojureLowerUtil.list(clauses));
 		});
+	}
+
+	/**
+	 * A clause calling a protocol method's dispatcher on a typed receiver whose own body
+	 * implements it -- an {@code extend-type} row is no method of the class, so it is not
+	 * reached here, like the oracle.
+	 */
+	private static LispVal inlineClause(InlineCall call, String method, LispSymbol self, List<LispVal> locals) {
+		List<LispVal> classes = new ArrayList<>();
+		for (String cls : call.classes()) {
+			classes.add(LispString.literal(cls));
+		}
+		LispVal test = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INLINE-METHOD-P"), self,
+				call.def().inlineTable(), ClojureCollectionLowering.keywordForm(method),
+				classes.isEmpty() ? ClojureLowering.NIL_CONST
+						: ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(classes)));
+		String ns = call.protocolKey().substring(0, call.protocolKey().lastIndexOf('/'));
+		List<LispVal> invocation = new ArrayList<>();
+		invocation.add(ClojureLowering.varSym(ClojureLowering.varKey(ns, method)));
+		invocation.add(self);
+		invocation.addAll(locals);
+		return ClojureLowerUtil.list(test, ClojureLowerUtil.list(invocation));
 	}
 
 	/**
@@ -268,7 +367,7 @@ final class ClojureValueMethodLowering {
 	 * {@code %clojure-no-method} appends (or, for nil, signals the oracle's
 	 * {@code NullPointerException}).
 	 */
-	private static LispVal refusal(LispVal recv, String method, boolean known, List<LispVal> args) {
+	static LispVal refusal(LispVal recv, String method, boolean known, List<LispVal> args) {
 		int n = args.size();
 		String words;
 		if (!known) {

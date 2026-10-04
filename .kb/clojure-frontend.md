@@ -52,7 +52,7 @@ The oracle is `clj` 1.12.6.1673: a behavior is decided by running it there, and 
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)` | one cell shape, so STM verbs accept atoms; the second slot is only what `volatile?` reads |
-| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE ...)` / a fresh `:C%REIFY` tag | "Dispatch" |
+| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch" |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | `reduced`, var, nil dispatch value | `(:C%REDUCED x)`, `(:C%VAR "ns/name" getter)`, `(:C%NIL)` | |
 | `ex-info` | a condition with message and data slots | |
@@ -939,7 +939,29 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   taking N args is not supported for class C` (the oracle's class may have it). The lowering
   fixes the words; `%clojure-no-method` appends the class. Measured 2026-10-04 vs `clj`
   1.12.6: clojure-spec `instance-calls-on-collections-keywords-symbols-and-ratios`
-  oracle-identical but the unsupported-method line. Cost, `(defn f [s] (.toUpperCase s))`:
+  oracle-identical but the unsupported-method line.
+  A record, deftype or reify passes the same gate, and its class also has the protocol
+  methods its body implements and its declared fields (oracle, clj 1.12.6, 2026-10-04:
+  `(.m r)` calls the inline `m`, `(.a r)` reads field `a`, an `extend-type` method or an
+  undeclared name is `No matching field found: q for class user.R`, a mutable field too).
+  `typedMembers` decides at lowering: a site whose name is a method of some protocol (any
+  arity) or a field of some known type gets, inside the arm's `cond`, per protocol declaring
+  it at the site's arity (`ProtocolDef.arities`) a clause `(%clojure-inline-method-p recv
+  table kw '(classes))` -> the protocol's dispatcher; the classes are the types whose body
+  implements it (`TypeDef.inlineMethods`, read leniently by the pre-scan in
+  `declareRecordType`), a reify is any row under its fresh tag (no extension reaches it).
+  Then the mapped rows (a record is `map?`, so `(.count r)` stays the map's), then for zero
+  arguments an immutable declared field (`%clojure-declared-field-p`, the `(caddr x)` key
+  list), then the refusal in the oracle's words on a typed receiver. A site naming neither
+  is lowered as before, so a typed receiver there keeps the unsupported-method words (the
+  oracle: `No matching field found`), and a site lowered before a later REPL input defines
+  a type does not see it. A deftype carries its class name at index 4 like a record, for
+  the refusal; `.-f` refuses in the same words. Size, 2026-10-04 (wasm P1 / `--optimize=size`
+  / component / JVM class): a program with no such site is byte-identical but +26 B per
+  deftype (the class string); `(.m o)` against `(.foo o)` +1212 / +1084 / +1215 / +1326,
+  `(.a o)` against `(.foo o)` +1011 / +829 / +1013 / +914. Pin: clojure-spec
+  `instance-calls-reach-a-record-deftype-or-reify-method-or-field`.
+  Cost, `(defn f [s] (.toUpperCase s))`:
   wasm 56160 -> 57298 B, JVM `.class` 94998 -> 97917 B (comment-only helpers and lowering-time
   words: docstrings and `format` arms had made it +4.0 KB on the JVM). Pins: that case,
   `ClojureInteropTest#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods`.
@@ -1394,8 +1416,9 @@ resolve var`.
   `#theNamespaceMapFamilyIsMadeByAQualifiedKeywordOrSymbol` and
   `ClojureLibraryTest#aProgramNamingNoPrintMetaAndMakingNoQualifiedKeySplicesThePrinterWithoutTheirArms`.
 - deftype mutable fields (`^:unsynchronized-mutable`/`^:volatile-mutable`; ClojureScript's
-  `^:mutable` is no marker): a fifth element `(vector m1 ...)` in the deftype (absent
-  without mutable fields), invisible to `.-field`; `defrecord` refuses the markers. An
+  `^:mutable` is no marker): a sixth element `(vector m1 ...)` in the deftype
+  (`DEFTYPE_SLOTS`, behind the class name; absent without mutable fields), invisible to
+  `.-field` and `.field`; `defrecord` refuses the markers. An
   inline method wraps its body in `(symbol-macrolet ((field (aref slots i))) ...)`
   (`.kb/symbol-macrolet.md`), so every read is live and `set!` is `(setf (aref ...))`;
   `set!` of any other local is `Cannot assign to non-mutable`. The oracle compiles

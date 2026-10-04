@@ -11,8 +11,13 @@ no host object either: its common `clojure.lang`/`java.util` methods (`.count`, 
 `.isEmpty`, `.get`, `.nth`, `.valAt`, `.contains`, `.containsKey`, `.indexOf`, `.getName`,
 `.getNamespace`, `.numerator`, `.deref`, ...) answer through the matching core function on
 every backend, a method its class lacks is refused in the oracle's words, and any other method is
-refused by name. Anything else runs on the interpreter and the JVM only -- the wasm backends
-reject `java:`.
+refused by name. A record, deftype or reify answers what its class has, on every backend: a
+protocol method its body implements calls it (`(.m r)`), and a zero-argument name that is a
+declared field reads it (`(.a r)`); an `extend-type` method, an undeclared name or a mutable
+field is refused in the oracle's words (`No matching field found: q for class user.R`). A name
+that is no protocol method and no field of a record or deftype the program defined is refused
+by name, as on a collection. Anything else runs on the interpreter and the JVM only -- the
+wasm backends reject `java:`.
 
 ```clojure
 (println (.toUpperCase "hi")) ; HI
@@ -20,4 +25,7 @@ reject `java:`.
 (println (.compareTo "a" "b")) ; -1
 (println (.toString [1 "a"])) ; [1 "a"]
 (println (.count [1 2 3]) (.get {:a 1} :a) (.getName :k)) ; 3 1 k
+(defprotocol P (m [this]))
+(defrecord R [a] P (m [this] (str "m" a)))
+(println (.m (->R 1)) (.a (->R 1))) ; m1 1
 ```

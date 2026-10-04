@@ -1124,6 +1124,24 @@
           ((rationalp x) "clojure.lang.Ratio")
           (t "clojure.lang.Symbol"))))
 
+;; Whether X is a typed value whose own body implements METHOD (a keyword) of
+;; the protocol whose inline rows TABLE holds: a record or deftype of one of
+;; CLASSES, the classes the lowering saw implement it, or a reify with a row
+;; there (no extension reaches a reify's fresh tag).
+(defun rontolisp::%clojure-inline-method-p (x table method classes)
+  (and (consp x)
+       (if (eq (car x) :C%REIFY)
+           (let ((row (gethash (car (cdr x)) table)))
+             (and row (gethash method row) t))
+           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (member (nth 4 x) classes :test #'equal) t))))
+
+;; Whether X is a record or deftype declaring FIELD (a keyword): its declared
+;; list holds the immutable fields only, since a mutable one is private.
+(defun rontolisp::%clojure-declared-field-p (x field)
+  (and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+       (member field (car (cdr (cdr x))) :test #'equal) t))
+
 ;; (.get coll i) over a vector, list or lazy seq, and (.nth v i): the member at
 ;; index I, signalling past either end like the oracle's
 ;; IndexOutOfBoundsException (nth answers nil there).

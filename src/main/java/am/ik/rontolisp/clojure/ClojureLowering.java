@@ -774,9 +774,10 @@ public final class ClojureLowering {
 	 * also has {@code inlineVar}: the table of the implementations a
 	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
 	 * target's metadata, which wins over the extension rows, like the oracle; null for
-	 * every other protocol, whose inline rows share the method table.
+	 * every other protocol, whose inline rows share the method table. {@code arities}
+	 * maps each method to its signature's parameter count, the target included.
 	 */
-	record ProtocolDef(Set<String> methods, LispSymbol methodsVar, LispSymbol defaultVar,
+	record ProtocolDef(Set<String> methods, Map<String, Integer> arities, LispSymbol methodsVar, LispSymbol defaultVar,
 			@Nullable LispSymbol inlineVar) {
 
 		/** The table an inline (body) implementation is stored in. */
@@ -795,9 +796,20 @@ public final class ClojureLowering {
 	 * declared {@code ^:unsynchronized-mutable} or {@code ^:volatile-mutable}, a subset
 	 * of {@code fields} in declaration order: they live in a slot vector behind the
 	 * public table, so only the type's own inline methods read or {@code set!} them.
+	 * {@code inlineMethods} are the protocol methods its body implements, each as
+	 * {@link #inlineMethodKey}: the methods of its host class, which an instance call
+	 * reaches ({@code (.m r)}), where an {@code extend-type} row is none.
 	 */
 	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className,
-			List<String> mutableFields) {
+			List<String> mutableFields, Set<String> inlineMethods) {
+	}
+
+	/**
+	 * One entry of {@link TypeDef#inlineMethods}: the protocol's var key and the method
+	 * name.
+	 */
+	static String inlineMethodKey(String protocolKey, String method) {
+		return protocolKey + " " + method;
 	}
 
 	/**

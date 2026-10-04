@@ -1025,9 +1025,9 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * {@code (.-field target)}: a record or deftype answers its field table's entry
-	 * (missing fields signal, like the oracle); anything else takes the host field path,
-	 * like before.
+	 * {@code (.-field target)}: a record or deftype answers its field table's entry (a
+	 * missing or mutable field signals in the oracle's words); anything else takes the
+	 * host field path, like before.
 	 */
 	static LispVal fieldRead(ClojureLowering ctx, LispVal target, String field) {
 		LispSymbol one = ctx.freshTemp();
@@ -1035,15 +1035,13 @@ final class ClojureInteropLowering {
 		LispSymbol got = ctx.freshTemp();
 		LispVal table = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isReifyForm(one),
 				ClojureLowering.NIL_CONST, ClojureProtocolLowering.typedTableOf(one));
-		LispVal read = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("let"),
-					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-									ClojureCollectionLowering.keywordForm(field), table, miss)))),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss), ClojureLowerUtil
-								.list(ClojureLowerUtil.sym("error"), LispString.literal("No such field: " + field)),
-							got));
+		LispVal read = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+								ClojureCollectionLowering.keywordForm(field), table, miss)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss),
+						ClojureValueMethodLowering.refusal(one, field, true, List.of()), got));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, target),
 						ClojureLowerUtil.list(miss,
