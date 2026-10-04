@@ -157,7 +157,7 @@ final class JvmExprCompiler {
 	 * @param className the class being generated
 	 */
 	static void compileForEffect(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
-		if (compileStatementSetq(expr, ctx, className)) {
+		if (isInertStatement(expr) || compileStatementSetq(expr, ctx, className)) {
 			return;
 		}
 		// A special let's binding restore is always a statement (the cleanup of its
@@ -185,6 +185,31 @@ final class JvmExprCompiler {
 		}
 		compileExpr(expr, ctx, className);
 		ctx.body.pop();
+	}
+
+	/**
+	 * {@return whether the form has no effect, so in statement position -- no consumer
+	 * either -- it compiles to nothing} A self-evaluating literal or a {@code declare}
+	 * (always nil). A defun docstring is the common case: emitted, it was an
+	 * {@code ldc}/{@code pop} at the head of the method and a constant-pool string in the
+	 * class; {@code documentation} answers nil without reading it, on every backend. The
+	 * wasm backend drops the literals too ({@code WasmExprCompiler.compileForEffect}).
+	 */
+	static boolean isInertStatement(LispVal expr) {
+		return switch (expr) {
+			case LispString ignored -> true;
+			case LispInteger ignored -> true;
+			case LispBigInteger ignored -> true;
+			case LispRatio ignored -> true;
+			case LispDouble ignored -> true;
+			case LispComplex ignored -> true;
+			case LispChar ignored -> true;
+			case LispNil ignored -> true;
+			case LispTrue ignored -> true;
+			case LispSymbol sym -> sym.isKeyword();
+			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.DECLARE.equals(head.name());
+			default -> false;
+		};
 	}
 
 	/**

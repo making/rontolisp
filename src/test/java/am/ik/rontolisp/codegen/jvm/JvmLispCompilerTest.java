@@ -10528,6 +10528,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aStatementPositionLiteralLeavesNoTraceInTheClass() throws Exception {
+		// A docstring (defun, lambda) or any self-evaluating literal whose value is
+		// discarded compiles to nothing: no ldc/pop in the method, no string in the
+		// constant pool. A lone docstring-shaped body is the function's VALUE and stays.
+		String source = """
+				(defun doc-f (x) "doc-f-marker" (declare (type fixnum x)) "mid-marker" 42 (* x 2))
+				(defun doc-only () "value-marker")
+				(print (doc-f 3))
+				(print (doc-only))
+				(print (documentation 'doc-f 'function))
+				(print (funcall (lambda (y) "lambda-marker" (+ y 1)) 1))
+				(print (let ((z (doc-f 1))) "let-marker" #\\c 1.5 :kw z))
+				""";
+		String classText = new String(new JvmLispCompiler("Test").compile(LispReader.readAllFromString(source)),
+				StandardCharsets.ISO_8859_1);
+		assertThat(classText).doesNotContain("doc-f-marker")
+			.doesNotContain("mid-marker")
+			.doesNotContain("lambda-marker")
+			.doesNotContain("let-marker")
+			.contains("value-marker");
+		assertThat(compileAndRun(source)).isEqualTo("6\n\"value-marker\"\nNIL\n2\n2").isEqualTo(interpret(source));
+	}
+
+	@Test
 	void aLiteralProvenRealDomainKeepsTheComplexGateShut() throws Exception {
 		// The gate's trigger for these four is the CALL, not the mention: an argument
 		// the source already proves inside the real domain cannot build a holder, so a

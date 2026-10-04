@@ -134,10 +134,10 @@ final class JvmBodyOutliner {
 		Tail tail = new Tail();
 		List<Item> seed = new ArrayList<>();
 		for (int i = 0; i < bodyExprs.size(); i++) {
-			if (i > 0) {
-				seed.add(new PopValue());
-			}
-			seed.add(new ValueForm(bodyExprs.get(i)));
+			// A non-final body form's value is discarded, as in a let or progn body: a
+			// docstring or a declare compiles to nothing, a statement assignment stores
+			// and stops.
+			seed.add(i < bodyExprs.size() - 1 ? new EffectForm(bodyExprs.get(i)) : new ValueForm(bodyExprs.get(i)));
 		}
 		tail.pushFront(seed, ctx);
 		run(tail, ctx, className);
@@ -156,9 +156,11 @@ final class JvmBodyOutliner {
 				case Cleanup cleanup -> cleanup.action().run();
 				case EffectForm effect -> {
 					// "Value, then pop" is what compileForEffect does for everything
-					// but a statement assignment -- said as two items so a nested body
-					// still joins the spine and the pop lands after it.
-					if (!JvmExprCompiler.compileStatementSetq(effect.form(), ctx, className)) {
+					// but an inert statement and a statement assignment -- said as two
+					// items so a nested body still joins the spine and the pop lands
+					// after it.
+					if (!JvmExprCompiler.isInertStatement(effect.form())
+							&& !JvmExprCompiler.compileStatementSetq(effect.form(), ctx, className)) {
 						tail.pushFront(List.of(new ValueForm(effect.form()), new PopValue()), ctx);
 					}
 				}

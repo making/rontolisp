@@ -39,6 +39,26 @@ backends:
   says `mirrorTopLevelGlobal` will read it back. `setq` keeps its tee unconditionally -- there the
   staged value is the form's own result.
 
+## Inside a body: a statement-position inert form emits nothing
+The same rule one level down. A non-final form of a defun/lambda/`let`/`progn` body (and a
+tagbody statement, a `while` body, a cleanup) is a statement; when it is a self-evaluating
+literal or a `(declare ...)`, the backend emits nothing for it.
+- JVM: `JvmExprCompiler.isInertStatement`, read by `compileForEffect` and by
+  `JvmBodyOutliner`'s `EffectForm`; a function body's non-final forms are `EffectForm`s like a
+  `let` body's (so a statement `setq` there stores and stops too). Before 2026-10-04 every
+  defun docstring was `ldc`/`pop` plus a constant-pool string, and every leading `declare` an
+  `aconst_null`/`pop`.
+- wasm: `WasmExprCompiler.compileForEffectHere` drops the literals (not `declare`, not under
+  an async resume).
+- `documentation` is nil on every backend (`LispMacroExpander.expandDocumentation`), so no
+  backend needs a docstring kept.
+- Measured 2026-10-04, `-o X.class` over `examples/`, `size-report/programs/`,
+  `bench-report/programs/` (231 programs that compile): raw 95,472,210 -> 94,955,847 B
+  (-516,363, -0.54%), gzip -9 23,026,927 -> 22,818,104 (-208,823, -0.91%); 0 grew, 113
+  unchanged. `examples/clojure/demo.clj` 131,498 -> 119,976 (-8.8%, the spliced
+  `clojure.lisp` docstrings); largest absolute: `examples/db/postmodern-crud.lisp` -50,697.
+  A changed docstring no longer changes the class.
+
 ## User-visible corollary: a run's EXIT CODE
 The last top-level form's value is dropped on every backend, so `(rove:run-suite *package*)` at
 the end of a file says nothing to the shell and a red suite exits 0 -- as `sbcl --script`
@@ -48,7 +68,8 @@ from the `rontolisp test` subcommand ([[asdf]]).
 ## Tests
 `ToplevelStatementsTest`; `WasmLispCompilerTest.aTopLevelFormThatIsNothingButAConstantEmitsNothing`,
 `.aTopLevelDefinerDoesNotBuildTheNameSymbolItReturns`;
-`JvmLispCompilerTest.aDefinerWhoseValueIsReadStillYieldsTheNameSymbol`.
+`JvmLispCompilerTest.aDefinerWhoseValueIsReadStillYieldsTheNameSymbol`,
+`.aStatementPositionLiteralLeavesNoTraceInTheClass`.
 
 ## Related
 [[pure-builtin-fold]], [[optimize-dead-code-elimination]], [[wasm-gc-strings]],
