@@ -20,7 +20,13 @@
  （`#0=(1 . #0#)`）で印字され、循環なしの共有は 2 度印字されます。atom は可読でない
  形（`#<Atom value>`）、関数は `#<procedure>`、例外はその `toString`
  （`clojure.lang.ExceptionInfo: m {}`。オラクルは `#error {...}`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
- `#object` はハッシュを含みます）と印字されます。
+ `#object` はハッシュを含みます）と印字されます。ストリームは種類に対応するホストクラスの
+ `#object` として、オラクルの印字から識別ハッシュを除いた形で印字されます
+ （`#object[java.io.StringWriter "ab"]`、
+ `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`）。`str` も同じ形の
+ `toString` を答えます。文字列入力ストリームは `with-in-str` の
+ `clojure.lang.LineNumberingPushbackReader` で、オラクルが `StringReader` の上の
+ `java.io.PushbackReader` を答える場合も同じです。
 - `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
  付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
  Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
@@ -98,8 +104,8 @@
   クラスを返します）、クラスを示さないコンディションの拒否には `:java.lang.RuntimeException`
   を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
-  空のベクターを返します。`.getMessage`、`.getLocalizedMessage`、`.getCause`、`.toString`
-  以外のメソッドは拒否します。例外でない値の `throw` は、値のレンダリングをメッセージとする
+  空のベクターを返します。`.getClass` は `class` と同じ値を返します。`.getMessage`、
+  `.getLocalizedMessage`、`.getCause`、`.toString` 以外のメソッドは拒否します。例外でない値の `throw` は、値のレンダリングをメッセージとする
   `ClassCastException` になります（オラクルのメッセージは 2 つのクラス名を挙げます）。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後
@@ -109,7 +115,14 @@
  どの表も nil をキーにしません。一方リテラルに `:nil` な値はキーワード行のままです
  （オラクル通り。ディスパッチ関数の中の `class` 呼び出しは nil 引数に nil 自身を答えるので、
   null 判定でそこでもマーカーへ写ります。素のものでも他の関数で包んだものでも、記録した定義から再降低される名前付き `defn`・`def` 済み関数経由でも、インラインなディスパッチ datum の中でそれらを呼び出す場合（呼び出し位置で同じ降低をインライン化）でも同様です）。
- `Object` メソッドは検索の後・デフォルトの先に捕まえます。プロトコルの
+ `Object` メソッドは検索の後・デフォルトの先に捕まえます。throwable やストリームのクラスは
+ その名前のキーワード（`class` が答えるもの）の下に格納され、検索はオラクルの Java の継承と
+ 同じくスーパークラスの連鎖をたどります。ただしインタフェース（`java.io.Serializable`、
+ `java.io.Closeable`）と `Object` は連鎖に入りません。`isa?`・`derive`・`underive` はクラス名を
+ 同じキーワードとして読むので `(isa? (class "a") String)` は `true` ですが、クラスの
+ `parents`/`ancestors` は `derive` が記録したものだけを返します（オラクルは Java の
+ スーパータイプも加えます）。ここではキーワードがクラスそのものなので、`:java.lang.Exception`
+ と綴ったキーワードもそのクラスです。プロトコルの
  ディスパッチは階層を読まず（タグの
  完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
  区別します）。
@@ -239,8 +252,8 @@
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
-  です（再束縛は標準ストリームの再束縛になります）。`(prn *out*)` は `true` と印字されます
-  （`*standard-output*` のルートが `t` のため）。
+  です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
+  プロセスの標準ストリームを指すストリーム値です。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
 - ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
   （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または

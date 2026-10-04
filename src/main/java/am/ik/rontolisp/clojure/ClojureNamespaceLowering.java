@@ -74,35 +74,35 @@ final class ClojureNamespaceLowering {
 			return ClojureSetLowering.setValue(ref.var());
 		}
 		if (ref.ns().equals("clojure.java.io")) {
-			return jioValue(ctx, ref.var());
+			return jioValue(ref.var());
 		}
 		return ClojureStringLowering.stringValue(ctx, ref.var());
 	}
 
+	/** {@code clojure.java.io/reader}: an {@code open} of the path, a stream producer. */
+	static final String READER = "RONTOLISP::%CLOJURE-READER";
+
 	/**
 	 * A {@code clojure.java.io} call: exactly {@code reader}, a buffered reader over the
 	 * path through the same file-stream runtime {@code slurp} reads through -- an
-	 * {@code open} input stream, so {@code line-seq} reads it and {@code with-open}
-	 * closes it.
+	 * {@code open} input stream ({@link #READER}), so {@code line-seq} reads it and
+	 * {@code with-open} closes it.
 	 */
 	static LispVal jioCall(ClojureLowering ctx, String var, List<LispVal> items) {
 		int n = items.size() - 1;
 		if (var.equals("reader")) {
 			ClojureLowerUtil.isTrue(n == 1, "reader takes one path");
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("open"), ctx.lower(items.get(1)));
+			return ClojureLowerUtil.list(new LispSymbol(READER), ctx.lower(items.get(1)));
 		}
 		throw new LispReadException("unknown name: clojure.java.io/" + var);
 	}
 
 	/**
-	 * {@code clojure.java.io/reader} as a function value: a one-argument lambda over the
-	 * same open.
+	 * {@code clojure.java.io/reader} as a function value: the reader function itself.
 	 */
-	static LispVal jioValue(ClojureLowering ctx, String var) {
+	static LispVal jioValue(String var) {
 		if (var.equals("reader")) {
-			LispSymbol path = new LispSymbol(ClojureLowering.mangle("reader-path"));
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(path),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("open"), path));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(READER));
 		}
 		throw new LispReadException("unknown name: clojure.java.io/" + var);
 	}

@@ -114,6 +114,29 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theStreamFamilyFoldsThePrinterArmOfAProgramMakingNoStream() {
+		// a stream reaches a value only through a read of *out*/*in*/*err*, a
+		// StringWriter, a reader over a StringReader or a clojure.java.io/reader
+		List<LispVal> forms = read("(cond ((rontolisp::%clojure-stream-p x) (w x)) ((functionp x) 1) (t 2))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.STREAM);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.STREAM).stream().map(LispVal::print))
+			.containsExactly("(COND ((FUNCTIONP X) 1) (T 2))");
+		for (String producer : List.of("(rontolisp::%clojure-out)", "(rontolisp::%clojure-in)",
+				"(rontolisp::%clojure-err)", "(rontolisp::%clojure-string-writer)",
+				"(rontolisp::%clojure-string-reader \"s\")", "(rontolisp::%clojure-reader \"f\")")) {
+			assertThat(ClojureArms.scan(read("(print " + producer + ")"), ClojureArms.Family.STREAM).builds())
+				.as(producer)
+				.isTrue();
+		}
+		// the Common Lisp constructors are no producer: naming one would splice the
+		// library into a Common Lisp program
+		assertThat(ClojureArms.isFamilyName("OPEN")).isFalse();
+		assertThat(ClojureArms.isFamilyName("MAKE-STRING-OUTPUT-STREAM")).isFalse();
+	}
+
+	@Test
 	void theStreamDepthFamilyDropsTheRebindingPairsOfAProgramReadingNoCounter() {
 		List<LispVal> forms = read("(defvar rontolisp::%clojure-out-depth 0)"
 				+ " (let* ((s (make-string-output-stream)) (*standard-output* s)"

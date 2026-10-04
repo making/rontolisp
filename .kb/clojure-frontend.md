@@ -116,7 +116,7 @@ answered `2 5 3` before).
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
 | `with-in-str` / `read-line` | `let*` rebinding `*standard-input*` to `make-string-input-stream` (body behind the `try` barrier) / `(read-line *standard-input* nil nil)` | `read-line` as a value is `%clojure-read-line-v`; clojure-spec `with-in-str-binds-in-to-the-string-and-read-line-reads-it` |
 | `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N.0 msecs` | a double like the oracle's `nanoTime` quotient (whole milliseconds here), so the book's `\d+\.\d+` match holds; only the shape pins |
-| `*out*` `*in*` `*err*` `*agent*`, the flags | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>` | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
+| `*out*` `*in*` `*err*` `*agent*`, the flags | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>`; a stream READ as a value calls its `Special.reader` (`%clojure-out`/`-in`/`-err`, "Streams as values") | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
 | `defstruct` `struct` `struct-map` | a key vector behind the name plus fresh-table builders | missing keys `nil`, too many values signal |
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
 | `var` / `#'` | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)` | "Vars and metadata" |
@@ -174,7 +174,8 @@ Each is a real work item unless the reason says otherwise.
 - Printing (`clojure.lisp`, `%clojure-write`): `nil` prints `nil`, never `()` (an empty lazy
   seq prints `()`); map/set walk order is unspecified (the spec pins only single-entry maps
   and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
-  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, any
+  and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a
+  stream the oracle's `#object` without the hash ("Streams as values"), any
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
   while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
@@ -204,6 +205,7 @@ Each is a real work item unless the reason says otherwise.
 - A runtime error whose condition names no class is taken by any catch but `ExceptionInfo`'s
   ("Catching"). Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
+  class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
   tag; `class` answers a kind keyword (host classes exist on no wasm backend), an exception
   its class name as a keyword, a host object its host class (interpreter and JVM).
@@ -252,9 +254,8 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   `No matching field found: m`), so the lowering carries no `java:` operator and wasm compiles
   it without the `JAVA:CALL` warning.
 - Deviations: `class` answers a keyword and `.printStackTrace`/`.getStackTrace` no frames
-  ("Catching"); any other method but the three readers and `.toString` is refused (`.getClass`
-  among them: routing it through the library would splice the exception runtime into every
-  program calling `.getClass` on a value of unknown class, `.todo/c65`); a runtime error's `str` has no class
+  ("Catching"); `.getClass` answers what `class` does ("Dispatch", "Class chains"); any other
+  method but the three readers and `.toString` is refused; a runtime error's `str` has no class
   prefix; `throw` of a non-exception is a `ClassCastException` whose message is its rendering
   (the oracle's names the two classes; until 2026-10-03 it signalled the rendering as a plain
   error, which an `IllegalArgumentException` catch took).
@@ -349,8 +350,8 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `.getStackTrace` of a receiver of unknown or plain-throwable class are
   `%clojure-print-stack-trace` (the report line to `*error-output*`) /
   `%clojure-stack-trace` (`[]`), the host method for anything but a condition; they read no
-  slot, so they need no reader. A `defmethod` over a throwable class stays refused
-  (`dispatchClassKey`; `.todo/c65`).
+  slot, so they need no reader. A `defmethod` over a throwable class dispatches by
+  inheritance ("Dispatch", "Class chains").
 - Measured against the oracle: 52 runtime-error kinds under a catch of the oracle's class, all
   four backends alike, differ only where documented (`nth` past the end answers nil; the
   division message); the shcloj4 drivers with `catch`/`thrown?` sites (interop, exploring,
@@ -447,8 +448,8 @@ before the library splice.
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
   `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's,
-  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", and `PRINT_FLAGS` the
-  printer's, "State") scans for a PRODUCER (`%clojure-sorted-make` and the four
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS` the
+  printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
   a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
@@ -821,6 +822,46 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
 - `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
   else refuses; it has no value.
+- **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
+  (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive` (`hierarchyArg`: a
+  class spelling no local or var shadows, `Object` aside) lower a class spelling through
+  `classKey` to the keyword `class` answers for its values: a core class its kind, a record
+  its tag, a throwable or stream class (`chainedClassKey`) its own name. The oracle's
+  `isa?` follows Java inheritance (`isAssignableFrom`, then each of `supers` through the
+  hierarchy); here `C%H-ISA?`'s last arm is `C%H-CLASS-ISA?`: a class keyword whose name
+  has an edge in `C%H-SUPERS` (an alist of name to superclass) is a child of whatever its
+  superclass is, so `(derive Exception ::e)` reaches every subclass and the most-specific
+  search ranks `IllegalArgumentException` over `Exception`. The edges are the chains the
+  lowering resolved (`ClojureLowering.recordChain`: constructions, including throwables
+  that stay host objects, catches, `instance?`, the spellings) plus, once a throwable is
+  spelled, the classes a runtime error or `ex-info` may have (`RUNTIME_THROWABLES`), and
+  once a stream class is, the `STREAM_SUPERS` table. Interfaces and `Object` are in no
+  chain. Everything rides on `usedClassChains`: a hierarchy runtime of a program spelling
+  no such class is byte-identical (a session adds the walk, a redefined `C%H-ISA?` and the
+  edges ahead of the first buffer spelling one, then `append`s later buffers' edges,
+  `ClojureSessionTest#aBufferSpellingAThrowableOrStreamClassJoinsTheClassChainWalkOnce`).
+  Gaps: the class of a host throwable no construction names (one a host method returned)
+  has no edges, so it `isa?` only itself; `parents`/`ancestors`/`descendants` of a class
+  answer only what `derive` recorded (the oracle adds bases/supers, interfaces included;
+  `.todo/c73`).
+  Rejected: registering the chain at run time where `class` reads a condition -- every
+  program calling `class` on one would carry the table and the write, where the edges are
+  known at lowering time for every class a value can have but that host-returned one.
+- `.getClass` of a receiver of unknown class (or a plain-throwable / stream class) is
+  `getClassForm`: an EXCEPTION arm answering `%clojure-exception-class` and a STREAM arm
+  answering the stream's class keyword ahead of the host call, so both shed where no
+  condition or stream can reach it (before: a `java:call` refusal on the interpreter and
+  the JVM, a call-time error on wasm).
+- Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component / JVM class): a
+  `class` multimethod with a `String` method, a `.getClass` of a parameter, a catch reading
+  `class`, a `class` multimethod over a caught error, `examples/clojure/demo.clj`:
+  byte-identical. `(defmethod f Exception ...)` over a caught error against the same program
+  spelling `:java.lang.Exception` (exact hit only) 184,464 / 149,718 / 188,247 / 156,625 ->
+  185,329 / 150,413 / 189,138 / 157,603; `(defmethod f java.io.Writer ...)` over `*out*`
+  against `:java.io.Writer` 88,031 / 73,414 / 89,378 / 96,502 -> 88,747 / 74,019 / 90,122 /
+  97,655; `(.getClass e)` of a caught error 63,530 (a refusal) -> 63,547.
+- Pins: clojure-spec `a-multimethod-dispatches-on-an-exception-class-by-inheritance`,
+  `a-multimethod-dispatches-on-a-stream-class-by-inheritance`.
 
 ## Java interop
 
@@ -868,12 +909,15 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `.toString` of a number, character, symbol (booleans too), cons, array, table or
   function answers `(%clojure-str-of x "nil" nil)`, the oracle's `toString`, on every
   backend (`ClojureInteropLowering.valueToString`); nil signals (the oracle's NPE); only
-  what is left reaches `java:call`. The stream arm's non-string-stream branch reaches the
-  same test, since `streamp` answers true for `t` (the terminal's designator, and
-  Clojure's `true`).
+  what is left reaches `java:call`.
   Stream receivers run on every backend: `.write` -> `princ` (nil signals), `.flush`,
   `.readLine` -> `read-line` (nil past the end), `.read` -> a character code (`-1` past
-  the end), `.toString` of a string output stream -> the text so far. `(new
+  the end), `.toString` -> `valueToString`'s stream clause, `%clojure-stream-string` (a
+  string output stream's text so far, any other stream its host class name) behind the
+  exact tag test `%clojure-stream-p`, never `streamp`: that answers true for `t`
+  (Clojure's `true`) and, on the JVM, for a host object whose `equals` answers true (a
+  `proxy` with `(equals [o] true)`: `ClojureInteropTest#proxyOverAClassSeesThisAndSuper`
+  went `true` when `.toString` took the printer behind `streamp`). `(new
   java.io.StringWriter)` with no argument is a string output stream on every backend; a
   `java.io.PushbackReader`/`BufferedReader` construction over a stream is that stream and
   over a `(StringReader. s)` argument a string input stream ("Reading").
@@ -1084,9 +1128,9 @@ literal. `::kw` resolves against the context each call site passes, `("ns" ("ali
   required later still reads (the oracle needs it loaded first); an unknown class and a
   deftype literal are the source reader's refusals.
 - Streams: `(java.io.PushbackReader. x)`/`BufferedReader.` is `x` itself when it surely is
-  a stream (`open`, a string input stream, `*standard-input*`), else a `streamp` test
-  around the `java:new`; over a `(StringReader. s)` argument it is `(make-string-input-stream
-  s)`. A `StringReader` alone stays the host class: the corpus's SAX `InputSource` takes
+  a stream (`%clojure-reader`, `%clojure-string-reader`, `%clojure-in`:
+  `ClojureInteropLowering.isStreamForm`), else a `streamp` test around the `java:new`; over
+  a `(StringReader. s)` argument it is `(%clojure-string-reader s)`. A `StringReader` alone stays the host class: the corpus's SAX `InputSource` takes
   one. `read` of a host reader is refused (`read needs a reader ...`).
 - Messages: the oracle's for the end of input (`EOF while reading`, `... string`, `...
   character`), `Unmatched delimiter: )` and the odd map; the source reader's otherwise.
@@ -1147,7 +1191,9 @@ resolve var`.
   Constant values stay a datum at each `#'` site; evaluated ones are stored into
   `|c%x%meta|` ahead of the definition. A site above a redefinition sees the older
   metadata. Anything other than `def`/`defn`/`defn-`/`defmacro` carries only
-  `:name`/`:ns`. `test` calls `(:test (meta v))`.
+  `:name`/`:ns`. `test` calls `(:test (meta v))`. `var-get` (measured 2026-10-04: `unknown name: var-get`) is
+  `%clojure-var-root` (`ClojureVarLowering.getOf`, value `-v`): the root of a var, and unlike
+  `deref` (atoms, reduced values) a signal for anything that is no var, like the oracle.
 - **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's
   unbound var: the value cell holds `(:C%UNBOUND "ns/name")` (`%clojure-unbound`), truthy,
   `str` `Unbound: #'ns/name`, printing `#<Unbound: #'ns/name>` (the oracle's `#object` has a
@@ -1177,6 +1223,56 @@ resolve var`.
   `ClojureSessionTest#aDeclaredNameStaysOpenForALaterBuffer`,
   `ClojureLibraryTest#aProgramMakingNoUnboundRootSplicesTheLibraryWithoutItsUnboundArms`,
   `ClojureArmsTest#theUnboundRootFamilyStripsOnlyItsOwnArms`.
+- **Streams as values.** At the root `*standard-output*`/`*standard-input*` hold the `t`
+  designator, the same object as Clojure's `true`, so `(prn *out*)` printed `true` on all
+  four backends. A read of `*out*`/`*in*` as a VALUE (`ClojureLowering.specialRead`: the
+  name, `clojure.core/` spelling, a core var's getter; never a `binding`/`set!` target)
+  lowers to `(%clojure-out)`/`(%clojure-in)`: the bound stream, or at the root one
+  library stream value over `t` itself, `(%obj-new '%stream t :standard-output)` /
+  `:standard-input` (`LispLayout.Kinds`). Every operation resolves it back to `t`
+  (`%stream-target` answers the handle slot), so no backend learned a handle: measured
+  2026-10-04, read/write/`binding`/`.readLine`/`line-seq` over it agree on all four, where
+  the plan of a `%STREAM` over handles 1/0 would have needed the JVM's `emitStderrBranch`
+  treatment for both and a second stdin buffer on wasm. The kinds keep `=` apart and give
+  the direction predicates their answer (`Environment.streamDirection`,
+  `expandStreamDirectionP`). `LispMacroExpander.mayCreateStreamValues` counts a literal
+  `(%obj-new '%STREAM ...)` as a producer (the library value names no constructor).
+  The printer and `str` spell a stream as the oracle's `#object[C "toString"]` WITHOUT the
+  identity hash, `str` that toString (`%clojure-stream-class`/`-string`/`write-stream`):
+  `:standard-output` `java.io.OutputStreamWriter`, `:standard` (`*err*`)
+  `java.io.PrintWriter`, `:string-output` `java.io.StringWriter` (toString the text so
+  far, read before anything is written since the target may be the stream itself),
+  `:standard-input`/`:string-input` `clojure.lang.LineNumberingPushbackReader` (the
+  oracle's `with-in-str`; its PushbackReader over a StringReader deviates), `:file`
+  `java.io.BufferedReader` (`clojure.java.io/reader`). **Arms**: the printer's and
+  `str`'s `%clojure-stream-p` tests are `ClojureArms.Family.STREAM`, whose producers are the
+  Clojure-only wrappers a stream reaches a program through -- `%clojure-out`/`-in`/`-err`,
+  `%clojure-string-writer` (`(StringWriter.)`), `%clojure-string-reader` (a reader over a
+  StringReader), `%clojure-reader` (`clojure.java.io/reader`) -- never `open` or
+  `make-string-output-stream`, which `ClojureLibrary.references` would read as a library
+  reference in a Common Lisp program; `with-out-str`'s own stream reaches a value only
+  through a read of `*out*`. Measured 2026-10-04 (wasm / class bytes, before -> after):
+  `(prn [1 "a"])` 32,305 / 64,141 and `(println (with-out-str (print 1)))` unchanged,
+  `(println [1 2] (str 3 :k))` 36,549 / 70,622 -> 36,490 / 70,060 (`str`'s old
+  `string-stream` arm was unconditional), `examples/clojure/demo.clj` 91,190 / 131,494 ->
+  91,151 / 130,914; a StringWriter read back with `str` 37,539 / 78,733 -> 37,841 /
+  80,743, `(binding [*out* *out*] (println 2))` 9,910 / 72,296 -> 11,528 / 77,211 (the
+  stream value turns the instance runtime and the per-operation unwrap on). Pinned by
+  clojure-spec `a-stream-prints-as-the-host-object-of-its-kind`,
+  `ClojureArmsTest#theStreamFamilyFoldsThePrinterArmOfAProgramMakingNoStream`,
+  `ClojureLibraryTest#aProgramMakingNoStreamSplicesTheLibraryWithoutItsStreamArms`, the
+  direction lines of `StringStreamPrograms`.
+  **`class` of a stream** (measured 2026-10-04: every one signalled `class needs a value of
+  a known kind`, `(class *out*)` answered `:boolean`) is an arm of `ClojureDispatchLowering.classForm`
+  on the same `%clojure-stream-p` test, so the same family sheds it: the keyword of
+  `%clojure-stream-class`, `:java.io.OutputStreamWriter` where the oracle's class prints
+  `java.io.OutputStreamWriter`, like an exception's class keyword. A program with no stream
+  producer compiles `(prn (class 1))` with no mention of it (wasm bytes: no
+  `OutputStreamWriter` string). Pinned by clojure-spec
+  `class-of-a-stream-answers-the-host-class-of-its-kind`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`
+  and `ClojureWasmFileIoTest` (the file reader), `ClojureLibraryTest#classOfAStreamIsAnArmAProgramMakingNoStreamSheds`.
+  `defmethod` on a stream CLASS SPELLING (`java.io.StringWriter`) is still the "needs a core
+  class" refusal (a keyword dispatch value works).
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).

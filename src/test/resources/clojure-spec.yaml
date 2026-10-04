@@ -1980,6 +1980,38 @@ cases:
       java.lang.Exception: boom
       :printed
       0 nil
+  - name: a-multimethod-dispatches-on-an-exception-class-by-inheritance
+    # A throwable class as a dispatch value is the keyword class answers for it, and the
+    # hierarchy follows the class chain like the oracle's isa? follows Java inheritance:
+    # the most specific method wins, prefer-method breaks a tie, derive on a class reaches
+    # its subclasses. isa? and derive read a class spelling as that keyword too, so a core
+    # class matches its kind. .getClass of an exception answers what class answers (the
+    # oracle answers the host class, which prints without the colon).
+    source: |
+      (defmulti xdh-handle class)
+      (defmethod xdh-handle IllegalArgumentException [e] :iae)
+      (defmethod xdh-handle Exception [e] :exception)
+      (defmethod xdh-handle :default [e] :default)
+      (println (xdh-handle (NumberFormatException. "x")) (xdh-handle (IllegalStateException. "x")) (xdh-handle (ex-info "m" {})) (xdh-handle 1))
+      (println (xdh-handle (try (+ 1 "a") (catch Exception e e))) (xdh-handle (try (inc nil) (catch Exception e e))))
+      (defmulti xdh-fails class)
+      (defmethod xdh-fails RuntimeException [e] :runtime)
+      (defmethod xdh-fails Throwable [e] :throwable)
+      (println (xdh-fails (try (+ 1 nil) (catch Exception e e))) (xdh-fails (AssertionError. "x")))
+      (prefer-method xdh-fails Throwable RuntimeException)
+      (println (xdh-fails (ex-info "x" {})))
+      (println (isa? (class (NumberFormatException. "x")) IllegalArgumentException) (isa? IllegalArgumentException (class (NumberFormatException. "x"))) (isa? NumberFormatException RuntimeException))
+      (derive Exception ::xdh-failure)
+      (println (isa? (class (ex-info "a" {})) ::xdh-failure) (isa? (class "a") String) (isa? (class [1]) String))
+      (println (.getClass (Exception. "x")) (try (+ 1 "a") (catch Exception e (.getClass e))))
+    expected: |
+      :iae :exception :exception :default
+      :exception :exception
+      :runtime :throwable
+      :throwable
+      true false true
+      true true false
+      :java.lang.Exception :java.lang.ClassCastException
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance
@@ -6031,6 +6063,101 @@ cases:
       "via err"
       false false true
       "Can't change/establish root binding of: *err* with set" "Can't change/establish root binding of: *out* with set"
+  - name: a-stream-prints-as-the-host-object-of-its-kind
+    # The oracle (clj 1.12.6) with its identity hashes removed (#object[C 0x.. "C@.."]
+    # here is #object[C "C"]): *out*, *in* and *err* at the root are the process standard
+    # streams, stream values apart from true, and every stream prints as the #object of the
+    # host class its kind is, str answering its toString (a StringWriter's text so far).
+    # One deviation: a string input stream is a LineNumberingPushbackReader, with-in-str's
+    # *in*, so the PushbackReader over a StringReader prints that where the oracle says
+    # java.io.PushbackReader.
+    source: |
+      (prn *out* *in* *err*)
+      (println *out* *in* *err*)
+      (println (str *out*) (str *in*) (str *err*) (.toString *out*))
+      (prn (= *out* *in*) (identical? *out* *out*) (= *out* *out*) (= *out* *err*) (true? *out*))
+      (binding [*out* *out*] (println "through the root stream"))
+      (.write *out* "written\n")
+      (.flush *out*)
+      (prn (with-out-str (prn *out*)))
+      (prn (java.io.StringWriter.) [*out*] (pr-str *err*) (print-str *in*))
+      (let [w (java.io.StringWriter.)] (.write w "a\"b") (prn w (str w)) (println w))
+      (with-in-str "abc" (prn *in*))
+      (prn (java.io.PushbackReader. (java.io.StringReader. "x")))
+      (prn @#'*out* @#'*in*)
+    expected: |
+      #object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"] #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"] #object[java.io.PrintWriter "java.io.PrintWriter"]
+      #object[java.io.OutputStreamWriter java.io.OutputStreamWriter] #object[clojure.lang.LineNumberingPushbackReader clojure.lang.LineNumberingPushbackReader] #object[java.io.PrintWriter java.io.PrintWriter]
+      java.io.OutputStreamWriter clojure.lang.LineNumberingPushbackReader java.io.PrintWriter java.io.OutputStreamWriter
+      false true true false false
+      through the root stream
+      written
+      "#object[java.io.StringWriter \"\"]\n"
+      #object[java.io.StringWriter ""] [#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]] "#object[java.io.PrintWriter \"java.io.PrintWriter\"]" "#object[clojure.lang.LineNumberingPushbackReader clojure.lang.LineNumberingPushbackReader]"
+      #object[java.io.StringWriter "a\"b"] "a\"b"
+      #object[java.io.StringWriter a"b]
+      #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+      #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+      #object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"] #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+  - name: class-of-a-stream-answers-the-host-class-of-its-kind
+    # class answers a keyword for every kind (the oracle answers the host class, which
+    # prints without the colon): a stream answers the class its printer names, :java.io.X
+    # where the oracle says java.io.X. *out*, *in* and *err* at the root, a StringWriter,
+    # with-in-str's *in*, with-out-str's *out* (a StringWriter) and a PushbackReader over a
+    # StringReader (the oracle's java.io.PushbackReader deviates, see the printer case).
+    # Dispatch on class tells the kinds apart like any keyword.
+    source: |
+      (prn (class *out*) (class *in*) (class *err*))
+      (prn (class (java.io.StringWriter.)) (with-out-str (prn (class *out*))))
+      (with-in-str "abc" (prn (class *in*)))
+      (prn (class (java.io.PushbackReader. (java.io.StringReader. "x"))))
+      (prn (= (class *out*) (class *out*)) (= (class *out*) (class *err*)) (= (class (java.io.StringWriter.)) (class (java.io.StringWriter.))))
+      (prn (map class [*out* (java.io.StringWriter.) 1 "s"]))
+      (defmulti stream-kind class)
+      (defmethod stream-kind :java.io.StringWriter [_] :writer)
+      (defmethod stream-kind :java.io.OutputStreamWriter [_] :stdout)
+      (defmethod stream-kind :default [_] :other)
+      (prn (stream-kind (java.io.StringWriter.)) (stream-kind *out*) (stream-kind *err*) (stream-kind 1))
+    expected: |
+      :java.io.OutputStreamWriter :clojure.lang.LineNumberingPushbackReader :java.io.PrintWriter
+      :java.io.StringWriter ":java.io.StringWriter\n"
+      :clojure.lang.LineNumberingPushbackReader
+      :clojure.lang.LineNumberingPushbackReader
+      true false true
+      (:java.io.OutputStreamWriter :java.io.StringWriter :number :string)
+      :writer :stdout :other :other
+  - name: a-multimethod-dispatches-on-a-stream-class-by-inheritance
+    # A stream's host class as a dispatch value is the keyword class answers for it, and
+    # java.io.Writer / java.io.Reader take every stream of their kind, like the oracle's
+    # Java inheritance. .getClass of a stream answers what class answers (the oracle
+    # answers the host class, which prints without the colon).
+    source: |
+      (defmulti xds-kind class)
+      (defmethod xds-kind java.io.StringWriter [w] :string-writer)
+      (defmethod xds-kind java.io.Writer [w] :writer)
+      (defmethod xds-kind java.io.Reader [w] :reader)
+      (println (xds-kind (java.io.StringWriter.)) (xds-kind *out*) (xds-kind *err*) (xds-kind *in*) (with-in-str "x" (xds-kind *in*)))
+      (println (isa? (class *out*) java.io.Writer) (isa? (class *in*) java.io.Writer) (.getClass (java.io.StringWriter.)))
+    expected: |
+      :string-writer :writer :writer :reader :reader
+      true false :java.io.StringWriter
+  - name: var-get-answers-the-root-of-a-var
+    # Oracle-identical (clj 1.12.6): var-get is the root of a var, the same as deref of
+    # it, a binding included, over a function value and a core var, and a non-var signals
+    # where deref of an atom would answer (a reduced value is no var).
+    source: |
+      (def vg-x 5)
+      (def ^:dynamic *vg-d* 1)
+      (defn vg-f [] 7)
+      (prn (var-get #'vg-x) (var-get #'*vg-d*) ((var-get (var vg-f))) (identical? (var-get #'*out*) *out*))
+      (binding [*vg-d* 9] (prn (var-get #'*vg-d*) @#'*vg-d*))
+      (prn (map var-get [#'vg-x #'*vg-d*]) (apply var-get [#'vg-x]) ((var-get #'inc) 1))
+      (prn (try (var-get 1) (catch Exception e :refused)) (try (var-get (atom 1)) (catch Exception e :refused)) (try (var-get (reduced 1)) (catch Exception e :refused)))
+    expected: |
+      5 1 7 true
+      9 9
+      (5 1) 5 2
+      :refused :refused :refused
   - name: print-length-level-and-readably-shape-the-printer
     # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
     # collection or record after that many members with ... (an infinite seq realizes only

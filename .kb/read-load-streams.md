@@ -1305,11 +1305,16 @@ answer.
   the output (`.kb/emitted-output-determinism.md`, `.kb/instance-syntax.md`). A test that must tell
   two streams apart uses `equal` in-program (see `StreamHandleConcurrencySupport`), not the text.
 - **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`, `:STRING-OUTPUT`,
-  `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`. Compared with `equal`, not `eq`.
+  `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`, `:STANDARD-OUTPUT`, `:STANDARD-INPUT`.
+  Compared with `equal`, not `eq`.
 - **`*error-output*` holds one** (`:STANDARD` over reserved handle 2). `*standard-output*` /
-  `*standard-input*` keep the `t` DESIGNATOR: it is not a value and does not become one.
+  `*standard-input*` keep the `t` DESIGNATOR: it is not a value and does not become one. A
+  Clojure program's `*out*`/`*in*` READ answers a value whose handle IS `t`
+  (`:STANDARD-OUTPUT`/`:STANDARD-INPUT`, `.kb/clojure-frontend.md` "Streams as values"):
+  the unwrap hands every backend the designator it already serves.
 - **One gate, both halves**: `LispMacroExpander.mayCreateStreamValues(program)` scans for the
-  constructor names (plus `*error-output*`) and answers `Ctx.usesStreamValues`, gating the WRAP a
+  constructor names (plus `*error-output*` and a literal `(%obj-new '%STREAM ...)`) and
+  answers `Ctx.usesStreamValues`, gating the WRAP a
   producer emits AND the UNWRAP a consumer emits, so the two can never disagree. It also forces
   `mayCreateInstances` on.
 - **Producers wrap in the BACKEND, not in an expansion** (`JvmObjCompiler.emitWrapStream`,

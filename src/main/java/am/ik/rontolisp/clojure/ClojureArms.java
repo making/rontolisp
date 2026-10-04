@@ -73,6 +73,21 @@ public final class ClojureArms {
 				Set.of("RONTOLISP::%CLOJURE-UNBOUND"), Set.of()),
 
 		/**
+		 * A stream value, which the printer and {@code str} spell as the oracle's
+		 * {@code #object} of the host class its kind is: only a read of {@code *out*},
+		 * {@code *in*} or {@code *err*} as a value, a {@code java.io.StringWriter}, a
+		 * reader over a {@code java.io.StringReader} and a {@code clojure.java.io/reader}
+		 * hand one to the program. The Common Lisp constructors the library and the
+		 * binding forms call are no producer: naming one would splice the library into a
+		 * Common Lisp program.
+		 */
+		STREAM("stream", Set.of("RONTOLISP::%CLOJURE-STREAM-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-OUT", "RONTOLISP::%CLOJURE-IN", "RONTOLISP::%CLOJURE-ERR",
+						"RONTOLISP::%CLOJURE-STRING-WRITER", "RONTOLISP::%CLOJURE-STRING-READER",
+						"RONTOLISP::%CLOJURE-READER"),
+				Set.of()),
+
+		/**
 		 * The binding depth of the {@code clojure.core} specials {@code clojure.main}
 		 * does not bind ({@code *out*}, {@code *in*}, {@code *err*}, {@code *agent*} and
 		 * a few flags, {@link ClojureCoreSpecials#COUNTERS}), which {@code thread-bound?}

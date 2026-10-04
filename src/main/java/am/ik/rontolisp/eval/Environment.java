@@ -9993,7 +9993,16 @@ public final class Environment implements Scope {
 			return 3;
 		}
 		if (!(target instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG)
-				&& inst.slot(0) instanceof LispInteger handle && inst.slot(1) instanceof LispSymbol kind)) {
+				&& inst.slot(1) instanceof LispSymbol kind)) {
+			return 0;
+		}
+		if (kind.name().equals(LispLayout.Kinds.STANDARD_INPUT)) {
+			return 1;
+		}
+		if (kind.name().equals(LispLayout.Kinds.STANDARD_OUTPUT)) {
+			return 2;
+		}
+		if (!(inst.slot(0) instanceof LispInteger handle)) {
 			return 0;
 		}
 		return switch (kind.name()) {

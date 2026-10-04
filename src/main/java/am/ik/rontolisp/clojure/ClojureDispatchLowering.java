@@ -88,6 +88,7 @@ final class ClojureDispatchLowering {
 			throw new LispReadException("instance? needs a core class, not " + name);
 		}
 		ctx.readsExceptionParts = true;
+		ctx.recordChain(chain);
 		return ClojureLowerUtil.list(new LispSymbol(INSTANCE_OF), lowered, ClojureThrowables.quoted(chain));
 	}
 
@@ -120,6 +121,10 @@ final class ClojureDispatchLowering {
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isReifyForm(one),
 				ClojureCollectionLowering.keywordForm("reify")));
+		// a stream answers the host class its printer names, as a keyword like every
+		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),
+				streamClassKeyword(one)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ctx.inDispatchFn ? ClojureLowering.NIL_CONST : ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),
@@ -171,6 +176,41 @@ final class ClojureDispatchLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
+	}
+
+	/** The keyword of the host class a stream's printer names ({@code clojure.lisp}). */
+	static LispVal streamClassKeyword(LispVal stream) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureCollectionLowering.KEYWORD_TAG,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STREAM-CLASS"), stream));
+	}
+
+	/**
+	 * {@code .getClass} over the call any other receiver takes: an exception or a runtime
+	 * error, and a stream, answer the keyword {@code class} answers -- arms a program
+	 * that can hold none of the kind sheds ({@link ClojureArms.Family#EXCEPTION},
+	 * {@link ClojureArms.Family#STREAM}), so the exception reader travels only where a
+	 * condition can reach the call. A receiver of a known class takes only its own kind's
+	 * arm.
+	 * @param ctx the hub
+	 * @param recv the bound receiver
+	 * @param knownClass the receiver's known host class, or null
+	 * @param call the call for any other receiver
+	 * @return the form
+	 */
+	static LispVal getClassForm(ClojureLowering ctx, LispSymbol recv, @Nullable String knownClass, LispVal call) {
+		LispVal out = call;
+		if (knownClass == null || STREAM_SUPERS.containsKey(knownClass) || STREAM_SUPERS.containsValue(knownClass)) {
+			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), recv),
+					streamClassKeyword(recv), out);
+		}
+		if (knownClass == null || ClojureThrowables.chainOf(knownClass) != null) {
+			ctx.readsConditionClass = true;
+			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(EXCEPTION_P), recv),
+					ClojureLowerUtil.list(new LispSymbol(EXCEPTION_CLASS), recv), out);
+		}
+		return out;
 	}
 
 	/** {@code class} as a value: a one-argument lambda over the same read. */
@@ -251,29 +291,117 @@ final class ClojureDispatchLowering {
 	 * a var holding the dispatch value, like the oracle's evaluated position). Record and
 	 * deftype names answer their tags; dotted, imported and {@code java.lang} spellings
 	 * resolve through {@link #resolveClass} first, so {@code java.util.Map} and
-	 * {@code clojure.lang.IPersistentVector} map like their simple names. A capitalized
-	 * name that maps to nothing (an {@code Instant}, a {@code Date}, ...) is the
+	 * {@code clojure.lang.IPersistentVector} map like their simple names, and a throwable
+	 * or stream class answers its own name ({@link #classKey}). A capitalized name that
+	 * maps to nothing (an {@code Instant}, a {@code Date}, ...) is the
 	 * {@code extend-protocol} row's named refusal.
 	 */
 	static @Nullable LispVal dispatchClassKey(ClojureLowering ctx, String name) {
+		if (ctx.typeDefOf(name) == null && isObjectClassName(ctx, name)) {
+			return ClojureCollectionLowering.keywordForm("object");
+		}
+		if (!ClojureNamespaceLowering.isClasslike(ctx, name) && ctx.typeDefOf(name) == null) {
+			return null;
+		}
+		LispVal key = classKey(ctx, name);
+		if (key == null) {
+			throw new LispReadException("defmethod needs a core class, not " + name);
+		}
+		return key;
+	}
+
+	/**
+	 * A class spelling to the keyword {@code class} answers for its values, or null when
+	 * the spelling maps to none: a record or deftype name its tag, a core class its kind,
+	 * a throwable or stream class its own name -- the keyword {@code class} answers for
+	 * an exception or a stream -- with its chain recorded ({@link #chainedClassKey}).
+	 */
+	static @Nullable LispVal classKey(ClojureLowering ctx, String name) {
 		ClojureLowering.TypeDef type = ctx.typeDefOf(name);
 		if (type != null) {
 			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
 		}
-		if (isObjectClassName(ctx, name)) {
-			return ClojureCollectionLowering.keywordForm("object");
-		}
-		boolean classlike = ctx.ns().classNames.containsKey(name) || ClojureNamespaceLowering.JAVA_LANG.contains(name)
-				|| name.indexOf('.') >= 0 || (!name.isEmpty() && Character.isUpperCase(name.charAt(0)));
-		if (!classlike) {
-			return null;
-		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
 		String kind = DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
-		if (kind == null) {
-			throw new LispReadException("defmethod needs a core class, not " + name);
+		if (kind != null) {
+			return ClojureCollectionLowering.keywordForm(kind);
 		}
-		return ClojureCollectionLowering.keywordForm(kind);
+		return chainedClassKey(ctx, fqn);
+	}
+
+	/**
+	 * The superclass of each stream class {@code class} answers ({@code clojure.lisp},
+	 * {@code %clojure-stream-class}) and of theirs below {@code Object}, read off clj
+	 * 1.12.6 on JDK 25 (2026-10-04): the stream half of the class chains, as
+	 * {@link ClojureThrowables#PARENTS} is the throwable half.
+	 */
+	static final Map<String, String> STREAM_SUPERS = Map.of("java.io.StringWriter", "java.io.Writer",
+			"java.io.PrintWriter", "java.io.Writer", "java.io.OutputStreamWriter", "java.io.Writer",
+			"java.io.BufferedReader", "java.io.Reader", "clojure.lang.LineNumberingPushbackReader",
+			"java.io.PushbackReader", "java.io.PushbackReader", "java.io.FilterReader", "java.io.FilterReader",
+			"java.io.Reader");
+
+	/**
+	 * The classes a runtime error's or an {@code ex-info}'s class may be
+	 * ({@code clojure.lisp}, {@code %clojure-error-chain} and
+	 * {@code %clojure-condition-chain}): their chains join any program that dispatches on
+	 * a throwable class, since such a value names no class in the program.
+	 */
+	static final List<String> RUNTIME_THROWABLES = List.of("java.lang.ArithmeticException",
+			"java.lang.ClassCastException", "java.lang.NullPointerException", "java.lang.IndexOutOfBoundsException",
+			"java.lang.UnsupportedOperationException", "clojure.lang.ArityException", "java.io.FileNotFoundException",
+			"clojure.lang.ExceptionInfo");
+
+	/**
+	 * A throwable or stream class name to its keyword, recording its chain and the chains
+	 * of every class of its family a value may have without the program naming it (the
+	 * runtime errors', the streams'), so {@code isa?} walks from the class {@code class}
+	 * answers to it; null for any other class.
+	 */
+	static @Nullable LispVal chainedClassKey(ClojureLowering ctx, String fqn) {
+		List<String> chain = ClojureThrowables.chainOf(fqn);
+		if (chain != null) {
+			for (String runtime : RUNTIME_THROWABLES) {
+				List<String> runtimeChain = ClojureThrowables.chainOf(runtime);
+				if (runtimeChain != null) {
+					ctx.recordChain(runtimeChain);
+				}
+			}
+		}
+		else if (STREAM_SUPERS.containsKey(fqn) || STREAM_SUPERS.containsValue(fqn)) {
+			chain = new ArrayList<>();
+			for (String c = fqn; c != null; c = STREAM_SUPERS.get(c)) {
+				chain.add(c);
+			}
+			for (String stream : STREAM_SUPERS.keySet()) {
+				ctx.classSupers.putIfAbsent(stream, STREAM_SUPERS.get(stream));
+			}
+		}
+		else {
+			return null;
+		}
+		ctx.recordChain(chain);
+		ctx.usedClassChains = true;
+		return ClojureCollectionLowering.keywordForm(fqn);
+	}
+
+	/**
+	 * An argument of {@code isa?}, {@code derive} or {@code underive}: a class spelling
+	 * (no local or var of that name) is the keyword {@code class} answers for its values
+	 * ({@link #classKey}), like a dispatch value; anything else lowers as usual, a class
+	 * that maps to no keyword ({@code Object} among them) included.
+	 */
+	static LispVal hierarchyArg(ClojureLowering ctx, LispVal datum) {
+		if (datum instanceof LispSymbol s && !s.name().startsWith(":") && !ctx.isLocal(s.name())
+				&& ctx.lookupVar(s.name()) == null
+				&& (ClojureNamespaceLowering.isClasslike(ctx, s.name()) || ctx.typeDefOf(s.name()) != null)
+				&& !isObjectClassName(ctx, s.name())) {
+			LispVal key = classKey(ctx, s.name());
+			if (key != null) {
+				return key;
+			}
+		}
+		return ctx.lower(datum);
 	}
 
 	/**

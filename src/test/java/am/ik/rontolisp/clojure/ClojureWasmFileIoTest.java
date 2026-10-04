@@ -31,14 +31,14 @@ class ClojureWasmFileIoTest {
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnPreview1() throws Exception {
 		assertThat(runWithPreopen(false))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n:java.io.BufferedReader\n");
 	}
 
 	@Test
 	void spitSlurpLineSeqAndReaderRunWithAPreopenOnTheComponent() throws Exception {
 		assertThat(runWithPreopen(true))
 			.isEqualTo("a\nb\n(a b)\n(1 2)\n[1 2]\n{:a 1}\n42\n\"\"\ns#fileio.Rec{:a 1, :b 2}\n7\n"
-					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n");
+					+ "(#fileio.Rec{:a 1, :b \"x\"}) :eof\n:java.io.BufferedReader\n");
 	}
 
 	private static String runWithPreopen(boolean component) throws Exception {
@@ -60,7 +60,8 @@ class ClojureWasmFileIoTest {
 				+ "(spit " + out + " \"s\")" + "(spit " + out + " (->Rec 1 2) :append true)" + "(println (slurp " + out
 				+ "))" + "(with-open [r (jio/reader " + words + ")] (println (count (line-seq r))))" + "(spit " + out
 				+ " (list (->Rec 1 \"x\")))" + "(with-open [r (java.io.PushbackReader. (jio/reader " + out + "))]"
-				+ " (prn (read r) (read r false :eof)))";
+				+ " (prn (read r) (read r false :eof)))" + "(with-open [r (jio/reader " + words
+				+ ")] (println (class r)))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)

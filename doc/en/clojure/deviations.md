@@ -20,7 +20,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
   as `#<procedure>`, an exception as its `toString` (`clojure.lang.ExceptionInfo: m {}`;
   the oracle prints `#error {...}`), an unbound var's root as `#<Unbound: #'user/x>` (the
-  oracle's `#object` carries a hash).
+  oracle's `#object` carries a hash). A stream prints as the oracle's `#object` of the
+  host class its kind is without the identity hash (`#object[java.io.StringWriter "ab"]`,
+  `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`), and `str` answers
+  its `toString` the same way: a string input stream is a
+  `clojure.lang.LineNumberingPushbackReader` (`with-in-str`'s), also where the oracle's is
+  a `java.io.PushbackReader` over a `StringReader`.
 - `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
   read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
   `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
@@ -100,8 +105,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers the host class), `:java.lang.RuntimeException` for a refusal whose condition names
   no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
-  `.getStackTrace` answers an empty vector; every other method but `.getMessage`,
-  `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
+  `.getStackTrace` answers an empty vector; `.getClass` answers what `class` does; every other
+  method but `.getMessage`, `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
   no exception is a `ClassCastException` whose message is the value's rendering, where the
   oracle's message names the two classes.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
@@ -116,7 +121,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   / `def`'d function re-lowered from its recorded definition, or a call to one
   nested inside an inline dispatch datum (inlined at the call site the same way),
   like the oracle);
-  an `Object` method catches past the search but ahead of the default.
+  an `Object` method catches past the search but ahead of the default. A throwable or
+  stream class stores under its name as a keyword (the one `class` answers), and the search
+  follows its superclass chain like the oracle's Java inheritance, without interfaces
+  (`java.io.Serializable`, `java.io.Closeable`) or `Object`; `isa?`, `derive` and
+  `underive` read a class spelling as the same keyword, so `(isa? (class "a") String)` is
+  `true`, but `parents`/`ancestors` of a class answer only what `derive` recorded (the
+  oracle adds the Java supers). Since the keyword is the class here, a keyword spelled
+  `:java.lang.Exception` is that class too.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.
@@ -248,8 +260,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
 - `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
-  (rebinding rebinds the standard streams); `(prn *out*)` prints `true` (the root of
-  `*standard-output*` is `t`);
+  (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
+  stream values over the process standard streams;
   `defonce` keeps the root on reload where `def` resets it.
 - A host-object boolean answers `false` only when the receiver's class is known
   at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound

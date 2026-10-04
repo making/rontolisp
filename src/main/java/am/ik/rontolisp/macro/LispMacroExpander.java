@@ -12323,6 +12323,7 @@ public final class LispMacroExpander {
 	 *         (let ((__sdp_k (%obj-ref __sdp_s 1)))
 	 *           (if (equal __sdp_k :string-output) t
 	 *               (if (equal __sdp_k :string-input) nil
+	 *                   (if (equal __sdp_k :standard-input) nil
 	 *                   (if (equal __sdp_k :body) nil
 	 *                       (if (equal __sdp_k :standard) (not (eql (%obj-ref __sdp_s 0) 0))
 	 *                           (if (equal __sdp_k :file) &lt;recorded bits &gt; 1&gt; t))))))
@@ -12365,6 +12366,10 @@ public final class LispMacroExpander {
 		byKind = makeIf(kindIs(k, LispLayout.Kinds.STANDARD), input ? standard : callOf(LispNames.NOT, standard),
 				byKind);
 		byKind = makeIf(kindIs(k, LispLayout.Kinds.BODY), input ? LispTrue.INSTANCE : LispNil.INSTANCE, byKind);
+		// the standard stream values over t: the opposite direction's is the one the
+		// fall-through would answer wrongly
+		byKind = makeIf(kindIs(k, input ? LispLayout.Kinds.STANDARD_OUTPUT : LispLayout.Kinds.STANDARD_INPUT),
+				LispNil.INSTANCE, byKind);
 		byKind = makeIf(kindIs(k, input ? LispLayout.Kinds.STRING_OUTPUT : LispLayout.Kinds.STRING_INPUT),
 				LispNil.INSTANCE, byKind);
 		byKind = makeIf(kindIs(k, input ? LispLayout.Kinds.STRING_INPUT : LispLayout.Kinds.STRING_OUTPUT),
@@ -20263,6 +20268,9 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean mentionsStreamProducer(LispVal form) {
+		if (constructsStreamValue(form)) {
+			return true;
+		}
 		while (form instanceof LispCons cons) {
 			if (mentionsStreamProducer(cons.car())) {
 				return true;
@@ -20280,6 +20288,20 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the form is a literal {@code (%obj-new '%STREAM ...)} construction: a
+	 * library building a stream value over a designator of its own (a Clojure program's
+	 * standard streams) is a producer like the constructors by name. Only the
+	 * construction counts -- a {@code (%obj-is s '%STREAM)} test names the tag too.
+	 */
+	private static boolean constructsStreamValue(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& head.name().equals(LispNames.OBJ_NEW) && cons.cdr() instanceof LispCons args
+				&& args.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+				&& quote.name().equals(LispNames.QUOTE) && quoted.cdr() instanceof LispCons tagCell
+				&& tagCell.car() instanceof LispSymbol tag && tag.name().equals(LispLayout.STREAM_TAG);
 	}
 
 	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry) {

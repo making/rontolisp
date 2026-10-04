@@ -661,6 +661,38 @@ public final class ClojureLowering {
 	boolean hierarchyEmitted;
 
 	/**
+	 * The superclass of each class whose chain the program resolved (a construction, a
+	 * catch, {@code instance?}, a class spelling in a dispatch or hierarchy position), by
+	 * name: the edges {@code isa?} walks between class keywords once
+	 * {@link #usedClassChains} is set.
+	 */
+	final Map<String, String> classSupers = new LinkedHashMap<>();
+
+	/**
+	 * Whether a dispatch value, {@code isa?}, {@code derive} or {@code underive} spells a
+	 * class with a chain (a throwable or a stream class): the hierarchy runtime then
+	 * follows {@link #classSupers} from a class keyword to its superclass, like the
+	 * oracle's {@code isa?} follows Java inheritance.
+	 */
+	boolean usedClassChains;
+
+	/** Whether the session already emitted the class-chain walk. */
+	boolean classChainsEmitted;
+
+	/** The {@link #classSupers} edges the session already emitted. */
+	final Set<String> emittedSupers = new HashSet<>();
+
+	/**
+	 * Records the superclass edges of a class chain (own name first).
+	 * @param chain the chain
+	 */
+	void recordChain(List<String> chain) {
+		for (int i = 0; i + 1 < chain.size(); i++) {
+			this.classSupers.putIfAbsent(chain.get(i), chain.get(i + 1));
+		}
+	}
+
+	/**
 	 * Whether a {@code defmulti} dispatch function is being lowered: a {@code class} call
 	 * inside one answers nil itself for nil (see {@link #classForm(LispVal)}), so the
 	 * dispatcher's null test maps it onto the nil method's marker -- bare, wrapped in
@@ -1009,6 +1041,32 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureHierarchyLowering.hierarchyRuntime(this), false));
 			this.hierarchyEmitted = true;
+			if (this.usedClassChains) {
+				this.classChainsEmitted = true;
+				this.emittedSupers.addAll(this.classSupers.keySet());
+			}
+		}
+		else if (this.usedClassChains) {
+			// The class-chain walk joins an earlier buffer's hierarchy runtime, and the
+			// edges this buffer resolved first join the ones before them.
+			List<LispVal> forms = new ArrayList<>();
+			Map<String, String> fresh = new LinkedHashMap<>();
+			for (Map.Entry<String, String> edge : this.classSupers.entrySet()) {
+				if (this.emittedSupers.add(edge.getKey())) {
+					fresh.put(edge.getKey(), edge.getValue());
+				}
+			}
+			if (!this.classChainsEmitted) {
+				forms.addAll(ClojureHierarchyLowering.classChainRuntime());
+				forms.add(ClojureHierarchyLowering.supersForm(fresh, false));
+				this.classChainsEmitted = true;
+			}
+			else if (!fresh.isEmpty()) {
+				forms.add(ClojureHierarchyLowering.supersForm(fresh, true));
+			}
+			if (!forms.isEmpty()) {
+				out.add(0, new ClojureTopLevel(forms, false));
+			}
 		}
 		if (this.usedProtocols && !this.protocolsEmitted) {
 			// The protocol runtime travels ahead of the buffer that first needs
@@ -3567,6 +3625,17 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * A {@code clojure.core} special read as a value: {@link #specialValue}, or for a
+	 * stream a call of its {@link ClojureCoreSpecials.Special#reader}, which answers a
+	 * stream value where the variable holds the {@code t} designator. A binding or
+	 * {@code set!} target stays the variable itself.
+	 */
+	LispVal specialRead(ClojureCoreSpecials.Special special) {
+		LispVal variable = specialValue(special);
+		return special.reader() == null ? variable : ClojureLowerUtil.list(special.reader());
+	}
+
+	/**
 	 * {@link #coreValue}, or null for a core name with no value here (a macro, or a var
 	 * the subset does not implement).
 	 */
@@ -3581,7 +3650,7 @@ public final class ClojureLowering {
 		}
 		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
 		if (special != null) {
-			return specialValue(special);
+			return specialRead(special);
 		}
 		LispVal synth = valueOf(name);
 		if (synth != null) {
@@ -3631,7 +3700,7 @@ public final class ClojureLowering {
 		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
 		if (special != null && !isLocal(name) && resolveVar(name) == null) {
 			// a clojure.core special no program var claims: its special variable
-			return specialValue(special);
+			return specialRead(special);
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {

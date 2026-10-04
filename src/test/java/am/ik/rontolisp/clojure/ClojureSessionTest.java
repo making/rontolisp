@@ -173,6 +173,26 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aBufferSpellingAThrowableOrStreamClassJoinsTheClassChainWalkOnce() {
+		// a hierarchy runtime without a class spelling carries no class-chain walk; the
+		// buffer that first dispatches on a throwable class adds the walk and the edges
+		// resolved so far, a later one only the edges it adds
+		ClojureSession session = new ClojureSession();
+		List<String> plain = forms(session.read("(defmulti f class) (defmethod f :default [x] :d)"));
+		assertThat(plain).anyMatch(form -> form.startsWith("(DEFUN C%H-ISA? "))
+			.noneMatch(form -> form.contains("C%H-CLASS-ISA?"));
+		List<String> chained = forms(session.read("(defmethod f IllegalStateException [e] :ise)"));
+		assertThat(chained).anyMatch(form -> form.startsWith("(DEFUN C%H-CLASS-ISA? "))
+			.anyMatch(form -> form.startsWith("(DEFUN C%H-ISA? ") && form.contains("(C%H-CLASS-ISA? "))
+			.anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS ")
+					&& form.contains("(\"java.lang.IllegalStateException\" . \"java.lang.RuntimeException\")"));
+		List<String> streams = forms(session.read("(defmethod f java.io.Writer [w] :w)"));
+		assertThat(streams).noneMatch(form -> form.contains("DEFUN"))
+			.anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS (APPEND ")
+					&& form.contains("(\"java.io.StringWriter\" . \"java.io.Writer\")"));
+	}
+
+	@Test
 	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
 		// clojure.test in a session: the runtime start travels ahead of the
 		// buffer that first uses it, the test registers under the session's

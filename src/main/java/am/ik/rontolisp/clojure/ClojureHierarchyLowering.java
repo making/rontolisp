@@ -272,17 +272,13 @@ final class ClojureHierarchyLowering {
 								hfn("IF", hfn("C%H-ISA?", h, hfn("AREF", c, i), hfn("AREF", p, i)),
 										hfn("C%H-VEC-ISA?", h, c, p, hfn("+", i, new LispInteger(1)), n, m),
 										ClojureLowering.NIL_CONST)))));
-		// (defun c%h-isa? (h child parent) ...): equal, vector-wise, or an ancestor walk
-		runtime.add(hdefun("C%H-ISA?", List.of(h, child, parent), hfn("IF", hfn("EQUAL", child, parent),
-				ClojureLowering.TRUE_CONST,
-				hfn("IF", hfn("AND", hfn("VECTORP", child), hfn("VECTORP", parent)),
-						hfn("C%H-VEC-ISA?", h, child, parent, new LispInteger(0), hfn("LENGTH", child),
-								hfn("LENGTH", parent)),
-						hfn("IF",
-								hfn("C%H-MEM?", parent,
-										hfn("C%H-SET-LIST",
-												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
-								ClojureLowering.TRUE_CONST, ClojureLowering.NIL_CONST)))));
+		if (ctx.usedClassChains) {
+			runtime.addAll(classChainRuntime());
+			runtime.add(supersForm(ctx.classSupers, false));
+		}
+		else {
+			runtime.add(isaDefun(false));
+		}
 		// parents/ancestors/descendants reads, and the empty hierarchy value
 		runtime.add(hdefun("C%H-PARENTS", List.of(h, child),
 				hfn("C%H-GET-SET", hfn("GETHASH", hkey("parents"), h), child)));
@@ -360,6 +356,84 @@ final class ClojureHierarchyLowering {
 	}
 
 	/**
+	 * The superclass edges of the class keywords: an alist of class name to superclass.
+	 */
+	static final String CLASS_SUPERS = "C%H-SUPERS";
+
+	/**
+	 * {@code (defun c%h-isa? (h child parent) ...)}: equal, vector-wise, or an ancestor
+	 * walk -- and, with {@code classes}, a class keyword's superclass walk
+	 * ({@link #classChainRuntime}).
+	 */
+	static LispVal isaDefun(boolean classes) {
+		LispSymbol h = new LispSymbol("h");
+		LispSymbol child = new LispSymbol("child");
+		LispSymbol parent = new LispSymbol("parent");
+		return hdefun("C%H-ISA?", List.of(h, child, parent), hfn("IF", hfn("EQUAL", child, parent),
+				ClojureLowering.TRUE_CONST,
+				hfn("IF", hfn("AND", hfn("VECTORP", child), hfn("VECTORP", parent)),
+						hfn("C%H-VEC-ISA?", h, child, parent, new LispInteger(0), hfn("LENGTH", child),
+								hfn("LENGTH", parent)),
+						hfn("IF",
+								hfn("C%H-MEM?", parent,
+										hfn("C%H-SET-LIST",
+												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
+								ClojureLowering.TRUE_CONST,
+								classes ? hfn("C%H-CLASS-ISA?", h, child, parent) : ClojureLowering.NIL_CONST))));
+	}
+
+	/**
+	 * The class-chain walk of {@code isa?}: a class keyword (the one {@code class}
+	 * answers, or a class spelling lowered to it) whose name has an edge in
+	 * {@link #CLASS_SUPERS} is a child of whatever its superclass is, so the oracle's
+	 * {@code isAssignableFrom} and its {@code supers} search of the hierarchy both hold
+	 * ({@code (derive Exception ::e)} reaches every subclass). The edges are the ones the
+	 * lowering resolved ({@link #supersForm}); a class keyword with none ends the walk.
+	 * The redefined {@code c%h-isa?} rides along, so a session's earlier hierarchy
+	 * runtime takes the walk too.
+	 */
+	static List<LispVal> classChainRuntime() {
+		LispSymbol h = new LispSymbol("h");
+		LispSymbol child = new LispSymbol("child");
+		LispSymbol parent = new LispSymbol("parent");
+		LispSymbol p = new LispSymbol("p");
+		LispSymbol name = new LispSymbol("name");
+		LispSymbol zuper = new LispSymbol("super");
+		// (defun c%h-super (child) ...): the superclass keyword of a class keyword, or
+		// nil
+		LispVal walk = hfnDef("WALK", List.of(p),
+				hfn("IF", hfn("NULL", p), ClojureLowering.NIL_CONST,
+						hfn("IF", hfn("EQUAL", hfn("CAR", hfn("CAR", p)), name),
+								hfn("LIST", ClojureCollectionLowering.KEYWORD_TAG, hfn("CDR", hfn("CAR", p))),
+								hfn("WALK", hfn("CDR", p)))));
+		LispVal superDefun = hdefun("C%H-SUPER", List.of(child),
+				hfn("IF", ClojureFilterLowering.keywordTest(child),
+						hlet(List.of(ClojureLowerUtil.list(name, hfn("CAR", hfn("CDR", child)))),
+								hlabels(List.of(walk), hfn("WALK", new LispSymbol(CLASS_SUPERS)))),
+						ClojureLowering.NIL_CONST));
+		// (defun c%h-class-isa? (h child parent) ...): the superclass isa the parent
+		LispVal classIsa = hdefun("C%H-CLASS-ISA?", List.of(h, child, parent),
+				hlet(List.of(ClojureLowerUtil.list(zuper, hfn("C%H-SUPER", child))),
+						hfn("IF", zuper, hfn("C%H-ISA?", h, zuper, parent), ClojureLowering.NIL_CONST)));
+		return List.of(superDefun, classIsa, isaDefun(true));
+	}
+
+	/**
+	 * The edges as {@code (setq c%h-supers '((class . super) ...))}, or with
+	 * {@code append} added in front of the ones a session's earlier buffer set.
+	 */
+	static LispVal supersForm(Map<String, String> edges, boolean append) {
+		List<LispVal> pairs = new ArrayList<>();
+		for (Map.Entry<String, String> edge : edges.entrySet()) {
+			pairs.add(new LispCons(LispString.literal(edge.getKey()), LispString.literal(edge.getValue())));
+		}
+		LispVal quoted = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(pairs));
+		LispSymbol global = new LispSymbol(CLASS_SUPERS);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), global,
+				append ? hfn("APPEND", quoted, global) : quoted);
+	}
+
+	/**
 	 * A hierarchy call: {@code derive}/{@code underive} (two forms on the global
 	 * hierarchy, three returning an updated hierarchy value), {@code isa?} (two or three,
 	 * answering {@code T}-or-false), {@code parents}/{@code ancestors}/
@@ -373,33 +447,33 @@ final class ClojureHierarchyLowering {
 		return switch (name) {
 			case "derive" -> {
 				if (n == 2) {
-					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), hierarchyGlobal(),
-									ClojureLowerUtil.list(new LispSymbol("C%H-DERIVE"), hierarchyGlobal(),
-											ctx.lower(items.get(1)), ctx.lower(items.get(2)))),
+					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil.list(
+							ClojureLowerUtil.sym("setq"), hierarchyGlobal(),
+							ClojureLowerUtil.list(new LispSymbol("C%H-DERIVE"), hierarchyGlobal(),
+									ClojureDispatchLowering.hierarchyArg(ctx, items.get(1)), ctx.lower(items.get(2)))),
 							ClojureLowering.NIL_CONST);
 				}
 				ClojureLowerUtil.isTrue(n == 3, "derive takes a child and a parent, or a hierarchy and both");
 				yield ClojureLowerUtil.list(new LispSymbol("C%H-DERIVE"), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+						ClojureDispatchLowering.hierarchyArg(ctx, items.get(2)), ctx.lower(items.get(3)));
 			}
 			case "underive" -> {
 				if (n == 2) {
-					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), hierarchyGlobal(),
-									ClojureLowerUtil.list(new LispSymbol("C%H-UNDERIVE"), hierarchyGlobal(),
-											ctx.lower(items.get(1)), ctx.lower(items.get(2)))),
+					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureLowerUtil.list(
+							ClojureLowerUtil.sym("setq"), hierarchyGlobal(),
+							ClojureLowerUtil.list(new LispSymbol("C%H-UNDERIVE"), hierarchyGlobal(),
+									ClojureDispatchLowering.hierarchyArg(ctx, items.get(1)), ctx.lower(items.get(2)))),
 							ClojureLowering.NIL_CONST);
 				}
 				ClojureLowerUtil.isTrue(n == 3, "underive takes a child and a parent, or a hierarchy and both");
 				yield ClojureLowerUtil.list(new LispSymbol("C%H-UNDERIVE"), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+						ClojureDispatchLowering.hierarchyArg(ctx, items.get(2)), ctx.lower(items.get(3)));
 			}
 			case "isa?" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "isa? takes a child and a parent, or a hierarchy and both");
 				LispVal hier = n == 3 ? ctx.lower(items.get(1)) : hierarchyGlobal();
-				LispVal child = ctx.lower(items.get(n == 3 ? 2 : 1));
-				LispVal parent = ctx.lower(items.get(n == 3 ? 3 : 2));
+				LispVal child = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 3 ? 2 : 1));
+				LispVal parent = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 3 ? 3 : 2));
 				yield ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol("C%H-ISA?"), hier, child, parent));
 			}
 			case "parents", "ancestors", "descendants" -> {

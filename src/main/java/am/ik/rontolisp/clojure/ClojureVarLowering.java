@@ -457,6 +457,16 @@ final class ClojureVarLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("VAR-TEST-V"));
 	}
 
+	/** {@code clojure.core/var-get} on a lowered var: its root, a non-var signals. */
+	static LispVal getOf(LispVal var) {
+		return ClojureLowerUtil.list(runtime("VAR-ROOT"), var);
+	}
+
+	/** {@code clojure.core/var-get} as a function value. */
+	static LispVal getValue() {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("VAR-ROOT-V"));
+	}
+
 	private static LispSymbol runtime(String name) {
 		return new LispSymbol("RONTOLISP::%CLOJURE-" + name);
 	}

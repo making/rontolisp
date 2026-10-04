@@ -1187,14 +1187,14 @@ class ClojureLoweringTest {
 		// with-out-str construction -- is a string output stream on every backend,
 		// never a java:new (which wasm refuses); .toString of one answers the
 		// text so far without clearing it, so str reads it back twice.
-		assertThat(lowered("(new java.io.StringWriter)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+		assertThat(lowered("(new java.io.StringWriter)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
-		assertThat(lowered("(java.io.StringWriter.)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+		assertThat(lowered("(java.io.StringWriter.)")).contains("(RONTOLISP::%CLOJURE-STRING-WRITER)")
 			.doesNotContain("JAVA:NEW");
 		// an initial capacity keeps the host construction, like any other class
 		assertThat(lowered("(new java.io.StringWriter 16)")).contains("JAVA:NEW").contains("java.io.StringWriter");
-		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains("GET-OUTPUT-STREAM-STRING")
-			.contains("WRITE-STRING");
+		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains(
+				"((RONTOLISP::%CLOJURE-STREAM-P |__clojure_0|) (RONTOLISP::%CLOJURE-STREAM-STRING |__clojure_0|))");
 	}
 
 	@Test
@@ -1350,8 +1350,13 @@ class ClojureLoweringTest {
 
 	@Test
 	void inIsStandardInput() {
-		assertThat(lowered("*in*")).contains("*STANDARD-INPUT*");
-		assertThat(lowered("(binding [*in* *in*] 1)")).contains("*STANDARD-INPUT*");
+		// read as a value, *in* is the bound stream, or the standard input's stream
+		// value where *standard-input* holds the t designator (Clojure's true); a
+		// binding target is the variable itself
+		assertThat(lowered("*in*")).contains("(RONTOLISP::%CLOJURE-IN)").doesNotContain("*STANDARD-INPUT*");
+		assertThat(lowered("(binding [*in* *in*] 1)")).contains("(*STANDARD-INPUT* (RONTOLISP::%CLOJURE-IN))");
+		assertThat(lowered("[*out* *err*]")).contains("(RONTOLISP::%CLOJURE-OUT)")
+			.contains("(RONTOLISP::%CLOJURE-ERR)");
 		assertThat(lowered("(.readLine *in*)")).contains("READ-LINE");
 	}
 
@@ -1471,7 +1476,7 @@ class ClojureLoweringTest {
 	void clojureCoreSpellingsNameTheCoreVar() {
 		assertThat(loweredWithMacros("(defn inc [x] x) (clojure.core/inc 1)")).contains("(+ 1 1)");
 		assertThat(loweredWithMacros("(defn inc [x] x) (map clojure.core/inc [1])")).doesNotContain("#'|c%inc|");
-		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("*STANDARD-OUTPUT*");
+		assertThat(loweredWithMacros("(list clojure.core/*out*)")).contains("(RONTOLISP::%CLOJURE-OUT)");
 		assertThatThrownBy(() -> Clojure.read("(clojure.core/nope 1)", null, ClojureMacroTime.create()))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such var: clojure.core/nope");
@@ -1629,7 +1634,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("#'when")).contains("Can't take value of a macro: #'clojure.core/when")
 			.contains("(LIST :C%KEYWORD \"macro\") T");
 		assertThat(lowered("#'*out*"))
-			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL *STANDARD-OUTPUT*)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*out*\" (LAMBDA NIL (RONTOLISP::%CLOJURE-OUT))")
 			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-OUT-DEPTH)");
 		assertThat(lowered("#'inc")).doesNotContain("VAR-DYNAMIC");
 		// every binding of a stream or agent special rebinds its counter one deeper
@@ -1644,7 +1649,7 @@ class ClojureLoweringTest {
 		// *err* and the flags are core specials too; a flag clojure.main binds is
 		// always thread-bound
 		assertThat(lowered("#'*err*"))
-			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*err*\" (LAMBDA NIL *ERROR-OUTPUT*)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*err*\" (LAMBDA NIL (RONTOLISP::%CLOJURE-ERR))")
 			.contains("(LAMBDA NIL RONTOLISP::%CLOJURE-ERR-DEPTH)");
 		assertThat(lowered("#'*assert*")).contains(
 				"(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*assert*\" (LAMBDA NIL RONTOLISP::%CLOJURE-ASSERT)")
@@ -1917,7 +1922,8 @@ class ClojureLoweringTest {
 			.contains("%CLOJURE-STR-OF");
 		assertThat(lowered("(slurp \"f\")")).contains("READ-CHAR");
 		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE").contains("STREAMP");
-		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")")).contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
+			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (line-seq (jio/reader \"f\"))"))
 			.contains("READ-LINE")
 			.contains("STREAMP");
@@ -1940,16 +1946,18 @@ class ClojureLoweringTest {
 
 	@Test
 	void javaIoReaderWiresLikeClojureString() {
-		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")")).contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")"))
+			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (clojure.java.io/reader \"f\")"))
-			.contains("(OPEN \"f\")");
+			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio :refer [reader]])) (reader \"f\")"))
-			.contains("(OPEN \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")")).contains("(OPEN \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader")).contains("LAMBDA")
-			.contains("OPEN");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader")).contains("LAMBDA")
-			.contains("OPEN");
+			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")"))
+			.contains("(RONTOLISP::%CLOJURE-READER \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader"))
+			.contains("#'RONTOLISP::%CLOJURE-READER");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader"))
+			.contains("#'RONTOLISP::%CLOJURE-READER");
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :refer [writer]]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: clojure.java.io/writer");
@@ -2178,7 +2186,7 @@ class ClojureLoweringTest {
 			.contains("(\"s\" \"clojure.string\")");
 		assertThat(lowered("(read-string {:eof 1} \"\")")).contains("(RONTOLISP::%CLOJURE-READ-STRING-OPTS ");
 		assertThat(lowered("(read)")).contains("(RONTOLISP::%CLOJURE-READ *STANDARD-INPUT* T NIL '(\"user\"))");
-		assertThat(lowered("(read *in* false :e)")).contains("(RONTOLISP::%CLOJURE-READ *STANDARD-INPUT* ");
+		assertThat(lowered("(read *in* false :e)")).contains("(RONTOLISP::%CLOJURE-READ (RONTOLISP::%CLOJURE-IN) ");
 		assertThat(lowered("(read {} *in*)")).contains("(RONTOLISP::%CLOJURE-READ-OPTS ");
 		assertThat(lowered("(map read-string [\"1\"])")).contains("RONTOLISP::%CLOJURE-READ-STRING-V");
 		assertThat(lowered("(map read [])")).contains("RONTOLISP::%CLOJURE-READ-V");
@@ -2196,13 +2204,14 @@ class ClojureLoweringTest {
 		// stream and over a clojure.java.io/reader the reader itself, so read runs on
 		// every backend; over anything else the host class stays a run-time choice
 		assertThat(lowered("(java.io.PushbackReader. (java.io.StringReader. \"x\"))"))
-			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
+			.endsWith("(RONTOLISP::%CLOJURE-STRING-READER \"x\")");
 		assertThat(lowered(
 				"(ns rdr (:import (java.io BufferedReader StringReader))) (BufferedReader. (new StringReader \"x\"))"))
-			.endsWith("(MAKE-STRING-INPUT-STREAM \"x\")");
+			.endsWith("(RONTOLISP::%CLOJURE-STRING-READER \"x\")");
 		assertThat(lowered(
 				"(ns rdj (:require [clojure.java.io :refer [reader]])) (java.io.PushbackReader. (reader \"f\"))"))
-			.endsWith("(OPEN \"f\")");
+			.endsWith("(RONTOLISP::%CLOJURE-READER \"f\")");
+		assertThat(lowered("(java.io.PushbackReader. *in*)")).endsWith("(RONTOLISP::%CLOJURE-IN)");
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
 		// a StringReader by itself stays the host class: a Java API takes it

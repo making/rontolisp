@@ -149,6 +149,7 @@ final class ClojureThrowables {
 		String className = ClojureNamespaceLowering.resolveClass(ctx, named.name());
 		List<String> chain = chainOf(className);
 		if (chain != null) {
+			ctx.recordChain(chain);
 			return chain;
 		}
 		if (isClass(className)) {

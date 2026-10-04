@@ -381,6 +381,87 @@
     (write-string "..." stream)
     (write-string close stream)))
 
+;; The streams. At the root *standard-output* and *standard-input* hold the t
+;; designator, the same object as Clojure's true, so a read of *out* or *in* as a
+;; value answers a stream value over t there instead: a stream to every
+;; operation (each resolves it back to t, so no backend writes through a handle
+;; of its own), a value of its own to the printer, str and =, one each so
+;; identical? holds. Every test of a stream is an arm (ClojureArms STREAM), whose
+;; producers are the reads and constructors below: a program holding no stream
+;; prints as if streams did not exist.
+(defvar rontolisp::%clojure-standard-output
+  (%obj-new '%stream t :standard-output))
+
+(defvar rontolisp::%clojure-standard-input
+  (%obj-new '%stream t :standard-input))
+
+(defun rontolisp::%clojure-out ()
+  "*out* read as a value: the stream it is bound to, at the root the process
+   standard output as a stream value."
+  (let ((s *standard-output*))
+    (if (eq s t) rontolisp::%clojure-standard-output s)))
+
+(defun rontolisp::%clojure-in ()
+  "*in* read as a value: the stream it is bound to, at the root the process
+   standard input as a stream value."
+  (let ((s *standard-input*))
+    (if (eq s t) rontolisp::%clojure-standard-input s)))
+
+(defun rontolisp::%clojure-err ()
+  "*err* read as a value: *error-output*, a stream value at the root already."
+  *error-output*)
+
+(defun rontolisp::%clojure-string-writer ()
+  "A zero-argument java.io.StringWriter: a string output stream."
+  (make-string-output-stream))
+
+(defun rontolisp::%clojure-string-reader (text)
+  "A reader over (java.io.StringReader. TEXT): a string input stream."
+  (make-string-input-stream text))
+
+(defun rontolisp::%clojure-reader (path)
+  "clojure.java.io/reader: a character input stream over the file PATH."
+  (open path))
+
+(defun rontolisp::%clojure-stream-p (x)
+  "Whether X is a stream value."
+  (%obj-is x '%stream))
+
+(defun rontolisp::%clojure-stream-class (x)
+  "The host class of the oracle's stream of stream X's kind: a string input
+   stream is with-in-str's *in*, a file stream clojure.java.io/reader's."
+  (let ((kind (%obj-ref x 1)))
+    (cond ((equal kind :standard-output) "java.io.OutputStreamWriter")
+          ((equal kind :standard) "java.io.PrintWriter")
+          ((equal kind :string-output) "java.io.StringWriter")
+          ((or (equal kind :standard-input) (equal kind :string-input))
+           "clojure.lang.LineNumberingPushbackReader")
+          (t "java.io.BufferedReader"))))
+
+(defun rontolisp::%clojure-stream-string (x)
+  "Stream X's toString: a StringWriter's text so far, left in place (what
+   get-output-stream-string answers and clears is written straight back), any
+   other stream its host class name -- the oracle's Class@hash without the
+   hash."
+  (if (equal (%obj-ref x 1) :string-output)
+      (let ((text (get-output-stream-string x)))
+        (write-string text x)
+        text)
+      (rontolisp::%clojure-stream-class x)))
+
+(defun rontolisp::%clojure-write-stream (x readable stream)
+  "Write stream X as the oracle's #object of its host class, the toString
+   quoted under pr, the identity hash left out. The toString is taken before
+   anything is written, since STREAM may be X itself."
+  (let ((text (rontolisp::%clojure-stream-string x)))
+    (write-string "#object[" stream)
+    (write-string (rontolisp::%clojure-stream-class x) stream)
+    (write-char #\Space stream)
+    (if readable
+        (rontolisp::%clojure-write-readable-string text stream)
+        (write-string text stream))
+    (write-char #\] stream)))
+
 (defun rontolisp::%clojure-write-nested
     (x nil-replacement readable stream labels)
   "%clojure-write of a collection's member, one *print-level* level deeper. A
@@ -513,6 +594,8 @@
         ;; the Common Lisp printer spells the exponent marker in lowercase; the
         ;; oracle's Double.toString says 1.0E19 and 1.5E-7
         ((floatp x) (write-string (string-upcase (princ-to-string x)) stream))
+        ((rontolisp::%clojure-stream-p x)
+         (rontolisp::%clojure-write-stream x readable stream))
         ((functionp x) (write-string "#<procedure>" stream))
         (t (let ((name (rontolisp::%clojure-host-class-name x)))
              (if name (write-string name stream) (princ x stream))))))
@@ -566,20 +649,18 @@
    toString: NIL is NIL-REPLACEMENT (\"\" for str), a string itself, a
    character its glyph, a pattern its source, and anything else its readable
    spelling -- a collection quotes the strings inside it and spells nil, so
-   spit writes what read reads back. A string OUTPUT stream answers the text
-   so far WITHOUT clearing it under str (a zero-argument java.io.StringWriter
-   lowers to one, so binding *out* to it and reading it back runs on every
-   backend); readably it prints as the stream it is, like the oracle's
-   #object. A host object answers its toString, so a class object answers
-   \"class java.lang.String\"."
+   spit writes what read reads back. A stream answers its toString: a string
+   OUTPUT stream the text so far WITHOUT clearing it (a zero-argument
+   java.io.StringWriter lowers to one, so binding *out* to it and reading it
+   back runs on every backend), any other its host class name; readably it
+   prints as the #object it is. A host object answers its toString, so a class
+   object answers \"class java.lang.String\"."
   (cond ((null readable)
          (cond ((null x) nil-replacement)
                ((stringp x) x)
                ((characterp x) (string x))
-               ((and (typep x 'string-stream) (output-stream-p x))
-                (let ((text (get-output-stream-string x)))
-                  (write-string text x)
-                  text))
+               ((rontolisp::%clojure-stream-p x)
+                (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
                ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
@@ -5945,6 +6026,18 @@
 (defun rontolisp::%clojure-var-get (v)
   "The root of the var V."
   (funcall (car (cdr (cdr v)))))
+
+(defun rontolisp::%clojure-var-root (v)
+  "var-get: the root of V, which must be a var (deref also reads an atom or a
+   reduced value, var-get does not)."
+  (if (rontolisp::%clojure-var-p v)
+      (rontolisp::%clojure-var-get v)
+      (error "var-get needs a var")))
+
+(defun rontolisp::%clojure-var-root-v (&rest args)
+  "var-get as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "var-get")
+  (rontolisp::%clojure-var-root (car args)))
 
 (defun rontolisp::%clojure-unbound (name)
   "The unbound root of the var NAME (\"ns/name\")."
