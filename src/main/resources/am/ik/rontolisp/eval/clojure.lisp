@@ -1617,7 +1617,159 @@
          (= a b))
         ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
          (rontolisp::%clojure-sorted-equal a b))
-        (t (equal a b))))
+        ;; equal hands a host object no collection, so a host collection and a
+        ;; Clojure one reach the host-object family's arm
+        (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
+
+;; = of a host collection and a Clojure one, the oracle's pcequiv: Util.equiv
+;; hands a pair holding a Clojure collection to that collection's equiv, which
+;; takes a java.util.List, Map or Set of its kind. The two functions are the
+;; host-object family's (clojure/ClojureArms): = and the sorted = ask the test
+;; last, and a program naming no java: operator, where no host object exists,
+;; folds it away.
+(defun rontolisp::%clojure-host-equal-p (a b)
+  "Whether one of A and B is a host object and the other a Lisp value = to it
+   as a collection of its kind (%clojure-host-collection-equal), either one
+   first."
+  (cond ((and (or (consp a) (numberp a) (arrayp a) (symbolp a))
+              (or (consp b) (numberp b) (arrayp b) (symbolp b)))
+         ;; the common unequal pairs, answered without a call: the interpreter
+         ;; asks this after every unequal = that reaches equal
+         nil)
+        ((rontolisp::%clojure-lisp-value-p a)
+         (and (not (rontolisp::%clojure-lisp-value-p b))
+              (rontolisp::%clojure-host-collection-equal b a)))
+        ((rontolisp::%clojure-lisp-value-p b)
+         (rontolisp::%clojure-host-collection-equal a b))))
+
+(defun rontolisp::%clojure-host-collection-equal (h c)
+  "Whether the host object H is = to the Lisp value C as the oracle's equiv of
+   the Clojure collection C decides it: a java.util.List element by element
+   with a sequential, a Map of C's count whose every key C holds under an =
+   value with a map, a Set of C's count whose every member C holds with a set.
+   C finds a key or member as its lookups do (by =, a sorted one by its
+   comparator); H's elements are read through toArray. Anything else is
+   unequal."
+  (if (rontolisp::%clojure-sequential-p c)
+      (and (rontolisp::%clojure-host-instance-p h "java.util.List")
+           (rontolisp::%clojure-seq-equal c (java:call h "toArray")))
+      (let ((setp
+             (or (rontolisp::%clojure-set-p c)
+                 (rontolisp::%clojure-sorted-set-p c))))
+        (and (or setp (hash-table-p c) (rontolisp::%clojure-sorted-map-p c))
+             (rontolisp::%clojure-host-instance-p h
+              (if setp "java.util.Set" "java.util.Map"))
+             (eql (java:call h "size")
+                  (if (rontolisp::%clojure-sorted-p c)
+                      (rontolisp::%clojure-sorted-count c)
+                      (hash-table-count (if setp (car (cdr c)) c))))
+             (let ((miss (list nil)) (ok t))
+               (dolist (e (java:call (if setp h (java:call h "entrySet"))
+                                     "toArray") ok)
+                 (if ok
+                     (let ((w
+                            (rontolisp::%clojure-sorted-lookup c
+                             (if setp e (java:call e "getKey")) miss)))
+                       (if (or (eq w miss)
+                               (and (not setp)
+                                    (not
+                                     (rontolisp::%clojure-equal w
+                                      (java:call e "getValue")))))
+                           (setq ok nil))))))))))
+
+;; seq, count, empty?, get, contains?, keys and vals of a host object, the
+;; oracle's RT arms for a java.lang.Iterable, a java.util.Map and a
+;; java.lang.CharSequence. The test is the host-object family's
+;; (clojure/ClojureArms): each verb asks it ahead of its own fall-through, and a
+;; program naming no java: operator, where no host object exists, folds it away.
+(defun rontolisp::%clojure-host-seqable-p (x)
+  "Whether X is a host object the oracle's seq takes: an Iterable, a Map or a
+   CharSequence."
+  ;; the kinds reaching a verb's fall-through answer without a call: this is
+  ;; asked of every list empty? walks and every vector count reads
+  (and (not (or (consp x) (arrayp x) (symbolp x) (numberp x)))
+       (not (rontolisp::%clojure-lisp-value-p x))
+       (or (rontolisp::%clojure-host-instance-p x "java.lang.Iterable")
+           (rontolisp::%clojure-host-instance-p x "java.util.Map")
+           (rontolisp::%clojure-host-instance-p x "java.lang.CharSequence"))))
+
+(defun rontolisp::%clojure-host-sized-p (x)
+  "Whether the host object X has a size the oracle's count reads: a
+   Collection, a Map or a CharSequence."
+  (or (rontolisp::%clojure-host-instance-p x "java.util.Collection")
+      (rontolisp::%clojure-host-instance-p x "java.util.Map")
+      (rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")))
+
+(defun rontolisp::%clojure-host-seq (x)
+  "The members of the host object X (%clojure-host-seqable-p) as a list: a
+   Collection's through toArray, a Map's entries as [key value] vectors,
+   another Iterable's through its iterator, a CharSequence's characters.
+   Unmarshalled: atoms become Lisp values, a nested host collection stays one.
+   A snapshot, read whole: the oracle's seq of an Iterable is lazy."
+  (cond ((rontolisp::%clojure-host-instance-p x "java.util.Collection")
+         (java:call x "toArray"))
+        ((rontolisp::%clojure-host-instance-p x "java.util.Map")
+         (mapcar
+          (lambda (e) (vector (java:call e "getKey") (java:call e "getValue")))
+          (java:call (java:call x "entrySet") "toArray")))
+        ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
+         (coerce (java:call x "toString") 'list))
+        (t (let ((it (java:call x "iterator")) (acc nil))
+             (do ()
+                 ((not (java:call it "hasNext")) (reverse acc))
+               (setq acc (cons (java:call it "next") acc)))))))
+
+(defun rontolisp::%clojure-host-count (x)
+  "count of the host object X (%clojure-host-seqable-p): a Collection's or a
+   Map's size, a CharSequence's length; any other Iterable is refused, like
+   the oracle's RT.count."
+  (cond ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
+         (java:call x "length"))
+        ((rontolisp::%clojure-host-sized-p x) (java:call x "size"))
+        (t (error "count not supported on this type: ~A"
+                  (java:call (java:call x "getClass") "getSimpleName")))))
+
+(defun rontolisp::%clojure-host-empty-p (x)
+  "empty? of the host object X (%clojure-host-seqable-p): whether its count,
+   or for an Iterable with none its seq, is empty."
+  (if (rontolisp::%clojure-host-sized-p x)
+      (eql (rontolisp::%clojure-host-count x) 0)
+      (null (rontolisp::%clojure-host-seq x))))
+
+(defun rontolisp::%clojure-host-keys (x i)
+  "keys (I 0) or vals (I 1) of the host object X (%clojure-host-seqable-p):
+   the key or value of each [key value] entry its seq answers."
+  (mapcar (lambda (e) (aref e i)) (rontolisp::%clojure-host-seq x)))
+
+(defun rontolisp::%clojure-host-key-p (k)
+  "Whether K reaches a host method's Object parameter. A value java:call
+   refuses there (a keyword, a symbol, a map, a set, a collection holding one)
+   is no key of a host Map and no member of a host Set: the same refusal kept
+   the program from putting it in one, and no host value unmarshals to it."
+  (handler-case (progn
+                  (java:static "java.util.Objects" "isNull" k)
+                  t)
+    (error () nil)))
+
+(defun rontolisp::%clojure-host-get (x k dflt)
+  "get of K in the host object X (%clojure-host-seqable-p): a Map's value
+   under K by the Map's own lookup, DFLT when it holds no such key or X is no
+   Map, like the oracle's RT.get."
+  (if (and (rontolisp::%clojure-host-instance-p x "java.util.Map")
+           (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k))
+      (java:call x "get" k)
+      dflt))
+
+(defun rontolisp::%clojure-host-contains-p (x k)
+  "contains? of K in the host object X (%clojure-host-seqable-p): whether a
+   Map holds the key K, or a Set the member K, by its own lookup. Any other
+   host object is refused, like the oracle's RT.contains."
+  (cond ((rontolisp::%clojure-host-instance-p x "java.util.Map")
+         (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k)))
+        ((rontolisp::%clojure-host-instance-p x "java.util.Set")
+         (and (rontolisp::%clojure-host-key-p k) (java:call x "contains" k)))
+        (t (error "contains? not supported on type: ~A"
+                  (java:call (java:call x "getClass") "getName")))))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
   "= as a function value: T when every neighbouring pair is equal, the false
@@ -2039,6 +2191,8 @@
       (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
       acc))
    ((eq coll rontolisp::%clojure-false) nil)
+   ((rontolisp::%clojure-host-seqable-p coll)
+    (rontolisp::%clojure-host-seq coll))
    (t (error "seq needs a collection"))))
 
 (defun rontolisp::%clojure-realize (x)
@@ -5558,6 +5712,7 @@
                                (not (rontolisp::%clojure-equal (cdr kv) w)))
                            (setq ok nil)))))
                nil))
+          ((rontolisp::%clojure-host-equal-p a b) t)
           (t nil))))
 
 (defun rontolisp::%clojure-sorted-hash (s)

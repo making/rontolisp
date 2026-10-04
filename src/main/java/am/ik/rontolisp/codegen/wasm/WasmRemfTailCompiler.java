@@ -125,7 +125,8 @@ final class WasmRemfTailCompiler {
 		ctx.writer.writeUnsignedLeb128(1);
 		// Push t and break to $result
 		WasmEmitHelper.emitTrue(ctx);
-		ctx.writer.write(Instruction.BR, 2); // break to $result
+		ctx.writer.write(Instruction.BR, 3); // break to $result (inside the if: if, loop,
+												// $nil, $result)
 		ctx.writer.write(Instruction.END); // end if (match)
 
 		// No match: current = nextKeyCell, continue loop

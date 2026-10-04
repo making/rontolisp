@@ -40,6 +40,12 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
   pinned by `JavaBridgeTemplateParityTest` -- change the two together.
+- `accessibleMethod` (all three lookups: `ReflectiveJavaClasses`, the bridge template,
+  `JvmClassFileLookup`) re-resolves a public method whose declaring class cannot be called
+  through to the same method on an accessible supertype of the RECEIVER class, the walk
+  starting at the receiver (Clojure's Reflector does the same). HashMap's entry iterator
+  inherits `hasNext` from `HashMap$HashIterator`, which implements nothing; until 2026-10-04
+  the walk started at the declaring class and a run-time site answered `No matching method`.
 
 ## What a host object is (one rule; interpreter = `LispJavaObject`)
 - Compiled: `JavaBridgeTemplate.isJavaObject` = `JvmJavaDirectSites._jhost`, test for test

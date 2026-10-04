@@ -2270,6 +2270,24 @@ cases:
       (A 1 C 3)
       (Y 20)
       99
+  - name: remf-answer-past-the-first-key
+    source: |
+      (setq remf-ans-plist (list 'a 1 'b 2 'c 3))
+      (print (remf remf-ans-plist 'b))
+      (print remf-ans-plist)
+      (print (remf remf-ans-plist 'c))
+      (print remf-ans-plist)
+      (print (remf remf-ans-plist 'a))
+      (print remf-ans-plist)
+      (print (remf remf-ans-plist 'a))
+    expected: |
+      T
+      (A 1 C 3)
+      T
+      (A 1)
+      T
+      NIL
+      NIL
   - name: keyword-symbols
     source: |
       (print :foo)

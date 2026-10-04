@@ -220,7 +220,7 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 				List<Member> candidates = new ArrayList<>();
 				for (Method method : this.type.getMethods()) {
 					if (method.getName().equals(name)) {
-						Method accessible = accessibleMethod(method);
+						Method accessible = accessibleMethod(this.type, method);
 						if (accessible != null) {
 							candidates.add(new Member(accessible));
 						}
@@ -485,13 +485,16 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 
 	// A public method declared in a non-exported/non-public class (e.g. the List.of
 	// result type java.util.ImmutableCollections$ListN) cannot be invoked reflectively;
-	// re-resolve it to the same method on an accessible superclass or interface
-	// (List.size() instead of ImmutableCollections$ListN.size()).
-	private static @Nullable Method accessibleMethod(Method method) {
+	// re-resolve it to the same method on an accessible superclass or interface of the
+	// RECEIVER class (List.size() instead of ImmutableCollections$ListN.size()). The walk
+	// starts at the receiver, not the declaring class: HashMap's entry iterator gets
+	// hasNext from HashMap$HashIterator, which implements nothing -- Iterator is on the
+	// receiver class (as Clojure's Reflector searches).
+	private static @Nullable Method accessibleMethod(Class<?> receiver, Method method) {
 		if (method.trySetAccessible()) {
 			return method;
 		}
-		for (Class<?> c = method.getDeclaringClass(); c != null; c = c.getSuperclass()) {
+		for (Class<?> c = receiver; c != null; c = c.getSuperclass()) {
 			Method onInterface = accessibleOnInterfaces(c, method);
 			if (onInterface != null) {
 				return onInterface;

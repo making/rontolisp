@@ -627,6 +627,100 @@ class ClojureInteropTest {
 				""", "true true true true true true\nfalse false false false\n");
 	}
 
+	// Oracle (clj 1.12.6, 2026-10-04): Util.equiv sends a pair holding a Clojure
+	// collection to its equiv, which compares a java.util.List element by element with a
+	// sequential, a Map entry by entry with a map and a Set member by member with a set,
+	// either operand first; a host collection inside a set is still found by its hash
+	// (the last answer of the sixth row). Before, every row answered false.
+	@Test
+	void aHostCollectionIsEqualToAClojureCollectionOfItsKind() throws Exception {
+		assertBothEqual("""
+				(def al (java.util.ArrayList. [1 2]))
+				(def hm (doto (java.util.HashMap.) (.put "a" 1) (.put "b" (java.util.ArrayList. [1 2]))))
+				(def hs (doto (java.util.HashSet.) (.add 1) (.add "x")))
+				(defrecord R [a])
+				(println (= al [1 2]) (= [1 2] al) (= al '(1 2)) (= '(1 2) al) (= al (map inc [0 1]))
+				         (= (map inc [0 1]) al) (= al (range 1 3)))
+				(println (= al [1 3]) (= al [1 2 3]) (= al []) (= (java.util.ArrayList.) [])
+				         (= (java.util.ArrayList.) ()) (= al (iterate inc 1)) (= (iterate inc 1) al))
+				(println (= hm {"a" 1 "b" [1 2]}) (= {"a" 1 "b" [1 2]} hm) (= hm {"a" 1 "b" '(1 2)})
+				         (= hm {"a" 1}) (= hm {"a" 2 "b" [1 2]}) (= hm {"a" 1 "c" [1 2]}))
+				(println (= hs #{1 "x"}) (= #{1 "x"} hs) (= hs #{1}) (= hs #{1 "y"}) (= hs [1 "x"])
+				         (= al #{1 2}) (= hm [1 2]) (= al {1 2}))
+				(println (= hm (sorted-map "a" 1 "b" [1 2])) (= (sorted-map "a" 1 "b" [1 2]) hm)
+				         (= (doto (java.util.HashSet.) (.add 1) (.add 2)) (sorted-set 1 2))
+				         (= (sorted-set 2 1) (doto (java.util.HashSet.) (.add 1) (.add 2))))
+				(println (= (java.util.ArrayList. [al [3]]) [[1 2] [3]]) (= [[1 2] [3]] (java.util.ArrayList. [al [3]]))
+				         (= [al] [[1 2]]) (= [[1 2]] [al]) (= {:k al} {:k [1 2]}) (= #{al} #{[1 2]}))
+				(println (not= al [1 2]) (= al [1 2] '(1 2)) (= al (java.util.ArrayList. [1 2])) (apply = [al [1 2]])
+				         (= hm (->R 1)) (= (->R 1) hm))
+				(println (= (java.util.LinkedList. [1 2]) [1 2]) (= (java.util.ArrayList. [1.0 2]) [1 2])
+				         (= (doto (java.util.TreeMap.) (.put "a" 1)) {"a" 1}) (= al (vector-of :long 1 2))
+				         (= al 1) (= 1 al) (= al "x"))
+				""", """
+				true true true true true true true
+				false false false true true false false
+				true true true false false false
+				true true false false false false false false
+				true true true true
+				true true true true true false
+				false true true true false false
+				true false true true false false false
+				""");
+	}
+
+	// Oracle (clj 1.12.6, 2026-10-04): RT.seq takes any Iterable (a Map through its
+	// entries, a CharSequence through its characters), RT.count a Collection, a Map or a
+	// CharSequence, RT.get a Map, RT.contains a Map or a Set, each by the host's own
+	// lookup (a key a Java method cannot take is in no host map); contains? of a List
+	// and count of an Iterable that is no Collection are refused. Before, every seq verb
+	// signalled "seq needs a collection" and count a LENGTH type error.
+	@Test
+	void aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne() throws Exception {
+		assertBothEqual(
+				"""
+						(def al (java.util.ArrayList. [1 2]))
+						(def hm (doto (java.util.HashMap.) (.put "a" 1)))
+						(def tm (doto (java.util.TreeMap.) (.put "a" 1) (.put "b" (java.util.ArrayList. [3]))))
+						(def ts (doto (java.util.TreeSet.) (.add 3) (.add 1)))
+						(def ea (java.util.ArrayList.))
+						(def path (.toPath (java.io.File. "a/b")))
+						(println (seq al) (vec al) (first al) (rest al) (next al) (last al) (nth al 1) (seq ea))
+						(println (map inc al) (filter odd? al) (reduce + al) (reduce + 10 al) (apply + al) (mapv inc al))
+						(println (into {} hm) (into [] al) (into #{} ts) (seq ts) (sort ts) (set al) (frequencies al))
+						(println (count al) (count hm) (count ts) (count ea) (count (StringBuilder. "abc")))
+						(println (empty? al) (empty? ea) (empty? hm) (empty? (java.util.HashMap.)) (seq (java.util.HashMap.)))
+						(println (get hm "a") (get hm "z") (get hm "z" :none) (vec (get tm "b")) (get al 0) (get al 0 :d))
+						(println (contains? hm "a") (contains? hm "z") (contains? ts 3) (contains? ts 2))
+						(println (keys tm) (first (vals tm)) (map key tm) (for [[k v] hm] (str k v)) (= (vec (second (vals tm))) [3]))
+						(println (seq (StringBuilder. "ab")) (map str path) (map count [al hm]))
+						(println (let [[a b] al] (+ a b)) (zipmap al [:x :y]) (clojure.string/join "," al) (concat al [3]))
+						(println (try (contains? al 0) (catch Exception e (.getMessage e))))
+						(println (try (count path) (catch Exception e (.getMessage e))))
+						(def vk (doto (java.util.HashMap.) (.put [1 2] "v") (.put nil 0) (.put \\c 1.5)))
+						(def hs (doto (java.util.HashSet.) (.add [1]) (.add "x")))
+						(println (get vk [1 2]) (get vk '(1 2)) (get vk nil) (get vk \\c) (get vk :a :none) (get vk {:a 1})
+						         (contains? vk {:a 1}) (contains? vk nil))
+						(println (contains? hs [1]) (contains? hs "x") (contains? hs :x) (contains? hs #{1}) (get hs "x"))
+						""",
+				"""
+						(1 2) [1 2] 1 (2) (2) 2 2 nil
+						(2 3) (1) 3 13 3 [2 3]
+						{a 1} [1 2] #{1 3} (1 3) (1 3) #{1 2} {1 1, 2 1}
+						2 1 2 0 3
+						false true false true nil
+						1 nil :none [3] nil :d
+						true false true false
+						(a b) 1 (a b) (a1) true
+						(a b) (a b) (2 1)
+						3 {1 :x, 2 :y} 1,2 (1 2 3)
+						contains? not supported on type: java.util.ArrayList
+						count not supported on this type: UnixPath
+						v v 0 1.5 :none nil false true
+						true true false false nil
+						""");
+	}
+
 	// Oracle: a protected method overrides -- paintComponent records -- while an
 	// unnamed one is inherited.
 	@Test

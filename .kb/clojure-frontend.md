@@ -149,7 +149,7 @@ answered `2 5 3` before).
 | `sorted-map` `sorted-map-by` `sorted-set` `sorted-set-by` `subseq` `rsubseq` `compare` `vector-of` | `ClojureSortedLowering`: one call to `rontolisp::%clojure-sorted-make` / `-subseq` / `-subseq-5` / `-compare` / `-vector-of` after a lower-time arity check in the oracle's wording; as a value `#'rontolisp::%clojure-NAME-v` | a literal core test of `subseq`/`rsubseq` lowers to its keyword (`:>` ...); "Sorted collections" |
 | a keyword, set, map or vector in call position or as a function value | the table-aware read / member / `nth` with an optional default | `({:a 1} :b :d)` is `:d`; a keyword or symbol reaching `%clojure-call`, a keyword function value (`ClojureFnLowering.keywordFn`, also a `defmulti` dispatch fn) or a quoted-symbol `defmulti` dispatch fn (`realFun` wraps it in `%clojure-as-fn`) takes one or two arguments and signals the oracle's `Wrong number of args (N) passed to: :kw` / `clojure.lang.Symbol` otherwise (a literal keyword head refuses at lower time) |
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
-| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection; a host collection is `=` to no Clojure one, the oracle's is: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
+| `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
 | the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` `char` `quot` | `truncate` (`char-code` for a char) / `code-char` / `truncate` | a non-number signals |
@@ -846,7 +846,7 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (`Serializable` -> `Throwable`), and `%clojure-host-object-p` when the host loads the class
   and no host value of it is converted at the `java:` boundary (`String`, the boxes,
   `BigInteger`). The host arm is the test of `ClojureArms.Family.HOST` (producers: the
-  `java:` operators), so a program naming none sheds it; `Number`/`CharSequence` lower to
+  `java:` operators; `=`'s `%clojure-host-equal-p` is its other test), so a program naming none sheds it; `Number`/`CharSequence` lower to
   `%clojure-host-number-p`/`-char-sequence-p`, the family's aliases to `NUMBERP`/`STRINGP`,
   so such a program compiles them as before. The value is bound to a temp unless it is a
   variable, or every arm reads it once or it is a constant no family arm reads (a family
@@ -1119,6 +1119,42 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   throws `UnsupportedOperationException`. Multi-arity methods, a second class, a final
   superclass are refused.
 - No host-field `set!`: the `java:` surface has no write primitive.
+- Host collections under the seq verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.seq`
+  takes an `Iterable`, a `Map` (its `entrySet`) and a `CharSequence`; `RT.count` a
+  `Collection`, `Map` or `CharSequence` (another `Iterable` is `count not supported on this
+  type: <simple name>`); `RT.get` a `Map` (anything else nil); `RT.contains` a `Map` or `Set`
+  (anything else `contains? not supported on type: <name>`). Before: `seq needs a
+  collection` for every seq verb, `count` a `LENGTH` type error, `get` nil, `contains?`
+  false. One host-object family test, `%clojure-host-seqable-p`
+  (`ClojureCollectionLowering.HOST_SEQABLE_P`), heads a clause ahead of each verb's
+  fall-through: `%clojure-strict-seq` (so every verb over the seq view: `first`, `map`,
+  `reduce`, `into`, `vec`, `nth`, destructuring), the lowered `count`, `empty?`, `get`
+  (and keyword call position, `getBranches`), `contains?`, and an `if` around `keys`/`vals`'
+  table walk. The reads (`clojure.lisp`, `%clojure-host-seq` and friends): a `Collection`
+  through `toArray`, a `Map` through `entrySet` `toArray` as `[k v]` vectors (the oracle's
+  are the host entries: user doc deviation), a `CharSequence` through `toString`, another
+  `Iterable` through `iterator` (a JDK non-public iterator class trips the `java:call` gap
+  of todo c92). `get`/`contains?` ask the host's own `containsKey`/`contains`/`get`, the
+  oracle's `equals` lookup, after `%clojure-host-key-p` (`Objects.isNull` under
+  `handler-case`): a key `java:call` cannot marshal (keyword, symbol, map, set) is in no host
+  map, since `.put` refused it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
+  whole closure into every `get` (+9.9 KB JVM class) and is O(n). `find`, `select-keys`,
+  `reduce-kv`, `merge`/`conj` of a host `Map` still refuse (todo c93).
+  Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
+  runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
+  component, JVM class with its runtime classes: `demo.clj` and a program over `seq`,
+  `count`, `empty?`, `get`, `contains?`, `keys`, `vals`, keyword call). A `java:` program
+  carries the arms: JVM class `count` + one `.toUpperCase` 98,490 -> 104,225 B, a program
+  also reaching `=` 127,068 -> 130,787, `empty?`/`count`/`keys`/`get` loops 109,655 ->
+  117,610. Speed there (JVM): an `empty?` list walk +5%, a `count` loop over a vector and
+  nil 0.70 -> 0.93 s per 8M (one more call per count), `keys`/`get` +15%. Interpreter, which
+  keeps the arms in every program: the same loops +3% / +24% / +14% (the `empty?` walk was
+  +30% before the inline consp/arrayp/symbolp/numberp exit at the head of
+  `%clojure-host-seqable-p`, which spares lists and vectors the `%clojure-lisp-value-p`
+  call), a mixed program (quicksort over `empty?`, a word count over `get`/`assoc`,
+  `keys`/`vals`/`frequencies`) 3,031 -> 2,988 ms, within noise.
+  Pins: `ClojureInteropTest#aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne`
+  (oracle-identical), `ClojureLibraryTest#aProgramNamingNoJavaOperatorSeqsAndCountsWithoutTheHostCollectionArms`.
 
 ## Laziness
 

@@ -371,6 +371,26 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo("(97 98)");
 	}
 
+	// An interface method a non-public class inherits from a non-public superclass
+	// (HashMap's entry iterator gets hasNext from HashMap$HashIterator) is found through
+	// the receiver class's own interfaces, at a site left to run time (the receiver
+	// is a parameter) -- mirrors
+	// JavaInteropTest#anInterfaceMethodOfANonPublicReceiverIsCalled.
+	@Test
+	void anInterfaceMethodOfANonPublicReceiverIsCalled() throws Exception {
+		assertThat(compileAndRun("""
+				(defun probe (m)
+				  (let ((it (java:call (java:call m "entrySet") "iterator")))
+				    (list (java:call it "hasNext")
+				          (java:call (java:call it "next") "getKey")
+				          (java:call it "hasNext")
+				          (java:call (java:call (java:call m "keySet") "iterator") "hasNext"))))
+				(let ((m (java:new "java.util.HashMap")))
+				  (java:call m "put" "a" 1)
+				  (print (probe m)))
+				""")).isEqualTo("(T \"a\" NIL T)");
+	}
+
 	// A parameter tag names the overload the cost would not pick -- mirrors
 	// JavaInteropTest#aParameterTagSelectsTheOverload.
 	@Test

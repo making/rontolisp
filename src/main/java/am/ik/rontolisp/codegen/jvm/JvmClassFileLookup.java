@@ -799,7 +799,7 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 				List<ClassMethod> candidates = new ArrayList<>();
 				for (ClassMethod method : publicMethods()) {
 					if (method.name().equals(name)) {
-						ClassMethod accessible = accessibleMethod(method);
+						ClassMethod accessible = accessibleMethod(this, method);
 						if (accessible != null) {
 							candidates.add(accessible);
 						}
@@ -971,12 +971,13 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 	// The interpreter's re-resolution of a public method whose declaring class it cannot
 	// call through (not public, or its package not exported): the same method on an
-	// accessible superinterface or superclass (ReflectiveJavaClasses.accessibleMethod).
-	private static @Nullable ClassMethod accessibleMethod(ClassMethod method) {
+	// accessible superinterface or superclass of the receiver class, the walk starting at
+	// the receiver (ReflectiveJavaClasses.accessibleMethod).
+	private static @Nullable ClassMethod accessibleMethod(ClassType receiver, ClassMethod method) {
 		if (method.owner.isAccessible()) {
 			return method;
 		}
-		for (ClassType c = method.owner; c != null; c = c.superclass()) {
+		for (ClassType c = receiver; c != null; c = c.superclass()) {
 			ClassMethod onInterface = accessibleOnInterfaces(c, method);
 			if (onInterface != null) {
 				return onInterface;

@@ -38,6 +38,34 @@ final class ClojureCollectionLowering {
 	private ClojureCollectionLowering() {
 	}
 
+	/**
+	 * The host arm test of {@code seq}, {@code count}, {@code empty?}, {@code get},
+	 * {@code contains?}, {@code keys} and {@code vals} ({@code clojure.lisp}): a host
+	 * {@code Iterable}, {@code Map} or {@code CharSequence}, which only a {@code java:}
+	 * operator hands the program ({@link ClojureArms.Family#HOST}).
+	 */
+	static final String HOST_SEQABLE_P = "RONTOLISP::%CLOJURE-HOST-SEQABLE-P";
+
+	/**
+	 * A verb's host arm, the clause ahead of its fall-through: the host object
+	 * {@code coll} answers {@code body}. A program naming no {@code java:} operator sheds
+	 * it.
+	 */
+	private static LispVal hostArm(LispVal coll, LispVal body) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(HOST_SEQABLE_P), coll), body);
+	}
+
+	/**
+	 * A call of the {@code clojure.lisp} host helper {@code %clojure-host-<suffix>}, the
+	 * suffix in its canonical spelling.
+	 */
+	private static LispVal hostCall(String suffix, LispVal... args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol("RONTOLISP::%CLOJURE-HOST-" + suffix));
+		call.addAll(List.of(args));
+		return ClojureLowerUtil.list(call);
+	}
+
 	/** The tag heading a wrapped set: a set is {@code (LIST :C%SET table)}. */
 	static final LispSymbol SET_TAG = new LispSymbol(":C%SET");
 
@@ -529,6 +557,7 @@ final class ClojureCollectionLowering {
 		// sheds, ClojureArms)
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
 				ClojureSortedLowering.runtime("sorted-get", coll, key, dflt)));
+		branches.add(hostArm(coll, hostCall("GET", coll, key, dflt)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, dflt));
 		return branches;
 	}
@@ -598,6 +627,7 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(indexForm(bound, at, false), ClojureLowering.TRUE_CONST));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(bound),
 				ctx.booleanAnswer(ClojureSortedLowering.runtime("sorted-contains", bound, at))));
+		branches.add(hostArm(bound, ctx.booleanAnswer(hostCall("CONTAINS-P", bound, at))));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ctx.falseVariable));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
@@ -647,9 +677,14 @@ final class ClojureCollectionLowering {
 						ClojureProtocolLowering.typedTableOf(map), map));
 		LispVal gathered = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(acc, ClojureLowering.NIL_CONST))), collect, acc);
+		// a host map answers its entries' keys (values): an arm a program naming no java:
+		// operator sheds
+		LispVal host = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(HOST_SEQABLE_P), map),
+				hostCall("KEYS", map, new LispInteger(keys ? 0 : 1)), gathered);
 		// a sorted map answers its keys (vals) in order
 		LispVal sorted = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(map),
-				ClojureSortedLowering.runtime("sorted-keys", map, new LispInteger(keys ? 0 : 1)), gathered);
+				ClojureSortedLowering.runtime("sorted-keys", map, new LispInteger(keys ? 0 : 1)), host);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(map, lowered))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), map, sorted, ClojureLowering.NIL_CONST));
@@ -1201,6 +1236,7 @@ final class ClojureCollectionLowering {
 			.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(coll),
 					ClojureSortedLowering.runtime("sorted-count", coll),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll)))));
+		branches.add(hostArm(coll, hostCall("COUNT", coll)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -1247,6 +1283,7 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll), ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("zerop"), ClojureSortedLowering.runtime("sorted-count", coll))));
+		branches.add(hostArm(coll, hostCall("EMPTY-P", coll)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), coll)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
