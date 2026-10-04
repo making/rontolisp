@@ -82,6 +82,21 @@ final class ClojurePredicateLowering {
 			"reader-conditional?", "tagged-literal?");
 
 	/**
+	 * A one-argument predicate's bare test over an already-lowered value: the Common Lisp
+	 * boolean, without the {@code T}-or-false answer, for a lowering that branches on it.
+	 * @param name the predicate's Clojure name ({@code map?}, {@code ident?}, ...)
+	 * @param value the lowered value, a variable when the test is a sorted arm
+	 * @return the test form
+	 */
+	static LispVal rawTest(String name, LispVal value) {
+		Test test = TESTS.get(name);
+		if (test == null) {
+			throw new IllegalArgumentException("no one-argument predicate " + name);
+		}
+		return test.over(value);
+	}
+
+	/**
 	 * A predicate in call position, or null when the name is none of them.
 	 * @param ctx the hub
 	 * @param name the Clojure name

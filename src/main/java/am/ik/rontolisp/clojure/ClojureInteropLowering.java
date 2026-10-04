@@ -1320,9 +1320,10 @@ final class ClojureInteropLowering {
 
 	/**
 	 * An instance call: the receiver runs once, behind a temporary; a string receiver
-	 * answers the mapped core operation, which runs on every backend; anything else goes
-	 * to {@code java:call} directly, which calls a string, number or character as its
-	 * {@code String}, box or {@code Character}.
+	 * answers the mapped core operation, which runs on every backend, and so does a
+	 * collection, keyword, symbol, ratio or atom ({@link ClojureValueMethodLowering});
+	 * anything else goes to {@code java:call} directly, which calls a string, number or
+	 * character as its {@code String}, box or {@code Character}.
 	 */
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, String method, List<LispVal> argDatums) {
 		List<LispVal> args = new ArrayList<>();
@@ -1403,6 +1404,11 @@ final class ClojureInteropLowering {
 		}
 		if (cls == null) {
 			call = valuePredicate(ctx, recv, method, args.size(), hostCall, call);
+			if (!(method.equals("toString") && args.isEmpty())) {
+				// a collection, keyword, symbol or ratio has no host object: its common
+				// methods answer through the core verbs, any other is refused by name
+				call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
+			}
 		}
 		LispVal mapped = stringMethod(ctx, method, recv, args);
 		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {

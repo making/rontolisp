@@ -858,6 +858,28 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   java.io.StringWriter)` with no argument is a string output stream on every backend; a
   `java.io.PushbackReader`/`BufferedReader` construction over a stream is that stream and
   over a `(StringReader. s)` argument a string input stream ("Reading").
+- A collection, keyword, symbol, ratio or atom has no host object (`java:call` refused every
+  one: `(.count [1 2 3])` was `java:call expects a java object ..., got #(1 2 3)`). With the
+  receiver class unknown, `ClojureValueMethodLowering.valueArm` puts `(if
+  (%clojure-value-receiver-p r) ARM call)` in front of the host call (not for `.toString`,
+  which `valueToString` answers). ARM is a row per `method/arity`: arms of one-argument
+  predicate kinds (`ClojurePredicateLowering.rawTest`, so the sorted strip still folds them)
+  over a `clojure.core/`-spelled verb datum lowered with the receiver and arguments bound to
+  `recv%`/`argN%` locals (the core meaning whatever the program defines), e.g. `.get` is
+  `get` on a map/set and `%clojure-list-get` (`nth` that signals past the end, the oracle's
+  `IndexOutOfBoundsException`) on a sequential. Nil passes the gate and counts as a list
+  for the `coll?`/`seq?`/`list?`/`sequential?` arms (it is the empty list: `(.isEmpty
+  (filter odd? [2]))` true like the oracle's empty LazySeq), else the oracle's NPE. A kind
+  no arm takes, or a row's method at another arity, is refused in the oracle's words (`No
+  matching method contains found taking 1 args for class clojure.lang.PersistentArrayMap`,
+  `No matching field found: first for class ...`); a method no row names is `Method m
+  taking N args is not supported for class C` (the oracle's class may have it). The lowering
+  fixes the words; `%clojure-no-method` appends the class. Measured 2026-10-04 vs `clj`
+  1.12.6: clojure-spec `instance-calls-on-collections-keywords-symbols-and-ratios`
+  oracle-identical but the unsupported-method line. Cost, `(defn f [s] (.toUpperCase s))`:
+  wasm 56160 -> 57298 B, JVM `.class` 94998 -> 97917 B (comment-only helpers and lowering-time
+  words: docstrings and `format` arms had made it +4.0 KB on the JVM). Pins: that case,
+  `ClojureInteropTest#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods`.
 - Host booleans: the shared unmarshal maps host false to nil (CL's only false; changing
   it would make host false truthy in `java:` programs and move all three paths plus the
   bridge parity). The lowering wraps to `T`-or-false instead where every overload at that

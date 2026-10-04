@@ -154,6 +154,13 @@
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。
+- コレクション・キーワード・シンボル・比・atom へのインスタンス呼び出しは core 関数を通して
+  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します）。対応づけて
+  いないメソッドは `Method m taking N args is not supported for class C` として拒否し、
+  オラクルが答える場合（`.hashCode`）もあります。map のクラス名は件数だけで決め、8 件までは
+  array map、それを超えると hash map とします。ここでは `nil` が空リストなので、コレクションの
+  メソッドは `nil` にも答えます（`(.count nil)` は `0`）が、オラクルは
+  `NullPointerException` を投げます。`nil` へのそれ以外のメソッドは `NullPointerException` です。
 - `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
   他のクラスは誤答の代わりに名前付きで拒否されます。
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換（`int`・`long`・`short`・

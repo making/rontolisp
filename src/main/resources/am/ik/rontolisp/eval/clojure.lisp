@@ -850,6 +850,67 @@
    exists there."
   (java:call x method))
 
+;; An instance call on a Clojure value with no host object: the lowering
+;; (clojure/ClojureValueMethodLowering) answers the common methods through the
+;; core verbs and refuses the rest here, so java:call never sees such a value.
+;; These carry comments, not docstrings: the JVM backend emits a docstring into
+;; every class splicing the defun, and every instance call splices the first two.
+
+;; Whether X is nil or a Clojure value with no host object of its own: a list or
+;; a tagged wrapper (keyword, set, lazy seq, record, atom, ...), a vector, a map,
+;; a ratio or a symbol.
+(defun rontolisp::%clojure-value-receiver-p (x)
+  (or (null x) (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))
+      (rontolisp::%clojure-is-ratio x) (rontolisp::%clojure-real-symbol-p x)))
+
+;; Refuse an instance call of METHOD on X, a value %clojure-value-receiver-p
+;; takes: the lowering's WORDS (the oracle's, or the unsupported refusal) and
+;; X's class, the oracle's -- a map of more than eight entries a hash map (its
+;; literals and assoc growth), a smaller one an array map; nil is the oracle's
+;; NullPointerException.
+(defun rontolisp::%clojure-no-method (x words method)
+  (if (null x) (error "NullPointerException: ~A of nil" method))
+  (error "~A~A" words
+         (cond ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
+          ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
+          ((rontolisp::%clojure-sorted-map-p x)
+           "clojure.lang.PersistentTreeMap")
+          ((rontolisp::%clojure-sorted-set-p x)
+           "clojure.lang.PersistentTreeSet")
+          ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
+          ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (stringp (nth 4 x)))
+           (nth 4 x))
+          ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
+          ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
+          ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+          ((and (consp x) (keywordp (car x))) "java.lang.Object")
+          ((consp x) "clojure.lang.PersistentList")
+          ((hash-table-p x)
+           (if (> (hash-table-count x) 8)
+               "clojure.lang.PersistentHashMap"
+               "clojure.lang.PersistentArrayMap"))
+          ((vectorp x) "clojure.lang.PersistentVector")
+          ((rationalp x) "clojure.lang.Ratio")
+          (t "clojure.lang.Symbol"))))
+
+;; (.get coll i) over a vector, list or lazy seq, and (.nth v i): the member at
+;; index I, signalling past either end like the oracle's
+;; IndexOutOfBoundsException (nth answers nil there).
+(defun rontolisp::%clojure-list-get (coll i)
+  (let* ((miss (list nil)) (got (rontolisp::%clojure-nth coll i miss)))
+    (if (eq got miss) (error "Index ~A out of bounds" i) got)))
+
+;; (.indexOf coll x) / (.lastIndexOf coll x) over a vector, list or lazy seq:
+;; the index of the first (last when FROM-END) member = to X, else -1, like
+;; java.util.List.
+(defun rontolisp::%clojure-index-of (coll x from-end)
+  (let ((at
+         (position x (rontolisp::%clojure-seq-all coll)
+                   :test #'rontolisp::%clojure-equal
+                   :from-end from-end)))
+    (if at at -1)))
+
 ;;;; Catching: which catch clause takes a condition.
 ;;
 ;; A catch names a throwable class, which the lowering resolves to its class

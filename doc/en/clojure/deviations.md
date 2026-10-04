@@ -162,6 +162,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
+- An instance call on a collection, keyword, symbol, ratio or atom answers through the core
+  functions and shares their deviations (`.getClass` answers what `class` does). A method
+  left unmapped is refused as `Method m taking N args is not supported for class C`, where the
+  oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
+  entries and a hash map past them, by size alone. `nil` is the empty list here, so a
+  collection method answers on it (`(.count nil)` is `0`) where the oracle throws a
+  `NullPointerException`; any other method on `nil` is one.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts

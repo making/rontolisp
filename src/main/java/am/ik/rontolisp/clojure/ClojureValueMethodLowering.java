@@ -1,0 +1,295 @@
+package am.ik.rontolisp.clojure;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Instance calls on a Clojure value that has no host object: a collection (vector, list,
+ * lazy seq, map, record, set, sorted collection), a keyword, a symbol, a ratio, an atom
+ * cell or nil (the empty list here). The oracle calls the {@code clojure.lang} /
+ * {@code java.util} interface method of the value's class ({@code Counted}, {@code List},
+ * {@code Map}, {@code Set}, {@code Named}, {@code Ratio}, ...); here the common ones
+ * answer through the core verb that does the same, so they run on every backend, and
+ * every other method on such a value is refused by name instead of reaching
+ * {@code java:call}, which takes no Lisp value but a string, number, character or
+ * {@code t}.
+ *
+ * <p>
+ * A row maps a method at one arity to arms: the kinds that answer it (a one-argument
+ * predicate's bare test) and the core verb, a datum lowered with the receiver and the
+ * arguments bound to locals of this class's own names. A kind the row names no arm for is
+ * refused in the oracle's words ({@code No matching method contains found taking 1 args
+ * for class clojure.lang.PersistentArrayMap}), since its class lacks the method; a method
+ * no row names is refused as unsupported, since its class may have it.
+ *
+ * <p>
+ * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
+ * and re-enters it for subforms.
+ */
+final class ClojureValueMethodLowering {
+
+	private ClojureValueMethodLowering() {
+	}
+
+	/**
+	 * The receiver's local name inside an arm: the {@code %} suffix keeps it generated.
+	 */
+	private static final String RECV = "recv%";
+
+	private static final LispSymbol R = new LispSymbol(RECV);
+
+	private static final LispSymbol A = new LispSymbol(argName(0));
+
+	private static final LispSymbol B = new LispSymbol(argName(1));
+
+	/**
+	 * One arm: the predicates whose kinds answer (any one of them; none for every value
+	 * kind) and the body over the bound locals.
+	 */
+	private record Arm(List<String> kinds, Function<ClojureLowering, LispVal> body) {
+
+	}
+
+	/**
+	 * The atom cell's kind (atoms, volatiles, refs and agents share it), which no
+	 * one-argument predicate names.
+	 */
+	private static final String ATOM = "atom";
+
+	/** The predicates whose kinds include the list, which nil stands for when empty. */
+	private static final List<String> LIST_KINDS = List.of("coll?", "seq?", "list?", "sequential?");
+
+	/** The rows, by {@code method/arity}. */
+	private static final Map<String, List<Arm>> ROWS = new HashMap<>();
+
+	static {
+		collectionRows();
+		lookupRows();
+		updateRows();
+		nameAndNumberRows();
+	}
+
+	private static void collectionRows() {
+		for (String counted : List.of("count", "size")) {
+			row(counted, 0, arm(List.of("coll?"), core("count", R)));
+		}
+		row("isEmpty", 0, arm(List.of("coll?"), core("empty?", R)));
+		row("length", 0, arm(List.of("indexed?"), core("count", R)));
+		row("seq", 0, arm(List.of("coll?"), core("seq", R)));
+		row("first", 0, arm(List.of("seq?"), core("first", R)));
+		row("next", 0, arm(List.of("seq?"), core("next", R)));
+		row("more", 0, arm(List.of("seq?"), core("rest", R)));
+		row("peek", 0, arm(List.of("indexed?", "list?"), core("peek", R)));
+		row("pop", 0, arm(List.of("indexed?", "list?"), core("pop", R)));
+		row("empty", 0, arm(List.of("coll?"), core("empty", R)));
+		row("rseq", 0, arm(List.of("reversible?"), core("rseq", R)));
+		row("keySet", 0, arm(List.of("map?"), core("set", core("keys", R))));
+		row("subList", 2, arm(List.of("indexed?"), core("subvec", R, A, B)),
+				arm(List.of("seq?"), core("subvec", core("vec", R), A, B)));
+	}
+
+	private static void lookupRows() {
+		row("get", 1, arm(List.of("map?", "set?"), core("get", R, A)),
+				new Arm(List.of("sequential?"), ClojureValueMethodLowering::listGet));
+		row("nth", 1, new Arm(List.of("indexed?"), ClojureValueMethodLowering::listGet));
+		row("nth", 2, arm(List.of("indexed?"), core("nth", R, A, B)));
+		row("valAt", 1, arm(List.of("map?", "indexed?"), core("get", R, A)));
+		row("valAt", 2, arm(List.of("map?", "indexed?"), core("get", R, A, B)));
+		row("contains", 1, arm(List.of("set?"), core("contains?", R, A)),
+				arm(List.of("sequential?"), core("contains?", core("set", R), A)));
+		row("containsKey", 1, arm(List.of("map?", "indexed?"), core("contains?", R, A)));
+		row("containsValue", 1, arm(List.of("map?"), core("contains?", core("set", core("vals", R)), A)));
+		row("indexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, false)));
+		row("lastIndexOf", 1, new Arm(List.of("sequential?"), ctx -> indexOf(ctx, true)));
+		row("entryAt", 1, arm(List.of("map?", "indexed?"), core("find", R, A)));
+		row("invoke", 1, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A)));
+		row("invoke", 2, arm(List.of("ifn?"), ClojureLowerUtil.list(R, A, B)));
+	}
+
+	private static void updateRows() {
+		row("cons", 1, arm(List.of("coll?"), core("conj", R, A)));
+		row("assoc", 2, arm(List.of("map?", "indexed?"), core("assoc", R, A, B)));
+		row("without", 1, arm(List.of("map?"), core("dissoc", R, A)));
+		row("disjoin", 1, arm(List.of("set?"), core("disj", R, A)));
+		for (String equal : List.of("equiv", "equals")) {
+			row(equal, 1, arm(List.of(), core("=", R, A)));
+		}
+		row("compareTo", 1, arm(List.of("indexed?", "ident?", "ratio?"), core("compare", R, A)));
+	}
+
+	private static void nameAndNumberRows() {
+		row("getName", 0, arm(List.of("ident?"), core("name", R)));
+		row("getNamespace", 0, arm(List.of("ident?"), core("namespace", R)));
+		row("sym", 0, arm(List.of("keyword?"), core("symbol", R)));
+		row("numerator", 0, arm(List.of("ratio?"), core("numerator", R)));
+		row("denominator", 0, arm(List.of("ratio?"), core("denominator", R)));
+		for (String widened : List.of("doubleValue", "floatValue")) {
+			row(widened, 0, arm(List.of("ratio?"), core("double", R)));
+		}
+		for (String truncated : List.of("intValue", "longValue")) {
+			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
+		}
+		row("getClass", 0, arm(List.of(), core("class", R)));
+		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
+		row("reset", 1, arm(List.of(ATOM), core("reset!", R, A)));
+		row("swap", 1, arm(List.of(ATOM), core("swap!", R, A)));
+	}
+
+	private static void row(String method, int arity, Arm... arms) {
+		ROWS.put(method + "/" + arity, List.of(arms));
+	}
+
+	private static Arm arm(List<String> kinds, LispVal datum) {
+		return new Arm(kinds, ctx -> ctx.lower(datum));
+	}
+
+	private static LispVal core(String verb, LispVal... operands) {
+		List<LispVal> items = new ArrayList<>();
+		items.add(new LispSymbol(ClojureCoreNames.PREFIX + verb));
+		items.addAll(List.of(operands));
+		return ClojureLowerUtil.list(items);
+	}
+
+	private static String argName(int i) {
+		return "arg" + i + "%";
+	}
+
+	/**
+	 * {@code List.get} / {@code Indexed.nth} of one index: the member, signalling past
+	 * either end like the oracle's {@code IndexOutOfBoundsException} ({@code nth} answers
+	 * nil there).
+	 */
+	private static LispVal listGet(ClojureLowering ctx) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LIST-GET"), ctx.localSym(RECV),
+				ctx.localSym(argName(0)));
+	}
+
+	/**
+	 * {@code indexOf} / {@code lastIndexOf}: the first (last) index of a member {@code =}
+	 * to the argument, or {@code -1}, like {@code java.util.List}.
+	 */
+	private static LispVal indexOf(ClojureLowering ctx, boolean last) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INDEX-OF"), ctx.localSym(RECV),
+				ctx.localSym(argName(0)), last ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST);
+	}
+
+	/**
+	 * The value arm of an instance call over an already-bound receiver: when the receiver
+	 * is a Clojure value with no host object, or nil, the mapped core verb of the first
+	 * kind that answers the method, else the refusal; anything else keeps {@code call}.
+	 * Nil is the empty list here, so it answers where a list does ({@code .isEmpty} of an
+	 * empty {@code filter} is true, like the oracle's empty seq) and is the oracle's
+	 * {@code NullPointerException} elsewhere. The arguments run once, before the
+	 * dispatch, like the oracle's.
+	 * @param ctx the hub
+	 * @param method the method name
+	 * @param recv the bound receiver
+	 * @param args the lowered arguments
+	 * @param call the call for any other receiver
+	 * @return the form
+	 */
+	static LispVal valueArm(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args, LispVal call) {
+		LispVal arm = mappedArm(ctx, method, recv, args);
+		if (arm == null) {
+			arm = refusal(recv, method, false, args);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VALUE-RECEIVER-P"), recv), arm, call);
+	}
+
+	private static @Nullable LispVal mappedArm(ClojureLowering ctx, String method, LispSymbol recv,
+			List<LispVal> args) {
+		List<Arm> arms = ROWS.get(method + "/" + args.size());
+		if (arms == null) {
+			for (String key : ROWS.keySet()) {
+				if (key.startsWith(method + "/")) {
+					// the method exists at another arity: the oracle's own refusal
+					return refusal(recv, method, true, args);
+				}
+			}
+			return null;
+		}
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		scope.put(RECV, ClojureLowering.Kind.VARIABLE);
+		for (int i = 0; i < args.size(); i++) {
+			scope.put(argName(i), ClojureLowering.Kind.VARIABLE);
+		}
+		return ctx.inScope(scope, () -> {
+			LispSymbol self = ctx.localSym(RECV);
+			List<LispVal> bindings = new ArrayList<>();
+			bindings.add(ClojureLowerUtil.list(self, recv));
+			List<LispVal> locals = new ArrayList<>();
+			for (int i = 0; i < args.size(); i++) {
+				LispSymbol local = ctx.localSym(argName(i));
+				bindings.add(ClojureLowerUtil.list(local, args.get(i)));
+				locals.add(local);
+			}
+			List<LispVal> clauses = new ArrayList<>();
+			clauses.add(ClojureLowerUtil.sym("cond"));
+			for (Arm arm : arms) {
+				clauses.add(ClojureLowerUtil.list(armTest(arm, self), arm.body().apply(ctx)));
+			}
+			clauses.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, refusal(self, method, true, locals)));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
+					ClojureLowerUtil.list(clauses));
+		});
+	}
+
+	/**
+	 * Whether an arm takes the bound receiver: one of its kinds, where nil -- the empty
+	 * list here -- counts as a list; an arm naming no kind takes every value but nil.
+	 */
+	private static LispVal armTest(Arm arm, LispSymbol self) {
+		if (arm.kinds().isEmpty()) {
+			return self;
+		}
+		List<LispVal> tests = new ArrayList<>();
+		for (String kind : arm.kinds()) {
+			tests.add(kind.equals(ATOM) ? ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self)
+					: ClojurePredicateLowering.rawTest(kind, self));
+		}
+		if (arm.kinds().stream().anyMatch(LIST_KINDS::contains)) {
+			tests.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), self));
+		}
+		return tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
+	}
+
+	/**
+	 * The refusal after the arguments run: in the oracle's words when {@code known} (a
+	 * row maps the method for another kind or arity, so this class lacks it), by name
+	 * otherwise. The words are fixed here but for the receiver's class, which
+	 * {@code %clojure-no-method} appends (or, for nil, signals the oracle's
+	 * {@code NullPointerException}).
+	 */
+	private static LispVal refusal(LispVal recv, String method, boolean known, List<LispVal> args) {
+		int n = args.size();
+		String words;
+		if (!known) {
+			words = "Method " + method + " taking " + n + " args is not supported for class ";
+		}
+		else if (n == 0) {
+			words = "No matching field found: " + method + " for class ";
+		}
+		else {
+			words = "No matching method " + method + " found taking " + n + " args for class ";
+		}
+		List<LispVal> body = new ArrayList<>();
+		body.add(ClojureLowerUtil.sym("progn"));
+		for (LispVal arg : args) {
+			if (!(arg instanceof LispSymbol)) {
+				body.add(arg);
+			}
+		}
+		body.add(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NO-METHOD"), recv, LispString.literal(words),
+				LispString.literal(method)));
+		return body.size() == 2 ? body.get(1) : ClojureLowerUtil.list(body);
+	}
+
+}
