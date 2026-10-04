@@ -84,7 +84,8 @@ the same name wins back the call sites. A `defmacro` of a core name (`with-out-s
 form-by-form compile: a call site above the definition, and a syntax-quote in a macro
 defined above it, keep the core meaning. `clojure.core/name` always names the core var,
 whatever the program defines under that name. A special form, or a head the reader
-spells (`deref` for `@x`, `with-meta`), or `fn`, cannot name a macro.
+spells (`deref` for `@x`, `with-meta`) cannot name a macro. A `fn` macro is allowed: it
+captures `fn` call sites, never `#(...)` (read as the special form `fn*`).
 
 `` `form `` builds a form as data over the mangled namespace: a symbol naming a var the
 defining namespace sees qualifies with that var's namespace like the oracle (a special

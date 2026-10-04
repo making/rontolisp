@@ -139,7 +139,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the `clojure.lisp` library, not the program's own definitions; a call above its
   definition is refused, and a macro has no function value. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
-  `syntax-quote`, `ns`, `in-ns`) or of `fn` is refused by name, where the oracle
+  `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where

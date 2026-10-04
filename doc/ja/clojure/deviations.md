@@ -131,7 +131,7 @@
  見えるのは核の built-in と `clojure.lisp` ライブラリであり、プログラム自身の定義は
  見えません。定義より上での呼び出しは拒否され、マクロに関数値はありません。special
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
- `syntax-quote`、`ns`、`in-ns`）と `fn` の `defmacro` は名前を挙げて拒否されます。oracle はこれを
+ `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
  受け付けます（special form なら呼び出し位置では無視します）。
 - `#(...)` はソース、クオートの下、`read-string`/`read` のいずれでもオラクルと同じ
   `(fn* [p1__N# ...] (body))` と読まれますが、N はトップレベルのフォーム（読む datum）

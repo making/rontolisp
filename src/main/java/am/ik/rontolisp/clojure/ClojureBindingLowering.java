@@ -306,7 +306,8 @@ final class ClojureBindingLowering {
 		LispSymbol fn = ClojureLowering.defnSym(key, definition);
 		String callName = fn.name();
 		List<LispVal> fnParts = new ArrayList<>();
-		fnParts.add(new LispSymbol("fn"));
+		fnParts.add(new LispSymbol("fn*")); // a special form: no program macro captures
+											// it
 		fnParts.addAll(items.subList(at, items.size()));
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
 		// recorded ahead of the body, so a #' of the name inside it sees this

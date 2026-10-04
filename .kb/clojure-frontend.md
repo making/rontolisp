@@ -649,7 +649,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
-  plus the heads the reader spells: `syntax-quote`/`unquote*`/`deref`/`fn`, `ns`/`in-ns`),
+  plus the heads the reader spells: `syntax-quote`/`unquote*`/`deref`, `ns`/`in-ns`; `fn` is not one since `#(...)`
+  reads as `fn*`, and a `defn`'s recorded dispatch datum is spelled `fn*` so a `fn` macro
+  never captures it),
   whose `defmacro` is refused. Above the definition `lookupVar` hides a `pendingCoreMacro`
   (a name in `ClojureCoreNames`, the oracle's 679 `clojure.core` publics). A definition
   head a macro above shadows pre-declares nothing.

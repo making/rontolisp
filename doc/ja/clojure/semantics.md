@@ -82,8 +82,9 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 `defmacro` は、oracle のフォーム単位のコンパイルと同じく、定義以降でその名前を覆い隠します。
 定義より上の呼び出し位置と、定義より上で定義されたマクロの syntax-quote は核の意味を
 保ちます。`clojure.core/name` は、プログラムがその名前で何を定義していても常に核の var
-を指します。special form と、リーダーが綴る先頭（`@x` の `deref`、`with-meta`）と
-`fn` はマクロの名前にできません。
+を指します。special form と、リーダーが綴る先頭（`@x` の `deref`、`with-meta`）は
+マクロの名前にできません。`fn` のマクロは定義でき、`fn` の呼び出し位置だけを捕らえます
+（`#(...)` は special form の `fn*` と読まれるので捕らえません）。
 
 `` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。定義側の
 名前空間から見える var を指すシンボルは oracle と同じくその var の名前空間で限定され

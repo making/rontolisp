@@ -57,14 +57,15 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The heads the reader itself spells ({@code `x}, {@code ~x}, {@code ~@x},
-	 * {@code @x}) plus the two the pre-scan reads a namespace from, and {@code fn}: a
-	 * macro of one would capture the reader's own forms (the oracle reads {@code @x} as
+	 * {@code @x}) plus the two the pre-scan reads a namespace from: a macro of one would
+	 * capture the reader's own forms (the oracle reads {@code @x} as
 	 * {@code clojure.core/deref}, which no program macro shadows), so a {@code defmacro}
-	 * of one is refused by name. {@code #(...)} reads as {@code fn*}, a special form.
-	 * {@code ^m x} reads as {@code %with-meta}, reserved by its {@code %}, so a
+	 * of one is refused by name. {@code #(...)} reads as {@code fn*}, a special form, so
+	 * {@code fn} is no reader head: a {@code fn} macro captures {@code fn} call sites
+	 * only. {@code ^m x} reads as {@code %with-meta}, reserved by its {@code %}, so a
 	 * {@code with-meta} macro shadows the call only.
 	 */
-	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "fn", "ns",
+	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "ns",
 			"in-ns");
 
 	/**
@@ -242,11 +243,8 @@ final class ClojureMacroLowering {
 	 * the head names no macro.
 	 */
 	static @Nullable LispVal macroCall(ClojureLowering ctx, String name, List<LispVal> items) {
-		if (ctx.isLocal(name)) {
-			return null; // a local binding shadows the macro
-		}
-		String key = ctx.resolveVar(name);
-		if (key == null || ctx.globals.get(key) != ClojureLowering.Kind.MACRO) {
+		String key = macroKey(ctx, name);
+		if (key == null) {
 			return null;
 		}
 		LispVal expander = ctx.macros.get(key);
@@ -254,6 +252,18 @@ final class ClojureMacroLowering {
 			throw new LispReadException("macro `" + name + "` used before its definition");
 		}
 		return expandMacro(ctx, name, expander, items);
+	}
+
+	/**
+	 * The var key of the program macro a head names at the current point, or null: a
+	 * local binding shadows the macro, and a name no macro owns has none.
+	 */
+	static @Nullable String macroKey(ClojureLowering ctx, String name) {
+		if (ctx.isLocal(name)) {
+			return null; // a local binding shadows the macro
+		}
+		String key = ctx.resolveVar(name);
+		return key != null && ctx.globals.get(key) == ClojureLowering.Kind.MACRO ? key : null;
 	}
 
 	/**
