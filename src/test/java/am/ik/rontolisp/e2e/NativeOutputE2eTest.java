@@ -17,11 +17,10 @@ import java.util.stream.Stream;
 
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.YamlResources;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.dataformat.yaml.YAMLMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.abort;
@@ -278,13 +277,9 @@ class NativeOutputE2eTest {
 	}
 
 	private static String slice() throws Exception {
-		JsonNode spec;
-		try (var in = NativeOutputE2eTest.class.getResourceAsStream("/ci-spec.yaml")) {
-			spec = YAMLMapper.builder().build().readTree(in);
-		}
 		Map<String, String> sources = new HashMap<>();
-		for (JsonNode c : spec.path("cases")) {
-			sources.put(c.path("name").asString(), c.path("source").asString());
+		for (YamlResources.Case c : YamlResources.readCiSpec().cases()) {
+			sources.put(c.name(), c.source());
 		}
 		return CASES.stream().map(name -> {
 			String s = sources.get(name);
