@@ -181,10 +181,9 @@ public final class ClojureArms {
 		 * {@code empty?}, {@code get} and {@code contains?} read as one, the map verbs
 		 * read as a map (the views are {@code select-keys}' key list and the map
 		 * {@code merge-with} walks) and the printer writes readably as its Clojure kind:
-		 * only a {@code java:} operator hands one to the
-		 * program. The aliases are {@code instance?} of a class a core kind's value is
-		 * and a host object may be ({@code Number}, {@code CharSequence}), each to the
-		 * kind's own test.
+		 * only a {@code java:} operator hands one to the program. The aliases are
+		 * {@code instance?} of a class a core kind's value is and a host object may be
+		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
 		 */
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",

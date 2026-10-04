@@ -1205,15 +1205,16 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   0) and writes it through `%clojure-write` at the same depth, so the print-flag arms apply.
   The members go in without `%clojure-store-key`: its key representatives pulled
   `%clojure-equal`'s closure in (`count` + `.toUpperCase` + `println`: JVM class +17,697 B with
-  it, +1,501 B without). Cost, measured 2026-10-04: a program naming no `java:` operator is
+  it, +1,574 B without). Cost, measured 2026-10-04: a program naming no `java:` operator is
   byte-identical (wasm P1, `--optimize=size`, component, JVM class and runtime classes:
   `demo.clj`, a program printing vectors, maps, sets, lists, sorted maps under the print
   flags). A `java:` program, JVM class: `count` + `.toUpperCase` + `println` 113,378 ->
-  114,879 B, the same with `prn` 114,969 -> 115,808, the pin's program 183,604 -> 184,611 (wasm
+  114,952 B, the same with `prn` 114,969 -> 115,881, the pin's program 183,604 -> 184,545 (wasm
   output is the `java:new` refusal either way, +-3 B). Speed: JVM `pr-str` of a 200k-integer
-  vector in a `java:` program within noise (3.95 vs 3.94 s / 20, medians of 5); the
+  vector in a `java:` program within noise (3.97 -> 3.95 s / 20, medians of 5); the
   interpreter, which keeps the arm in every program, pays one call per value reaching the
-  fall-through (integers): the same vector 6.9 -> 7.4 s / 4 (+6%, medians of 5, load 3-13).
+  fall-through (integers): `pr-str` of a 50k-integer vector 6.87 -> 7.40 s / 4 (+8%, medians
+  of 5, load 3-13).
   Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
   (oracle-identical but the `#<java C>` lines),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
