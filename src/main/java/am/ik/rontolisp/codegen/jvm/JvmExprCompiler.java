@@ -398,8 +398,9 @@ final class JvmExprCompiler {
 		else if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
 			// *error-output* is the process standard ERROR, which t does not name: it is
 			// the stream VALUE over the reserved handle 2, the same value the interpreter
-			// holds (the program never binds this one, so warn's redirect does not exist
-			// here). Mentioning the variable is what turns the stream-value gate on
+			// holds. A program that names the variable gives it a global seeded once
+			// (JvmLispCompiler), so this arm is reached only by a read the source scan
+			// cannot see. Mentioning the variable is what turns the stream-value gate on
 			// (LispMacroExpander.mayCreateStreamValues), so the constructor form always
 			// compiles here.
 			JvmExprCompiler.compileExpr(StreamDesignators.standardError(), ctx, ctx.className);

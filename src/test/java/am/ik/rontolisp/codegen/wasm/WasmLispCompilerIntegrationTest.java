@@ -15216,6 +15216,39 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void errorOutputIsOneStreamValue() throws Exception {
+		// A program that never binds the variable reads the seeded value, not a value
+		// constructed per read; symbol-value's global-environment mirror holds the same
+		// object. Preview 1 and the component.
+		String unbound = """
+				(print (list (eq *error-output* *error-output*)
+				             (let ((a *error-output*) (b *error-output*)) (eq a b))
+				             (eq *error-output* (symbol-value '*error-output*))))""";
+		assertThat(compileAndRunPrelude(unbound)).isEqualTo("(T T T)");
+		assertThat(compileComponentAndRunPrelude(unbound)).isEqualTo("(T T T)");
+		String rebound = """
+				(defun eo-rebind () (let ((*error-output* *error-output*)) *error-output*))
+				(print (list (eq (eo-rebind) *error-output*)
+				             (eq *error-output* (symbol-value '*error-output*))))""";
+		assertThat(compileAndRunPrelude(rebound)).isEqualTo("(T T)");
+		assertThat(compileComponentAndRunPrelude(rebound)).isEqualTo("(T T)");
+	}
+
+	@Test
+	void streamDirectionPredicatesAtTheTopLevel() throws Exception {
+		// The synchronous top level compiles in a context of its own
+		// (WasmAsyncEmit.freshCtx); it has to ask the real direction exactly where a
+		// defun body does.
+		String program = """
+				(print (list (input-stream-p *error-output*)
+				             (output-stream-p *error-output*)
+				             (output-stream-p (make-string-input-stream "a"))
+				             (input-stream-p (make-string-output-stream))))""";
+		assertThat(compileAndRunPrelude(program)).isEqualTo("(NIL T NIL NIL)");
+		assertThat(compileComponentAndRunPrelude(program)).isEqualTo("(NIL T NIL NIL)");
+	}
+
+	@Test
 	void errorOutputIsTheProcessErrorStream() throws Exception {
 		// *error-output* is the standard ERROR designator (the handle 2, here literally
 		// the WASI fd), so a diagnostic written through it stays off standard output.

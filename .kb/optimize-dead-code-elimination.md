@@ -911,7 +911,8 @@ value, `WasmAsyncEmit`'s waiter closure). Collected DURING emission, not from a 
 the whole point: a `#'identity` a macro synthesizes in Pass 2 is invisible to any source scan.
 **TRAP: `WasmAsyncEmit.freshCtx` rebuilds a `Ctx` field by field** and also builds the SYNCHRONOUS
 top level; omitting `valueFuncIds` there silently lost every closure the top level makes and
-`(funcall f 1)` trapped. **Any module-wide MUTABLE `Ctx` field must be listed there.**
+`(funcall f 1)` trapped. **Any module-wide MUTABLE `Ctx` field must be listed there.** The 20
+fields it still drops, and inheriting by construction instead: `.todo/c77`.
 
 **Source 2, the names a runtime SYMBOL designator can resolve** (on WASM live when the registry is:
 `usesEval || usesRuntimeDesignator || usesApplyRuntime`, `.kb/eval-runtime.md`). `_lookup` matches

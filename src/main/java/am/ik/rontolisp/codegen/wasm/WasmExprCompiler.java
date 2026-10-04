@@ -311,8 +311,9 @@ final class WasmExprCompiler {
 		if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
 			// *error-output* is the process standard ERROR, which t does not name: it is
 			// the stream VALUE over the reserved handle 2 -- the fd the write helpers
-			// already send stderr to (the program never binds this one, so warn's
-			// redirect does not exist here). Mentioning the variable is what turns the
+			// already send stderr to. A program that names the variable gives it a module
+			// global seeded once (WasmLispCompiler), so this arm is reached only by a
+			// read the source scan cannot see. Mentioning the variable is what turns the
 			// stream-value gate on (LispMacroExpander.mayCreateStreamValues), so the
 			// constructor form always compiles here.
 			compileExpr(StreamDesignators.standardError(), ctx);
