@@ -9,7 +9,10 @@
 `child` や `parent` に書いたクラス名は、`defmethod` と同じく `class` がその値に答える
 キーワードです。`String` は `:string`、record はそのタグ、throwable やストリームのクラスは
 その名前です。throwable やストリームのクラスのキーワードは、オラクルの Java の継承と同じく
-各スーパークラスとそれらの派生先に `isa?` です（インタフェースと `Object` は除きます）。
+インタフェースを含む各スーパータイプとそれらの派生先に `isa?` です。どのクラスも `Object` に
+`isa?` です。インタプリタと JVM では、ホストオブジェクトの `class` はそのクラスオブジェクトを
+返し、それは継承・実装する各クラスとそれらの派生先に、どの綴りでも `isa?` です。
+`(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。
 
 ```clojure
 (derive :c :p)
@@ -18,4 +21,5 @@
 (println (isa? :p :c)) ; false
 (println (isa? (class "a") String)) ; true
 (println (isa? (class (NumberFormatException. "x")) IllegalArgumentException)) ; true
+(println (isa? NumberFormatException java.io.Serializable) (isa? (class "a") Object)) ; true true
 ```

@@ -1,0 +1,186 @@
+package am.ik.rontolisp.clojure;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The bases of the classes a class keyword may name -- the oracle's {@code bases}: the
+ * superclass first, then the direct interfaces -- so {@code isa?}, {@code parents} and
+ * {@code ancestors} follow Java inheritance the way the oracle does. The throwable half
+ * extends {@link ClojureThrowables#PARENTS} with the interfaces, the stream half is
+ * {@link #STREAM_SUPERS}; both are tables read off clj 1.12.6 on JDK 25 (2026-10-04), not
+ * reflection, so a host that reflects only what its image holds resolves them alike. Any
+ * other throwable reflects, like its chain.
+ */
+final class ClojureClassBases {
+
+	/** The root of every class's supers but an interface's. */
+	static final String OBJECT = "java.lang.Object";
+
+	/**
+	 * The superclass of each stream class {@code class} answers ({@code clojure.lisp},
+	 * {@code %clojure-stream-class}) and of theirs below {@code Writer} and
+	 * {@code Reader}: the stream half of the class chains, as
+	 * {@link ClojureThrowables#PARENTS} is the throwable half.
+	 */
+	static final Map<String, String> STREAM_SUPERS = Map.of("java.io.StringWriter", "java.io.Writer",
+			"java.io.PrintWriter", "java.io.Writer", "java.io.OutputStreamWriter", "java.io.Writer",
+			"java.io.BufferedReader", "java.io.Reader", "clojure.lang.LineNumberingPushbackReader",
+			"java.io.PushbackReader", "java.io.PushbackReader", "java.io.FilterReader", "java.io.FilterReader",
+			"java.io.Reader");
+
+	/** The stream classes below {@code Object} that no other stream class extends. */
+	private static final Set<String> STREAM_ROOTS = Set.of("java.io.Writer", "java.io.Reader");
+
+	/**
+	 * The direct interfaces of the tabled classes that have any, and the bases of the
+	 * interfaces among their supers (an interface's bases are its superinterfaces).
+	 */
+	static final Map<String, List<String>> INTERFACES = Map.of("java.lang.Throwable", List.of("java.io.Serializable"),
+			"clojure.lang.ExceptionInfo", List.of("clojure.lang.IExceptionInfo"),
+			"clojure.lang.Compiler$CompilerException", List.of("clojure.lang.IExceptionInfo"),
+			"clojure.lang.LispReader$ReaderException", List.of("clojure.lang.IExceptionInfo"), "java.io.Writer",
+			List.of("java.lang.Appendable", "java.io.Closeable", "java.io.Flushable"), "java.io.Reader",
+			List.of("java.lang.Readable", "java.io.Closeable"), "java.io.Closeable",
+			List.of("java.lang.AutoCloseable"));
+
+	/** The interfaces among the tabled classes' supers. */
+	static final Set<String> TABLED_INTERFACES = Set.of("java.io.Serializable", "clojure.lang.IExceptionInfo",
+			"java.lang.Appendable", "java.io.Closeable", "java.io.Flushable", "java.lang.Readable",
+			"java.lang.AutoCloseable");
+
+	/**
+	 * The classes a runtime error's or an {@code ex-info}'s class may be
+	 * ({@code clojure.lisp}, {@code %clojure-error-chain} and
+	 * {@code %clojure-condition-chain}), which a value has without the program naming
+	 * them.
+	 */
+	static final List<String> RUNTIME_THROWABLES = List.of("java.lang.ArithmeticException",
+			"java.lang.ClassCastException", "java.lang.NullPointerException", "java.lang.IndexOutOfBoundsException",
+			"java.lang.UnsupportedOperationException", "clojure.lang.ArityException", "java.io.FileNotFoundException",
+			"clojure.lang.ExceptionInfo");
+
+	/**
+	 * The keywords {@code class} answers for a core kind (the
+	 * {@code ClojureDispatchLowering
+	 * classForm} arms but nil's, exceptions' and streams'): each stands for host classes
+	 * that are no one value here -- {@code :number} is {@code Long}, {@code Double},
+	 * {@code Ratio}... -- so its row names no bases and its supers are {@code Object}
+	 * alone. A record's or a deftype's tag is such a class too.
+	 */
+	static final List<String> KINDS = List.of("boolean", "keyword", "symbol", "char", "string", "number", "set", "map",
+			"vector", "pattern", "matcher", "list", "function", "atom", "reify", "clojure.lang.Namespace");
+
+	private ClojureClassBases() {
+	}
+
+	/**
+	 * The bases of the class with this name, or null when it is none a class keyword
+	 * names here: a tabled class, an interface among their supers, {@code Object}, or a
+	 * throwable host reflection resolves.
+	 * @param name the class's binary name
+	 * @return its superclass then its interfaces, empty for {@code Object} and a root
+	 * interface
+	 */
+	static @Nullable List<String> basesOf(String name) {
+		if (name.equals(OBJECT)) {
+			return List.of();
+		}
+		if (TABLED_INTERFACES.contains(name)) {
+			return INTERFACES.getOrDefault(name, List.of());
+		}
+		String superclass = ClojureThrowables.PARENTS.get(name);
+		if (superclass == null) {
+			superclass = STREAM_SUPERS.get(name);
+		}
+		if (superclass == null && (name.equals(ClojureThrowables.THROWABLE) || STREAM_ROOTS.contains(name))) {
+			superclass = OBJECT;
+		}
+		if (superclass != null) {
+			List<String> bases = new ArrayList<>();
+			bases.add(superclass);
+			bases.addAll(INTERFACES.getOrDefault(name, List.of()));
+			return bases;
+		}
+		return ClojureThrowables.chainOf(name) != null ? reflectedBases(name) : null;
+	}
+
+	/** The bases host reflection answers, or null when the class does not resolve. */
+	private static @Nullable List<String> reflectedBases(String name) {
+		Class<?> type;
+		try {
+			type = Class.forName(name, false, ClojureClassBases.class.getClassLoader());
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			return null;
+		}
+		List<String> bases = new ArrayList<>();
+		if (type.getSuperclass() != null) {
+			bases.add(type.getSuperclass().getName());
+		}
+		for (Class<?> each : type.getInterfaces()) {
+			bases.add(each.getName());
+		}
+		return bases;
+	}
+
+	/**
+	 * The bases of a class among the supers of one {@link #basesOf} answers: the tables
+	 * first, then reflection for an interface a reflected throwable implements.
+	 */
+	static @Nullable List<String> superBasesOf(String name) {
+		List<String> bases = basesOf(name);
+		return bases != null ? bases : reflectedBases(name);
+	}
+
+	/**
+	 * Whether a spelling of this class lowers to its class keyword: a throwable, a stream
+	 * class, an interface among their supers, or {@code Object}.
+	 */
+	static boolean isChained(String name) {
+		return basesOf(name) != null;
+	}
+
+	/**
+	 * Whether the class is a stream class {@code class} may answer or a superclass of
+	 * one.
+	 */
+	static boolean isStreamClass(String name) {
+		return STREAM_SUPERS.containsKey(name) || STREAM_SUPERS.containsValue(name);
+	}
+
+	/**
+	 * The class's supers (the oracle's {@code supers}): every base, and every base's
+	 * supers.
+	 * @param name a class {@link #basesOf} resolves
+	 * @return its supers, nearest first
+	 */
+	static Set<String> supersOf(String name) {
+		Set<String> supers = new LinkedHashSet<>();
+		List<String> bases = superBasesOf(name);
+		if (bases != null) {
+			for (String base : bases) {
+				if (supers.add(base)) {
+					supers.addAll(supersOf(base));
+				}
+			}
+		}
+		return supers;
+	}
+
+	/**
+	 * The classes a value's {@code class} may answer without the program naming them: the
+	 * runtime errors' and the streams'.
+	 */
+	static List<String> implicitClasses() {
+		List<String> classes = new ArrayList<>(RUNTIME_THROWABLES);
+		classes.addAll(STREAM_SUPERS.keySet().stream().sorted().toList());
+		return classes;
+	}
+
+}

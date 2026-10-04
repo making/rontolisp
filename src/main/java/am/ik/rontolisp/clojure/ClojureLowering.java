@@ -695,35 +695,150 @@ public final class ClojureLowering {
 	boolean hierarchyEmitted;
 
 	/**
-	 * The superclass of each class whose chain the program resolved (a construction, a
-	 * catch, {@code instance?}, a class spelling in a dispatch or hierarchy position), by
-	 * name: the edges {@code isa?} walks between class keywords once
+	 * The bases of each class whose chain the program resolved (a construction, a catch,
+	 * {@code instance?}, a class spelling in a dispatch or hierarchy position) and of
+	 * each of its supers, by name ({@link ClojureClassBases}): the rows {@code isa?},
+	 * {@code parents} and {@code ancestors} read off a class keyword once
 	 * {@link #usedClassChains} is set.
 	 */
-	final Map<String, String> classSupers = new LinkedHashMap<>();
+	final Map<String, List<String>> classBases = new LinkedHashMap<>();
 
 	/**
-	 * Whether a dispatch value, {@code isa?}, {@code derive} or {@code underive} spells a
-	 * class with a chain (a throwable or a stream class): the hierarchy runtime then
-	 * follows {@link #classSupers} from a class keyword to its superclass, like the
-	 * oracle's {@code isa?} follows Java inheritance.
+	 * Whether a dispatch value or a hierarchy operation spells a class: the hierarchy
+	 * runtime then reads {@link #classBases} for a class keyword, like the oracle's
+	 * {@code isa?} follows Java inheritance.
 	 */
 	boolean usedClassChains;
+
+	/**
+	 * Whether {@code Object} is spelled, or a hierarchy reader can meet a class keyword:
+	 * every class {@code class} may answer gets its row ({@link #pendingClassRows}), the
+	 * core kinds and the program's types too.
+	 */
+	boolean allClassRows;
+
+	/**
+	 * Whether {@code descendants} is lowered: with {@link #usedClassChains}, a class
+	 * keyword is its refusal, an exception of the program's exception runtime.
+	 */
+	boolean readsDescendants;
 
 	/** Whether the session already emitted the class-chain walk. */
 	boolean classChainsEmitted;
 
-	/** The {@link #classSupers} edges the session already emitted. */
+	/**
+	 * Whether a hierarchy may meet a host class object: the program uses a hierarchy and
+	 * names a {@code java:} operator ({@link ClojureHierarchyLowering#namesHost}), so its
+	 * class-chain walk asks the host for a class object's supers. Sets
+	 * {@link #usedClassChains}.
+	 */
+	boolean hostClassWalk;
+
+	/**
+	 * Whether the forms lowered so far (a session's buffers) named a {@code java:}
+	 * operator.
+	 */
+	boolean namedHost;
+
+	/** Whether the session's emitted class-chain walk is the host class one. */
+	boolean hostClassWalkEmitted;
+
+	/**
+	 * Turns on {@link #hostClassWalk} once the program uses a hierarchy and the forms
+	 * lowered so far name the host.
+	 * @param lowered forms just lowered
+	 */
+	void noteHost(List<LispVal> lowered) {
+		this.namedHost = this.namedHost || ClojureHierarchyLowering.namesHost(lowered);
+		if (this.usedHierarchy && this.namedHost) {
+			this.hostClassWalk = true;
+			this.usedClassChains = true;
+		}
+	}
+
+	/** The class rows the session already emitted, by name. */
 	final Set<String> emittedSupers = new HashSet<>();
 
 	/**
-	 * Records the superclass edges of a class chain (own name first).
+	 * Records the rows of a class chain's classes (own name first) and of their supers.
 	 * @param chain the chain
 	 */
 	void recordChain(List<String> chain) {
-		for (int i = 0; i + 1 < chain.size(); i++) {
-			this.classSupers.putIfAbsent(chain.get(i), chain.get(i + 1));
+		for (String name : chain) {
+			recordClass(name);
 		}
+	}
+
+	/**
+	 * Records the row of the class and of each of its supers.
+	 * @param name the class's binary name
+	 */
+	void recordClass(String name) {
+		if (this.classBases.containsKey(name)) {
+			return;
+		}
+		List<String> bases = ClojureClassBases.superBasesOf(name);
+		if (bases == null) {
+			return;
+		}
+		this.classBases.put(name, bases);
+		for (String base : bases) {
+			recordClass(base);
+		}
+	}
+
+	/**
+	 * Records a class spelled in a dispatch or hierarchy position, and every class a
+	 * value may have without the program naming it whose supers hold it (the runtime
+	 * errors', the streams'), so {@code isa?} walks from the class {@code class} answers
+	 * to it; {@code Object} records them all.
+	 * @param name the class's binary name
+	 */
+	void recordSpelledClass(String name) {
+		recordClass(name);
+		this.usedClassChains = true;
+		if (name.equals(ClojureClassBases.OBJECT)) {
+			this.allClassRows = true;
+			return;
+		}
+		for (String implicit : ClojureClassBases.implicitClasses()) {
+			if (implicit.equals(name) || ClojureClassBases.supersOf(implicit).contains(name)) {
+				recordClass(implicit);
+			}
+		}
+	}
+
+	/**
+	 * The class rows not yet emitted, as {@code (name base ...)} conses, each a class
+	 * with known bases, or {@code (name . t)} for a core kind or a type
+	 * ({@link ClojureClassBases#KINDS}). With {@link #allClassRows}, every class
+	 * {@code class} may answer joins first.
+	 */
+	List<LispVal> pendingClassRows() {
+		List<String> opaque = new ArrayList<>();
+		if (this.allClassRows) {
+			for (String implicit : ClojureClassBases.implicitClasses()) {
+				recordClass(implicit);
+			}
+			opaque.addAll(ClojureClassBases.KINDS);
+			this.types.values().stream().map(TypeDef::tagSpelling).sorted().forEach(opaque::add);
+		}
+		List<LispVal> rows = new ArrayList<>();
+		for (Map.Entry<String, List<String>> row : this.classBases.entrySet()) {
+			if (this.emittedSupers.add(row.getKey())) {
+				List<LispVal> bases = new ArrayList<>();
+				for (String base : row.getValue()) {
+					bases.add(LispString.literal(base));
+				}
+				rows.add(new LispCons(LispString.literal(row.getKey()), ClojureLowerUtil.list(bases)));
+			}
+		}
+		for (String name : opaque) {
+			if (this.emittedSupers.add(name)) {
+				rows.add(new LispCons(LispString.literal(name), TRUE_CONST));
+			}
+		}
+		return rows;
 	}
 
 	/**
@@ -1009,6 +1124,10 @@ public final class ClojureLowering {
 			// the macro runtime travels with the program, like the false value
 			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering));
 		}
+		// a hierarchy meets a host class object only where the program names the host
+		lowering.noteHost(lowering.forms);
+		// descendants of a class keyword is an exception of the program's runtime
+		lowering.usedExInfo |= lowering.usedClassChains && lowering.readsDescendants;
 		if (lowering.usedHierarchy) {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureHierarchyLowering.hierarchyRuntime(lowering));
@@ -1094,33 +1213,36 @@ public final class ClojureLowering {
 			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
 			this.falseBound = true;
 		}
+		// a hierarchy meets a host class object once any buffer named the host
+		noteHost(out.stream().flatMap(top -> top.forms().stream()).toList());
+		// descendants of a class keyword is an exception of the program's runtime
+		this.usedExInfo |= this.usedClassChains && this.readsDescendants;
 		if (this.usedHierarchy && !this.hierarchyEmitted) {
 			// The hierarchy runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(ClojureHierarchyLowering.hierarchyRuntime(this), false));
 			this.hierarchyEmitted = true;
-			if (this.usedClassChains) {
-				this.classChainsEmitted = true;
-				this.emittedSupers.addAll(this.classSupers.keySet());
-			}
+			this.classChainsEmitted = this.usedClassChains;
+			this.hostClassWalkEmitted = this.hostClassWalk;
 		}
 		else if (this.usedClassChains) {
-			// The class-chain walk joins an earlier buffer's hierarchy runtime, and the
-			// edges this buffer resolved first join the ones before them.
+			// The class-chain readers join an earlier buffer's hierarchy runtime (their
+			// host class versions once a buffer names the host), and the rows this
+			// buffer resolved first join the ones before them.
 			List<LispVal> forms = new ArrayList<>();
-			Map<String, String> fresh = new LinkedHashMap<>();
-			for (Map.Entry<String, String> edge : this.classSupers.entrySet()) {
-				if (this.emittedSupers.add(edge.getKey())) {
-					fresh.put(edge.getKey(), edge.getValue());
-				}
+			if (!this.classChainsEmitted || this.hostClassWalk != this.hostClassWalkEmitted) {
+				forms.addAll(ClojureHierarchyLowering.classChainRuntime(this));
+				this.hostClassWalkEmitted = this.hostClassWalk;
 			}
 			if (!this.classChainsEmitted) {
-				forms.addAll(ClojureHierarchyLowering.classChainRuntime());
-				forms.add(ClojureHierarchyLowering.supersForm(fresh, false));
+				forms.add(ClojureHierarchyLowering.supersForm(pendingClassRows(), false));
 				this.classChainsEmitted = true;
 			}
-			else if (!fresh.isEmpty()) {
-				forms.add(ClojureHierarchyLowering.supersForm(fresh, true));
+			else {
+				List<LispVal> fresh = pendingClassRows();
+				if (!fresh.isEmpty()) {
+					forms.add(ClojureHierarchyLowering.supersForm(fresh, true));
+				}
 			}
 			if (!forms.isEmpty()) {
 				out.add(0, new ClojureTopLevel(forms, false));

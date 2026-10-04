@@ -148,6 +148,82 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void theClassOfAHostThrowableNoConstructionNamesTakesItsSupersFromTheHost() throws Exception {
+		// measured against clj 1.12.6: the program names no ZipException, so no row of
+		// the lowering holds it; the host answers its supers
+		assertBothEqual("(def z (try (throw (.newInstance (Class/forName \"java.util.zip.ZipException\")))"
+				+ " (catch Exception e e)))"
+				+ " (println (isa? (class z) java.io.IOException) (isa? (class z) Exception) (isa? (class z) Object))"
+				+ " (println (sort (map #(apply str (remove #{\\:} (pr-str %))) (ancestors (class z)))))",
+				"true true true\n"
+						+ "(java.io.IOException java.io.Serializable java.lang.Exception java.lang.Object java.lang.Throwable)\n");
+	}
+
+	@Test
+	void aHostClassObjectWalksJavaInheritanceInAHierarchy() throws Exception {
+		// measured against clj 1.12.6: class of a host object is its class object, which
+		// isa? the classes it extends and implements, Object among them; java.util.List
+		// lowers to :list in a hierarchy position, which the host class still reaches
+		assertBothEqual("(println (isa? (class (java.io.File. \"x\")) Object)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.List)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
+				+ " (isa? (class (java.util.ArrayList.)) Exception)"
+				+ " (isa? (class (java.io.File. \"x\")) java.io.Serializable)"
+				+ " (isa? (class (StringBuilder.)) CharSequence))", "true true false false true true\n");
+		// a class object parent: the class's own spelling, or one of a value's class
+		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.AbstractList)"
+				+ " (isa? (class \"x\") (class (StringBuilder.)))"
+				+ " (isa? [(class (java.util.ArrayList.))] [java.util.List])))", "true true false true\n");
+		// parents and ancestors answer class objects, a program spelling no class too
+		assertBothEqual(
+				"(println (sort (map str (parents (class (java.util.ArrayList.))))))"
+						+ " (println (sort (map str (ancestors (class (java.io.File. \"x\"))))))"
+						+ " (println (parents (class (Object.))) (ancestors (class (Object.))))",
+				"(class java.util.AbstractList interface java.io.Serializable interface java.lang.Cloneable"
+						+ " interface java.util.List interface java.util.RandomAccess)\n"
+						+ "(class java.lang.Object interface java.io.Serializable interface java.lang.Comparable)\n"
+						+ "nil nil\n");
+		// what a super derives from, under any spelling of it, and descendants' refusal
+		assertBothEqual(
+				"(derive java.util.List ::seqy) (derive java.util.AbstractList ::abs)"
+						+ " (def c (class (java.util.ArrayList.)))"
+						+ " (println (isa? c ::seqy) (isa? c ::abs) (contains? (ancestors c) ::seqy)"
+						+ " (contains? (ancestors c) ::abs))"
+						+ " (println (try (descendants c) (catch UnsupportedOperationException e (ex-message e))))",
+				"true true true true\nCan't get descendants of classes\n");
+		// a class multimethod dispatches a host object through its interfaces
+		assertBothEqual("(defmulti f class) (defmethod f java.util.List [x] :list) (defmethod f java.util.Map [x] :map)"
+				+ " (defmethod f :default [x] :default)"
+				+ " (println (f (java.util.ArrayList.)) (f (java.util.HashMap.)) (f (java.io.File. \"x\")) (f '(1)))",
+				":list :map :default :list\n");
+	}
+
+	@Test
+	void aMultimethodDispatchesOnAHostClassOfNoKind() throws Exception {
+		// measured against clj 1.12.6: a class no kind or chain names is a dispatch value
+		// of its own, found exactly and through Java inheritance, the most specific first
+		assertBothEqual("(defmulti f class) (defmethod f java.io.File [x] :file)"
+				+ " (defmethod f java.util.AbstractList [x] :alist)"
+				+ " (defmethod f java.util.AbstractCollection [x] :acoll) (defmethod f java.util.List [x] :list)"
+				+ " (defmethod f :default [x] :default)"
+				+ " (println (f (java.io.File. \"x\")) (f (java.util.ArrayList.)) (f (java.util.ArrayDeque.))"
+				+ " (f (java.util.LinkedList.)) (f 1))"
+				+ " (println (some? (get-method f java.io.File)) (some? (get-method f java.util.HashMap)))"
+				+ " (remove-method f java.io.File) (println (f (java.io.File. \"x\")))",
+				":file :alist :acoll :alist :default\ntrue false\n:default\n");
+		// a class value dispatched on itself, a dispatch vector, and prefer-method
+		assertBothEqual("(defmulti g identity) (defmethod g java.util.AbstractMap [x] :amap)"
+				+ " (defmethod g :default [x] :default)"
+				+ " (println (g java.util.AbstractMap) (g java.util.HashMap) (g java.util.Map))"
+				+ " (defmulti h (fn [a b] [(class a) (class b)])) (defmethod h [java.io.File String] [a b] :fs)"
+				+ " (defmethod h :default [a b] :default) (println (h (java.io.File. \"x\") \"s\") (h \"s\" \"s\"))"
+				+ " (defmulti k class) (defmethod k java.util.RandomAccess [x] :ra)"
+				+ " (defmethod k java.util.AbstractList [x] :al) (prefer-method k java.util.RandomAccess java.util.AbstractList)"
+				+ " (println (k (java.util.ArrayList.)))", ":amap :amap :default\n:fs :default\n:ra\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");

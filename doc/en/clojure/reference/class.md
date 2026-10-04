@@ -13,7 +13,7 @@ condition names no class `:java.lang.RuntimeException`). A stream (`*out*`, `*in
 (`:java.io.OutputStreamWriter`, `:java.io.StringWriter`, `:java.io.BufferedReader`, ...). A host
 object answers its host class on the interpreter and the JVM, so a `class` dispatch over one reaches an `Object` or
 `:default` method. `.getClass` of an exception or a stream answers the same keyword, and a
-`defmethod`, `isa?` or `derive` naming the class reads it as that keyword. As a value a
+`defmethod` or a hierarchy operation (`isa?`, `derive`, `ancestors`, ...) naming the class reads it as that keyword. As a value a
 one-argument lambda.
 
 ```clojure

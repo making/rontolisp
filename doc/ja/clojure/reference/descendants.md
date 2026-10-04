@@ -3,7 +3,7 @@
 `(descendants tag)`
 `(descendants h tag)`
 
-階層 -- グローバルのもの、2 引数形式では `h` -- における `tag` のすべての子孫を、推移的に含むセットを返します。
+階層 -- グローバルのもの、2 引数形式では `h` -- における `tag` のすべての子孫を、推移的に含むセットを返します。子孫がなければ nil です。クラスの子孫はオラクルと同じく拒否で、`UnsupportedOperationException` を投げます。
 
 ```clojure
 (derive :c :p)
