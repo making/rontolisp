@@ -72,18 +72,20 @@ final class JvmRawGlobals {
 	 * @param globals the promoted top-level global names. ITERATION ORDER REACHES EMITTED
 	 * BYTES (it mints the raw-global fields), hence {@code SequencedSet}
 	 * (.kb/emitted-output-determinism.md)
-	 * @param boundSpecials the specials some {@code let} binds dynamically
+	 * @param excluded the names that keep the plain field: the specials some {@code let}
+	 * binds dynamically, and the globals whose field carries their bound-ness (the
+	 * UNBOUND marker, {@link JvmDynVarRuntimeBuilder#unboundMarker})
 	 * @param enabled the whole-program gate (see the class comment)
 	 * @return the eligible names, empty when the gate is closed
 	 */
-	static Set<String> collect(List<LispVal> program, SequencedSet<String> globals, SequencedSet<String> boundSpecials,
+	static Set<String> collect(List<LispVal> program, SequencedSet<String> globals, Set<String> excluded,
 			boolean enabled) {
 		LinkedHashSet<String> eligible = new LinkedHashSet<>();
 		if (!enabled) {
 			return eligible;
 		}
 		for (String name : globals) {
-			if (boundSpecials.contains(name) || reserved(name)) {
+			if (excluded.contains(name) || reserved(name)) {
 				continue;
 			}
 			int[] shapedAndSites = new int[2];

@@ -87,24 +87,27 @@ public final class LispNames {
 	 * Internal (compile-path only): the raw runtime {@code boundp} emission (the
 	 * eval-mirror probe), the fallback arm of the dispatch {@code (boundp x)} compiles to
 	 * in a program that tracks a special's bound-ness in its variable
-	 * ({@link #SPECIAL_BOUNDP}).
+	 * ({@link #GLOBAL_BOUNDP}).
 	 */
 	public static final String BOUNDP_RAW = "%BOUNDP-RAW";
 
 	/**
-	 * Internal (compile-path only): {@code (%special-boundp 'S)}, the bound-ness of the
-	 * literal special {@code S} read from its variable -- the active dynamic binding,
-	 * else the global, which holds the unbound marker until something assigns it. Only
-	 * for a special the program binds, probes and declares without a value
-	 * ({@code SpecialVarCollector.collectProbedValueless}).
+	 * Internal (compile-path only): {@code (%global-boundp 'G)}, the bound-ness of the
+	 * literal global {@code G} read from its variable -- a special's active dynamic
+	 * binding, else the global, which holds the unbound marker until something assigns
+	 * it. Only for a global whose variable carries its bound-ness: a special the program
+	 * binds, probes and declares without a value
+	 * ({@code SpecialVarCollector.collectProbedValueless}), or, in a program without the
+	 * eval mirror, any global a literal {@code boundp} names and no definer gives a value
+	 * ({@code GlobalVarCollector.collectProbedUnbound}).
 	 */
-	public static final String SPECIAL_BOUNDP = "%SPECIAL-BOUNDP";
+	public static final String GLOBAL_BOUNDP = "%GLOBAL-BOUNDP";
 
 	/**
 	 * Internal (compile-path only): the shared {@code boundp} runtime a computed name
 	 * calls in a program that tracks a special's bound-ness in its variable --
 	 * {@code (%boundp-dynamic name)}, a dispatch over those specials onto
-	 * {@link #SPECIAL_BOUNDP}, falling to {@link #BOUNDP_RAW}. Later segments are this
+	 * {@link #GLOBAL_BOUNDP}, falling to {@link #BOUNDP_RAW}. Later segments are this
 	 * name suffixed {@code -1}, {@code -2}, ...
 	 */
 	public static final String BOUNDP_DYNAMIC = "%BOUNDP-DYNAMIC";

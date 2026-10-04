@@ -46,12 +46,49 @@ unbound.
   special without a value") -- and a **computed designator** (`(boundp (intern ...))`), which
   keeps the eval runtime.
 - Never answered either: a name assigned only inside a deferred body. That
-  assignment poisons the name, so the probe is left to the run time, where the
-  eval mirror answers it -- every store to a global feeds the mirror since b78
-  (`.kb/eval-runtime.md`), so the answer agrees with the interpreter. A name no top-level
-  form assigns is a global too when a function body assigns it with no lexical binding in
-  scope (`.kb/core-representation.md`); before 2026-10-04 that store was a function local
-  and the probe answered NIL.
+  assignment poisons the name, so the probe is left to the run time ("A probe the fold
+  leaves open" below). A name no top-level form assigns is a global too when a function
+  body assigns it with no lexical binding in scope (`.kb/core-representation.md`); before
+  2026-10-04 that store was a function local and the probe answered NIL.
+- The poison scan recognises `setq`/`setf` (and `defvar`-family, nested `defun`) only: a
+  `psetq`/`psetf`/`multiple-value-setq` in a function body is missed and a later probe folds
+  to NIL (`.todo/d04`).
+
+## A probe the fold leaves open (all four backends, 2026-10-04)
+
+**A literal probe the fold cannot answer reads the variable, not the eval mirror, in a
+program without the mirror.** The globals (`GlobalVarCollector.collectProbedUnbound`): a
+literal `(boundp 'G)` names G, G is a global (special or not), no `defvar` with a value /
+`defparameter` / `defconstant` names it, not a `cl` symbol, and the program calls no
+`progv` (whose lowering binds a non-special name in the mirror). They join the tracked set
+of `.kb/dynamic-special-variables.md` ("Bound-ness of a special without a value"): the
+variable starts as the UNBOUND marker, a store overwrites it, a read answers nil for it,
+the probe is `(%global-boundp 'G)`.
+
+- Only where the mirror is absent: a program carrying the eval runtime anyway (`eval`, a
+  computed probe, `symbol-value`, ...) keeps the mirror probe, which answers the same, so it
+  compiles byte-identically. The gate reads a SUBSET of the final set off the program
+  before injection (`collectProbedUnboundBeforeInjection`: the specials, `collect` of the
+  non-defun forms, nested defuns, function-body free assignments);
+  `requireBoundpOffMirror` checks the final set.
+- JVM: the marker is `JvmDynVarRuntimeBuilder.unboundMarker` (`_unbound`, seeded in
+  `<clinit>`), independent of the ThreadLocal runtime. A global without a `_d$` field reads
+  `getstatic` + an inline marker test and probes by comparing its field with the marker; a
+  bound special keeps `_dget`/`_dbound`. Excluded from `JvmRawGlobals` (the raw shadow would
+  hand out the marker). Wasm: `Ctx.unboundGlobals`, the same sentinel, read and probe as for
+  a special.
+- Measured 2026-10-04 (before -> after, `--class-name P` / P1 / component bytes).
+  `(defun s () (setq *z* 1)) (s) (print (boundp '*z*))`: JVM 47,211 -> 6,192, P1 2,364 ->
+  1,821, component 3,535 -> 2,979 (reading `(if *z* t nil)` instead: 6,294 / 1,807 / 2,965).
+  `ProbedUnboundGlobalFixture`: JVM 51,752 -> 17,190, P1 15,777 -> 10,649. examples,
+  size-report, bench-report and the ci-spec program: byte-identical (P1, `--optimize=size`,
+  component, JVM; 1,938 outputs), as are the d01 fixtures. 200M reads of a tracked global in
+  a loop: JVM unchanged (~0.26 s), wasm 1.18 -> 1.26 s.
+- Pins: `ProbedUnboundGlobalFixture` on
+  `aLiteralBoundpOfAGlobalWithoutAValueAnswersTheStoresMadeSoFar` (`LispEvaluatorTest`,
+  `JvmLispCompilerTest` with the no-eval-runtime check, `WasmLispCompilerIntegrationTest` P1 +
+  component), `WasmLispCompilerTest#aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime`,
+  `GlobalVarCollectorTest`. ci-spec cannot pin it: its program calls `eval`.
 
 ## What the fold leaves behind
 - TOP LEVEL: the surviving branch is spliced INTO the top-level list, restoring the

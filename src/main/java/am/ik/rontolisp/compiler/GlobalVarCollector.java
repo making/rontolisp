@@ -1,14 +1,18 @@
 package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.SpecialVarCollector;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -82,6 +86,66 @@ public final class GlobalVarCollector {
 			}
 		}
 		return globals;
+	}
+
+	/**
+	 * The globals a literal {@code (boundp 'G)} in a program WITHOUT the eval mirror
+	 * reads off their own variable: no definer gives them a value
+	 * ({@link SpecialVarCollector#collectLiterallyProbedValueless}), so the compile paths
+	 * seed the variable with an UNBOUND marker the first store overwrites. With the
+	 * mirror the probe asks it instead, and in a program calling {@code progv}, which can
+	 * bind a name no special declaration covers and reaches the mirror for it, none is
+	 * answered this way.
+	 * @param forms the program's forms, the injected runtime's and the condition reports'
+	 * included
+	 * @param program the program's forms
+	 * @param globals the program's globals
+	 * @return those globals, in {@code globals} order
+	 */
+	public static LinkedHashSet<String> collectProbedUnbound(Collection<LispVal> forms, List<LispVal> program,
+			SequencedSet<String> globals) {
+		if (LispMacroExpander.programCallsProgv(program)) {
+			return new LinkedHashSet<>();
+		}
+		return SpecialVarCollector.collectLiterallyProbedValueless(forms, globals);
+	}
+
+	/**
+	 * The globals whose variable the eval gate may count on to answer a literal
+	 * {@code boundp}, read off the program BEFORE the compile path injects its runtime
+	 * and collects its globals: the dynamically bound specials
+	 * {@link SpecialVarCollector#collectProbedValuelessBound} tracks, and
+	 * {@link #collectProbedUnbound} over the globals the program certainly has -- its
+	 * specials, the names {@link #collect} reads off its top-level forms, a nested
+	 * {@code defun}, a function body's free assignment. A subset of what the compilers
+	 * carry once their globals are final, so the gate never drops a mirror a probe needs
+	 * (they check, {@code LispMacroExpander.requireBoundpOffMirror}).
+	 * @param program the program's forms
+	 * @param reports the condition {@code :report} lambdas, probed like the program
+	 * @param specials the program's special-variable names
+	 * @param everyBound whether every special is runtime-bindable by name (the JVM's
+	 * {@code make-thread} hand-over)
+	 * @return those globals
+	 */
+	public static LinkedHashSet<String> collectProbedUnboundBeforeInjection(List<LispVal> program,
+			Collection<LispVal> reports, SequencedSet<String> specials, boolean everyBound) {
+		LinkedHashSet<String> tracked = SpecialVarCollector.collectProbedValuelessBound(program, reports, specials,
+				everyBound);
+		List<LispVal> topLevel = new ArrayList<>();
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()))) {
+				topLevel.add(expr);
+			}
+		}
+		LinkedHashSet<String> globals = new LinkedHashSet<>(specials);
+		globals.addAll(collect(topLevel));
+		globals.addAll(collectNestedInDefunBodies(program));
+		globals.addAll(collectFreeAssignedInFunctionBodies(program));
+		List<LispVal> probed = new ArrayList<>(program);
+		probed.addAll(reports);
+		tracked.addAll(collectProbedUnbound(probed, program, globals));
+		return tracked;
 	}
 
 	/**

@@ -56,4 +56,34 @@ class GlobalVarCollectorTest {
 		assertThat(freeAssigned("(defun f () (list *y* (let ((*y* 1)) (setq *y* 2))))")).isEqualTo("*Y*");
 	}
 
+	/**
+	 * The globals a literal {@code boundp} reads off their own variable when the program
+	 * has no eval mirror: probed, no definer gives them a value, not a {@code cl} symbol,
+	 * and no {@code progv} in the program. The gate's set, read before injection, holds
+	 * the bound specials besides and only names the program certainly makes globals.
+	 */
+	@Test
+	void aLiteralProbeOfAGlobalWithoutAValueIsReadOffItsVariable() {
+		java.util.List<am.ik.rontolisp.LispVal> program = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b* 1)
+				(defun f () (setq *c* 1) (setq *d* 2) (let ((*l* 0)) (setq *l* 1)))
+				(defun p () (list (boundp '*a*) (boundp '*b*) (boundp '*c*) (boundp '*print-base*) (boundp '*l*)
+				                  '(boundp '*d*)))
+				(setq *e* 0)
+				(defun q () (boundp '*e*))
+				""");
+		java.util.SequencedSet<String> specials = new java.util.LinkedHashSet<>(java.util.List.of("*A*", "*B*"));
+		java.util.SequencedSet<String> globals = new java.util.LinkedHashSet<>(
+				java.util.List.of("*E*", "*A*", "*B*", "*C*", "*D*", "*PRINT-BASE*"));
+		assertThat(GlobalVarCollector.collectProbedUnbound(program, program, globals)).containsExactly("*E*", "*A*",
+				"*C*");
+		assertThat(
+				GlobalVarCollector.collectProbedUnboundBeforeInjection(program, java.util.List.of(), specials, false))
+			.containsExactlyInAnyOrder("*A*", "*C*", "*E*");
+		java.util.List<am.ik.rontolisp.LispVal> progv = new java.util.ArrayList<>(program);
+		progv.addAll(LispReader.readAllFromString("(progv '(*x*) '(1) (q))"));
+		assertThat(GlobalVarCollector.collectProbedUnbound(progv, progv, globals)).isEmpty();
+	}
+
 }

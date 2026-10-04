@@ -19850,20 +19850,23 @@ class JvmLispCompilerTest {
 
 	@Test
 	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
-		// The marker, its seeding and _dbound exist only where boundp can see a binding
-		// of
-		// a special no definer gives a value; a literal probe of one calls _dbound and
-		// never the mirror. A valued, never-bound or never-probed special keeps the plain
-		// representation, so such a program compiles as it did.
+		// _dbound exists only where boundp can see a binding of a special no definer
+		// gives a value; a literal probe of one calls it and never the mirror. A
+		// never-bound one carries the marker in its plain field, and a valued or
+		// never-probed special keeps the plain representation, so such a program compiles
+		// as it did.
 		byte[] tracked = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader
 			.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))")));
 		assertThat(declaredFieldNames(tracked)).contains("_unbound");
 		assertThat(declaredMethodNames(tracked)).contains("_dbound");
 		assertThat(ownCallsIn(tracked, "UB-P", "_dbound")).isOne();
 		assertThat(ownCallsIn(tracked, "UB-P", "_envLookup")).isZero();
+		byte[] neverBound = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p))")));
+		assertThat(declaredFieldNames(neverBound)).contains("_unbound");
+		assertThat(declaredMethodNames(neverBound)).doesNotContain("_dbound", "_envLookup");
 		for (String untracked : List.of(
 				"(defvar *ub* 0) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))",
-				"(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p)) (defun ub-q () (let ((x 1)) x))",
 				"(defvar *ub*) (defun ub-p () *ub*) (print (let ((*ub* 1)) (ub-p)))")) {
 			byte[] classBytes = new JvmLispCompiler("Test")
 				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(untracked)));
@@ -19876,17 +19879,18 @@ class JvmLispCompilerTest {
 	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() throws Exception {
 		// A literal probe of a special whose variable carries its bound-ness reads that
 		// variable alone (_dbound), so a program whose every boundp is one carries
-		// neither the eval runtime nor its mirror writes. A literal probe of any other
-		// name still reads the mirror and brings both back.
+		// neither the eval runtime nor its mirror writes. A literal probe of a global a
+		// definer gives a value, here from a function, still reads the mirror and brings
+		// both back.
 		byte[] literal = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE)));
 		assertThat(declaredMethodNames(literal)).contains("_dbound").doesNotContain("_eval", "_store", "_envLookup");
 		byte[] mixed = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb*)"
+			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb* 0)"
 					+ " (defun ub-p () (list (boundp '*ub*) (boundp '*nb*))) (print (let ((*ub* 1)) (ub-p)))")));
 		assertThat(declaredMethodNames(mixed)).contains("_dbound", "_envLookup");
 		assertThat(ownCallsIn(mixed, "UB-P", "_dbound")).isOne();
-		assertThat(runClass(mixed)).isEqualTo("(T NIL)");
+		assertThat(runClass(mixed)).isEqualTo("(T T)");
 	}
 
 	@Test
@@ -20674,6 +20678,20 @@ class JvmLispCompilerTest {
 		// (GlobalVarCollector.collectFreeAssignedInFunctionBodies).
 		assertThat(compileAndRun(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
+	}
+
+	@Test
+	void aLiteralBoundpOfAGlobalWithoutAValueAnswersTheStoresMadeSoFar() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin). Every probe names a global no
+		// definer gives a value and no binding covers, so its _g$ field holds the UNBOUND
+		// marker until the first store and the class carries no eval runtime -- no
+		// _dbound either: no ThreadLocal is involved.
+		assertThat(compileAndRun(am.ik.rontolisp.ProbedUnboundGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProbedUnboundGlobalFixture.EXPECTED);
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.ProbedUnboundGlobalFixture.SOURCE)));
+		assertThat(declaredFieldNames(classBytes)).contains("_unbound");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_store", "_envLookup", "_dbound");
 	}
 
 	@Test

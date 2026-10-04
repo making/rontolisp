@@ -129,15 +129,15 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * boundp. A special whose module global carries its bound-ness (it starts as the
-	 * UNBOUND marker, {@link WasmLispCompiler.Ctx#unboundSpecials}) is answered by it
+	 * boundp. A global whose module global carries its bound-ness (it starts as the
+	 * UNBOUND marker, {@link WasmLispCompiler.Ctx#unboundGlobals}) is answered by it
 	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
-	 * {@code %special-boundp}, a computed name through the shared dispatch over them.
-	 * Every other name, and every name in a program without such a special, probes the
+	 * {@code %global-boundp}, a computed name through the shared dispatch over them.
+	 * Every other name, and every name in a program without such a global, probes the
 	 * {@code GLOBAL_ENV} mirror.
 	 */
 	static void compileBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, ctx.unboundSpecials, ctx.specialVars,
+		LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, ctx.unboundGlobals, ctx.specialVars,
 				ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
 		if (tracked != null) {
 			WasmExprCompiler.compileExpr(tracked, ctx);
@@ -155,18 +155,17 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * {@code (%special-boundp 'S)}: the special's current value -- the per-task binding
-	 * under {@code --reentrant}, else the module global, which shallow binding makes the
-	 * active binding -- compared with the UNBOUND marker: nil when it is the marker, t
-	 * otherwise.
+	 * {@code (%global-boundp 'G)}: the global's current value -- a special's per-task
+	 * binding under {@code --reentrant}, else the module global, which shallow binding
+	 * makes a special's active binding -- compared with the UNBOUND marker: nil when it
+	 * is the marker, t otherwise.
 	 */
-	static void compileSpecialBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	static void compileGlobalBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		String name = ((LispSymbol) ((LispCons) cons.toList().get(1)).toList().get(1)).name();
 		Integer globalIndex = ctx.globalIndices.get(name);
-		if (globalIndex == null || !ctx.unboundSpecials.contains(name)) {
-			throw new IllegalStateException(
-					"special variable " + name + " does not carry its bound-ness in its module global ("
-							+ LispNames.BOUNDP + " of it was lowered to " + LispNames.SPECIAL_BOUNDP + ")");
+		if (globalIndex == null || !ctx.unboundGlobals.contains(name)) {
+			throw new IllegalStateException("global " + name + " does not carry its bound-ness in its module global ("
+					+ LispNames.BOUNDP + " of it was lowered to " + LispNames.GLOBAL_BOUNDP + ")");
 		}
 		WasmExprCompiler.emitRawSpecialRead(ctx, name, globalIndex);
 		ctx.writer.write(Instruction.GET_GLOBAL);

@@ -108,7 +108,8 @@ symbol reference`), a runtime `boundp` answered NIL. Measured 2026-10-04: a stde
 arm saw zero function-body hits over the examples, size-report, bench-report and ci-spec
 programs, and all of them compile byte-identically (P1, `--optimize=size`, component, JVM;
 build-timestamp strings aside); ci-spec compile time unchanged (~18 s). A literal `boundp` of
-such a name keeps the eval runtime (`.todo/d03`). Pins: `GlobalVarCollectorTest`,
+such a name reads its variable in a program without the eval mirror
+(`.kb/compile-time-boundp.md`, "A probe the fold leaves open"). Pins: `GlobalVarCollectorTest`,
 `FunctionAssignedGlobalFixture` on `aGlobalAssignedOnlyInsideAFunctionIsAGlobal`
 (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` P1 + component),
 ci-spec `a-global-assigned-only-inside-a-function`.

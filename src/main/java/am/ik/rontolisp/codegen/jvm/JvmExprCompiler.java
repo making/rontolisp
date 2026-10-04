@@ -416,7 +416,9 @@ final class JvmExprCompiler {
 	 * Reads a global variable. A special that is dynamically bound somewhere in the
 	 * program reads DYNAMIC-FIRST through {@code _dget} (this thread's binding when one
 	 * is active, else the {@code _g$} global default); every other global -- including a
-	 * special that is never {@code let}-bound -- stays a single {@code getstatic}.
+	 * special that is never {@code let}-bound -- stays a single {@code getstatic}, plus
+	 * the UNBOUND-marker test when its field carries its bound-ness
+	 * ({@link JvmDynVarRuntimeBuilder#unboundMarker}).
 	 */
 	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && LispNames.MV_SPILL.equals(name)) {
@@ -442,6 +444,17 @@ final class JvmExprCompiler {
 			}
 		}
 		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+		// A global whose field carries its bound-ness reads its UNBOUND marker as nil.
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		if (marker != null && marker.globals().contains(name)) {
+			ctx.body.dup();
+			ctx.body.getstatic(marker.field());
+			MethodCode.Label value = ctx.body.newLabel();
+			ctx.body.if_acmpne(value);
+			ctx.body.pop();
+			ctx.body.aconst_null();
+			ctx.body.labelBinding(value);
+		}
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -1550,7 +1563,7 @@ final class JvmExprCompiler {
 			case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
 			case LispNames.BOUNDP_RAW -> JvmSymbolApiCompiler.compileBoundpRaw(cons, ctx, className);
-			case LispNames.SPECIAL_BOUNDP -> JvmSymbolApiCompiler.compileSpecialBoundp(cons, ctx);
+			case LispNames.GLOBAL_BOUNDP -> JvmSymbolApiCompiler.compileGlobalBoundp(cons, ctx);
 			case LispNames.SYMBOL_IS -> JvmSymbolApiCompiler.compileSymbolIs(cons, ctx, className);
 			case LispNames.GLOBAL_STORE_SET -> JvmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx, className);
 			case LispNames.SET_MIRROR -> JvmSymbolApiCompiler.compileSetMirror(cons, ctx, className);

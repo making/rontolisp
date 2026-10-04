@@ -22569,6 +22569,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aLiteralBoundpOfAGlobalWithoutAValueAnswersTheStoresMadeSoFar() {
+		// The reference answer for the compiled backends' twins of this name, and SBCL's:
+		// NIL until something assigns the name, T from then on, nil included.
+		assertThat(printedLines(am.ik.rontolisp.ProbedUnboundGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProbedUnboundGlobalFixture.EXPECTED);
+	}
+
+	@Test
 	void symbolValueSitesReadTheActiveBinding() {
 		// The reference answer for the compiled backends' twins
 		// (JvmLispCompilerTest#symbolValueSitesDoNotEachPayForTheSpecialSet,

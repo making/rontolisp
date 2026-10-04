@@ -1603,12 +1603,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
 		// they force the eval runtime. fmakunbound writes the tombstone into that same
-		// _fenv. A boundp of a special whose variable carries its bound-ness reads that
+		// _fenv. A boundp of a global whose variable carries its bound-ness reads that
 		// variable alone, so a program whose every boundp is such a literal probe does
 		// not (the tracked set is checked again once the runtime is injected).
-		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
-				&& LispMacroExpander.boundpReachesMirror(program, SpecialVarCollector.collectProbedValuelessBound(
-						program, closRegistry.conditionReports().values(), specialVars, usesThreads));
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP) && LispMacroExpander
+			.boundpReachesMirror(program, GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
+					closRegistry.conditionReports().values(), specialVars, usesThreads));
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
 				|| boundpReadsMirror || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
 				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
@@ -1978,13 +1978,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// an assignment gives a value: their _g$ starts as the UNBOUND marker, so boundp
 		// reads their variable instead of the eval mirror, which no binding writes
 		// (JvmDynVarRuntimeBuilder). A computed boundp dispatches its name over them
-		// through one shared runtime.
+		// through one shared runtime. Without the mirror, every global a literal boundp
+		// names and no definer gives a value carries it the same way.
 		List<LispVal> probedForms = new ArrayList<>(compiledForms);
 		probedForms.addAll(closRegistry.conditionReports().values());
 		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
 		unboundSpecials.retainAll(boundSpecialVars);
+		SequencedSet<String> unboundGlobals = new java.util.LinkedHashSet<>(unboundSpecials);
 		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
-			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundSpecials);
+			unboundGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundGlobals);
 		}
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
@@ -1993,9 +1996,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
+		final JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker = JvmDynVarRuntimeBuilder.unboundMarker(cp,
+				thisClass, unboundGlobals, globalFields);
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars, unboundSpecials,
-						globalFields);
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
+						unboundSpecials.isEmpty() ? null : Objects.requireNonNull(unboundMarker).field());
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -2396,7 +2401,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// which stays the boxed shadow. Same gate as the local version, plus the seams a
 		// local does not have -- an eval runtime that mirrors the BOX, and anything
 		// concurrent (three fields where there was one).
-		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, boundSpecialVars, intFusion
+		SequencedSet<String> rawGlobalExcluded = new java.util.LinkedHashSet<>(boundSpecialVars);
+		rawGlobalExcluded.addAll(unboundGlobals);
+		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, rawGlobalExcluded, intFusion
 				&& !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime && !usesSockets);
 		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = new HashMap<>();
 		List<Utf8Entry> rawGlobalLongFieldNameUtfs = new ArrayList<>();
@@ -2548,6 +2555,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.globalFields(globalFields)
 			.mvChannel(mvChannel)
 			.dynVars(dynVarRuntime)
+			.unboundMarker(unboundMarker)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
 
@@ -4045,13 +4053,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dfName,
 						dynVarRuntime.fieldDescUtf());
 			}
-			// The UNBOUND marker a probed valueless special's _g$ starts as; set in
-			// <clinit> with the ThreadLocals.
-			Utf8Entry unboundFieldName = dynVarRuntime.unboundFieldName();
-			if (unboundFieldName != null) {
-				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, unboundFieldName,
-						globalFieldDescUtf);
-			}
+		}
+		if (unboundMarker != null) {
+			// The UNBOUND marker a probed valueless global's _g$ starts as; set in
+			// <clinit> after the ThreadLocals.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, unboundMarker.fieldName(),
+					unboundMarker.fieldDesc());
 		}
 		if (javaRuntime != null) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaRuntime.initedFieldName(),
@@ -4232,8 +4239,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				cp.utf8Entry(JvmTailBounce.UNW_DESC), unwCode);
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
-				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)
-				|| javaSignals != null) {
+				|| dynVarRuntime != null || unboundMarker != null || initsClinit
+				|| (mvChannel != null && mvChannel.perThread() != null) || javaSignals != null) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
 			// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -4311,6 +4318,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				// request threads would mint two ThreadLocals and lose one
 				// binding.
 				clinitCode.append(dynVarRuntime.clinitCode());
+			}
+			if (unboundMarker != null) {
+				// The UNBOUND marker and the globals that start with it.
+				clinitCode.append(unboundMarker.clinitCode());
 			}
 			if (streamsFieldRef != null) {
 				// _streams = new Object[16]; _streamCount = 3 -- the reserved
@@ -4390,13 +4401,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Entry clinitNameUtf = channel.clinitName != null ? channel.clinitName
 					: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
 							: dynVarRuntime != null ? dynVarRuntime.clinitName()
-									: standardOutputClinitName != null ? standardOutputClinitName
-											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
+									: unboundMarker != null ? unboundMarker.clinitName()
+											: standardOutputClinitName != null ? standardOutputClinitName
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
 			Utf8Entry clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
 					: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
 							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
-									: standardOutputClinitDesc != null ? standardOutputClinitDesc
-											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
+									: unboundMarker != null ? unboundMarker.clinitDesc()
+											: standardOutputClinitDesc != null ? standardOutputClinitDesc
+													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
 			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitCode);
 		}
 		if (dynVarRuntime != null) {
@@ -7195,6 +7208,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
 
 		/**
+		 * The UNBOUND marker and the globals whose {@code _g$} starts as it -- their
+		 * variable carries their bound-ness, so a read answers nil for the marker and
+		 * {@code boundp} reads the field -- or {@code null} without such a global. Shared
+		 * across every context.
+		 */
+		JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker;
+
+		/**
 		 * Top-level globals already initialized by a {@code defvar}/{@code defparameter}
 		 * in this compilation, used to implement {@code defvar}'s "bind only if not
 		 * already bound" idempotence at compile time. Per-context (only the top-level
@@ -7404,6 +7425,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mvChannel = builder.mvChannel;
 			this.rawGlobals = builder.rawGlobals;
 			this.dynVars = builder.dynVars;
+			this.unboundMarker = builder.unboundMarker;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack();
 			this.body = new am.ik.jvm.MethodCode(this.stack);
@@ -7967,6 +7989,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = Map.of();
 
 			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
+
+			private JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker;
 
 			private Map<String, MethodRefEntry> numOps = Map.of();
 
@@ -8553,6 +8577,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynVars(JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars) {
 				this.dynVars = dynVars;
+				return this;
+			}
+
+			Builder unboundMarker(JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker) {
+				this.unboundMarker = unboundMarker;
 				return this;
 			}
 
