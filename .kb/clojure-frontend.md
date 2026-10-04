@@ -176,7 +176,8 @@ Each is a real work item unless the reason says otherwise.
   and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
   and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a
   stream the oracle's `#object` without the hash ("Streams as values"), any
-  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
+  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash; a
+  host `List`/`Map`/`Set` prints readably as its Clojure kind, "Java interop") --
   while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
@@ -1192,6 +1193,30 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   map), `find`/`reduce-kv` within noise.
   Pins: `ClojureInteropTest#aHostMapIsAMapToTheMapVerbs` (oracle-identical),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms`.
+- Host collections under the printer (decided 2026-10-04, oracle clj 1.12.6): `print-method`
+  under `*print-readably*` writes a `RandomAccess` as a vector, another `List` as a list, a
+  `Map` as a map and a `Set` as a set, members readably, under `*print-length*`/`*print-level*`,
+  in the host's own order; another `Collection` (`ArrayDeque`, a `Map`'s `values`), a `Map`'s
+  entries, and every host object not readably (`println`, `print`, `str` of one) are
+  `print-object` -- here `#<java C>`. Before: `#<java C>` for all. One clause
+  `(%clojure-host-seqable-p x)` ahead of `%clojure-write`'s fall-through calls
+  `%clojure-write-host`, which builds the Clojure value (a plain `equal` table / `:C%SET`
+  table / vector / list, an empty `List` a realized empty lazy seq so it is `()`, `#` at level
+  0) and writes it through `%clojure-write` at the same depth, so the print-flag arms apply.
+  The members go in without `%clojure-store-key`: its key representatives pulled
+  `%clojure-equal`'s closure in (`count` + `.toUpperCase` + `println`: JVM class +17,697 B with
+  it, +1,501 B without). Cost, measured 2026-10-04: a program naming no `java:` operator is
+  byte-identical (wasm P1, `--optimize=size`, component, JVM class and runtime classes:
+  `demo.clj`, a program printing vectors, maps, sets, lists, sorted maps under the print
+  flags). A `java:` program, JVM class: `count` + `.toUpperCase` + `println` 113,378 ->
+  114,879 B, the same with `prn` 114,969 -> 115,808, the pin's program 183,604 -> 184,611 (wasm
+  output is the `java:new` refusal either way, +-3 B). Speed: JVM `pr-str` of a 200k-integer
+  vector in a `java:` program within noise (3.95 vs 3.94 s / 20, medians of 5); the
+  interpreter, which keeps the arm in every program, pays one call per value reaching the
+  fall-through (integers): the same vector 6.9 -> 7.4 s / 4 (+6%, medians of 5, load 3-13).
+  Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
+  (oracle-identical but the `#<java C>` lines),
+  `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
 
 ## Laziness
 

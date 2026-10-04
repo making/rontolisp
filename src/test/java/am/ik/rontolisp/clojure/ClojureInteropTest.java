@@ -721,6 +721,57 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a
+	// RandomAccess List as a vector, any other List as a list, a Map as a map and a Set
+	// as a set, each member readably and under *print-length* / *print-level*; another
+	// Collection (ArrayDeque, a Map's values) and any host object not readably is
+	// print-object (here the #<java C> deviation, without hash and toString). The
+	// members follow the host's own order. Before, every host collection printed as
+	// #<java C>.
+	@Test
+	void aHostCollectionPrintsReadablyLikeItsClojureKind() throws Exception {
+		assertBothEqual(
+				"""
+						(def al (java.util.ArrayList. [1 2]))
+						(def ll (java.util.LinkedList. [1 "s"]))
+						(def hm (doto (java.util.HashMap.) (.put "a" 1)))
+						(def hs (doto (java.util.HashSet.) (.add "x")))
+						(def tm (doto (java.util.TreeMap.) (.put "b" al) (.put "a" nil)))
+						(def ts (java.util.TreeSet. [3 1 2]))
+						(def nested (java.util.ArrayList. [al ll hm hs "s" \\c nil true 1.5]))
+						(prn al ll hm hs tm ts)
+						(prn nested (java.util.Vector. [1 "q"]) (java.util.Collections/singletonList 7) (java.util.Collections/unmodifiableList ll) (.keySet tm))
+						(prn (java.util.ArrayList.) (java.util.LinkedList.) (java.util.HashMap.) (java.util.HashSet.))
+						(println (pr-str al) (pr-str [al hm]) (str [ll]) (str {:k hs}) (str al) (str hm))
+						(println (prn-str tm) (with-out-str (pr ts)) (pr-str (list al)))
+						(binding [*print-length* 1] (prn al ll tm ts [al]))
+						(binding [*print-level* 1] (prn nested [al] tm))
+						(println (pr-str (java.util.ArrayDeque. [1 2])) (str [(.values tm)]))
+						(println al [hm])
+						(binding [*print-readably* false] (prn ll))
+						(def big (java.util.TreeSet. (map #(* 7 %) (range 30))))
+						(prn big (java.util.ArrayList. [(doto (java.util.HashMap.) (.put nil 1)) (doto (java.util.HashSet.) (.add nil))]))
+						(binding [*print-level* 0] (prn (java.util.LinkedList.) (java.util.ArrayList.)))
+						(binding [*print-length* 0] (prn (java.util.LinkedList.) (java.util.LinkedList. [1])))
+						""",
+				"""
+						[1 2] (1 "s") {"a" 1} #{"x"} {"a" nil, "b" [1 2]} #{1 2 3}
+						[[1 2] (1 "s") {"a" 1} #{"x"} "s" \\c nil true 1.5] [1 "q"] [7] (1 "s") #{"a" "b"}
+						[] () {} #{}
+						[1 2] [[1 2] {"a" 1}] [(1 "s")] {:k #{"x"}} [1, 2] {a=1}
+						{"a" nil, "b" [1 2]}
+						 #{1 2 3} ([1 2])
+						[1 ...] (1 ...) {"a" nil, ...} #{1 ...} [[1 ...]]
+						[# # # # "s" \\c nil true 1.5] [#] {"a" nil, "b" #}
+						#<java java.util.ArrayDeque> [#<java java.util.TreeMap$Values>]
+						#<java java.util.ArrayList> [#<java java.util.HashMap>]
+						#<java java.util.LinkedList>
+						#{0 7 14 21 28 35 42 49 56 63 70 77 84 91 98 105 112 119 126 133 140 147 154 161 168 175 182 189 196 203} [{nil 1} #{nil}]
+						# #
+						() (...)
+						""");
+	}
+
 	// Oracle (clj 1.12.6, 2026-10-04): RT.find (and select-keys over it) takes a Map by
 	// its own containsKey and refuses any other host object, kv-reduce reads a Map's
 	// entries (reduce-kv, update-vals, update-keys, map-invert), and a map's cons takes
