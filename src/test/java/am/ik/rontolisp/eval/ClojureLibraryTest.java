@@ -261,6 +261,35 @@ class ClojureLibraryTest {
 		assertThat(defun(host, "RONTOLISP::%CLOJURE-EQUAL")).contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
 	}
 
+	@Test
+	void aProgramNamingNoJavaOperatorSeqsAndCountsWithoutTheHostCollectionArms() {
+		// only a java: operator hands a program a host collection: without one, seq and
+		// the lowered count, empty?, get and contains? keep what they lowered to before
+		String verbs = "(prn (seq [1]) (count [1]) (empty? []) (get {1 2} 1) (contains? #{1} 1) (map :a [{:a 1}])"
+				+ " (keys {1 2}) (vals {1 2}))";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P COLL)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(verbs, null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-STRICT-SEQ")).doesNotContain("HOST")
+			.endsWith("(T (ERROR \"seq needs a collection\"))))");
+		assertThat(program(plain, verbs)).doesNotContain("HOST");
+		String withJava = "(def al (java.util.ArrayList. [1])) " + verbs;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P COLL)");
+		assertThat(program(host, withJava)).contains("(RONTOLISP::%CLOJURE-HOST-COUNT ",
+				"(RONTOLISP::%CLOJURE-HOST-EMPTY-P ", "(RONTOLISP::%CLOJURE-HOST-GET ",
+				"(RONTOLISP::%CLOJURE-HOST-CONTAINS-P ", "(RONTOLISP::%CLOJURE-HOST-KEYS ");
+	}
+
+	/** The processed forms of the program itself: the tail past the spliced library. */
+	private static String program(List<LispVal> processed, String source) {
+		int own = Clojure.read(source, null).size();
+		return processed.subList(processed.size() - own, processed.size())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
 	private static String defun(List<LispVal> forms, String name) {
 		return forms.stream()
 			.map(LispVal::print)

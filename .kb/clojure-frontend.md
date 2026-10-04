@@ -1119,6 +1119,42 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   throws `UnsupportedOperationException`. Multi-arity methods, a second class, a final
   superclass are refused.
 - No host-field `set!`: the `java:` surface has no write primitive.
+- Host collections under the seq verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.seq`
+  takes an `Iterable`, a `Map` (its `entrySet`) and a `CharSequence`; `RT.count` a
+  `Collection`, `Map` or `CharSequence` (another `Iterable` is `count not supported on this
+  type: <simple name>`); `RT.get` a `Map` (anything else nil); `RT.contains` a `Map` or `Set`
+  (anything else `contains? not supported on type: <name>`). Before: `seq needs a
+  collection` for every seq verb, `count` a `LENGTH` type error, `get` nil, `contains?`
+  false. One host-object family test, `%clojure-host-seqable-p`
+  (`ClojureCollectionLowering.HOST_SEQABLE_P`), heads a clause ahead of each verb's
+  fall-through: `%clojure-strict-seq` (so every verb over the seq view: `first`, `map`,
+  `reduce`, `into`, `vec`, `nth`, destructuring), the lowered `count`, `empty?`, `get`
+  (and keyword call position, `getBranches`), `contains?`, and an `if` around `keys`/`vals`'
+  table walk. The reads (`clojure.lisp`, `%clojure-host-seq` and friends): a `Collection`
+  through `toArray`, a `Map` through `entrySet` `toArray` as `[k v]` vectors (the oracle's
+  are the host entries: user doc deviation), a `CharSequence` through `toString`, another
+  `Iterable` through `iterator` (a JDK non-public iterator class trips the `java:call` gap
+  of todo c92). `get`/`contains?` ask the host's own `containsKey`/`contains`/`get`, the
+  oracle's `equals` lookup, after `%clojure-host-key-p` (`Objects.isNull` under
+  `handler-case`): a key `java:call` cannot marshal (keyword, symbol, map, set) is in no host
+  map, since `.put` refused it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
+  whole closure into every `get` (+9.9 KB JVM class) and is O(n). `find`, `select-keys`,
+  `reduce-kv`, `merge`/`conj` of a host `Map` still refuse (todo c93).
+  Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
+  runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
+  component, JVM class with its runtime classes: `demo.clj` and a program over `seq`,
+  `count`, `empty?`, `get`, `contains?`, `keys`, `vals`, keyword call). A `java:` program
+  carries the arms: JVM class `count` + one `.toUpperCase` 98,490 -> 104,225 B, a program
+  also reaching `=` 127,068 -> 130,787, `empty?`/`count`/`keys`/`get` loops 109,655 ->
+  117,610. Speed there (JVM): an `empty?` list walk +5%, a `count` loop over a vector and
+  nil 0.70 -> 0.93 s per 8M (one more call per count), `keys`/`get` +15%. Interpreter, which
+  keeps the arms in every program: the same loops +3% / +24% / +14% (the `empty?` walk was
+  +30% before the inline consp/arrayp/symbolp/numberp exit at the head of
+  `%clojure-host-seqable-p`, which spares lists and vectors the `%clojure-lisp-value-p`
+  call), a mixed program (quicksort over `empty?`, a word count over `get`/`assoc`,
+  `keys`/`vals`/`frequencies`) 3,031 -> 2,988 ms, within noise.
+  Pins: `ClojureInteropTest#aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne`
+  (oracle-identical), `ClojureLibraryTest#aProgramNamingNoJavaOperatorSeqsAndCountsWithoutTheHostCollectionArms`.
 
 ## Laziness
 

@@ -669,6 +669,58 @@ class ClojureInteropTest {
 				""");
 	}
 
+	// Oracle (clj 1.12.6, 2026-10-04): RT.seq takes any Iterable (a Map through its
+	// entries, a CharSequence through its characters), RT.count a Collection, a Map or a
+	// CharSequence, RT.get a Map, RT.contains a Map or a Set, each by the host's own
+	// lookup (a key a Java method cannot take is in no host map); contains? of a List
+	// and count of an Iterable that is no Collection are refused. Before, every seq verb
+	// signalled "seq needs a collection" and count a LENGTH type error.
+	@Test
+	void aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne() throws Exception {
+		assertBothEqual(
+				"""
+						(def al (java.util.ArrayList. [1 2]))
+						(def hm (doto (java.util.HashMap.) (.put "a" 1)))
+						(def tm (doto (java.util.TreeMap.) (.put "a" 1) (.put "b" (java.util.ArrayList. [3]))))
+						(def ts (doto (java.util.TreeSet.) (.add 3) (.add 1)))
+						(def ea (java.util.ArrayList.))
+						(def path (.toPath (java.io.File. "a/b")))
+						(println (seq al) (vec al) (first al) (rest al) (next al) (last al) (nth al 1) (seq ea))
+						(println (map inc al) (filter odd? al) (reduce + al) (reduce + 10 al) (apply + al) (mapv inc al))
+						(println (into {} hm) (into [] al) (into #{} ts) (seq ts) (sort ts) (set al) (frequencies al))
+						(println (count al) (count hm) (count ts) (count ea) (count (StringBuilder. "abc")))
+						(println (empty? al) (empty? ea) (empty? hm) (empty? (java.util.HashMap.)) (seq (java.util.HashMap.)))
+						(println (get hm "a") (get hm "z") (get hm "z" :none) (vec (get tm "b")) (get al 0) (get al 0 :d))
+						(println (contains? hm "a") (contains? hm "z") (contains? ts 3) (contains? ts 2))
+						(println (keys tm) (first (vals tm)) (map key tm) (for [[k v] hm] (str k v)) (= (vec (second (vals tm))) [3]))
+						(println (seq (StringBuilder. "ab")) (map str path) (map count [al hm]))
+						(println (let [[a b] al] (+ a b)) (zipmap al [:x :y]) (clojure.string/join "," al) (concat al [3]))
+						(println (try (contains? al 0) (catch Exception e (.getMessage e))))
+						(println (try (count path) (catch Exception e (.getMessage e))))
+						(def vk (doto (java.util.HashMap.) (.put [1 2] "v") (.put nil 0) (.put \\c 1.5)))
+						(def hs (doto (java.util.HashSet.) (.add [1]) (.add "x")))
+						(println (get vk [1 2]) (get vk '(1 2)) (get vk nil) (get vk \\c) (get vk :a :none) (get vk {:a 1})
+						         (contains? vk {:a 1}) (contains? vk nil))
+						(println (contains? hs [1]) (contains? hs "x") (contains? hs :x) (contains? hs #{1}) (get hs "x"))
+						""",
+				"""
+						(1 2) [1 2] 1 (2) (2) 2 2 nil
+						(2 3) (1) 3 13 3 [2 3]
+						{a 1} [1 2] #{1 3} (1 3) (1 3) #{1 2} {1 1, 2 1}
+						2 1 2 0 3
+						false true false true nil
+						1 nil :none [3] nil :d
+						true false true false
+						(a b) 1 (a b) (a1) true
+						(a b) (a b) (2 1)
+						3 {1 :x, 2 :y} 1,2 (1 2 3)
+						contains? not supported on type: java.util.ArrayList
+						count not supported on this type: UnixPath
+						v v 0 1.5 :none nil false true
+						true true false false nil
+						""");
+	}
+
 	// Oracle: a protected method overrides -- paintComponent records -- while an
 	// unnamed one is inherited.
 	@Test

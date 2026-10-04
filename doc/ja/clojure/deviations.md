@@ -48,6 +48,11 @@
  マップとセットは Java のコレクションのキーを本家のハッシュマップ・セットと同じくそれ自身の
  `equals` で探し、本家の小さな配列マップが使う `=` では探しません。
  `(get {[1 2] :v} (java.util.ArrayList. [1 2]))` はここでは `nil`、本家では `:v` です。
+- `seq` とその上の操作、`count`、`empty?`、`get`、`contains?`、`keys`、`vals` は本家と同じく
+ Java の `Iterable`、`Map`、`CharSequence` を読みます。ただし seq は取った時点ですべて読み
+ （本家はイテレータを遅延で辿ります）、`Map` のエントリは `[k v]` ベクターです（本家は Java の
+ エントリで、`#object[...]` と表示されます）。Java の `Map` に対する `find`、`select-keys`、
+ `reduce-kv`、`merge` はシグナルします。本家はそれをマップとして読みます。
 - 最も大きい入力がマップである `clojure.set/union` はシグナルします。本家は他の入力の
  `[k v]` メンバーをそこへ conj します。`clojure.set` の結果はメタデータを持ちません。
 - マップエントリは単なる2要素のベクターなので、`map-entry?` はすべての `[k v]` に対して `true` を返し

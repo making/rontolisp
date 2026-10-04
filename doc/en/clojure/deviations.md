@@ -47,6 +47,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   A map or set finds a Java collection key by its own `equals`, like the oracle's hash maps
   and sets, never by `=`, which the oracle's small array maps use:
   `(get {[1 2] :v} (java.util.ArrayList. [1 2]))` is `nil` here, `:v` there.
+- `seq` and the verbs over it, `count`, `empty?`, `get`, `contains?`, `keys` and `vals` read a
+  Java `Iterable`, `Map` or `CharSequence` like the oracle, but the seq is read whole when it
+  is taken (the oracle's walks the iterator lazily), a `Map`'s entries are `[k v]` vectors
+  (the oracle's are the Java entries, printed `#object[...]`), and `find`, `select-keys`,
+  `reduce-kv` and `merge` of a Java `Map` signal, where the oracle reads it as a map.
 - `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
   the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A map entry is a plain two-member vector, so `map-entry?` is `true` of every `[k v]`

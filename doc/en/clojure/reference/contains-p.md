@@ -3,8 +3,9 @@
 `(contains? coll k)`
 
 Answers whether `k` is present: a key of the map, a member of the set, or a valid index
-of the vector or string (a bounds check). `nil` contains nothing; anything else answers
-`false`.
+of the vector or string (a bounds check). `nil` contains nothing. A Java `Map` or `Set`
+looks `k` up itself, as `get` does; any other Java object signals, like the oracle.
+Anything else answers `false`.
 
 As a value a two-argument lambda.
 
