@@ -92,24 +92,31 @@ unboxed free variable is an `IllegalStateException` naming the name. Pins:
 `defun` is in `CompileTimeBoundp`'s `DEFERRING` set, so the name is POISONED (no
 `(boundp 'name)` fold).
 
-**A name a function body assigns with no lexical binding in scope is a global** (all four
-backends, 2026-10-04, `.todo/d02`). CL leaves assigning an undeclared variable undefined; SBCL
-warns and assigns the global, the interpreter always did, so the compile paths follow rather
-than refuse (a refusal would have to change the interpreter too, for no gain).
-`GlobalVarCollector.collectFreeAssignedInFunctionBodies(program)`: per top-level `defun`, the
-bare-symbol places of `setq`/`setf`/`psetq`/`psetf`/`multiple-value-setq` in its body, kept
-when `FreeVarAnalyzer.findFreeVars` finds them free in `(lambda lambda-list . body)` (nested
-`defun`s read as lambdas). Scope-aware, unlike `collect`: nearly every body `setq` assigns a
-`let` variable or a parameter. Unioned in LAST, after the specials and `*error-output*`: the
-walk also finds specials a local `(declare (special ...))` proclaims (cl-ppcre's), and an
-earlier union moved their indices. Before: the store compiled into a local of the function
-(the plain-local arm of `Jvm`/`WasmSetqCompiler`), any other read was refused (`Cannot compile
-symbol reference`), a runtime `boundp` answered NIL. Measured 2026-10-04: a stderr probe on that
-arm saw zero function-body hits over the examples, size-report, bench-report and ci-spec
-programs, and all of them compile byte-identically (P1, `--optimize=size`, component, JVM;
-build-timestamp strings aside); ci-spec compile time unchanged (~18 s). A literal `boundp` of
-such a name keeps the eval runtime (`.todo/d03`). Pins: `GlobalVarCollectorTest`,
-`FunctionAssignedGlobalFixture` on `aGlobalAssignedOnlyInsideAFunctionIsAGlobal`
+**A name the program assigns with no lexical binding in scope is a global** (all four
+backends, 2026-10-04, `.todo/d02`, `.todo/d05`). CL leaves assigning an undeclared variable
+undefined; SBCL warns and assigns the global, the interpreter always did, so the compile paths
+follow rather than refuse (a refusal would have to change the interpreter too, for no gain).
+`GlobalVarCollector.collectFreeAssigned(program)`, the ONE scope-aware owner: per top-level form,
+the bare-symbol places of `setq`/`setf`/`psetq`/`psetf`/`multiple-value-setq` in it (a `defun`'s
+body), kept when `FreeVarAnalyzer.findFreeVars` finds them free in `(lambda lambda-list . body)`,
+or `(lambda () form)` for any other form (nested `defun`s read as lambdas). `collect` stays
+scope-blind for `setq`/`setf` (byte identity), so at top level the walk adds only the three other
+heads and a `setq` in a definer's initform, which `collect` does not enter. Scope-aware because
+nearly every body `setq`, and nearly every top-level `psetq`/`multiple-value-setq` (a `do` loop's,
+a `let`'s), assigns a lexical: reading the three heads in `collect` grew the ci-spec program 34 B
+on P1. Unioned in LAST, after the specials and `*error-output*`: the walk also finds specials a
+local `(declare (special ...))` proclaims (cl-ppcre's), and an earlier union moved their indices.
+Before: the store compiled into a local of the enclosing function (the plain-local arm of
+`Jvm`/`WasmSetqCompiler`), any other read was refused (`Cannot compile symbol reference`), a
+runtime `boundp` answered NIL; a top-level `psetq`/`psetf`/`multiple-value-setq` was refused on
+the JVM and both WASM, and a `setq` in a `defvar` initform on both WASM (the JVM had a top-level
+free-assignment pass of its own for `setq`/`setf`, now this one). Measured 2026-10-04: examples,
+size-report, bench-report and the ci-spec program (1,927 outputs: P1, `--optimize=size`,
+component, JVM) compile byte-identically, build-info strings aside; ci-spec compile time
+unchanged (~18 s). A literal `boundp` of such a name reads its variable in a program without the
+eval mirror (`.kb/compile-time-boundp.md`, "A probe the fold leaves open"). Pins:
+`GlobalVarCollectorTest`, `FunctionAssignedGlobalFixture` on
+`aGlobalAssignedOnlyInsideAFunctionIsAGlobal` and `ProbedUnboundGlobalFixture`'s top-level part
 (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` P1 + component),
 ci-spec `a-global-assigned-only-inside-a-function`.
 

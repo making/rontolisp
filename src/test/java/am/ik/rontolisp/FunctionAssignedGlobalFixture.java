@@ -7,9 +7,9 @@ package am.ik.rontolisp;
  * {@code multiple-value-setq}, none with a {@code defvar}. Assigning an undeclared
  * variable is undefined in CL; SBCL warns and treats the name as a global, and so does
  * the interpreter, so the compile paths give such a name a global backing store too
- * ({@code GlobalVarCollector.collectFreeAssignedInFunctionBodies}). A {@code let} or a
- * parameter of the same name stays lexical, as in SBCL, where the name is not proclaimed
- * special. Until 2026-10-04 the JVM and both WASM refused the first read
+ * ({@code GlobalVarCollector.collectFreeAssigned}). A {@code let} or a parameter of the
+ * same name stays lexical, as in SBCL, where the name is not proclaimed special. Until
+ * 2026-10-04 the JVM and both WASM refused the first read
  * ({@code Cannot compile symbol reference: *FA-Z*}), and with no read compiled the
  * assignment into a local of the function, so {@code boundp} answered NIL. The expected
  * text is SBCL's. Shared by the backend suites; {@code ci-spec.yaml}'s

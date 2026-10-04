@@ -6,15 +6,14 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Which names a function body's assignments make globals: those no lexical binding in
- * scope holds, and nothing else, so a program whose functions assign only their own
- * variables gets no new backing store.
+ * Which names a function body's or a top-level form's assignments make globals: those no
+ * lexical binding in scope holds, and nothing else, so a program that assigns only its
+ * own lexical variables gets no new backing store.
  */
 class GlobalVarCollectorTest {
 
 	private static String freeAssigned(String source) {
-		return String.join(" ",
-				GlobalVarCollector.collectFreeAssignedInFunctionBodies(LispReader.readAllFromString(source)));
+		return String.join(" ", GlobalVarCollector.collectFreeAssigned(LispReader.readAllFromString(source)));
 	}
 
 	@Test
@@ -42,11 +41,36 @@ class GlobalVarCollectorTest {
 				  (labels ((h (z) (setq z 0))) (h 1))
 				  (multiple-value-bind (m n) (floor 7 2) (setq m n)))
 				""")).isEmpty();
-		// Quoted data assigns nothing; a top-level form is collect()'s, not this walk's.
-		assertThat(freeAssigned("(defun f () '(setq *a* 1)) (setq *b* 2) (let () (setq *c* 3))")).isEmpty();
+		// Quoted data assigns nothing.
+		assertThat(freeAssigned("(defun f () '(setq *a* 1)) '(setq *b* 2)")).isEmpty();
 		// The standard stream variables and the multiple-value channel keep their own
 		// representation on the backends.
 		assertThat(freeAssigned("(defun f (s) (setq *standard-output* s *error-output* s))")).isEmpty();
+	}
+
+	@Test
+	void aTopLevelAssignmentWithNoBindingIsAGlobal() {
+		// At any depth of a top-level form, a lambda's body and a definer's initform
+		// included.
+		assertThat(freeAssigned("(setq *a* 1) (let () (setf *b* 2)) (defvar *v* (progn (setq *c* 3) *c*))"))
+			.isEqualTo("*A* *B* *C*");
+		assertThat(freeAssigned("""
+				(psetq *a* 1 *b* 2)
+				(multiple-value-setq (*q* *r*) (floor 7 2))
+				(print (progn (psetf *c* 3) *c*))
+				(mapc (lambda (x) (multiple-value-setq (*l*) (floor x 2))) '(3 9))
+				(let ((n 0)) (defun f () (psetq n 1 *d* 2)))
+				""")).isEqualTo("*A* *B* *Q* *R* *C* *L* *D*");
+		// Under a top-level binding the name stays lexical: no store for every do loop's
+		// stepping or a let's multiple-value-setq.
+		assertThat(freeAssigned("""
+				(let (a b) (multiple-value-setq (a b) (floor 7 2)) (psetq a b b a) (psetf a 1))
+				(mapc (lambda (x) (psetq x 1)) '(1))
+				(dolist (i '(1 2)) (multiple-value-setq (i) (floor i 2)))
+				(let ((*a* 0)) (psetq *a* 1) (setq *a* 2))
+				(defvar *v* (let ((c 0)) (setq c 1) (psetq c 2) c))
+				'(psetq *b* 1)
+				""")).isEmpty();
 	}
 
 	@Test
@@ -54,6 +78,36 @@ class GlobalVarCollectorTest {
 		// The free read had no store to reach before; the lexical assignment still
 		// resolves its own binding first.
 		assertThat(freeAssigned("(defun f () (list *y* (let ((*y* 1)) (setq *y* 2))))")).isEqualTo("*Y*");
+	}
+
+	/**
+	 * The globals a literal {@code boundp} reads off their own variable when the program
+	 * has no eval mirror: probed, no definer gives them a value, not a {@code cl} symbol,
+	 * and no {@code progv} in the program. The gate's set, read before injection, holds
+	 * the bound specials besides and only names the program certainly makes globals.
+	 */
+	@Test
+	void aLiteralProbeOfAGlobalWithoutAValueIsReadOffItsVariable() {
+		java.util.List<am.ik.rontolisp.LispVal> program = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b* 1)
+				(defun f () (setq *c* 1) (setq *d* 2) (let ((*l* 0)) (setq *l* 1)))
+				(defun p () (list (boundp '*a*) (boundp '*b*) (boundp '*c*) (boundp '*print-base*) (boundp '*l*)
+				                  '(boundp '*d*)))
+				(setq *e* 0)
+				(defun q () (boundp '*e*))
+				""");
+		java.util.SequencedSet<String> specials = new java.util.LinkedHashSet<>(java.util.List.of("*A*", "*B*"));
+		java.util.SequencedSet<String> globals = new java.util.LinkedHashSet<>(
+				java.util.List.of("*E*", "*A*", "*B*", "*C*", "*D*", "*PRINT-BASE*"));
+		assertThat(GlobalVarCollector.collectProbedUnbound(program, program, globals)).containsExactly("*E*", "*A*",
+				"*C*");
+		assertThat(
+				GlobalVarCollector.collectProbedUnboundBeforeInjection(program, java.util.List.of(), specials, false))
+			.containsExactlyInAnyOrder("*A*", "*C*", "*E*");
+		java.util.List<am.ik.rontolisp.LispVal> progv = new java.util.ArrayList<>(program);
+		progv.addAll(LispReader.readAllFromString("(progv '(*x*) '(1) (q))"));
+		assertThat(GlobalVarCollector.collectProbedUnbound(progv, progv, globals)).isEmpty();
 	}
 
 }

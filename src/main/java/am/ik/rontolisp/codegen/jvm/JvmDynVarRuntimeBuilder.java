@@ -48,15 +48,14 @@ import am.ik.jvm.MethodCode;
  * from two request threads would mint two ThreadLocals and lose one of the bindings).
  *
  * <p>
- * A special whose bound-ness the program probes and only a binding or an assignment gives
- * a value ({@code SpecialVarCollector.collectProbedValueless}) carries that bound-ness in
- * its variable: its {@code _g$} global starts as the class's UNBOUND marker
- * ({@code _unbound}, a {@code new Object()} no Lisp value can be, set in
- * {@code <clinit>}) and keeps it until a global store, so {@code _dbound(tl, global)}
- * answers t for this thread's binding or a global that is not the marker, and
- * {@code _dget} reads the marker back as nil. A binding never touches {@code _g$}, so the
- * marker outlives every extent. A program without such a special has neither, and its
- * {@code _dget} is the plain one.
+ * A global whose bound-ness the program probes and only a binding or an assignment gives
+ * a value carries that bound-ness in its variable ({@link #unboundMarker}): its
+ * {@code _g$} global starts as the class's UNBOUND marker and keeps it until a global
+ * store. For a bound special among them ({@code SpecialVarCollector.
+ * collectProbedValueless}) {@code _dbound(tl, global)} answers t for this thread's
+ * binding or a global that is not the marker, and {@code _dget} reads the marker back as
+ * nil. A binding never touches {@code _g$}, so the marker outlives every extent. A
+ * program without such a special has neither, and its {@code _dget} is the plain one.
  */
 final class JvmDynVarRuntimeBuilder {
 
@@ -74,17 +73,34 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param dbind the {@code _dbind} helper ref
 	 * @param dset the {@code _dset} helper ref
 	 * @param methods the helper method bodies to register
-	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal (and the
-	 * UNBOUND marker, seeding the globals that start with it)
-	 * @param unboundSpecials the specials whose global starts as the UNBOUND marker
-	 * @param unboundFieldName the marker field's name, or null without such a special
-	 * @param dbound the {@code _dbound} helper ref, or null without such a special
+	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal
+	 * @param dbound the {@code _dbound} helper ref, or null when no bound special starts
+	 * as the UNBOUND marker
 	 */
 	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Entry> fieldNameUtfs, Utf8Entry fieldDescUtf,
 			MethodRefEntry tlSet, MethodRefEntry dget, MethodRefEntry dbind, MethodRefEntry dset,
 			List<HelperMethod> methods, MethodCode clinitCode, Utf8Entry clinitName, Utf8Entry clinitDesc,
-			SequencedSet<String> unboundSpecials, @Nullable Utf8Entry unboundFieldName,
 			@Nullable MethodRefEntry dbound) {
+	}
+
+	/**
+	 * The UNBOUND marker: {@code _unbound}, a {@code new Object()} no Lisp value can be,
+	 * which the {@code _g$} global of each of {@code globals} holds from {@code <clinit>}
+	 * until a store overwrites it. A read of such a global answers nil for it, and
+	 * {@code boundp} nil.
+	 *
+	 * @param globals the globals whose variable carries their bound-ness, in seeding
+	 * order
+	 * @param field the marker field
+	 * @param fieldName its name constant
+	 * @param fieldDesc its descriptor constant
+	 * @param clinitCode the {@code <clinit>} fragment creating the marker and seeding the
+	 * globals with it
+	 * @param clinitName the {@code <clinit>} name constant
+	 * @param clinitDesc the {@code <clinit>} descriptor constant
+	 */
+	record UnboundMarker(SequencedSet<String> globals, FieldRefEntry field, Utf8Entry fieldName, Utf8Entry fieldDesc,
+			MethodCode clinitCode, Utf8Entry clinitName, Utf8Entry clinitDesc) {
 	}
 
 	/** One helper method: its name/descriptor constants and body. */
@@ -92,24 +108,54 @@ final class JvmDynVarRuntimeBuilder {
 	}
 
 	/**
-	 * The runtime, with {@code unboundSpecials} carrying their bound-ness in their
-	 * variable (see the class note). Both sets are {@link SequencedSet}s, not plain
-	 * {@code Set}s: their iteration order is the mint order of the fields, the seeding
-	 * order and the order of the constant-pool entries behind them, so an unordered one
+	 * The UNBOUND marker of a program some of whose globals carry their bound-ness in
+	 * their variable (see the class note). {@code globals} is a {@link SequencedSet}, not
+	 * a plain {@code Set}: its iteration order is the seeding order, so an unordered one
 	 * emits a different-but-equivalent class per JVM run
 	 * (.kb/emitted-output-determinism.md).
 	 * @param cp the class's constant pool
 	 * @param thisClass the class being emitted
+	 * @param globals the globals whose {@code _g$} starts as the marker
+	 * @param globalFields every global's {@code _g$} field
+	 * @return the marker, or null when {@code globals} is empty
+	 */
+	static @Nullable UnboundMarker unboundMarker(ConstantPool cp, ClassEntry thisClass, SequencedSet<String> globals,
+			Map<String, FieldRefEntry> globalFields) {
+		if (globals.isEmpty()) {
+			return null;
+		}
+		ClassEntry objectClass = cp.classEntry("java/lang/Object");
+		Utf8Entry fieldName = cp.utf8Entry(UNBOUND_FIELD);
+		Utf8Entry fieldDesc = cp.utf8Entry("Ljava/lang/Object;");
+		FieldRefEntry field = cp.fieldRef(thisClass, fieldName, fieldDesc);
+		MethodCode clinitCode = new MethodCode();
+		clinitCode.new_(objectClass);
+		clinitCode.dup();
+		clinitCode.invokespecial(cp.methodRef(objectClass, "<init>", "()V"));
+		clinitCode.putstatic(field);
+		for (String name : globals) {
+			clinitCode.getstatic(field);
+			clinitCode.putstatic(Objects.requireNonNull(globalFields.get(name)));
+		}
+		return new UnboundMarker(Collections.unmodifiableSequencedSet(globals), field, fieldName, fieldDesc, clinitCode,
+				cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"));
+	}
+
+	/**
+	 * The runtime. {@code boundSpecials} is a {@link SequencedSet}, not a plain
+	 * {@code Set}: its iteration order is the mint order of the fields and the order of
+	 * the constant-pool entries behind them, so an unordered one emits a
+	 * different-but-equivalent class per JVM run (.kb/emitted-output-determinism.md).
+	 * @param cp the class's constant pool
+	 * @param thisClass the class being emitted
 	 * @param objectArrayClass the {@code Object[]} class constant
 	 * @param boundSpecials the dynamically bound specials, in mint order
-	 * @param unboundSpecials those of them whose global starts as the UNBOUND marker, in
-	 * seeding order
-	 * @param globalFields every global's {@code _g$} field
+	 * @param unboundField the UNBOUND marker when some of them start as it
+	 * ({@link #unboundMarker}), else null
 	 * @return the runtime
 	 */
 	static DynVarRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
-			SequencedSet<String> boundSpecials, SequencedSet<String> unboundSpecials,
-			Map<String, FieldRefEntry> globalFields) {
+			SequencedSet<String> boundSpecials, @Nullable FieldRefEntry unboundField) {
 		ClassEntry threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
 		MethodRefEntry tlCtor = cp.methodRef(threadLocalClass, "<init>", "()V");
 		MethodRefEntry tlGet = cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;");
@@ -127,22 +173,6 @@ final class JvmDynVarRuntimeBuilder {
 			clinitCode.dup();
 			clinitCode.invokespecial(tlCtor);
 			clinitCode.putstatic(field);
-		}
-		// The UNBOUND marker and the globals that start with it, after the ThreadLocals.
-		FieldRefEntry unboundField = null;
-		Utf8Entry unboundFieldName = null;
-		if (!unboundSpecials.isEmpty()) {
-			ClassEntry objectClass = cp.classEntry("java/lang/Object");
-			unboundFieldName = cp.utf8Entry(UNBOUND_FIELD);
-			unboundField = cp.fieldRef(thisClass, unboundFieldName, cp.utf8Entry("Ljava/lang/Object;"));
-			clinitCode.new_(objectClass);
-			clinitCode.dup();
-			clinitCode.invokespecial(cp.methodRef(objectClass, "<init>", "()V"));
-			clinitCode.putstatic(unboundField);
-			for (String name : unboundSpecials) {
-				clinitCode.getstatic(unboundField);
-				clinitCode.putstatic(Objects.requireNonNull(globalFields.get(name)));
-			}
 		}
 		String refDesc = "(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Ljava/lang/Object;";
 		Utf8Entry dgetName = cp.utf8Entry("_dget");
@@ -164,8 +194,7 @@ final class JvmDynVarRuntimeBuilder {
 			methods.add(new HelperMethod(dboundName, refDescUtf, dboundCode(tlGet, unboundField, cp)));
 		}
 		return new DynVarRuntime(fields, fieldNameUtfs, fieldDescUtf, tlSet, dget, dbind, dset, List.copyOf(methods),
-				clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"),
-				Collections.unmodifiableSequencedSet(unboundSpecials), unboundFieldName, dbound);
+				clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"), dbound);
 	}
 
 	/** The UNBOUND marker's field name (see the class note). */

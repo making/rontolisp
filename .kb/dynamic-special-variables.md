@@ -257,10 +257,10 @@ wrote the mirror only, so compiled code kept reading 1.
   `new Object[0]`, wasm a fresh cons), the mirror after (and the JVM's case-flipped retry the
   same way); its `setq`/`setf`/`push`/`pop` of such a variable call the store half, then `_store`
   as before. Only where the program runs forms through eval: the runtime is also switched on by
-  `boundp` (but a literal probe of a tracked special), `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
+  `boundp` (but a literal probe of a tracked global), `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
   those modules stay byte-identical. The compiled mirror (`mirrorGlobal`) still writes every
   store: it is the value of every non-special global and the `boundp` witness of every name
-  but a tracked special ("Bound-ness of a special without a value" below).
+  but a tracked global ("Bound-ness of a special without a value" below).
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM, except the Cloudflare Worker rows, whose libraries run
   `eval`: hello-clack 697,130 -> 698,493 (+1,363; gzip 185,160 -> 185,513), tiny-routes +1,518 to
@@ -326,22 +326,22 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   its argument, which makes every such special tracked. A self-evaluating argument probes
   nothing. A program with none compiles byte-identically.
 - Representation: an UNBOUND marker in the GLOBAL cell until a global store overwrites it; a
-  binding saves and restores it like any value. JVM (`JvmDynVarRuntimeBuilder`): `_unbound`, a
-  `new Object()` set in `<clinit>` with the tracked `_g$` seeded from it, `_dget` reading it as
-  nil, `_dbound(tl, global)` t for this thread's `_d$` cell or a non-marker global. Wasm: the
-  raw-local sentinel (`Ctx.unboundSpecials`), stored by `_start` before user code; a read
+  binding saves and restores it like any value. JVM (`JvmDynVarRuntimeBuilder.unboundMarker`):
+  `_unbound`, a `new Object()` set in `<clinit>` with the tracked `_g$` seeded from it, `_dget`
+  reading it as nil, `_dbound(tl, global)` t for this thread's `_d$` cell or a non-marker global.
+  Wasm: the raw-local sentinel (`Ctx.unboundGlobals`), stored by `_start` before user code; a read
   answers nil for it through an inline `ref.eq` (`WasmExprCompiler.emitUnboundAsNil`, ~15 B a
   site), except in the binding's own frame, where the binding is active; `--reentrant` reads
   the task cell first as before.
 - `boundp` (`LispMacroExpander.dynamicFirstBoundp`): a literal tracked name is
-  `(%special-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
-  (`boundpDynamicRuntime`, a segmented name dispatch onto `%special-boundp`, the miss on
+  `(%global-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
+  (`boundpDynamicRuntime`, a segmented name dispatch onto `%global-boundp`, the miss on
   `%boundp-raw`, the old mirror probe); any other name keeps the raw probe.
 - The eval gate: a program whose every occurrence of `boundp` is a literal probe of a tracked
   special carries no eval runtime and no mirror writes (`LispMacroExpander.boundpReachesMirror`;
   any other occurrence -- a computed site, `#'boundp`, quoted data, a macro template, a literal of
   an untracked name -- keeps the arm). The gate runs before the runtime is injected, so it reads
-  the set off the program (`SpecialVarCollector.collectProbedValuelessBound`); the injected runtime
+  the set off the program (`GlobalVarCollector.collectProbedUnboundBeforeInjection`); the injected runtime
   spells no probe the program does not, and `requireBoundpOffMirror` checks the final set again.
   Measured 2026-10-04: `(defvar *x*)` probed in a callee of a binding, JVM 10,162 -> 6,577 B,
   P1 1,124 -> 820, component 2,286 -> 1,975 (the same program reading `*x*` instead: 6,550 / 806 /
@@ -351,6 +351,9 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime` (`JvmLispCompilerTest`,
   `WasmLispCompilerTest`), the fixture's literal program on all four backends,
   `SpecialVarCollectorTest`. ci-spec cannot pin it: its concatenated program calls `eval`.
+- Without the eval mirror the tracked set also takes every global a literal probe names and no
+  definer gives a value, bound or not, special or not (`.kb/compile-time-boundp.md`, "A probe
+  the fold leaves open"); the probe is `(%global-boundp 'G)` for all of them.
 - `#'boundp` is a reference-gated wrapper (`BuiltinFunctionWrappers`, beside `#'symbol-value`),
   so `(mapcar #'boundp names)` is a computed probe: the injected body is among the forms
   `boundpProbes` reads, which tracks every valueless special exactly as a computed call does.

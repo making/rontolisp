@@ -336,15 +336,15 @@ final class WasmExprCompiler {
 
 	/**
 	 * Turns the value on the stack into nil when it is the UNBOUND marker -- the
-	 * raw-local sentinel, which the module global of a special in
-	 * {@code Ctx.unboundSpecials} holds until something assigns it -- so a read of such a
-	 * special answers nil there, as every other special's unassigned global does. Emits
-	 * nothing for any other name.
+	 * raw-local sentinel, which the module global of a global in
+	 * {@code Ctx.unboundGlobals} holds until something assigns it -- so a read of such a
+	 * global answers nil there, as every other unassigned global does. Emits nothing for
+	 * any other name.
 	 * @param ctx the compilation context
 	 * @param name the variable read
 	 */
 	private static void emitUnboundAsNil(WasmLispCompiler.Ctx ctx, String name) {
-		if (!ctx.unboundSpecials.contains(name)) {
+		if (!ctx.unboundGlobals.contains(name)) {
 			return;
 		}
 		int value = ctx.allocTemp();
@@ -1876,7 +1876,7 @@ final class WasmExprCompiler {
 			case LispNames.PROGV_GENV_SET -> WasmProgvCompiler.compileGenvWrite(cons, ctx);
 			case LispNames.SYMBOL_VALUE_RAW -> WasmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx);
 			case LispNames.BOUNDP_RAW -> WasmSymbolApiCompiler.compileBoundpRaw(cons, ctx);
-			case LispNames.SPECIAL_BOUNDP -> WasmSymbolApiCompiler.compileSpecialBoundp(cons, ctx);
+			case LispNames.GLOBAL_BOUNDP -> WasmSymbolApiCompiler.compileGlobalBoundp(cons, ctx);
 			case LispNames.SYMBOL_IS -> WasmSymbolApiCompiler.compileSymbolIs(cons, ctx);
 			case LispNames.GLOBAL_STORE_SET -> WasmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx);
 			case LispNames.SET_MIRROR -> WasmSymbolApiCompiler.compileSetMirror(cons, ctx);

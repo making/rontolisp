@@ -75,6 +75,23 @@ class CompileTimeBoundpTest {
 	}
 
 	@Test
+	void aParallelOrMultipleValueAssignmentIsAnAssignmentLikeSetq() {
+		// SBCL answers T for each of these probes. A body that only psetq / psetf /
+		// multiple-value-setq's the name poisons it exactly as a setq does; at top level
+		// the form binds it for every later probe.
+		assertThat(folded("(defun f () (psetq *a* 1 *b* 2)) (f) (print (boundp '*a*))")).contains("BOUNDP");
+		assertThat(folded("(defun f () (psetf *a* 1)) (f) (print (boundp '*a*))")).contains("BOUNDP");
+		assertThat(folded("(defun f () (multiple-value-setq (*q* *r*) (floor 7 2))) (f) (print (boundp '*r*))"))
+			.contains("BOUNDP");
+		assertThat(folded("(psetq *a* 1 *b* 2) (print (boundp '*b*))")).isEqualTo("(PSETQ *A* 1 *B* 2)\n(PRINT T)\n");
+		assertThat(folded("(psetf *a* 1) (print (boundp '*a*))")).isEqualTo("(PSETF *A* 1)\n(PRINT T)\n");
+		assertThat(folded("(multiple-value-setq (*q* *r*) (floor 7 2)) (print (boundp '*r*))"))
+			.isEqualTo("(MULTIPLE-VALUE-SETQ (*Q* *R*) (FLOOR 7 2))\n(PRINT T)\n");
+		// Evaluated before the probe in the same top-level form, so the probe is open.
+		assertThat(folded("(progn (psetq *a* 1) (print (boundp '*a*)))")).contains("BOUNDP");
+	}
+
+	@Test
 	void aDefinerThePositionDoesNotOrderKeepsItsProbe() {
 		// Written after the probe but inside a loop, so it can also have run before it.
 		assertThat(folded("(dotimes (i 2) (print (boundp '*x*)) (defvar *x* 1))")).contains("BOUNDP");

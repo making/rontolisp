@@ -26,7 +26,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Core language and evaluation
 
-- [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, a function body's assignment of an unbound name as a global, `%` prefix, JVM method mangling, WASM rec-groups
+- [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, an assignment of an unbound name (function body or top level) as a global, `%` prefix, JVM method mangling, WASM rec-groups
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
@@ -133,7 +133,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md) -- the `--optimize` flag: levels, what the shaker drops, the duplicate-body fold, dispatch pruning
 - [pure-builtin-fold.md](pure-builtin-fold.md) -- compile-time fold of pure built-ins over literal arguments, and what is deliberately out
 - [toplevel-statement-values.md](toplevel-statement-values.md) -- a top-level form, or a non-final body form, is a statement; nothing may be emitted only to be dropped (docstrings, `declare`)
-- [compile-time-boundp.md](compile-time-boundp.md) -- `(boundp 'name)` over a literal symbol decided at compile time
+- [compile-time-boundp.md](compile-time-boundp.md) -- `(boundp 'name)` over a literal symbol decided at compile time; a probe it leaves open reads the variable without the eval mirror
 - [library-defun-pruning.md](library-defun-pruning.md) -- AST pruning of spliced library defuns, rontolisp's own and ASDF-spliced; the JVM-lived parse caches the splice reads from
 - [emitted-output-determinism.md](emitted-output-determinism.md) -- the same program compiles to the same bytes on every run
 - [default-run-path.md](default-run-path.md) -- flagless `rontolisp app.lisp` runs the interpreter by decision

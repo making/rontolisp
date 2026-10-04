@@ -267,6 +267,41 @@ public final class SpecialVarCollector {
 	}
 
 	/**
+	 * The globals a literal {@code (boundp 'G)} names that no {@code defvar} with a
+	 * value, {@code defparameter} or {@code defconstant} names anywhere, {@code cl}
+	 * symbols aside -- the names whose bound-ness nothing but an assignment gives. In a
+	 * program without the eval mirror their variable carries it (an UNBOUND marker until
+	 * the first store), which no binding changes for a name that is never bound; a
+	 * dynamically bound special is {@link #collectProbedValueless}'s.
+	 * @param forms the program's forms, the injected runtime's included
+	 * @param globals the candidate names: the program's globals
+	 * @return those globals, in {@code globals} order
+	 */
+	public static LinkedHashSet<String> collectLiterallyProbedValueless(Collection<LispVal> forms,
+			SequencedSet<String> globals) {
+		LinkedHashSet<String> out = new LinkedHashSet<>();
+		Set<String> probed = new HashSet<>();
+		for (LispVal form : forms) {
+			LispMacroExpander.boundpProbes(form, probed);
+		}
+		probed.retainAll(globals);
+		if (probed.isEmpty()) {
+			return out;
+		}
+		Set<String> valued = new HashSet<>();
+		for (LispVal form : forms) {
+			collectValued(form, valued);
+		}
+		for (String name : globals) {
+			if (probed.contains(name) && !valued.contains(name) && !PackageRegistry.isClSymbol(name)
+					&& !PackageRegistry.isClSymbol(member(name))) {
+				out.add(name);
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * Records the name of every {@code defvar} with a value, {@code defparameter} and
 	 * {@code defconstant} in the form, quoted data skipped.
 	 */

@@ -5136,22 +5136,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * {@code boundp} of a program whose specials {@code tracked} carry their bound-ness
-	 * in their variable ({@code SpecialVarCollector.collectProbedValueless}): such a
-	 * special's global holds the unbound marker until something assigns it, a binding
-	 * covers it for its extent, and its restore puts the marker back -- the answer the
-	 * eval mirror cannot give, since no binding writes it and a store inside one writes
-	 * it for good. No site pays for the tracked set:
+	 * {@code boundp} of a program whose globals {@code tracked} carry their bound-ness in
+	 * their variable ({@code SpecialVarCollector.collectProbedValueless}, and without the
+	 * eval mirror {@code GlobalVarCollector.collectProbedUnbound}): such a global holds
+	 * the unbound marker until something assigns it, a special's binding covers it for
+	 * its extent, and its restore puts the marker back -- the answer the eval mirror
+	 * cannot give, since no binding writes it and a store inside one writes it for good.
+	 * No site pays for the tracked set:
 	 * <ul>
-	 * <li>a LITERAL tracked name folds to {@code (%special-boundp 'S)}, the variable's
-	 * own answer; any other literal keeps the raw mirror probe (null here);</li>
+	 * <li>a LITERAL tracked name folds to {@code (%global-boundp 'S)}, the variable's own
+	 * answer; any other literal keeps the raw mirror probe (null here);</li>
 	 * <li>a computed name calls the shared {@link #boundpDynamicRuntime} when the program
 	 * carries it ({@code shared});</li>
 	 * <li>otherwise -- a user definition took the runtime's name -- the dispatch is
 	 * spelled inline.</li>
 	 * </ul>
 	 * @param cons the {@code (boundp x)} form
-	 * @param tracked the specials whose bound-ness their variable carries
+	 * @param tracked the globals whose bound-ness their variable carries
 	 * @param specials the program's special-variable names
 	 * @param shared whether the program carries {@link #boundpDynamicRuntime}
 	 * @return the expansion, or null when the raw probe answers this form
@@ -5166,7 +5167,7 @@ public final class LispMacroExpander {
 		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& quoted.cdr() instanceof LispCons body && body.cdr() instanceof LispNil) {
 			return body.car() instanceof LispSymbol name && tracked.contains(name.name())
-					? callOf(LispNames.SPECIAL_BOUNDP, quotedData(name)) : null;
+					? callOf(LispNames.GLOBAL_BOUNDP, quotedData(name)) : null;
 		}
 		if (!(arg instanceof LispCons || arg instanceof LispSymbol sym && !sym.isKeyword())) {
 			// Self-evaluating: nil, t, a keyword, a number -- no variable's name.
@@ -5177,14 +5178,14 @@ public final class LispMacroExpander {
 		}
 		LispSymbol n = new LispSymbol(freshName("__BOUNDP_NAME", specials));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(n, arg)))),
-				nameChain(n, new ArrayList<>(tracked), s -> callOf(LispNames.SPECIAL_BOUNDP, quotedData(s)),
+				nameChain(n, new ArrayList<>(tracked), s -> callOf(LispNames.GLOBAL_BOUNDP, quotedData(s)),
 						callOf(LispNames.BOUNDP_RAW, n))));
 	}
 
 	/**
 	 * The shared {@code boundp} runtime a computed name calls
 	 * ({@link #dynamicFirstBoundp}): {@code (%boundp-dynamic name)} dispatches the name
-	 * over the tracked specials onto {@code (%special-boundp 'S)}, any other name falling
+	 * over the tracked specials onto {@code (%global-boundp 'S)}, any other name falling
 	 * to the raw mirror probe. Segmented ({@link #segmentedNameDispatch}), so no body
 	 * grows with the set.
 	 * @param tracked the specials whose bound-ness their variable carries
@@ -5195,7 +5196,7 @@ public final class LispMacroExpander {
 			java.util.Collection<String> specials) {
 		LispSymbol n = new LispSymbol(freshName("%BD-NAME", specials));
 		return segmentedNameDispatch(LispNames.BOUNDP_DYNAMIC, List.of(n), new ArrayList<>(tracked),
-				s -> callOf(LispNames.SPECIAL_BOUNDP, quotedData(s)), callOf(LispNames.BOUNDP_RAW, n));
+				s -> callOf(LispNames.GLOBAL_BOUNDP, quotedData(s)), callOf(LispNames.BOUNDP_RAW, n));
 	}
 
 	/**
@@ -5219,11 +5220,11 @@ public final class LispMacroExpander {
 	 * occurrence of the symbol -- any list element at any depth, quoted data and
 	 * {@code #'boundp} included, the census the eval gate takes -- other than the head of
 	 * a {@code (boundp 'S)} whose {@code S} is {@code tracked}. Such a probe compiles to
-	 * {@code (%special-boundp 'S)} ({@link #dynamicFirstBoundp}), which reads the
-	 * variable alone.
+	 * {@code (%global-boundp 'S)} ({@link #dynamicFirstBoundp}), which reads the variable
+	 * alone.
 	 * @param forms the forms to walk
-	 * @param tracked the specials whose variable carries their bound-ness
-	 * @return true when some occurrence is anything but a probe of a tracked special
+	 * @param tracked the globals whose variable carries their bound-ness
+	 * @return true when some occurrence is anything but a probe of a tracked global
 	 */
 	public static boolean boundpReachesMirror(java.util.Collection<LispVal> forms,
 			java.util.Collection<String> tracked) {
@@ -5238,17 +5239,17 @@ public final class LispMacroExpander {
 	/**
 	 * The check behind the eval gate's {@code boundp} arm: a program compiled without the
 	 * eval runtime because its every {@code boundp} was a literal probe of a tracked
-	 * special ({@link #boundpReachesMirror}) must still be one once the runtime is
+	 * global ({@link #boundpReachesMirror}) must still be one once the runtime is
 	 * injected, over the tracked set the backend carries -- a probe the mirror answers
 	 * would otherwise compile against a runtime that is not there.
 	 * @param compiledForms the program's forms and the injected runtime's
-	 * @param tracked the specials whose variable carries their bound-ness
+	 * @param tracked the globals whose variable carries their bound-ness
 	 */
 	public static void requireBoundpOffMirror(java.util.Collection<LispVal> compiledForms,
 			java.util.Collection<String> tracked) {
 		if (boundpReachesMirror(compiledForms, tracked)) {
 			throw new IllegalStateException("a " + LispNames.BOUNDP
-					+ " the eval gate read as a probe of a tracked special reaches the eval mirror");
+					+ " the eval gate read as a probe of a tracked global reaches the eval mirror");
 		}
 	}
 

@@ -1,14 +1,20 @@
 package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.SpecialVarCollector;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -18,8 +24,8 @@ import org.jspecify.annotations.Nullable;
  * assign it. A symbol is a top-level global when it is the name of a top-level
  * {@code defvar}/{@code defparameter}/{@code defconstant}, or the place of a top-level
  * {@code setq}/{@code setf} whose place is a bare symbol (Lisp-2: a top-level assignment
- * targets the global variable namespace), or a name a function body assigns with no
- * lexical binding in scope ({@link #collectFreeAssignedInFunctionBodies}).
+ * targets the global variable namespace), or a name a function body or a top-level form
+ * assigns with no lexical binding in scope ({@link #collectFreeAssigned}).
  */
 public final class GlobalVarCollector {
 
@@ -48,13 +54,9 @@ public final class GlobalVarCollector {
 					}
 				}
 				case LispNames.SETQ, LispNames.SETF -> {
-					// setq/setf take place/value pairs; record each place that is a bare
-					// symbol (a symbol place under setf expands to setq).
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-							globals.add(place.name());
-						}
-					}
+					// Record each place that is a bare symbol (a symbol place under setf
+					// expands to setq).
+					assignedPlaces(head.name(), cons, globals::add);
 					// The values may hold further assignments -- a namespace init is a
 					// top-level setq of a lambda over the namespace's setqs -- and those
 					// assign the same globals a head-position setq would (nested in a
@@ -82,6 +84,66 @@ public final class GlobalVarCollector {
 			}
 		}
 		return globals;
+	}
+
+	/**
+	 * The globals a literal {@code (boundp 'G)} in a program WITHOUT the eval mirror
+	 * reads off their own variable: no definer gives them a value
+	 * ({@link SpecialVarCollector#collectLiterallyProbedValueless}), so the compile paths
+	 * seed the variable with an UNBOUND marker the first store overwrites. With the
+	 * mirror the probe asks it instead, and in a program calling {@code progv}, which can
+	 * bind a name no special declaration covers and reaches the mirror for it, none is
+	 * answered this way.
+	 * @param forms the program's forms, the injected runtime's and the condition reports'
+	 * included
+	 * @param program the program's forms
+	 * @param globals the program's globals
+	 * @return those globals, in {@code globals} order
+	 */
+	public static LinkedHashSet<String> collectProbedUnbound(Collection<LispVal> forms, List<LispVal> program,
+			SequencedSet<String> globals) {
+		if (LispMacroExpander.programCallsProgv(program)) {
+			return new LinkedHashSet<>();
+		}
+		return SpecialVarCollector.collectLiterallyProbedValueless(forms, globals);
+	}
+
+	/**
+	 * The globals whose variable the eval gate may count on to answer a literal
+	 * {@code boundp}, read off the program BEFORE the compile path injects its runtime
+	 * and collects its globals: the dynamically bound specials
+	 * {@link SpecialVarCollector#collectProbedValuelessBound} tracks, and
+	 * {@link #collectProbedUnbound} over the globals the program certainly has -- its
+	 * specials, the names {@link #collect} reads off its top-level forms, a nested
+	 * {@code defun}, a free assignment ({@link #collectFreeAssigned}). A subset of what
+	 * the compilers carry once their globals are final, so the gate never drops a mirror
+	 * a probe needs (they check, {@code LispMacroExpander.requireBoundpOffMirror}).
+	 * @param program the program's forms
+	 * @param reports the condition {@code :report} lambdas, probed like the program
+	 * @param specials the program's special-variable names
+	 * @param everyBound whether every special is runtime-bindable by name (the JVM's
+	 * {@code make-thread} hand-over)
+	 * @return those globals
+	 */
+	public static LinkedHashSet<String> collectProbedUnboundBeforeInjection(List<LispVal> program,
+			Collection<LispVal> reports, SequencedSet<String> specials, boolean everyBound) {
+		LinkedHashSet<String> tracked = SpecialVarCollector.collectProbedValuelessBound(program, reports, specials,
+				everyBound);
+		List<LispVal> topLevel = new ArrayList<>();
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()))) {
+				topLevel.add(expr);
+			}
+		}
+		LinkedHashSet<String> globals = new LinkedHashSet<>(specials);
+		globals.addAll(collect(topLevel));
+		globals.addAll(collectNestedInDefunBodies(program));
+		globals.addAll(collectFreeAssigned(program));
+		List<LispVal> probed = new ArrayList<>(program);
+		probed.addAll(reports);
+		tracked.addAll(collectProbedUnbound(probed, program, globals));
+		return tracked;
 	}
 
 	/**
@@ -118,35 +180,49 @@ public final class GlobalVarCollector {
 	}
 
 	/**
-	 * Returns the names a top-level {@code defun}'s body assigns -- {@code setq},
-	 * {@code setf}, {@code psetq}, {@code psetf} or {@code multiple-value-setq} of a bare
-	 * symbol -- where no lexical binding of the name is in scope, in program order. The
-	 * body's lambdas, local functions and nested {@code defun}s count; the function's own
-	 * parameters, and every {@code let} or parameter between it and the assignment,
-	 * shadow it.
+	 * Returns the names the program assigns -- {@code setq}, {@code setf}, {@code psetq},
+	 * {@code psetf} or {@code multiple-value-setq} of a bare symbol, in a top-level
+	 * {@code defun}'s body or in a top-level form -- where no lexical binding of the name
+	 * is in scope, in program order. The body's (or form's) lambdas, local functions and
+	 * nested {@code defun}s count; the function's own parameters, and every {@code let}
+	 * or parameter between the top level and the assignment, shadow it.
 	 * <p>
 	 * Assigning an undeclared variable is undefined in CL; SBCL warns and assigns the
 	 * global, and so does the interpreter, so such a name needs the backing store a
 	 * top-level {@code setq}'s gets. Without it the assignment compiled into a local of
-	 * the function, and a read anywhere else was refused. Unlike {@link #collect} this
-	 * walk is scope-aware ({@link FreeVarAnalyzer#findFreeVars}): almost every
-	 * {@code setq} in a function body assigns a {@code let} variable or a parameter, and
-	 * a store for each would grow every program. A name the body both reads free and
-	 * assigns under a binding still counts -- the read had no other store to reach.
+	 * the enclosing function, and a read anywhere else was refused. Unlike
+	 * {@link #collect} this walk is scope-aware ({@link FreeVarAnalyzer#findFreeVars}):
+	 * almost every {@code setq} in a function body assigns a {@code let} variable or a
+	 * parameter, and almost every top-level {@code psetq} or {@code multiple-value-setq}
+	 * a {@code do} loop's or a {@code let}'s, and a store for each would grow every
+	 * program. A top-level {@code setq} or {@code setf} is mostly {@code collect}'s
+	 * already; this walk adds the one in a definer's initform, which {@code collect} does
+	 * not enter. A name the scope both reads free and assigns under a binding still
+	 * counts -- the read had no other store to reach.
 	 * @param program the whole program, top-level {@code defun}s included
-	 * @return the names in program order; empty for a program whose functions assign only
-	 * lexical variables
+	 * @return the names in program order; empty for a program that assigns only lexical
+	 * variables
 	 */
-	public static LinkedHashSet<String> collectFreeAssignedInFunctionBodies(List<LispVal> program) {
+	public static LinkedHashSet<String> collectFreeAssigned(List<LispVal> program) {
 		LinkedHashSet<String> names = new LinkedHashSet<>();
 		for (LispVal expr : program) {
-			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
-					|| !LispNames.DEFUN.equals(head.name()) || !(cons.cdr() instanceof LispCons nameCell)
-					|| !(nameCell.cdr() instanceof LispCons lambdaListCell)) {
-				continue;
-			}
 			LinkedHashSet<String> assigned = new LinkedHashSet<>();
-			collectAssignedPlaces(lambdaListCell.cdr(), assigned);
+			LispVal lambdaListAndBody;
+			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name())) {
+				if (!(cons.cdr() instanceof LispCons nameCell)
+						|| !(nameCell.cdr() instanceof LispCons lambdaListCell)) {
+					continue;
+				}
+				collectAssignedPlaces(lambdaListCell.cdr(), assigned);
+				// The defun as the lambda it is: the walk binds a lambda's parameters.
+				lambdaListAndBody = lambdaListCell;
+			}
+			else {
+				collectAssignedPlaces(expr, assigned);
+				// The form as the body of a lambda of no parameters.
+				lambdaListAndBody = new LispCons(LispNil.INSTANCE, new LispCons(expr, LispNil.INSTANCE));
+			}
 			// The standard stream variables and the multiple-value channel are never a
 			// collected global: the backends give them their own representation
 			// (FreeVarAnalyzer's SPECIAL_NAMES).
@@ -157,19 +233,65 @@ public final class GlobalVarCollector {
 			if (assigned.isEmpty()) {
 				continue;
 			}
-			// The defun as the lambda it is, its nested defuns as theirs: the walk binds
-			// a lambda's parameters and skips a defun.
-			LispVal function = new LispCons(new LispSymbol(LispNames.LAMBDA), nestedDefunsAsLambdas(lambdaListCell));
+			// Its nested defuns read as lambdas too: the walk skips a defun.
+			LispVal lambda = new LispCons(new LispSymbol(LispNames.LAMBDA), nestedDefunsAsLambdas(lambdaListAndBody));
 			// The assigned names go in as enclosing lexicals only to lift the walk's
 			// exclusion of built-in names: (setq list 1) assigns a variable too.
-			for (String free : FreeVarAnalyzer.findFreeVars(List.of(function), Set.of(), Set.of(), Set.of(),
-					assigned)) {
+			for (String free : FreeVarAnalyzer.findFreeVars(List.of(lambda), Set.of(), Set.of(), Set.of(), assigned)) {
 				if (assigned.contains(free)) {
 					names.add(free);
 				}
 			}
 		}
 		return names;
+	}
+
+	/**
+	 * Whether {@code op} heads a form that assigns bare-symbol places
+	 * ({@link #assignedPlaces}).
+	 */
+	public static boolean isAssignmentHead(@Nullable String op) {
+		return LispNames.SETQ.equals(op) || LispNames.SETF.equals(op) || LispNames.PSETQ.equals(op)
+				|| LispNames.PSETF.equals(op) || LispNames.MULTIPLE_VALUE_SETQ.equals(op);
+	}
+
+	/**
+	 * Hands {@code sink} each bare symbol the assignment form {@code form}, headed by
+	 * {@code op}, stores to: the places of {@code setq}, {@code setf}, {@code psetq} and
+	 * {@code psetf}, the variables of {@code multiple-value-setq}. The one recognition of
+	 * what assigns a variable, shared by every walk that asks which names a program
+	 * stores. Keywords and non-symbol places ({@code (setf (car x) 1)}) are skipped, and
+	 * a form of any other head, or a malformed one, yields what it has.
+	 * @param op the head's name, as the caller reads it
+	 * @param form the whole form
+	 * @param sink receives each assigned name, in order
+	 */
+	public static void assignedPlaces(String op, LispCons form, Consumer<String> sink) {
+		switch (op) {
+			case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF -> {
+				// Place/value pairs: every other element, starting at the first.
+				LispVal node = form.cdr();
+				while (node instanceof LispCons placeCell && placeCell.cdr() instanceof LispCons valueCell) {
+					if (placeCell.car() instanceof LispSymbol place && !place.isKeyword()) {
+						sink.accept(place.name());
+					}
+					node = valueCell.cdr();
+				}
+			}
+			case LispNames.MULTIPLE_VALUE_SETQ -> {
+				if (form.cdr() instanceof LispCons varsCell) {
+					LispVal vars = varsCell.car();
+					while (vars instanceof LispCons varCons) {
+						if (varCons.car() instanceof LispSymbol place && !place.isKeyword()) {
+							sink.accept(place.name());
+						}
+						vars = varCons.cdr();
+					}
+				}
+			}
+			default -> {
+			}
+		}
 	}
 
 	/**
@@ -184,25 +306,9 @@ public final class GlobalVarCollector {
 					case LispNames.QUOTE -> {
 						return;
 					}
-					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF -> {
-						List<LispVal> parts = cons.toList();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-								names.add(place.name());
-							}
-						}
-					}
-					case LispNames.MULTIPLE_VALUE_SETQ -> {
-						if (cons.cdr() instanceof LispCons varsCell) {
-							LispVal vars = varsCell.car();
-							while (vars instanceof LispCons varCons) {
-								if (varCons.car() instanceof LispSymbol place && !place.isKeyword()) {
-									names.add(place.name());
-								}
-								vars = varCons.cdr();
-							}
-						}
-					}
+					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF,
+							LispNames.MULTIPLE_VALUE_SETQ ->
+						assignedPlaces(head.name(), cons, names::add);
 					default -> {
 					}
 				}
@@ -328,14 +434,7 @@ public final class GlobalVarCollector {
 							globals.add(name.name());
 						}
 					}
-					case LispNames.SETQ, LispNames.SETF -> {
-						List<LispVal> parts = cons.toList();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-								globals.add(place.name());
-							}
-						}
-					}
+					case LispNames.SETQ, LispNames.SETF -> assignedPlaces(head.name(), cons, globals::add);
 					default -> {
 					}
 				}

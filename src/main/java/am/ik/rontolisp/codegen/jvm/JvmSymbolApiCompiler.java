@@ -234,17 +234,17 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * boundp. A special whose variable carries its bound-ness
-	 * ({@link JvmDynVarRuntimeBuilder}, the UNBOUND marker) is answered by it
+	 * boundp. A global whose variable carries its bound-ness
+	 * ({@link JvmDynVarRuntimeBuilder#unboundMarker}) is answered by it
 	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
-	 * {@code %special-boundp}, a computed name through the shared dispatch over them.
-	 * Every other name, and every name in a program without such a special, takes the raw
+	 * {@code %global-boundp}, a computed name through the shared dispatch over them.
+	 * Every other name, and every name in a program without such a global, takes the raw
 	 * probe.
 	 */
 	static void compileBoundp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		if (dyn != null) {
-			LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, dyn.unboundSpecials(), ctx.specialVars,
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		if (marker != null) {
+			LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, marker.globals(), ctx.specialVars,
 					ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
 			if (tracked != null) {
 				JvmExprCompiler.compileExpr(tracked, ctx, className);
@@ -255,22 +255,37 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * {@code (%special-boundp 'S)}: {@code _dbound} over the special's ThreadLocal and
-	 * global -- this thread's binding, else a global that is not the UNBOUND marker.
+	 * {@code (%global-boundp 'G)}: whether the global's variable holds a value. A
+	 * dynamically bound special asks {@code _dbound} over its ThreadLocal and global --
+	 * this thread's binding, else a global that is not the UNBOUND marker; any other
+	 * global compares its field with the marker.
 	 */
-	static void compileSpecialBoundp(LispCons cons, JvmLispCompiler.Ctx ctx) {
+	static void compileGlobalBoundp(LispCons cons, JvmLispCompiler.Ctx ctx) {
 		String name = ((LispSymbol) ((LispCons) cons.toList().get(1)).toList().get(1)).name();
-		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		MethodRefEntry dbound = dyn == null ? null : dyn.dbound();
-		FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
-		if (dyn == null || dbound == null || tlField == null || !dyn.unboundSpecials().contains(name)) {
-			throw new IllegalStateException(
-					"special variable " + name + " does not carry its bound-ness in its variable (" + LispNames.BOUNDP
-							+ " of it was lowered to " + LispNames.SPECIAL_BOUNDP + ")");
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		FieldRefEntry global = ctx.globalFields.get(name);
+		if (marker == null || global == null || !marker.globals().contains(name)) {
+			throw new IllegalStateException("global " + name + " does not carry its bound-ness in its variable ("
+					+ LispNames.BOUNDP + " of it was lowered to " + LispNames.GLOBAL_BOUNDP + ")");
 		}
-		ctx.body.getstatic(tlField);
-		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
-		ctx.body.invokestatic(dbound);
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
+		if (tlField != null) {
+			ctx.body.getstatic(tlField);
+			ctx.body.getstatic(global);
+			ctx.body.invokestatic(java.util.Objects.requireNonNull(java.util.Objects.requireNonNull(dyn).dbound()));
+			return;
+		}
+		ctx.body.getstatic(global);
+		ctx.body.getstatic(marker.field());
+		MethodCode.Label unbound = ctx.body.newLabel();
+		ctx.body.if_acmpeq(unbound);
+		JvmEmitHelper.compileTrue(ctx);
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.goto_(end);
+		ctx.body.labelBinding(unbound);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(end);
 	}
 
 	/**
