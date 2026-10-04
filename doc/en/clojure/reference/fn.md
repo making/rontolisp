@@ -10,9 +10,12 @@ outer scope (there are no local functions). Parameters destructure, vector and m
 patterns alike. A `recur` in the body jumps back to the enclosing clause with new
 argument values.
 
-The reader's `#(...)` form is the same lambda with the arguments traveling as one rest
-list: `%` is the first, `%N` the Nth (at most 9), `%&` the rest, and the body forms wrap
-as ONE call -- multi-form bodies need an explicit `do`.
+The reader's `#(...)` form reads as the oracle's reader reads it, `(fn* [p1__N# ...]
+(body...))`: `%` and `%1` are the first parameter, `%N` the Nth, `%&` the rest, and the
+parameter vector runs up to the highest `%N` used, so a call with any other count
+signals. The body forms wrap as ONE call -- multi-form bodies need an explicit `do`. A
+`#(...)` inside another is refused. Quoted, read with `read-string` or passed to a macro,
+it is that `fn*` form.
 
 ```clojure
 (println ((fn [a b] (+ (* a 10) b)) 4 2)) ; 42

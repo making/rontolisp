@@ -382,9 +382,6 @@ final class ClojureTestLowering {
 		if (name.startsWith(":") || name.equals("nil") || name.equals("true") || name.equals("false")) {
 			return true;
 		}
-		if (name.startsWith("%")) {
-			return false; // an anonymous-function argument
-		}
 		return isFunctionName(ctx, name) || !ctx.known(name);
 	}
 
@@ -431,7 +428,7 @@ final class ClojureTestLowering {
 	 */
 	static LispVal substitute(LispVal datum, Map<String, LispVal> replace) {
 		if (datum instanceof LispSymbol s) {
-			if (s == ClojureReader.VECTOR || s == ClojureReader.FN_ANON || s == ClojureReader.REGEX) {
+			if (s == ClojureReader.VECTOR || s == ClojureReader.REGEX) {
 				return s;
 			}
 			LispVal value = replace.get(s.name());

@@ -225,8 +225,20 @@ class ClojureReaderTest {
 	}
 
 	@Test
-	void anonFnReadsAsFnOverTheAnonMarker() {
-		assertThat(printed("#(* % %)")).isEqualTo("[(|fn| |%anon| * % %)]");
+	void anonFnReadsAsTheOraclesFnStarOverGeneratedParameters() {
+		assertThat(printed("#(* % %1)")).isEqualTo("[(|fn*| (|%vector| |p1__1#|) (* |p1__1#| |p1__1#|))]");
+		// an unused lower parameter is generated after the body; %& is the rest
+		assertThat(printed("#(f %2 %&)"))
+			.isEqualTo("[(|fn*| (|%vector| |p1__3#| |p2__1#| & |rest__2#|) (|f| |p2__1#| |rest__2#|))]");
+		// the numbers restart per top-level form, and an argument inside a quote is
+		// replaced too
+		assertThat(printed("#(f '%) #(g %)")).isEqualTo(
+				"[(|fn*| (|%vector| |p1__1#|) (|f| (|quote| |p1__1#|))), (|fn*| (|%vector| |p1__1#|) (|g| |p1__1#|))]");
+		assertThat(printed("%")).isEqualTo("[%]");
+		assertThatThrownBy(() -> read("#(f #(g %))")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Nested #()s are not allowed");
+		assertThatThrownBy(() -> read("#(f %x)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("arg literal must be %, %& or %integer");
 	}
 
 	@Test

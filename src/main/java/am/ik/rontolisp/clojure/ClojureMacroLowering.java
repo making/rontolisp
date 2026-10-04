@@ -57,11 +57,12 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The heads the reader itself spells ({@code `x}, {@code ~x}, {@code ~@x},
-	 * {@code @x}, {@code #(...)}) plus the two the pre-scan reads a namespace from: a
+	 * {@code @x}) plus the two the pre-scan reads a namespace from, and {@code fn}: a
 	 * macro of one would capture the reader's own forms (the oracle reads {@code @x} as
 	 * {@code clojure.core/deref}, which no program macro shadows), so a {@code defmacro}
-	 * of one is refused by name. {@code ^m x} reads as {@code %with-meta}, reserved by
-	 * its {@code %}, so a {@code with-meta} macro shadows the call only.
+	 * of one is refused by name. {@code #(...)} reads as {@code fn*}, a special form.
+	 * {@code ^m x} reads as {@code %with-meta}, reserved by its {@code %}, so a
+	 * {@code with-meta} macro shadows the call only.
 	 */
 	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "fn", "ns",
 			"in-ns");
@@ -306,9 +307,9 @@ final class ClojureMacroLowering {
 	/**
 	 * A macro answer back to a datum: the inverse of {@link #quote}, so the expansion
 	 * lowers the way the quoted call-site data would. Mangled symbols shed the prefix,
-	 * keyword and set wrappers answer their datum, vectors and tables their literals, and
-	 * a gensym ({@code #:}-spelled, uninterned) travels as itself so the {@code #:}
-	 * bypass lowers it back to the same symbol.
+	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
+	 * and tables their literals, and a gensym ({@code #:}-spelled, uninterned) travels as
+	 * itself so the {@code #:} bypass lowers it back to the same symbol.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
 		if (value instanceof LispNil) {
@@ -343,6 +344,9 @@ final class ClojureMacroLowering {
 				}
 				if (tag.name().equals(":C%SORTED")) {
 					return decodeSorted(ctx, cons);
+				}
+				if (tag.name().equals(":C%PATTERN")) {
+					return decodePattern(cons);
 				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
@@ -436,6 +440,19 @@ final class ClojureMacroLowering {
 				}
 			}
 			return ClojureLowerUtil.list(elements);
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * A pattern answer back to the regex literal of its source, which compiles to an
+	 * equivalent pattern (the oracle's expansion holds the one Pattern object; this one
+	 * compiles its own, so only identity tells them apart).
+	 */
+	static LispVal decodePattern(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 5 && parts.get(2) instanceof LispString source) {
+			return ClojureLowerUtil.list(ClojureReader.REGEX, source);
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}

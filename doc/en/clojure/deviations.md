@@ -138,9 +138,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `eval` of a macro call expands the same way. A macro body sees the core builtins and
   the `clojure.lisp` library, not the program's own definitions; a call above its
   definition is refused, and a macro has no function value. A `defmacro` of a special
-  form (`if`, `do`, `let*`, `new`, ...) or of a head the reader spells (`deref`,
-  `fn`, `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
+  form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
+  `syntax-quote`, `ns`, `in-ns`) or of `fn` is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form).
+- `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
+  in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
+  the oracle's counter runs across the process: the parameter names differ, and two reads
+  of one text answer `=` forms here. A regex literal passed to a macro reaches the
+  expansion as a fresh pattern compiled from the same source, where the oracle's
+  expansion holds the one `Pattern` object.
 - Syntax-quote qualifies every symbol but a special form, like the oracle: a core name
   spells `clojure.core/name` (one a `(:refer-clojure ...)` filter hides spells its own
   namespace instead), any other unresolved spelling the defining namespace, an alias
@@ -236,7 +242,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle's carries nanosecond digits.
 - `read-string`/`read` answer what a quote answers: `@x` reads `(deref x)` and a
   syntax-quote stays unexpanded, where the oracle reads `(clojure.core/deref x)` and
-  expands it; `#(...)` reads the source reader's `(fn %anon ...)`. A record literal reads
+  expands it. A record literal reads
   for any class the program defines, also one a later `require` loads (the oracle needs
   the class loaded first); a deftype literal is refused. `read` takes a stream -- a
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and

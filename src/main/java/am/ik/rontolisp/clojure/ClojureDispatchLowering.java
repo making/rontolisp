@@ -381,9 +381,8 @@ final class ClojureDispatchLowering {
 			return;
 		}
 		List<LispVal> parts = ClojureLowerUtil.items(valueDatum);
-		if (parts != null && !parts.isEmpty()
-				&& (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn") || parts.get(0) == ClojureReader.FN_ANON)
-				&& containsClassCall(valueDatum)) {
+		if (parts != null && !parts.isEmpty() && (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn")
+				|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn*")) && containsClassCall(valueDatum)) {
 			ctx.classDispatchFns.put(name, valueDatum);
 		}
 		else {

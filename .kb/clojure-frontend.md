@@ -93,7 +93,7 @@ answered `2 5 3` before).
 | `def` | top-level `setq` of the mangled name | inside a body it sets the global when the body runs. The value lowers against the OLD binding, so `(def p (memoize p))` after `(defn p ...)` captures `#'c%p`. A docstring and an attr map are skipped (recorded as var metadata); an attr map needs a value behind it and a lone string is the value |
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
-| `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` takes one `&rest` list, `%`..`%9` as `(nth n args)`; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`) |
+| `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
 | destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end), `&` rest through `%clojure-drop`, `:as`; map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur" |
@@ -665,6 +665,21 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   into lists, vectors, maps and sets; `x#` is one `(gensym "x")` per syntax-quote node per
   expansion (fresher than the oracle's per-compilation suffix). `quote` and syntax-quote
   build data symbols (`dataSym`), so `'*out*` is `*out*`, not the stream alias.
+- **An argument datum travels quoted and its answer decodes back (`decodeDatum`)**, so
+  every reader form must survive the round trip. A regex literal answers its
+  `(:C%PATTERN ...)`, decoded to `(%regex source)` (a fresh pattern; the oracle's
+  expansion holds the one object). `#()` needs no decoding since it READS as `fn*` over
+  plain symbols; until 2026-10-04 it read as `(fn %anon ...)`, whose marker matched by
+  identity and broke in any expansion (`(t (map #(inc %) xs))` and `` `#(inc %) ``).
+  Pinned by clojure-spec `a-macro-argument-holding-a-regex-literal-expands`,
+  `anon-fn-reads-as-fn-star-over-generated-parameters`,
+  `a-macro-argument-holding-an-anonymous-fn-expands` (clj 1.12.6, oracle-identical but
+  for the parameter numbers). Measured 2026-10-04 against the parent build: a `#()`
+  program shrinks (fixed parameters instead of `&rest` + `nth`): `(map #(* % %) ...)` plus
+  `(reduce #(+ %1 %2) ...)` wasm 45,805 -> 45,447 B, class 85,811 -> 85,675;
+  `examples/clojure/demo.clj` wasm 91,456 -> 91,190, class 131,678 -> 131,498. A
+  `read-string` program carries the run-time `#()` reader: wasm 126,952 -> 129,209,
+  class 196,456 -> 201,150.
 - `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=` against a quoted form
   holds and the printer (demangling `c%`) spells the oracle's lowercase; a non-macro head
   answers the form. The head resolves through the call site's namespace (the lowering
@@ -1027,7 +1042,7 @@ through it. Pinned on all four backends by clojure-spec `a-double-prints-its-exp
 source reader's language, answering what a quote of the same text answers**, so `(=
 (read-string s) 's)` holds: `@x` reads `(deref x)` and `` `x `` `(syntax-quote x)` like a
 quote does (the oracle: `clojure.core/deref`, the expansion), `#(...)` the source reader's
-`(fn %anon ...)`, metadata drops, `#=`/`#?`/`#inst` are its refusals. A read map
+`(fn* [p1__N# ...] (body))` (N per datum read, through the specials `%clojure-rd-args`/`%clojure-rd-arg-id`), metadata drops, `#=`/`#?`/`#inst` are its refusals. A read map
 or set stores its keys through "Structural keys" (`%clojure-plist-table`,
 `%clojure-set-put`), so it finds `=` keys and refuses an `=` duplicate member like a
 literal. `::kw` resolves against the context each call site passes, `("ns" ("alias"
