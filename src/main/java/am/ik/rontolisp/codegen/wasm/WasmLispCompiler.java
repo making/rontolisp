@@ -4066,10 +4066,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (dispatchableFuncIds), so a program whose names resolve at run time does not
 		// keep one alive that no reachable site calls.
 		Set<String> callOnlyRuntimes = new HashSet<>();
-		// The shared dynamic-first symbol-value dispatch a computed name calls in a
-		// progv-using program. When it is absent a site spells the dispatch inline
+		// A program that writes a binding by a name only known at run time (progv, set)
+		// reads symbol-value dynamic-first, so it answers what such a store wrote.
+		boolean usesSet = LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms);
+		boolean symbolValueDynamicFirst = programUsesSymbol(program, LispNames.PROGV) || usesSet;
+		// The shared dynamic-first symbol-value dispatch a computed name calls in such a
+		// program. When it is absent a site spells the dispatch inline
 		// (LispMacroExpander.dynamicFirstSymbolValue).
-		if (programUsesSymbol(program, LispNames.PROGV) && !specialVars.isEmpty()
+		if (symbolValueDynamicFirst && !specialVars.isEmpty()
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.SYMBOL_VALUE_DYNAMIC)
 				&& (LispMacroExpander.programUsesComputedSymbolValue(program)
 						|| LispMacroExpander.programUsesComputedSymbolValue(injectedForms) || LispMacroExpander
@@ -4124,8 +4128,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The shared dispatch a computed set writes a global's module global through,
 		// here because its arms are the FINAL global set. When it is absent a site
 		// spells the dispatch inline (LispMacroExpander.expandSetForCompile).
-		if (!globals.isEmpty() && !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.SET_GLOBAL_RUNTIME)
-				&& (LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms))) {
+		if (usesSet && !globals.isEmpty()
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.SET_GLOBAL_RUNTIME)) {
 			for (LispVal segment : LispMacroExpander.setGlobalRuntime(globals)) {
 				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
 				callOnlyRuntimes.add(defuns.getLast().name);
@@ -4555,7 +4559,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
-			.usesProgv(programUsesSymbol(program, LispNames.PROGV))
+			.symbolValueDynamicFirst(symbolValueDynamicFirst)
 			// Every context carries the flag (not just _start): the progv lowering
 			// maintains the eval env mirror from any position, while the top-level-only
 			// consumers keep their own ctx.topLevel guard.
@@ -10771,11 +10775,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesRuntimePackages = false;
 
 		/**
-		 * Whether the program uses {@code progv}. Switches {@code symbol-value} to the
-		 * dynamic-first dispatch over the special set
-		 * ({@code WasmSymbolApiCompiler.compileSymbolValue}).
+		 * Whether the program uses {@code progv} or {@code set} -- writes a binding by a
+		 * name only known at run time. Switches {@code symbol-value} to the dynamic-first
+		 * dispatch over the special set
+		 * ({@code WasmSymbolApiCompiler.compileSymbolValue}), so it answers the binding
+		 * such a store wrote rather than the eval mirror.
 		 */
-		boolean usesProgv = false;
+		boolean symbolValueDynamicFirst = false;
 
 		/**
 		 * The package designators the program's {@code defpackage}s and the built-in
@@ -11172,7 +11178,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
-			this.usesProgv = builder.usesProgv;
+			this.symbolValueDynamicFirst = builder.symbolValueDynamicFirst;
 			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
@@ -11361,7 +11367,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean usesRuntimePackages = false;
 
-			private boolean usesProgv = false;
+			private boolean symbolValueDynamicFirst = false;
 
 			private boolean usesEval = false;
 
@@ -11494,7 +11500,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.builtinShapedDefuns = proto.builtinShapedDefuns;
 				this.usesFmakunbound = proto.usesFmakunbound;
 				this.usesRuntimePackages = proto.usesRuntimePackages;
-				this.usesProgv = proto.usesProgv;
+				this.symbolValueDynamicFirst = proto.symbolValueDynamicFirst;
 				this.usesEval = proto.usesEval;
 				this.packageTable = proto.packageTable;
 				this.packageUseTable = proto.packageUseTable;
@@ -11838,8 +11844,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder usesProgv(boolean usesProgv) {
-				this.usesProgv = usesProgv;
+			Builder symbolValueDynamicFirst(boolean symbolValueDynamicFirst) {
+				this.symbolValueDynamicFirst = symbolValueDynamicFirst;
 				return this;
 			}
 

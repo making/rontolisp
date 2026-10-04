@@ -75,6 +75,30 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aVariableNamedSetIsNoSetSite() {
+		// A let binding or a lambda-list entry of a variable named set (cl-ppcre's
+		// charset code) is no call: counting one made symbol-value read dynamic-first,
+		// at the price of the shared dispatch over the specials, in every program that
+		// loads cl-ppcre.
+		for (String source : List.of("(defun f (set) (list set))", "(defun f (set x) (list set x))",
+				"(let ((set (list 1)) (y 2)) (list set y))", "(lambda (&optional (set 1) (x 2)) (list set x))",
+				"(print '(set a b))")) {
+			assertThat(LispMacroExpander.programUsesSet(LispReader.readAllFromString(source))).as(source).isFalse();
+		}
+	}
+
+	@Test
+	void aSetCallOrASymbolValuePlaceWriteIsASetSite() {
+		for (String source : List.of("(set 'x 1)", "(defun f (n) (set n 2))", "(let ((y (set 'x 1))) y)",
+				"(defun f (set) (set set 1))", "(lambda (&optional (a (set 'x 1))) a)", "(setf (symbol-value 'x) 1)",
+				"(push 1 (symbol-value v))", "(pushnew 1 (symbol-value v) :test 'equal)", "(incf (symbol-value v))",
+				"(pop (symbol-value v))", "(rotatef (symbol-value a) (symbol-value b))",
+				"(psetf (symbol-value a) 1)")) {
+			assertThat(LispMacroExpander.programUsesSet(LispReader.readAllFromString(source))).as(source).isTrue();
+		}
+	}
+
+	@Test
 	void anOperatorPositionRestartFormStillFlipsRestartMode() {
 		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(continue)"))).isTrue();
 		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(when t (abort c))"))).isTrue();

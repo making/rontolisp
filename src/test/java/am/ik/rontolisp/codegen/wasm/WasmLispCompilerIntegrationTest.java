@@ -5361,12 +5361,21 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
 				         (uiop:style-warn "styled ~A" 2)
 				         :sw-done))
-				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
-				         (uiop:not-implemented-error (c) :nie)))
 				""")))).isEqualTo("""
 				:MUFFLED
-				:SW-DONE
-				:NIE""");
+				:SW-DONE""");
+	}
+
+	@Test
+	void uiopRegisterHookFunctionCompileAndRun() throws Exception {
+		// The wasm twin of JvmLispCompilerTest#compileAndRunUiopRegisterHookFunction, on
+		// Preview 1 and the component.
+		String source = am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(source))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
 	}
 
 	@Test
@@ -23638,6 +23647,25 @@ class WasmLispCompilerIntegrationTest {
 				(wset-bump)
 				(print (symbol-value '*wset-f*))
 				""")).isEqualTo("11\n11\n21");
+	}
+
+	@Test
+	void setWritesTheActiveDynamicBinding() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: the module global IS the active binding (shallow binding), and
+		// symbol-value in a set-using program reads it rather than the eval mirror.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED },
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED },
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
 	}
 
 	@Test

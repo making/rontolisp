@@ -104,6 +104,29 @@ class WasmReentrantE2eTest {
 		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
 	}
 
+	// set inside a binding writes THIS call's task-record cell, like setq: the module
+	// global is the default, never a binding, so writing it would leak into every
+	// other call and survive both.
+	private static final String SET_MODULE = """
+			(rontolisp:wasm-import 'pause :from "env" :as "pause" :params '(:int) :returns :int :async t)
+			(defvar *ctx* 0)
+			(defun observe () *ctx*)
+			(rontolisp:async-defun work (n)
+			  (let ((*ctx* 0))
+			    (set '*ctx* n)
+			    (rontolisp:await (pause n))
+			    (+ (* 1000 (observe)) *ctx*)))
+			(rontolisp:wasm-export 'work :params '(:int) :returns :int)
+			(defun peek () *ctx*)
+			(rontolisp:wasm-export 'peek :params '() :returns :int)
+			""";
+
+	@Test
+	void overlappedCallsEachSetTheirOwnDynamicBinding() throws Exception {
+		Path wasm = compile("set.wasm", SET_MODULE);
+		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
+	}
+
 	// A binding the LOAD PATH makes is the load path's own, exactly like one an export
 	// call makes: an export the host enters from inside it reads the default. The top
 	// level compiles in contexts of its own, which bound the shared module global

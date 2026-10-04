@@ -2,14 +2,14 @@
 
 `(set symbol value)`
 
-Sets the **global** variable named by `symbol` to `value`, creating the binding
-when the name is unbound -- the computed-name counterpart of `setq`. Use
-[`boundp`](boundp.md) to test first when the name may be new, and
+Sets the variable named by `symbol` to `value` -- the computed-name counterpart
+of `setq`. An active dynamic binding of the name (made by `let`, a parameter or
+`progv`) takes the value, and is undone as usual when its extent ends; with none
+active the global is set, and the binding is created when the name is unbound.
+Use [`boundp`](boundp.md) to test first when the name may be new, and
 [`intern`](intern.md) to build it at runtime. `(setf (symbol-value symbol)
-value)` is the same store. An already-active dynamic binding is left alone on
-every backend alike: `set` targets the global namespace, `setq` the current
-dynamic binding. `nil`, `t`, keywords and other constants cannot be set, and a
-non-symbol signals an error.
+value)` is the same store. `nil`, `t`, keywords and other constants cannot be
+set, and a non-symbol signals an error.
 
 ```lisp
 (defvar *level* 7)
@@ -24,5 +24,13 @@ non-symbol signals an error.
 
 ```lisp
 (setf (symbol-value '*level*) 9)
+*level* ; => 9
+```
+
+```lisp
+(defun bump (name) (set name 99))
+(let ((*level* 1))
+  (bump '*level*)
+  *level*) ; => 99
 *level* ; => 9
 ```

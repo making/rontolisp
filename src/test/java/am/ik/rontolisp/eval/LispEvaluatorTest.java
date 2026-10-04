@@ -3456,16 +3456,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void uiopRegisterHookFunctionPushesOntoAVariableNamedAtRunTime() {
+		// Upstream's body over the symbol-value place: pushnew by equal, the hook
+		// called now when asked, and an active binding of the variable takes the hook,
+		// as setq would. The compiled twins: JvmLispCompilerTest /
+		// WasmLispCompilerIntegrationTest, same fixture.
+		assertThat(printedLines(am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
+	}
+
+	@Test
 	void uiopUtilityMembersWithoutAPrimitiveNameThemselves() {
-		// The two members of uiop/utility rontolisp cannot implement, and why: pushing
-		// onto a hook needs (setf (symbol-value ...)) -- not a place on any backend --
-		// and the debug loader needs a run-time load of a computed pathname. They carry
-		// real definitions that signal, rather than a synthesized stub, so the message
-		// says what is missing instead of only which name.
-		assertThat(eval("""
-				(handler-case (uiop:register-hook-function '*h* (lambda () 1))
-				  (uiop:not-implemented-error (c) (princ-to-string c)))
-				""").print()).contains("REGISTER-HOOK-FUNCTION", "symbol-value");
+		// The member of uiop/utility rontolisp cannot implement, and why: the debug
+		// loader needs a run-time load of a computed pathname. It carries a real
+		// definition that signals, rather than a synthesized stub, so the message says
+		// what is missing instead of only which name.
 		assertThat(eval("""
 				(handler-case (uiop:uiop-debug)
 				  (uiop:not-implemented-error (c) (princ-to-string c)))
@@ -17344,6 +17349,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setWritesTheActiveDynamicBinding() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: set assigns the current dynamic binding, as setq does, whether a let,
+		// a parameter or progv made it, and reaches the global only when none is active.
+		// A progv binding of an undeclared name stays progv's: boundp is nil after it.
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED);
+	}
+
+	@Test
 	void setOfAConstantOrNonSymbolSignals() {
 		assertThatThrownBy(() -> eval("(set nil 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("SET expects a symbol");
@@ -25489,9 +25508,8 @@ class LispEvaluatorTest {
 	@Test
 	void evalUiopImageHooksAndTheFatalConditionFamily() {
 		// The hooks are REAL lists -- a library may register into one at load time, and
-		// only the act of dumping an image is impossible. Upstream routes both registrars
-		// through register-hook-function, which needs (setf (symbol-value ...)); naming
-		// the variable literally is the same registration without that primitive.
+		// only the act of dumping an image is impossible. Both registrars go through
+		// register-hook-function, as upstream's do.
 		assertThat(evalMulti("""
 				(uiop:register-image-dump-hook 'a)
 				(uiop:register-image-dump-hook 'b)

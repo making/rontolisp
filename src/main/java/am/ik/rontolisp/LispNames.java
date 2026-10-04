@@ -122,9 +122,12 @@ public final class LispNames {
 
 	/**
 	 * Internal (compile-path only): {@code (%global-store-set NAME value)}, where
-	 * {@code NAME} is a literal symbol -- writes the global's backing store (JVM: its
-	 * {@code _g$} field; WASM: its module global), deaf to an active dynamic binding, the
-	 * store {@code set} targets. Answers nil.
+	 * {@code NAME} is a literal symbol -- the store {@code setq} of the global makes
+	 * where it is not lexical: an active dynamic binding of a special when there is one
+	 * (JVM: the thread's {@code _d$} cell; WASM {@code --reentrant}: the task record's),
+	 * else the backing store (JVM: its {@code _g$} field; WASM: its module global, which
+	 * under shallow binding IS the active binding). Its value is unspecified: every site
+	 * discards it.
 	 */
 	public static final String GLOBAL_STORE_SET = "%GLOBAL-STORE-SET";
 

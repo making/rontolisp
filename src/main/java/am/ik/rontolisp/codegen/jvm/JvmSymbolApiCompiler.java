@@ -267,16 +267,16 @@ final class JvmSymbolApiCompiler {
 
 	/**
 	 * symbol-value: nil/t/keyword evaluate to themselves, otherwise read {@code _genv}.
-	 * In a program that uses {@code progv} the emission is DYNAMIC-FIRST
+	 * In a program that uses {@code progv} or {@code set} the emission is DYNAMIC-FIRST
 	 * ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal special reads the
 	 * variable (the {@code _dget} read), a computed name calls the shared dispatch over
 	 * the special set, so an active {@code progv}/{@code let} binding -- and a
 	 * {@code setq} inside its extent -- is answered instead of the mirror's global
-	 * default (cl-json's {@code (mapcar #'symbol-value scope-variables)} snapshot).
-	 * Programs without {@code progv} keep the raw emission unchanged.
+	 * default (cl-json's {@code (mapcar #'symbol-value scope-variables)} snapshot), as is
+	 * a binding a {@code set} wrote. Other programs keep the raw emission unchanged.
 	 */
 	static void compileSymbolValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		if (ctx.usesProgv && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
+		if (ctx.symbolValueDynamicFirst && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
 			JvmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars,
 					ctx.functions.containsKey(LispNames.SYMBOL_VALUE_DYNAMIC)), ctx, className);
 			return;
@@ -497,9 +497,8 @@ final class JvmSymbolApiCompiler {
 	 * name and writes the eval mirror, and a name with a compiled backing store writes
 	 * that static field ({@link #compileGlobalStoreSet}, so compiled reads see the store)
 	 * through the shared {@code %set-global} dispatch over the globals, or the same
-	 * dispatch inline when the program lacks it. Deliberately deaf to an already-active
-	 * dynamic binding (unlike {@code setq}, which writes it): the store targets the
-	 * global namespace on every backend alike. Forces {@code usesEval} in
+	 * dispatch inline when the program lacks it. Like {@code setq}, the store assigns an
+	 * already-active dynamic binding of a special. Forces {@code usesEval} in
 	 * {@link JvmLispCompiler} like the rest of the symbol API.
 	 */
 	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -554,19 +553,20 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * {@code (%global-store-set NAME value)} -- {@code putstatic} into the backing field
-	 * of the literal global {@code NAME}, deaf to an active dynamic binding (the store
-	 * {@code set} targets); answers nil.
+	 * {@code (%global-store-set NAME value)} -- the store of the literal global
+	 * {@code NAME} that {@code setq} makes from a body where it is not lexical: a
+	 * dynamically-bound special writes this thread's active {@code _d$} cell and falls to
+	 * the {@code _g$} default only when none is active, any other global is a plain
+	 * {@code putstatic} ({@link JvmSetqCompiler#emitGlobalStore}); answers the value.
 	 */
 	static void compileGlobalStoreSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		String name = ((LispSymbol) parts.get(1)).name();
-		FieldRefEntry field = ctx.globalFields.get(name);
-		if (field == null) {
+		if (!ctx.globalFields.containsKey(name)) {
 			throw new IllegalStateException("global " + name + " has no backing field for " + LispNames.SET);
 		}
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.body.putstatic(field).aconst_null();
+		JvmSetqCompiler.emitGlobalStore(name, ctx);
 	}
 
 	/**

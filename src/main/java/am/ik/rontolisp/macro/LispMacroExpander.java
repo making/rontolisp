@@ -4981,20 +4981,80 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether any form can reach a {@code set} -- a call of the operator (quoted data
-	 * skipped; a {@code #'set} value calls it from its wrapper, an injected form), or a
-	 * {@code (setf (symbol-value ...))} place, which lowers to one per expression -- i.e.
-	 * whether {@link #setGlobalRuntime} could have a caller. A variable merely NAMED
-	 * {@code set} (cl-ppcre's charset code has dozens) does not count: in a program whose
-	 * names resolve at run time every defun stays dispatchable, so a runtime injected for
-	 * no site would be kept. Over-predicting costs that; under-predicting costs a site
-	 * its sharing, never its correctness.
+	 * Whether any form can reach a {@code set} -- a two-argument call of the operator
+	 * (quoted data skipped; a {@code #'set} value calls it from its wrapper, an injected
+	 * form), or a {@code symbol-value} place a {@code setf} or a modify macro writes,
+	 * which lowers to one per expression -- i.e. whether {@link #setGlobalRuntime} could
+	 * have a caller, and whether {@code symbol-value} must read dynamic-first
+	 * ({@link #dynamicFirstSymbolValue}) to answer what such a store wrote. A variable
+	 * merely NAMED {@code set} (cl-ppcre's charset code has dozens) does not count: a
+	 * {@code let} binding or a lambda-list entry of it is no call. Over-predicting costs
+	 * a program the shared dispatch over its specials at every computed
+	 * {@code symbol-value}; under-predicting costs a {@code set} site its sharing and
+	 * leaves {@code symbol-value} reading the eval mirror.
 	 * @param forms the program's (or the injected runtime's) top-level forms
 	 * @return true when a {@code set} site can occur
 	 */
 	public static boolean programUsesSet(java.util.Collection<LispVal> forms) {
 		for (LispVal form : forms) {
-			if (callsOperator(form, LispNames.SET) || containsSymbolValueWrite(form)) {
+			if (callsSet(form) || containsSymbolValueWrite(form, true)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether {@code form} holds a {@code (set name value)} call, quoted data skipped. A
+	 * {@code let}/{@code let*} binding and a {@code lambda}/{@code defun} lambda-list
+	 * entry are walked for their init forms only, so a variable named {@code set} -- or
+	 * any other list headed by it that is not a call -- is not one.
+	 */
+	private static boolean callsSet(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String h = head.name();
+			if (LispNames.QUOTE.equals(h)) {
+				return false;
+			}
+			if (LispNames.SET.equals(h) && cons.cdr() instanceof LispCons first
+					&& first.cdr() instanceof LispCons second && second.cdr() instanceof LispNil) {
+				return true;
+			}
+			if ((LispNames.LET.equals(h) || LispNames.LET_STAR.equals(h)) && cons.cdr() instanceof LispCons rest) {
+				for (LispVal b = rest.car(); b instanceof LispCons cell; b = cell.cdr()) {
+					if (cell.car() instanceof LispCons binding && binding.car() instanceof LispSymbol
+							&& elementsCallSet(binding.cdr())) {
+						return true;
+					}
+				}
+				return elementsCallSet(rest.cdr());
+			}
+			boolean lambda = LispNames.LAMBDA.equals(h);
+			if (lambda || LispNames.DEFUN.equals(h)) {
+				LispVal afterHead = cons.cdr();
+				if (!lambda && afterHead instanceof LispCons named) {
+					afterHead = named.cdr();
+				}
+				if (afterHead instanceof LispCons listCell) {
+					for (LispVal p = listCell.car(); p instanceof LispCons cell; p = cell.cdr()) {
+						if (cell.car() instanceof LispCons spec && elementsCallSet(spec.cdr())) {
+							return true;
+						}
+					}
+					return elementsCallSet(listCell.cdr());
+				}
+			}
+		}
+		return elementsCallSet(cons);
+	}
+
+	/** Whether any element of the list {@code forms} holds a {@code set} call. */
+	private static boolean elementsCallSet(LispVal forms) {
+		for (LispVal cur = forms; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (callsSet(cell.car())) {
 				return true;
 			}
 		}
@@ -5040,11 +5100,12 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv}, so an
-	 * active {@code progv}/{@code let} binding (and a {@code setq} inside its extent) is
-	 * answered instead of the eval mirror's global default -- what makes cl-json's
-	 * {@code (mapcar #'symbol-value scope-variables)} snapshot see the values its decoder
-	 * {@code setq}s inside the enclosing scope extent. No site pays for the special set:
+	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv} or
+	 * {@code set}, so an active {@code progv}/{@code let} binding (and a {@code setq} or
+	 * {@code set} inside its extent) is answered instead of the eval mirror's global
+	 * default -- what makes cl-json's {@code (mapcar #'symbol-value scope-variables)}
+	 * snapshot see the values its decoder {@code setq}s inside the enclosing scope
+	 * extent. No site pays for the special set:
 	 * <ul>
 	 * <li>a LITERAL name folds: a special reads the VARIABLE (the dynamic-first read the
 	 * compilers emit for one), any other quoted datum takes the raw mirror probe
@@ -26034,31 +26095,57 @@ public final class LispMacroExpander {
 	 * @return true when such a place is written
 	 */
 	public static boolean usesSymbolValueWrite(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsSymbolValueWrite);
+		return program.stream().anyMatch(form -> containsSymbolValueWrite(form, false));
 	}
 
-	private static boolean containsSymbolValueWrite(LispVal form) {
+	/**
+	 * Whether {@code form} writes a {@code symbol-value} place, quoted data skipped: as a
+	 * {@code setf} place, and with {@code modifyMacros} also as the place of a
+	 * {@code psetf}, {@code push}, {@code pushnew}, {@code pop}, {@code incf},
+	 * {@code decf}, {@code remf}, {@code rotatef} or {@code shiftf} -- each of which
+	 * stores through {@code set} as well, though none can create the binding the
+	 * {@code boundp} gate asks about.
+	 */
+	private static boolean containsSymbolValueWrite(LispVal form, boolean modifyMacros) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
 				if (LispNames.QUOTE.equals(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolValuePlace(parts.get(i))) {
-							return true;
-						}
-					}
+				if (cons.isProperList() && writesSymbolValuePlace(member, cons.toList(), modifyMacros)) {
+					return true;
 				}
 			}
-			if (containsSymbolValueWrite(cons.car())) {
+			if (containsSymbolValueWrite(cons.car(), modifyMacros)) {
 				return true;
 			}
 			form = cons.cdr();
 		}
 		return false;
+	}
+
+	private static boolean writesSymbolValuePlace(String member, List<LispVal> parts, boolean modifyMacros) {
+		boolean pairs = LispNames.SETF.equals(member) || modifyMacros && LispNames.PSETF.equals(member);
+		if (pairs) {
+			for (int i = 1; i + 1 < parts.size(); i += 2) {
+				if (isSymbolValuePlace(parts.get(i))) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (!modifyMacros) {
+			return false;
+		}
+		return switch (member) {
+			case LispNames.PUSH, LispNames.PUSHNEW -> parts.size() > 2 && isSymbolValuePlace(parts.get(2));
+			case LispNames.POP, LispNames.INCF, LispNames.DECF, LispNames.REMF ->
+				parts.size() > 1 && isSymbolValuePlace(parts.get(1));
+			case LispNames.ROTATEF, LispNames.SHIFTF ->
+				parts.stream().skip(1).anyMatch(LispMacroExpander::isSymbolValuePlace);
+			default -> false;
+		};
 	}
 
 	private static boolean isSymbolValuePlace(LispVal place) {

@@ -4374,12 +4374,18 @@ class JvmLispCompilerTest {
 				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
 				         (uiop:style-warn "styled ~A" 2)
 				         :sw-done))
-				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
-				         (uiop:not-implemented-error (c) :nie)))
 				""")).isEqualTo("""
 				:MUFFLED
-				:SW-DONE
-				:NIE""");
+				:SW-DONE""");
+	}
+
+	@Test
+	void compileAndRunUiopRegisterHookFunction() throws Exception {
+		// Upstream's body over the symbol-value place, so the program is a set site:
+		// the hook lands in an active binding of the variable, as on the interpreter
+		// (LispEvaluatorTest#uiopRegisterHookFunctionPushesOntoAVariableNamedAtRunTime).
+		assertThat(compileAndRun(am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
 	}
 
 	@Test
@@ -19797,6 +19803,20 @@ class JvmLispCompilerTest {
 				(jset-bump)
 				(print (symbol-value '*jset-f*))
 				""")).isEqualTo("11\n11\n21");
+	}
+
+	@Test
+	void setWritesTheActiveDynamicBinding() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a set arm writes the
+		// thread's active _d$ cell when one exists and falls to the _g$ default
+		// otherwise, like setq; symbol-value in a set-using program -- a modify macro
+		// over a symbol-value place is a set site too -- reads dynamic-first.
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED);
 	}
 
 	@Test

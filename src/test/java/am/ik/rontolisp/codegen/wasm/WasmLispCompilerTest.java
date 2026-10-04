@@ -1911,7 +1911,7 @@ class WasmLispCompilerTest {
 		// (defun probe (s) (symbol-value s))
 		program.add(cons(sym("DEFUN"), cons(sym("PROBE"), cons(cons(sym("S"), LispNil.INSTANCE),
 				cons(cons(sym("SYMBOL-VALUE"), cons(sym("S"), LispNil.INSTANCE)), LispNil.INSTANCE)))));
-		// (progv '(*ps-0*) '(1) (symbol-value '*ps-0*)): arms usesProgv.
+		// (progv '(*ps-0*) '(1) (symbol-value '*ps-0*)): arms symbolValueDynamicFirst.
 		program.add(cons(sym("PROGV"), cons(quoted(cons(sym("*PS-0*"), LispNil.INSTANCE)), cons(
 				quoted(cons(new am.ik.rontolisp.LispInteger(1), LispNil.INSTANCE)),
 				cons(cons(sym("SYMBOL-VALUE"), cons(quoted(sym("*PS-0*")), LispNil.INSTANCE)), LispNil.INSTANCE)))));

@@ -236,25 +236,40 @@ likewise not tombstone-aware.
 `expandSetf` lowers the place to `(set name value)` -- one store, evaluated once each
 side, answering the value -- so only `set` needs the per-backend work.
 
-- **Semantics, all four backends**: the GLOBAL namespace, creating the binding when the
-  name is unbound (what a run-time evaluator defines program globals through -- and a
-  deliberate creation where CL's `set` signals). An already-active dynamic binding is
-  left alone everywhere alike (unlike `setq`): `set` targets the global cell, so a
-  `symbol-value` inside the extent still answers the dynamic one, exactly the
-  pre-existing "reads the global default" divergence. Constants (nil, t and keywords,
-  by value or by computed `NIL`/`T` name, and the empty name) and non-symbols signal on
-  the interpreter and the JVM and trap on WASM, the symbol API's usual split.
-- **Interpreter**: a builtin over `Environment` (`define` on the global env).
+- **Semantics, all four backends** (CL's, 2026-10-04 `.todo/c86`): the CURRENT dynamic
+  binding when one is active -- a `let`, a parameter or `progv` made it, the name
+  declared or not -- exactly what `setq` assigns; otherwise the global, creating the
+  binding when the name is unbound (what a run-time evaluator defines program globals
+  through -- and a deliberate creation where CL's `set` signals). Constants (nil, t and
+  keywords, by value or by computed `NIL`/`T` name, and the empty name) and non-symbols
+  signal on the interpreter and the JVM and trap on WASM, the symbol API's usual split.
+  Before, the backends answered three ways (`(let ((*dv* 2)) (set '*dv* 3) (list *dv*
+  (symbol-value '*dv*)))`, then `*dv*`): interpreter `(2 2)` / 3 (it defined the global
+  under its binding), JVM `(2 3)` / 3 (`_g$` beside the active `_d$` cell), wasm `(3 3)` /
+  1 -- shallow binding: the module global IS the binding -- but `(symbol-value '*dv*)`
+  after the extent answered 3, from the mirror.
+- **Interpreter**: a builtin: `*package*` through `assignCurrentPackage` (setq's arm),
+  an active `DynamicBindings` entry through `setCurrent`, else `define` on the global env.
   **Compilers** (`LispMacroExpander.expandSetForCompile`, 2026-10-04 `.todo/c81`): a site is
   one call to the shared `%set-global` (`setGlobalRuntime`): `%set-mirror` validates and
   writes the `_store` / `FUNC_STORE` mirror (which creates the binding when the name has
   none), then `%set-global-store` dispatches the name over the globals onto
-  `%global-store-set` -- `putstatic _g$` on the JVM, `global.set` on wasm -- segmented and
+  `%global-store-set` -- the store a non-lexical `setq` of the name makes: JVM
+  `JvmSetqCompiler.emitGlobalStore` (`_dset` into the thread's active cell of a
+  dynamically-bound special, falling to `putstatic _g$`), wasm `global.set` (the binding
+  under shallow binding; `--reentrant`: `WasmDynVars.emitWrite`, the task record's cell
+  first) -- segmented and
   tested like the progv dispatches (`.kb/dynamic-special-variables.md`: `%symbol-is`, wasm by
   canonical string-table offset, so a literal and a run-time `intern` agree). Mirror before
   field is unobservable: no global is a constant or a non-symbol. Injected when a form calls
-  `set` or writes a `(setf (symbol-value ...))` place (`programUsesSet`; a variable NAMED
-  `set` does not count). Without it the same `let` + checks + chain is spelled at the site
+  `set` with two arguments or writes a `symbol-value` place through `setf` or a modify macro
+  (`push`/`pushnew`/`pop`/`incf`/`decf`/`remf`/`psetf`/`rotatef`/`shiftf`) --
+  `programUsesSet`, which also turns `symbol-value` dynamic-first
+  (`.kb/dynamic-special-variables.md`, "progv on the compile paths"), so it answers the
+  binding a `set` wrote, not the mirror. A variable NAMED `set` does not count: a `let`
+  binding or lambda-list entry of it is walked for its init forms only (`callsSet`). Until
+  2026-10-04 one did (the walk took any list headed by `SET` for a call): the "dead `set`
+  site" `.todo/c81` measured in the ningle examples was one. Without it the same `let` + checks + chain is spelled at the site
   (JVM over `ctx.globals`, wasm over the sorted global names). Before: the chain inline at
   every site, ~8.8 KB of JVM bytecode a site over ci-spec's ~510 globals. Both force `usesEval` (a `SET`
   spelling; a raw `(setf (symbol-value ...) ...)` spells `SYMBOL_VALUE`, which is
@@ -269,10 +284,31 @@ side, answering the value -- so only `set` needs the per-backend work.
   eval-created global); the program reads it through `symbol-value`/`eval`. Inside a
   compiled runtime `eval`, `set` is an unknown operator and answers nil, like every
   other inline-only operator (`boundp`, `symbol-value`).
+- Cost (2026-10-04, before -> after): size-report, bench-report: byte-identical on P1,
+  `--optimize=size`, component and JVM. ci-spec program: wasm P1 6,641,349, size 5,474,693,
+  component 6,852,178, all unchanged; JVM 7,303,710 -> 7,309,112 (+5,402 B: each of the
+  ~360 `%global-store-set` arms of a progv program's dynamically-bound specials is a `_dset`
+  call and a branch, ~15 B instead of a 3-byte `putstatic`). examples: byte-identical but
+  for build-info strings, except the six whose libraries bind a variable named `set`
+  (the three ningle ones, cloudflare httpbin, roman, minesweeper-core-test): the phantom
+  `set` site is gone, -75 to -98 B wasm, -3 B JVM.
+  4M computed `set`s of a bound special over 300 specials: JVM 4.2-4.7 s, wasm 3.1-3.5 s,
+  before and after alike (the mirror's `_store` walk dominates).
+- **The mirror is still written inside an active binding** (`%set-mirror` runs first,
+  as a callee's `setq` mirrors), so after the extent `eval`/`boundp` -- and a raw
+  `symbol-value` in a program with neither `set` nor `progv` -- answer the binding's value:
+  `.todo/c89`.
 - Tests: `LispEvaluatorTest#set*`, `JvmLispCompilerTest#compileAndRunSet*`,
   `WasmLispCompilerIntegrationTest#set*`, `CompileTimeBoundpTest`
   (the gate arm), `BuiltinFunctionWrapperCatalogTest` (the `#'set` value), ci-spec
-  `set-and-setf-symbol-value-for-computed-names`.
+  `set-and-setf-symbol-value-for-computed-names`. The active binding:
+  `SetInDynamicBindingFixture` (a `let`/parameter program, a modify-macro-only program, a
+  `progv` program; SBCL's answers) on `setWritesTheActiveDynamicBinding` in
+  `LispEvaluatorTest`, `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest`
+  (Preview 1 and component), ci-spec `set-writes-the-active-dynamic-binding`,
+  `WasmReentrantE2eTest#overlappedCallsEachSetTheirOwnDynamicBinding`;
+  `LispMacroExpanderTest#aVariableNamedSetIsNoSetSite` /
+  `#aSetCallOrASymbolValuePlaceWriteIsASetSite`.
 
 ### Computed `find-package` is answered from a BAKED table
 A computed designator lowers to `(cdr (assoc (string x) '(("CL" . :CL) ...) :test #'string=))`,
