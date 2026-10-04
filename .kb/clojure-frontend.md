@@ -1225,6 +1225,18 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   +288-336 B of class (59,347 -> 59,635); a program linking no printer (wasm
   `(println "n")`, a JVM `(def x 1)`) is byte-identical. Output identical on the four backends
   (`an-integer-and-a-ratio-print-as-their-digits-under-every-flag`).
+  A keyword, string, character and float (no metadata, no collection, no label) take their
+  arms right behind it, the float arms merged into one `(floatp x)` with the
+  `symbolic-float-p` split inside; nothing else moved. They sat behind the library tests
+  (`print-meta`, `print-deep`, lazy, pattern, matcher for a keyword; twenty more for a
+  string; every kind for a float). Measured 2026-10-04 (wall minus a no-print control, a
+  50k-element vector x 5 `pr-str`, interpreter): keywords 9.5 -> 8.1 s, strings 10.2 -> 7.9 s,
+  doubles 7.8 -> 3.5 s; wasm 200k x 20 within 4% (keywords 8.2 -> 7.9 s, doubles and
+  component within noise), JVM within noise. Size: wasm -100 to -140 B (P1,
+  `--optimize=size`, component alike: the merged float arm drops a test), JVM class
+  +87-92 B for a program that links the printer; a program linking none (`(def x 1)`) is
+  byte-identical. Output identical on the four backends
+  (`a-keyword-string-character-and-float-print-the-same-under-every-flag`).
   Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
   (oracle-identical but the `#<java C>` lines),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
