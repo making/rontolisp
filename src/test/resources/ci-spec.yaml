@@ -20263,12 +20263,14 @@ cases:
       ;; Each form at the top level answers what the same form answers inside a
       ;; defun: a special bound by let or progv is what symbol-value reads, ...
       (defvar *tlf-x* 1)
-      ;; (One symbol-value per form: each site expands over every special.)
-      (defun tlf-let-bound () (let ((*tlf-x* 5)) (symbol-value '*tlf-x*)))
-      (defun tlf-progv-bound () (progv '(*tlf-x*) '(2) (setq *tlf-x* 3) (symbol-value '*tlf-x*)))
-      (print (list (tlf-let-bound) (tlf-progv-bound)))
-      (print (let ((*tlf-x* 5)) (symbol-value '*tlf-x*)))
-      (print (progv '(*tlf-x*) '(2) (setq *tlf-x* 3) (symbol-value '*tlf-x*)))
+      ;; (A literal and a computed name, several sites to a form.)
+      (defun tlf-bound (name)
+        (list (let ((*tlf-x* 5)) (list (symbol-value '*tlf-x*) (symbol-value name)))
+              (progv (list name) '(2) (setq *tlf-x* 3) (list (symbol-value '*tlf-x*) (symbol-value name)))))
+      (print (tlf-bound '*tlf-x*))
+      (print (let ((name '*tlf-x*))
+               (list (let ((*tlf-x* 5)) (list (symbol-value '*tlf-x*) (symbol-value name)))
+                     (progv (list name) '(2) (setq *tlf-x* 3) (list (symbol-value '*tlf-x*) (symbol-value name))))))
       ;; ... a struct accessor the program redefines is called as redefined, its
       ;; slot :type no longer describing what it answers, ...
       (defstruct tlf-box (v nil :type (simple-array double-float (*))))
@@ -20280,9 +20282,8 @@ cases:
       (rontolisp:async-defun tlf-assign () (setq *tlf-x* 7) (eval '*tlf-x*))
       (print (rontolisp:await (tlf-assign)))
     expected: |
-      (5 3)
-      5
-      3
+      ((5 5) (3 3))
+      ((5 5) (3 3))
       (20 20)
       7
 

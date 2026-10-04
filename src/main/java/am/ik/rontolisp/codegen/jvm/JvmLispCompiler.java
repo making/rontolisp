@@ -1876,6 +1876,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			specialVars.add(LispNames.ERROR_OUTPUT_VAR);
 		}
 		globals.addAll(specialVars);
+		// The shared dynamic-first symbol-value dispatch a computed name calls in a
+		// progv-using program, here because its arms are the FINAL special set (the
+		// thread-forced stream specials just joined it). When it is absent a site spells
+		// the dispatch inline (LispMacroExpander.dynamicFirstSymbolValue).
+		if (programUsesSymbol(program, LispNames.PROGV) && !specialVars.isEmpty()
+				&& !LispMacroExpander.definesSymbolValueRuntimeName(userDefinedNames)
+				&& (LispMacroExpander.programUsesComputedSymbolValue(program)
+						|| LispMacroExpander.programUsesComputedSymbolValue(injectedForms) || LispMacroExpander
+							.programUsesComputedSymbolValue(closRegistry.conditionReports().values()))) {
+			for (LispVal segment : LispMacroExpander.symbolValueDynamicRuntime(specialVars)) {
+				inject(segment, defuns, injectedForms, specialVars);
+			}
+		}
 		// *error-output*'s default is a stream VALUE, not a constant like the t the
 		// other two standard stream variables hold, so a program that names it reads it
 		// from a field seeded once: a read that built the value afresh would answer a new

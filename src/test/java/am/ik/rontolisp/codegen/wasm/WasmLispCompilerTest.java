@@ -1841,19 +1841,41 @@ class WasmLispCompilerTest {
 
 	@Test
 	void aDeepElseChainCompilesOnAMegabyteStack() throws Exception {
-		// A 315-level chain (the progv `symbol-value` dispatch over the ci-spec
-		// special set) overflowed a 1 MiB compile stack cold (2026-09-25): an
-		// else-chain compiles iteratively, so depth costs no Java stack whatever
-		// builds it. Built programmatically: the reader itself recurses per
+		// A 315-level chain (the progv dispatch over the ci-spec special set)
+		// overflowed a 1 MiB compile stack cold (2026-09-25): an else-chain compiles
+		// iteratively, so depth costs no Java stack whatever builds it. Built
+		// programmatically: the reader itself recurses per
 		// nesting level, and a deep chain as source would overflow it instead.
 		byte[] module = compileOnOneMebibyte(progvThousandSpecials());
 		assertThat(module.length).isGreaterThan(0);
 	}
 
+	@Test
+	void aSymbolValueSiteDoesNotPayForTheSpecialSet() {
+		// A progv-using program reads symbol-value dynamic-first, a computed name through
+		// one shared dispatch over the special set: eight more computed sites cost their
+		// calls, not eight copies of the 300-arm dispatch (~6 KB each when every site
+		// spelled it inline). The run half is WasmLispCompilerIntegrationTest's.
+		String more = """
+				(defun svs-more (a)
+				  (list (symbol-value a) (symbol-value a) (symbol-value a) (symbol-value a)
+				        (symbol-value a) (symbol-value a) (symbol-value a) (symbol-value a)))
+				(print (svs-more '*svs-2*))
+				""";
+		int base = compilePrelude(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE).length;
+		int grown = compilePrelude(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE + more).length;
+		assertThat(grown - base).isLessThan(1_000);
+	}
+
+	private static byte[] compilePrelude(String lispCode) {
+		return new WasmLispCompiler()
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
 	/**
-	 * A thousand specials, a computed `symbol-value` and the `progv` that arms its
-	 * dynamic-first dispatch: shallow source that expands to a thousand-level else-chain
-	 * at codegen time, the ci-spec failure's shape.
+	 * A thousand specials, a computed `symbol-value` and a `progv`: shallow source whose
+	 * progv lowering expands to thousand-level else-chains at codegen time, the ci-spec
+	 * failure's shape.
 	 */
 	private static List<LispVal> progvThousandSpecials() {
 		List<LispVal> program = new java.util.ArrayList<>();

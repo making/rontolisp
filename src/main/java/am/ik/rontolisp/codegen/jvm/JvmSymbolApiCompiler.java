@@ -267,17 +267,18 @@ final class JvmSymbolApiCompiler {
 
 	/**
 	 * symbol-value: nil/t/keyword evaluate to themselves, otherwise read {@code _genv}.
-	 * In a program that uses {@code progv} the emission is DYNAMIC-FIRST: the runtime
-	 * name is dispatched over the special set and a match reads the variable (the
-	 * {@code _dget} read), so an active {@code progv}/{@code let} binding -- and a
+	 * In a program that uses {@code progv} the emission is DYNAMIC-FIRST
+	 * ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal special reads the
+	 * variable (the {@code _dget} read), a computed name calls the shared dispatch over
+	 * the special set, so an active {@code progv}/{@code let} binding -- and a
 	 * {@code setq} inside its extent -- is answered instead of the mirror's global
 	 * default (cl-json's {@code (mapcar #'symbol-value scope-variables)} snapshot).
 	 * Programs without {@code progv} keep the raw emission unchanged.
 	 */
 	static void compileSymbolValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		if (ctx.usesProgv && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
-			JvmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars), ctx,
-					className);
+			JvmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars,
+					ctx.functions.containsKey(LispNames.SYMBOL_VALUE_DYNAMIC)), ctx, className);
 			return;
 		}
 		compileSymbolValueRaw(cons, ctx, className);

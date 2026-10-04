@@ -127,9 +127,38 @@ native `evalProgv`).
   `%symbol-value-raw`. This is what makes cl-json's `(progv vars (mapcar #'symbol-value vars)
   ...)` see values its decoder `setq`s in the enclosing extent. Programs without progv keep the
   raw emission byte-identically. `#'symbol-value` has a REFERENCE-GATED
-  `BuiltinFunctionWrappers` entry.
-- The name dispatch is a chain of one `if` per special, and so is the `progv`
-  bind/unbind lowering above -- a 315-special program nested 315 `if`s. That is fine
+  `BuiltinFunctionWrappers` entry. No site pays for the special set (2026-10-04, `.todo/c78`):
+  - a LITERAL name folds: a special -> the variable read, any other quoted datum ->
+    `%symbol-value-raw`;
+  - a computed name calls `%symbol-value-dynamic`, the dispatch defined ONCE
+    (`symbolValueDynamicRuntime`), cut into segments of `SYMBOL_VALUE_SEGMENT_ARMS` (128) arms,
+    each miss tail-calling the next segment (`%symbol-value-dynamic-1`, ...), the last falling
+    to `%symbol-value-raw`. ~32 B of JVM bytecode an arm, so a segment is ~4.1 KB: under the
+    64 KB limit for any special count and under HotSpot's 8,000-byte `HugeMethodLimit`, so the
+    JIT compiles it. Injected by both backends after the special set is final (JVM: after the
+    thread-forced stream specials join), when the program, the injected runtime or a condition
+    report can reach a computed site (`programUsesComputedSymbolValue`: any `SYMBOL-VALUE` but
+    `(symbol-value 'x)`). A site whose program lacks it (a user defun took the name, or a site
+    no scan saw) spells the old inline chain: correct, at the old size.
+  - Before: every site, literal or computed, inlined the whole chain -- ~12 KB a site at
+    ci-spec's ~359 specials, so a defun or top-level form with a few sites overflowed 64 KB
+    (ci-spec's `top-level-forms-answer-like-defun-bodies` was cut to one site a form;
+    restored to four a form). A method over 8,000 B is never JIT-compiled, so a computed
+    site also ran interpreted: 2M lookups over 300 specials 10.8 s -> 2.1 s on the JVM; wasm
+    unchanged at ~22 s (the `equal` chain itself, `.todo/c81`).
+  - Measured 2026-10-04, the ci-spec program as of `HEAD` (before -> after): JVM classes
+    7,846,439 -> 7,538,586 B (-3.9%), wasm 6,881,325 -> 6,749,210 (-1.9%), component
+    7,094,646 -> 6,961,175 (-1.9%); with the restored four-site case the JVM build failed
+    before (`_top$55`, 107,364 B) and is 7,539,091 after. size-report, bench-report: every
+    program byte-identical on all three outputs (none uses progv). examples: byte-identical
+    but for build-info strings, except `jvm/cffi-sqlite.lisp` +264 B (2,353,838 ->
+    2,354,102): its one computed site (cffi's `mini-eval`, 3,818 -> 200 B) now pays the
+    shared runtime (3,483 B) and its name-table entries -- a one-site program is the
+    break-even's losing side. It counts as progv-using only because a code walker quotes
+    `PROGV` (`programUsesSymbol` counts quoted data).
+- The `progv` bind/unbind lowering above is still a chain of one `if` per special AT EACH
+  SITE (~36 KB of JVM bytecode a site at ci-spec's ~359 specials; 600 specials overflow one
+  top-level `progv` form): `.todo/c81`. A 315-special program nested 315 `if`s. That is fine
   for the EMISSION (linear, small constants) but the wasm backend used to compile an
   else-chain with one Java frame per level, so it overflowed a 1 MiB compile stack
   cold on the ci-spec corpus (2026-09-25, `WasmTreeShakerCorpusTest » StackOverflow`
@@ -140,11 +169,14 @@ native `evalProgv`).
   corpus compiles cold at `-Xss384k` on fresh JVMs, and the emission is byte-identical
   (the corpus compiles to the same bytes at all three optimize levels as before).
   Pinned by `WasmLispCompilerTest.aDeepElseChainCompilesOnAMegabyteStack` (a thousand
-  specials through the real dispatch on a 1 MiB thread; fails with `StackOverflow`
+  specials through the progv dispatch on a 1 MiB thread; fails with `StackOverflow`
   without the loop).
 - The literal-`boundp` fold refuses progv programs (`CompileTimeBoundp.fold` gate).
 - Deliberate divergences: a non-symbol in the symbols list is not detected, and a closure that
-  CAPTURED a special reads its capture even under `symbol-value`.
+  CAPTURED a special reads its capture under a LITERAL `(symbol-value '*x*)` (it folds to the
+  variable read, as `*x*` itself reads); a computed name reads in the shared dispatch's own
+  frame, so it answers the dynamic binding, as the interpreter does (before 2026-10-04 both
+  read the capture).
 
 ## Compile-path limitations (interpreter unaffected)
 
@@ -283,7 +315,15 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 `WasmReentrantE2eTest.overlappedCallsEachReadTheirOwnDynamicBinding`,
 `WasmReentrantCompilerTest`, `ClJsonE2eTest`, `ClPpcreE2eTest`, ci-spec
 `special-variable-dynamic-binding`, `progv-compiles-on-every-backend`,
-`special-let-restores-on-every-exit`.
+`special-let-restores-on-every-exit`, `top-level-forms-answer-like-defun-bodies`.
+
+symbol-value sites: `SymbolValueSiteFixture` (300 specials, eight-site defun and top-level
+form) on `LispEvaluatorTest#symbolValueSitesReadTheActiveBinding`,
+`JvmLispCompilerTest#symbolValueSitesDoNotEachPayForTheSpecialSet` (site method < 500 B,
+literal sites call nothing, every segment < 8,000 B) and
+`WasmLispCompilerIntegrationTest#symbolValueSitesReadTheActiveBinding` (Preview 1 and
+component); `WasmLispCompilerTest#aSymbolValueSiteDoesNotPayForTheSpecialSet` (eight more sites
+< 1,000 B of module).
 
 Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one

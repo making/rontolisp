@@ -20611,6 +20611,28 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void symbolValueSitesDoNotEachPayForTheSpecialSet() throws Exception {
+		// A progv-using program reads symbol-value dynamic-first: a literal name folds to
+		// the variable read, a computed one calls one shared dispatch over the special
+		// set, cut into segments the JIT still compiles. Each site used to spell the
+		// 300-arm dispatch inline, ~10 KB, so the eight-site defun and top-level form
+		// overflowed the 64 KB method limit (.kb/dynamic-special-variables.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE)));
+		String dispatch = "$pctSYMBOL-VALUE-DYNAMIC";
+		assertThat(codeLengthOf(classBytes, "SVS-EIGHT")).isLessThan(500);
+		assertThat(ownCallsIn(classBytes, "SVS-EIGHT", dispatch)).isEqualTo(8);
+		assertThat(ownCallsIn(classBytes, "SVS-LITERAL", dispatch)).isZero();
+		List<String> segments = declaredMethodNames(classBytes).stream().filter(m -> m.startsWith(dispatch)).toList();
+		assertThat(segments).hasSizeGreaterThan(1);
+		for (String segment : segments) {
+			assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+		}
+		assertThat(compileAndRun(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SymbolValueSiteFixture.EXPECTED);
+	}
+
+	@Test
 	void specialVarBindingIsThreadScoped() throws Exception {
 		// Interpreter parity (LispEvaluatorTest.specialVariablesAreThreadScoped): a
 		// dynamic binding belongs to the thread that established it. A thread spawned

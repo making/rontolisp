@@ -4859,31 +4859,163 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv}: the
-	 * runtime name is dispatched through an {@code equal} chain over the special set, and
-	 * a match reads the VARIABLE -- the dynamic-first read the compilers emit for a
-	 * special -- so an active {@code progv}/{@code let} binding (and a {@code setq}
-	 * inside its extent) is answered instead of the eval mirror's global default. The
-	 * fallback is the raw mirror probe ({@code %symbol-value-raw}), which also serves
-	 * names {@code progv} bound without any special declaration. This is what makes
-	 * cl-json's {@code (mapcar #'symbol-value scope-variables)} snapshot see the values
-	 * its decoder {@code setq}s inside the enclosing scope extent.
+	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv}, so an
+	 * active {@code progv}/{@code let} binding (and a {@code setq} inside its extent) is
+	 * answered instead of the eval mirror's global default -- what makes cl-json's
+	 * {@code (mapcar #'symbol-value scope-variables)} snapshot see the values its decoder
+	 * {@code setq}s inside the enclosing scope extent. No site pays for the special set:
+	 * <ul>
+	 * <li>a LITERAL name folds: a special reads the VARIABLE (the dynamic-first read the
+	 * compilers emit for one), any other quoted datum takes the raw mirror probe
+	 * ({@code %symbol-value-raw}), which also serves names {@code progv} bound without a
+	 * special declaration;</li>
+	 * <li>a computed name calls the shared {@link #symbolValueDynamicRuntime} when the
+	 * program carries it ({@code shared});</li>
+	 * <li>otherwise -- a user definition took the runtime's name, or a site no gate scan
+	 * saw -- the dispatch is spelled inline, correct at the size of the special set.</li>
+	 * </ul>
 	 * @param cons the {@code (symbol-value x)} form
 	 * @param specials the program's special-variable names
+	 * @param shared whether the program carries {@link #symbolValueDynamicRuntime}
 	 * @return the expansion
 	 */
-	public static LispVal dynamicFirstSymbolValue(LispCons cons, java.util.Collection<String> specials) {
-		List<LispVal> parts = cons.toList();
-		LispSymbol n = new LispSymbol("__PROGV_SVNAME");
-		LispVal chain = listToCons(List.of(new LispSymbol(LispNames.SYMBOL_VALUE_RAW), n));
+	public static LispVal dynamicFirstSymbolValue(LispCons cons, java.util.Collection<String> specials,
+			boolean shared) {
+		LispVal arg = cons.toList().get(1);
+		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons body && body.cdr() instanceof LispNil) {
+			if (body.car() instanceof LispSymbol name && specials.contains(name.name())) {
+				return name;
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.SYMBOL_VALUE_RAW), arg));
+		}
+		if (shared) {
+			return listToCons(List.of(new LispSymbol(LispNames.SYMBOL_VALUE_DYNAMIC), arg));
+		}
+		LispSymbol n = new LispSymbol(freshName("__PROGV_SVNAME", specials));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(n, arg)))),
+				symbolValueChain(n, new ArrayList<>(specials), LispNames.SYMBOL_VALUE_RAW)));
+	}
+
+	/**
+	 * The most arms one {@link #symbolValueDynamicRuntime} segment dispatches, so a
+	 * segment's body stays bounded however many specials the program declares: the JVM's
+	 * 64 KB method limit, and HotSpot's 8,000-byte {@code HugeMethodLimit} past which a
+	 * method is never JIT-compiled.
+	 */
+	static final int SYMBOL_VALUE_SEGMENT_ARMS = 128;
+
+	/**
+	 * The shared dynamic-first {@code symbol-value} runtime a computed name calls
+	 * ({@link #dynamicFirstSymbolValue}): {@code (%symbol-value-dynamic name)} dispatches
+	 * the name through an {@code equal} chain over the special set, a match reading the
+	 * variable, the miss falling to the raw mirror probe. The chain is cut into segments
+	 * of {@link #SYMBOL_VALUE_SEGMENT_ARMS} arms, each a defun whose miss tail-calls the
+	 * next, so no body grows with the special set.
+	 * @param specials the program's special-variable names, in declaration order
+	 * @return the segments' definitions, wrapper-shaped, the entry first
+	 */
+	public static List<LispVal> symbolValueDynamicRuntime(java.util.Collection<String> specials) {
 		List<String> names = new ArrayList<>(specials);
+		LispSymbol n = new LispSymbol(freshName("%SVD-NAME", specials));
+		int segments = Math.max(1, (names.size() + SYMBOL_VALUE_SEGMENT_ARMS - 1) / SYMBOL_VALUE_SEGMENT_ARMS);
+		List<LispVal> out = new ArrayList<>(segments);
+		for (int k = 0; k < segments; k++) {
+			List<String> arms = names.subList(k * SYMBOL_VALUE_SEGMENT_ARMS,
+					Math.min(names.size(), (k + 1) * SYMBOL_VALUE_SEGMENT_ARMS));
+			String miss = k + 1 < segments ? symbolValueSegmentName(k + 1) : LispNames.SYMBOL_VALUE_RAW;
+			LispVal lambda = listToCons(
+					List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(n)), symbolValueChain(n, arms, miss)));
+			out.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(symbolValueSegmentName(k)), lambda)));
+		}
+		return out;
+	}
+
+	/** The name of {@link #symbolValueDynamicRuntime}'s {@code k}-th segment. */
+	private static String symbolValueSegmentName(int k) {
+		return k == 0 ? LispNames.SYMBOL_VALUE_DYNAMIC : LispNames.SYMBOL_VALUE_DYNAMIC + "-" + k;
+	}
+
+	/**
+	 * Whether a program's user definitions take a name {@link #symbolValueDynamicRuntime}
+	 * would define.
+	 * @param userDefinedNames the program's defun names
+	 * @return true when the runtime cannot be injected
+	 */
+	public static boolean definesSymbolValueRuntimeName(java.util.Set<String> userDefinedNames) {
+		return userDefinedNames.stream().anyMatch(name -> name.startsWith(LispNames.SYMBOL_VALUE_DYNAMIC));
+	}
+
+	/**
+	 * {@code (if (equal n 'S1) S1 (if (equal n 'S2) S2 ... (MISS n)))}.
+	 * @param n the variable holding the name
+	 * @param names the specials the chain dispatches, in order
+	 * @param miss the operator a name matching no arm is handed to
+	 * @return the chain
+	 */
+	private static LispVal symbolValueChain(LispSymbol n, List<String> names, String miss) {
+		LispVal chain = listToCons(List.of(new LispSymbol(miss), n));
 		for (int i = names.size() - 1; i >= 0; i--) {
 			LispSymbol s = new LispSymbol(names.get(i));
 			chain = listToCons(List.of(new LispSymbol(LispNames.IF),
 					listToCons(List.of(new LispSymbol(LispNames.EQUAL), n, quotedData(s))), s, chain));
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(n, parts.get(1))))), chain));
+		return chain;
+	}
+
+	/**
+	 * {@code base}, suffixed until it names no special: the variable holding the name
+	 * must stay lexical, or a {@code (defvar base)} would make the chain's arm for it
+	 * read the parameter.
+	 */
+	private static String freshName(String base, java.util.Collection<String> specials) {
+		String name = base;
+		for (int i = 1; specials.contains(name); i++) {
+			name = base + "-" + i;
+		}
+		return name;
+	}
+
+	/**
+	 * Whether any form can reach a {@code symbol-value} of a COMPUTED name -- every
+	 * spelling of the operator but {@code (symbol-value 'literal)}, which folds -- i.e.
+	 * whether {@link #symbolValueDynamicRuntime} could have a caller. Over-predicting
+	 * costs unreachable defuns the shaker drops; under-predicting costs a site its
+	 * sharing, never its correctness ({@link #dynamicFirstSymbolValue} spells the chain
+	 * inline).
+	 * @param forms the program's (or the injected runtime's) top-level forms
+	 * @return true when a computed site can occur
+	 */
+	public static boolean programUsesComputedSymbolValue(java.util.Collection<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (reachesComputedSymbolValue(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean reachesComputedSymbolValue(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return LispNames.SYMBOL_VALUE.equals(sym.name());
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.SYMBOL_VALUE.equals(head.name())
+				&& cons.cdr() instanceof LispCons args && args.cdr() instanceof LispNil
+				&& args.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name())) {
+			return false;
+		}
+		LispVal cur = cons;
+		for (; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (reachesComputedSymbolValue(cell.car())) {
+				return true;
+			}
+		}
+		return reachesComputedSymbolValue(cur);
 	}
 
 	/** {@code (cons a b)} -- the pair-building call the progv lowering leans on. */
