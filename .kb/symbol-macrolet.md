@@ -16,7 +16,7 @@ Consumers: trivia `match`, dbi `driver.lisp`, mito `core/type.lisp`.
   DROPPED.
 - **User macros must expand BEFORE substitution.** `expandSymbolMacrolet(cons, hook)` takes
   `LispMacroExpander.UserMacroHook`: interpreter = `LispEvaluator.symbolMacroUserMacroHook`, wired
-  in `evalConsRareOperator` (the hot half sits near HugeMethodLimit,
+  in `rareOperatorExpansion` (kept out of `evalCons`'s hot table,
   `LispEvaluatorHotMethodSizeTest`); compile path = null (`UserMacroExpander.expandAll` keeps the
   SYMBOL-MACROLET pattern).
 - Wiring: evaluator case, `Jvm/WasmExprCompiler.compileCons`, `FreeVarAnalyzer`,

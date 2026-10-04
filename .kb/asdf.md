@@ -138,7 +138,7 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   `src/test/resources/package-inferred-demo`).
 
 ## Interpreter / compile path / search order
-- **Interpreter**: `asdf:defsystem` is an `evalCons` case on `LispNames.ASDF_DEFSYSTEM` (special
+- **Interpreter**: `asdf:defsystem` is an `evalConsRareOperator` case on `LispNames.ASDF_DEFSYSTEM` (special
   form — options are data); `asdf:load-system` is a global function accepting computed names,
   driving `loadFile` with the system's `baseDir` on `loadDirStack`. State:
   `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.

@@ -18,7 +18,7 @@ portable; never print, order or do arithmetic on one.
 
 ## `with-mutex`
 `LispMacroExpander.expandWithMutex`, dispatched on the qualified name from
-`LispEvaluator.evalCons`, `JvmExprCompiler`, `WasmExprCompiler`; binds the mutex form
+`LispEvaluator.rareOperatorExpansion`, `JvmExprCompiler`, `WasmExprCompiler`; binds the mutex form
 ONCE to `__mutex_lock`, releases under `unwind-protect`. WASM passes
 `unwindProtect = ctx.ehMode` but does NOT flip the module into EH mode (absent from
 `WasmLispCompiler.programUsesEhForm`). In `WasmAwaitNormalizer`'s non-strict head list.

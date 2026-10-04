@@ -5,7 +5,7 @@
   (`(async (defun ...))`, `(async (lambda ...))`, else an error). Pure frontend rewrite
   (`LispMacroExpander.expandAsync`, `rewriteAsyncSugar`) run before EVERY consumer of the
   canonical forms: the CLI after LoadInliner, both compilers' `compile()` after flattenTopLevel,
-  `UserMacroExpander`'s output, an evalCons case, `LispAsync.check`/`lowerForm`. `rontolisp:async`
+  `UserMacroExpander`'s output, a `rareOperatorExpansion` case, `LispAsync.check`/`lowerForm`. `rontolisp:async`
   joins NO introspection listing.
 - `rontolisp:await` is a SPECIAL FORM. `futurep` / `streamp`; `make-stream` / `stream-read` /
   `stream-write` / `stream-close` / `read-all`; `rontolisp:wait-for` (ms -> future settling to
@@ -22,7 +22,7 @@
   (interpreter), which PRE-APPROVES the `%async-run` thunk lambdas the lowering synthesizes.
 - **Lowering**: `(async-defun name (ll) body...)` ->
   `(defun name (ll) (rontolisp::%async-run (lambda () body...)))` (`expandAsyncDefun`;
-  `LispAsync.lowerProgram` on compile paths, evalCons case on the interpreter). `%async-run` is
+  `LispAsync.lowerProgram` on compile paths, `rareOperatorExpansion` case on the interpreter). `%async-run` is
   the ONE backend primitive; the lambda-list stays on the outer defun.
 
 ## Per-backend implementation

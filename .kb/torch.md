@@ -71,7 +71,7 @@ A BUILT-IN `LispMacroExpander` expansion (`expandTorchNoGrad` -> `(let ((torch::
 nil)) body...)`), not a `defmacro`: the compile path runs `UserMacroExpander` BEFORE the library
 splice. Dynamic rebinding, so wasm needs no EH mode.
 
-- **Interpreter ordering**: the `TORCH:NO-GRAD` case in `evalCons` calls `ensureTorchLoaded()`
+- **Interpreter ordering**: the `TORCH:NO-GRAD` case in `rareOperatorExpansion` calls `ensureTorchLoaded()`
   BEFORE evaluating the expansion, else the variable is not yet special and the binding is lexical.
 - **`SpecialVarCollector`**: the `let` is synthesized after the scan, so `TORCH:NO-GRAD` must be
   listed in `LispMacroExpander.expandBuiltinMacro`; missing it is a LOUD compile error ("dynamically

@@ -93,8 +93,23 @@ timings below do not resolve. `LispEvaluatorHotMethodSizeTest` keeps each under 
 8000-bytecode `HugeMethodLimit` (`.kb/hot-path-method-size.md`): `evalCons` was 6,812
 bytecodes (from 5,516) when the loop landed, 7,717 by 2026-10-04 and 7,788 with `deferTo`
 (its catch, the `exitsToFrame` calls; `tagbody` stayed in `evalConsRareOperator`, which takes
-the owners), `rareOperatorExpansion` 4,446, `evalConsRareOperator` under 2,500. 212 bytes of
-headroom: the next arm that grows it should move something out.
+the owners), `rareOperatorExpansion` 4,446, `evalConsRareOperator` 1,386 -- 212 bytes of
+headroom. So `evalCons` keeps only the arms a loop or method body plausibly runs (the special
+forms, the control and iteration macros, the list accessors through `fourth`, `setf`/`incf`/
+`push`/`pushnew`, `format`, `slot-value`/`with-slots`/`make-instance`, the condition
+signalling forms, `ignore-errors`, the string-stream macros, `copy-seq`/`stable-sort`); the
+definers, top-level directives and rarely looped macros (`defun`..`defmethod`, `defvar`,
+`deftype`, `define-condition`, `macrolet`, `progv`, `change-class`, `ccase`, `time`,
+`fifth`..`tenth`, `remf`, `with-open-file`, the restart, readtable, async, thread, socket, torch
+and objc macros) moved to the two rare methods by kind. Sizes after (2026-10-04): `evalCons`
+5,269, `rareOperatorExpansion` 6,050, `evalConsRareOperator` 2,223 -- the tightest is now
+`rareOperatorExpansion`, 1,950 under the cliff. A moved arm costs one more switch miss and the
+`wrongCountCall` lookup every fall-through already pays, so an arm needs no count check of its
+own there; `rontolisp:await` stayed because `wrongCountCall` would evaluate its arguments before
+the arity error its own arm raises first. Whole process, five alternating pairs (linux-x64, load
+6-9), before -> after (median): `fib 30` 2.93 -> 2.86 s; a sieve-and-`dotimes` loop 8.33 -> 8.33
+s; a macro mix (`defmacro`, `case`, `push`/`pop`, `fifth`, `remf`, `with-slots` over
+`make-instance`, `with-output-to-string`) 6.03 -> 5.96 s. Same output; no slowdown resolved.
 `javac` duplicates a `finally` at every `return` inside its `try`, which is why the loop's
 arms assign `result` and `break frame` to ONE exit instead of returning: ~150 returns
 times a 14-byte `finally` copy would have crossed the cliff by itself.
