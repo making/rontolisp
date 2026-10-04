@@ -13,10 +13,21 @@
 `defprotocol` は名前（`P`）、`defrecord` と `deftype` はクラス名（`user.R`）、`declare` は最後の名前の var、
 他のフォームに入れ子になった `def` もその var をエコーします。ファイルでは入れ子の `def` は値を返します。
 
+oracle の REPL と同じく、`*1`、`*2`、`*3` は直近 3 つの入力の値（`ns` の入力は `nil` を
+記録します）を、`*e` は入力が投げた最後の例外を持ちます。例外はこれらの値を変えません。
+入力の読み込みや lowering での拒否は例外ではなく、何も記録しません。`*repl*` は `true` で
+束縛されており、`*file*` は `"NO_SOURCE_PATH"`、`*source-path*` は `"NO_SOURCE_FILE"` です。
+
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
 #'user/twice
 clojure> (twice 21)
 42
+clojure> [*1 *2]
+[42 #'user/twice]
+clojure> (/ 1 0)
+Error: Division by zero
+clojure> (ex-message *e)
+"Division by zero"
 ```

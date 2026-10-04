@@ -613,11 +613,15 @@ class ClojureLoweringTest {
 
 	@Test
 	void nsDefinesNothing() {
-		// the ns form lowers to nothing; what follows defines into the namespace,
+		// the ns form lowers to nothing but the switch of *ns* (which a program reading
+		// no *ns* sheds, ClojureArmsTest); what follows defines into the namespace,
 		// whose vars carry its name (user's keep the bare mangled name)
-		assertThat(lowered("(ns foo) (def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
+		String nsSwitch = "(DEFVAR RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"user\"))\n"
+				+ "(SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"foo\"))\n";
+		assertThat(lowered("(ns foo) (def x 1) x"))
+			.isEqualTo(FALSE_BINDING + nsSwitch + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
 		assertThat(lowered("(ns foo (:require [clojure.string :as s])) (def x 1) x"))
-			.isEqualTo(FALSE_BINDING + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
+			.isEqualTo(FALSE_BINDING + nsSwitch + "(SETQ |c%foo/x| 1)\n|c%foo/x|");
 		assertThat(lowered("(def x 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");
 	}
 
@@ -1252,9 +1256,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2))")).contains("(LET*")
 			.contains("(|c%*d*| 5)")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
-		// a clojure.main-bound flag is always thread-bound, so it assigns; a flag
-		// clojure.main does not bind, and a stream, assign like a dynamic var; *ns*
-		// answers the value with no effect
+		// a clojure.main-bound flag is always thread-bound, so it assigns (*ns* too);
+		// a flag clojure.main does not bind, and a stream, assign like a dynamic var
 		assertThat(lowered("(set! *warn-on-reflection* true)"))
 			.contains("(DEFVAR RONTOLISP::%CLOJURE-WARN-ON-REFLECTION RONTOLISP::%CLOJURE-FALSE)")
 			.endsWith("(SETQ RONTOLISP::%CLOJURE-WARN-ON-REFLECTION T)");
@@ -1265,7 +1268,7 @@ class ClojureLoweringTest {
 			.contains("(ERROR \"Can't change/establish root binding of: *print-dup* with set\")");
 		assertThat(lowered("(set! *out* *out*)")).contains("(> RONTOLISP::%CLOJURE-OUT-DEPTH 0)")
 			.contains("(SETQ *STANDARD-OUTPUT* ");
-		assertThat(lowered("(set! *ns* 1)")).isEqualTo(FALSE_BINDING + "1");
+		assertThat(lowered("(set! *ns* 1)")).endsWith("\n(SETQ RONTOLISP::%CLOJURE-NS 1)");
 		// anything else names what is missing
 		assertThatThrownBy(() -> Clojure.read("(set! *no-such-var* 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a var is not supported yet: *no-such-var*");
@@ -1655,8 +1658,11 @@ class ClojureLoweringTest {
 				"(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*assert*\" (LAMBDA NIL RONTOLISP::%CLOJURE-ASSERT)")
 			.contains("(LAMBDA NIL 1)")
 			.contains("(DEFVAR RONTOLISP::%CLOJURE-ASSERT T)");
-		assertThatThrownBy(() -> Clojure.read("#'*ns*", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/*ns*");
+		assertThat(lowered("#'*ns*"))
+			.contains("(RONTOLISP::%CLOJURE-VAR-DYNAMIC \"clojure.core/*ns*\" (LAMBDA NIL RONTOLISP::%CLOJURE-NS)")
+			.contains("(LAMBDA NIL 1)");
+		assertThatThrownBy(() -> Clojure.read("#'all-ns", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/all-ns");
 		assertThatThrownBy(() -> Clojure.read("#'if", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Unable to resolve var: if in this context");
 		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)
@@ -2577,7 +2583,7 @@ class ClojureLoweringTest {
 			.contains("(SETQ |c%app.lib%init-1| (LAMBDA NIL")
 			.contains("(SETQ |c%app.lib/v| 1)")
 			.contains("(SETQ |c%app.lib%init| (LAMBDA NIL (FUNCALL |c%app.lib%init-1|)))")
-			.contains("(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))");
+			.contains("(UNLESS |c%app.lib%loaded| " + loading("app.lib") + " (SETQ |c%app.lib%loaded| T))");
 		// definitions ahead of the requiring form, statements inside the init
 		assertThat(out.indexOf("(DEFUN |c%app.lib/f|")).isLessThan(out.indexOf("|c%app.lib%init-1| (LAMBDA"));
 		assertThat(out.indexOf("\"hi\"")).isGreaterThan(out.indexOf("|c%app.lib%init-1| (LAMBDA"));
@@ -2590,12 +2596,12 @@ class ClojureLoweringTest {
 		Map<String, String> fs = Map.of("src/app/lib.clj", files);
 		// a second require is another guarded call, but the flag is still one defvar
 		String both = loweredWithFiles("(require 'app.lib) (require 'app.lib)", fs);
-		String guarded = "(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))";
+		String guarded = "(UNLESS |c%app.lib%loaded| " + loading("app.lib") + " (SETQ |c%app.lib%loaded| T))";
 		assertThat(both).containsOnlyOnce("(DEFVAR |c%app.lib%loaded| NIL)");
 		assertThat(both.indexOf(guarded)).isLessThan(both.lastIndexOf(guarded));
 		// :reload calls the init outright, and still marks it loaded
 		assertThat(loweredWithFiles("(require '[app.lib] :reload)", fs))
-			.contains("(PROGN (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))");
+			.contains("(PROGN " + loading("app.lib") + " (SETQ |c%app.lib%loaded| T))");
 		// a library namespace has no init, so even :reload is nothing at run time
 		assertThat(loweredWithFiles("(require '[clojure.string :as s] :reload) (s/join \",\" [\"a\"])", Map.of()))
 			.doesNotContain("FUNCALL");
@@ -2606,8 +2612,19 @@ class ClojureLoweringTest {
 		Map<String, String> fs = Map.of("src/app/b.clj", "(ns app.b) (println \"b\") (def bv 1)", "src/app/a.clj",
 				"(ns app.a (:require [app.b :as b])) (println \"a\") (def av b/bv)");
 		String out = loweredWithFiles("(require '[app.a] :reload-all)", fs);
-		assertThat(out).contains("(FUNCALL |c%app.b%init|) (SETQ |c%app.b%loaded| T) (FUNCALL |c%app.a%init|)");
+		assertThat(out).contains(loading("app.b") + " (SETQ |c%app.b%loaded| T) " + loading("app.a"));
 		assertThat(out.indexOf("(FUNCALL |c%app.b%init|)")).isLessThan(out.indexOf("(FUNCALL |c%app.a%init|)"));
+	}
+
+	/**
+	 * The run of a namespace's init where its load binds *ns*, *file* and *source-path*:
+	 * {@code app.lib} reads {@code app/lib.clj}.
+	 */
+	private static String loading(String ns) {
+		String file = ns.replace('.', '/') + ".clj";
+		return "(LET ((RONTOLISP::%CLOJURE-NS RONTOLISP::%CLOJURE-NS) (RONTOLISP::%CLOJURE-FILE \"" + file
+				+ "\") (RONTOLISP::%CLOJURE-SOURCE-PATH \"" + file.substring(file.lastIndexOf('/') + 1)
+				+ "\")) (FUNCALL |c%" + ns + "%init|))";
 	}
 
 	@Test

@@ -208,7 +208,10 @@ final class ClojureNamespaceLowering {
 		}
 		ctx.currentNs = name.name();
 		ctx.createdNamespaces.add(name.name());
-		List<LispVal> calls = nsClauses(ctx, items);
+		// *ns* switches before the clauses load anything, like the oracle's ns
+		List<LispVal> calls = new ArrayList<>();
+		calls.add(ctx.nsSwitch(name.name()));
+		calls.addAll(nsClauses(ctx, items));
 		// loaded once its clauses ran, like the oracle's ns: a require of it from a
 		// namespace its own clauses load is a cycle, not a no-op
 		ctx.loadedNamespaces.add(name.name());
@@ -243,18 +246,19 @@ final class ClojureNamespaceLowering {
 	/**
 	 * {@code (in-ns 'name)}: switches to the namespace (creating it, but not marking it
 	 * loaded -- the oracle's {@code in-ns} loads nothing), so the definitions and the
-	 * {@code ::}-keywords below it belong there, answering nil. A quoted symbol, a bare
-	 * symbol or a string names it directly (never evaluated); anything else leaves it
-	 * alone.
+	 * {@code ::}-keywords below it belong there, and {@code *ns*} to it where it runs,
+	 * answering nil (the oracle's answers the namespace). A quoted symbol, a bare symbol
+	 * or a string names it directly (never evaluated); anything else leaves it alone.
 	 */
 	static LispVal inNsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 2, "in-ns takes a namespace");
 		String name = inNsName(items.get(1));
-		if (name != null) {
-			ctx.currentNs = name;
-			ctx.createdNamespaces.add(name);
+		if (name == null) {
+			return ClojureLowering.NIL_CONST;
 		}
-		return ClojureLowering.NIL_CONST;
+		ctx.currentNs = name;
+		ctx.createdNamespaces.add(name);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.nsSwitch(name), ClojureLowering.NIL_CONST);
 	}
 
 	/**
@@ -423,6 +427,7 @@ final class ClojureNamespaceLowering {
 		if (library) {
 			ctx.ns().aliases.putIfAbsent(ns, ns); // the fully-qualified spelling always
 													// resolves
+			ctx.requiredLibraries.add(ns);
 		}
 		else {
 			if (ns.startsWith("clojure.")) {

@@ -380,6 +380,9 @@ categories:
       - { slug: use, name: "use" }
       - { slug: import, name: "import" }
       - { slug: in-ns, name: "in-ns" }
+      - { slug: the-ns, name: "the-ns" }
+      - { slug: find-ns, name: "find-ns" }
+      - { slug: ns-name, name: "ns-name" }
   - title: "名前とキーワード"
     index_page: clojure/reference/names.md
     functions:

@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The arms of a lowered program and of the run-time library ({@code clojure.lisp}) for a
@@ -29,7 +30,9 @@ import am.ik.rontolisp.LispVal;
  * compiles to the same bytes, and the kind's runtime is pruned with nothing left to reach
  * it. A binding-depth counter ({@link Family#depths}) is the fourth shape: the
  * {@code let} pair each binding site adds to rebind it, and the program's definition of
- * it, go from a program that never reads it.
+ * it, go from a program that never reads it. A special a load switches
+ * ({@link Family#switches}) is the fifth: its switching statements, rebinding pairs and
+ * definition go the same way.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -47,6 +50,20 @@ public final class ClojureArms {
 	 * A kind of value with arms: its tests, views and aliases, and what makes one.
 	 */
 	public enum Family {
+
+		/**
+		 * The namespace {@code ns} and {@code in-ns} switch {@code *ns*} to, and the
+		 * rebinding of it around a required namespace's load: only a read of {@code *ns*}
+		 * sees either ({@link Family#switches}). Ahead of {@link #NAMESPACE}, whose
+		 * producer a switch names.
+		 */
+		NS_SWITCH("ns-switch", Set.of(ClojureCoreSpecials.NS.name())),
+
+		/** The rebinding of {@code *file*} around a required namespace's load. */
+		FILE_SWITCH("file-switch", Set.of(ClojureCoreSpecials.FILE.name())),
+
+		/** The rebinding of {@code *source-path*} around a required namespace's load. */
+		SOURCE_PATH_SWITCH("source-path-switch", Set.of(ClojureCoreSpecials.SOURCE_PATH.name())),
 
 		/**
 		 * Sorted maps and sets: no literal makes one, only the constructor and the
@@ -146,6 +163,15 @@ public final class ClojureArms {
 		 * catches -- can hold one.
 		 */
 		EXCEPTION("exception", Set.of("RONTOLISP::%CLOJURE-EXCEPTION-P"), Set.of(), Map.of(), Set.of("C%E-PARTS"),
+				Set.of()),
+
+		/**
+		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
+		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns} and
+		 * {@code find-ns} hand one to the program.
+		 */
+		NAMESPACE("namespace", Set.of("RONTOLISP::%CLOJURE-NS-OBJECT-P"), Set.of(), Map.of(),
+				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS"),
 				Set.of());
 
 		private final String label;
@@ -177,6 +203,20 @@ public final class ClojureArms {
 		 */
 		final boolean qualifiedIdents;
 
+		/**
+		 * The specials a load switches: the program's top-level
+		 * {@code (defvar special value)}, a statement {@code (setq special value)} and a
+		 * {@code let}/{@code let*} pair {@code (special value)} -- each over a value with
+		 * no effect, a string or an interned namespace, or the special itself -- are
+		 * arms, and any other mention of the special reads it, which is what keeps them.
+		 * A {@code let} left without a pair is its body.
+		 */
+		final Set<String> switches;
+
+		Family(String label, Set<String> switches) {
+			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
+		}
+
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths) {
 			this(label, tests, views, aliases, producers, depths, false);
@@ -184,6 +224,11 @@ public final class ClojureArms {
 
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths, boolean qualifiedIdents) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, Set.of());
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -191,6 +236,7 @@ public final class ClojureArms {
 			this.producers = producers;
 			this.depths = depths;
 			this.qualifiedIdents = qualifiedIdents;
+			this.switches = switches;
 		}
 
 		/**
@@ -243,15 +289,16 @@ public final class ClojureArms {
 	}
 
 	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
-		if (isDepthDefinition(form, family)) {
+		if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)) {
 			found[1] = true;
 			return;
 		}
 		LispVal rest = form;
-		if (!family.depths.isEmpty() && isLet(form) && ((LispCons) form).cdr() instanceof LispCons bindings) {
+		if ((!family.depths.isEmpty() || !family.switches.isEmpty()) && isLet(form)
+				&& ((LispCons) form).cdr() instanceof LispCons bindings) {
 			LispVal pairs = bindings.car();
 			while (pairs instanceof LispCons cell) {
-				if (isDepthPair(cell.car(), family)) {
+				if (isDepthPair(cell.car(), family) || isSwitchPair(cell.car(), family)) {
 					found[1] = true;
 				}
 				else {
@@ -272,7 +319,7 @@ public final class ClojureArms {
 		}
 		if (rest instanceof LispSymbol symbol) {
 			String name = symbol.name();
-			if (family.producers.contains(name) || family.depths.contains(name)) {
+			if (family.producers.contains(name) || family.depths.contains(name) || family.switches.contains(name)) {
 				found[0] = true;
 			}
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)) {
@@ -317,7 +364,7 @@ public final class ClojureArms {
 		List<LispVal> out = new ArrayList<>(forms.size());
 		boolean changed = false;
 		for (LispVal form : forms) {
-			if (isDepthDefinition(form, family)) {
+			if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)) {
 				changed = true;
 				continue;
 			}
@@ -370,9 +417,17 @@ public final class ClojureArms {
 					return LispCons.rebuilt(cons, head,
 							LispCons.rebuilt(fn, new LispSymbol(this.family.aliases.get(target.name())), fn.cdr()));
 				}
+				if (isSwitchSetq(form, this.family)) {
+					throw new IllegalStateException(
+							"a " + this.family.label + " switch where it cannot go: " + form.print());
+				}
 				switch (name) {
 					case "LET", "LET*":
 						return walkLet(cons);
+					case "PROGN":
+						return walkProgn(cons);
+					case "LAMBDA":
+						return walkLambda(cons);
 					case "OR":
 						return walkOr(cons);
 					case "COND":
@@ -407,24 +462,90 @@ public final class ClojureArms {
 
 		/**
 		 * {@code (let (pairs...) body...)}: a pair rebinding one of the family's
-		 * binding-depth counters goes; the rest is walked as code.
+		 * binding-depth counters or switching one of its specials goes; the rest is
+		 * walked as code. A {@code let} the fold of a switch leaves with no pair and one
+		 * body form is that form.
 		 */
 		private LispVal walkLet(LispCons form) {
 			LispCons walked = form;
-			if (!this.family.depths.isEmpty() && form.cdr() instanceof LispCons bindings
-					&& bindings.car() instanceof LispCons pairs) {
+			if ((!this.family.depths.isEmpty() || !this.family.switches.isEmpty())
+					&& form.cdr() instanceof LispCons bindings && bindings.car() instanceof LispCons pairs) {
 				List<LispVal> kept = new ArrayList<>();
 				LispVal run = pairs;
 				while (run instanceof LispCons cell) {
-					if (!isDepthPair(cell.car(), this.family)) {
+					if (!isDepthPair(cell.car(), this.family) && !isSwitchPair(cell.car(), this.family)) {
 						kept.add(cell.car());
 					}
 					run = cell.cdr();
+				}
+				// pairs is a non-empty list, so an empty kept means the fold dropped them
+				// all; a load's switches leave the body alone (a binding always keeps
+				// its own pair beside a counter's)
+				if (kept.isEmpty() && !this.family.switches.isEmpty() && bindings.cdr() instanceof LispCons body
+						&& body.cdr() instanceof LispNil) {
+					return walkCode(body.car());
 				}
 				walked = LispCons.rebuilt(form, form.car(),
 						LispCons.rebuilt(bindings, LispCons.rebuiltList(pairs, kept), bindings.cdr()));
 			}
 			return LispCons.rebuilt(walked, walkCode(walked.car()), walkElements(walked.cdr()));
+		}
+
+		/**
+		 * {@code (progn statement...)}: a switch among the statements before the last
+		 * goes; a {@code progn} it leaves with one form is that form.
+		 */
+		private LispVal walkProgn(LispCons form) {
+			LispVal statements = withoutSwitches(form.cdr(), true);
+			if (statements == form.cdr()) {
+				return LispCons.rebuilt(form, form.car(), walkElements(form.cdr()));
+			}
+			if (statements instanceof LispCons only && only.cdr() instanceof LispNil) {
+				return walkCode(only.car());
+			}
+			return LispCons.rebuilt(form, form.car(), walkElements(statements));
+		}
+
+		/**
+		 * {@code (lambda params statement...)}: a switch among the body's statements
+		 * goes, a last one too (only a namespace's init, whose value nobody reads, ends
+		 * in one) unless it is the whole body.
+		 */
+		private LispVal walkLambda(LispCons form) {
+			if (!(form.cdr() instanceof LispCons params)) {
+				return form;
+			}
+			LispVal body = withoutSwitches(params.cdr(), false);
+			if (body == params.cdr()) {
+				return LispCons.rebuilt(form, form.car(), walkElements(form.cdr()));
+			}
+			return LispCons.rebuilt(form, form.car(),
+					LispCons.rebuilt(params, walkCode(params.car()), walkElements(body)));
+		}
+
+		/**
+		 * The statements without the family's switches (the last statement kept when
+		 * asked, and always when nothing else is left), or the statements themselves when
+		 * there is none to drop.
+		 */
+		private LispVal withoutSwitches(LispVal statements, boolean keepLast) {
+			if (this.family.switches.isEmpty()) {
+				return statements;
+			}
+			List<LispVal> kept = new ArrayList<>();
+			boolean dropped = false;
+			LispVal run = statements;
+			while (run instanceof LispCons cell) {
+				boolean last = !(cell.cdr() instanceof LispCons);
+				if (isSwitchSetq(cell.car(), this.family) && !(last && (keepLast || kept.isEmpty()))) {
+					dropped = true;
+				}
+				else {
+					kept.add(cell.car());
+				}
+				run = cell.cdr();
+			}
+			return dropped ? LispCons.rebuiltList((LispCons) statements, kept) : statements;
 		}
 
 		/**
@@ -509,6 +630,37 @@ public final class ClojureArms {
 	}
 
 	/**
+	 * Whether the statement switches a special some family switches
+	 * ({@link Family#switches}): what a program reading none of them sheds.
+	 * @param statement a lowered statement
+	 * @return {@code true} for a switch
+	 */
+	static boolean isSwitch(LispVal statement) {
+		for (Family family : Family.values()) {
+			if (isSwitchSetq(statement, family)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A statement as a program reading none of the switched specials compiles it: every
+	 * switch in it folded away ({@link Family#switches}).
+	 * @param statement a lowered statement, itself no switch
+	 * @return the statement without its switches
+	 */
+	static LispVal withoutSwitches(LispVal statement) {
+		LispVal out = statement;
+		for (Family family : Family.values()) {
+			if (!family.switches.isEmpty()) {
+				out = new Stripper(family).walkCode(out);
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * Whether a name is one the arms of some family spell (a test, a view, an alias, a
 	 * producer or a binding-depth counter): a program naming one goes through the strip.
 	 * @param symbolName the symbol name, in its canonical spelling
@@ -518,7 +670,7 @@ public final class ClojureArms {
 		for (Family family : Family.values()) {
 			if (family.tests.contains(symbolName) || family.views.contains(symbolName)
 					|| family.aliases.containsKey(symbolName) || family.producers.contains(symbolName)
-					|| family.depths.contains(symbolName)) {
+					|| family.depths.contains(symbolName) || family.switches.contains(symbolName)) {
 				return true;
 			}
 		}
@@ -534,6 +686,66 @@ public final class ClojureArms {
 				&& cons.cdr() instanceof LispCons name && name.car() instanceof LispSymbol counter
 				&& family.depths.contains(counter.name()) && name.cdr() instanceof LispCons init
 				&& init.car() instanceof LispInteger zero && zero.value() == 0 && init.cdr() instanceof LispNil;
+	}
+
+	/**
+	 * Whether the top-level form is the program's definition of one of the family's
+	 * switched specials, {@code (defvar special value)} over a switch value: it goes with
+	 * the switches.
+	 */
+	private static boolean isSwitchDefinition(LispVal form, Family family) {
+		LispVal value = switchedValue(form, "DEFVAR", family);
+		return value instanceof LispString || isInternedNamespace(value);
+	}
+
+	/**
+	 * Whether the form is a statement switching one of the family's specials to an
+	 * interned namespace, {@code (setq special (%clojure-ns-object "name"))}: the shape
+	 * only {@code ns} and {@code in-ns} write, never a {@code set!}.
+	 */
+	private static boolean isSwitchSetq(LispVal form, Family family) {
+		return isInternedNamespace(switchedValue(form, "SETQ", family));
+	}
+
+	/**
+	 * The value a {@code (head special value)} form of one of the family's specials
+	 * assigns, or null for any other form.
+	 */
+	private static @Nullable LispVal switchedValue(LispVal form, String head, Family family) {
+		if (family.switches.isEmpty() || !(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !op.name().equals(head) || !(cons.cdr() instanceof LispCons pair)
+				|| !(pair.car() instanceof LispSymbol special) || !family.switches.contains(special.name())
+				|| !(pair.cdr() instanceof LispCons valueCell) || !(valueCell.cdr() instanceof LispNil)) {
+			return null;
+		}
+		return valueCell.car();
+	}
+
+	/**
+	 * Whether the binding pair rebinds one of the family's specials to a value with no
+	 * effect: {@code (special value)} over the special itself, a string or an interned
+	 * namespace. Nothing reads the special where the strip applies, so even a
+	 * {@code binding} of the program's own of that shape goes unobserved.
+	 */
+	private static boolean isSwitchPair(LispVal pair, Family family) {
+		if (family.switches.isEmpty() || !(pair instanceof LispCons cell) || !(cell.car() instanceof LispSymbol special)
+				|| !family.switches.contains(special.name()) || !(cell.cdr() instanceof LispCons valueCell)
+				|| !(valueCell.cdr() instanceof LispNil)) {
+			return false;
+		}
+		LispVal value = valueCell.car();
+		return value instanceof LispString || value instanceof LispSymbol self && self.name().equals(special.name())
+				|| isInternedNamespace(value);
+	}
+
+	/**
+	 * Whether the form interns a namespace by a literal name:
+	 * {@code (%clojure-ns-object "name")}.
+	 */
+	private static boolean isInternedNamespace(@Nullable LispVal value) {
+		return value instanceof LispCons call && call.car() instanceof LispSymbol fn
+				&& fn.name().equals(ClojureCoreSpecials.NS_OBJECT) && call.cdr() instanceof LispCons arg
+				&& arg.car() instanceof LispString && arg.cdr() instanceof LispNil;
 	}
 
 	private static boolean isLet(LispVal form) {

@@ -13,10 +13,22 @@ notation, readably; a top-level `def`, `defn`, `defn-`, `defmacro`, `defmulti` o
 `declare` the last name's var, and a `def` nested in another form its var as well. In a file a
 nested `def` answers the value.
 
+Like the oracle's REPL, `*1`, `*2` and `*3` hold the values of the last three inputs (an
+`ns` input records `nil`) and `*e` the last exception an input threw, which leaves them
+alone; a refusal while the input is read or lowered is no exception and records nothing.
+`*repl*` is `true` and bound, `*file*` is `"NO_SOURCE_PATH"` and `*source-path*`
+`"NO_SOURCE_FILE"`.
+
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
 #'user/twice
 clojure> (twice 21)
 42
+clojure> [*1 *2]
+[42 #'user/twice]
+clojure> (/ 1 0)
+Error: Division by zero
+clojure> (ex-message *e)
+"Division by zero"
 ```

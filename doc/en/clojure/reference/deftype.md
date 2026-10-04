@@ -3,13 +3,14 @@
 `(deftype Name [fields...] Protocol (method [target & args] body...) ...)`
 
 Defines a deftype: a record-shaped value opaque to the map verbs. The value shares
-the record's 4-list shape with a `:C%TYPE` tag; reads miss (`get` answers the
+the record's shape, class name included, with a `:C%TYPE` tag; reads miss (`get` answers the
 default), writers and `seq`/`count`/`empty?` signal, and `=` is identity, like the
 oracle. Only the positional constructor `->Name` lowers (the oracle defines no
 `map->Name` for deftypes); `(Name. ...)` rewrites to it. Inline method bodies see
 the fields as locals, like `defrecord`. A field marked `^:unsynchronized-mutable` or
 `^:volatile-mutable` is private to those methods, which assign it with
-[`set!`](set-bang.md). The name joins the whole-file pre-scan.
+[`set!`](set-bang.md). An instance call reaches the inline methods and the immutable
+fields ([`.name`](dot-name.md)). The name joins the whole-file pre-scan.
 
 ```clojure
 (deftype T [a])

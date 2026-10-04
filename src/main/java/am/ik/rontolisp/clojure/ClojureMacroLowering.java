@@ -284,8 +284,14 @@ final class ClojureMacroLowering {
 		for (int i = 1; i < items.size(); i++) {
 			quoted.add(ctx.quote(items.get(i)));
 		}
-		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
-				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted));
+		// the body reads the load's specials where the call expands, like the oracle's
+		// macroexpansion inside the load
+		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(
+				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.namespaceObject(ctx.currentNs)),
+				ClojureLowerUtil.list(ClojureCoreSpecials.FILE, LispString.literal(ctx.loadingFile)),
+				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted)));
 		LispVal value;
 		try {
 			value = ctx.macroEvaluator.evaluate(invocation);

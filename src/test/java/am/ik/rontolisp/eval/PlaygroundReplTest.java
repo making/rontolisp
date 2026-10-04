@@ -78,6 +78,30 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars() {
+		// the oracle's REPL: *1, *2 and *3 hold the last three results and *e the last
+		// exception, which leaves the results alone; *repl* is true and thread-bound,
+		// *file* and *source-path* name no file, and *ns* follows an ns input
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("[*1 *2 *3 *e]")).isEqualTo("[nil nil nil nil]");
+		repl.eval("1");
+		repl.eval("2");
+		repl.eval("(+ 1 2)");
+		assertThat(repl.eval("[*1 *2 *3]")).isEqualTo("[3 2 1]");
+		assertThat(repl.eval("*1")).isEqualTo("[3 2 1]");
+		assertThatThrownBy(() -> repl.eval("(/ 1 0)")).hasMessageContaining("Division by zero");
+		assertThat(repl.eval("[(first *1) (ex-message *e) (class *e)]"))
+			.isEqualTo("[3 \"Division by zero\" :java.lang.ArithmeticException]");
+		assertThatThrownBy(() -> repl.eval("(def hist-x (throw (ex-info \"in a def\" {})))"))
+			.hasMessageContaining("in a def");
+		assertThat(repl.eval("(ex-message *e)")).isEqualTo("\"in a def\"");
+		assertThat(repl.eval("[*repl* (thread-bound? #'*repl*) *file* *source-path*]"))
+			.isEqualTo("[true true \"NO_SOURCE_PATH\" \"NO_SOURCE_FILE\"]");
+		assertThat(repl.eval("(ns sess.where) [*ns* (str *ns*)]"))
+			.isEqualTo("[#object[clojure.lang.Namespace \"sess.where\"] \"sess.where\"]");
+	}
+
+	@Test
 	void theClojureRunPrintsAndItsTranscriptEchoesEveryForm() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
 		assertThat(repl.run("""

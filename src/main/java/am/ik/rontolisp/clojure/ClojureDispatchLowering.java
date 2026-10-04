@@ -125,6 +125,11 @@ final class ClojureDispatchLowering {
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),
 				streamClassKeyword(one)));
+		// a namespace answers its class's keyword: an arm a program making no namespace
+		// sheds (ClojureArms.Family.NAMESPACE)
+		branches
+			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NS-OBJECT-P"), one),
+					ClojureCollectionLowering.keywordForm("clojure.lang.Namespace")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ctx.inDispatchFn ? ClojureLowering.NIL_CONST : ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),

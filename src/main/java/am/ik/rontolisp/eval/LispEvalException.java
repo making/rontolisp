@@ -57,6 +57,15 @@ public class LispEvalException extends RuntimeException {
 	}
 
 	/**
+	 * The signal of a division by an exact zero -- what {@code mod}/{@code rem} would
+	 * otherwise leave to the host's {@code ArithmeticException} and its own text.
+	 * @return the exception to throw
+	 */
+	public static LispEvalException divisionByZero() {
+		return ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
+	}
+
+	/**
 	 * Create a new evaluation exception carrying a condition object.
 	 * @param message the error message
 	 * @param condition the condition instance (a tagged list), or null

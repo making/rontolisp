@@ -124,6 +124,23 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramReadingNoLoadSpecialShedsTheirSwitches() {
+		// ns and in-ns switch *ns*, and a require rebinds *ns*, *file* and *source-path*
+		// around a namespace's init; only a read of one keeps them, so a program reading
+		// none compiles as before they had values
+		List<LispVal> plain = Clojure.read("(ns a) (defn f [] 1) (in-ns 'b) (a/f) (do (in-ns 'c) (println 1))", null);
+		assertThat(plain.stream().map(LispVal::print)).anyMatch(text -> text.contains("RONTOLISP::%CLOJURE-NS"));
+		List<String> processed = ClojureLibrary.process(plain).stream().map(LispVal::print).toList();
+		assertThat(processed).noneMatch(text -> text.matches("(?s).*RONTOLISP::%CLOJURE-NS[ )].*"))
+			.contains("(|c%a/f|)")
+			.anyMatch(text -> text.contains("(PROGN NIL (PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM 1"));
+		List<LispVal> read = Clojure.read("(ns a) (println (str *ns*))", null);
+		assertThat(ClojureLibrary.process(read).stream().map(LispVal::print)).contains(
+				"(DEFVAR RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"user\"))",
+				"(SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"a\"))");
+	}
+
+	@Test
 	void aProgramNamingNoPrintFlagSplicesTheLibraryWithoutItsPrintArms() {
 		// the printer reads *print-length*, *print-level* and *print-readably* through
 		// arms: the interpreter keeps them, a compiled program naming none of the three
@@ -178,13 +195,16 @@ class ClojureLibraryTest {
 				builders.add(name);
 			}
 		});
-		// class answers a class name as a keyword, and a class name has no slash
-		builders.remove("RONTOLISP::%CLOJURE-EXCEPTION-CLASS");
+		// class answers a class name as a keyword, and a class name has no slash; ns-name
+		// a namespace's name as a symbol, which has none either
+		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-NS-NAME");
+		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {
 			grew = false;
 			for (Map.Entry<String, LispVal> defun : defuns.entrySet()) {
-				if (!builders.contains(defun.getKey()) && mentionsAny(defun.getValue(), builders)) {
+				if (!builders.contains(defun.getKey()) && !slashless.contains(defun.getKey())
+						&& mentionsAny(defun.getValue(), builders)) {
 					builders.add(defun.getKey());
 					grew = true;
 				}

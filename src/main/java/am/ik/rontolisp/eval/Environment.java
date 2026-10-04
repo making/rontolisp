@@ -2826,7 +2826,7 @@ public final class Environment implements Scope {
 			for (int i = first; i < args.size(); i++) {
 				BigInteger divisorNum = numeratorOf(args.get(i));
 				if (divisorNum.signum() == 0) {
-					throw divisionByZero();
+					throw LispEvalException.divisionByZero();
 				}
 				num = num.multiply(denominatorOf(args.get(i)));
 				den = den.multiply(divisorNum);
@@ -9007,6 +9007,20 @@ public final class Environment implements Scope {
 		return a == 0.0 ? a - Math.copySign(0.0, b) : 0.0;
 	}
 
+	private static long nonZeroDivisor(long divisor) {
+		if (divisor == 0) {
+			throw LispEvalException.divisionByZero();
+		}
+		return divisor;
+	}
+
+	private static BigInteger nonZeroDivisor(BigInteger divisor) {
+		if (divisor.signum() == 0) {
+			throw LispEvalException.divisionByZero();
+		}
+		return divisor;
+	}
+
 	/**
 	 * The rational arm shared by {@code mod} and {@code rem}. With a = an/ad and b =
 	 * bn/bd the quotient a/b is (an*bd)/(ad*bn), so the integer remainder of THAT
@@ -9014,35 +9028,12 @@ public final class Environment implements Scope {
 	 * computation the integer arm does, one level up. {@code divisorSigned} corrects the
 	 * remainder to the divisor's sign, which is what makes it {@code mod}.
 	 */
-	/**
-	 * The signal of a division by an exact zero -- what {@code mod}/{@code rem} would
-	 * otherwise leave to the host's {@code ArithmeticException} and its own text.
-	 */
-	static LispEvalException divisionByZero() {
-		return LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME,
-				ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
-	}
-
-	private static long nonZeroDivisor(long divisor) {
-		if (divisor == 0) {
-			throw divisionByZero();
-		}
-		return divisor;
-	}
-
-	private static BigInteger nonZeroDivisor(BigInteger divisor) {
-		if (divisor.signum() == 0) {
-			throw divisionByZero();
-		}
-		return divisor;
-	}
-
 	private static LispVal rationalRemainder(LispVal a, LispVal b, boolean divisorSigned) {
 		BigInteger aDen = denominatorOf(a);
 		BigInteger bDen = denominatorOf(b);
 		BigInteger quotientDen = aDen.multiply(numeratorOf(b));
 		if (quotientDen.signum() == 0) {
-			throw divisionByZero();
+			throw LispEvalException.divisionByZero();
 		}
 		BigInteger r = numeratorOf(a).multiply(bDen).remainder(quotientDen);
 		// Denominators are positive, so quotientDen carries the divisor's sign.
@@ -9380,7 +9371,7 @@ public final class Environment implements Scope {
 
 	private static LispVal exactDiv(LispVal a, LispVal b) {
 		if (numeratorOf(b).signum() == 0) {
-			throw divisionByZero();
+			throw LispEvalException.divisionByZero();
 		}
 		return LispRatio.valueOf(numeratorOf(a).multiply(denominatorOf(b)), denominatorOf(a).multiply(numeratorOf(b)));
 	}
@@ -9547,7 +9538,7 @@ public final class Environment implements Scope {
 	private static LispVal[] exactDivComplex(LispVal a, LispVal b, LispVal c, LispVal d) {
 		LispVal denom = exactAdd(exactMul(c, c), exactMul(d, d));
 		if (isZeroReal(denom)) {
-			throw divisionByZero();
+			throw LispEvalException.divisionByZero();
 		}
 		return new LispVal[] { exactDiv(exactAdd(exactMul(a, c), exactMul(b, d)), denom),
 				exactDiv(exactSub(exactMul(b, c), exactMul(a, d)), denom) };

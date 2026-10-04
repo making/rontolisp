@@ -137,6 +137,36 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theSwitchFamiliesDropTheSwitchesOfAProgramReadingNoLoadSpecial() {
+		List<LispVal> forms = read("(defvar rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"user\"))"
+				+ " (defvar rontolisp::%clojure-file \"/p/m.clj\")"
+				+ " (setq rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"m\"))"
+				+ " (setq i (lambda () (setq rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"a\")) (f)"
+				+ " (setq rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"b\"))))"
+				+ " (unless l (let ((rontolisp::%clojure-ns rontolisp::%clojure-ns) (rontolisp::%clojure-file \"a.clj\"))"
+				+ " (funcall i)) (setq l t))"
+				+ " (progn (setq rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"c\")) nil)");
+		List<LispVal> stripped = forms;
+		for (ClojureArms.Family family : List.of(ClojureArms.Family.NS_SWITCH, ClojureArms.Family.FILE_SWITCH)) {
+			ClojureArms.Scan scan = ClojureArms.scan(stripped, family);
+			assertThat(scan.builds()).isFalse();
+			assertThat(scan.strips()).isTrue();
+			stripped = ClojureArms.strip(stripped, family);
+		}
+		// a namespace's init ends in a switch only where nothing reads its value
+		assertThat(stripped.stream().map(LispVal::print)).containsExactly("(SETQ I (LAMBDA NIL (F)))",
+				"(UNLESS L (FUNCALL I) (SETQ L T))", "NIL");
+		// a read of the special anywhere else is what keeps them
+		List<LispVal> read = read("(setq rontolisp::%clojure-ns (rontolisp::%clojure-ns-object \"m\"))"
+				+ " (print rontolisp::%clojure-ns)");
+		assertThat(ClojureArms.scan(read, ClojureArms.Family.NS_SWITCH).builds()).isTrue();
+		assertThat(ClojureArms.scan(read, ClojureArms.Family.FILE_SWITCH).arms()).isFalse();
+		// a set! is no switch: its value is the program's
+		List<LispVal> assigned = read("(f (setq rontolisp::%clojure-ns (rontolisp::%clojure-the-ns x k)))");
+		assertThat(ClojureArms.scan(assigned, ClojureArms.Family.NS_SWITCH).builds()).isTrue();
+	}
+
+	@Test
 	void theStreamDepthFamilyDropsTheRebindingPairsOfAProgramReadingNoCounter() {
 		List<LispVal> forms = read("(defvar rontolisp::%clojure-out-depth 0)"
 				+ " (let* ((s (make-string-output-stream)) (*standard-output* s)"

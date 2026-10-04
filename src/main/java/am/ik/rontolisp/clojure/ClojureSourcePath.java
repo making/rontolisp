@@ -53,6 +53,28 @@ final class ClojureSourcePath {
 	}
 
 	/**
+	 * The entry file's path as the oracle's {@code *file*} holds it: absolute where the
+	 * host has a working directory, {@code NO_SOURCE_PATH} for a read without a file.
+	 * @return the path
+	 */
+	String entryPath() {
+		if (this.entryFile == null) {
+			return ClojureCoreSpecials.NO_SOURCE_PATH;
+		}
+		String dir = this.files.parent(this.entryFile);
+		return dir == null ? this.entryFile : this.files.resolve(dir, lastSegmentOf(this.entryFile));
+	}
+
+	/**
+	 * The entry file's name, the oracle's {@code *source-path*}, or
+	 * {@code NO_SOURCE_FILE} for a read without a file.
+	 * @return the name
+	 */
+	String entryName() {
+		return this.entryFile == null ? ClojureCoreSpecials.NO_SOURCE_FILE : lastSegmentOf(this.entryFile);
+	}
+
+	/**
 	 * The file a namespace maps to below a root, like the oracle's root resource: the
 	 * dots are directories and a dash is an underscore ({@code my-app.core} is
 	 * {@code my_app/core.clj}).
@@ -161,7 +183,7 @@ final class ClojureSourcePath {
 		return segment.replace('-', '_');
 	}
 
-	private static String lastSegmentOf(String path) {
+	static String lastSegmentOf(String path) {
 		int cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
 		return path.substring(cut + 1);
 	}

@@ -5599,6 +5599,43 @@ cases:
       No matching method nth found taking 1 args for class clojure.lang.PersistentList
       :out-of-bounds
       Method foo taking 1 args is not supported for class clojure.lang.Keyword
+  - name: instance-calls-reach-a-record-deftype-or-reify-method-or-field
+    # An instance call naming a method a defrecord, deftype or reify body implements
+    # calls it, and a zero-argument name that is a declared field reads the field,
+    # like the oracle's class (answers measured against clj 1.12.6). An extend-type
+    # row is no method of the class and a mutable field is private: both are refused
+    # in the oracle's words, which name the record's or deftype's class.
+    source: |
+      (defprotocol InstP (instm [this]) (instk [this x]))
+      (defprotocol InstQ (instq [this]))
+      (defrecord InstR [a] InstP (instm [this] (str "m" a)) (instk [this x] (+ a x)))
+      (deftype InstT [x] InstP (instm [this] (str "t" x)) (instk [this y] y))
+      (deftype InstU [^:unsynchronized-mutable z w] InstP (instm [this] z) (instk [this y] y))
+      (extend-type InstR InstQ (instq [this] :q))
+      (defn inst-refusal [f] (try (f) (catch Exception e (.getMessage e))))
+      (prn (.instm (->InstR 1)) (.instk (->InstR 1) 2) (.a (->InstR 1)) (.a (assoc (->InstR 1) :a 5)) (.count (->InstR 1)))
+      (prn (.instm (InstT. 5)) (.x (InstT. 5)) (.instk (InstT. 5) 7) (.instm (InstU. 3 4)) (.w (InstU. 3 4)))
+      (let [r (reify InstP (instm [this] :r) (instk [this x] [x]))] (prn (.instm r) (.instk r 3) (. r instm)))
+      (let [f (fn [o] (.instm o))] (prn (map f [(->InstR 2) (InstT. 3)]) ((memfn instk y) (->InstR 1) 4) (. (->InstR 1) (instk 2)) (instq (->InstR 1))))
+      (println (inst-refusal #(.instq (->InstR 1))))
+      (println (inst-refusal #(.instq (->InstR 1) 2)))
+      (println (inst-refusal #(.instm (->InstR 1) 2)))
+      (println (inst-refusal #(.instk (InstT. 1))))
+      (println (inst-refusal #(.z (InstU. 3 4))))
+      (println (inst-refusal #(.-b (->InstR 1))))
+      (println (inst-refusal #(.-z (InstU. 3 4))))
+    expected: |
+      "m1" 3 1 5 1
+      "t5" 5 7 3 4
+      :r [3] :r
+      ("m2" "t3") 5 3 :q
+      No matching field found: instq for class reading.InstR
+      No matching method instq found taking 1 args for class reading.InstR
+      No matching method instm found taking 1 args for class reading.InstR
+      No matching field found: instk for class reading.InstT
+      No matching field found: z for class reading.InstU
+      No matching field found: b for class reading.InstR
+      No matching field found: z for class reading.InstU
   - name: a-second-defmulti-of-a-multimethod-is-a-no-op
     # The oracle's defmulti defines only when the var holds no multimethod yet, so
     # the book's second (defmulti my-print class :default :everything-else) keeps
@@ -6825,3 +6862,37 @@ cases:
       1.0E19|[1.0E-10] 1.0E20 {:a 1.0E-10} 1.0E300
        2.5E-8
       [1.0E20 1.5] {:k 1.0E21} #{1.0E30} (1.0E-9) InfinityNaN ##Inf 1.23456789012E11
+  - name: ns-is-the-current-namespace-and-the-load-specials-have-their-values
+    # Oracle-identical (clj 1.12.6, clj -M file) but for two spellings: the oracle prints a
+    # namespace with its identity hash (#object[clojure.lang.Namespace 0x1dfd5f51 "nsv-a"])
+    # and class answers the class, where class answers a keyword here. *ns* is the
+    # namespace ns and in-ns switch to while the file runs, read when a function runs, so
+    # nsv-here answers its caller's; binding rebinds it. *file* and *source-path* name the
+    # file (a path that differs per leg), *repl* is false and not thread-bound, and the REPL
+    # history vars are nil and thread-bound.
+    source: |
+      (ns nsv-a)
+      (prn *ns* (str *ns*) (ns-name *ns*) (symbol? (ns-name *ns*)))
+      (println *ns*)
+      (defn nsv-here [] (str *ns*))
+      (in-ns 'nsv-b)
+      (clojure.core/prn (clojure.core/str clojure.core/*ns*) (nsv-a/nsv-here))
+      (clojure.core/in-ns 'nsv-a)
+      (prn (= *ns* (the-ns 'nsv-a)) (identical? *ns* (find-ns 'nsv-a)) (find-ns 'nsv-none) (str (the-ns *ns*)) (ns-name 'nsv-b))
+      (prn (binding [*ns* (the-ns 'nsv-b)] (nsv-here)) (nsv-here) (map ns-name [(the-ns 'nsv-b)]) (some? (find-ns 'clojure.core)))
+      (prn (try (the-ns 'nsv-none) (catch Exception e (ex-message e))))
+      (prn (class *ns*) (thread-bound? #'*ns*) #'*ns* (meta *ns*) (seq? *ns*) (coll? *ns*))
+      (prn [(string? *file*) (string? *source-path*) *repl* *1 *2 *3 *e])
+      (prn (map thread-bound? [#'*file* #'*source-path* #'*1 #'*2 #'*3 #'*e #'*repl*]))
+      (prn (try (set! *repl* true) (catch Exception e (ex-message e))) (set! *3 5) *3 (binding [*repl* 1] [*repl* (thread-bound? #'*repl*)]))
+    expected: |
+      #object[clojure.lang.Namespace "nsv-a"] "nsv-a" nsv-a true
+      #object[clojure.lang.Namespace nsv-a]
+      "nsv-b" "nsv-b"
+      true true nil "nsv-a" nsv-b
+      "nsv-b" "nsv-a" (nsv-b) true
+      "No namespace: nsv-none found"
+      :clojure.lang.Namespace true #'clojure.core/*ns* nil false false
+      [true true false nil nil nil nil]
+      (true true true true true true false)
+      "Can't change/establish root binding of: *repl* with set" 5 5 [1 true]

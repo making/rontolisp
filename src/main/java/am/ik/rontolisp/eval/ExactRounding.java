@@ -81,7 +81,7 @@ final class ExactRounding {
 			// division-by-zero,
 			// where IEEE would divide to an infinity and fail the non-finite rounding
 			// (which a NaN or infinite dividend keeps, as in SBCL).
-			throw Environment.divisionByZero();
+			throw LispEvalException.divisionByZero();
 		}
 		if (b instanceof LispDouble bd && Double.isInfinite(bd.value())) {
 			return infiniteDivisorQuotient(a, bd.value() > 0, mode);

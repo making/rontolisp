@@ -253,6 +253,39 @@ public final class ClojureLowering {
 	String currentNs = "user";
 
 	/**
+	 * The root of {@code *file*}: the entry file's path, absolute where the host has a
+	 * working directory, or {@code NO_SOURCE_PATH} (a session, a read without a file).
+	 */
+	String rootFile = ClojureCoreSpecials.NO_SOURCE_PATH;
+
+	/**
+	 * The root of {@code *source-path*}: the entry file's name, or
+	 * {@code NO_SOURCE_FILE}.
+	 */
+	String rootSourcePath = ClojureCoreSpecials.NO_SOURCE_FILE;
+
+	/**
+	 * The {@code *file*} of the file the forms lower in: the root, or a required
+	 * namespace's path below its source root while its file lowers -- what a macro body
+	 * reads where it expands.
+	 */
+	String loadingFile = ClojureCoreSpecials.NO_SOURCE_PATH;
+
+	/** The {@code *source-path*} beside {@link #loadingFile}. */
+	String loadingSourcePath = ClojureCoreSpecials.NO_SOURCE_FILE;
+
+	/**
+	 * The library namespaces a {@code require} named ({@code clojure.set},
+	 * {@code clojure.test}): {@code find-ns} finds them, like the ones the oracle loads
+	 * before the program ({@link #STARTUP_NAMESPACES}).
+	 */
+	final Set<String> requiredLibraries = new HashSet<>();
+
+	/** The library namespaces {@code clj -M} has loaded before the program runs. */
+	static final List<String> STARTUP_NAMESPACES = List.of("clojure.core", "clojure.edn", "clojure.java.io",
+			"clojure.string");
+
+	/**
 	 * Every namespace an {@code ns} or {@code in-ns} named so far, {@code user} first:
 	 * the namespaces {@code run-tests} knows beside the ones that defined a test (the
 	 * oracle refuses any other).
@@ -641,11 +674,12 @@ public final class ClojureLowering {
 	/**
 	 * Whether the program needs the catch runtime's exception reader: it builds no
 	 * exception, and a catch tests a class, {@code instance?} tests one, or {@code class}
-	 * can read a caught condition.
+	 * can read a caught condition -- in a session any input may, through the {@code *e}
+	 * the session records.
 	 */
 	boolean needsExceptionReader() {
 		return !this.usedExInfo && (!this.caughtChains.isEmpty() || this.readsExceptionParts
-				|| (this.readsConditionClass && this.usedCatch));
+				|| (this.readsConditionClass && (this.usedCatch || this.session)));
 	}
 
 	/**
@@ -740,9 +774,10 @@ public final class ClojureLowering {
 	 * also has {@code inlineVar}: the table of the implementations a
 	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
 	 * target's metadata, which wins over the extension rows, like the oracle; null for
-	 * every other protocol, whose inline rows share the method table.
+	 * every other protocol, whose inline rows share the method table. {@code arities}
+	 * maps each method to its signature's parameter count, the target included.
 	 */
-	record ProtocolDef(Set<String> methods, LispSymbol methodsVar, LispSymbol defaultVar,
+	record ProtocolDef(Set<String> methods, Map<String, Integer> arities, LispSymbol methodsVar, LispSymbol defaultVar,
 			@Nullable LispSymbol inlineVar) {
 
 		/** The table an inline (body) implementation is stored in. */
@@ -761,9 +796,20 @@ public final class ClojureLowering {
 	 * declared {@code ^:unsynchronized-mutable} or {@code ^:volatile-mutable}, a subset
 	 * of {@code fields} in declaration order: they live in a slot vector behind the
 	 * public table, so only the type's own inline methods read or {@code set!} them.
+	 * {@code inlineMethods} are the protocol methods its body implements, each as
+	 * {@link #inlineMethodKey}: the methods of its host class, which an instance call
+	 * reaches ({@code (.m r)}), where an {@code extend-type} row is none.
 	 */
 	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className,
-			List<String> mutableFields) {
+			List<String> mutableFields, Set<String> inlineMethods) {
+	}
+
+	/**
+	 * One entry of {@link TypeDef#inlineMethods}: the protocol's var key and the method
+	 * name.
+	 */
+	static String inlineMethodKey(String protocolKey, String method) {
+		return protocolKey + " " + method;
 	}
 
 	/**
@@ -949,6 +995,10 @@ public final class ClojureLowering {
 		lowering.macroEvaluator = macroEvaluator;
 		lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
 		lowering.sourcePath.entryNamespace(firstNsName(datums));
+		lowering.rootFile = lowering.sourcePath.entryPath();
+		lowering.rootSourcePath = lowering.sourcePath.entryName();
+		lowering.loadingFile = lowering.rootFile;
+		lowering.loadingSourcePath = lowering.rootSourcePath;
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
@@ -1031,7 +1081,7 @@ public final class ClojureLowering {
 			// (their forms ride with it)
 			boolean ns = ClojureLowerUtil.isNsForm(datum);
 			if (!forms.isEmpty() || !ns) {
-				out.add(new ClojureTopLevel(forms, !ns));
+				out.add(new ClojureTopLevel(evaluated(forms, !ns), !ns));
 			}
 		}
 		if (!this.falseBound && !out.isEmpty()) {
@@ -1145,6 +1195,32 @@ public final class ClojureLowering {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * One input's forms the way the oracle's REPL evaluates it: its value recorded as
+	 * {@code *1} (the earlier ones moving to {@code *2} and {@code *3}; an {@code ns}
+	 * records nil), an exception it throws recorded as {@code *e} on its way to the
+	 * report ({@code clojure.lisp}, {@code %clojure-repl-result} and
+	 * {@code %clojure-repl-error}). An input lowering to nothing records nothing.
+	 * @param forms the input's forms
+	 * @param echoes whether its value is shown
+	 * @return the one form evaluating them
+	 */
+	private static List<LispVal> evaluated(List<LispVal> forms, boolean echoes) {
+		if (forms.isEmpty()) {
+			return forms;
+		}
+		List<LispVal> body = new ArrayList<>();
+		body.add(ClojureLowerUtil.sym("progn"));
+		body.addAll(forms);
+		if (!echoes) {
+			body.add(NIL_CONST);
+		}
+		LispVal handler = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-REPL-ERROR")));
+		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("handler-bind"), ClojureLowerUtil.list(handler),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPL-RESULT"), ClojureLowerUtil.list(body))));
 	}
 
 	void declare(List<LispVal> datums) {
@@ -1676,6 +1752,10 @@ public final class ClojureLowering {
 		boolean outerDispatch = this.inDispatchFn;
 		@Nullable String outerTestLocation = this.testLocation;
 		boolean outerEcho = this.nestedDefAnswersVar;
+		String outerFile = this.loadingFile;
+		String outerSourcePath = this.loadingSourcePath;
+		this.loadingFile = ClojureSourcePath.resourceOf(ns);
+		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
 		this.nestedDefAnswersVar = false;
 		this.scopes.clear();
 		this.scopes.add(new HashMap<>());
@@ -1754,6 +1834,8 @@ public final class ClojureLowering {
 			this.inDispatchFn = outerDispatch;
 			this.testLocation = outerTestLocation;
 			this.nestedDefAnswersVar = outerEcho;
+			this.loadingFile = outerFile;
+			this.loadingSourcePath = outerSourcePath;
 		}
 		this.hoisted.addAll(loaded);
 	}
@@ -1806,7 +1888,16 @@ public final class ClojureLowering {
 	 */
 	boolean hasInit(String ns) {
 		List<LispVal> statements = this.namespaceInits.get(ns);
-		return statements != null && !statements.isEmpty();
+		if (statements == null) {
+			return false;
+		}
+		for (LispVal statement : statements) {
+			// a switch of *ns* alone runs nothing anyone could see it from
+			if (!ClojureArms.isSwitch(statement)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1825,7 +1916,7 @@ public final class ClojureLowering {
 			return null;
 		}
 		LispSymbol flag = loadedFlagSym(ns);
-		LispVal run = ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(ns));
+		LispVal run = loading(ns, ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(ns)));
 		LispVal mark = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), flag, TRUE_CONST);
 		return switch (mode) {
 			case GUARDED -> ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"), flag, run, mark);
@@ -1837,7 +1928,8 @@ public final class ClojureLowering {
 				List<LispVal> steps = new ArrayList<>();
 				for (String member : reloadClosure(ns)) {
 					if (hasInit(member)) {
-						steps.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(member)));
+						steps.add(loading(member,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), initSym(member))));
 						steps.add(
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), loadedFlagSym(member), TRUE_CONST));
 					}
@@ -1845,6 +1937,57 @@ public final class ClojureLowering {
 				yield ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), steps);
 			}
 		};
+	}
+
+	/**
+	 * A namespace's init run where {@code clojure.main}'s {@code load} binds the load's
+	 * specials: {@code *ns*} to itself (the file's {@code ns} switches it, and the
+	 * requiring namespace is back afterwards), {@code *file*} to the file's path below
+	 * its source root and {@code *source-path*} to its name. The pairs are switches
+	 * ({@link ClojureArms.Family#NS_SWITCH} and its siblings), so a program reading none
+	 * of the three runs the init as before.
+	 * @param ns the namespace
+	 * @param run the call of its init
+	 * @return the call under the bindings
+	 */
+	private LispVal loading(String ns, LispVal run) {
+		String file = ClojureSourcePath.resourceOf(ns);
+		this.usedSpecials.addAll(List.of("*ns*", "*file*", "*source-path*"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(
+				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.NS),
+				ClojureLowerUtil.list(ClojureCoreSpecials.FILE, LispString.literal(file)), ClojureLowerUtil
+					.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ClojureSourcePath.lastSegmentOf(file)))),
+				run);
+	}
+
+	/**
+	 * The switch of {@code *ns*} to a namespace an {@code ns} or {@code in-ns} names: a
+	 * statement ({@link ClojureArms.Family#NS_SWITCH}) a program reading no {@code *ns*}
+	 * sheds.
+	 * @param ns the namespace
+	 * @return the statement
+	 */
+	LispVal nsSwitch(String ns) {
+		this.usedSpecials.add("*ns*");
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureCoreSpecials.NS,
+				ClojureCoreSpecials.namespaceObject(ns));
+	}
+
+	/**
+	 * The namespaces {@code the-ns} and {@code find-ns} find where they lower: the ones
+	 * the program created so far, the libraries it required and the ones the oracle loads
+	 * first, as a quoted list of names.
+	 * @return the lowered list
+	 */
+	LispVal knownNamespaces() {
+		Set<String> known = new java.util.TreeSet<>(this.createdNamespaces);
+		known.addAll(this.requiredLibraries);
+		known.addAll(STARTUP_NAMESPACES);
+		List<LispVal> names = new ArrayList<>();
+		for (String name : known) {
+			names.add(LispString.literal(name));
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(names));
 	}
 
 	/**
@@ -1884,7 +2027,7 @@ public final class ClojureLowering {
 			return;
 		}
 		List<LispVal> statements = this.namespaceInits.get(ns);
-		if (statements == null || statements.isEmpty()) {
+		if (statements == null || !hasInit(ns)) {
 			return;
 		}
 		List<LispVal> defs = new ArrayList<>();
@@ -1892,15 +2035,24 @@ public final class ClojureLowering {
 		List<LispVal> chunkSyms = new ArrayList<>();
 		List<LispVal> chunk = new ArrayList<>();
 		int chars = 0;
+		boolean statementInChunk = false;
 		for (LispVal statement : statements) {
-			String printed = statement.print();
-			if (!chunk.isEmpty() && chars + printed.length() > INIT_CHUNK_TARGET_CHARS) {
+			// a switch weighs nothing and joins the chunk at hand, and the rest weigh
+			// what they print without theirs: a program that sheds them cuts its init
+			// where it did before they existed
+			if (ClojureArms.isSwitch(statement)) {
+				chunk.add(statement);
+				continue;
+			}
+			int printed = ClojureArms.withoutSwitches(statement).print().length();
+			if (statementInChunk && chars + printed > INIT_CHUNK_TARGET_CHARS) {
 				chunkSyms.add(closeInitChunk(ns, chunkSyms.size() + 1, chunk, defs));
 				chunk = new ArrayList<>();
 				chars = 0;
 			}
 			chunk.add(statement);
-			chars += printed.length();
+			statementInChunk = true;
+			chars += printed;
 		}
 		chunkSyms.add(closeInitChunk(ns, chunkSyms.size() + 1, chunk, defs));
 		List<LispVal> calls = new ArrayList<>();

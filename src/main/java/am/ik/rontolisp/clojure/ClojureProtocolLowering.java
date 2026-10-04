@@ -38,14 +38,6 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The flags {@code clojure.main} binds around every load (measured on the oracle,
-	 * Clojure CLI 1.12) that have no value here ({@link ClojureCoreSpecials} has the
-	 * rest): a {@code set!} of one answers the value there, so it answers the value here
-	 * too, with no effect.
-	 */
-	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*ns*");
-
-	/**
 	 * The tag heading a record value: a record is
 	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table "ns.Name")}, beside
 	 * the {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers; the trailing
@@ -56,8 +48,9 @@ final class ClojureProtocolLowering {
 	static final LispSymbol RECORD_TAG = new LispSymbol(":C%RECORD");
 
 	/**
-	 * The tag heading a deftype value: the same 4-list as a record, but opaque to the map
-	 * verbs (reads miss, writers signal, {@code =} is identity), like the oracle.
+	 * The tag heading a deftype value: the same shape as a record, class name included,
+	 * but opaque to the map verbs (reads miss, writers signal, {@code =} is identity),
+	 * like the oracle.
 	 */
 	static final LispSymbol TYPE_TAG = new LispSymbol(":C%TYPE");
 
@@ -132,8 +125,8 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The host class name inside a record value: {@code (NTH 4 form)}, the string its
-	 * literal spells.
+	 * The host class name inside a record or deftype value: {@code (NTH 4 form)}, the
+	 * string a record's literal spells and an instance-call refusal names.
 	 */
 	static LispVal typedClassOf(LispVal form) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(4), form);
@@ -153,16 +146,20 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * A deftype's construction: {@code (LIST :C%TYPE tag fields table slots?)}. The table
-	 * holds the immutable fields ({@code .-field} reads it); a type with mutable fields
-	 * appends their slot vector, which only its inline methods read and write.
+	 * A deftype's construction: {@code (LIST :C%TYPE tag fields table className slots?)}.
+	 * The table holds the immutable fields ({@code .-field} reads it); a type with
+	 * mutable fields appends their slot vector ({@link #DEFTYPE_SLOTS}), which only its
+	 * inline methods read and write.
 	 */
-	static LispVal wrapDeftype(LispVal tag, LispVal fields, LispVal table, @Nullable LispVal slots) {
+	static LispVal wrapDeftype(LispVal tag, LispVal fields, LispVal table, LispVal className, @Nullable LispVal slots) {
 		if (slots == null) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table, className);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table, slots);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table, className, slots);
 	}
+
+	/** The index of a deftype's mutable-field slot vector, behind its class name. */
+	static final int DEFTYPE_SLOTS = 5;
 
 	/** A type's dispatch tag as data: the keyword of its spelling. */
 	static LispVal typeTagForm(String name) {
@@ -255,6 +252,28 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The protocol methods a {@code defrecord}/{@code deftype} body implements, as
+	 * {@link ClojureLowering#inlineMethodKey}s: read leniently, since the pre-scan meets
+	 * the datum before its checks run (the definition refuses what is malformed), and a
+	 * group naming no known protocol contributes nothing.
+	 */
+	private static Set<String> inlineMethods(ClojureLowering ctx, List<LispVal> items) {
+		Set<String> inline = new HashSet<>();
+		String protocolKey = null;
+		for (LispVal datum : items.subList(3, items.size())) {
+			if (datum instanceof LispSymbol s && !s.name().startsWith(":")) {
+				String key = ctx.isLocal(s.name()) ? null : ctx.lookupVar(s.name());
+				protocolKey = key != null && ctx.protocols.containsKey(key) ? key : null;
+			}
+			else if (protocolKey != null && ClojureLowerUtil.items(datum) instanceof List<LispVal> impl
+					&& !impl.isEmpty() && impl.get(0) instanceof LispSymbol method) {
+				inline.add(ClojureLowering.inlineMethodKey(protocolKey, method.name()));
+			}
+		}
+		return inline;
+	}
+
+	/**
 	 * The pre-scan half of {@code defrecord}/{@code deftype}: registers the type plus its
 	 * constructors in the current namespace, so a constructor call may stand above the
 	 * definition, like {@code defn}. The type name itself is no value (the oracle answers
@@ -268,7 +287,7 @@ final class ClojureProtocolLowering {
 		ClojureLowerUtil.isTrue(!record || mutable.isEmpty(),
 				":volatile-mutable or :unsynchronized-mutable not supported for record fields");
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
-				ctx.currentNs.replace('-', '_') + "." + name, mutable);
+				ctx.currentNs.replace('-', '_') + "." + name, mutable, inlineMethods(ctx, items));
 		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
 		ctx.globals.put(ctx.intern("->" + name, false), ClojureLowering.Kind.FUNCTION);
 		if (record) {
@@ -309,6 +328,7 @@ final class ClojureProtocolLowering {
 			}
 		}
 		Set<String> methods = new LinkedHashSet<>();
+		Map<String, Integer> arities = new HashMap<>();
 		for (; at < items.size(); at++) {
 			List<LispVal> sig = ClojureLowerUtil.items(items.get(at));
 			if (sig == null || sig.isEmpty() || !(sig.get(0) instanceof LispSymbol)) {
@@ -329,10 +349,11 @@ final class ClojureProtocolLowering {
 			List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(sig.get(marg)),
 					"the method " + method + " of");
 			ClojureLowerUtil.isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+			arities.put(method, params.size());
 		}
 		ClojureLowerUtil.isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
 		String var = ClojureLowering.varSym(key).name();
-		return new ClojureLowering.ProtocolDef(methods, new LispSymbol(var + "%methods"),
+		return new ClojureLowering.ProtocolDef(methods, arities, new LispSymbol(var + "%methods"),
 				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null);
 	}
 
@@ -521,8 +542,8 @@ final class ClojureProtocolLowering {
 	 * global or an unbound dynamic one (the run-time
 	 * {@code Can't change/establish root binding}, after the value evaluates). A
 	 * {@code clojure.core} special ({@link ClojureCoreSpecials}) assigns like a dynamic
-	 * var, a flag {@code clojure.main} binds at the top level too; {@code *ns*} answers
-	 * the value with no effect. A host field stays refused by name.
+	 * var, a flag {@code clojure.main} binds at the top level too. A host field stays
+	 * refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -569,11 +590,6 @@ final class ClojureProtocolLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), temp),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
-		}
-		if (ALWAYS_BOUND_FLAGS.contains(name)) {
-			// a clojure.main-bound compiler flag: bound around every load on the
-			// oracle, so a set! there answers the value; here it has no effect
-			return ctx.lower(items.get(2));
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
 				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");
@@ -775,7 +791,7 @@ final class ClojureProtocolLowering {
 		LispVal body = clause.wrapped();
 		if (!places.isEmpty()) {
 			binds.add(ClojureLowerUtil.list(slots,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(4), self)));
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(DEFTYPE_SLOTS), self)));
 			List<LispVal> macros = new ArrayList<>();
 			for (Map.Entry<String, LispVal> place : places.entrySet()) {
 				if (paramNames.contains(ctx.localSym(place.getKey()).name())) {
@@ -852,6 +868,7 @@ final class ClojureProtocolLowering {
 				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()))
 				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+						LispString.literal(def.className()),
 						slots.isEmpty() ? null : ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), slots));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "->" + name)),

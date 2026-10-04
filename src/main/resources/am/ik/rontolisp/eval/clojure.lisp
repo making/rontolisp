@@ -414,6 +414,7 @@
    ((rontolisp::%clojure-keyword-p x) nil)
    ((rontolisp::%clojure-var-p x) nil)
    ((rontolisp::%clojure-unbound-p x) nil)
+   ((rontolisp::%clojure-ns-object-p x) nil)
    ((rontolisp::%clojure-atom-p x) nil)
    ((rontolisp::%clojure-re-pattern-p x) nil)
    ((rontolisp::%clojure-re-matcher-p x) nil)
@@ -647,6 +648,8 @@
          (write-string "#<Unbound: #'" stream)
          (write-string (car (cdr x)) stream)
          (write-char #\> stream))
+        ((rontolisp::%clojure-ns-object-p x)
+         (rontolisp::%clojure-write-ns-object x readable stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-print-ns-map-p x)
@@ -812,6 +815,7 @@
                 (princ-to-string x))
                ((rontolisp::%clojure-unbound-p x)
                 (concatenate 'string "Unbound: #'" (car (cdr x))))
+               ((rontolisp::%clojure-ns-object-p x) (car (cdr x)))
                (t (or (rontolisp::%clojure-host-string x)
                       (rontolisp::%clojure-str-of x "nil" t)))))
         ((rontolisp::%clojure-re-pattern-p x)
@@ -1119,6 +1123,24 @@
           ((vectorp x) "clojure.lang.PersistentVector")
           ((rationalp x) "clojure.lang.Ratio")
           (t "clojure.lang.Symbol"))))
+
+;; Whether X is a typed value whose own body implements METHOD (a keyword) of
+;; the protocol whose inline rows TABLE holds: a record or deftype of one of
+;; CLASSES, the classes the lowering saw implement it, or a reify with a row
+;; there (no extension reaches a reify's fresh tag).
+(defun rontolisp::%clojure-inline-method-p (x table method classes)
+  (and (consp x)
+       (if (eq (car x) :C%REIFY)
+           (let ((row (gethash (car (cdr x)) table)))
+             (and row (gethash method row) t))
+           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (member (nth 4 x) classes :test #'equal) t))))
+
+;; Whether X is a record or deftype declaring FIELD (a keyword): its declared
+;; list holds the immutable fields only, since a mutable one is private.
+(defun rontolisp::%clojure-declared-field-p (x field)
+  (and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+       (member field (car (cdr (cdr x))) :test #'equal) t))
 
 ;; (.get coll i) over a vector, list or lazy seq, and (.nth v i): the member at
 ;; index I, signalling past either end like the oracle's
@@ -6208,6 +6230,97 @@
   "test as a value."
   (rontolisp::%clojure-check-arity args 1 1 "test")
   (rontolisp::%clojure-var-test (car args)))
+
+;;;; Namespaces: *ns* as a value, and the REPL's history.
+;;
+;; A namespace is (:C%NS-OBJECT "name"), interned per name in
+;; rontolisp::%clojure-ns-table (made on first use), so every read of one
+;; answers the same object, like the oracle's one Namespace per name. It exists
+;; at run time only as a value: what a namespace defines is decided where the
+;; program lowers, so the-ns and find-ns take the names the program created
+;; before the call (KNOWN, from the lowering). *ns* holds one: ns and in-ns
+;; switch it, a require rebinds it around the namespace's load. Every test of
+;; one (%clojure-ns-object-p) is an arm a program that makes none sheds
+;; (clojure/ClojureArms, the NAMESPACE family).
+
+(defvar rontolisp::%clojure-ns-table
+  nil
+  "The interned namespaces: an equal table from the name to its namespace,
+   NIL until the first one is made.")
+
+(defun rontolisp::%clojure-ns-object (name)
+  "The namespace NAME, interned on first use."
+  (unless rontolisp::%clojure-ns-table
+    (setq rontolisp::%clojure-ns-table (make-hash-table :test 'equal)))
+  (let ((ns (gethash name rontolisp::%clojure-ns-table)))
+    (if ns
+        ns
+        (setf (gethash name rontolisp::%clojure-ns-table)
+              (list :C%NS-OBJECT name)))))
+
+(defun rontolisp::%clojure-ns-object-p (x)
+  "Whether X is a namespace."
+  (and (consp x) (eq (car x) :C%NS-OBJECT)))
+
+(defun rontolisp::%clojure-write-ns-object (x readable stream)
+  "Write namespace X as the oracle's #object, its name quoted under pr, the
+   identity hash left out."
+  (write-string "#object[clojure.lang.Namespace " stream)
+  (if readable
+      (rontolisp::%clojure-write-readable-string (car (cdr x)) stream)
+      (write-string (car (cdr x)) stream))
+  (write-char #\] stream))
+
+(defun rontolisp::%clojure-find-ns (x known)
+  "find-ns: the namespace the symbol X names when the program created it
+   (KNOWN, the names it created before the call), else nil."
+  (if (not (rontolisp::%clojure-real-symbol-p x))
+      (error "find-ns needs a symbol"))
+  (let ((name (rontolisp::%clojure-symbol-full-name x)) (found nil))
+    (dolist (k known) (if (equal k name) (setq found t)))
+    (if found (rontolisp::%clojure-ns-object name) nil)))
+
+(defun rontolisp::%clojure-the-ns (x known)
+  "the-ns: X itself for a namespace, else the namespace the symbol X names,
+   signalling like the oracle when the program created none."
+  (if (rontolisp::%clojure-ns-object-p x)
+      x
+      (let ((ns (rontolisp::%clojure-find-ns x known)))
+        (if ns
+            ns
+            (error "No namespace: ~A found"
+                   (rontolisp::%clojure-symbol-full-name x))))))
+
+(defun rontolisp::%clojure-ns-name (x known)
+  "ns-name: the name of the namespace X (or the symbol naming one) as a
+   symbol."
+  (rontolisp::%clojure-symbol-1
+   (car (cdr (rontolisp::%clojure-the-ns x known)))))
+
+;; The REPL's *1, *2, *3 and *e: a session evaluates each input under
+;; %clojure-repl-error and hands its value to %clojure-repl-result
+;; (clojure/ClojureLowering, interact). A file only reads them, as nil.
+(defvar rontolisp::%clojure-history-1 nil)
+
+(defvar rontolisp::%clojure-history-2 nil)
+
+(defvar rontolisp::%clojure-history-3 nil)
+
+(defvar rontolisp::%clojure-history-e nil)
+
+(defun rontolisp::%clojure-repl-result (x)
+  "Record X, the value of a REPL input, as *1, the earlier two moving to *2 and
+   *3; answers X."
+  (setq rontolisp::%clojure-history-3 rontolisp::%clojure-history-2)
+  (setq rontolisp::%clojure-history-2 rontolisp::%clojure-history-1)
+  (setq rontolisp::%clojure-history-1 x)
+  x)
+
+(defun rontolisp::%clojure-repl-error (c)
+  "Record the condition C a REPL input signals as *e and decline it, so it
+   reaches the REPL's report unchanged."
+  (setq rontolisp::%clojure-history-e c)
+  nil)
 
 ;;;; Reduction and transducers.
 ;;
