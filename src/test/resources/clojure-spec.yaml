@@ -2114,6 +2114,28 @@ cases:
       false false false 9
       true
       true true false OK
+  - name: a-vector-import-spec-registers-its-classes
+    # (:import [pkg A B]) and (import '[pkg A B]) register the classes like the list
+    # spelling, a host class or another namespace's protocol interface (munged package).
+    # Measured against clj 1.12.6, identical.
+    source: |
+      (ns vi-ns.core)
+      (defprotocol ViNsP (vi-ns-m [x]))
+      (defrecord ViNsR [] ViNsP (vi-ns-m [_] 2))
+      (ns vi-use
+        (:import [java.io File] [java.util Map List] (java.util TreeMap) [vi_ns.core ViNsP]))
+      (println (instance? File "x") (instance? Map {}) (instance? Map [1]) (instance? List [1]) (instance? TreeMap {}))
+      (println (instance? ViNsP (vi-ns.core/->ViNsR)) (instance? ViNsP {}))
+      (import '[java.util Set] '(java.util Collection))
+      (println (instance? Set #{1}) (instance? Set {}) (instance? Collection [1]))
+      (import [java.util Iterator])
+      (println (instance? Iterator [1]))
+      (ns auto)
+    expected: |
+      false true false true false
+      true false
+      true false true
+      false
   - name: methods-answers-the-method-table-as-a-map
     # (methods mt) is a copy of the table: the nil row keyed by nil, the Object and the
     # default rows in it, a later defmethod or remove-method not reaching it. A host

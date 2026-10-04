@@ -771,6 +771,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `(get (methods f) (class x))` works while `(contains? (methods f) String)` is false.
   Programs that do not call it compile byte-identically (measured 2026-10-04: wasm P1,
   `--optimize=size`, component and JVM class of a Clojure demo and a multimethod program).
+- `:import` / `import` read a `[pkg A B]` vector like the `(pkg A B)` list: the reader's
+  `VECTOR` marker leads the items and is skipped (`importSpecs`, as `referNames` does), so a
+  vector spelling no longer registers `<marker>.pkg` and `<marker>.A`.
 - A `defmulti` of a var that holds a multimethod lowers to `nil`, like the oracle's (the
   corpus's second `(defmulti my-print class :default :everything-else)` keeps the first's
   methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
