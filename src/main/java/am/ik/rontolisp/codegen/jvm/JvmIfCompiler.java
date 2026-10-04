@@ -27,7 +27,12 @@ final class JvmIfCompiler {
 			return;
 		}
 		Opcode falseBranchOpcode;
-		if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
+		if (JvmSymbolApiCompiler.isSymbolIs(parts.get(1))) {
+			// A name dispatch's test: one String.equals, no boxed t/nil.
+			JvmSymbolApiCompiler.emitSymbolIsTest((LispCons) parts.get(1), ctx, className);
+			falseBranchOpcode = Opcode.IFEQ;
+		}
+		else if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
 			falseBranchOpcode = Opcode.IFEQ;
 		}
 		else {

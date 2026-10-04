@@ -1843,7 +1843,9 @@ class WasmLispCompilerTest {
 	void aDeepElseChainCompilesOnAMegabyteStack() throws Exception {
 		// A 315-level chain (the progv dispatch over the ci-spec special set)
 		// overflowed a 1 MiB compile stack cold (2026-09-25): an else-chain compiles
-		// iteratively, so depth costs no Java stack whatever builds it. Built
+		// iteratively, so depth costs no Java stack whatever builds it. The shared
+		// runtimes cut the dispatches into segments now; user definitions taking their
+		// names keep them inline, the thousand-level shape this pins. Built
 		// programmatically: the reader itself recurses per
 		// nesting level, and a deep chain as source would overflow it instead.
 		byte[] module = compileOnOneMebibyte(progvThousandSpecials());
@@ -1867,6 +1869,24 @@ class WasmLispCompilerTest {
 		assertThat(grown - base).isLessThan(1_000);
 	}
 
+	@Test
+	void progvAndSetSitesDoNotPayForTheSpecialSet() {
+		// progv dispatches each runtime name over the special set and set over the
+		// global set through shared runtimes: four more sites of each cost their calls,
+		// not four copies of the 300-arm dispatch (~18 KB a progv when every site
+		// spelled it inline). The run half is WasmLispCompilerIntegrationTest's.
+		String more = """
+				(defun pvs-more (a v)
+				  (list (progv (list a) (list v) (symbol-value a)) (progv (list a) (list v) (symbol-value a))
+				        (progv (list a) (list v) (symbol-value a)) (progv (list a) (list v) (symbol-value a))
+				        (set a v) (set a v) (set a v) (set a v)))
+				(print (pvs-more '*pvs-2* 7))
+				""";
+		int base = compilePrelude(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE).length;
+		int grown = compilePrelude(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE + more).length;
+		assertThat(grown - base).isLessThan(2_000);
+	}
+
 	private static byte[] compilePrelude(String lispCode) {
 		return new WasmLispCompiler()
 			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
@@ -1875,10 +1895,15 @@ class WasmLispCompilerTest {
 	/**
 	 * A thousand specials, a computed `symbol-value` and a `progv`: shallow source whose
 	 * progv lowering expands to thousand-level else-chains at codegen time, the ci-spec
-	 * failure's shape.
+	 * failure's shape -- inline, because user definitions take the names of the shared
+	 * runtimes that would otherwise hold the dispatches.
 	 */
 	private static List<LispVal> progvThousandSpecials() {
 		List<LispVal> program = new java.util.ArrayList<>();
+		for (String shadow : List.of("%SYMBOL-VALUE-DYNAMIC-SHADOW", "%PROGV-BIND-SHADOW", "%PROGV-UNBIND-SHADOW")) {
+			program.add(cons(sym("DEFUN"),
+					cons(sym(shadow), cons(LispNil.INSTANCE, cons(LispNil.INSTANCE, LispNil.INSTANCE)))));
+		}
 		for (int i = 0; i < 1000; i++) {
 			program.add(cons(sym("DEFVAR"),
 					cons(sym("*PS-" + i + "*"), cons(new am.ik.rontolisp.LispInteger(i), LispNil.INSTANCE))));

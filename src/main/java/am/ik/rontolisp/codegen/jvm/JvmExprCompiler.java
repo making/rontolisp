@@ -1538,14 +1538,20 @@ final class JvmExprCompiler {
 				// static: lower to a loop dispatching each name over that set, with
 				// an unwind-protect carrying the restores (.kb/dynamic-special-
 				// variables.md).
-				JvmExprCompiler.compileExpr(
-						LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.evalStoreRef != null), ctx,
-						className);
+				JvmExprCompiler
+					.compileExpr(
+							LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.evalStoreRef != null,
+									ctx.functions.containsKey(LispNames.PROGV_BIND_RUNTIME)
+											&& ctx.functions.containsKey(LispNames.PROGV_UNBIND_RUNTIME)),
+							ctx, className);
 			case LispNames.PROGV_DYN_BIND -> JvmProgvCompiler.compileDynBind(cons, ctx, className);
 			case LispNames.PROGV_DYN_UNBIND -> JvmProgvCompiler.compileDynUnbind(cons, ctx, className);
 			case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
 			case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
+			case LispNames.SYMBOL_IS -> JvmSymbolApiCompiler.compileSymbolIs(cons, ctx, className);
+			case LispNames.GLOBAL_STORE_SET -> JvmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx, className);
+			case LispNames.SET_MIRROR -> JvmSymbolApiCompiler.compileSetMirror(cons, ctx, className);
 			case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className, tail);
 			case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
 			case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);

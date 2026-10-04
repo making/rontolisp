@@ -22499,6 +22499,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void progvAndSetSitesBindAndStoreByName() {
+		// The reference answer for the compiled backends' twins
+		// (JvmLispCompilerTest#progvAndSetSitesDoNotEachPayForTheSpecialSet,
+		// WasmLispCompilerIntegrationTest#progvAndSetSitesBindAndStoreByName): every
+		// progv site binds its runtime names and restores them on every exit, every
+		// set site stores through its runtime name.
+		assertThat(printedLines(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvSetSiteFixture.EXPECTED);
+	}
+
+	@Test
 	void specialVariablesAreThreadScoped() throws Exception {
 		// The flagship acceptance case: one shared evaluator (like the HTTP handler,
 		// which
