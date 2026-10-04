@@ -619,6 +619,9 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
+        ;; an integer carries no metadata, is no collection and has no label:
+        ;; it skips every kind test below
+        ((integerp x) (princ x stream))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -745,6 +748,9 @@
         ((rontolisp::%clojure-stream-p x)
          (rontolisp::%clojure-write-stream x readable stream))
         ((functionp x) (write-string "#<procedure>" stream))
+        ((rontolisp::%clojure-host-seqable-p x)
+         (rontolisp::%clojure-write-host x nil-replacement readable stream
+                                         labels))
         (t (let ((name (rontolisp::%clojure-host-class-name x)))
              (if name (write-string name stream) (princ x stream))))))
 
@@ -1799,6 +1805,37 @@
                  (setf (gethash (rontolisp::%clojure-store-key k out) out)
                        (aref e 1))))))
         (t keys)))
+
+(defun rontolisp::%clojure-write-host (x nil-replacement readable stream labels)
+  "Write the host object X (%clojure-host-seqable-p) like the oracle's
+   print-method: readably, a Map as a map, a Set as a set, a RandomAccess as a
+   vector and any other List as a list, written as that Clojure value so the
+   print flags reach its members; anything else, and every host object not
+   readably, as the host object it is."
+  ;; the members go in as they are, not through %clojure-store-key: the host's
+  ;; own equals already made them distinct, and the key representatives pulled
+  ;; %clojure-equal's closure into every printing java: program (+16 KB class)
+  (let ((v
+         (cond ((not readable) nil)
+               ((rontolisp::%clojure-host-instance-p x "java.util.Map")
+                (let ((table (make-hash-table :test 'equal)))
+                  (dolist (e (rontolisp::%clojure-host-seq x) table)
+                    (setf (gethash (aref e 0) table) (aref e 1)))))
+               ((rontolisp::%clojure-host-instance-p x "java.util.Set")
+                (let ((table (make-hash-table :test 'equal)))
+                  (dolist (m (rontolisp::%clojure-host-seq x)
+                             (list :C%SET table))
+                    (setf (gethash m table) m))))
+               ((rontolisp::%clojure-host-instance-p x "java.util.RandomAccess")
+                (coerce (rontolisp::%clojure-host-seq x) 'vector))
+               ;; an empty List is a realized empty lazy seq: () under the
+               ;; print flags, where nil would print as nil
+               ((rontolisp::%clojure-host-instance-p x "java.util.List")
+                (or (rontolisp::%clojure-host-seq x)
+                    (list :C%LAZY (cons nil nil)))))))
+    (if v
+        (rontolisp::%clojure-write v nil-replacement readable stream labels)
+        (princ x stream))))
 
 (defun rontolisp::%clojure-host-entries (x name)
   "The entries of the host object X (%clojure-host-seqable-p) as [key value]

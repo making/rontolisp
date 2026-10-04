@@ -304,6 +304,22 @@ class ClojureLibraryTest {
 				"(RONTOLISP::%CLOJURE-HOST-ENTRY-PLIST ", "(RONTOLISP::%CLOJURE-HOST-TABLE ");
 	}
 
+	@Test
+	void aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm() {
+		// only a java: operator hands a program a host collection: without one, the
+		// printer keeps what it wrote before and nothing reaches the host writer
+		String print = "(prn [1] {1 2} #{3} '(4))";
+		String arm = "(RONTOLISP::%CLOJURE-HOST-SEQABLE-P X)";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains(arm);
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(print, null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("HOST-SEQABLE")
+			.doesNotContain("WRITE-HOST");
+		String withJava = "(def al (java.util.ArrayList. [1])) " + print;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).contains(arm);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE-HOST")).isNotEmpty();
+	}
+
 	/** The processed forms of the program itself: the tail past the spliced library. */
 	private static String program(List<LispVal> processed, String source) {
 		int own = Clojure.read(source, null).size();

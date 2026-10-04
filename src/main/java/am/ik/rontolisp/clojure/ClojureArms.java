@@ -178,12 +178,12 @@ public final class ClojureArms {
 		/**
 		 * A host object, which {@code instance?} asks the host the class of, {@code =}
 		 * compares as a collection with a Clojure one, {@code seq}, {@code count},
-		 * {@code empty?}, {@code get} and {@code contains?} read as one and the map verbs
+		 * {@code empty?}, {@code get} and {@code contains?} read as one, the map verbs
 		 * read as a map (the views are {@code select-keys}' key list and the map
-		 * {@code merge-with} walks): only a {@code java:} operator hands one to the
-		 * program. The aliases are {@code instance?} of a class a core kind's value is
-		 * and a host object may be ({@code Number}, {@code CharSequence}), each to the
-		 * kind's own test.
+		 * {@code merge-with} walks) and the printer writes readably as its Clojure kind:
+		 * only a {@code java:} operator hands one to the program. The aliases are
+		 * {@code instance?} of a class a core kind's value is and a host object may be
+		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
 		 */
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",

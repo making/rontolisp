@@ -176,7 +176,8 @@ Each is a real work item unless the reason says otherwise.
   and single-member sets); unreadable values print `#<..>` -- functions `#<procedure>`, atoms
   and agents `#<Atom v>`, an `ex-info` its condition, a hierarchy its hash table, a
   stream the oracle's `#object` without the hash ("Streams as values"), any
-  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
+  other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash; a
+  host `List`/`Map`/`Set` prints readably as its Clojure kind, "Java interop") --
   while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
   `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
@@ -1192,6 +1193,41 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   map), `find`/`reduce-kv` within noise.
   Pins: `ClojureInteropTest#aHostMapIsAMapToTheMapVerbs` (oracle-identical),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms`.
+- Host collections under the printer (decided 2026-10-04, oracle clj 1.12.6): `print-method`
+  under `*print-readably*` writes a `RandomAccess` as a vector, another `List` as a list, a
+  `Map` as a map and a `Set` as a set, members readably, under `*print-length*`/`*print-level*`,
+  in the host's own order; another `Collection` (`ArrayDeque`, a `Map`'s `values`), a `Map`'s
+  entries, and every host object not readably (`println`, `print`, `str` of one) are
+  `print-object` -- here `#<java C>`. Before: `#<java C>` for all. One clause
+  `(%clojure-host-seqable-p x)` ahead of `%clojure-write`'s fall-through calls
+  `%clojure-write-host`, which builds the Clojure value (a plain `equal` table / `:C%SET`
+  table / vector / list, an empty `List` a realized empty lazy seq so it is `()`, `#` at level
+  0) and writes it through `%clojure-write` at the same depth, so the print-flag arms apply.
+  The members go in without `%clojure-store-key`: its key representatives pulled
+  `%clojure-equal`'s closure in (`count` + `.toUpperCase` + `println`: JVM class +17,697 B with
+  it, +1,574 B without). Cost, measured 2026-10-04: a program naming no `java:` operator is
+  byte-identical (wasm P1, `--optimize=size`, component, JVM class and runtime classes:
+  `demo.clj`, a program printing vectors, maps, sets, lists, sorted maps under the print
+  flags). A `java:` program, JVM class: `count` + `.toUpperCase` + `println` 113,378 ->
+  114,952 B, the same with `prn` 114,969 -> 115,881, the pin's program 183,604 -> 184,545 (wasm
+  output is the `java:new` refusal either way, +-3 B). Speed: JVM `pr-str` of a 200k-integer
+  vector in a `java:` program within noise (3.97 -> 3.95 s / 20, medians of 5); the
+  interpreter, which keeps the arm in every program, pays one call per value reaching the
+  fall-through (integers): `pr-str` of a 50k-integer vector 6.87 -> 7.40 s / 4 (+8%, medians
+  of 5, load 3-13). An integer therefore takes `((integerp x) (princ x stream))` right after
+  the `nil` arm (it has no metadata, is no collection, carries no label; a bignum is an
+  integer, a ratio still falls through to the same `princ`): the same `pr-str` x 5 on the
+  interpreter 12.2 -> 6.0 s (the load, compile and `princ` share is the rest), JVM 200k x 20
+  3.24 -> 3.09 s, wasm and component 4.9 -> 4.6 s (3-5%, near noise: the compiled kind tests
+  are cheap). Cost, measured 2026-10-04: a program that prints a non-literal value
+  grows by the one clause, wasm +46 B (P1, `--optimize=size`, component alike; 36,796 ->
+  36,842), and any JVM program that links the printer, `(println "n")` included, grows
+  +288-336 B of class (59,347 -> 59,635); a program linking no printer (wasm
+  `(println "n")`, a JVM `(def x 1)`) is byte-identical. Output identical on the four backends
+  (`an-integer-and-a-ratio-print-as-their-digits-under-every-flag`).
+  Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
+  (oracle-identical but the `#<java C>` lines),
+  `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.
 
 ## Laziness
 
