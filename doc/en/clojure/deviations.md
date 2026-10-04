@@ -20,7 +20,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   without a cycle prints twice. An atom prints unreadably (`#<Atom value>`), a function
   as `#<procedure>`, an exception as its `toString` (`clojure.lang.ExceptionInfo: m {}`;
   the oracle prints `#error {...}`), an unbound var's root as `#<Unbound: #'user/x>` (the
-  oracle's `#object` carries a hash).
+  oracle's `#object` carries a hash). A stream prints as the oracle's `#object` of the
+  host class its kind is without the identity hash (`#object[java.io.StringWriter "ab"]`,
+  `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`), and `str` answers
+  its `toString` the same way: a string input stream is a
+  `clojure.lang.LineNumberingPushbackReader` (`with-in-str`'s), also where the oracle's is
+  a `java.io.PushbackReader` over a `StringReader`.
 - `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
   read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
   `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
@@ -248,8 +253,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   plain `clojure.java.io/reader` too, where the oracle requires a `PushbackReader` -- and
   refuses a host reader.
 - `*out*`/`*in*`/`*err*` are `*standard-output*`/`*standard-input*`/`*error-output*`
-  (rebinding rebinds the standard streams); `(prn *out*)` prints `true` (the root of
-  `*standard-output*` is `t`);
+  (rebinding rebinds the standard streams); read at the root, `*out*` and `*in*` are
+  stream values over the process standard streams;
   `defonce` keeps the root on reload where `def` resets it.
 - A host-object boolean answers `false` only when the receiver's class is known
   at lowering (a construction literal, a `let`/`if-let`/`when-let` local bound

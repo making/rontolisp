@@ -52,9 +52,15 @@ final class ClojureCoreSpecials {
 	 * @param lowered whether {@code root} is already a lowered form
 	 * @param counter the binding-depth counter, or null for a flag {@code clojure.main}
 	 * binds
+	 * @param reader the library function a read of a stream as a value calls, or null
+	 * when the read is the variable itself: at the root {@code *standard-output*} and
+	 * {@code *standard-input*} hold the {@code t} designator, Clojure's {@code true}, so
+	 * {@code *out*} and {@code *in*} answer a stream value there instead; {@code *err*}
+	 * holds one already, and its reader only marks the read as a stream producer
+	 * ({@link ClojureArms.Family#STREAM})
 	 */
 	record Special(String name, LispSymbol symbol, @Nullable LispVal root, boolean lowered,
-			@Nullable LispSymbol counter) {
+			@Nullable LispSymbol counter, @Nullable LispSymbol reader) {
 
 		/**
 		 * Whether {@code clojure.main} binds it around a script: always thread-bound, so
@@ -82,10 +88,10 @@ final class ClojureCoreSpecials {
 
 	private static Map<String, Special> table() {
 		Map<String, Special> table = new LinkedHashMap<>();
-		stream(table, "*out*", "*STANDARD-OUTPUT*");
-		stream(table, "*in*", "*STANDARD-INPUT*");
-		stream(table, "*err*", "*ERROR-OUTPUT*");
-		stream(table, "*agent*", "C%AGENT");
+		stream(table, "*out*", "*STANDARD-OUTPUT*", "RONTOLISP::%CLOJURE-OUT");
+		stream(table, "*in*", "*STANDARD-INPUT*", "RONTOLISP::%CLOJURE-IN");
+		stream(table, "*err*", "*ERROR-OUTPUT*", "RONTOLISP::%CLOJURE-ERR");
+		stream(table, "*agent*", "C%AGENT", null);
 		LispSymbol nil = new LispSymbol("nil");
 		LispSymbol yes = new LispSymbol("true");
 		LispSymbol no = new LispSymbol("false");
@@ -107,7 +113,7 @@ final class ClojureCoreSpecials {
 		// when there are none
 		table.put(args, new Special(args, flagSymbol(args),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(new LispSymbol("%HOST-ARGV"))),
-				true, null));
+				true, null, null));
 		flag(table, "*print-dup*", no, false);
 		flag(table, "*flush-on-newline*", yes, false);
 		flag(table, "*compile-files*", no, false);
@@ -126,12 +132,13 @@ final class ClojureCoreSpecials {
 		return table;
 	}
 
-	private static void stream(Map<String, Special> table, String name, String symbol) {
-		table.put(name, new Special(name, new LispSymbol(symbol), null, false, counterSymbol(name)));
+	private static void stream(Map<String, Special> table, String name, String symbol, @Nullable String reader) {
+		table.put(name, new Special(name, new LispSymbol(symbol), null, false, counterSymbol(name),
+				reader == null ? null : new LispSymbol(reader)));
 	}
 
 	private static void flag(Map<String, Special> table, String name, LispVal root, boolean mainBound) {
-		table.put(name, new Special(name, flagSymbol(name), root, false, mainBound ? null : counterSymbol(name)));
+		table.put(name, new Special(name, flagSymbol(name), root, false, mainBound ? null : counterSymbol(name), null));
 	}
 
 	private static LispSymbol flagSymbol(String name) {

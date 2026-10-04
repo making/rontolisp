@@ -3567,6 +3567,17 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * A {@code clojure.core} special read as a value: {@link #specialValue}, or for a
+	 * stream a call of its {@link ClojureCoreSpecials.Special#reader}, which answers a
+	 * stream value where the variable holds the {@code t} designator. A binding or
+	 * {@code set!} target stays the variable itself.
+	 */
+	LispVal specialRead(ClojureCoreSpecials.Special special) {
+		LispVal variable = specialValue(special);
+		return special.reader() == null ? variable : ClojureLowerUtil.list(special.reader());
+	}
+
+	/**
 	 * {@link #coreValue}, or null for a core name with no value here (a macro, or a var
 	 * the subset does not implement).
 	 */
@@ -3581,7 +3592,7 @@ public final class ClojureLowering {
 		}
 		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
 		if (special != null) {
-			return specialValue(special);
+			return specialRead(special);
 		}
 		LispVal synth = valueOf(name);
 		if (synth != null) {
@@ -3631,7 +3642,7 @@ public final class ClojureLowering {
 		ClojureCoreSpecials.Special special = ClojureCoreSpecials.of(name);
 		if (special != null && !isLocal(name) && resolveVar(name) == null) {
 			// a clojure.core special no program var claims: its special variable
-			return specialValue(special);
+			return specialRead(special);
 		}
 		if (!known(name)) {
 			if (name.equals("nth")) {

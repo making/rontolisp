@@ -6008,6 +6008,42 @@ cases:
       "via err"
       false false true
       "Can't change/establish root binding of: *err* with set" "Can't change/establish root binding of: *out* with set"
+  - name: a-stream-prints-as-the-host-object-of-its-kind
+    # The oracle (clj 1.12.6) with its identity hashes removed (#object[C 0x.. "C@.."]
+    # here is #object[C "C"]): *out*, *in* and *err* at the root are the process standard
+    # streams, stream values apart from true, and every stream prints as the #object of the
+    # host class its kind is, str answering its toString (a StringWriter's text so far).
+    # One deviation: a string input stream is a LineNumberingPushbackReader, with-in-str's
+    # *in*, so the PushbackReader over a StringReader prints that where the oracle says
+    # java.io.PushbackReader.
+    source: |
+      (prn *out* *in* *err*)
+      (println *out* *in* *err*)
+      (println (str *out*) (str *in*) (str *err*) (.toString *out*))
+      (prn (= *out* *in*) (identical? *out* *out*) (= *out* *out*) (= *out* *err*) (true? *out*))
+      (binding [*out* *out*] (println "through the root stream"))
+      (.write *out* "written\n")
+      (.flush *out*)
+      (prn (with-out-str (prn *out*)))
+      (prn (java.io.StringWriter.) [*out*] (pr-str *err*) (print-str *in*))
+      (let [w (java.io.StringWriter.)] (.write w "a\"b") (prn w (str w)) (println w))
+      (with-in-str "abc" (prn *in*))
+      (prn (java.io.PushbackReader. (java.io.StringReader. "x")))
+      (prn @#'*out* @#'*in*)
+    expected: |
+      #object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"] #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"] #object[java.io.PrintWriter "java.io.PrintWriter"]
+      #object[java.io.OutputStreamWriter java.io.OutputStreamWriter] #object[clojure.lang.LineNumberingPushbackReader clojure.lang.LineNumberingPushbackReader] #object[java.io.PrintWriter java.io.PrintWriter]
+      java.io.OutputStreamWriter clojure.lang.LineNumberingPushbackReader java.io.PrintWriter java.io.OutputStreamWriter
+      false true true false false
+      through the root stream
+      written
+      "#object[java.io.StringWriter \"\"]\n"
+      #object[java.io.StringWriter ""] [#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]] "#object[java.io.PrintWriter \"java.io.PrintWriter\"]" "#object[clojure.lang.LineNumberingPushbackReader clojure.lang.LineNumberingPushbackReader]"
+      #object[java.io.StringWriter "a\"b"] "a\"b"
+      #object[java.io.StringWriter a"b]
+      #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+      #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+      #object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"] #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
   - name: print-length-level-and-readably-shape-the-printer
     # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
     # collection or record after that many members with ... (an infinite seq realizes only

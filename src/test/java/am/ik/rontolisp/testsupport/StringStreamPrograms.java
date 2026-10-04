@@ -9,7 +9,8 @@ package am.ik.rontolisp.testsupport;
  * One text per program, because the behavior must not differ between backends and a
  * per-class copy lets one expectation drift. The answers are SBCL's (checked 2026-09-22),
  * except for the {@code t} designator, which is a designator here rather than a stream
- * and answers both directions.
+ * and answers both directions. The last two lines are the standard stream values over
+ * {@code t} a Clojure program's {@code *in*}/{@code *out*} read answers.
  */
 public final class StringStreamPrograms {
 
@@ -42,6 +43,8 @@ public final class StringStreamPrograms {
 			(print (dir-of *error-output*))
 			(print (dir-of t))
 			(print (dir-of 3))
+			(print (dir-of (%obj-new '%stream t :standard-input)))
+			(print (dir-of (%obj-new '%stream t :standard-output)))
 			""";
 
 	/** What {@link #DIRECTION_PROGRAM} prints. */
@@ -61,7 +64,9 @@ public final class StringStreamPrograms {
 			(NIL T)
 			(NIL T)
 			(T T)
-			(NIL NIL)""";
+			(NIL NIL)
+			(T NIL)
+			(NIL T)""";
 
 	/**
 	 * The direction program over a concrete scratch path.

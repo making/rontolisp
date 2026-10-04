@@ -64,6 +64,21 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoStreamSplicesTheLibraryWithoutItsStreamArms() {
+		// the printer's and str's stream arms go like the unbound ones: only a program
+		// that can hold a stream (a read of *out*, a StringWriter, ...) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-STREAM-P X)");
+		List<LispVal> plain = Clojure.read("(prn (str 1) (with-out-str (print 2)))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("STREAM-P");
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-STREAM-P");
+		List<LispVal> stream = Clojure.read("(prn *out*)", null);
+		assertThat(defun(ClojureLibrary.process(stream), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-STREAM-P X)");
+	}
+
+	@Test
 	void aProgramReadingNoStreamDepthShedsTheRebindingPairs() {
 		// with-out-str, a binding of *out* and an agent action rebind the counters, which
 		// only a #'*out* / #'*in* / #'*agent* site reads: without one the pairs go and

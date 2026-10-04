@@ -20,7 +20,13 @@
  （`#0=(1 . #0#)`）で印字され、循環なしの共有は 2 度印字されます。atom は可読でない
  形（`#<Atom value>`）、関数は `#<procedure>`、例外はその `toString`
  （`clojure.lang.ExceptionInfo: m {}`。オラクルは `#error {...}`）、未束縛の var のルートは `#<Unbound: #'user/x>`（オラクルの
- `#object` はハッシュを含みます）と印字されます。
+ `#object` はハッシュを含みます）と印字されます。ストリームは種類に対応するホストクラスの
+ `#object` として、オラクルの印字から識別ハッシュを除いた形で印字されます
+ （`#object[java.io.StringWriter "ab"]`、
+ `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`）。`str` も同じ形の
+ `toString` を答えます。文字列入力ストリームは `with-in-str` の
+ `clojure.lang.LineNumberingPushbackReader` で、オラクルが `StringReader` の上の
+ `java.io.PushbackReader` を答える場合も同じです。
 - `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
  付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
  Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
@@ -239,8 +245,8 @@
   拒否されます。`read` はストリームを取り、素の `clojure.java.io/reader` も受け付けます
   （オラクルは `PushbackReader` を要求します）。ホストのリーダは拒否します。
 - `*out*`/`*in*`/`*err*` は `*standard-output*`/`*standard-input*`/`*error-output*`
-  です（再束縛は標準ストリームの再束縛になります）。`(prn *out*)` は `true` と印字されます
-  （`*standard-output*` のルートが `t` のため）。
+  です（再束縛は標準ストリームの再束縛になります）。ルートで読んだ `*out*` と `*in*` は
+  プロセスの標準ストリームを指すストリーム値です。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
 - ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
   （構築リテラル、それを束縛した `let`/`if-let`/`when-let` ローカル、または

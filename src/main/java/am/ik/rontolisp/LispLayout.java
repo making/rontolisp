@@ -216,6 +216,22 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 		 */
 		public static final String STANDARD = ":STANDARD";
 
+		/**
+		 * The process standard OUTPUT as a value over the {@code t} designator, which is
+		 * its handle: what a Clojure program's {@code *out*} reads at the root, where
+		 * {@code *standard-output*} holds {@code t} -- Clojure's {@code true}. Every
+		 * operation resolves it to {@code t}, so no backend writes through a handle of
+		 * its own.
+		 */
+		public static final String STANDARD_OUTPUT = ":STANDARD-OUTPUT";
+
+		/**
+		 * The process standard INPUT as a value over the {@code t} designator: what a
+		 * Clojure program's {@code *in*} reads at the root ({@link #STANDARD_OUTPUT}'s
+		 * input twin).
+		 */
+		public static final String STANDARD_INPUT = ":STANDARD-INPUT";
+
 	}
 
 	/**

@@ -57,6 +57,21 @@ final class ClojureInteropLowering {
 	 */
 	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
 
+	/** A zero-argument {@code java.io.StringWriter}: a string output stream. */
+	static final String STRING_WRITER = "RONTOLISP::%CLOJURE-STRING-WRITER";
+
+	/** A reader over a {@code java.io.StringReader}: a string input stream. */
+	static final String STRING_READER = "RONTOLISP::%CLOJURE-STRING-READER";
+
+	/** The stream test, an arm of {@code ClojureArms.Family.STREAM}. */
+	static final String STREAM_P = "RONTOLISP::%CLOJURE-STREAM-P";
+
+	/** A stream's toString. */
+	static final String STREAM_STRING = "RONTOLISP::%CLOJURE-STREAM-STRING";
+
+	/** A read of {@code *in*} as a value. */
+	static final String STANDARD_INPUT_READ = "RONTOLISP::%CLOJURE-IN";
+
 	/**
 	 * The zero-argument {@code Throwable} methods an exception condition answers
 	 * ({@link #instanceCallLoweredWithClass}); {@code toString} is
@@ -837,13 +852,14 @@ final class ClojureInteropLowering {
 
 	/**
 	 * A zero-argument {@code java.io.StringWriter} construction (dotted or imported,
-	 * resolved): a fresh string output stream, so every backend runs it -- wasm included,
-	 * which never sees the refused {@code java:new}. Anything else (an initial-capacity
-	 * argument, another class) is null, so the call keeps its {@code java:new} shape.
+	 * resolved): a fresh string output stream ({@code %clojure-string-writer}, a stream
+	 * producer), so every backend runs it -- wasm included, which never sees the refused
+	 * {@code java:new}. Anything else (an initial-capacity argument, another class) is
+	 * null, so the call keeps its {@code java:new} shape.
 	 */
 	static @Nullable LispVal stringWriterConstruction(String cls, int argCount) {
 		if (cls.equals(STRING_WRITER_CLASS) && argCount == 0) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"));
+			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER));
 		}
 		return null;
 	}
@@ -874,8 +890,7 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		LispVal text = stringReaderText(ctx, args.get(0));
-		LispVal reader = text != null
-				? ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-input-stream"), ctx.lower(text))
+		LispVal reader = text != null ? ClojureLowerUtil.list(new LispSymbol(STRING_READER), ctx.lower(text))
 				: ctx.lower(args.get(0));
 		if (args.size() == 1 && isStreamForm(reader)) {
 			return reader;
@@ -899,21 +914,19 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * Whether a lowered form surely answers a Common Lisp character input stream: an
-	 * {@code open} (a {@code clojure.java.io/reader}), a string input stream,
-	 * {@code *standard-input*} ({@code *in*}), or a binding form ending in one (a nested
-	 * reader wrapper).
+	 * Whether a lowered form surely answers a Common Lisp character input stream: a
+	 * {@code clojure.java.io/reader}, a string input stream over a
+	 * {@code java.io.StringReader}, a read of {@code *in*}, or a binding form ending in
+	 * one (a nested reader wrapper).
 	 */
 	static boolean isStreamForm(LispVal lowered) {
-		if (ClojureLowerUtil.isSymbolNamed(lowered, "*STANDARD-INPUT*")) {
-			return true;
-		}
 		List<LispVal> items = ClojureLowerUtil.items(lowered);
 		if (items == null || items.isEmpty()) {
 			return false;
 		}
-		if (ClojureLowerUtil.isSymbolNamed(items.get(0), "OPEN")
-				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "MAKE-STRING-INPUT-STREAM")) {
+		if (ClojureLowerUtil.isSymbolNamed(items.get(0), ClojureNamespaceLowering.READER)
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STRING_READER)
+				|| ClojureLowerUtil.isSymbolNamed(items.get(0), STANDARD_INPUT_READ)) {
 			return true;
 		}
 		return items.size() == 3 && ClojureLowerUtil.isSymbolNamed(items.get(0), "LET*") && isStreamForm(items.get(2));
@@ -1451,16 +1464,18 @@ final class ClojureInteropLowering {
 	}
 
 	/**
-	 * {@code toString} over an already-bound receiver that is no string or string output
-	 * stream (both arms of the stream test reach here, since {@code streamp} also answers
-	 * true for {@code t}, Clojure's {@code true}): a value of a Lisp kind -- number,
-	 * character, symbol (keywords and booleans included), cons (lists, keywords, records,
-	 * lazy seqs), array, table, function, condition (an exception's report is its
-	 * {@code toString}) -- answers its {@code str} spelling, the oracle's
-	 * {@code toString}, on every backend; nil signals, like the oracle's
-	 * {@code NullPointerException}; anything else is a host object and keeps the
-	 * {@code java:call}. No predicate here answers true for a host object (a host
-	 * collection is no Lisp array or table on the JVM either), so the host path is
+	 * {@code toString} over an already-bound receiver that is no string: a stream answers
+	 * its toString ({@code %clojure-stream-string}: a string output stream's text so far
+	 * without clearing it, any other stream its host class name; the test is an arm of
+	 * {@code ClojureArms.Family.STREAM}, and an exact tag test, since {@code streamp}
+	 * answers true for {@code t} and, on the JVM, for a host object whose {@code equals}
+	 * answers true); a value of a Lisp kind -- number, character, symbol (keywords and
+	 * booleans included), cons (lists, keywords, records, lazy seqs), array, table,
+	 * function, condition (an exception's report is its {@code toString}) -- answers its
+	 * {@code str} spelling, the oracle's {@code toString}, on every backend; nil signals,
+	 * like the oracle's {@code NullPointerException}; anything else is a host object and
+	 * keeps the {@code java:call}. No predicate here answers true for a host object (a
+	 * host collection is no Lisp array or table on the JVM either), so the host path is
 	 * exactly what it was.
 	 */
 	static LispVal valueToString(LispSymbol recv) {
@@ -1482,6 +1497,8 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 								LispString.literal("NullPointerException: toString of nil"))),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(STREAM_P), recv),
+						ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv)),
 				ClojureLowerUtil
 					.list(lispValue,
 							ClojureLowerUtil.list(ClojureLowering.CLOJURE_STR_OF, recv, LispString.literal("nil"),
@@ -1667,9 +1684,8 @@ final class ClojureInteropLowering {
 	 * the oracle), {@code read} answers one character's code ({@code -1} past the end)
 	 * and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
-	 * without reaching {@code java:call}. {@code toString} answers a string output
-	 * stream's text so far without clearing it. Null when the method maps to nothing, so
-	 * the call goes to {@code java:call}.
+	 * without reaching {@code java:call}. {@code toString} is {@link #valueToString}'s.
+	 * Null when the method maps to nothing, so the call goes to {@code java:call}.
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispSymbol recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -1704,33 +1720,7 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), c,
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("char-code"), c), new LispInteger(-1)));
 		}
-		if (method.equals("toString") && args.isEmpty()) {
-			// A StringWriter lowered to a string output stream answers the
-			// text so far without clearing it; anything else takes the value path
-			// (t is a stream to streamp, as the terminal's designator, and also
-			// Clojure's true).
-			return stringWriterContents(ctx, recv);
-		}
 		return null;
-	}
-
-	/**
-	 * The text a string output stream holds, WITHOUT clearing it:
-	 * {@code get-output-stream-string} answers and empties (CL's contract), so the text
-	 * is written straight back. Only a string-stream in the output direction takes this
-	 * path (there is no portable string-stream predicate, so the test is the exact
-	 * {@code string-stream} type plus the real direction, both true on all four
-	 * backends); anything else takes {@link #valueToString}.
-	 */
-	static LispVal stringWriterContents(ClojureLowering ctx, LispSymbol recv) {
-		LispSymbol text = ctx.freshTemp();
-		LispVal readback = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(text,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-output-stream-string"), recv)))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, recv), text);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv, ClojureLowerUtil.quoted("string-stream")),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("output-stream-p"), recv)), readback, valueToString(recv));
 	}
 
 	/**
