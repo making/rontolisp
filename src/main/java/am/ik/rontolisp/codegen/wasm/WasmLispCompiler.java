@@ -2646,9 +2646,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Scratch for path_open's output file descriptor (for load).
 	static final int READ_FD_ADDR = 96;
 
-	// Runtime intern table: a count cell plus a region of (offset,length) entries used by
-	// _intern to give symbols parsed at runtime but absent from the compile-time table
-	// (e.g. lambda parameters in loaded files) a stable offset across occurrences.
+	// 0 until _intern's first call, then one more than the symbols it has added at
+	// runtime -- symbols parsed or built at runtime but absent from the compile-time
+	// table (e.g. lambda parameters in loaded files), each given a stable offset across
+	// occurrences. _intern derives its hash table's size from it; the per-call heap
+	// resets read a change in it as "this call may have advanced the heap for good".
 	static final int RT_INTERN_COUNT_ADDR = 100;
 
 	// Capture mode for the string runtime: while CAPTURE_FLAG is non-zero, _write_str
@@ -2691,9 +2693,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// interned string bytes are clobbered).
 	static final int BYTE_SCRATCH_ADDR = 148;
 
-	// Cell holding the runtime intern table's base address (see RT_INTERN_MIN_BASE);
-	// seeded by an active data segment at instantiation from the program's actual
-	// static-data size.
+	// Cell holding the runtime intern hash table's address; seeded by an active data
+	// segment at instantiation to the reservation above the program's actual static
+	// data (see RT_INTERN_MIN_BASE), moved to the heap when the table grows.
 	static final int RT_INTERN_BASE_ADDR = 152;
 
 	// Monotonic counter cell handing out the id (field 0) of every RUNTIME-built string
@@ -2896,18 +2898,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	// adapter's scratch.)
 	static final int SOCK_FD_ADDR = 0x40018;
 
-	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
-	// records appended by _intern for symbols first seen at runtime). The actual base
-	// is computed per program -- max(this, 16-aligned end of the static string
-	// segment) -- and seeded into the RT_INTERN_BASE_ADDR cell at instantiation, so
-	// the records can never start inside the interned-string data (which outgrows a
-	// fixed 8192 base on large programs; the old fixed base let runtime interning
-	// silently corrupt static strings and the eval registry).
+	// Minimum base address of the runtime intern hash table (_intern's index over the
+	// compile-time rows and the symbols first seen at runtime). The actual base is
+	// computed per program -- max(this, 16-aligned end of the static string segment)
+	// -- and seeded into the RT_INTERN_BASE_ADDR cell at instantiation, so the table
+	// can never start inside the interned-string data (which outgrows a fixed 8192
+	// base on large programs; the old fixed base let runtime interning silently
+	// corrupt static strings and the eval registry).
 	static final int RT_INTERN_MIN_BASE = 8192;
 
-	// Bytes reserved for the runtime intern table between its base and the heap base
-	// (the historical 8192..16384 gap). The bump-allocator heap starts at
-	// rtInternBase + this.
+	// The least bytes reserved for the runtime intern table between its base and the
+	// heap base (the historical 8192..16384 gap); an interning module reserves its
+	// initial hash table instead when that is larger. The bump-allocator heap starts
+	// above the reservation.
 	static final int RT_INTERN_REGION_SIZE = 8192;
 
 	// The interned-string data segment must start ABOVE every fixed scratch address
@@ -6104,6 +6107,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// NIL's offset in the runtime intern table (-1 without one): _intern_sym maps a
 		// runtime spelling NIL to the null ref by it.
 		int internNilOffset = -1;
+		// The bytes reserved at the runtime intern base: the initial hash table of an
+		// interning module (sized to its compile-time rows), the historical gap
+		// otherwise -- so a module that never interns keeps every address it had.
+		int rtInternRegionSize = RT_INTERN_REGION_SIZE;
 		if (usesIntern) {
 			// Intern NIL/quote/function before snapshotting so the runtime resolves them
 			// to the same offsets the eval runtime uses (uppercase-canonical: the
@@ -6119,13 +6126,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			List<StringTable.StringEntry> internEntries = new ArrayList<>(stringTable.entries());
 			// Rows sorted by string offset so a run of dead entries drops as ONE cut of
 			// rows next to one cut of bytes (cache order would interleave live and dead
-			// rows and fragment the re-emitted segment); _intern scans for the unique
-			// byte-equal row, so the order is free to choose.
+			// rows and fragment the re-emitted segment); _intern hashes every row by its
+			// bytes, so the order is free to choose.
 			internEntries.sort(java.util.Comparator.comparingInt(StringTable.StringEntry::offset));
 			internRows = internEntries;
 			int internCount = internRows.size();
 			internBase = stringTable.appendBlob(buildInternBlob(internRows));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
+			rtInternRegionSize = Math.max(RT_INTERN_REGION_SIZE,
+					WasmReadRuntimeBuilder.internTableSlots(internCount) * 8);
 			if (usesRead) {
 				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
 						quoteOffset, functionOffset, ehMode, this.simd, this.usesInstances ? instanceTypeBase() : -1,
@@ -6258,7 +6267,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int litStageBase = litStageBytes[0] > 0 ? (allocBase + 15) & ~15 : allocBase;
 		int litStageEnd = litStageBase + litStageBytes[0];
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (litStageEnd + 15) & ~15);
-		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
+		int heapBase = rtInternBase + rtInternRegionSize;
 
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
@@ -8594,12 +8603,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex + 2,
 						new int[] { FUNC_CHAR_ALNUM_P + hostImports.size() }));
 		// A string interned by a body Pass 2a-2c emitted, and by nothing else, goes when
-		// that body does. One blob cites EVERY entry -- the runtime intern table, which
-		// _intern scans by offset -- so under usesIntern each candidate's (offset,
-		// length) row is offered as a range of its own, probed on the STRING interval:
-		// row and bytes fall together, and _intern skips the zeroed hole a cut row
-		// leaves (WasmReadRuntimeBuilder.emitInternScan). A candidate interned after the
-		// blob snapshot has no row and offers only its bytes -- such an entry is
+		// that body does. One blob cites EVERY entry -- the compile-time intern table,
+		// which _intern hashes on its first call -- so under usesIntern each candidate's
+		// (offset, length) row is offered as a range of its own, probed on the STRING
+		// interval: row and bytes fall together, and _intern skips the zeroed hole a cut
+		// row leaves (WasmReadRuntimeBuilder.buildInternBody). A candidate interned after
+		// the blob snapshot has no row and offers only its bytes -- such an entry is
 		// runtime-invisible by construction (T is interned BEFORE the snapshot for
 		// exactly that reason).
 		int stringDataSegIndex = upperFoldSegIndex - 1;
@@ -9786,9 +9795,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * Builds the compile-time intern table: one {@code (offset i32, length i32)} pair per
-	 * interned string. The runtime {@code _intern} scans it to map a freshly-parsed
-	 * symbol's bytes to the canonical string-table offset that the eval runtime compares
-	 * against.
+	 * interned string. The runtime {@code _intern} hashes it on its first call to map a
+	 * freshly-parsed symbol's bytes to the canonical string-table offset that the eval
+	 * runtime compares against.
 	 * @param entries the interned string entries
 	 * @return the little-endian blob
 	 */
@@ -12854,8 +12863,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		/**
 		 * Returns a snapshot of all interned string entries. Used to build the
-		 * compile-time intern table scanned by the runtime {@code _intern} so that
-		 * symbols parsed by {@code read} resolve to the canonical offset the eval runtime
+		 * compile-time intern table hashed by the runtime {@code _intern} so that symbols
+		 * parsed by {@code read} resolve to the canonical offset the eval runtime
 		 * compares against.
 		 * @return the interned entries
 		 */

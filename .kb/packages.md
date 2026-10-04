@@ -500,9 +500,10 @@ made table-aware. The model:
   answer: in the ci-spec corpus (66 packages, 16,245 rows, 2,436 distinct) one walk cost
   4-25 s on JVM/WASM and `runtime-package-api` was 79-95% of every compiled leg. Pinned by
   `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` (32,000
-  rows: do-symbols 3.9 s -> 0.1 s, apropos-list 18 s -> 0.7 s). Still superlinear on
-  WASM: each row's `intern` is a linear scan of the symbol table (32,000 fresh symbols:
-  4.6 s per walk against the JVM's 0.1 s).
+  rows: do-symbols 3.9 s -> 0.1 s, apropos-list 18 s -> 0.7 s) and its WASM twin. Each
+  row's WASM `intern` was a linear scan of the symbol table (4.6 s per walk) until
+  `_intern` became a hash table (`.kb/symbol-runtime-api.md`). What remains in a large
+  program is the per-symbol `%package-spelling-normalize` (~0.7 ms each, `.todo/d11`).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends (the unknown-name

@@ -17923,6 +17923,114 @@ class WasmLispCompilerIntegrationTest {
 				NIL""");
 	}
 
+	// Runtime interning keeps every symbol however many arrive. The runtime records
+	// used to live in a fixed 8 KB region below the heap, so the 1,025th fresh symbol
+	// was written over the heap's first interned bytes and the walk below trapped out of
+	// bounds on both module shapes.
+	@Test
+	void runtimeInternKeepsEverySymbolPastAThousand() throws Exception {
+		String source = """
+				(defvar *ri-syms* (make-array 3000))
+				(dotimes (i 3000) (setf (aref *ri-syms* i) (intern (format nil "RI-~D" i))))
+				(defvar *ri-bad* 0)
+				(dotimes (i 3000)
+				  (unless (and (eq (aref *ri-syms* i) (intern (format nil "RI-~D" i)))
+				               (string= (symbol-name (aref *ri-syms* i)) (format nil "RI-~D" i)))
+				    (setq *ri-bad* (+ *ri-bad* 1))))
+				(print (list *ri-bad* (aref *ri-syms* 0) (aref *ri-syms* 2999) (eq (intern "CAR") 'car)))
+				""";
+		String expected = "(0 RI-0 RI-2999 T)";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileAndRunComponent(source)).isEqualTo(expected);
+	}
+
+	// A runtime intern costs the same wherever its symbol sits in the table. _intern
+	// was a scan of the compile-time rows and then of the runtime ones, so a lookup of
+	// the symbol interned last paid for every symbol before it and interning n fresh
+	// symbols cost n^2 (a 32,000-symbol package walk: 4.6 s on WASM against 0.1 s on the
+	// JVM). The bound is a ratio between two lookups of the same program, each the best
+	// of three, so it does not depend on the machine.
+	@Test
+	void runtimeInternCostsTheSameWhereverItsSymbolSits() throws Exception {
+		String[] lines = compileAndRunPrelude("""
+				(defvar *rc-names* (make-array 32000))
+				(dotimes (i 32000) (setf (aref *rc-names* i) (format nil "RC-~D" i)))
+				(dotimes (i 32000) (intern (aref *rc-names* i)))
+				(defun rc-probe (name)
+				  (let ((t0 (get-internal-real-time)))
+				    (dotimes (j 100000) (intern name))
+				    (- (get-internal-real-time) t0)))
+				(defun rc-best (name) (min (rc-probe name) (rc-probe name) (rc-probe name)))
+				(princ (rc-best (aref *rc-names* 0))) (terpri)
+				(princ (rc-best (aref *rc-names* 31999))) (terpri)
+				""").split("\n");
+		long first = Long.parseLong(lines[0].trim());
+		long last = Long.parseLong(lines[1].trim());
+		assertThat(last)
+			.as("100,000 interns of the last of 32,000 runtime symbols (%d ms) against the first (%d ms)", last, first)
+			.isLessThanOrEqualTo(200 + 3 * first);
+	}
+
+	// The JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare twin:
+	// do-symbols and apropos-list over 32,000 rows against the same rows walked as 64-row
+	// packages.
+	@Test
+	void aPackageWalkCostsItsUniverseNotItsSquare() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder wideUses = new StringBuilder();
+		for (int p = 0; p < 8; p++) {
+			program.append("(defpackage :pw-").append(p).append(" (:use) (:export");
+			for (int i = 0; i < 4000; i++) {
+				program.append(" #:").append((char) ('A' + p)).append(i);
+			}
+			program.append("))\n");
+			wideUses.append(" :pw-").append(p);
+		}
+		program.append("(defpackage :pw-few (:use) (:export");
+		for (int i = 0; i < 64; i++) {
+			program.append(" #:F").append(i);
+		}
+		program.append("))\n");
+		program.append("(make-package :pw-wide :use '(").append(wideUses.toString().trim()).append("))\n");
+		program.append("""
+				(make-package :pw-small :use '(:pw-few))
+				(defun pw-walk (p) (let ((n 0)) (do-symbols (s p) (setq n (+ n 1))) n))
+				(defun pw-match (p) (length (apropos-list "" p)))
+				(defvar *pw-reps* (floor (pw-walk :pw-wide) (pw-walk :pw-small)))
+				(pw-match :pw-small)
+				(defvar *pw-t0* (get-internal-real-time))
+				(defvar *pw-whole* (pw-walk :pw-wide))
+				(defvar *pw-t1* (get-internal-real-time))
+				(defvar *pw-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-walk :pw-small)))) n))
+				(defvar *pw-t2* (get-internal-real-time))
+				(defvar *pw-found* (pw-match :pw-wide))
+				(defvar *pw-t3* (get-internal-real-time))
+				(defvar *pw-found-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-match :pw-small)))) n))
+				(defvar *pw-t4* (get-internal-real-time))
+				(princ (list *pw-whole* *pw-pieces* *pw-found* *pw-found-pieces*)) (terpri)
+				(princ (- *pw-t1* *pw-t0*)) (terpri)
+				(princ (- *pw-t2* *pw-t1*)) (terpri)
+				(princ (- *pw-t3* *pw-t2*)) (terpri)
+				(princ (- *pw-t4* *pw-t3*)) (terpri)
+				""");
+		String[] lines = compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.toString(),
+				am.ik.rontolisp.reader.Features.WASM, true, false))
+			.split("\n");
+		assertThat(lines[0].trim()).as("both halves must walk the same rows").isEqualTo("(32000 32000 32000 32000)");
+		long walkWhole = Long.parseLong(lines[1].trim());
+		long walkPieces = Long.parseLong(lines[2].trim());
+		long matchWhole = Long.parseLong(lines[3].trim());
+		long matchPieces = Long.parseLong(lines[4].trim());
+		assertThat(walkWhole)
+			.as("do-symbols over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", walkWhole,
+					walkPieces)
+			.isLessThanOrEqualTo(500 + 6 * walkPieces);
+		assertThat(matchWhole)
+			.as("apropos-list over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", matchWhole,
+					matchPieces)
+			.isLessThanOrEqualTo(500 + 6 * matchPieces);
+	}
+
 	@Test
 	void lonePackageOperation() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunALonePackageOperation twin, through the

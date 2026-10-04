@@ -50,6 +50,9 @@ and the component 173 s idle / 426 s loaded (one timeout), and the time was not 
 package walk, `.kb/packages.md` "The enumeration universe"), and
 `landing-pads-read-fresh-references-after-a-collection` 45% of the interpreter's (5M
 interpreted `cons` iterations; now the same cells by `make-list`, 250 per iteration).
+Later that day `_intern` became a hash table: on the jar, the program's own time in the P1
+and component legs went ~9.5 s -> ~6.9 s, `runtime-package-api` ~4.9 s -> ~2.5 s of it
+(the rest: `.todo/d11`).
 **Find the case that owns a leg before touching the timeout**: prepend
 `(cl:format cl:*error-output* "~&@@T ~A ~A~%" "<case>" (cl:get-internal-real-time))` to each
 case of the concatenated program, run the leg, and diff consecutive stamps. What owns the

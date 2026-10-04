@@ -8,8 +8,8 @@ constant chosen when the compiler was written. Layout low to high (`WasmLispComp
 | low scratch cells | 0..255 — `HEAP_PTR_ADDR`=84, `TIME_SCRATCH_ADDR`=128, `ENV_COUNT_ADDR`=136, `RT_INTERN_BASE_ADDR`=152, `PATH_LEN_ADDR`=212, `PATH_PTR_ADDR`=248, `RANDOM_SEEDED_ADDR`=252 |
 | static data (interned strings, then the three case-fold tables) | `DATA_BASE_OFFSET` (256); `COMPONENT_DATA_BASE_OFFSET` (0x60000) under `--component` |
 | env/argv scratch, written by the HOST via `environ_get`/`args_get` | `scratchBase` = 16-aligned `staticEnd` |
-| runtime intern table (`_intern`) | `rtInternBase` = `max(RT_INTERN_MIN_BASE, 16-aligned end of the block above)` |
-| bump heap (every runtime string, grows upward) | `heapBase` = `rtInternBase + RT_INTERN_REGION_SIZE` |
+| initial runtime intern hash table (`_intern`; a grown one lives on the heap) | `rtInternBase` = `max(RT_INTERN_MIN_BASE, 16-aligned end of the block above)` |
+| bump heap (every runtime string, grows upward) | `heapBase` = `rtInternBase + max(RT_INTERN_REGION_SIZE, 8 * initial slots)` (the max only in an interning module) |
 
 - The env/argv block used to be four FIXED 16 KiB regions in page 3 (`ENV_PTRS_ADDR` 0x30000,
   `ENV_BUF_ADDR` 0x34000, `ARGV_COUNT_ADDR` 0x38000, `ARGV_BUF_ADDR` 0x3C000). A program with

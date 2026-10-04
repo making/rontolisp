@@ -15441,10 +15441,8 @@ class JvmLispCompilerTest {
 	// of the answer: 3.9 s for do-symbols and 18 s for apropos-list over the 32,000 rows
 	// below, against 0.1 s and 0.7 s by table. In the ci-spec corpus that made one
 	// do-all-symbols cost 8-25 s on WASM. The bound is a ratio against the same rows
-	// walked as 64-row packages, so it does not depend on the machine. The walk is
-	// backend-neutral prelude source, pinned here on the JVM: on WASM every row's intern
-	// is itself a scan of the symbol table, which 32,000 fresh symbols would measure
-	// instead.
+	// walked as 64-row packages, so it does not depend on the machine. The WASM twin is
+	// WasmLispCompilerIntegrationTest#aPackageWalkCostsItsUniverseNotItsSquare.
 	@Test
 	void compileAndRunAPackageWalkCostsItsUniverseNotItsSquare() throws Exception {
 		StringBuilder program = new StringBuilder();
