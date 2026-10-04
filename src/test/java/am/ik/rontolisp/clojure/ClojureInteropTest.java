@@ -592,6 +592,41 @@ class ClojureInteropTest {
 				""", "super-was:x\ntrue\n7\nx\n");
 	}
 
+	// Oracle (clj 1.12.6): identical? on host objects is ==, while = asks equals -- a
+	// host collection included, and so do a set's and a map's lookups. A proxy whose
+	// equals answers true is not identical? to true or 1 and str shows its toString.
+	// Before, measured 2026-10-04: the JVM answered equals for identical? (the proxy was
+	// identical? to true and printed "true"), the interpreter for two Files.
+	@Test
+	void identicalOnHostObjectsIsIdentity() throws Exception {
+		assertBothEqual("""
+				(def f1 (java.io.File. "x"))
+				(def f2 (java.io.File. "x"))
+				(def p (proxy [Object] [] (equals [o] true) (toString [] "P")))
+				(def l1 (java.util.ArrayList.))
+				(def l2 (java.util.ArrayList.))
+				(println (identical? f1 f2) (= f1 f2) (identical? f1 f1))
+				(println (identical? p true) (identical? p 1) (identical? true p))
+				(println (str p))
+				(println (identical? l1 l2) (= l1 l2))
+				(println (contains? #{f1} f2) (get {f1 1} f2) (count (distinct [f1 f2])))
+				""", "false true true\nfalse false false\nP\nfalse true\ntrue 1 1\n");
+	}
+
+	// Oracle (clj 1.12.6): = asks the left operand, so a proxy whose equals answers
+	// true is = to a number, a string, nil, true and a character, while none of them
+	// is = to it; a vector is compared as a collection, never handed to equals. Before,
+	// measured 2026-10-04: the interpreter answered false for the first row, the JVM
+	// true for (= p [1]).
+	@Test
+	void equalsOfAHostObjectAndAValueAsksTheLeftOperand() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [Object] [] (equals [o] true) (toString [] "P")))
+				(println (= p 1) (= p "s") (= p nil) (= p true) (= p \\a) (= p 1.5))
+				(println (= 1 p) (= "s" p) (= nil p) (= p [1]))
+				""", "true true true true true true\nfalse false false false\n");
+	}
+
 	// Oracle: a protected method overrides -- paintComponent records -- while an
 	// unnamed one is inherited.
 	@Test

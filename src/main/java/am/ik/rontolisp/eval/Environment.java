@@ -8531,21 +8531,9 @@ public final class Environment implements Scope {
 				if (!(nextKeyCellVal instanceof LispCons nextKeyCell)) {
 					return LispNil.INSTANCE;
 				}
-				LispVal key = nextKeyCell.car();
-				boolean match;
-				if (key instanceof LispCons || indicator instanceof LispCons) {
-					match = key == indicator;
-				}
-				else if (key instanceof LispNil && indicator instanceof LispNil) {
-					match = true;
-				}
-				else if (key instanceof LispNil || indicator instanceof LispNil) {
-					match = false;
-				}
-				else {
-					match = key.equals(indicator);
-				}
-				if (match) {
+				// eq, as remf's first key is compared: a fresh string or instance and a
+				// host object by identity.
+				if (isEqStrict(nextKeyCell.car(), indicator)) {
 					LispVal rest = nextKeyCell.cdr();
 					if (rest instanceof LispCons restCons) {
 						valueCell.setCdr(restCons.cdr());

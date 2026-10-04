@@ -298,11 +298,24 @@ final class JvmNumericRuntimeBuilder {
 	 * array runtime helpers, or null when the program uses no arrays; when present,
 	 * {@code _equal}'s string arm normalizes both operands through it so a mutable
 	 * character vector is {@code equal} to the string with the same content
+	 * @param strArrClass {@code String[]}, the interned layout of an instance, or null
+	 * when the program can build none
+	 * @param usesComplex whether the program may observe a complex
+	 * @param hostTest in a {@code java:} program, the shared host-object test
+	 * ({@code JvmJavaDirectSites#host}): {@code _eqv} compares a host object by identity
+	 * and {@code _equal} by its {@code equals}; null elsewhere, where no host object
+	 * exists and both keep the bodies they had
+	 * @param hostReceiver beside {@code hostTest} (null exactly when it is), the shared
+	 * conversion of a Lisp value to the one object Java sees
+	 * ({@code JvmJavaDirectSites#receiver}): what {@code _equal} hands a host object's
+	 * {@code equals}
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
 	static NumericRuntime build(ConstantPool cp, ClassEntry thisClass,
 			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod,
-			@org.jspecify.annotations.Nullable ClassEntry strArrClass, boolean usesComplex) {
+			@org.jspecify.annotations.Nullable ClassEntry strArrClass, boolean usesComplex,
+			@org.jspecify.annotations.Nullable MethodRefEntry hostTest,
+			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver) {
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		ClassEntry bigClass = cp.classEntry("java/math/BigInteger");
 		ClassEntry arithEx = cp.classEntry("java/lang/ArithmeticException");
@@ -571,10 +584,10 @@ final class JvmNumericRuntimeBuilder {
 		ClassEntry listClass = cp.classEntry("java/util/List");
 		StringRefs stringRefs = new StringRefs(stringClass, listClass, cp.methodRef(stringClass, "isEmpty", "()Z"),
 				cp.methodRef(stringClass, "charAt", "(I)C"));
-		methods
-			.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.classEntry("java/util/Map"), objEquals, stringRefs));
+		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.classEntry("java/util/Map"), objEquals,
+				stringRefs, hostTest));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass,
-				strvMethod, stringRefs, objEquals));
+				strvMethod, stringRefs, objEquals, hostTest, hostReceiver));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -2278,9 +2291,13 @@ final class JvmNumericRuntimeBuilder {
 	// STRING (a quote-framed java.lang.String), as ANSI has it: two distinct strings with
 	// equal contents are not eql. Equal string LITERALS are still one object, because
 	// ldc interns them -- the coalescing the interpreter and WASM reproduce. A SYMBOL is
-	// a bare String and keeps comparing by name.
+	// a bare String and keeps comparing by name. In a java: program (hostTest non-null)
+	// a HOST OBJECT is identity too: its equals is equal's answer, not eql's -- asked
+	// here, a reify whose equals answers true was eq to T and to 1
+	// (.kb/eq-numbers.md, "Host objects").
 	private static NumericMethod buildEqv(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
-			ClassEntry intArrClass, ClassEntry mapClass, MethodRefEntry objEquals, StringRefs strings) {
+			ClassEntry intArrClass, ClassEntry mapClass, MethodRefEntry objEquals, StringRefs strings,
+			@org.jspecify.annotations.Nullable MethodRefEntry hostTest) {
 		MethodCode c = new MethodCode();
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
 		// equality is (a[0] == b[0]). Emitted BEFORE the ratio and equals paths so a
@@ -2372,6 +2389,11 @@ final class JvmNumericRuntimeBuilder {
 		c.iconst_0();
 		c.ireturn();
 		c.labelBinding(toEquals);
+		if (hostTest != null) {
+			c.aload(0);
+			c.invokestatic(hostTest);
+			c.ifne(toIdentity);
+		}
 		c.aload(0);
 		c.aload(1);
 		c.invokevirtual(objEquals);
@@ -2414,13 +2436,18 @@ final class JvmNumericRuntimeBuilder {
 	// ratios) are equal when their cars and cdrs are recursively _equal; two STRINGS are
 	// equal by content (a mutable character vector first rendered through _strv, when the
 	// array helpers exist), which _eqv no longer answers; everything else (including
-	// nil/null) delegates to _eqv, so numbers, symbols and nil compare by value. Returns
-	// 1 for equal, 0 otherwise.
+	// nil/null) delegates to _eqv, so numbers, symbols and nil compare by value -- except
+	// a HOST OBJECT on the left in a java: program, which _eqv compares by identity:
+	// equal asks its equals, a host collection included, as the interpreter does,
+	// handing it what an Object parameter receives (nil's null, another host object,
+	// _jrecv's object of any other value; a value _jrecv converts to nothing is equal
+	// to no host object). Returns 1 for equal, 0 otherwise.
 	private static NumericMethod buildEqual(Utf8Entry name, Utf8Entry desc, ClassEntry objArrClass,
 			ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry eqv, MethodRefEntry equal,
 			@org.jspecify.annotations.Nullable ClassEntry strArrClass,
-			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod, StringRefs strings,
-			MethodRefEntry objEquals) {
+			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod, StringRefs strings, MethodRefEntry objEquals,
+			@org.jspecify.annotations.Nullable MethodRefEntry hostTest,
+			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver) {
 		MethodCode c = new MethodCode();
 		// if (a == b) return 1 -- identity BEFORE any recursion, which is what makes a
 		// cyclic value comparable to itself (a hash table storing and retrieving under
@@ -2492,6 +2519,34 @@ final class JvmNumericRuntimeBuilder {
 		c.invokevirtual(objEquals);
 		c.ireturn();
 		c.labelBinding(notStrings);
+		if (hostTest != null) {
+			MethodCode.Label notHost = c.newLabel();
+			MethodCode.Label ask = c.newLabel();
+			c.aload(0);
+			c.invokestatic(hostTest);
+			c.ifeq(notHost);
+			// b: nil (null) and a host object as they are, any other value as _jrecv
+			// converts it -- the framed string, the int[] character, "T" a Lisp value is
+			// here are no objects Java ever sees.
+			c.aload(1);
+			c.ifnull(ask);
+			c.aload(1);
+			c.invokestatic(hostTest);
+			c.ifne(ask);
+			c.aload(1);
+			c.invokestatic(java.util.Objects.requireNonNull(hostReceiver, "hostReceiver"));
+			c.astore(1);
+			c.aload(1);
+			c.ifnonnull(ask);
+			c.iconst_0();
+			c.ireturn();
+			c.labelBinding(ask);
+			c.aload(0);
+			c.aload(1);
+			c.invokevirtual(objEquals);
+			c.ireturn();
+			c.labelBinding(notHost);
+		}
 		c.aload(0);
 		c.aload(1);
 		c.invokestatic(eqv);

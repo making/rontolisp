@@ -138,7 +138,10 @@ public final class LispPreludeLibrary {
 	static {
 		// Two eql instances are equalp before any slot is walked: on wasm-GC a --native
 		// program's Objective-C wrapper is eql by address while its handle slots differ
-		// (.kb/objc.md, "--native").
+		// (.kb/objc.md, "--native"). Any other pair ends in equal, which is eql for every
+		// Lisp value reaching it but asks a host object's equals -- so two equal objects
+		// stay equalp, as an equalp table (whose fold leaves a host object as it is)
+		// already answers (.kb/eq-numbers.md, "Host objects").
 		SOURCES.put(LispNames.EQUALP, """
 				(defun equalp (a b)
 				  (cond ((and (numberp a) (numberp b)) (= a b))
@@ -162,7 +165,7 @@ public final class LispPreludeLibrary {
 				                  ((>= %eqp-i %eqp-n) t)
 				                (unless (equalp (row-major-aref a %eqp-i) (row-major-aref b %eqp-i))
 				                  (return nil)))))
-				        (t (eql a b))))
+				        (t (equal a b))))
 				""");
 		// ldiff / sublis / gentemp -- the three list-and-symbol functions iterate's own
 		// source needs at LOAD time (expand-iterate splits a body's declarations with

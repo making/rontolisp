@@ -12419,6 +12419,15 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
 	}
 
+	// The %remf-tail walk compares with the eql helper, not the key's Object.equals,
+	// which threw on a nil key and never found a character. The interpreter twin is
+	// LispEvaluatorTest#remfPastTheFirstKeyComparesWithEq.
+	@Test
+	void remfPastTheFirstKeyComparesWithEq() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.RemfIndicatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RemfIndicatorFixture.EXPECTED);
+	}
+
 	@Test
 	void compileAndRunCharComparisonExtensions() throws Exception {
 		assertThat(compileAndRun("""

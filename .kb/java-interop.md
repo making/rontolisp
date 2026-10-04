@@ -109,6 +109,11 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends; its rows print the message
   too since 2026-09-27).
 
+- `eq`/`eql` on a host object is identity, `equal`/`equalp` its `equals` (a Lisp value on
+  the right handed as the receiver rule below converts it); on the JVM the equality helpers
+  ask `_jhost` / `_jrecv` in a `java:` program only ([eq-numbers.md](eq-numbers.md), "Host
+  objects").
+
 ## A Lisp value as a `java:call` receiver (one rule, three copies)
 - A receiver that is no host object but a Lisp value of a receiver kind
   (`JavaOverloads.isReceiverKind`: every kind but NIL and FUNCTION) is called as what `convert`
@@ -117,8 +122,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   is `Integer.equals(Integer)`, T), float `Double`, bignum `BigInteger`, BMP char `Character`,
   supplementary char `Integer`, `t` `Boolean.TRUE`. Anything else keeps `java:call expects a
   java object ..., got X`. `java:field` is unchanged (a string there is a class name).
-- Copies: interpreter `JavaInterop.receiverObject` (run-time `callInstance` and
-  `invokeResolved`), bridge `receiverObject`, direct sites `_jrecv` (`JvmJavaDirectSites.
+- Copies: interpreter `LispJavaObject.receiverObject` (run-time `callInstance`,
+  `invokeResolved` and `equal`), bridge `receiverObject`, direct sites and `_equal` `_jrecv` (`JvmJavaDirectSites.
   RECEIVER`, called only after `_jhost` refused, so a host receiver pays nothing new; the
   converted object replaces the receiver slot, the messages show the value handed in).
   `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays` pins

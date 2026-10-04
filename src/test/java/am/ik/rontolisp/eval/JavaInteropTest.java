@@ -452,6 +452,21 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#eqAndEqlOnHostObjectsAreIdentity.
+	@Test
+	void eqAndEqlOnHostObjectsAreIdentity() {
+		assertThat(output(JavaInteropPrograms.HOST_IDENTITY_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_IDENTITY_OUTPUT);
+	}
+
+	// Mirrors
+	// JvmJavaInteropCompilerTest#equalOfAHostObjectAndALispValueAsksEqualsWithTheValueAsJavaSeesIt.
+	@Test
+	void equalOfAHostObjectAndALispValueAsksEqualsWithTheValueAsJavaSeesIt() {
+		assertThat(output(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#anAccessorRefusesAHostCollection.
 	@Test
 	void anAccessorRefusesAHostCollection() {

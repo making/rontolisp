@@ -122,6 +122,24 @@ it in Lisp rather than through `java:call`.
 Symbols, ratios, hash tables, dotted (improper) lists and multidimensional
 (rank-2+) arrays are **not** bridged.
 
+A `java` object is `eq` and `eql` only to itself: the same object answered by two
+calls is `eq`, while two objects that are `equals` are not. `equal` and `equalp`
+ask the object's `equals`. So an `eq` or `eql` hash table keys a `java` object by
+identity (a key mutated after it was stored is still found), and an `equal` or
+`equalp` table by `equals` and `hashCode`:
+
+```lisp
+(let ((a (java:new "java.io.File" "x"))
+      (b (java:new "java.io.File" "x")))
+  (list (eq a b) (eql a b) (equal a b) (eq a a)))   ; => (NIL NIL T T)
+```
+
+With a Lisp value on the right, `equal` hands the object's `equals` the value as
+a Java method's `Object` parameter receives it (a string a `String`, a character
+a `Character`, `nil` `null`); a symbol, list, vector or ratio is equal to no
+`java` object. A Lisp value on the left is never `equal` to a `java` object, as in
+Clojure, whose `=` asks its left operand.
+
 ## Overload resolution
 
 When a class has several constructors or methods of the same name and arity,

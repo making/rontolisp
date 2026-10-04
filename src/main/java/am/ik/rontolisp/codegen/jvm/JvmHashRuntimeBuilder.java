@@ -249,12 +249,18 @@ final class JvmHashRuntimeBuilder {
 	 * ({@code JvmJavaDirectSites#lispTable}) that tells a table from a host
 	 * {@code LinkedHashMap} for {@code hash-table-p}; null elsewhere, where the class
 	 * alone decides
+	 * @param hostTest in a {@code java:} program, the shared host-object test
+	 * ({@code JvmJavaDirectSites#host}): an eql/eq table hashes a host object by
+	 * identity, as {@code _eqv} compares it, and {@code _hash} (an equal table's) by its
+	 * own {@code hashCode}, as {@code _equal} compares it by {@code equals}; null
+	 * elsewhere
 	 * @return the helper methods
 	 */
 	static List<HashMethod> build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, MemberRefEntry longValueOf, MemberRefEntry equalMethod,
 			MemberRefEntry eqvMethod, @Nullable MemberRefEntry strvMethod, @Nullable ClassEntry stringArrayClass,
-			boolean equalpFold, boolean identityTables, @Nullable MemberRefEntry lispTable) {
+			boolean equalpFold, boolean identityTables, @Nullable MemberRefEntry lispTable,
+			@Nullable MemberRefEntry hostTest) {
 		ClassEntry mapClass = cp.classEntry(MAP_CLASS);
 		ClassEntry listClass = cp.classEntry(LIST_CLASS);
 		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
@@ -306,8 +312,9 @@ final class JvmHashRuntimeBuilder {
 		final @Nullable MethodRefEntry keyRef = equalpFold ? cp.methodRef(thisClass, KEY, KEY_DESC) : null;
 
 		List<HashMethod> methods = new ArrayList<>();
-		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
-				strvMethod, objectHashCode, hashRef, listClass, cp.classEntry("java/util/Map"), identityHashCode));
+		methods
+			.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass, strvMethod,
+					objectHashCode, hashRef, listClass, cp.classEntry("java/util/Map"), identityHashCode, hostTest));
 
 		// _hashMake(): m = new LinkedHashMap(); m.put(ORDER_KEY, new ArrayList());
 		// m.put(DEAD_KEY, 0); return m
@@ -348,13 +355,13 @@ final class JvmHashRuntimeBuilder {
 
 		methods.add(buildGet(cp, mapClass, listClass, objectArrayClass, mapGet, listGet, listSize, integerValueOf,
 				hashRef, equalMethod, eqvMethod, ratArrClass, integerClass, identityHashCode, keyRef, testRef,
-				identityTables));
+				identityTables, hostTest));
 		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInitCapacity,
 				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod, eqvMethod, ratArrClass,
-				integerClass, identityHashCode, keyRef, testRef, identityTables, maybeCompactRef));
+				integerClass, identityHashCode, keyRef, testRef, identityTables, maybeCompactRef, hostTest));
 		methods.add(buildRem(cp, mapClass, listClass, objectArrayClass, mapGet, mapRemove, listGet, listSize,
 				listRemoveAt, integerValueOf, hashRef, equalMethod, eqvMethod, ratArrClass, integerClass,
-				identityHashCode, trueStr, keyRef, testRef, identityTables, tombstoneRef));
+				identityHashCode, trueStr, keyRef, testRef, identityTables, tombstoneRef, hostTest));
 
 		if (identityTables) {
 			methods.addAll(buildIdentityTables(cp, thisClass, mapClass, mapGet, mapPut, trueStr));
@@ -517,7 +524,8 @@ final class JvmHashRuntimeBuilder {
 	private static HashMethod buildHash(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry ratArrClass,
 			ClassEntry intArrClass, ClassEntry integerClass, @Nullable ClassEntry stringArrayClass,
 			@Nullable MemberRefEntry strvMethod, MethodRefEntry objectHashCode, MethodRefEntry hashRef,
-			ClassEntry listClass, ClassEntry mapInterface, MethodRefEntry identityHashCode) {
+			ClassEntry listClass, ClassEntry mapInterface, MethodRefEntry identityHashCode,
+			@Nullable MemberRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		// if (d <= 0) return 0
 		a.iload(1);
@@ -689,6 +697,13 @@ final class JvmHashRuntimeBuilder {
 		// cycle a Scheme printer's eq table meets) would otherwise never finish.
 		MethodCode.Label identity = a.newLabel();
 		MethodCode.Label notAggregate = a.newLabel();
+		// A host collection is no Lisp one: _equal asks its equals, so its own hashCode
+		// is what agrees.
+		if (hostTest != null) {
+			a.aload(0);
+			a.invokestatic(hostTest);
+			a.ifne(notAggregate);
+		}
 		a.aload(0);
 		a.instanceOf(listClass);
 		a.ifne(identity);
@@ -715,7 +730,8 @@ final class JvmHashRuntimeBuilder {
 			ClassEntry objectArrayClass, MethodRefEntry mapGet, MethodRefEntry listGet, MethodRefEntry listSize,
 			MethodRefEntry integerValueOf, MethodRefEntry hashRef, MemberRefEntry equalMethod, MemberRefEntry eqvMethod,
 			ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry identityHashCode,
-			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables) {
+			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables,
+			@Nullable MemberRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -726,7 +742,7 @@ final class JvmHashRuntimeBuilder {
 		a.aload(1);
 		a.checkcast(mapClass);
 		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
-				identityHashCode, 6, identityTables);
+				identityHashCode, 6, identityTables, hostTest);
 		a.invokevirtual(mapGet);
 		a.checkcast(listClass);
 		a.astore(3);
@@ -776,7 +792,7 @@ final class JvmHashRuntimeBuilder {
 			MethodRefEntry integerValueOf, MethodRefEntry hashRef, MethodRefEntry ordRef, MemberRefEntry equalMethod,
 			MemberRefEntry eqvMethod, ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry identityHashCode,
 			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables,
-			MethodRefEntry maybeCompactRef) {
+			MethodRefEntry maybeCompactRef, @Nullable MemberRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -785,7 +801,7 @@ final class JvmHashRuntimeBuilder {
 			a.istore(7);
 		}
 		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
-				identityHashCode, 7, identityTables);
+				identityHashCode, 7, identityTables, hostTest);
 		a.astore(6);
 		a.aload(1);
 		a.checkcast(mapClass);
@@ -879,7 +895,8 @@ final class JvmHashRuntimeBuilder {
 			MethodRefEntry listSize, MethodRefEntry listRemoveAt, MethodRefEntry integerValueOf, MethodRefEntry hashRef,
 			MemberRefEntry equalMethod, MemberRefEntry eqvMethod, ClassEntry ratArrClass, ClassEntry integerClass,
 			MethodRefEntry identityHashCode, StringEntry trueStr, @Nullable MethodRefEntry keyRef,
-			@Nullable MethodRefEntry testRef, boolean identityTables, MethodRefEntry tombstoneRef) {
+			@Nullable MethodRefEntry testRef, boolean identityTables, MethodRefEntry tombstoneRef,
+			@Nullable MemberRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -888,7 +905,7 @@ final class JvmHashRuntimeBuilder {
 			a.istore(6);
 		}
 		emitKeyHash(a, hashRef, integerValueOf, objectArrayClass, listClass, ratArrClass, integerClass,
-				identityHashCode, 6, identityTables);
+				identityHashCode, 6, identityTables, hostTest);
 		a.astore(5);
 		a.aload(1);
 		a.checkcast(mapClass);
@@ -1152,10 +1169,12 @@ final class JvmHashRuntimeBuilder {
 	// a function of that key alone and never of what the table hashed before it. For an
 	// eql/eq table (testSlot >= 2) an aggregate key -- a cons or an instance, the values
 	// _equal would fold structurally -- hashes by identity instead, so mutating it after
-	// insertion keeps its bucket; every other key hashes exactly as before.
+	// insertion keeps its bucket, and so does a host object in a java: program
+	// (hostTest), which _eqv compares by identity; every other key hashes exactly as
+	// before.
 	private static void emitKeyHash(MethodCode a, MethodRefEntry hashRef, MethodRefEntry integerValueOf,
 			ClassEntry objectArrayClass, ClassEntry listClass, ClassEntry ratArrClass, ClassEntry integerClass,
-			MethodRefEntry identityHashCode, int testSlot, boolean identityTables) {
+			MethodRefEntry identityHashCode, int testSlot, boolean identityTables, @Nullable MemberRefEntry hostTest) {
 		if (!identityTables) {
 			emitStructuralKeyHash(a, hashRef, integerValueOf);
 			return;
@@ -1172,6 +1191,11 @@ final class JvmHashRuntimeBuilder {
 		a.aload(0);
 		a.instanceOf(listClass);
 		a.ifne(identity);
+		if (hostTest != null) {
+			a.aload(0);
+			a.invokestatic(hostTest);
+			a.ifne(identity);
+		}
 		a.aload(0);
 		a.instanceOf(objectArrayClass);
 		a.ifeq(structural);

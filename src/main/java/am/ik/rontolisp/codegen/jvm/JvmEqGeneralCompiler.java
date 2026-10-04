@@ -28,6 +28,17 @@ final class JvmEqGeneralCompiler {
 		// Evaluate both args
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitCall(ctx, className);
+	}
+
+	/**
+	 * Replaces the two values on the operand stack with their {@code eq}/{@code eql}
+	 * answer, {@code t} or nil -- the one comparison every compiled {@code eq} site
+	 * shares, for a walk that compares inline (the {@code %remf-tail} key scan).
+	 * @param ctx the compilation context
+	 * @param className the class being compiled
+	 */
+	static void emitCall(JvmLispCompiler.Ctx ctx, String className) {
 		// The nil handling around the numeric helper is the same wherever it is
 		// written, so it lives in one per-class method (JvmEmitHelper.emitSharedCall)
 		// instead of ~45 bytecodes per site.
