@@ -273,21 +273,38 @@ final class WasmSymbolApiCompiler {
 	/**
 	 * {@code (set name value)} -- store {@code value} into the global variable
 	 * {@code name} names, creating the binding when unbound: the computed-name
-	 * counterpart of {@code setq}. A name with a compiled backing store writes that
-	 * module global (matched by canonical string-table offset, so a caller's literal and
-	 * a run-time {@code intern} agree); the eval mirror is written unconditionally
-	 * through {@code _store}, which creates the binding in {@code GLOBAL_ENV} when no
-	 * backing store took it. Deliberately deaf to an already-active dynamic binding, like
-	 * the JVM twin: the store targets the global namespace on every backend alike.
-	 * Constants (nil, t and keywords, by value or by computed name) and non-symbols trap,
-	 * the {@code %error} convention of the symbol API. Forces {@code usesEval} in
-	 * {@link WasmLispCompiler} like the rest of the symbol API.
+	 * counterpart of {@code setq}. Lowered by
+	 * {@link LispMacroExpander#expandSetForCompile}: {@link #compileSetMirror} checks the
+	 * name and writes the eval mirror, and a name with a compiled backing store writes
+	 * that module global ({@link #compileGlobalStoreSet}) through the shared
+	 * {@code %set-global} dispatch over the globals, or the same dispatch inline when the
+	 * program lacks it -- matched by canonical string-table offset, so a caller's literal
+	 * and a run-time {@code intern} agree. Deliberately deaf to an already-active dynamic
+	 * binding, like the JVM twin: the store targets the global namespace on every backend
+	 * alike. Forces {@code usesEval} in {@link WasmLispCompiler} like the rest of the
+	 * symbol API.
 	 */
 	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException(LispNames.SET + " expects 2 arguments, got " + (parts.size() - 1));
 		}
+		// Sorted by name: the index map is a hash, and emission must stay deterministic.
+		java.util.List<String> orderedGlobals = new java.util.ArrayList<>(ctx.globalIndices.keySet());
+		java.util.Collections.sort(orderedGlobals);
+		WasmExprCompiler.compileExpr(LispMacroExpander.expandSetForCompile(cons, orderedGlobals, ctx.specialVars,
+				ctx.functions.containsKey(LispNames.SET_GLOBAL_RUNTIME)), ctx);
+	}
+
+	/**
+	 * {@code (%set-mirror name value)} -- the checked half of {@code set}: constants
+	 * (nil, t and keywords, by value or by computed name) and non-symbols trap, the
+	 * {@code %error} convention of the symbol API; otherwise the eval mirror is written
+	 * through {@code _store}, which creates the binding in {@code GLOBAL_ENV} when the
+	 * name has none. Answers the stored value.
+	 */
+	static void compileSetMirror(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		int nameSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
@@ -336,26 +353,8 @@ final class WasmSymbolApiCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
-		// backing stores first: a compiled read must see the store, not only the
-		// mirror below. Sorted by name: the index map is a hash, at most one entry
-		// can match, and emission must stay deterministic.
-		java.util.List<String> orderedGlobals = new java.util.ArrayList<>(ctx.globalIndices.keySet());
-		java.util.Collections.sort(orderedGlobals);
-		for (String global : orderedGlobals) {
-			Integer index = ctx.globalIndices.get(global);
-			if (index == null) {
-				continue;
-			}
-			emitNameOffsetEquals(nameSlot, ctx.stringTable.addString(global).offset(), ctx);
-			ctx.writer.write(Instruction.IF, 0x40);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(valueSlot);
-			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(index);
-			ctx.writer.write(Instruction.END);
-		}
-		// the mirror, unconditionally: _store creates the binding when no backing
-		// store took it, and answers the stored value, the set result.
+		// the mirror: _store creates the binding when the name has none, and answers
+		// the stored value
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(nameSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -364,6 +363,75 @@ final class WasmSymbolApiCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
+	}
+
+	/**
+	 * {@code (%global-store-set NAME value)} -- {@code global.set} into the module global
+	 * of the literal global {@code NAME}, deaf to an active dynamic binding (the store
+	 * {@code set} targets); answers nil.
+	 */
+	static void compileGlobalStoreSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		String name = ((LispSymbol) parts.get(1)).name();
+		Integer index = ctx.globalIndices.get(name);
+		if (index == null) {
+			throw new IllegalStateException("global " + name + " has no module global for " + LispNames.SET);
+		}
+		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(index);
+		emitNil(ctx);
+	}
+
+	/**
+	 * {@code (%symbol-is x 'NAME)} as an i32 truth value (the complement when
+	 * {@code negated}): {@code x} is a string struct at {@code NAME}'s canonical
+	 * string-table offset -- what {@code eql} answers for a symbol, without building the
+	 * literal or calling the structural {@code equal}. A variable operand is read twice;
+	 * anything else goes through a temp. The name is not a designator the program
+	 * spelled.
+	 */
+	static void emitSymbolIsTest(LispCons cons, WasmLispCompiler.Ctx ctx, boolean negated) {
+		List<LispVal> parts = cons.toList();
+		LispCons quoted = (LispCons) parts.get(2);
+		int offset = ctx.stringTable.addString(((LispSymbol) ((LispCons) quoted.cdr()).car()).name()).offset();
+		LispVal operand = parts.get(1);
+		int slot = -1;
+		WasmExprCompiler.compileExpr(operand, ctx);
+		if (!(operand instanceof LispSymbol)) {
+			slot = ctx.allocTemp();
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+		}
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		if (slot < 0) {
+			WasmExprCompiler.compileExpr(operand, ctx);
+		}
+		else {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+		}
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(offset);
+		ctx.writer.write(negated ? Instruction.I32_NE : Instruction.I32_EQ);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(negated ? 1 : 0);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/** {@code (%symbol-is x 'NAME)} as a Lisp boolean. */
+	static void compileSymbolIs(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		emitSymbolIsTest(cons, ctx, false);
+		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
 	// The name's canonical string-table offset == the given one, as an i32 condition.

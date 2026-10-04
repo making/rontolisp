@@ -84,6 +84,67 @@ public final class LispNames {
 	 */
 	public static final String SYMBOL_VALUE_DYNAMIC = "%SYMBOL-VALUE-DYNAMIC";
 
+	/**
+	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
+	 * runtime symbols through -- {@code (%progv-bind symbols values)} binds each name and
+	 * answers the save list {@link #PROGV_UNBIND_RUNTIME} restores. Its per-name dispatch
+	 * over the special set is {@link #PROGV_BIND_NAME}.
+	 */
+	public static final String PROGV_BIND_RUNTIME = "%PROGV-BIND";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-unbind saved)}, the restore half of
+	 * {@link #PROGV_BIND_RUNTIME}; its per-name dispatch is {@link #PROGV_UNBIND_NAME}.
+	 */
+	public static final String PROGV_UNBIND_RUNTIME = "%PROGV-UNBIND";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-bind-name name value)}, the dispatch
+	 * of one runtime name over the special set onto its {@link #PROGV_DYN_BIND} arm,
+	 * answering the previous binding state (nil for a name in no arm). Later segments are
+	 * this name suffixed {@code -1}, {@code -2}, ...
+	 */
+	public static final String PROGV_BIND_NAME = "%PROGV-BIND-NAME";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-unbind-name name prev)}, the dispatch
+	 * onto the {@link #PROGV_DYN_UNBIND} arm. Segmented like {@link #PROGV_BIND_NAME}.
+	 */
+	public static final String PROGV_UNBIND_NAME = "%PROGV-UNBIND-NAME";
+
+	/**
+	 * Internal (compile-path only): {@code (%set-global name value)}, the shared runtime
+	 * a computed {@code set} site calls: {@link #SET_MIRROR}, then the dispatch of the
+	 * name over the program's globals onto {@link #GLOBAL_STORE_SET} -- this name
+	 * suffixed {@code -STORE}, segmented like {@link #PROGV_BIND_NAME}.
+	 */
+	public static final String SET_GLOBAL_RUNTIME = "%SET-GLOBAL";
+
+	/**
+	 * Internal (compile-path only): {@code (%global-store-set NAME value)}, where
+	 * {@code NAME} is a literal symbol -- writes the global's backing store (JVM: its
+	 * {@code _g$} field; WASM: its module global), deaf to an active dynamic binding, the
+	 * store {@code set} targets. Answers nil.
+	 */
+	public static final String GLOBAL_STORE_SET = "%GLOBAL-STORE-SET";
+
+	/**
+	 * Internal (compile-path only): {@code (%set-mirror name value)}, the checked half of
+	 * a computed {@code set} -- signals on a constant (nil, t, a keyword, the empty name)
+	 * or a non-symbol, then writes the eval runtime's global env mirror, creating the
+	 * binding. Answers the value.
+	 */
+	public static final String SET_MIRROR = "%SET-MIRROR";
+
+	/**
+	 * Internal (compile-path only): {@code (%symbol-is x 'NAME)} -- whether {@code x} is
+	 * the symbol {@code NAME}, the name test of the dispatches over the special and
+	 * global sets: a string compare on the JVM, a string-table offset compare on WASM,
+	 * where an {@code equal} against a quoted symbol builds the symbol and calls the
+	 * structural walk. The quoted name is not a designator the program spelled.
+	 */
+	public static final String SYMBOL_IS = "%SYMBOL-IS";
+
 	/** The {@code progn} special form. */
 	public static final String PROGN = "PROGN";
 

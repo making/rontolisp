@@ -4061,16 +4061,33 @@ public final class WasmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.checkSequenceRuntimeWrapper(), defuns, injectedRuntimeDefuns, injectedForms,
 					specialVars);
 		}
+		// The shared name dispatches injected below are called only from the sites the
+		// compiler lowers onto them, never through a designator: no dispatcher case
+		// (dispatchableFuncIds), so a program whose names resolve at run time does not
+		// keep one alive that no reachable site calls.
+		Set<String> callOnlyRuntimes = new HashSet<>();
 		// The shared dynamic-first symbol-value dispatch a computed name calls in a
 		// progv-using program. When it is absent a site spells the dispatch inline
 		// (LispMacroExpander.dynamicFirstSymbolValue).
 		if (programUsesSymbol(program, LispNames.PROGV) && !specialVars.isEmpty()
-				&& !LispMacroExpander.definesSymbolValueRuntimeName(userDefinedNames)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.SYMBOL_VALUE_DYNAMIC)
 				&& (LispMacroExpander.programUsesComputedSymbolValue(program)
 						|| LispMacroExpander.programUsesComputedSymbolValue(injectedForms) || LispMacroExpander
 							.programUsesComputedSymbolValue(closRegistry.conditionReports().values()))) {
 			for (LispVal segment : LispMacroExpander.symbolValueDynamicRuntime(specialVars)) {
 				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
+			}
+		}
+		// The shared progv runtime: a site hands its lists to %progv-bind, whose
+		// per-name dispatch is over the special set. When it is absent a site spells the
+		// loops inline (LispMacroExpander.expandProgvForCompile).
+		if (LispMacroExpander.programCallsProgv(program)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.PROGV_BIND_RUNTIME)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.PROGV_UNBIND_RUNTIME)) {
+			for (LispVal definition : LispMacroExpander.progvRuntime(specialVars, usesEval)) {
+				inject(definition, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
 
@@ -4103,6 +4120,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// false.
 		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
 			globals.add(LispNames.ERROR_OUTPUT_VAR);
+		}
+		// The shared dispatch a computed set writes a global's module global through,
+		// here because its arms are the FINAL global set. When it is absent a site
+		// spells the dispatch inline (LispMacroExpander.expandSetForCompile).
+		if (!globals.isEmpty() && !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.SET_GLOBAL_RUNTIME)
+				&& (LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms))) {
+			for (LispVal segment : LispMacroExpander.setGlobalRuntime(globals)) {
+				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
+			}
 		}
 		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
 		// per-call task record (WasmDynVars); every other special keeps its plain
@@ -5575,7 +5602,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean registryLive = usesEval || usesRuntimeDesignator || usesApplyRuntime || designatorSymbolArrives
 				|| runtimeFunctionBox;
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
-				nameResolvable, symbolBuilders);
+				nameResolvable, symbolBuilders, callOnlyRuntimes);
 		// An injected wrapper body's fdlibm calls count once the wrapper can be
 		// reached: materialized as a function value, hittable through the name
 		// registry, or named as #'op in the user's program (the apply-direct-call
@@ -9108,20 +9135,27 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
-			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
+			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders,
+			Set<String> callOnly) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time, so nothing is provably
-			// call-only.
+			// call-only -- but the compiler's shared name dispatches, which only the
+			// sites lowered onto them call.
 			Set<Integer> all = new HashSet<>(valueFuncIds);
 			for (int i = 0; i < defuns.size(); i++) {
-				all.add(i);
+				if (!callOnly.contains(defuns.get(i).name)) {
+					all.add(i);
+				}
 			}
 			return all;
 		}
 		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
 		if (registryLive) {
 			for (int i = 0; i < defuns.size(); i++) {
+				if (callOnly.contains(defuns.get(i).name)) {
+					continue;
+				}
 				// Every spelling a runtime designator can carry for the name --
 				// canonical, the alias row's, the bare member, and (only with a symbol
 				// BUILDER present) the framed string literal and the two package-less

@@ -97,6 +97,11 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
+			case LispNames.SYMBOL_IS -> {
+				// A name dispatch's test: a string-table offset compare, no box.
+				WasmSymbolApiCompiler.emitSymbolIsTest(cons, ctx, negated);
+				return true;
+			}
 			case LispNames.EQ_GENERAL, LispNames.EQL -> {
 				if (args.size() != 3) {
 					return false;

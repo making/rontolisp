@@ -24085,6 +24085,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void progvAndSetSitesBindAndStoreByName() throws Exception {
+		// The wasm twin of
+		// JvmLispCompilerTest#progvAndSetSitesDoNotEachPayForTheSpecialSet
+		// on Preview 1 and the component: progv and set dispatch through shared
+		// runtimes (the size half is WasmLispCompilerTest's).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.ProgvSetSiteFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvSetSiteFixture.EXPECTED);
+	}
+
+	@Test
 	void progvSymbolValueSeesTheSetqInsideTheExtent() throws Exception {
 		// The cl-json aggregate-scope shape: (progv vars (mapcar #'symbol-value vars))
 		// re-binds each scope variable to its CURRENT value, where "current" includes a

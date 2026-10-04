@@ -492,21 +492,34 @@ final class JvmSymbolApiCompiler {
 	 * {@code (set name value)} -- store {@code value} into the global variable
 	 * {@code name} names, creating the binding when the name is unbound: the
 	 * computed-name counterpart of {@code setq}, and what a run-time evaluator defines
-	 * and assigns program globals through. A name with a compiled backing store writes
-	 * that static field (so compiled reads see the store); the eval mirror is written
-	 * unconditionally through {@code _store} (which creates the binding there when no
-	 * backing store exists -- so {@code symbol-value} and {@code eval} see the store
-	 * wherever it lands). Deliberately deaf to an already-active dynamic binding (unlike
-	 * {@code setq}, which writes it): the store targets the global namespace on every
-	 * backend alike. Constants (nil, t and keywords, by value or by computed name) and
-	 * non-symbols signal. Forces {@code usesEval} in {@link JvmLispCompiler} like the
-	 * rest of the symbol API.
+	 * and assigns program globals through. Lowered by
+	 * {@link LispMacroExpander#expandSetForCompile}: {@link #compileSetMirror} checks the
+	 * name and writes the eval mirror, and a name with a compiled backing store writes
+	 * that static field ({@link #compileGlobalStoreSet}, so compiled reads see the store)
+	 * through the shared {@code %set-global} dispatch over the globals, or the same
+	 * dispatch inline when the program lacks it. Deliberately deaf to an already-active
+	 * dynamic binding (unlike {@code setq}, which writes it): the store targets the
+	 * global namespace on every backend alike. Forces {@code usesEval} in
+	 * {@link JvmLispCompiler} like the rest of the symbol API.
 	 */
 	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(LispNames.SET + " expects 2 arguments, got " + (parts.size() - 1));
 		}
+		JvmExprCompiler.compileExpr(LispMacroExpander.expandSetForCompile(cons, ctx.globals, ctx.specialVars,
+				ctx.functions.containsKey(LispNames.SET_GLOBAL_RUNTIME)), ctx, className);
+	}
+
+	/**
+	 * {@code (%set-mirror name value)} -- the checked half of {@code set}: constants
+	 * (nil, t and keywords, by value or by computed name, and the empty name) and
+	 * non-symbols signal; otherwise the eval mirror is written through {@code _store},
+	 * which creates the binding when the name has none -- so {@code symbol-value} and
+	 * {@code eval} see the store wherever it lands. Answers the stored value.
+	 */
+	static void compileSetMirror(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
 		// null (nil) -> throw
@@ -534,28 +547,55 @@ final class JvmSymbolApiCompiler {
 		ctx.body.if_icmpne(notKeyword);
 		emitSetConstantNameThrowDynamic(nameSlot, ctx);
 		ctx.body.labelBinding(notKeyword);
-		// backing stores first, in declaration order: a compiled read must see the
-		// store, not only the mirror below. Every taken arm lands on the mirror:
-		// the field IS the store, and the mirror keeps symbol-value and eval with
-		// it.
-		MethodCode.Label toMirror = ctx.body.newLabel();
-		for (String global : ctx.globals) {
-			FieldRefEntry field = ctx.globalFields.get(global);
-			if (field == null) {
-				continue;
-			}
-			JvmEmitHelper.compileStringLiteral(global, ctx);
-			ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals);
-			MethodCode.Label miss = ctx.body.newLabel();
-			ctx.body.ifeq(miss);
-			ctx.body.aload(valueSlot).putstatic(field).goto_(toMirror);
-			ctx.body.labelBinding(miss);
-		}
-		// the mirror, unconditionally: _store creates the binding when no backing
-		// store took it, and answers the stored value, the set result.
-		ctx.body.labelBinding(toMirror);
+		// the mirror: _store creates the binding when the name has none, and answers
+		// the stored value
 		ctx.body.aload(nameSlot).aload(valueSlot).aconst_null();
 		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef));
+	}
+
+	/**
+	 * {@code (%global-store-set NAME value)} -- {@code putstatic} into the backing field
+	 * of the literal global {@code NAME}, deaf to an active dynamic binding (the store
+	 * {@code set} targets); answers nil.
+	 */
+	static void compileGlobalStoreSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		String name = ((LispSymbol) parts.get(1)).name();
+		FieldRefEntry field = ctx.globalFields.get(name);
+		if (field == null) {
+			throw new IllegalStateException("global " + name + " has no backing field for " + LispNames.SET);
+		}
+		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+		ctx.body.putstatic(field).aconst_null();
+	}
+
+	/**
+	 * {@code (%symbol-is x 'NAME)} as a raw int truth value: {@code "NAME".equals(x)} --
+	 * a symbol is a bare String, so this is {@code equal} against the symbol without the
+	 * structural walk. The name is not a designator the program spelled.
+	 */
+	static void emitSymbolIsTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		JvmEmitHelper.compileUnspelledLiteral(symbolIsName(cons), ctx);
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		ctx.body.invokevirtual(ctx.objectEquals);
+	}
+
+	/** {@code (%symbol-is x 'NAME)} as a Lisp boolean. */
+	static void compileSymbolIs(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		emitSymbolIsTest(cons, ctx, className);
+		JvmEmitHelper.emitBoolFromInt(ctx);
+	}
+
+	/** Whether {@code test} is a {@code (%symbol-is x 'NAME)} form. */
+	static boolean isSymbolIs(LispVal test) {
+		return test instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SYMBOL_IS.equals(head.name());
+	}
+
+	private static String symbolIsName(LispCons cons) {
+		LispCons quoted = (LispCons) cons.toList().get(2);
+		return ((LispSymbol) ((LispCons) quoted.cdr()).car()).name();
 	}
 
 	// throw new RuntimeException("SET cannot set " + constant)

@@ -4694,25 +4694,33 @@ public final class LispMacroExpander {
 	/**
 	 * Compile-path lowering of {@code (progv symbols values body...)}. The bound symbols
 	 * are runtime values, but the set of candidate SPECIALS in a compiled program is
-	 * static -- that asymmetry is what makes the form compilable at all: the expansion
-	 * loops over the runtime symbol list and dispatches each name through an
-	 * {@code equal} chain over the statically known special set, whose per-name arm
-	 * ({@code %progv-dyn-bind}/{@code %progv-dyn-unbind}) performs exactly the
-	 * save-and-set the {@code let} path performs for that one special (JVM: the
-	 * {@code _d$} ThreadLocal cell; WASM: the module global, or the per-task slot under
-	 * {@code --reentrant}). A name in NO arm -- CL lets {@code progv} bind an undeclared
-	 * symbol -- is bound in the eval runtime's global env mirror only
-	 * ({@code %progv-genv}/{@code %progv-genv-set}), which is also what
-	 * {@code symbol-value}/{@code boundp} read on the compile paths; when the program
-	 * carries no eval runtime ({@code mirror} false) that store does not exist, and
-	 * neither does anything that could observe it, so the mirror maintenance is omitted.
+	 * static -- that asymmetry is what makes the form compilable at all: the lowering
+	 * loops over the runtime symbol list and dispatches each name over the statically
+	 * known special set, whose per-name arm ({@code %progv-dyn-bind}/
+	 * {@code %progv-dyn-unbind}) performs exactly the save-and-set the {@code let} path
+	 * performs for that one special (JVM: the {@code _d$} ThreadLocal cell; WASM: the
+	 * module global, or the per-task slot under {@code --reentrant}). A name in NO arm --
+	 * CL lets {@code progv} bind an undeclared symbol -- is bound in the eval runtime's
+	 * global env mirror only ({@code %progv-genv}/{@code %progv-genv-set}), which is also
+	 * what {@code symbol-value}/{@code boundp} read on the compile paths; when the
+	 * program carries no eval runtime ({@code mirror} false) that store does not exist,
+	 * and neither does anything that could observe it, so the mirror maintenance is
+	 * omitted.
 	 *
 	 * <p>
-	 * The restore loop is the cleanup form of an {@code unwind-protect}, so every exit
-	 * the compilers cover for unwind-protect -- normal completion, an error unwinding
-	 * past the form, a {@code return-from}/{@code go} out of the body -- restores the
-	 * bindings through the same emitter, and the known unwind holes are neither widened
-	 * nor narrowed by this construct.
+	 * No site pays for the special set: the loops live in the shared
+	 * {@link #progvRuntime} when the program carries it ({@code shared}), so a site is
+	 * {@code (let ((saved (%progv-bind symbols values))) (unwind-protect (progn body...)
+	 * (%progv-unbind saved)))}. Otherwise -- a user definition took a runtime name -- the
+	 * same loops and dispatches are spelled inline, correct at the size of the special
+	 * set.
+	 *
+	 * <p>
+	 * The restore is the cleanup form of an {@code unwind-protect}, so every exit the
+	 * compilers cover for unwind-protect -- normal completion, an error unwinding past
+	 * the form, a {@code return-from}/{@code go} out of the body -- restores the bindings
+	 * through the same emitter, and the known unwind holes are neither widened nor
+	 * narrowed by this construct.
 	 *
 	 * <p>
 	 * Divergences from the interpreter's native {@code evalProgv} (both deliberate): a
@@ -4724,91 +4732,166 @@ public final class LispMacroExpander {
 	 * @param specials the program's special-variable names, in declaration order
 	 * @param mirror whether the eval runtime's global env mirror exists in this program
 	 * (JVM: {@code evalStoreRef != null}; WASM: {@code usesEval})
+	 * @param shared whether the program carries {@link #progvRuntime}
 	 * @return the expansion
 	 */
-	public static LispVal expandProgvForCompile(LispCons cons, java.util.Collection<String> specials, boolean mirror) {
+	public static LispVal expandProgvForCompile(LispCons cons, java.util.Collection<String> specials, boolean mirror,
+			boolean shared) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(LispNames.PROGV + " expects a symbols list, a values list, and a body");
 		}
-		LispSymbol syms = new LispSymbol("__PROGV_SYMS");
-		LispSymbol vals = new LispSymbol("__PROGV_VALS");
-		LispSymbol saved = new LispSymbol("__PROGV_SAVED");
-		LispSymbol name = new LispSymbol("__PROGV_NAME");
-		LispSymbol val = new LispSymbol("__PROGV_VAL");
-		LispSymbol prev = new LispSymbol("__PROGV_PREV");
-		LispSymbol entry = new LispSymbol("__PROGV_ENTRY");
-		LispSymbol env = new LispSymbol("__PROGV_ENV");
-		LispSymbol e = new LispSymbol("__PROGV_E");
-		List<String> names = new ArrayList<>(specials);
-		// The bind arm chain: (if (equal name 'S) (%progv-dyn-bind S val) ...), last arm
-		// nil (an unknown name has no dynamic store; the mirror below still records it).
-		LispVal bindChain = LispNil.INSTANCE;
-		LispVal unbindChain = LispNil.INSTANCE;
-		for (int i = names.size() - 1; i >= 0; i--) {
-			LispSymbol s = new LispSymbol(names.get(i));
-			LispVal test = listToCons(List.of(new LispSymbol(LispNames.EQUAL), name, quotedData(s)));
-			bindChain = listToCons(List.of(new LispSymbol(LispNames.IF), test,
-					listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_BIND), s, val)), bindChain));
-			unbindChain = listToCons(List.of(new LispSymbol(LispNames.IF), test,
-					listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_UNBIND), s, prev)), unbindChain));
+		ProgvVars v = ProgvVars.fresh(specials);
+		List<LispVal> protectedForm = new ArrayList<>();
+		protectedForm.add(new LispSymbol(LispNames.PROGN));
+		if (shared) {
+			protectedForm.addAll(parts.subList(3, parts.size()));
+			if (parts.size() == 3) {
+				protectedForm.add(LispNil.INSTANCE);
+			}
+			LispVal bind = listToCons(
+					List.of(new LispSymbol(LispNames.PROGV_BIND_RUNTIME), parts.get(1), parts.get(2)));
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(v.saved, bind)))),
+							listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(protectedForm),
+									callOf(LispNames.PROGV_UNBIND_RUNTIME, v.saved)))));
 		}
-		// (setq saved (cons RECORD saved)) -- the record is (name prev) without the
-		// mirror, (name prev entry old) with it (entry nil = this progv ADDED the
-		// mirror binding and the restore removes it again).
+		List<String> names = new ArrayList<>(specials);
+		LispVal bindArm = nameChain(v.name, names,
+				s -> listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_BIND), s, v.val)), LispNil.INSTANCE);
+		LispVal unbindArm = nameChain(v.name, names,
+				s -> listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_UNBIND), s, v.prev)), LispNil.INSTANCE);
+		protectedForm.add(progvBindLoop(v, mirror, bindArm));
+		protectedForm.addAll(parts.subList(3, parts.size()));
+		if (parts.size() == 3) {
+			protectedForm.add(LispNil.INSTANCE);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(v.syms, parts.get(1))), listToCons(List.of(v.vals, parts.get(2))),
+						listToCons(List.of(v.saved, LispNil.INSTANCE)))),
+				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(protectedForm),
+						progvUnbindLoop(v, mirror, unbindArm)))));
+	}
+
+	/**
+	 * The shared {@code progv} runtime ({@link #expandProgvForCompile}):
+	 * {@code (%progv-bind symbols values)} binds each name and answers the save list,
+	 * {@code (%progv-unbind saved)} restores it, innermost first. Each dispatches a name
+	 * through {@code %progv-bind-name}/{@code %progv-unbind-name}, an arm per special,
+	 * cut into segments like {@link #symbolValueDynamicRuntime}, so no body grows with
+	 * the special set.
+	 * @param specials the program's special-variable names, in declaration order
+	 * @param mirror whether the eval runtime's global env mirror exists in this program
+	 * @return the definitions, wrapper-shaped
+	 */
+	public static List<LispVal> progvRuntime(java.util.Collection<String> specials, boolean mirror) {
+		ProgvVars v = ProgvVars.fresh(specials);
+		List<LispVal> out = new ArrayList<>();
+		LispVal bindBody = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(v.saved, LispNil.INSTANCE)))),
+				progvBindLoop(v, mirror, callOf(LispNames.PROGV_BIND_NAME, v.name, v.val)), v.saved));
+		out.add(runtimeDefinition(LispNames.PROGV_BIND_RUNTIME, List.of(v.syms, v.vals), bindBody));
+		out.add(runtimeDefinition(LispNames.PROGV_UNBIND_RUNTIME, List.of(v.saved),
+				progvUnbindLoop(v, mirror, callOf(LispNames.PROGV_UNBIND_NAME, v.name, v.prev))));
+		List<String> names = new ArrayList<>(specials);
+		out.addAll(segmentedNameDispatch(LispNames.PROGV_BIND_NAME, List.of(v.name, v.val), names,
+				s -> listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_BIND), s, v.val)), LispNil.INSTANCE));
+		out.addAll(segmentedNameDispatch(LispNames.PROGV_UNBIND_NAME, List.of(v.name, v.prev), names,
+				s -> listToCons(List.of(new LispSymbol(LispNames.PROGV_DYN_UNBIND), s, v.prev)), LispNil.INSTANCE));
+		return out;
+	}
+
+	/** The variables of the {@code progv} lowering, none of them naming a special. */
+	private record ProgvVars(LispSymbol syms, LispSymbol vals, LispSymbol saved, LispSymbol name, LispSymbol val,
+			LispSymbol prev, LispSymbol entry, LispSymbol env, LispSymbol e) {
+
+		static ProgvVars fresh(java.util.Collection<String> specials) {
+			return new ProgvVars(fresh("__PROGV_SYMS", specials), fresh("__PROGV_VALS", specials),
+					fresh("__PROGV_SAVED", specials), fresh("__PROGV_NAME", specials), fresh("__PROGV_VAL", specials),
+					fresh("__PROGV_PREV", specials), fresh("__PROGV_ENTRY", specials), fresh("__PROGV_ENV", specials),
+					fresh("__PROGV_E", specials));
+		}
+
+		private static LispSymbol fresh(String base, java.util.Collection<String> specials) {
+			return new LispSymbol(freshName(base, specials));
+		}
+
+	}
+
+	/**
+	 * The bind loop over {@code v.syms}/{@code v.vals}: each name is bound by
+	 * {@code bindArm} (a form over {@code v.name}/{@code v.val} answering the previous
+	 * binding state) and recorded on {@code v.saved} -- {@code (name prev)} without the
+	 * mirror, {@code (name prev entry old)} with it (entry nil = this progv ADDED the
+	 * mirror binding and the restore removes it again).
+	 */
+	private static LispVal progvBindLoop(ProgvVars v, boolean mirror, LispVal bindArm) {
 		LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
 		List<LispVal> iterBody = new ArrayList<>();
 		if (mirror) {
 			// Find the mirror binding for name (an assoc over the env alist, written as
 			// a plain loop so the expansion depends only on core operators).
 			LispVal lookupLoop = listToCons(List
-				.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, env), listToCons(List.of(
+				.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, v.env), listToCons(List.of(
 						new LispSymbol(LispNames.IF),
 						listToCons(List.of(new LispSymbol(LispNames.EQUAL),
-								callOf(LispNames.CAR, callOf(LispNames.CAR, env)), name)),
+								callOf(LispNames.CAR, callOf(LispNames.CAR, v.env)), v.name)),
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
-								listToCons(List.of(new LispSymbol(LispNames.SETQ), entry, callOf(LispNames.CAR, env))),
-								listToCons(List.of(new LispSymbol(LispNames.SETQ), env, LispNil.INSTANCE)))),
-						listToCons(List.of(new LispSymbol(LispNames.SETQ), env, callOf(LispNames.CDR, env)))))));
-			LispVal recordWithEntry = cons2(name,
-					cons2(prev, cons2(entry, cons2(callOf(LispNames.CDR, entry), LispNil.INSTANCE))));
-			LispVal recordAdded = cons2(name,
-					cons2(prev, cons2(LispNil.INSTANCE, cons2(LispNil.INSTANCE, LispNil.INSTANCE))));
-			LispVal mirrorStep = listToCons(List.of(new LispSymbol(LispNames.IF), entry,
+								listToCons(
+										List.of(new LispSymbol(LispNames.SETQ), v.entry, callOf(LispNames.CAR, v.env))),
+								listToCons(List.of(new LispSymbol(LispNames.SETQ), v.env, LispNil.INSTANCE)))),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), v.env, callOf(LispNames.CDR, v.env)))))));
+			LispVal recordWithEntry = cons2(v.name,
+					cons2(v.prev, cons2(v.entry, cons2(callOf(LispNames.CDR, v.entry), LispNil.INSTANCE))));
+			LispVal recordAdded = cons2(v.name,
+					cons2(v.prev, cons2(LispNil.INSTANCE, cons2(LispNil.INSTANCE, LispNil.INSTANCE))));
+			LispVal mirrorStep = listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
 					listToCons(List.of(new LispSymbol(LispNames.PROGN),
-							listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, cons2(recordWithEntry, saved))),
-							listToCons(List.of(new LispSymbol(LispNames.RPLACD), entry, val)))),
+							listToCons(
+									List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordWithEntry, v.saved))),
+							listToCons(List.of(new LispSymbol(LispNames.RPLACD), v.entry, v.val)))),
 					listToCons(List.of(new LispSymbol(LispNames.PROGN),
-							listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, cons2(recordAdded, saved))),
+							listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved, cons2(recordAdded, v.saved))),
 							listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV_SET),
-									cons2(cons2(name, val), genvRead)))))));
-			iterBody.add(listToCons(List.of(new LispSymbol(LispNames.LET),
-					listToCons(
-							List.of(listToCons(List.of(entry, LispNil.INSTANCE)), listToCons(List.of(env, genvRead)))),
-					lookupLoop, mirrorStep)));
+									cons2(cons2(v.name, v.val), genvRead)))))));
+			iterBody
+				.add(listToCons(List.of(
+						new LispSymbol(LispNames.LET), listToCons(List
+							.of(listToCons(List.of(v.entry, LispNil.INSTANCE)), listToCons(List.of(v.env, genvRead)))),
+						lookupLoop, mirrorStep)));
 		}
 		else {
-			iterBody.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), saved,
-					cons2(cons2(name, cons2(prev, LispNil.INSTANCE)), saved))));
+			iterBody.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved,
+					cons2(cons2(v.name, cons2(v.prev, LispNil.INSTANCE)), v.saved))));
 		}
 		LispVal iterLet = listToCons(concat(List.of(new LispSymbol(LispNames.LET_STAR),
-				listToCons(List.of(listToCons(List.of(name, callOf(LispNames.CAR, syms))),
-						listToCons(List.of(val,
-								listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, vals),
-										callOf(LispNames.CAR, vals), LispNil.INSTANCE)))),
-						listToCons(List.of(prev, bindChain))))),
+				listToCons(List.of(listToCons(List.of(v.name, callOf(LispNames.CAR, v.syms))),
+						listToCons(List.of(v.val,
+								listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.CONSP, v.vals),
+										callOf(LispNames.CAR, v.vals), LispNil.INSTANCE)))),
+						listToCons(List.of(v.prev, bindArm))))),
 				iterBody));
-		LispVal bindLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, syms), iterLet,
-				listToCons(List.of(new LispSymbol(LispNames.SETQ), syms, callOf(LispNames.CDR, syms))),
+		return listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, v.syms), iterLet,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), v.syms, callOf(LispNames.CDR, v.syms))),
 				listToCons(
-						List.of(new LispSymbol(LispNames.SETQ), vals, listToCons(List.of(new LispSymbol(LispNames.IF),
-								callOf(LispNames.CONSP, vals), callOf(LispNames.CDR, vals), LispNil.INSTANCE))))));
-		// The cleanup: unwind the saved records (innermost first -- the list was built
-		// by consing).
+						List.of(new LispSymbol(LispNames.SETQ), v.vals, listToCons(List.of(new LispSymbol(LispNames.IF),
+								callOf(LispNames.CONSP, v.vals), callOf(LispNames.CDR, v.vals), LispNil.INSTANCE))))));
+	}
+
+	/**
+	 * The restore loop over {@code v.saved} (innermost first -- the list was built by
+	 * consing): each record's name is restored by {@code unbindArm} (a form over
+	 * {@code v.name}/{@code v.prev}), and with the mirror its mirror binding is put back.
+	 */
+	private static LispVal progvUnbindLoop(ProgvVars v, boolean mirror, LispVal unbindArm) {
 		List<LispVal> cleanupLetBody = new ArrayList<>();
-		cleanupLetBody.add(unbindChain);
+		cleanupLetBody.add(unbindArm);
 		if (mirror) {
-			LispVal old = callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, e))));
+			LispSymbol env = v.env;
+			LispSymbol name = v.name;
+			LispVal genvRead = listToCons(List.of(new LispSymbol(LispNames.PROGV_GENV)));
+			LispVal old = callOf(LispNames.CAR,
+					callOf(LispNames.CDR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))));
 			LispVal removeHead = listToCons(
 					List.of(new LispSymbol(LispNames.PROGV_GENV_SET), callOf(LispNames.CDR, env)));
 			LispVal headMatches = listToCons(List.of(
@@ -4829,33 +4912,131 @@ public final class LispMacroExpander {
 								listToCons(List.of(new LispSymbol(LispNames.SETQ), env, LispNil.INSTANCE)))),
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), env, callOf(LispNames.CDR, env)))))));
 			cleanupLetBody.add(listToCons(List.of(new LispSymbol(LispNames.LET),
-					listToCons(List.of(listToCons(
-							List.of(entry, callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, e))))))),
-					listToCons(List.of(new LispSymbol(LispNames.IF), entry,
-							listToCons(List.of(new LispSymbol(LispNames.RPLACD), entry, old)),
+					listToCons(List.of(listToCons(List.of(v.entry,
+							callOf(LispNames.CAR, callOf(LispNames.CDR, callOf(LispNames.CDR, v.e))))))),
+					listToCons(List.of(new LispSymbol(LispNames.IF), v.entry,
+							listToCons(List.of(new LispSymbol(LispNames.RPLACD), v.entry, old)),
 							listToCons(List.of(new LispSymbol(LispNames.LET),
 									listToCons(List.of(listToCons(List.of(env, genvRead)))), listToCons(List
 										.of(new LispSymbol(LispNames.IF), headMatches, removeHead, unlinkLoop)))))))));
 		}
 		LispVal cleanupLet = listToCons(concat(
 				List.of(new LispSymbol(LispNames.LET_STAR),
-						listToCons(List.of(listToCons(List.of(e, callOf(LispNames.CAR, saved))),
-								listToCons(List.of(name, callOf(LispNames.CAR, e))),
-								listToCons(List.of(prev, callOf(LispNames.CAR, callOf(LispNames.CDR, e))))))),
+						listToCons(List.of(listToCons(List.of(v.e, callOf(LispNames.CAR, v.saved))),
+								listToCons(List.of(v.name, callOf(LispNames.CAR, v.e))),
+								listToCons(List.of(v.prev, callOf(LispNames.CAR, callOf(LispNames.CDR, v.e))))))),
 				cleanupLetBody));
-		LispVal cleanupLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, saved),
-				cleanupLet, listToCons(List.of(new LispSymbol(LispNames.SETQ), saved, callOf(LispNames.CDR, saved)))));
-		List<LispVal> protectedForm = new ArrayList<>();
-		protectedForm.add(new LispSymbol(LispNames.PROGN));
-		protectedForm.add(bindLoop);
-		protectedForm.addAll(parts.subList(3, parts.size()));
-		if (parts.size() == 3) {
-			protectedForm.add(LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.WHILE), callOf(LispNames.CONSP, v.saved), cleanupLet,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), v.saved, callOf(LispNames.CDR, v.saved)))));
+	}
+
+	/**
+	 * Compile-path lowering of {@code (set name value)}. {@code %set-mirror} signals on a
+	 * constant or a non-symbol and writes the eval mirror, creating the binding; the
+	 * dispatch over {@code globals} writes the backing store of the global the name names
+	 * ({@code %global-store-set}). A site is one call to the shared
+	 * {@link #setGlobalRuntime} when the program carries it ({@code shared}); otherwise
+	 * {@code (let ((n name) (v value)) (%set-mirror n v) DISPATCH v)} spelled inline. No
+	 * arm can match a name the mirror store refused, so the order is unobservable.
+	 * @param cons the set form, two arguments
+	 * @param globals the program's globals with a backing store
+	 * @param specials the program's special-variable names
+	 * @param shared whether the program carries {@link #setGlobalRuntime}
+	 * @return the expansion
+	 */
+	public static LispVal expandSetForCompile(LispCons cons, java.util.Collection<String> globals,
+			java.util.Collection<String> specials, boolean shared) {
+		List<LispVal> parts = cons.toList();
+		if (shared) {
+			return callOf(LispNames.SET_GLOBAL_RUNTIME, parts.get(1), parts.get(2));
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
-				listToCons(List.of(listToCons(List.of(syms, parts.get(1))), listToCons(List.of(vals, parts.get(2))),
-						listToCons(List.of(saved, LispNil.INSTANCE)))),
-				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(protectedForm), cleanupLoop))));
+		LispSymbol n = new LispSymbol(freshName("__SET_NAME", specials));
+		LispSymbol v = new LispSymbol(freshName("__SET_VALUE", specials));
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(n, parts.get(1))), listToCons(List.of(v, parts.get(2))))),
+				callOf(LispNames.SET_MIRROR, n, v),
+				nameChain(n, new ArrayList<>(globals),
+						s -> listToCons(List.of(new LispSymbol(LispNames.GLOBAL_STORE_SET), s, v)), LispNil.INSTANCE),
+				v));
+	}
+
+	/**
+	 * The shared runtime a {@code set} site calls ({@link #expandSetForCompile}):
+	 * {@code (%set-global name value)} checks the name and writes the mirror, then
+	 * dispatches it over the globals through {@code %set-global-store}, an arm per
+	 * global, segmented like {@link #symbolValueDynamicRuntime}; answers the value.
+	 * @param globals the program's globals with a backing store, in declaration order
+	 * @return the definitions, wrapper-shaped, the entry first
+	 */
+	public static List<LispVal> setGlobalRuntime(java.util.Collection<String> globals) {
+		LispSymbol n = new LispSymbol(freshName("%SG-NAME", globals));
+		LispSymbol v = new LispSymbol(freshName("%SG-VALUE", globals));
+		String store = LispNames.SET_GLOBAL_RUNTIME + "-STORE";
+		List<LispVal> out = new ArrayList<>();
+		out.add(runtimeDefinition(LispNames.SET_GLOBAL_RUNTIME, List.of(n, v), listToCons(
+				List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.SET_MIRROR, n, v), callOf(store, n, v), v))));
+		out.addAll(segmentedNameDispatch(store, List.of(n, v), new ArrayList<>(globals),
+				s -> listToCons(List.of(new LispSymbol(LispNames.GLOBAL_STORE_SET), s, v)), LispNil.INSTANCE));
+		return out;
+	}
+
+	/**
+	 * Whether any form can reach a {@code set} -- a call of the operator (quoted data
+	 * skipped; a {@code #'set} value calls it from its wrapper, an injected form), or a
+	 * {@code (setf (symbol-value ...))} place, which lowers to one per expression -- i.e.
+	 * whether {@link #setGlobalRuntime} could have a caller. A variable merely NAMED
+	 * {@code set} (cl-ppcre's charset code has dozens) does not count: in a program whose
+	 * names resolve at run time every defun stays dispatchable, so a runtime injected for
+	 * no site would be kept. Over-predicting costs that; under-predicting costs a site
+	 * its sharing, never its correctness.
+	 * @param forms the program's (or the injected runtime's) top-level forms
+	 * @return true when a {@code set} site can occur
+	 */
+	public static boolean programUsesSet(java.util.Collection<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (callsOperator(form, LispNames.SET) || containsSymbolValueWrite(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether any form calls {@code progv} (quoted data skipped) -- whether
+	 * {@link #progvRuntime} could have a caller. The symbol merely spelled does not count
+	 * (a code walker quoting {@code PROGV}), for the reason {@link #programUsesSet}
+	 * gives.
+	 * @param forms the program's top-level forms
+	 * @return true when a {@code progv} site can occur
+	 */
+	public static boolean programCallsProgv(java.util.Collection<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (callsOperator(form, LispNames.PROGV)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether {@code form} holds a call of {@code operator}, quoted data skipped. */
+	private static boolean callsOperator(LispVal form, String operator) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return false;
+			}
+			if (operator.equals(head.name())) {
+				return true;
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (callsOperator(cell.car(), operator)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -4894,72 +5075,104 @@ public final class LispMacroExpander {
 		}
 		LispSymbol n = new LispSymbol(freshName("__PROGV_SVNAME", specials));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(n, arg)))),
-				symbolValueChain(n, new ArrayList<>(specials), LispNames.SYMBOL_VALUE_RAW)));
+				nameChain(n, new ArrayList<>(specials), s -> s, callOf(LispNames.SYMBOL_VALUE_RAW, n))));
 	}
 
 	/**
-	 * The most arms one {@link #symbolValueDynamicRuntime} segment dispatches, so a
-	 * segment's body stays bounded however many specials the program declares: the JVM's
-	 * 64 KB method limit, and HotSpot's 8,000-byte {@code HugeMethodLimit} past which a
-	 * method is never JIT-compiled.
+	 * The most arms one segment of a shared name dispatch
+	 * ({@link #segmentedNameDispatch}) holds, so a segment's body stays bounded however
+	 * many specials or globals the program declares: the JVM's 64 KB method limit, and
+	 * HotSpot's 8,000-byte {@code HugeMethodLimit} past which a method is never
+	 * JIT-compiled.
 	 */
-	static final int SYMBOL_VALUE_SEGMENT_ARMS = 128;
+	static final int NAME_DISPATCH_SEGMENT_ARMS = 128;
 
 	/**
 	 * The shared dynamic-first {@code symbol-value} runtime a computed name calls
 	 * ({@link #dynamicFirstSymbolValue}): {@code (%symbol-value-dynamic name)} dispatches
-	 * the name through an {@code equal} chain over the special set, a match reading the
-	 * variable, the miss falling to the raw mirror probe. The chain is cut into segments
-	 * of {@link #SYMBOL_VALUE_SEGMENT_ARMS} arms, each a defun whose miss tail-calls the
-	 * next, so no body grows with the special set.
+	 * the name over the special set, a match reading the variable, the miss falling to
+	 * the raw mirror probe. Segmented ({@link #segmentedNameDispatch}), so no body grows
+	 * with the special set.
 	 * @param specials the program's special-variable names, in declaration order
 	 * @return the segments' definitions, wrapper-shaped, the entry first
 	 */
 	public static List<LispVal> symbolValueDynamicRuntime(java.util.Collection<String> specials) {
-		List<String> names = new ArrayList<>(specials);
 		LispSymbol n = new LispSymbol(freshName("%SVD-NAME", specials));
-		int segments = Math.max(1, (names.size() + SYMBOL_VALUE_SEGMENT_ARMS - 1) / SYMBOL_VALUE_SEGMENT_ARMS);
+		return segmentedNameDispatch(LispNames.SYMBOL_VALUE_DYNAMIC, List.of(n), new ArrayList<>(specials), s -> s,
+				callOf(LispNames.SYMBOL_VALUE_RAW, n));
+	}
+
+	/**
+	 * A shared dispatch of a runtime name over a static name set, cut into segments of
+	 * {@link #NAME_DISPATCH_SEGMENT_ARMS} arms: segment {@code k} is the defun
+	 * {@code base} ({@code k} = 0) or {@code base-k} over {@code params}, whose first
+	 * parameter is the name; a miss tail-calls the next segment with the same arguments,
+	 * the last one answering {@code lastMiss}.
+	 * @param base the entry's name
+	 * @param params the parameters, the name first
+	 * @param names the names dispatched, in order
+	 * @param arm the form a match on a name answers
+	 * @param lastMiss the form a name matching no arm answers
+	 * @return the segments' definitions, wrapper-shaped, the entry first
+	 */
+	private static List<LispVal> segmentedNameDispatch(String base, List<LispSymbol> params, List<String> names,
+			java.util.function.Function<LispSymbol, LispVal> arm, LispVal lastMiss) {
+		int segments = Math.max(1, (names.size() + NAME_DISPATCH_SEGMENT_ARMS - 1) / NAME_DISPATCH_SEGMENT_ARMS);
 		List<LispVal> out = new ArrayList<>(segments);
 		for (int k = 0; k < segments; k++) {
-			List<String> arms = names.subList(k * SYMBOL_VALUE_SEGMENT_ARMS,
-					Math.min(names.size(), (k + 1) * SYMBOL_VALUE_SEGMENT_ARMS));
-			String miss = k + 1 < segments ? symbolValueSegmentName(k + 1) : LispNames.SYMBOL_VALUE_RAW;
-			LispVal lambda = listToCons(
-					List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(n)), symbolValueChain(n, arms, miss)));
-			out.add(listToCons(
-					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(symbolValueSegmentName(k)), lambda)));
+			List<String> arms = names.subList(k * NAME_DISPATCH_SEGMENT_ARMS,
+					Math.min(names.size(), (k + 1) * NAME_DISPATCH_SEGMENT_ARMS));
+			LispVal miss = lastMiss;
+			if (k + 1 < segments) {
+				List<LispVal> call = new ArrayList<>();
+				call.add(new LispSymbol(segmentName(base, k + 1)));
+				call.addAll(params);
+				miss = listToCons(call);
+			}
+			out.add(runtimeDefinition(segmentName(base, k), params, nameChain(params.get(0), arms, arm, miss)));
 		}
 		return out;
 	}
 
-	/** The name of {@link #symbolValueDynamicRuntime}'s {@code k}-th segment. */
-	private static String symbolValueSegmentName(int k) {
-		return k == 0 ? LispNames.SYMBOL_VALUE_DYNAMIC : LispNames.SYMBOL_VALUE_DYNAMIC + "-" + k;
+	/** {@code (setq name (lambda (params...) body))}, the injected-runtime shape. */
+	private static LispVal runtimeDefinition(String name, List<LispSymbol> params, LispVal body) {
+		LispVal lambda = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(new ArrayList<LispVal>(params)), body));
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(name), lambda));
+	}
+
+	/** The name of segment {@code k} of the shared dispatch {@code base}. */
+	private static String segmentName(String base, int k) {
+		return k == 0 ? base : base + "-" + k;
 	}
 
 	/**
-	 * Whether a program's user definitions take a name {@link #symbolValueDynamicRuntime}
-	 * would define.
+	 * Whether a program's user definitions take a name one of the shared runtimes
+	 * ({@link #symbolValueDynamicRuntime}, {@link #progvRuntime},
+	 * {@link #setGlobalRuntime}) would define.
 	 * @param userDefinedNames the program's defun names
+	 * @param base the runtime's entry name (its segments extend it)
 	 * @return true when the runtime cannot be injected
 	 */
-	public static boolean definesSymbolValueRuntimeName(java.util.Set<String> userDefinedNames) {
-		return userDefinedNames.stream().anyMatch(name -> name.startsWith(LispNames.SYMBOL_VALUE_DYNAMIC));
+	public static boolean definesRuntimeName(java.util.Set<String> userDefinedNames, String base) {
+		return userDefinedNames.stream().anyMatch(name -> name.startsWith(base));
 	}
 
 	/**
-	 * {@code (if (equal n 'S1) S1 (if (equal n 'S2) S2 ... (MISS n)))}.
+	 * {@code (if (%symbol-is n 'S1) ARM(S1) (if (%symbol-is n 'S2) ARM(S2) ... MISS))}.
 	 * @param n the variable holding the name
-	 * @param names the specials the chain dispatches, in order
-	 * @param miss the operator a name matching no arm is handed to
+	 * @param names the names the chain dispatches, in order
+	 * @param arm the form a match on a name answers
+	 * @param miss the form a name matching no arm answers
 	 * @return the chain
 	 */
-	private static LispVal symbolValueChain(LispSymbol n, List<String> names, String miss) {
-		LispVal chain = listToCons(List.of(new LispSymbol(miss), n));
+	private static LispVal nameChain(LispSymbol n, List<String> names,
+			java.util.function.Function<LispSymbol, LispVal> arm, LispVal miss) {
+		LispVal chain = miss;
 		for (int i = names.size() - 1; i >= 0; i--) {
 			LispSymbol s = new LispSymbol(names.get(i));
 			chain = listToCons(List.of(new LispSymbol(LispNames.IF),
-					listToCons(List.of(new LispSymbol(LispNames.EQUAL), n, quotedData(s))), s, chain));
+					listToCons(List.of(new LispSymbol(LispNames.SYMBOL_IS), n, quotedData(s))), arm.apply(s), chain));
 		}
 		return chain;
 	}

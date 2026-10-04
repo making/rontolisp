@@ -245,13 +245,18 @@ side, answering the value -- so only `set` needs the per-backend work.
   by value or by computed `NIL`/`T` name, and the empty name) and non-symbols signal on
   the interpreter and the JVM and trap on WASM, the symbol API's usual split.
 - **Interpreter**: a builtin over `Environment` (`define` on the global env).
-  **JVM** (`JvmSymbolApiCompiler.compileSet`): validate, then a per-name
-  name-equals chain over `ctx.globals` writing the static field, every taken arm
-  landing on the unconditional `_store(name, value, null)` mirror -- which creates the
-  binding when no backing store took it. **WASM** (`WasmSymbolApiCompiler.compileSet`):
-  the same shape inline (offsets compared by canonical string-table offset, so a
-  literal and a run-time `intern` agree; the global list sorted, the index map being a
-  hash), landing on `FUNC_STORE` over `GLOBAL_ENV`. Both force `usesEval` (a `SET`
+  **Compilers** (`LispMacroExpander.expandSetForCompile`, 2026-10-04 `.todo/c81`): a site is
+  one call to the shared `%set-global` (`setGlobalRuntime`): `%set-mirror` validates and
+  writes the `_store` / `FUNC_STORE` mirror (which creates the binding when the name has
+  none), then `%set-global-store` dispatches the name over the globals onto
+  `%global-store-set` -- `putstatic _g$` on the JVM, `global.set` on wasm -- segmented and
+  tested like the progv dispatches (`.kb/dynamic-special-variables.md`: `%symbol-is`, wasm by
+  canonical string-table offset, so a literal and a run-time `intern` agree). Mirror before
+  field is unobservable: no global is a constant or a non-symbol. Injected when a form calls
+  `set` or writes a `(setf (symbol-value ...))` place (`programUsesSet`; a variable NAMED
+  `set` does not count). Without it the same `let` + checks + chain is spelled at the site
+  (JVM over `ctx.globals`, wasm over the sorted global names). Before: the chain inline at
+  every site, ~8.8 KB of JVM bytecode a site over ci-spec's ~510 globals. Both force `usesEval` (a `SET`
   spelling; a raw `(setf (symbol-value ...) ...)` spells `SYMBOL_VALUE`, which is
   already in the chain), and `#'set` is a reference-gated wrapper like
   `#'symbol-value`. `--no-gc` refuses by omission, like every other eval-runtime

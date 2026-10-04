@@ -20642,6 +20642,54 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void progvAndSetSitesDoNotEachPayForTheSpecialSet() throws Exception {
+		// progv dispatches each runtime name over the special set and set over the
+		// global set, both through shared runtimes cut into segments the JIT still
+		// compiles. Each site used to spell its dispatch inline, ~30 KB a progv over
+		// 300 specials, so the four-site top-level form overflowed the 64 KB method
+		// limit (.kb/dynamic-special-variables.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE)));
+		assertThat(codeLengthOf(classBytes, "PVS-FOUR")).isLessThan(1_000);
+		assertThat(ownCallsIn(classBytes, "PVS-FOUR", "$pctPROGV-BIND")).isEqualTo(4);
+		assertThat(codeLengthOf(classBytes, "PVS-SET-FOUR")).isLessThan(300);
+		assertThat(ownCallsIn(classBytes, "PVS-SET-FOUR", "$pctSET-GLOBAL")).isEqualTo(4);
+		for (String runtime : List.of("$pctPROGV-BIND-NAME", "$pctPROGV-UNBIND-NAME", "$pctSET-GLOBAL-STORE")) {
+			List<String> segments = declaredMethodNames(classBytes).stream()
+				.filter(m -> m.equals(runtime) || m.startsWith(runtime + "-"))
+				.toList();
+			assertThat(segments).as(runtime).hasSizeGreaterThan(1);
+			for (String segment : segments) {
+				assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+			}
+		}
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvSetSiteFixture.EXPECTED);
+	}
+
+	@Test
+	void theSharedNameDispatchesAreNeverDispatcherTargets() throws Exception {
+		// A program whose names resolve at run time (read-from-string) gives every defun
+		// a dispatcher case -- but not the shared set runtime, which only the sites
+		// lowered onto it call. A library holding a set site the shaker drops would
+		// otherwise keep the whole runtime alive through the dispatchers.
+		String source = """
+				(defvar *nd-a* 1)
+				(defun nd-g (n) (set n 2))
+				(defun nd-h (s) (if (stringp s) (funcall (read-from-string s) 5) (nd-g s)))
+				(print (nd-h "identity"))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source)));
+		List<String> dispatchers = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("_invoke_"))
+			.toList();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "ND-G")).sum()).isPositive();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctSET-GLOBAL")).sum()).isZero();
+		assertThat(compileAndRun(source)).isEqualTo("5");
+	}
+
+	@Test
 	void specialVarBindingIsThreadScoped() throws Exception {
 		// Interpreter parity (LispEvaluatorTest.specialVariablesAreThreadScoped): a
 		// dynamic binding belongs to the thread that established it. A thread spawned

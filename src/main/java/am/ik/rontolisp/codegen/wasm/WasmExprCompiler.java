@@ -1825,13 +1825,18 @@ final class WasmExprCompiler {
 				// static: lower to a loop dispatching each name over that set, with
 				// an unwind-protect carrying the restores (.kb/dynamic-special-
 				// variables.md). The unwind-protect is why progv forces EH mode.
-				WasmExprCompiler
-					.compileExpr(LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.usesEval), ctx);
+				WasmExprCompiler.compileExpr(LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars,
+						ctx.usesEval, ctx.functions.containsKey(LispNames.PROGV_BIND_RUNTIME)
+								&& ctx.functions.containsKey(LispNames.PROGV_UNBIND_RUNTIME)),
+						ctx);
 			case LispNames.PROGV_DYN_BIND -> WasmProgvCompiler.compileDynBind(cons, ctx);
 			case LispNames.PROGV_DYN_UNBIND -> WasmProgvCompiler.compileDynUnbind(cons, ctx);
 			case LispNames.PROGV_GENV -> WasmProgvCompiler.compileGenvRead(ctx);
 			case LispNames.PROGV_GENV_SET -> WasmProgvCompiler.compileGenvWrite(cons, ctx);
 			case LispNames.SYMBOL_VALUE_RAW -> WasmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx);
+			case LispNames.SYMBOL_IS -> WasmSymbolApiCompiler.compileSymbolIs(cons, ctx);
+			case LispNames.GLOBAL_STORE_SET -> WasmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx);
+			case LispNames.SET_MIRROR -> WasmSymbolApiCompiler.compileSetMirror(cons, ctx);
 			case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 			case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
 			case LispNames.HB_GUARD_INTERNAL -> WasmHandlerCaseCompiler.compileGuard(cons, ctx);
