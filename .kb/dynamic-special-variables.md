@@ -257,7 +257,7 @@ wrote the mirror only, so compiled code kept reading 1.
   `new Object[0]`, wasm a fresh cons), the mirror after (and the JVM's case-flipped retry the
   same way); its `setq`/`setf`/`push`/`pop` of such a variable call the store half, then `_store`
   as before. Only where the program runs forms through eval: the runtime is also switched on by
-  `boundp`, `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
+  `boundp` (but a literal probe of a tracked special), `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
   those modules stay byte-identical. The compiled mirror (`mirrorGlobal`) still writes every
   store: it is the value of every non-special global and the `boundp` witness of every name
   but a tracked special ("Bound-ness of a special without a value" below).
@@ -337,6 +337,20 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `(%special-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
   (`boundpDynamicRuntime`, a segmented name dispatch onto `%special-boundp`, the miss on
   `%boundp-raw`, the old mirror probe); any other name keeps the raw probe.
+- The eval gate: a program whose every occurrence of `boundp` is a literal probe of a tracked
+  special carries no eval runtime and no mirror writes (`LispMacroExpander.boundpReachesMirror`;
+  any other occurrence -- a computed site, `#'boundp`, quoted data, a macro template, a literal of
+  an untracked name -- keeps the arm). The gate runs before the runtime is injected, so it reads
+  the set off the program (`SpecialVarCollector.collectProbedValuelessBound`); the injected runtime
+  spells no probe the program does not, and `requireBoundpOffMirror` checks the final set again.
+  Measured 2026-10-04: `(defvar *x*)` probed in a callee of a binding, JVM 10,162 -> 6,577 B,
+  P1 1,124 -> 820, component 2,286 -> 1,975 (the same program reading `*x*` instead: 6,550 / 806 /
+  1,961); `BoundpInBindingFixture.LITERAL_SOURCE` JVM 57,632 -> 20,627, P1 19,845 -> 7,854.
+  size-report, bench-report, examples and Workers: byte-identical (P1, `--optimize=size`,
+  component, JVM; none probes only tracked specials). Pins:
+  `aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime` (`JvmLispCompilerTest`,
+  `WasmLispCompilerTest`), the fixture's literal program on all four backends,
+  `SpecialVarCollectorTest`. ci-spec cannot pin it: its concatenated program calls `eval`.
 - `#'boundp` is a reference-gated wrapper (`BuiltinFunctionWrappers`, beside `#'symbol-value`),
   so `(mapcar #'boundp names)` is a computed probe: the injected body is among the forms
   `boundpProbes` reads, which tracks every valueless special exactly as a computed call does.

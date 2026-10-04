@@ -6,6 +6,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
@@ -238,6 +239,31 @@ public final class SpecialVarCollector {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * The specials a literal {@code boundp} will answer from their variable, read off the
+	 * program BEFORE the compile path injects its runtime:
+	 * {@link #collectProbedValueless} within the dynamically bound specials. The eval
+	 * gate needs the set, and the gate decides what is injected; the injected runtime
+	 * spells no probe the program does not, so the set the compilers take after injection
+	 * holds this one (they check).
+	 * @param program the program's forms
+	 * @param reports the condition {@code :report} lambdas, probed like the program
+	 * @param specials the program's special-variable names
+	 * @param everyBound whether every special is runtime-bindable by name (the JVM's
+	 * {@code make-thread} hand-over)
+	 * @return those specials, in {@code specials} order
+	 */
+	public static LinkedHashSet<String> collectProbedValuelessBound(List<LispVal> program, Collection<LispVal> reports,
+			SequencedSet<String> specials, boolean everyBound) {
+		List<LispVal> probed = new ArrayList<>(program);
+		probed.addAll(reports);
+		LinkedHashSet<String> tracked = collectProbedValueless(probed, specials);
+		if (!tracked.isEmpty() && !everyBound) {
+			tracked.retainAll(collectDynamicallyBound(program, specials));
+		}
+		return tracked;
 	}
 
 	/**

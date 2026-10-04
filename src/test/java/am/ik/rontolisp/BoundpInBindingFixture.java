@@ -45,6 +45,33 @@ public final class BoundpInBindingFixture {
 			"(T NIL)", "(NIL T NIL)", "(NIL T)", "(T NIL)", "(NIL NIL)", "((1 T) NIL)", "(T T T 9 T)");
 
 	/**
+	 * {@link #SOURCE} with every probe a literal one: a program whose every
+	 * {@code boundp} names such a special compiles without the eval runtime on the
+	 * compile paths, so this pins that the variable alone gives every answer.
+	 */
+	public static final String LITERAL_SOURCE = """
+			(defvar *bpl*)
+			(declaim (special *bpl-d*))
+			(defun bpl-set (v) (setq *bpl* v))
+			(defun bpl-probe () (boundp '*bpl*))
+			(defun bpl-param (*bpl*) (list (boundp '*bpl*) (bpl-probe)))
+			(print (list (boundp '*bpl*) (let ((*bpl* 1)) (list (boundp '*bpl*) (bpl-probe))) (boundp '*bpl*) (bpl-probe)))
+			(print (progn (let ((*bpl* 1)) (bpl-set 2)) (list (boundp '*bpl*) (bpl-probe))))
+			(print (list (bpl-param 5) (boundp '*bpl*)))
+			(print (list (boundp '*bpl-d*) (let ((*bpl-d* 1)) (boundp '*bpl-d*)) (boundp '*bpl-d*)))
+			(print (let ((f (let ((*bpl* 1)) (lambda () (boundp '*bpl*))))) (list (funcall f) (let ((*bpl* 2)) (funcall f)))))
+			(print (list (catch 'bpl-tag (let ((*bpl* 1)) (throw 'bpl-tag (bpl-probe)))) (bpl-probe)))
+			(print (list (handler-case (let ((*bpl* 1)) (bpl-set 3) (error "bpl")) (error () (bpl-probe))) (boundp '*bpl*)))
+			(print (list (let ((*bpl* 1)) (let ((*bpl* 2)) (bpl-set 4)) (list *bpl* (bpl-probe))) (bpl-probe)))
+			(bpl-set 9)
+			(print (list (boundp '*bpl*) (let ((*bpl* 1)) (bpl-probe)) (bpl-probe) *bpl*))
+			""";
+
+	/** What {@link #LITERAL_SOURCE} prints, one value per line. */
+	public static final String LITERAL_EXPECTED = String.join("\n", "(NIL (T T) NIL NIL)", "(NIL NIL)", "((T T) NIL)",
+			"(NIL T NIL)", "(NIL T)", "(T NIL)", "(NIL NIL)", "((1 T) NIL)", "(T T T 9)");
+
+	/**
 	 * The program that also stores through {@code set} and {@code eval} and binds through
 	 * {@code progv}.
 	 */

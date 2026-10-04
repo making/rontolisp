@@ -129,4 +129,39 @@ class SpecialVarCollectorTest {
 		assertThat(SpecialVarCollector.collectProbedValueless(unprobed, specials)).isEmpty();
 	}
 
+	/**
+	 * What the eval gate reads before the runtime is injected: the probed specials
+	 * without a value that something binds, and whether any {@code boundp} reaches past
+	 * them to the mirror -- every occurrence of the symbol but a literal probe of one of
+	 * them, quoted data, {@code #'boundp} and a macro template included.
+	 */
+	@Test
+	void theEvalGateReadsWhetherEveryBoundpIsAProbeOfABoundSpecialWithoutAValue() {
+		SequencedSet<String> specials = new LinkedHashSet<>(List.of("*A*", "*B*", "*C*"));
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b*)
+				(defvar *c* 1)
+				(defun p () (list (boundp '*a*) (boundp '*b*)))
+				(let ((*a* 1)) (p))
+				""");
+		SequencedSet<String> tracked = SpecialVarCollector.collectProbedValuelessBound(program, List.of(), specials,
+				false);
+		assertThat(tracked).containsExactly("*A*");
+		assertThat(SpecialVarCollector.collectProbedValuelessBound(program, List.of(), specials, true))
+			.containsExactly("*A*", "*B*");
+		assertThat(LispMacroExpander.boundpReachesMirror(program, tracked)).isTrue();
+		assertThat(LispMacroExpander.boundpReachesMirror(program, List.of("*A*", "*B*"))).isFalse();
+		for (String other : List.of("(boundp '*c*)", "(boundp x)", "'(boundp '*b*)", "#'boundp", "(funcall 'boundp x)",
+				"`(boundp ',x)", "(boundp '*a* 1)", "(flet ((boundp (x) x)) x)")) {
+			assertThat(LispMacroExpander.boundpReachesMirror(LispReader.readAllFromString("(boundp '*a*) " + other),
+					List.of("*A*")))
+				.as(other)
+				.isTrue();
+		}
+		assertThat(LispMacroExpander.boundpReachesMirror(
+				LispReader.readAllFromString("(boundp '*a*) (list (boundp '*a*) '(boundp '*a*))"), List.of("*A*")))
+			.isFalse();
+	}
+
 }

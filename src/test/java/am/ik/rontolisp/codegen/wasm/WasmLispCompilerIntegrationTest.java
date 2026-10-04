@@ -23678,6 +23678,8 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED },
 				{ am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE,
 						am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED },
+				{ am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE,
+						am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED },
 				// A user definition under the shared dispatch's name (its segments
 				// extend it) keeps the runtime out, and each site spells the dispatch.
 				{ "(defun %boundp-dynamic-shadow () :user)\n" + am.ik.rontolisp.BoundpInBindingFixture.SOURCE,

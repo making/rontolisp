@@ -65,7 +65,9 @@ stubs to hold fixed function indices, JVM needs none.
   `(print (+ 1 2))`.
 - **A literal `boundp` never reaches the gate**: `compiler/CompileTimeBoundp` folds `(boundp 'name)`
   on both compile paths and in the CLI/playground before the tree-shaker; only `(boundp (intern ...))`
-  opens it (`.kb/compile-time-boundp.md`).
+  opens it (`.kb/compile-time-boundp.md`). Nor does a literal probe of a tracked special
+  (`.kb/dynamic-special-variables.md`, "Bound-ness of a special without a value"): the `boundp` arm is
+  `LispMacroExpander.boundpReachesMirror` over the tracked set read before injection.
 
 ## Argument counts
 

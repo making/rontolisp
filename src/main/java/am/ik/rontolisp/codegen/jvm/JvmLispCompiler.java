@@ -1603,9 +1603,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
 		// they force the eval runtime. fmakunbound writes the tombstone into that same
-		// _fenv.
+		// _fenv. A boundp of a special whose variable carries its bound-ness reads that
+		// variable alone, so a program whose every boundp is such a literal probe does
+		// not (the tracked set is checked again once the runtime is injected).
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
+				&& LispMacroExpander.boundpReachesMirror(program, SpecialVarCollector.collectProbedValuelessBound(
+						program, closRegistry.conditionReports().values(), specialVars, usesThreads));
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
-				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| boundpReadsMirror || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
 				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
@@ -1972,6 +1977,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		probedForms.addAll(closRegistry.conditionReports().values());
 		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
 		unboundSpecials.retainAll(boundSpecialVars);
+		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundSpecials);
+		}
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {

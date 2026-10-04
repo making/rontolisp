@@ -17370,6 +17370,8 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
 	}
 
 	@Test

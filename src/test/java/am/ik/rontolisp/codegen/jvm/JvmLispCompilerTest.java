@@ -19828,6 +19828,8 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
 		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
 		// A read of it while it has no value answers nil, never the marker.
 		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED);
@@ -19868,6 +19870,23 @@ class JvmLispCompilerTest {
 			assertThat(declaredFieldNames(classBytes)).as(untracked).doesNotContain("_unbound");
 			assertThat(declaredMethodNames(classBytes)).as(untracked).doesNotContain("_dbound");
 		}
+	}
+
+	@Test
+	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() throws Exception {
+		// A literal probe of a special whose variable carries its bound-ness reads that
+		// variable alone (_dbound), so a program whose every boundp is one carries
+		// neither the eval runtime nor its mirror writes. A literal probe of any other
+		// name still reads the mirror and brings both back.
+		byte[] literal = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE)));
+		assertThat(declaredMethodNames(literal)).contains("_dbound").doesNotContain("_eval", "_store", "_envLookup");
+		byte[] mixed = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb*)"
+					+ " (defun ub-p () (list (boundp '*ub*) (boundp '*nb*))) (print (let ((*ub* 1)) (ub-p)))")));
+		assertThat(declaredMethodNames(mixed)).contains("_dbound", "_envLookup");
+		assertThat(ownCallsIn(mixed, "UB-P", "_dbound")).isOne();
+		assertThat(runClass(mixed)).isEqualTo("(T NIL)");
 	}
 
 	@Test

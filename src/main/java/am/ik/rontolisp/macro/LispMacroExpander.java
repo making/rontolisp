@@ -5215,6 +5215,64 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether some {@code boundp} of the forms can need the eval runtime's mirror: an
+	 * occurrence of the symbol -- any list element at any depth, quoted data and
+	 * {@code #'boundp} included, the census the eval gate takes -- other than the head of
+	 * a {@code (boundp 'S)} whose {@code S} is {@code tracked}. Such a probe compiles to
+	 * {@code (%special-boundp 'S)} ({@link #dynamicFirstBoundp}), which reads the
+	 * variable alone.
+	 * @param forms the forms to walk
+	 * @param tracked the specials whose variable carries their bound-ness
+	 * @return true when some occurrence is anything but a probe of a tracked special
+	 */
+	public static boolean boundpReachesMirror(java.util.Collection<LispVal> forms,
+			java.util.Collection<String> tracked) {
+		for (LispVal form : forms) {
+			if (boundpReachesMirror(form, tracked)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The check behind the eval gate's {@code boundp} arm: a program compiled without the
+	 * eval runtime because its every {@code boundp} was a literal probe of a tracked
+	 * special ({@link #boundpReachesMirror}) must still be one once the runtime is
+	 * injected, over the tracked set the backend carries -- a probe the mirror answers
+	 * would otherwise compile against a runtime that is not there.
+	 * @param compiledForms the program's forms and the injected runtime's
+	 * @param tracked the specials whose variable carries their bound-ness
+	 */
+	public static void requireBoundpOffMirror(java.util.Collection<LispVal> compiledForms,
+			java.util.Collection<String> tracked) {
+		if (boundpReachesMirror(compiledForms, tracked)) {
+			throw new IllegalStateException("a " + LispNames.BOUNDP
+					+ " the eval gate read as a probe of a tracked special reaches the eval mirror");
+		}
+	}
+
+	private static boolean boundpReachesMirror(LispVal form, java.util.Collection<String> tracked) {
+		if (form instanceof LispCons probe && probe.car() instanceof LispSymbol head
+				&& LispNames.BOUNDP.equals(head.name()) && probe.cdr() instanceof LispCons args
+				&& args.cdr() instanceof LispNil && args.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons body && body.cdr() instanceof LispNil
+				&& body.car() instanceof LispSymbol name && tracked.contains(name.name())) {
+			return false;
+		}
+		// The cdr is walked in the loop, so a long list costs no stack.
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.BOUNDP.equals(sym.name())
+					|| boundpReachesMirror(cons.car(), tracked)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
 	 * Records the name every {@code (boundp 'name)} call in the form probes, quoted data
 	 * skipped. A self-evaluating argument -- nil, t, a keyword, a number -- probes no
 	 * variable; a variable or any other form computes the name.

@@ -3539,11 +3539,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
 		// boundp/symbol-value/fboundp probe the eval global envs through
 		// _env_lookup/_lookup, so they force the eval runtime; intern needs the real
-		// _intern body (canonical offsets) which lives in the reader runtime.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
-				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
-				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
-				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+		// _intern body (canonical offsets) which lives in the reader runtime. A boundp of
+		// a special whose variable carries its bound-ness reads that variable alone, so a
+		// program whose every boundp is such a literal probe does not (the tracked set is
+		// checked again once the runtime is injected).
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
+				&& LispMacroExpander.boundpReachesMirror(program, SpecialVarCollector.collectProbedValuelessBound(
+						program, closRegistry.conditionReports().values(), specialVars, false));
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || boundpReadsMirror
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
+				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
 				// is scanned: the %set-symbol-function lowering happens per expression,
 				// after this gate).
@@ -4158,6 +4163,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				: SpecialVarCollector.collectDynamicallyBound(compiledForms, specialVars);
 		if (boundSpecials != null) {
 			unboundSpecials.retainAll(boundSpecials);
+		}
+		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundSpecials);
 		}
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
