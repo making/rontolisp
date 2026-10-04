@@ -142,6 +142,13 @@ public final class ClosRegistry {
 	public static final String DIVISION_BY_ZERO_CLASS_NAME = "DIVISION-BY-ZERO";
 
 	/**
+	 * What a division by an exact zero reports, on every backend and through every
+	 * division path -- never the host's own text ({@code / by zero},
+	 * {@code BigInteger divide by zero}).
+	 */
+	public static final String DIVISION_BY_ZERO_MESSAGE = "Division by zero";
+
+	/**
 	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
 	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
 	 * {@code compile-file} leaves {@code failure-p} alone for it.

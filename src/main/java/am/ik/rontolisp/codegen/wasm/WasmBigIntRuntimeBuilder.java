@@ -1452,10 +1452,12 @@ final class WasmBigIntRuntimeBuilder {
 	}
 
 	// _big_divrem(a, b, which): truncating quotient (0) / remainder (1) at any tier.
-	// The i64 fast path traps on b = 0 (rem_s/div_s) and routes the i64.min / -1
-	// overflow edge to the limb path; the limb path divides magnitudes and applies the
-	// truncating sign rules (remainder takes the dividend's sign).
-	static byte[] buildBigDivremBody() {
+	// The i64 fast path routes the i64.min / -1 overflow edge to the limb path; the limb
+	// path divides magnitudes and applies the truncating sign rules (remainder takes the
+	// dividend's sign). With the landing (EH mode, WasmRuntimeBuilder.emitDivisionByZero)
+	// a zero divisor signals division-by-zero on both paths; without it the fast path
+	// traps in rem_s/div_s itself and the limb path explicitly.
+	static byte[] buildBigDivremBody(boolean landing) {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		// params 0=a, 1=b, 2=which. locals: 3=va, 4=vb (i64), 5=sa, 6=sb (i32),
@@ -1477,6 +1479,13 @@ final class WasmBigIntRuntimeBuilder {
 		b.get(1);
 		b.call(WasmLispCompiler.FUNC_INT_VAL);
 		b.set(vb);
+		if (landing) {
+			b.get(vb);
+			w.write(Instruction.I64_EQZ);
+			b.ifVoid();
+			WasmRuntimeBuilder.emitDivisionByZero(w, true);
+			b.end();
+		}
 		// the i64.min / -1 edge overflows div_s; promote it to the limb path
 		b.get(va);
 		b.i64c(Long.MIN_VALUE);
@@ -1503,7 +1512,7 @@ final class WasmBigIntRuntimeBuilder {
 		b.end();
 		b.end();
 
-		// a zero divisor still traps on the limb path
+		// a zero divisor reaches the limb path beside a limb dividend
 		b.get(1);
 		b.refTest(WasmLispCompiler.TYPE_BIGINT);
 		w.write(Instruction.I32_EQZ);
@@ -1512,7 +1521,7 @@ final class WasmBigIntRuntimeBuilder {
 		b.call(WasmLispCompiler.FUNC_INT_VAL);
 		w.write(Instruction.I64_EQZ);
 		b.ifVoid();
-		w.write(Instruction.UNREACHABLE);
+		WasmRuntimeBuilder.emitDivisionByZero(w, landing);
 		b.end();
 		b.end();
 
@@ -2653,7 +2662,7 @@ final class WasmBigIntRuntimeBuilder {
 	// truncate, 1 = floor, 2 = ceiling, 3 = round to nearest with ties to even. The
 	// fused lowering of `(truncate (/ a b))` and friends for exact-integer operands
 	// (no ratio intermediate is allocated). Composed from the other _big_* helpers;
-	// traps on b = 0 like _big_divrem.
+	// signals on b = 0 through _big_divrem.
 	static byte[] buildBigFdivBody() {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;

@@ -35,8 +35,9 @@ Equality per tier -- `ref.eq`, i64 field, `_big_eq` -- wired into eq/eql/`_equal
   limbs, correct it against v's second limb (zero for a one-limb v, whose estimate is exact), multiply-
   subtract, add back when still one too large. See "Limb division" below.
 - **`_big_*`** dispatch all three tiers with an i64 fast path FIRST: `_add`/`_sub`
-  (overflow-checked, promote not wrap), `_mul`, `_neg`, `_divrem` (truncating, traps on zero
-  divisor), `_mod`, `_fdiv` (truncate/floor/ceiling/round-ties-even), `_cmp`, `_and/_or/_xor/_not`,
+  (overflow-checked, promote not wrap), `_mul`, `_neg`, `_divrem` (truncating; a zero divisor
+  signals through `_div_zero` in EH mode, [[error-handling]]), `_mod`, `_fdiv`
+  (truncate/floor/ceiling/round-ties-even), `_cmp`, `_and/_or/_xor/_not`,
   `_ash` (**left shift past 2^25 bits traps as an allocation guard**), `_intlen`, `_logbitp`,
   `_gcd`, `_grow`, `_to_f64` (correctly rounded, "Ratios" below), `_print`/`_print_mag`/`_pad9`,
   `_eq`, `_hash`.

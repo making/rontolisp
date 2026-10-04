@@ -316,6 +316,15 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// The component twin of compileAndRunProgram.
+	private static String compileComponentAndRunProgram(List<LispVal> program) throws Exception {
+		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	private static String compileComponentAndRun(String lispCode) throws Exception {
 		byte[] component = WasmLispCompiler.builder()
 			.component(true)
@@ -26362,6 +26371,30 @@ class WasmLispCompilerIntegrationTest {
 				(1 0 0 T)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void divisionByZeroIsACatchableCondition() throws Exception {
+		// The LispEvaluatorTest#divisionByZeroIsACatchableCondition twin. EH mode (the
+		// program's handler-case): every integer and ratio division by zero lands in
+		// _div_zero, a division-by-zero instance, where it trapped past every handler.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.DivisionByZeroFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(program)).isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(program)).isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
+	}
+
+	@Test
+	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
+		// EH mode without a handler around the division: the entry landing pad reports
+		// it as the interpreter does. Outside EH mode it is still the bare trap.
+		assertThat(compileAndRunEhExpectTrap("""
+				(defvar *z* 0)
+				(print (ignore-errors (car 1)))
+				(print (mod 7 *z*))
+				""")).contains("Unhandled condition: Division by zero\n");
+		assertThat(compileAndRunExpectTrap("(defvar *z* 0) (print (/ 1 *z*))")).contains("unreachable")
+			.doesNotContain("Unhandled condition");
 	}
 
 	@Test

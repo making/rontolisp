@@ -1915,6 +1915,29 @@ cases:
       :iae
       :rte
       :ex
+  - name: catch-takes-a-division-by-zero-as-an-arithmetic-exception
+    # Oracle-identical (clj 1.12.6): an exact division by zero is taken by an
+    # ArithmeticException catch -- /, quot, rem and mod, through a literal and a
+    # var -- and by its superclasses (on the wasm pair it trapped past the try).
+    source: |
+      (def cdz-zero 0)
+      (println (try (/ 1 0) (catch ArithmeticException e :arith)))
+      (println (try (/ 1 cdz-zero) (catch ArithmeticException e :arith)))
+      (println (try (/ 1/2 cdz-zero) (catch ArithmeticException e :arith)))
+      (println (try (quot 7 cdz-zero) (catch ArithmeticException e :arith)))
+      (println (try (rem 7 cdz-zero) (catch ArithmeticException e :arith)))
+      (println (try (mod 7 cdz-zero) (catch ArithmeticException e :arith)))
+      (println (try (/ 1 cdz-zero) (catch IllegalArgumentException e :iae) (catch RuntimeException e :rte)))
+      (println (try (/ 1 cdz-zero) (catch Exception e :ex)))
+    expected: |
+      :arith
+      :arith
+      :arith
+      :arith
+      :arith
+      :arith
+      :rte
+      :ex
   - name: a-refusal-naming-no-class-is-taken-by-any-catch-but-exception-info
     # Deviation: a refusal of the runtime whose condition names no class (first
     # of a number, a failed assert) is taken by the first catch of any class but

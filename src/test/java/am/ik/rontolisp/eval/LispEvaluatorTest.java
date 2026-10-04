@@ -19708,6 +19708,17 @@ class LispEvaluatorTest {
 				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
 	}
 
+	// A division by an exact zero through every integer and ratio path signals a
+	// division-by-zero reporting "Division by zero" -- mod and rem reported the host's
+	// "/ by zero" / "BigInteger divide by zero". The twins are
+	// JvmLispCompilerTest#compileAndRunDivisionByZeroIsACatchableCondition and
+	// WasmLispCompilerIntegrationTest#divisionByZeroIsACatchableCondition.
+	@Test
+	void divisionByZeroIsACatchableCondition() {
+		assertThat(printedLines(am.ik.rontolisp.DivisionByZeroFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

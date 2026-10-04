@@ -1949,6 +1949,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDivisionByZeroIsACatchableCondition() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#divisionByZeroIsACatchableCondition:
+		// _mod/_rem (and the fused trees that bail to them) reported the host's
+		// "/ by zero" / "BigInteger divide by zero".
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.DivisionByZeroFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

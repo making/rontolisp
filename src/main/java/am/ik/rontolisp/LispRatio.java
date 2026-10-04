@@ -38,7 +38,7 @@ public record LispRatio(BigInteger numerator, BigInteger denominator) implements
 	 */
 	public static LispVal valueOf(BigInteger numerator, BigInteger denominator) {
 		if (denominator.signum() == 0) {
-			throw new ArithmeticException("Division by zero");
+			throw new ArithmeticException(ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
 		}
 		if (denominator.signum() < 0) {
 			numerator = numerator.negate();
@@ -83,7 +83,7 @@ public record LispRatio(BigInteger numerator, BigInteger denominator) implements
 	 */
 	static double ratioToDouble(BigInteger num, BigInteger den) {
 		if (den.signum() == 0) {
-			throw new ArithmeticException("Division by zero");
+			throw new ArithmeticException(ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
 		}
 		if (num.signum() == 0) {
 			// Unreachable through valueOf (a zero numerator demotes to an integer),

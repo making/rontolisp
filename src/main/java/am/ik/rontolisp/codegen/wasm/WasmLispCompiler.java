@@ -2075,6 +2075,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fixed helper so no index above shifts, and shaken in a module with no ratio.
 	static final int FUNC_RAT_TO_F64 = FUNC_FP_HDR + 1;
 
+	// _div_zero () -> (): the landing of a division by an exact zero -- _rat_new's zero
+	// denominator, _big_divrem's and _fx_mod/_fx_rem's zero divisor -- in EH mode with a
+	// division operator reachable (divZeroLanding; WasmRuntimeBuilder.buildDivZeroBody):
+	// it throws "Division by zero" as a division-by-zero instance (or the instance-less
+	// payload where the class is not baked). Never returns; without the landing no site
+	// calls it. Reuses _start's
+	// signature (TYPE_START); appended after the last fixed helper so no index above
+	// shifts, and shaken when nothing divides.
+	static final int FUNC_DIV_ZERO = FUNC_RAT_TO_F64 + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2105,7 +2115,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_RAT_TO_F64 + 1;
+	static final int FUNC_VEC_BASE = FUNC_DIV_ZERO + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2122,10 +2132,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
-	// landing (_type_err_of), the fill-pointer check (_fp_hdr) and the ratio-to-double
-	// conversion (_rat_to_f64) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_RAT_TO_F64 + 1;
+	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
+	// conversion (_rat_to_f64) and the division-by-zero landing (_div_zero) -- plus,
+	// under --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_DIV_ZERO + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -4229,6 +4239,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// bare `unreachable` that cites no bytes.
 		WasmOperandTypes.Texts operandTexts = ehMode
 				? WasmOperandTypes.Texts.intern(stringTable, operandTypeErrorPossible) : null;
+		// A program that can resolve ANY name at run time (eval, read, a runtime load,
+		// --dynamic) can reach any built-in through it.
+		boolean resolvesAnyName = this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad);
+		final List<LispVal> spelledDivisions = program;
+		// Whether a division by zero signals through _div_zero: EH mode, and an operator
+		// that can divide by zero reachable (spelled, or resolvable at run time).
+		// Elsewhere every division helper keeps its bytes and its trap, so an EH-mode
+		// program that never divides is byte-identical to one built before the landing.
+		boolean divZeroLanding = ehMode && (resolvesAnyName
+				|| DIVISION_OPERATORS.stream().anyMatch(op -> programUsesSymbol(spelledDivisions, op)));
+		// _div_zero's text, interned HERE for the same reason as operandTexts above.
+		StringTable.StringEntry divZeroMessage = divZeroLanding
+				? stringTable.addBodyString("\"" + ClosRegistry.DIVISION_BY_ZERO_MESSAGE + "\"") : null;
 		// _subseq's bounds-error text (todo a42), interned HERE for the same reason as
 		// operandTexts above: buildSubseqBody runs after the data segment's content is
 		// fixed. EH mode only: outside it the check is a bare `unreachable`.
@@ -4256,7 +4279,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// compiler bug and refused there.
 		// A program that can resolve ANY name at run time (eval, read, a runtime load,
 		// --dynamic) keeps every wrapper-catalog body reachable, the trig ones included.
-		boolean mayReachTrig = this.simd || this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad);
+		boolean mayReachTrig = this.simd || resolvesAnyName;
 		// With a symbol BUILDER in the program, a STRING literal spelling one of these
 		// names makes its wrapper dispatchable too (DesignatorSpellings.of's framed
 		// spellings, applied by dispatchableFuncIds after Pass 2) -- the baked package
@@ -5603,6 +5626,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the message-only payload reports the same text.
 		WasmOperandTypes.@Nullable TypeErrorShape operandTypeError = operandTexts != null
 				&& operandTexts.typeNames() != null ? operandTypeErrorShape(closRegistry, layoutAddresses) : null;
+		// The division-by-zero _div_zero throws: where usedLayoutTags baked the class (a
+		// handler landing pad and a division operator spelled); elsewhere the
+		// message-only payload reports the same text.
+		WasmRuntimeBuilder.@Nullable ConditionInstance divZeroInstance = divZeroLanding && this.usesInstances
+				? conditionInstance(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, closRegistry, layoutAddresses) : null;
 		// What a dispatcher throws for a value that names no function: EH mode only,
 		// where a throw has a tag and a catcher (the entry landing pad at least).
 		WasmRuntimeBuilder.NotFunctionReport notFunctionReport = ehMode ? new WasmRuntimeBuilder.NotFunctionReport(
@@ -7285,6 +7313,7 @@ public final class WasmLispCompiler implements LispCompiler {
 															// header (FUNC_FP_HDR)
 				fnDef.addFunction(TYPE_BIG_TO_F64); // _rat_to_f64 (rational) -> f64
 													// (FUNC_RAT_TO_F64)
+				fnDef.addFunction(TYPE_START); // _div_zero () -> () (FUNC_DIV_ZERO)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7920,7 +7949,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(readListBody)
 					.addFunction(readBody)
 					.addFunction(loadBody)
-					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody(!this.optimize.prefersSizeOverSpeed()))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatNewBody(!this.optimize.prefersSizeOverSpeed(),
+							divZeroLanding))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD,
@@ -8073,7 +8103,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAddBody(true));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigMulBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigNegBody());
-				code.addFunction(WasmBigIntRuntimeBuilder.buildBigDivremBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigDivremBody(divZeroLanding));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigModBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigCmpBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_AND));
@@ -8098,8 +8128,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFxRuntimeBuilder.buildFxAddBody(true));
 				code.addFunction(WasmFxRuntimeBuilder.buildFxMulBody());
 				code.addFunction(WasmFxRuntimeBuilder.buildFxAshBody());
-				code.addFunction(WasmFxRuntimeBuilder.buildFxModBody());
-				code.addFunction(WasmFxRuntimeBuilder.buildFxRemBody());
+				code.addFunction(WasmFxRuntimeBuilder.buildFxModBody(divZeroLanding));
+				code.addFunction(WasmFxRuntimeBuilder.buildFxRemBody(divZeroLanding));
 				code.addFunction(WasmFxRuntimeBuilder.buildIvSetBody());
 				code.addFunction(
 						WasmFxRuntimeBuilder.buildTSymBody(tSymEntry.offset(), tSymEntry.length(), tSymGlobalIndex));
@@ -8187,7 +8217,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)
-				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody());
+				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody(divZeroLanding));
 				// closure-value name tag body (FUNC_FUN_NAME); a constant when the
 				// funcId -> name table has no rows
 				code.addFunction(WasmRuntimeBuilder.buildFunNameBody(stringTable,
@@ -8279,6 +8309,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						this.usesIdentityHashTables));
 				// the ratio-to-double body (FUNC_RAT_TO_F64): shaken with the ratios.
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatToF64Body());
+				// the division-by-zero landing body (FUNC_DIV_ZERO): shaken when nothing
+				// divides.
+				code.addFunction(WasmRuntimeBuilder.buildDivZeroBody(divZeroMessage, divZeroInstance,
+						this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -11975,6 +12009,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			// The same for a wrong-type operand's type-error, which the fixed
 			// _type_err_* landings build (WasmOperandTypes.buildLandingBody).
 			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
+			// The same for a division by zero's division-by-zero, which the fixed
+			// _div_zero landing builds -- only where an operator that can divide by
+			// zero is spelled, since nothing else reaches the landing.
+			for (String division : DIVISION_OPERATORS) {
+				if (symbols.contains(division)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME);
+					break;
+				}
+			}
 			// The same for a failed open's / %file-error's file-error (lowerFileError).
 			for (String site : LispMacroExpander.FILE_ERROR_SITES) {
 				if (symbols.contains(site)) {
@@ -12001,6 +12044,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return used;
 	}
+
+	/**
+	 * The operators that can divide by an exact zero (the {@code _div_zero} landing):
+	 * {@code /}, the rounding family with a divisor, {@code mod}/{@code rem}, and
+	 * {@code expt} of zero to a negative power.
+	 */
+	private static final java.util.List<String> DIVISION_OPERATORS = java.util.List.of(LispNames.DIV, LispNames.FLOOR,
+			LispNames.CEILING, LispNames.TRUNCATE, LispNames.ROUND, LispNames.FFLOOR, LispNames.FCEILING,
+			LispNames.FTRUNCATE, LispNames.FROUND, LispNames.MOD, LispNames.REM, LispNames.EXPT);
 
 	/**
 	 * Member names whose presence makes the reachable-layout set unknowable: subclass

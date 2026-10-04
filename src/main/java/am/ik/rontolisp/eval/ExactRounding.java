@@ -56,8 +56,10 @@ final class ExactRounding {
 	/**
 	 * The exact quotient of {@code a/b} under one of the four rounding modes, or
 	 * {@code null} when the operands are not a float paired with a float or an exact
-	 * integer (a ratio operand, a non-finite dividend and a zero divisor all decline, so
-	 * the caller keeps its ordinary route).
+	 * integer (a ratio operand, a non-finite dividend and a zero FLOAT divisor all
+	 * decline, so the caller keeps its ordinary route). An exact zero divisor over a
+	 * finite float signals {@code division-by-zero}, as it does for an integer or ratio
+	 * dividend.
 	 * <p>
 	 * An INFINITE divisor is settled by sign rather than by the rational route (infinity
 	 * is not a rational, so {@link #rationalOf} declines on it): with a finite nonzero
@@ -72,6 +74,14 @@ final class ExactRounding {
 	static @Nullable LispVal quotient(LispVal a, LispVal b, int mode) {
 		if (!(a instanceof LispDouble) && !(b instanceof LispDouble)) {
 			return null;
+		}
+		if (b instanceof LispInteger zero && zero.value() == 0 && a instanceof LispDouble ad
+				&& Double.isFinite(ad.value())) {
+			// A finite float rounded by an EXACT zero: the integer path's
+			// division-by-zero,
+			// where IEEE would divide to an infinity and fail the non-finite rounding
+			// (which a NaN or infinite dividend keeps, as in SBCL).
+			throw Environment.divisionByZero();
 		}
 		if (b instanceof LispDouble bd && Double.isInfinite(bd.value())) {
 			return infiniteDivisorQuotient(a, bd.value() > 0, mode);

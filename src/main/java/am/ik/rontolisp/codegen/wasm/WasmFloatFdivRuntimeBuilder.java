@@ -32,8 +32,9 @@ import am.ik.wasm.WasmWriter;
  *
  * <p>
  * It DECLINES (answers a null, which the call site reads as "keep the ordinary route")
- * for a ratio operand, a non-finite float and a zero divisor, so the f64 division's
- * non-trapping policy for those is untouched.
+ * for a ratio operand, a non-finite float and a zero FLOAT divisor, so the f64 division's
+ * non-trapping policy for those is untouched. An exact zero divisor signals
+ * {@code division-by-zero} first, where the module has the landing.
  */
 final class WasmFloatFdivRuntimeBuilder {
 
@@ -46,9 +47,12 @@ final class WasmFloatFdivRuntimeBuilder {
 
 	/**
 	 * Builds the {@code _f64_fdiv} body.
+	 * @param landing whether the module signals a division by zero through
+	 * {@code _div_zero} (EH mode with a division operator reachable); without it the
+	 * exact-zero divisor keeps declining, so the module's bytes and trap are unchanged
 	 * @return the encoded function body
 	 */
-	static byte[] buildBody() {
+	static byte[] buildBody(boolean landing) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// 1 x f64, 2 x i64, 2 x i32, 6 x (ref null eq)
@@ -121,8 +125,11 @@ final class WasmFloatFdivRuntimeBuilder {
 		get(w, NUM_B);
 		call(w, WasmLispCompiler.FUNC_BIG_MUL);
 		set(w, B);
-		// A zero divisor declines: (/ x 0.0) is an infinity here, not a signal, and an
-		// exact zero divisor signals through the route this one keeps.
+		// A zero divisor: a FLOAT one declines ((/ x 0.0) is an infinity here, not a
+		// signal),
+		// an EXACT one signals division-by-zero where the module has the landing -- after
+		// the dividend's own checks, so a NaN or an infinity over zero still reports the
+		// non-finite rounding, as SBCL does.
 		get(w, B);
 		i31Const(w, 0);
 		call(w, WasmLispCompiler.FUNC_BIG_CMP);
@@ -130,6 +137,15 @@ final class WasmFloatFdivRuntimeBuilder {
 		get(w, TMP);
 		w.write(Instruction.I32_EQZ);
 		ifVoid(w);
+		if (landing) {
+			get(w, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			w.write(Instruction.I32_EQZ);
+			ifVoid(w);
+			WasmRuntimeBuilder.emitDivisionByZero(w, true);
+			w.write(Instruction.END);
+		}
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.RETURN);
