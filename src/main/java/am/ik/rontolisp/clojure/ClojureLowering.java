@@ -607,14 +607,49 @@ public final class ClojureLowering {
 	boolean falseBound;
 
 	/**
-	 * Whether the program throws or carries exception data: the ex-info runtime (a
-	 * condition with message and data slots) is spliced in once, behind the false
-	 * binding.
+	 * Whether the program throws, builds or reads an exception: the exception runtime
+	 * (one condition class carrying a class chain, a message, data and a cause) is
+	 * spliced in once, behind the false binding.
 	 */
 	boolean usedExInfo;
 
 	/** Whether the ex-info runtime was already spliced in (files splice it inline). */
 	boolean exInfoEmitted;
+
+	/**
+	 * The classes a catch tests, by name, to their chains: each needs its predicate
+	 * ({@code ClojureThrowables.catchRuntime}), and a program that builds no exception
+	 * the exception reader too.
+	 */
+	final Map<String, List<String>> caughtChains = new LinkedHashMap<>();
+
+	/** The caught classes whose predicates the session already emitted. */
+	final Set<String> emittedCatches = new HashSet<>();
+
+	/** Whether the session already emitted the catch runtime's exception reader. */
+	boolean catchReaderEmitted;
+
+	/** Whether a {@code catch} clause of any class binds a caught condition. */
+	boolean usedCatch;
+
+	/**
+	 * Whether {@code class} may read a condition's class: its exception arm survives
+	 * where the program defines the exception reader, which a catch then needs.
+	 */
+	boolean readsConditionClass;
+
+	/** Whether {@code instance?} reads exceptions: the reader always travels. */
+	boolean readsExceptionParts;
+
+	/**
+	 * Whether the program needs the catch runtime's exception reader: it builds no
+	 * exception, and a catch tests a class, {@code instance?} tests one, or {@code class}
+	 * can read a caught condition.
+	 */
+	boolean needsExceptionReader() {
+		return !this.usedExInfo && (!this.caughtChains.isEmpty() || this.readsExceptionParts
+				|| (this.readsConditionClass && this.usedCatch));
+	}
 
 	/**
 	 * Whether the program uses hierarchies (any of {@code derive}/{@code underive}/
@@ -899,6 +934,12 @@ public final class ClojureLowering {
 			// the ex-info runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.exInfoRuntime(lowering));
 		}
+		if (!lowering.caughtChains.isEmpty() || lowering.needsExceptionReader()) {
+			// the caught classes' predicates, and the exception reader a catch asks
+			// even where the program builds no exception
+			lowering.forms.addAll(1,
+					ClojureThrowables.catchRuntime(lowering.caughtChains.values(), lowering.needsExceptionReader()));
+		}
 		if (lowering.usedStm) {
 			// the STM runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, ClojureStateLowering.stmRuntime(lowering));
@@ -986,9 +1027,24 @@ public final class ClojureLowering {
 		}
 		if (this.usedExInfo && !this.exInfoEmitted) {
 			// The ex-info runtime travels ahead of the buffer that first needs
-			// it, like the false binding; later buffers reuse it.
+			// it, like the false binding; later buffers reuse it. Its reader
+			// replaces the catch runtime's, should an earlier buffer have carried it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.exInfoRuntime(this), false));
 			this.exInfoEmitted = true;
+		}
+		List<List<String>> freshCatches = new ArrayList<>();
+		for (Map.Entry<String, List<String>> caught : this.caughtChains.entrySet()) {
+			if (this.emittedCatches.add(caught.getKey())) {
+				freshCatches.add(caught.getValue());
+			}
+		}
+		boolean reader = needsExceptionReader() && !this.exInfoEmitted && !this.catchReaderEmitted;
+		if (!freshCatches.isEmpty() || reader) {
+			// The predicates of the classes this buffer catches first travel ahead
+			// of it, with the exception reader while no buffer built an exception
+			// (the exception runtime's own reader replaces it once one does).
+			out.add(0, new ClojureTopLevel(ClojureThrowables.catchRuntime(freshCatches, reader), false));
+			this.catchReaderEmitted |= reader;
 		}
 		if (this.usedStm && !this.stmEmitted) {
 			// The STM runtime travels ahead of the buffer that first needs

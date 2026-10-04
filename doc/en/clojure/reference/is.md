@@ -7,10 +7,10 @@ Asserts `form` and answers its value. A truthy value passes; anything else repor
 actual value. For a function call the arguments are evaluated first and the actual value is
 `(not (f values...))`; for a macro, a special form, a local or a keyword it is the value
 itself. An error inside `form` reports `ERROR` and answers `nil`. `(thrown? C body...)`
-passes when the body signals and answers the condition; `(thrown-with-msg? C re body...)`
-also requires `re` to find a match in the message. The class `C` is not checked: any
-condition matches, like `catch`. Outside `run-tests` the report still prints, without
-counting.
+passes when the body throws an exception a `catch` of `C` takes and answers it;
+`(thrown-with-msg? C re body...)` also requires `re` to find a match in the message. An
+exception of another class reports `ERROR`, like the oracle's. Outside `run-tests` the
+report still prints, without counting.
 
 ```clojure
 (ns demo (:require [clojure.test :refer :all]))

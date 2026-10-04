@@ -252,14 +252,18 @@ final class ClojureTestLowering {
 		LispVal head = parts.isEmpty() ? LispNil.INSTANCE : parts.get(0);
 		if (ClojureLowerUtil.isSymbolNamed(head, "thrown?")) {
 			ClojureLowerUtil.isTrue(parts.size() >= 2, "thrown? takes a class and a body");
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-THROWN"), thunkOf(ctx, parts, 2),
-					expected, msg, loc);
+			LispVal type = ClojureThrowables.clauseType(ctx,
+					ClojureThrowables.caughtChain(ctx, parts.get(1), "thrown?"));
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-THROWN"),
+					caughtOf(ctx, parts, 2, type), expected, msg, loc);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "thrown-with-msg?")) {
 			ClojureLowerUtil.isTrue(parts.size() >= 3, "thrown-with-msg? takes a class, a pattern and a body");
+			LispVal type = ClojureThrowables.clauseType(ctx,
+					ClojureThrowables.caughtChain(ctx, parts.get(1), "thrown-with-msg?"));
 			LispVal re = ctx.lower(parts.get(2));
-			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-THROWN-MSG"), thunkOf(ctx, parts, 3),
-					re, expected, msg, loc);
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TEST-THROWN-MSG"),
+					caughtOf(ctx, parts, 3, type), re, expected, msg, loc);
 		}
 		if (isPredicateHead(ctx, head)) {
 			return predicate(ctx, parts, expected, msg, loc);
@@ -268,9 +272,19 @@ final class ClojureTestLowering {
 				loc);
 	}
 
-	/** The body forms from {@code from} as a zero-argument lambda. */
-	static LispVal thunkOf(ClojureLowering ctx, List<LispVal> parts, int from) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), LispNil.INSTANCE, ctx.nonTailBody(parts, from));
+	/**
+	 * The body forms from {@code from} under a {@code handler-case} whose one clause, of
+	 * the caught class's {@code type}, answers the condition: nil when the body returns,
+	 * the condition when it signals one of the class, and any other condition passes on
+	 * to the {@code is} uncaught, which reports it as an error, like the oracle's
+	 * {@code thrown?} expansion (a {@code try} catching the class alone).
+	 */
+	static LispVal caughtOf(ClojureLowering ctx, List<LispVal> parts, int from, LispVal type) {
+		LispSymbol condition = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("HANDLER-CASE"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("PROGN"), ctx.nonTailBody(parts, from),
+						ClojureLowering.NIL_CONST),
+				ClojureLowerUtil.list(type, ClojureLowerUtil.list(condition), condition));
 	}
 
 	/**

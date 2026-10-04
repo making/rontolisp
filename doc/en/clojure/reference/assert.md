@@ -9,5 +9,5 @@ lazily, like the oracle. Like `and`/`or`, `assert` has no function value.
 
 ```clojure
 (println (assert (= 1 1))) ; nil
-(println (try (assert (= 1 2) "oops") (catch Exception e (ex-message e)))) ; Assert failed: oops, then (= 1 2) on the next line
+(println (try (assert (= 1 2) "oops") (catch AssertionError e (ex-message e)))) ; Assert failed: oops, then (= 1 2) on the next line
 ```

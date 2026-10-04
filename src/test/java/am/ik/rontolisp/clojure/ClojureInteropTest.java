@@ -54,6 +54,28 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods() throws Exception {
+		// answers measured against clj 1.12.6; a host object of the same method name
+		// still reaches java:call
+		assertBothEqual("(defn sz [x] (.size x)) (println (sz [1 2 3]) (sz (java.util.ArrayList. [1 2])) (sz {:a 1}))",
+				"3 2 1\n");
+		assertBothEqual("(defn g [x k] (.get x k)) (println (g {\"a\" 1} \"a\")"
+				+ " (g (doto (java.util.HashMap.) (.put \"a\" 2)) \"a\") (g [5 6] 1) (g (java.util.ArrayList. [7 8]) 0))",
+				"1 2 6 7\n");
+		assertBothEqual(
+				"(defn nm [x] (.getName x))"
+						+ " (println (nm :k) (nm 'sym) (nm (java.io.File. \"/tmp/x.txt\")) (nm String))",
+				"k sym x.txt java.lang.String\n");
+		assertBothEqual("(println (.count [1 2 3]) (.get {:a 1} :a) (.contains #{1} 1) (.getName :abc)"
+				+ " (.getNamespace :a/b) (.numerator 1/3))", "3 1 true abc a 1\n");
+		// a method left unmapped is refused by name (the oracle answers 994)
+		assertBothEqual("(println (try (.hashCode [1 2]) (catch Exception e (.getMessage e))))",
+				"Method hashCode taking 0 args is not supported for class clojure.lang.PersistentVector\n");
+		assertBothEqual("(println (try (.size {:a 1} 2) (catch Exception e (.getMessage e))))",
+				"No matching method size found taking 1 args for class clojure.lang.PersistentArrayMap\n");
+	}
+
+	@Test
 	void staticsConstructorsAndFields() throws Exception {
 		assertBothEqual("(println (Integer/parseInt \"42\"))", "42\n");
 		assertBothEqual("(println (Math/max 3 7))", "7\n");
@@ -102,6 +124,27 @@ class ClojureInteropTest {
 				"\"bad: in\"\n");
 		// a host object of another kind keeps its own getMessage
 		assertBothEqual("(prn (try (.getMessage (java.io.File. \"x\")) (catch Exception e :refused)))", ":refused\n");
+	}
+
+	@Test
+	void aHostThrowableAnswersInstanceAndItsStackTraceFromTheHost() throws Exception {
+		// measured against clj 1.12.6: a host throwable is no condition, so instance?
+		// asks the host and getStackTrace answers the host's frames
+		assertBothEqual(
+				"(println (instance? Exception (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (instance? RuntimeException (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (pos? (count (.getStackTrace (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"true false true\n");
+	}
+
+	@Test
+	void aThrownHostThrowableIsCaughtByItsOwnClassChain() throws Exception {
+		// measured against clj 1.12.6: the host class's superclasses, read at run time,
+		// decide the catch -- a checked exception passes a RuntimeException catch
+		assertBothEqual("(println (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch java.net.URISyntaxException e (.getMessage e))))", "bad: in\n");
+		assertBothEqual("(println (try (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch RuntimeException e :rte)) (catch Exception e :ex)))", ":ex\n");
 	}
 
 	@Test
@@ -190,13 +233,12 @@ class ClojureInteropTest {
 	}
 
 	@Test
-	void classOfAValueOfNoKnownKindStaysARefusalWithOrWithoutInterop() throws Exception {
-		// an ex-info condition is no host object: the same refusal whether the
-		// program uses interop (the host arm) or not (no java: at all)
+	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
+		// an ex-info condition is no host object: the same keyword whether the program
+		// uses interop (the host arm behind the exception arm) or not (no java: at all)
 		String plain = "(println (try (class (ex-info \"a\" {})) (catch Exception e (ex-message e))))";
-		assertBothEqual(plain, "class needs a value of a known kind\n");
-		assertBothEqual("(println (.getName String)) " + plain,
-				"java.lang.String\nclass needs a value of a known kind\n");
+		assertBothEqual(plain, ":clojure.lang.ExceptionInfo\n");
+		assertBothEqual("(println (.getName String)) " + plain, "java.lang.String\n:clojure.lang.ExceptionInfo\n");
 	}
 
 	@Test

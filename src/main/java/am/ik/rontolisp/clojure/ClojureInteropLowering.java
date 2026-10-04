@@ -65,6 +65,14 @@ final class ClojureInteropLowering {
 	static final Set<String> EXCEPTION_METHODS = Set.of("getMessage", "getLocalizedMessage", "getCause");
 
 	/**
+	 * The stack-trace methods of an exception, to the library function answering them
+	 * ({@code clojure.lisp}): a condition has no frames, so they need no exception
+	 * reader.
+	 */
+	static final Map<String, String> STACK_TRACE_METHODS = Map.of("printStackTrace",
+			"RONTOLISP::%CLOJURE-PRINT-STACK-TRACE", "getStackTrace", "RONTOLISP::%CLOJURE-STACK-TRACE");
+
+	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
 	 * {@code (Class. ...)} construction and {@code (Class/member ...)} statics. Null when
@@ -291,13 +299,13 @@ final class ClojureInteropLowering {
 		if (type == null) {
 			return null;
 		}
-		LispVal name = LispString.literal(type.getName());
+		LispVal chain = ClojureThrowables.quoted(ClojureThrowables.chainOf(type));
 		LispVal call = switch (args.size()) {
 			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
-					name, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
-			case 1 -> messageOrCauseConstruction(type, name, args.get(0));
+					chain, ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST) : null;
+			case 1 -> messageOrCauseConstruction(type, chain, args.get(0));
 			case 2 -> onlyConstructorsAtArity(type, 2, List.of(String.class, Throwable.class)) ? ClojureLowerUtil
-				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, args.get(0), args.get(1)) : null;
+				.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, args.get(0), args.get(1)) : null;
 			default -> null;
 		};
 		if (call != null) {
@@ -314,13 +322,13 @@ final class ClojureInteropLowering {
 	 * oracle resolves a literal at compile time: {@code (AssertionError. "m")} is its
 	 * {@code (Object)} constructor). Anything else is null.
 	 */
-	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal name, LispVal arg) {
+	private static @Nullable LispVal messageOrCauseConstruction(Class<?> type, LispVal chain, LispVal arg) {
 		if (onlyConstructorsAtArity(type, 1, List.of(String.class, Throwable.class))) {
-			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), name, arg);
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW_1), chain, arg);
 		}
 		boolean literal = arg instanceof LispString;
 		if (onlyConstructorsAtArity(type, 1, List.of(String.class)) || (literal && takesAString(type))) {
-			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), name, arg,
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW), chain, arg,
 					ClojureLowering.NIL_CONST);
 		}
 		return null;
@@ -1312,9 +1320,10 @@ final class ClojureInteropLowering {
 
 	/**
 	 * An instance call: the receiver runs once, behind a temporary; a string receiver
-	 * answers the mapped core operation, which runs on every backend; anything else goes
-	 * to {@code java:call} directly, which calls a string, number or character as its
-	 * {@code String}, box or {@code Character}.
+	 * answers the mapped core operation, which runs on every backend, and so does a
+	 * collection, keyword, symbol, ratio or atom ({@link ClojureValueMethodLowering});
+	 * anything else goes to {@code java:call} directly, which calls a string, number or
+	 * character as its {@code String}, box or {@code Character}.
 	 */
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, String method, List<LispVal> argDatums) {
 		List<LispVal> args = new ArrayList<>();
@@ -1377,6 +1386,11 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_METHOD), receiver,
 					LispString.literal(method));
 		}
+		if (args.isEmpty() && STACK_TRACE_METHODS.containsKey(method) && (cls == null || plainThrowable(cls) != null)) {
+			// a condition answers its toString line and no frames; anything else calls
+			// the host method
+			return ClojureLowerUtil.list(new LispSymbol(STACK_TRACE_METHODS.get(method)), receiver);
+		}
 		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
 			call = ctx.booleanAnswer(call);
 		}
@@ -1390,6 +1404,11 @@ final class ClojureInteropLowering {
 		}
 		if (cls == null) {
 			call = valuePredicate(ctx, recv, method, args.size(), hostCall, call);
+			if (!(method.equals("toString") && args.isEmpty())) {
+				// a collection, keyword, symbol or ratio has no host object: its common
+				// methods answer through the core verbs, any other is refused by name
+				call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
+			}
 		}
 		LispVal mapped = stringMethod(ctx, method, recv, args);
 		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {

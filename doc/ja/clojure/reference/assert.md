@@ -9,5 +9,5 @@
 
 ```clojure
 (println (assert (= 1 1))) ; nil
-(println (try (assert (= 1 2) "oops") (catch Exception e (ex-message e)))) ; Assert failed: oops、次の行に (= 1 2)
+(println (try (assert (= 1 2) "oops") (catch AssertionError e (ex-message e)))) ; Assert failed: oops、次の行に (= 1 2)
 ```

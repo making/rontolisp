@@ -92,7 +92,16 @@ public final class ClojureArms {
 		PRINT_FLAGS("print-flags", Set.of("RONTOLISP::%CLOJURE-PRINT-CUT-P", "RONTOLISP::%CLOJURE-PRINT-DEEP-P"),
 				Set.of("RONTOLISP::%CLOJURE-PRINT-READABLE"),
 				Map.of("RONTOLISP::%CLOJURE-WRITE-NESTED", "RONTOLISP::%CLOJURE-WRITE"),
-				ClojureCoreSpecials.PRINT_FLAGS, Set.of());
+				ClojureCoreSpecials.PRINT_FLAGS, Set.of()),
+
+		/**
+		 * An exception or a runtime error, which {@code class} reads the class of: only a
+		 * program defining the exception reader {@code C%E-PARTS} -- the exception
+		 * runtime of one that builds an exception, the catch runtime's of one that
+		 * catches -- can hold one.
+		 */
+		EXCEPTION("exception", Set.of("RONTOLISP::%CLOJURE-EXCEPTION-P"), Set.of(), Map.of(), Set.of("C%E-PARTS"),
+				Set.of());
 
 		private final String label;
 

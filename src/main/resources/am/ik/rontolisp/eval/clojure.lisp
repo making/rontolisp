@@ -713,31 +713,42 @@
 ;; Lisp condition the runtime signals; ex-info, a throwable construction
 ;; ((Exception. "m"), ...) and a thrown host Throwable are an exception
 ;; condition of the program's exception runtime (clojure/ClojureStateLowering
-;; exInfoRuntime): its class name, message, data and cause. These functions
-;; read and build one through that runtime's two functions, C%E-NEW (class
-;; message data cause) and C%E-PARTS (the four, or NIL for any other value), so
-;; only a program whose lowering emitted the runtime reaches them. The
-;; condition's report is the oracle's toString, so str, .toString and an error
-;; report spell it without a function of their own.
+;; exInfoRuntime): its class chain (the class's name, then each superclass's up
+;; to java.lang.Throwable, resolved when the program was lowered), message,
+;; data and cause. These functions read and build one through that runtime's
+;; two functions, C%E-NEW (chain message data cause) and C%E-PARTS (the four,
+;; or NIL for any other value), so only a program whose lowering emitted the
+;; runtime reaches them. The condition's report is the oracle's toString, so
+;; str, .toString and an error report spell it without a function of their own.
 
-(defun rontolisp::%clojure-exception-string (class message data)
-  "The oracle's toString of an exception of CLASS: ExceptionInfo's
-   \"clojure.lang.ExceptionInfo: message data\", any other class's
-   \"class: message\", the class alone without a message."
-  (cond ((equal class "clojure.lang.ExceptionInfo")
-         (concatenate 'string class ": "
-                      (rontolisp::%clojure-str-of message "null" nil) " "
-                      (rontolisp::%clojure-str-of data "nil" nil)))
-        ((null message) class)
-        (t (concatenate 'string class ": "
-                        (rontolisp::%clojure-str-of message "" nil)))))
+(defun rontolisp::%clojure-exception-string (chain message data)
+  "The oracle's toString of an exception of the class chain CHAIN:
+   ExceptionInfo's \"clojure.lang.ExceptionInfo: message data\", any other
+   class's \"class: message\", the class alone without a message."
+  (let ((class (car chain)))
+    (cond ((equal class "clojure.lang.ExceptionInfo")
+           (concatenate 'string class ": "
+                        (rontolisp::%clojure-str-of message "null" nil) " "
+                        (rontolisp::%clojure-str-of data "nil" nil)))
+          ((null message) class)
+          (t (concatenate 'string class ": "
+                          (rontolisp::%clojure-str-of message "" nil))))))
+
+(defun rontolisp::%clojure-host-chain (class)
+  "The class chain of the host Throwable class CLASS: its name, then each
+   superclass's up to java.lang.Throwable."
+  (let ((name (java:call class "getName")))
+    (if (equal name "java.lang.Throwable")
+        (list name)
+        (cons name
+         (rontolisp::%clojure-host-chain (java:call class "getSuperclass"))))))
 
 (defun rontolisp::%clojure-host-throwable (x)
-  "(class-name message cause) when X is a host Throwable, else NIL. A host arm
+  "(chain message cause) when X is a host Throwable, else NIL. A host arm
    like %clojure-host-class: a program with no java: operator gets a body
    answering NIL, since no host object exists there."
   (if (rontolisp::%clojure-host-instance-p x "java.lang.Throwable")
-      (list (java:call (java:call x "getClass") "getName")
+      (list (rontolisp::%clojure-host-chain (java:call x "getClass"))
             (java:call x "getMessage") (java:call x "getCause"))))
 
 (defun rontolisp::%clojure-exception-of (x)
@@ -752,10 +763,20 @@
 
 (defun rontolisp::%clojure-throw (x)
   "throw: an exception signals itself (a caught one rethrows unchanged, a host
-   Throwable as its exception); anything else signals its Clojure rendering,
-   so a thrown string keeps its text (the oracle refuses one)."
+   Throwable as its exception). Anything else is the oracle's
+   ClassCastException (nil its NullPointerException), whose message here is
+   the value's Clojure rendering, so a thrown string keeps its text."
   (let ((e (rontolisp::%clojure-exception-of x)))
-    (if e (error e) (error "~a" (rontolisp::%clojure-str-of x "nil" nil)))))
+    (error
+     (or e
+         (c%e-new (if (null x)
+                      '("java.lang.NullPointerException"
+                        "java.lang.RuntimeException" "java.lang.Exception"
+                        "java.lang.Throwable")
+                      '("java.lang.ClassCastException"
+                        "java.lang.RuntimeException" "java.lang.Exception"
+                        "java.lang.Throwable"))
+                  (rontolisp::%clojure-str-of x "nil" nil) nil nil)))))
 
 (defun rontolisp::%clojure-ex-message (x)
   "ex-message and .getMessage: an exception's message (nil when it has none),
@@ -789,25 +810,29 @@
 (defun rontolisp::%clojure-ex-info (message data cause)
   "(ex-info message data cause): an ExceptionInfo; nil data is {}, like the
    oracle's."
-  (c%e-new "clojure.lang.ExceptionInfo" message
+  (c%e-new '("clojure.lang.ExceptionInfo" "java.lang.RuntimeException"
+             "java.lang.Exception" "java.lang.Throwable") message
            (if (null data) (make-hash-table :test 'equal) data)
            (rontolisp::%clojure-cause-of cause)))
 
-(defun rontolisp::%clojure-exception-new (class message cause)
-  "(Class. message cause) of a throwable CLASS (both nil when absent): MESSAGE
-   a string or nil and CAUSE an exception or nil, else the oracle's refusal."
+(defun rontolisp::%clojure-exception-new (chain message cause)
+  "(Class. message cause) of a throwable class of the chain CHAIN (both nil
+   when absent): MESSAGE a string or nil and CAUSE an exception or nil, else
+   the oracle's refusal."
   (if (or (null message) (stringp message))
-      (c%e-new class message nil (rontolisp::%clojure-cause-of cause))
-      (error (concatenate 'string "No matching ctor found for class " class))))
+      (c%e-new chain message nil (rontolisp::%clojure-cause-of cause))
+      (error
+       (concatenate 'string "No matching ctor found for class " (car chain)))))
 
-(defun rontolisp::%clojure-exception-new-1 (class x)
-  "(Class. x) of a throwable CLASS taking a message or a cause (the lowering
-   calls %clojure-exception-new for one taking a message only): an exception X
-   is the cause and its toString the message, anything else the message."
+(defun rontolisp::%clojure-exception-new-1 (chain x)
+  "(Class. x) of a throwable class of the chain CHAIN taking a message or a
+   cause (the lowering calls %clojure-exception-new for one taking a message
+   only): an exception X is the cause and its toString the message, anything
+   else the message."
   (let ((cause (rontolisp::%clojure-exception-of x)))
     (if cause
-        (c%e-new class (format nil "~a" cause) nil cause)
-        (rontolisp::%clojure-exception-new class x nil))))
+        (c%e-new chain (format nil "~a" cause) nil cause)
+        (rontolisp::%clojure-exception-new chain x nil))))
 
 (defun rontolisp::%clojure-exception-method (x method)
   "(.getMessage x), (.getLocalizedMessage x) or (.getCause x) of a receiver of
@@ -824,6 +849,196 @@
    program with no java: operator gets a body refusing, since no host object
    exists there."
   (java:call x method))
+
+;; An instance call on a Clojure value with no host object: the lowering
+;; (clojure/ClojureValueMethodLowering) answers the common methods through the
+;; core verbs and refuses the rest here, so java:call never sees such a value.
+;; These carry comments, not docstrings: the JVM backend emits a docstring into
+;; every class splicing the defun, and every instance call splices the first two.
+
+;; Whether X is nil or a Clojure value with no host object of its own: a list or
+;; a tagged wrapper (keyword, set, lazy seq, record, atom, ...), a vector, a map,
+;; a ratio or a symbol.
+(defun rontolisp::%clojure-value-receiver-p (x)
+  (or (null x) (consp x) (hash-table-p x) (and (vectorp x) (not (stringp x)))
+      (rontolisp::%clojure-is-ratio x) (rontolisp::%clojure-real-symbol-p x)))
+
+;; Refuse an instance call of METHOD on X, a value %clojure-value-receiver-p
+;; takes: the lowering's WORDS (the oracle's, or the unsupported refusal) and
+;; X's class, the oracle's -- a map of more than eight entries a hash map (its
+;; literals and assoc growth), a smaller one an array map; nil is the oracle's
+;; NullPointerException.
+(defun rontolisp::%clojure-no-method (x words method)
+  (if (null x) (error "NullPointerException: ~A of nil" method))
+  (error "~A~A" words
+         (cond ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
+          ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
+          ((rontolisp::%clojure-sorted-map-p x)
+           "clojure.lang.PersistentTreeMap")
+          ((rontolisp::%clojure-sorted-set-p x)
+           "clojure.lang.PersistentTreeSet")
+          ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
+          ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (stringp (nth 4 x)))
+           (nth 4 x))
+          ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
+          ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
+          ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+          ((and (consp x) (keywordp (car x))) "java.lang.Object")
+          ((consp x) "clojure.lang.PersistentList")
+          ((hash-table-p x)
+           (if (> (hash-table-count x) 8)
+               "clojure.lang.PersistentHashMap"
+               "clojure.lang.PersistentArrayMap"))
+          ((vectorp x) "clojure.lang.PersistentVector")
+          ((rationalp x) "clojure.lang.Ratio")
+          (t "clojure.lang.Symbol"))))
+
+;; (.get coll i) over a vector, list or lazy seq, and (.nth v i): the member at
+;; index I, signalling past either end like the oracle's
+;; IndexOutOfBoundsException (nth answers nil there).
+(defun rontolisp::%clojure-list-get (coll i)
+  (let* ((miss (list nil)) (got (rontolisp::%clojure-nth coll i miss)))
+    (if (eq got miss) (error "Index ~A out of bounds" i) got)))
+
+;; (.indexOf coll x) / (.lastIndexOf coll x) over a vector, list or lazy seq:
+;; the index of the first (last when FROM-END) member = to X, else -1, like
+;; java.util.List.
+(defun rontolisp::%clojure-index-of (coll x from-end)
+  (let ((at
+         (position x (rontolisp::%clojure-seq-all coll)
+                   :test #'rontolisp::%clojure-equal
+                   :from-end from-end)))
+    (if at at -1)))
+
+;;;; Catching: which catch clause takes a condition.
+;;
+;; A catch names a throwable class, which the lowering resolves to its class
+;; chain, so no test needs a class hierarchy at run time: a catch takes an
+;; exception whose own chain holds the class it names. A runtime error carries
+;; no class, so it takes the one the oracle throws where the runtime signals
+;; its condition type (%clojure-error-chain); a condition whose type tells none
+;; (the simple-error of a Clojure refusal, a failed host call) is taken by
+;; every catch but ExceptionInfo's, which the oracle's runtime never throws.
+
+(defun rontolisp::%clojure-type-error-class (c)
+  "The class the oracle throws where the runtime signals the type error C: a
+   ClassCastException, a NullPointerException for a nil value, an
+   IndexOutOfBoundsException for an index outside its bound, an
+   UnsupportedOperationException for a value that is no sequence (count of a
+   number), and NIL when C names no type (a host failure the JVM classifies,
+   its value unknown). The seeded type error's datum and expected type are its
+   first two slots, read in place: slot-value would splice the run-time slot
+   dispatch into every program that catches."
+  (if (%obj-is c '|%class-TYPE-ERROR| '|%class-SIMPLE-TYPE-ERROR|)
+      (let ((expected (%obj-ref c 1)))
+        (cond ((null expected) nil)
+         ((null (%obj-ref c 0)) "java.lang.NullPointerException")
+         ((and (consp expected) (eq (car expected) 'integer)
+               (consp (car (cdr (cdr expected)))))
+          "java.lang.IndexOutOfBoundsException")
+         ((eq expected 'sequence) "java.lang.UnsupportedOperationException")
+         (t "java.lang.ClassCastException")))
+      "java.lang.ClassCastException"))
+
+(defun rontolisp::%clojure-error-chain (c)
+  "The class chain of the exception the oracle throws where the runtime
+   signals the Common Lisp condition C, NIL when its type tells none: an
+   arithmetic error is an ArithmeticException, a type error the class
+   %clojure-type-error-class answers, a wrong argument count an
+   ArityException, a failed open a FileNotFoundException."
+  (let ((runtime
+         '("java.lang.RuntimeException" "java.lang.Exception"
+           "java.lang.Throwable")))
+    (cond ((typep c 'arithmetic-error)
+           (cons "java.lang.ArithmeticException" runtime))
+          ((typep c 'type-error)
+           (let ((class (rontolisp::%clojure-type-error-class c)))
+             (if class (cons class runtime))))
+          ((typep c 'program-error)
+           (cons "clojure.lang.ArityException"
+                 (cons "java.lang.IllegalArgumentException" runtime)))
+          ((typep c 'file-error)
+           '("java.io.FileNotFoundException" "java.io.IOException"
+             "java.lang.Exception" "java.lang.Throwable")))))
+
+(defun rontolisp::%clojure-chain-has (chain name)
+  "Whether the class chain CHAIN holds the class NAME."
+  (let ((found nil))
+    (dolist (c chain) (if (equal c name) (setq found t)))
+    found))
+
+(defun rontolisp::%clojure-catches (c chain)
+  "Whether a catch of the class whose chain is CHAIN takes the condition C:
+   an exception when its class is that class or a subclass of it; a runtime
+   error when the class the oracle throws for it is that class, a superclass
+   or a subclass of it (the operation may throw a subclass: aget's
+   ArrayIndexOutOfBoundsException), or, when its type tells no class, unless
+   the catch names ExceptionInfo."
+  (let ((parts (c%e-parts c)))
+    (if parts
+        (rontolisp::%clojure-chain-has (car parts) (car chain))
+        (let ((class (rontolisp::%clojure-error-chain c)))
+          (if class
+              (or (rontolisp::%clojure-chain-has class (car chain))
+                  (rontolisp::%clojure-chain-has chain (car class)))
+              (not
+               (rontolisp::%clojure-chain-has chain
+                "clojure.lang.ExceptionInfo")))))))
+
+;;;; The class of an exception: class, instance? and the stack-trace methods.
+;;
+;; class and instance? read the class the program can name: an exception's own,
+;; a runtime error's the one the oracle throws for its condition type, and
+;; RuntimeException for one whose condition names none -- the superclass of
+;; every such refusal of the Clojure runtime but assert's.
+
+(defun rontolisp::%clojure-exception-p (x)
+  "Whether X is an exception or a runtime error: a condition. class's arm
+   test, stripped from a program that can hold no condition."
+  (typep x 'condition))
+
+(defun rontolisp::%clojure-condition-chain (c)
+  "The class chain of the condition C: an exception's own, a runtime error's
+   the one the oracle throws for it, RuntimeException's when it names none."
+  (let ((parts (c%e-parts c)))
+    (if parts
+        (car parts)
+        (or (rontolisp::%clojure-error-chain c)
+            '("java.lang.RuntimeException" "java.lang.Exception"
+              "java.lang.Throwable")))))
+
+(defun rontolisp::%clojure-exception-class (c)
+  "class of an exception or a runtime error C: its class name as a keyword,
+   the shape class answers for every kind."
+  (list :c%keyword (car (rontolisp::%clojure-condition-chain c))))
+
+(defun rontolisp::%clojure-instance-of (x chain)
+  "instance? of the throwable class whose chain is CHAIN: a condition when its
+   class is that class or a subclass of it, a host Throwable by the host's own
+   test, anything else false."
+  (if (typep x 'condition)
+      (rontolisp::%clojure-chain-has (rontolisp::%clojure-condition-chain x)
+                                     (car chain))
+      (rontolisp::%clojure-host-instance-p x (car chain))))
+
+(defun rontolisp::%clojure-print-stack-trace (x)
+  ".printStackTrace: a condition writes its toString line to *err* (the oracle
+   adds a line per frame), answering nil; anything else calls the host
+   method."
+  (if (typep x 'condition)
+      (progn
+        (princ x *error-output*)
+        (terpri *error-output*)
+        nil)
+      (rontolisp::%clojure-host-method x "printStackTrace")))
+
+(defun rontolisp::%clojure-stack-trace (x)
+  ".getStackTrace: a condition carries no frames, so an empty vector;
+   anything else calls the host method."
+  (if (typep x 'condition)
+      (vector)
+      (rontolisp::%clojure-host-method x "getStackTrace")))
 
 ;;;; Equality: the = family over every value shape.
 
@@ -6324,7 +6539,7 @@
    class and message, then the data on a line of its own), anything else its
    report, an exception's toString."
   (let ((parts (c%e-parts e)))
-    (if (and parts (equal (car parts) "clojure.lang.ExceptionInfo"))
+    (if (and parts (equal (car (car parts)) "clojure.lang.ExceptionInfo"))
         (concatenate 'string "clojure.lang.ExceptionInfo: "
          (rontolisp::%clojure-str-of (car (cdr parts)) "nil" nil)
          (string #\Newline)
@@ -6374,35 +6589,27 @@
                                      msg loc))
   value)
 
-(defun rontolisp::%clojure-test-caught (thunk)
-  "The condition THUNK signals, or NIL when it returns."
-  (handler-case (progn
-                  (funcall thunk)
-                  nil)
-    (error (e) e)))
+(defun rontolisp::%clojure-test-thrown (caught expected msg loc)
+  "(is (thrown? C body...)): CAUGHT is the condition of the class C the body
+   signalled (the lowering catches it), nil when the body returned. Passes
+   answering it, or fails with actual nil."
+  (if caught
+      (rontolisp::%clojure-test-pass)
+      (rontolisp::%clojure-test-fail expected "nil" msg loc))
+  caught)
 
-(defun rontolisp::%clojure-test-thrown (thunk expected msg loc)
-  "(is (thrown? C body...)): passes answering the condition when the body
-   signals; fails with actual nil when it returns."
-  (let ((caught (rontolisp::%clojure-test-caught thunk)))
-    (if caught
-        (rontolisp::%clojure-test-pass)
-        (rontolisp::%clojure-test-fail expected "nil" msg loc))
-    caught))
-
-(defun rontolisp::%clojure-test-thrown-msg (thunk re expected msg loc)
-  "(is (thrown-with-msg? C re body...)): passes when the body signals and RE
-   finds a match in the message; a mismatch fails showing the condition, a
+(defun rontolisp::%clojure-test-thrown-msg (caught re expected msg loc)
+  "(is (thrown-with-msg? C re body...)): CAUGHT as for thrown?; passes when RE
+   finds a match in its message, a mismatch fails showing the condition, a
    return fails with actual nil. Answers the condition, or nil."
-  (let ((caught (rontolisp::%clojure-test-caught thunk)))
-    (cond ((null caught) (rontolisp::%clojure-test-fail expected "nil" msg loc))
-          ((rontolisp::%clojure-test-truthy-p
-            (rontolisp::%clojure-re-find re
-             (rontolisp::%clojure-test-message caught)))
-           (rontolisp::%clojure-test-pass))
-          (t (rontolisp::%clojure-test-fail expected
-              (rontolisp::%clojure-test-describe caught) msg loc)))
-    caught))
+  (cond ((null caught) (rontolisp::%clojure-test-fail expected "nil" msg loc))
+        ((rontolisp::%clojure-test-truthy-p
+          (rontolisp::%clojure-re-find re
+           (rontolisp::%clojure-test-message caught)))
+         (rontolisp::%clojure-test-pass))
+        (t (rontolisp::%clojure-test-fail expected
+            (rontolisp::%clojure-test-describe caught) msg loc)))
+  caught)
 
 (defun rontolisp::%clojure-test-testing (context thunk)
   "(testing context body...): THUNK with CONTEXT (as str spells it) pushed on

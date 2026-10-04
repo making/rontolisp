@@ -71,26 +71,39 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   test asserting that overflow (`(is (thrown? StackOverflowError (tail-fibo 1000000N)))`)
   fails.
 - `clojure.test` runs the tests in definition order (the oracle's order is its
-  namespace map's); `thrown?`/`thrown-with-msg?` match any condition whatever the class
-  names, like `catch`; an error report prints the exception's `toString` (a runtime error
+  namespace map's); an error report prints the exception's `toString` (a runtime error
   its report) with no stack trace, at the `is` form's line where the oracle names the
   frame that threw; a failed `thrown-with-msg?` shows the condition's message where the
   oracle prints `#error {...}`; a host stack overflow (`catch StackOverflowError`,
   `(is (thrown? StackOverflowError ...))`) is no condition on the interpreter, where it ends
   the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
   like the oracle. `use-fixtures` is refused by name.
-- `try` catch clauses are catch-all in order: the first handles any condition, where the
-  oracle dispatches by class; the catch variable binds the Common Lisp condition.
-- An exception is a condition carrying a class name, a message, data and a cause. A runtime
+- A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
+  runtime signals its Common Lisp condition. A refusal whose condition names no class -- most
+  of the Clojure runtime's own refusals (`(first 5)`, the oracle's
+  `IllegalArgumentException`), a failed `assert` (the oracle's `AssertionError`, which an
+  `Exception` catch does not take), a failed host call -- is taken by the first catch of any
+  class but `clojure.lang.ExceptionInfo`. An index past its bound is an
+  `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's
+  `aget` throws `ArrayIndexOutOfBoundsException`, `.charAt` a
+  `StringIndexOutOfBoundsException`). A catch must name a class that resolves on this host
+  (`java.*`, `clojure.lang`'s throwables); one the oracle finds on its class path only is
+  refused.
+- An exception is a condition carrying its class, a message, data and a cause. A runtime
   error is the Common Lisp condition the runtime signals, whose message is the Common Lisp
   report (`(.getMessage e)` of a failed `(inc nil)` is `+: The value NIL is not of type
   NUMBER`, the oracle's a `NullPointerException` text) and whose `str` is that report
   without the oracle's class prefix. A throwable construction is an exception only
   for a class that carries nothing but a message and a cause; one with members of its own
-  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class`,
-  `instance?` and every other method of an exception (`.printStackTrace`, `.getStackTrace`)
-  are refused, and `throw` of a value that is no exception signals its rendering where the
-  oracle refuses it.
+  (`java.net.URISyntaxException`) stays a host object until it is thrown. `class` of an
+  exception answers its class name as a keyword (`:java.lang.Exception`, where the oracle
+  answers the host class), `:java.lang.RuntimeException` for a refusal whose condition names
+  no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
+  and a line per frame to the process's stderr, whatever `*err*` is bound to) and
+  `.getStackTrace` answers an empty vector; every other method but `.getMessage`,
+  `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
+  no exception is a `ClassCastException` whose message is the value's rendering, where the
+  oracle's message names the two classes.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
@@ -149,6 +162,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead; a host object (interpreter and JVM) its host class.
+- An instance call on a collection, keyword, symbol, ratio or atom answers through the core
+  functions and shares their deviations (`.getClass` answers what `class` does). A method
+  left unmapped is refused as `Method m taking N args is not supported for class C`, where the
+  oracle may answer (`.hashCode`); the class named for a map is an array map up to eight
+  entries and a hash map past them, by size alone. `nil` is the empty list here, so a
+  collection method answers on it (`(.count nil)` is `0`) where the oracle throws a
+  `NullPointerException`; any other method on `nil` is one.
 - `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
   names; any other class is a named refusal instead of a wrong answer.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
