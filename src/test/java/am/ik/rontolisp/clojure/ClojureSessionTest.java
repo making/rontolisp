@@ -37,6 +37,18 @@ class ClojureSessionTest {
 			.anyMatch(form -> form.contains("(IF (FBOUNDP '|c%later|) #'|c%later| |c%later|)"));
 	}
 
+	@Test
+	void aSetOfAssertInOneBufferSwitchesOffTheAssertsOfTheNext() {
+		// the oracle reads *assert* where assert expands, which in a REPL is when the
+		// later input is read
+		ClojureSession session = new ClojureSession();
+		assertThat(forms(session.read("(assert false)"))).anyMatch(form -> form.contains("Assert failed: false"));
+		session.read("(set! *assert* false)");
+		assertThat(forms(session.read("(assert false)"))).containsExactly("NIL");
+		session.read("(set! *assert* true)");
+		assertThat(forms(session.read("(assert false)"))).anyMatch(form -> form.contains("Assert failed: false"));
+	}
+
 	private static List<String> forms(List<ClojureTopLevel> tops) {
 		return tops.stream().flatMap(top -> top.forms().stream()).map(LispVal::print).toList();
 	}

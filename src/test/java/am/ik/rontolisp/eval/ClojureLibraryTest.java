@@ -1,10 +1,18 @@
 package am.ik.rontolisp.eval;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.Clojure;
+import am.ik.rontolisp.clojure.ClojureArms;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -131,6 +139,89 @@ class ClojureLibraryTest {
 		List<LispVal> flagged = Clojure.read("(binding [*print-length* 2] (prn [1 2 3]))", null);
 		assertThat(defun(ClojureLibrary.process(flagged), "RONTOLISP::%CLOJURE-WRITE"))
 			.contains("(RONTOLISP::%CLOJURE-PRINT-CUT-P X)", "RONTOLISP::%CLOJURE-WRITE-NESTED");
+	}
+
+	@Test
+	void aProgramNamingNoPrintMetaAndMakingNoQualifiedKeySplicesThePrinterWithoutTheirArms() {
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("RONTOLISP::%CLOJURE-PRINT-META-P", "(RONTOLISP::%CLOJURE-PRINT-NS-MAP-P X)");
+		String plain = defun(ClojureLibrary.process(Clojure.read("(prn {:a 1} 'b)", null)),
+				"RONTOLISP::%CLOJURE-WRITE");
+		assertThat(plain).doesNotContain("%CLOJURE-PRINT-META-P", "%CLOJURE-PRINT-NS-MAP-P");
+		String meta = defun(ClojureLibrary.process(Clojure.read("(binding [*print-meta* true] (prn [1]))", null)),
+				"RONTOLISP::%CLOJURE-WRITE");
+		assertThat(meta).contains("%CLOJURE-PRINT-META-P").doesNotContain("%CLOJURE-PRINT-NS-MAP-P");
+		for (String qualified : List.of("(prn :a/b)", "(prn 'a/b)", "(prn ::b)", "(prn (keyword \"a\" \"b\"))",
+				"(prn (read-string \"x\"))")) {
+			assertThat(defun(ClojureLibrary.process(Clojure.read(qualified, null)), "RONTOLISP::%CLOJURE-WRITE"))
+				.as(qualified)
+				.contains("%CLOJURE-PRINT-NS-MAP-P")
+				.doesNotContain("%CLOJURE-PRINT-META-P");
+		}
+	}
+
+	@Test
+	void everyLibraryFunctionBuildingAKeywordOrSymbolFromAComputedSpellingMakesANamespaceMap() {
+		// a qualified key reaches a map only through a literal or one of these: a defun
+		// interning a symbol or wrapping a computed spelling as a keyword, or calling one
+		// that does. A program naming one keeps the namespace-map arm.
+		Map<String, LispVal> defuns = new HashMap<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFUN")
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				defuns.put(name.name(), rest.cdr());
+			}
+		}
+		Set<String> builders = new TreeSet<>();
+		defuns.forEach((name, body) -> {
+			if (buildsIdent(body)) {
+				builders.add(name);
+			}
+		});
+		// class answers a class name as a keyword, and a class name has no slash
+		builders.remove("RONTOLISP::%CLOJURE-EXCEPTION-CLASS");
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (Map.Entry<String, LispVal> defun : defuns.entrySet()) {
+				if (!builders.contains(defun.getKey()) && mentionsAny(defun.getValue(), builders)) {
+					builders.add(defun.getKey());
+					grew = true;
+				}
+			}
+		}
+		assertThat(builders).contains("RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-READ-STRING");
+		assertThat(builders).allSatisfy(name -> assertThat(ClojureArms.Family.NAMESPACE_MAP.isProducer(name))
+			.as(name + " builds a keyword or symbol")
+			.isTrue());
+	}
+
+	/** Whether the code interns a symbol or wraps a computed spelling as a keyword. */
+	private static boolean buildsIdent(LispVal code) {
+		LispVal rest = code;
+		while (rest instanceof LispCons cell) {
+			if (cell.car() instanceof LispSymbol head
+					&& (head.name().equals("INTERN") || head.name().equals(":C%KEYWORD")
+							&& cell.cdr() instanceof LispCons next && !(next.car() instanceof LispString))) {
+				return true;
+			}
+			if (buildsIdent(cell.car())) {
+				return true;
+			}
+			rest = cell.cdr();
+		}
+		return false;
+	}
+
+	private static boolean mentionsAny(LispVal code, Set<String> names) {
+		LispVal rest = code;
+		while (rest instanceof LispCons cell) {
+			if (mentionsAny(cell.car(), names)) {
+				return true;
+			}
+			rest = cell.cdr();
+		}
+		return rest instanceof LispSymbol symbol && names.contains(symbol.name());
 	}
 
 	private static String defun(List<LispVal> forms, String name) {

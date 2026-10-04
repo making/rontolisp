@@ -580,6 +580,35 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * What a top-level {@code set!} sets {@code *assert*} to, when its value is a
+	 * literal: false for {@code false} and {@code nil}, true for any other literal; null
+	 * when it sets something else (a var of the program's own named so included) or a
+	 * computed value, which a lowering cannot know.
+	 * @param ctx the hub
+	 * @param items the {@code set!} form, head included
+	 * @return the literal's truth, or null
+	 */
+	static @Nullable Boolean assertSetTo(ClojureLowering ctx, List<LispVal> items) {
+		if (items.size() != 3 || !(ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol target)) {
+			return null;
+		}
+		String name = target.name();
+		boolean programVar = !name.startsWith(ClojureCoreNames.PREFIX) && ctx.resolveVar(name) != null;
+		if (ctx.localKind(name) != null || programVar || !"*assert*".equals(ClojureCoreSpecials.targetName(name))) {
+			return null;
+		}
+		LispVal value = items.get(2);
+		if (value instanceof LispSymbol symbol) {
+			return switch (symbol.name()) {
+				case "false", "nil" -> false;
+				case "true" -> true;
+				default -> symbol.name().startsWith(":") ? Boolean.TRUE : null;
+			};
+		}
+		return value instanceof LispCons ? null : Boolean.TRUE;
+	}
+
+	/**
 	 * {@code set!} of a {@code clojure.core} special: a flag {@code clojure.main} binds
 	 * is always thread-bound, so it assigns; any other assigns inside a {@code binding}
 	 * of it (its counter past zero), else the oracle's root-binding error. The value

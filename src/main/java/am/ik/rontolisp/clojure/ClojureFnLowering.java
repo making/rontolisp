@@ -260,11 +260,16 @@ final class ClojureFnLowering {
 	 * failure (it sits in the else branch), like the oracle's lazy message form. The
 	 * failure text carries the failed form as quoted data through the readable string
 	 * conversion: {@code Assert failed: (nil? 1)}, or
-	 * {@code Assert failed: msg\n(nil? 1)} with a message.
+	 * {@code Assert failed: msg\n(nil? 1)} with a message. Under a false {@code *assert*}
+	 * ({@link ClojureLowering#assertEnabled}) it is nil.
 	 */
 	static LispVal assertOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 1 || n == 2, "assert takes a test and an optional message");
+		if (!ctx.assertEnabled) {
+			// *assert* was false where it expands: nothing evaluates
+			return ClojureLowering.NIL_CONST;
+		}
 		LispVal test = ctx.lower(items.get(1));
 		String rendered = ClojureStringLowering.prSource(items.get(1));
 		LispVal form = rendered != null ? LispString.literal(rendered) : ClojureStringLowering.strOf(ctx,

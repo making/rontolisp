@@ -179,8 +179,8 @@ Each is a real work item unless the reason says otherwise.
   other host object `#<java C>` (the oracle's `#object[C 0x.. "..."]` carries a hash) --
   while a deftype, reify and `reduced` print their
   wrapper lists; `str` of a lazy seq or record spells the contents where the oracle answers
-  `Class@hash`; `*print-meta*`/`*print-namespace-maps*` are plain values (`{:a/b 1}`
-  prints so), `print-method` and `pprint` are absent;
+  `Class@hash`; `*print-meta*` prints no reader `:line`/`:column` (no value carries
+  them), `*print-dup*` is a plain value, `print-method` and `pprint` are absent;
   `~S`/`~A` on Clojure values stay CL notation (`format` is a CL surface). Cycles print with
   datum labels, copied from `%scheme-print` (sharing would splice `scheme.lisp` into every
   Clojure program).
@@ -448,8 +448,8 @@ before the library splice.
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
   `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's,
-  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS` the
-  printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
+  `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS`,
+  `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
   false (its clause, its `if` branch or its disjunct goes; one disjunct left stands alone),
   a view to its first argument, an alias to its plain helper. An arm anywhere else, or over
@@ -1306,8 +1306,15 @@ resolve var`.
 - The flags hold the oracle's `clj -M` root (`ClojureCoreSpecials`: `*data-readers*`
   `{}`, `*command-line-args*` `(cdr (%host-argv))`, `*clojure-version*` 1.12.6,
   `*compile-path*` `"classes"`, ...). Not here: `*ns*` (no namespace value), `*file*`,
-  `*source-path*`, `*repl*` and the REPL's `*1`..`*e`. `*assert*` is a plain value:
-  `assert` ignores it (the oracle reads it at macroexpansion).
+  `*source-path*`, `*repl*` and the REPL's `*1`..`*e`.
+- `assert` reads `*assert*` at lower time, like the oracle's macroexpansion:
+  `ClojureLowering.assertEnabled`, set by a TOP-LEVEL `(set! *assert* literal)`
+  (`topLevelsOf`, so a required namespace's too, and a REPL input's for the next input;
+  `ClojureProtocolLowering.assertSetTo`), makes every later `assert` lower to `nil`. A
+  `set!` inside a function or to a computed value is not seen (the oracle's takes effect
+  when it runs); a `binding` around an expanded `assert` changes nothing on either side.
+  Pinned by clojure-spec `assert-reads-the-assert-flag-where-it-expands` and
+  `ClojureSessionTest#aSetOfAssertInOneBufferSwitchesOffTheAssertsOfTheNext`.
 - The printer honours `*print-length*`, `*print-level*` and `*print-readably*`: specials
   `%clojure-print-length`/`-level`/`-readably` with library defvars too (the interpreter
   loads the library lazily, after the program's own). `%clojure-print` passes `readable`
@@ -1325,6 +1332,35 @@ resolve var`.
   `print-length-level-and-readably-shape-the-printer`,
   `ClojureArmsTest#thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch`,
   `ClojureLibraryTest#aProgramNamingNoPrintFlagSplicesTheLibraryWithoutItsPrintArms`.
+- `*print-meta*` (family `PRINT_META`, producer the flag's special): `%clojure-write`'s
+  clause `((%clojure-print-meta-p x readable stream labels))` writes `^m ` (a lone truthy
+  `:tag` as its value) on the pr side when the metadata is non-empty and answers NIL, so
+  the `cond` goes on to write X -- at X's own level, before the `#` of `*print-level*`,
+  like the oracle's `[^# #]`. The library's root is the literal false object `'|false|`
+  (a compiled program splices the library's defvars ahead of its own, so a `nil` root
+  would make `(prn *print-meta*)` print `nil`).
+- `*print-namespace-maps*` (family `NAMESPACE_MAP`): `%clojure-print-ns-map-p` ahead of
+  the cut clause sends a hash or sorted map whose every key is a keyword or symbol of one
+  namespace to `%clojure-write-ns-map` (`#:a{:b 1}`, the cut and the order its own).
+  The flag's root is TRUE, so the producer is not the flag but what makes a qualified
+  key: a `(:C%KEYWORD "ns/name")` wrapper (built or quoted), a quoted `c%ns/name` symbol
+  (`Family.qualifiedIdents`; a qualified name in code is a call, not a value), or a library
+  function building a keyword/symbol from a computed spelling or calling one (the
+  constructors, `find-keyword`, the reader). The last list is pinned by
+  `ClojureLibraryTest#everyLibraryFunctionBuildingAKeywordOrSymbolFromAComputedSpellingMakesANamespaceMap`,
+  which walks the library's call graph from every `intern` and computed `:C%KEYWORD`.
+- Measured 2026-10-04 against the parent build (raw wasm / JVM class): `(prn {:a 1} [1 2 3])`,
+  a `meta`/`with-meta` program, `(binding [*print-length* 2] ...)`, an `assert` plus
+  `sorted-map` program and `examples/clojure/demo.clj` are byte-identical. `(prn (:a/b {:a/b 1}))`
+  33,484 -> 40,418 / 62,296 -> 70,794 (a qualified literal links the lift; a first version
+  through `search`/`subseq`/`equal` and the entry list was 43,754 / 77,136, the char loops of
+  `%clojure-slash-at`/`-same-namespace-p`/`-write-chars` took 3.3 KB off; a symbol key's
+  demangle through `%clojure-unescape-part` is 1.7 KB of the rest).
+  `(binding [*print-meta* true] (prn (with-meta [1] {:a 1})))` 43,523 -> 45,370 / 69,228 ->
+  71,582. Pinned by clojure-spec `a-map-whose-keys-share-a-namespace-prints-it-lifted`,
+  `print-meta-writes-the-metadata-ahead-of-the-value`, `ClojureArmsTest#thePrintMetaFamily...`,
+  `#theNamespaceMapFamilyIsMadeByAQualifiedKeywordOrSymbol` and
+  `ClojureLibraryTest#aProgramNamingNoPrintMetaAndMakingNoQualifiedKeySplicesThePrinterWithoutTheirArms`.
 - deftype mutable fields (`^:unsynchronized-mutable`/`^:volatile-mutable`; ClojureScript's
   `^:mutable` is no marker): a fifth element `(vector m1 ...)` in the deftype (absent
   without mutable fields), invisible to `.-field`; `defrecord` refuses the markers. An

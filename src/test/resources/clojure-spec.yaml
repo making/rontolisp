@@ -6188,6 +6188,88 @@ cases:
       x
       [1 ...]
       [1 2]
+  - name: a-map-whose-keys-share-a-namespace-prints-it-lifted
+    # Oracle-identical (clj 1.12.6): under *print-namespace-maps*, which clojure.main binds
+    # true, a map whose every key is a keyword or symbol of one namespace prints as
+    # #:ns{...} with the keys bare -- under pr, print, str and the print flags alike, a
+    # sorted map too; bound or set false, it prints plainly. A record keeps its own
+    # notation. Hash maps hold one entry: their walk order is unspecified.
+    source: |
+      (prn {:a/b 1} {'a/c 2} {:a/b 'a/c} [{:a/b {:c/d 1}}] {:a/b nil} {} {"a/b" 1})
+      (prn (sorted-map :a/b 1 :a/c 2) (sorted-map :a/b 1 :b/c 2) {(keyword "k" "x") 1} {(symbol "s/y") 2})
+      (println {:a/b "x"} (pr-str {:a/b "x"}) (str {:a/b "x"}) (print-str {:a/b "x"}))
+      (binding [*print-length* 1] (prn (sorted-map :a/b 1 :a/c 2) {:a/b 1}))
+      (binding [*print-length* 0] (prn {:a/b 1}))
+      (binding [*print-level* 1] (prn {:a/b {:a/c 2}} (sorted-map :a/b [1])))
+      (binding [*print-namespace-maps* false] (prn {:a/b 1} (pr-str (sorted-map :a/b 1))))
+      (set! *print-namespace-maps* false) (prn {:a/b 1}) (set! *print-namespace-maps* true) (prn {:a/b 1})
+      (defrecord NsmR [x])
+      (prn (assoc (->NsmR 1) :a/b 2))
+    expected: |
+      #:a{:b 1} #:a{c 2} #:a{:b a/c} [#:a{:b #:c{:d 1}}] #:a{:b nil} {} {"a/b" 1}
+      #:a{:b 1, :c 2} {:a/b 1, :b/c 2} #:k{:x 1} #:s{y 2}
+      #:a{:b x} #:a{:b "x"} #:a{:b "x"} #:a{:b x}
+      #:a{:b 1, ...} #:a{:b 1}
+      #:a{...}
+      #:a{:b #} #:a{:b #}
+      {:a/b 1} "{:a/b 1}"
+      {:a/b 1}
+      #:a{:b 1}
+      #reading.NsmR{:x 1, :a/b 2}
+  - name: print-meta-writes-the-metadata-ahead-of-the-value
+    # Oracle-identical (clj 1.12.6): under *print-meta*, pr (and pr-str, str) writes a
+    # value's non-empty metadata as ^m ahead of it -- a lone :tag as its value -- at the
+    # value's own level and under the print flags; print and *print-readably* false write
+    # none. The oracle's reader also gives a quoted list :line/:column metadata, which no
+    # value carries here.
+    source: |
+      (binding [*print-meta* true]
+        (prn (with-meta [1] {:a 1}) (with-meta {:x 1} {:a 1}) (with-meta #{1} {:a 1}) (with-meta (list 1 2) {:a 1}))
+        (prn (with-meta [1] {:tag 'String}) (with-meta [1] {}) [(with-meta [2] {:b 1})] (with-meta [1] (with-meta {:a 1} {:z 2})))
+        (prn ^:foo [1] (vary-meta [1] assoc :k 2) (pr-str (with-meta [1] {:a 1})) (str (with-meta [1] {:a 1})))
+        (prn (with-meta (->NsmR 1) {:a 1}) (with-meta (sorted-map 1 2) {:a 1}) (with-meta {:a/b 1} {:c/d 1}) (with-meta [1] (sorted-map :s 1)))
+        (print (with-meta [1] {:a 1})) (newline)
+        (println (with-meta [1] {:a 1}) (print-str (with-meta [1] {:a 1}))))
+      (binding [*print-meta* true *print-readably* false] (prn (with-meta [1] {:a 1})))
+      (binding [*print-meta* true *print-length* 1] (prn (with-meta [1 2] {:a 1})))
+      (binding [*print-meta* true *print-level* 1] (prn [(with-meta [1 2] {:a 1})] (with-meta [1 2] {:a [1]})))
+      (prn (with-meta [1] {:a 1}))
+      (set! *print-meta* true) (prn (with-meta [1] {:a 1})) (set! *print-meta* false) (prn (with-meta [1] {:a 1}))
+    expected: |
+      ^{:a 1} [1] ^{:a 1} {:x 1} ^{:a 1} #{1} ^{:a 1} (1 2)
+      ^String [1] [1] [^{:b 1} [2]] ^^{:z 2} {:a 1} [1]
+      ^{:foo true} [1] ^{:k 2} [1] "^{:a 1} [1]" "^{:a 1} [1]"
+      ^{:a 1} #reading.NsmR{:x 1} ^{:a 1} {1 2} ^#:c{:d 1} #:a{:b 1} ^{:s 1} [1]
+      [1]
+      [1] [1]
+      [1]
+      ^{:a 1} [1 ...]
+      [^# #] ^{:a #} [1 2]
+      [1]
+      ^{:a 1} [1]
+      [1]
+  - name: assert-reads-the-assert-flag-where-it-expands
+    # Oracle-identical (clj 1.12.6): assert reads *assert* when it expands, so a top-level
+    # set! of it to a literal switches off every assert that follows -- its test and
+    # message unevaluated -- and none before it; a binding around an expanded assert does
+    # not.
+    source: |
+      (defn asf-checked [] (assert false "early"))
+      (set! *assert* false)
+      (prn (assert false) (assert (do (println "unevaluated") false) "m") *assert*)
+      (defn asf-unchecked [] (assert false))
+      (prn (asf-unchecked) (try (asf-checked) (catch AssertionError e (ex-message e))))
+      (set! *assert* nil)
+      (prn (assert false))
+      (set! *assert* true)
+      (prn (try (assert false) (catch AssertionError e (ex-message e))) (asf-unchecked))
+      (prn (try (binding [*assert* false] (assert false)) (catch AssertionError e (ex-message e))))
+    expected: |
+      nil nil false
+      nil "Assert failed: early\nfalse"
+      nil
+      "Assert failed: false" nil
+      "Assert failed: false"
   - name: with-in-str-binds-in-to-the-string-and-read-line-reads-it
     # Oracle-identical (clj 1.12.6): with-in-str binds *in* to a reader over the string
     # (thread-bound inside), which read-line (nil past the end, a function value too),

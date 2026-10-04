@@ -110,6 +110,36 @@ public final class ClojureArms {
 				ClojureCoreSpecials.PRINT_FLAGS, Set.of()),
 
 		/**
+		 * The printer's reading of {@code *print-meta*}: the {@code ^m} it writes ahead
+		 * of a value carrying metadata. Its root is false, so only a program naming it
+		 * can print one.
+		 */
+		PRINT_META("print-meta", Set.of("RONTOLISP::%CLOJURE-PRINT-META-P"), Set.of(), Map.of(),
+				ClojureCoreSpecials.PRINT_META, Set.of()),
+
+		/**
+		 * A map the printer writes as {@code #:ns{...}} under
+		 * {@code *print-namespace-maps*} (true at the root): one whose every key is a
+		 * keyword or symbol of one namespace. Only a qualified keyword or symbol makes
+		 * one -- a literal of either ({@link Family#qualifiedIdents}), or one of the
+		 * library functions that build a keyword or symbol from a computed spelling, or
+		 * call one that does (the constructors, {@code find-keyword} and the reader).
+		 */
+		NAMESPACE_MAP("namespace-map", Set.of("RONTOLISP::%CLOJURE-PRINT-NS-MAP-P"), Set.of(), Map.of(), Set.of(
+				"RONTOLISP::%CLOJURE-KEYWORD-1", "RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-SYMBOL-1",
+				"RONTOLISP::%CLOJURE-SYMBOL-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD",
+				"RONTOLISP::%CLOJURE-FIND-KEYWORD-2", "RONTOLISP::%CLOJURE-FIND-KEYWORD-V", "RONTOLISP::%CLOJURE-READ",
+				"RONTOLISP::%CLOJURE-READ-V", "RONTOLISP::%CLOJURE-READ-OPTS", "RONTOLISP::%CLOJURE-READ-FROM",
+				"RONTOLISP::%CLOJURE-READ-STRING", "RONTOLISP::%CLOJURE-READ-STRING-V",
+				"RONTOLISP::%CLOJURE-READ-STRING-OPTS", "RONTOLISP::%CLOJURE-RD-ANON-FN", "RONTOLISP::%CLOJURE-RD-ARG",
+				"RONTOLISP::%CLOJURE-RD-ARG-PARAM", "RONTOLISP::%CLOJURE-RD-ATOM",
+				"RONTOLISP::%CLOJURE-RD-BUILD-RECORD", "RONTOLISP::%CLOJURE-RD-DISPATCH", "RONTOLISP::%CLOJURE-RD-FORM",
+				"RONTOLISP::%CLOJURE-RD-KEYWORD", "RONTOLISP::%CLOJURE-RD-MAP", "RONTOLISP::%CLOJURE-RD-META",
+				"RONTOLISP::%CLOJURE-RD-RECORD", "RONTOLISP::%CLOJURE-RD-REQUIRED", "RONTOLISP::%CLOJURE-RD-SEQ",
+				"RONTOLISP::%CLOJURE-RD-SET", "RONTOLISP::%CLOJURE-RD-SYMBOL", "RONTOLISP::%CLOJURE-RD-SYMBOLIC",
+				"RONTOLISP::%CLOJURE-RD-WRAP"), Set.of(), true),
+
+		/**
 		 * An exception or a runtime error, which {@code class} reads the class of: only a
 		 * program defining the exception reader {@code C%E-PARTS} -- the exception
 		 * runtime of one that builds an exception, the catch runtime's of one that
@@ -140,14 +170,36 @@ public final class ClojureArms {
 		 */
 		final Set<String> depths;
 
+		/**
+		 * Whether a qualified keyword or symbol literal is a producer too: a
+		 * {@code :C%KEYWORD} wrapper over a spelling with a namespace, built or quoted,
+		 * or a quoted symbol whose demangled name has one.
+		 */
+		final boolean qualifiedIdents;
+
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths) {
+			this(label, tests, views, aliases, producers, depths, false);
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
 			this.aliases = aliases;
 			this.producers = producers;
 			this.depths = depths;
+			this.qualifiedIdents = qualifiedIdents;
+		}
+
+		/**
+		 * Whether a name is one of the family's producers.
+		 * @param symbolName the symbol name, in its canonical spelling
+		 * @return {@code true} when naming it may make a value of the kind
+		 */
+		public boolean isProducer(String symbolName) {
+			return this.producers.contains(symbolName);
 		}
 
 	}
@@ -182,7 +234,7 @@ public final class ClojureArms {
 	public static Scan scan(List<LispVal> forms, Family family) {
 		boolean[] found = new boolean[2];
 		for (LispVal form : forms) {
-			scanInto(form, family, found);
+			scanInto(form, family, found, false);
 			if (found[0] && found[1]) {
 				break;
 			}
@@ -190,7 +242,7 @@ public final class ClojureArms {
 		return new Scan(found[0], found[1]);
 	}
 
-	private static void scanInto(LispVal form, Family family, boolean[] found) {
+	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
 		if (isDepthDefinition(form, family)) {
 			found[1] = true;
 			return;
@@ -203,14 +255,19 @@ public final class ClojureArms {
 					found[1] = true;
 				}
 				else {
-					scanInto(cell.car(), family, found);
+					scanInto(cell.car(), family, found, quoted);
 				}
 				pairs = cell.cdr();
 			}
 			rest = bindings.cdr();
 		}
+		boolean quotedArgs = quoted || form instanceof LispCons head && head.car() instanceof LispSymbol quote
+				&& quote.name().equals("QUOTE");
 		while (rest instanceof LispCons cons) {
-			scanInto(cons.car(), family, found);
+			if (family.qualifiedIdents && isQualifiedKeyword(cons)) {
+				found[0] = true;
+			}
+			scanInto(cons.car(), family, found, quotedArgs);
 			rest = cons.cdr();
 		}
 		if (rest instanceof LispSymbol symbol) {
@@ -221,7 +278,29 @@ public final class ClojureArms {
 			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)) {
 				found[1] = true;
 			}
+			else if (quoted && family.qualifiedIdents && name.startsWith("c%") && hasNamespace(name.substring(2))) {
+				found[0] = true;
+			}
 		}
+	}
+
+	/**
+	 * Whether the cell starts a keyword wrapper over a spelling with a namespace:
+	 * {@code (:C%KEYWORD "ns/name")}, quoted or the tail of its {@code LIST}
+	 * construction.
+	 */
+	private static boolean isQualifiedKeyword(LispCons cell) {
+		return cell.car() instanceof LispSymbol tag && tag.name().equals(":C%KEYWORD")
+				&& cell.cdr() instanceof LispCons next && next.car() instanceof LispString spelling
+				&& hasNamespace(spelling.value());
+	}
+
+	/**
+	 * Whether a keyword or symbol spelling has a namespace: a slash, except the lone
+	 * slash (the symbol {@code /}), split at the first like the oracle.
+	 */
+	private static boolean hasNamespace(String spelling) {
+		return spelling.indexOf('/') >= 0 && !spelling.equals("/");
 	}
 
 	/**

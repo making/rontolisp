@@ -188,4 +188,35 @@ class ClojureArmsTest {
 		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_FLAGS).builds()).isTrue();
 	}
 
+	@Test
+	void thePrintMetaFamilyFoldsTheMetadataClauseOfAProgramNamingNoFlag() {
+		List<LispVal> forms = read("(cond ((null x) (a)) ((rontolisp::%clojure-print-meta-p x r s l))"
+				+ " ((rontolisp::%clojure-print-deep-p x) (b)) (t (c)))");
+		assertThat(ClojureArms.scan(forms, ClojureArms.Family.PRINT_META).strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.PRINT_META).stream().map(LispVal::print))
+			.containsExactly("(COND ((NULL X) (A)) ((RONTOLISP::%CLOJURE-PRINT-DEEP-P X) (B)) (T (C)))");
+		List<LispVal> flagged = read("(let* ((rontolisp::%clojure-print-meta t)) (f))");
+		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_META).builds()).isTrue();
+		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_FLAGS).builds()).isFalse();
+	}
+
+	@Test
+	void theNamespaceMapFamilyIsMadeByAQualifiedKeywordOrSymbol() {
+		ClojureArms.Family family = ClojureArms.Family.NAMESPACE_MAP;
+		String arm = "(cond ((rontolisp::%clojure-print-ns-map-p x) (a)) (t (b)))";
+		assertThat(ClojureArms.strip(read(arm), family).stream().map(LispVal::print)).containsExactly("(COND (T (B)))");
+		// a built or quoted keyword wrapper over a spelling with a namespace, a quoted
+		// qualified symbol, and a function building one from a computed spelling
+		for (String producer : List.of("(f (list :c%keyword \"a/b\"))", "(f '(1 (:c%keyword \"a/b\")))", "(f '|c%a/b|)",
+				"(f '(|c%x| |c%a/b|))", "(rontolisp::%clojure-keyword-1 s)", "(rontolisp::%clojure-read-string s c)")) {
+			assertThat(ClojureArms.scan(read(arm + producer), family).builds()).as(producer).isTrue();
+		}
+		// an unqualified keyword or symbol, the lone slash, and a qualified name in code
+		// (a call of another namespace's function) make none
+		for (String plain : List.of("(f (list :c%keyword \"b\"))", "(f '(:c%keyword \"/\"))", "(f '|c%/|)",
+				"(f '|c%b|)", "(|c%a/b| 1)", "(f \"a/b\")")) {
+			assertThat(ClojureArms.scan(read(arm + plain), family).strips()).as(plain).isTrue();
+		}
+	}
+
 }

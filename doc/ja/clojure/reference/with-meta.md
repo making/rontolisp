@@ -17,8 +17,20 @@
 セットのリテラルについたものはオラクルのリーダー同様に付きます。`^:k [1]` は `{:k true}` を
 持ちます。
 
+`*print-meta*` が真の間、`pr`、`prn`、`pr-str`、`str` は空でないメタデータを値の前に
+書きます（`^{:k 1} [1 2]`、`:tag` だけなら `^String [1]`）。`print` と `println` は
+書きません。
+
 ```clojure
 (def v (with-meta [1 2] {:tag :x}))
 (println v (meta v))  ; [1 2] {:tag :x}
 (println (meta [1 2])) ; nil
+```
+
+```clojure
+(binding [*print-meta* true] (prn (with-meta [1 2] {:k 1})))
+```
+
+```
+^{:k 1} [1 2]
 ```

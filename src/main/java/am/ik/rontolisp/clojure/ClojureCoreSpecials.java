@@ -33,8 +33,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The printer honours {@code *print-length*}, {@code *print-level*} and
- * {@code *print-readably*} ({@link ClojureArms.Family#PRINT_FLAGS}); every other flag is
- * a plain value. {@code *ns*}, {@code *file*}, {@code *source-path*}, {@code *repl*} and
+ * {@code *print-readably*} ({@link ClojureArms.Family#PRINT_FLAGS}), {@code *print-meta*}
+ * ({@link ClojureArms.Family#PRINT_META}) and {@code *print-namespace-maps*}
+ * ({@link ClojureArms.Family#NAMESPACE_MAP}); {@code assert} reads {@code *assert*} where
+ * it lowers, after a top-level {@code set!} of it to a literal. Every other flag is a
+ * plain value. {@code *ns*}, {@code *file*}, {@code *source-path*}, {@code *repl*} and
  * the REPL's {@code *1}/{@code *2}/{@code *3}/{@code *e} are not here.
  */
 final class ClojureCoreSpecials {
@@ -85,6 +88,12 @@ final class ClojureCoreSpecials {
 	/** The specials the printer reads ({@link ClojureArms.Family#PRINT_FLAGS}). */
 	static final Set<String> PRINT_FLAGS = Set.of(flagSymbol("*print-length*").name(),
 			flagSymbol("*print-level*").name(), flagSymbol("*print-readably*").name());
+
+	/**
+	 * The special only through which metadata prints
+	 * ({@link ClojureArms.Family#PRINT_META}).
+	 */
+	static final Set<String> PRINT_META = Set.of(flagSymbol("*print-meta*").name());
 
 	private static Map<String, Special> table() {
 		Map<String, Special> table = new LinkedHashMap<>();

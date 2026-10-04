@@ -214,8 +214,10 @@ extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`
 `*standard-input*`/`*error-output*`; the flags hold the oracle's values under
 `clojure -M` (`*print-length*` `nil`, `*assert*` `true`, `*data-readers*` `{}`,
 `*command-line-args*` the program's arguments, `*clojure-version*` 1.12.6, ...), and
-the printer honours `*print-length*`, `*print-level*` and `*print-readably*` (the
-others are plain values). `*ns*`, `*file*`, `*source-path*`, `*repl*` and
+the printer honours `*print-length*`, `*print-level*`, `*print-readably*`,
+`*print-meta*` and `*print-namespace-maps*` (a map whose keys share a namespace prints
+`#:a{:b 1}`), `assert` reads `*assert*` where it expands, and the others are plain
+values. `*ns*`, `*file*`, `*source-path*`, `*repl*` and
 `*1`/`*2`/`*3`/`*e` have no value here. `with-in-str` binds `*in*` to a string
 reader, which `read-line`, `read` and `(.read *in*)` take from. `defstruct` holds its key vector
 behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
