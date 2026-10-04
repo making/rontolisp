@@ -19818,6 +19818,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a name dispatch searches the
+		// names' hashCodes, so *XO* / *Y0* and *A_* / *B@*, whose hashes are equal, land
+		// in one leaf and are told apart by equals. Shared and inline dispatches alike.
+		assertThat(compileAndRun(am.ik.rontolisp.NameDispatchFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NameDispatchFixture.INLINE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+	}
+
+	@Test
 	void setWritesTheActiveDynamicBinding() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a set arm writes the
 		// thread's active _d$ cell when one exists and falls to the _g$ default

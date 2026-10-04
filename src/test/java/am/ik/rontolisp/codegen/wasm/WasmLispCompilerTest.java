@@ -1911,6 +1911,21 @@ class WasmLispCompilerTest {
 		assertThat(grown - base).isLessThan(2_000);
 	}
 
+	@Test
+	void aNameDispatchArmIsAnOffsetCompare() {
+		// A name dispatch reads the name's string-table offset once and searches the
+		// arms' offsets: an arm of the accessor is a local, a constant and a compare in
+		// front of its access, ~28 B here (43 B when every arm repeated the ref.test,
+		// ref.cast and struct.get of the name). One full segment, set storing through
+		// it; the accessor is the module's largest body.
+		int arms = 128;
+		String program = java.util.stream.IntStream.range(0, arms)
+			.mapToObj(i -> "(defvar *nda-" + i + "* " + i + ")")
+			.collect(java.util.stream.Collectors.joining("\n", "",
+					"\n(defun nda-set (s v) (set s v))\n(print (nda-set (intern \"*NDA-7*\") 3))\n"));
+		assertThat(WasmModuleInspector.largestFunctionBodySize(compilePrelude(program))).isLessThan(arms * 32);
+	}
+
 	private static byte[] compilePrelude(String lispCode) {
 		return new WasmLispCompiler()
 			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));

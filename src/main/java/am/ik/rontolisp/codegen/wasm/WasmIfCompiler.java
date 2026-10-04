@@ -59,6 +59,11 @@ final class WasmIfCompiler {
 	 * @param ctx the function context
 	 */
 	static void compileForEffect(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		am.ik.rontolisp.compiler.NameDispatch dispatch = WasmNameDispatchCompiler.match(cons, ctx);
+		if (dispatch != null) {
+			WasmNameDispatchCompiler.compile(dispatch, ctx, false, false);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		LispVal test = parts.get(1);
 		LispVal thenForm = parts.get(2);
@@ -126,6 +131,13 @@ final class WasmIfCompiler {
 				// exactly as the recursion compiled it.
 				ctx.tailPosition = tail;
 				WasmExprCompiler.compileExpr(form, ctx);
+				break;
+			}
+			am.ik.rontolisp.compiler.NameDispatch dispatch = WasmNameDispatchCompiler.match(ifCons, ctx);
+			if (dispatch != null) {
+				// A name dispatch, at the head or down the else spine: a search over
+				// the names' offsets instead of a test per level.
+				WasmNameDispatchCompiler.compile(dispatch, ctx, tail, true);
 				break;
 			}
 			List<LispVal> parts = ifCons.toList();

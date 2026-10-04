@@ -164,11 +164,12 @@ native `evalProgv`).
     break-even's losing side. It counts as progv-using only because a code walker quotes
     `PROGV` (`programUsesSymbol` counts quoted data).
 - The name test of every dispatch over the special or global set is the internal
-  `(%symbol-is n 'S)` (`nameChain`): the JVM `"S".equals(n)` straight into the branch, wasm a
-  `ref.test` + string-table-offset compare (the canonical offset `eq` already relies on). The
-  `equal` it replaced built the symbol and called the structural `_equal` on wasm, then boxed
-  the answer -- that, not the chain length, was wasm's ~11 us a lookup. The quoted name is not a
-  spelled designator (`compileUnspelledLiteral` / `stringTable.addString`).
+  `(%symbol-is n 'S)` (`nameChain`): the JVM `"S".equals(n)`, wasm a string-table-offset compare
+  (the canonical offset `eq` already relies on). The `equal` it replaced built the symbol and
+  called the structural `_equal` on wasm, then boxed the answer -- that, not the chain length,
+  was wasm's ~11 us a lookup. The quoted name is not a spelled designator
+  (`compileUnspelledLiteral` / `stringTable.addString`). The compilers emit the chain as a
+  search ("Name dispatch" below).
 - The shared dispatches are CALL-ONLY: neither backend gives them a `_invoke_N` /
   `_lookup` row (`dispatchableFuncIds`' `callOnly`), even when names resolve at run time. A
   library holding a `set` or `progv` site the shaker later drops (cl-ppcre's, ningle's) would
@@ -271,11 +272,46 @@ wrote the mirror only, so compiled code kept reading 1.
   9 KB of wasm, plus the names it needs in the string table). ci-spec program: JVM 7,334,695 ->
   7,336,257, wasm 6,647,482 -> 6,641,111, component 6,857,938 -> 6,851,479, `--optimize=size`
   5,480,695 -> 5,474,319 (one accessor where `%symbol-value-dynamic` and `%set-global-store` were
-  two chains). A wasm arm is ~44 B (`ref.test` + cast + offset compare per arm, `.todo/c94`).
-- Run time: 2M computed `symbol-value` over 300 specials JVM 1.22 -> 1.19 s, wasm 1.39 -> 1.46 s
-  (the default cons and the wrapper call). An eval'd variable access walks the accessor before
-  the mirror: 200k `(eval '(setq *ex* (+ *ex* *e99*)))` over 101 specials, the names last in
-  declaration order, JVM 125 -> 370 ms, wasm 43 -> 170 ms (the mirror found both at its head).
+  two chains).
+- Run time: an eval'd variable access goes through the accessor before the mirror. As a linear
+  walk that cost 200k `(eval '(setq *ex* (+ *ex* *e99*)))` over 101 specials, the names last in
+  declaration order, JVM 125 -> 370 ms, wasm 43 -> 170 ms (the mirror found both at its head);
+  searched ("Name dispatch"), JVM ~80 ms, wasm ~50 ms.
+
+## Name dispatch: a search, not a walk (JVM and both WASM, 2026-10-04)
+
+**Invariant: a dispatch of a runtime name over a static name set costs a key and a search, not
+a test per name.** The AST keeps `nameChain`'s else-chain -- every pass reads plain `if`s --
+and both compilers recognise it (`compiler/NameDispatch.match`: `if`s testing
+`(%symbol-is v 'S)` on one variable; a repeated name's arm is dead and dropped) wherever an
+`if` compiles, the head of a shared runtime's segment or an inline chain.
+
+- wasm (`WasmNameDispatchCompiler`, from 2 arms, value and effect position): the name's
+  canonical offset once into an i64 scratch local (a non-`$str` branches to the miss), a binary
+  search of `i64.lt_s` over the arms' offsets (`NameDispatch.searchTree`), leaves of at most 16
+  arms each `local.get` / `i32.const OFF` / `i64.extend_i32_u` / `i64.eq` / `if ARM br $out`.
+  The leaf's constant must stay an `i32.const`: it is what keeps the name's string and intern
+  row through the shaker (`WasmTreeShaker` probes a live body's `i32.const`s), and a run-time
+  `intern` of a cut name would get a fresh offset no arm tests. Not in state-machine mode.
+- JVM (`JvmNameDispatchCompiler`, past 4 arms): `String.hashCode` once (a non-`String` goes to
+  the miss), an `if_icmpge` search over the arms' hashes, leaves of at most 4 arms keeping the
+  `equals` test, which separates colliding hashes -- `searchTree` never splits equal keys
+  (`*XO*` / `*Y0*` collide; `NameDispatchFixture`). Keying on the hash's low 15 bits makes
+  every pivot a `sipush` (-1.1 KB on the ci-spec program) but ran a random lookup over 300
+  names twice as slow under Graal (C2: the same). Arms carry the tail and exit marks like an
+  `if`'s.
+- Leaf sizes measured: wasm time flat from 2 to 32 (16 for the fewest pivots at no cost); JVM
+  4 fastest (2: 1.8x slower, 8: +15%).
+- Measured 2026-10-04 (linear -> search). 2M computed `symbol-value` over 300 specials (three
+  segments): JVM 960 -> 165 ms, wasm 1,560 -> 167 ms; 1M two-name `progv` over 300 specials:
+  JVM 3.7 s -> 0.54 s, wasm 5.7 s -> 0.25 s. A wasm accessor arm 43 -> 28 B (the rest is the
+  arm's access). Sizes: every program without a name dispatch byte-identical (size-report,
+  bench-report, examples, P1 / `--optimize=size` / component / JVM). With one, wasm shrinks
+  and the JVM grows by the pivots: ci-spec program wasm -19.0 KB (gzip +2.0 KB), JVM +4.9 KB
+  (gzip +3.2 KB); hello-ningle Worker -3.0 KB (gzip -0.7 KB), hello-clack -581 B (gzip +1).
+  The gzip rows barely move because an arm's information -- its offset and its global -- is
+  the same either way. Pins: `WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare`, the
+  `aNameDispatchAnswersEveryNameItsChainDoes` four, `NameDispatchTest`.
 
 ## Parameters named like a special (all four backends, 2026-10-03)
 
@@ -420,6 +456,12 @@ literal sites call nothing, every segment < 8,000 B) and
 `WasmLispCompilerIntegrationTest#symbolValueSitesReadTheActiveBinding` (Preview 1 and
 component); `WasmLispCompilerTest#aSymbolValueSiteDoesNotPayForTheSpecialSet` (eight more sites
 < 1,000 B of module).
+
+Name dispatch: `NameDispatchFixture` (154 specials, two hash-colliding pairs) on
+`aNameDispatchAnswersEveryNameItsChainDoes` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest` -- Preview 1 and component),
+`WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare` (a 128-arm accessor < 32 B an arm),
+`NameDispatchTest`.
 
 Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one

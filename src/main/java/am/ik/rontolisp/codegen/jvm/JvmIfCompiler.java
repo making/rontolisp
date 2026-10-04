@@ -16,6 +16,13 @@ final class JvmIfCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		am.ik.rontolisp.compiler.NameDispatch dispatch = JvmNameDispatchCompiler.match(cons);
+		if (dispatch != null) {
+			// A name dispatch: a search over the names' hashes instead of an equals per
+			// level.
+			JvmNameDispatchCompiler.compile(cons, dispatch, ctx, className);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		// A fusable binary comparison in condition position leaves a RAW int truth
 		// value and branches on it directly, skipping the boxed t/nil round trip
