@@ -2,10 +2,10 @@
 
 `(reduce-kv f init coll)`
 
-Folds `(f acc k v)` over a map's or record's entries (the table's walk order) or a
-vector's index/member pairs, starting from `init`; `nil` answers `init`. A list, set
-or string signals, like the oracle. `reduced` is not supported. As a value a
-three-argument function.
+Folds `(f acc k v)` over a map's or record's entries (the table's walk order), a Java
+`Map`'s entries (interpreter and JVM) or a vector's index/member pairs, starting from
+`init`; `nil` answers `init`. A list, set or string signals, like the oracle. A `reduced`
+answer stops the fold. As a value a three-argument function.
 
 ```clojure
 (println (reduce-kv (fn [acc k v] (+ acc v)) 0 {:a 1 :b 2})) ; 3

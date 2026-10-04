@@ -1138,8 +1138,7 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   oracle's `equals` lookup, after `%clojure-host-key-p` (`Objects.isNull` under
   `handler-case`): a key `java:call` cannot marshal (keyword, symbol, map, set) is in no host
   map, since `.put` refused it too. Not the c90 walk by `=`: that pulled `%clojure-equal`'s
-  whole closure into every `get` (+9.9 KB JVM class) and is O(n). `find`, `select-keys`,
-  `reduce-kv`, `merge`/`conj` of a host `Map` still refuse (todo c93).
+  whole closure into every `get` (+9.9 KB JVM class) and is O(n).
   Cost, measured 2026-10-04 (load average 25-140, so speeds are medians of 5-7 alternated
   runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
   component, JVM class with its runtime classes: `demo.clj` and a program over `seq`,
@@ -1155,6 +1154,44 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   `keys`/`vals`/`frequencies`) 3,031 -> 2,988 ms, within noise.
   Pins: `ClojureInteropTest#aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne`
   (oracle-identical), `ClojureLibraryTest#aProgramNamingNoJavaOperatorSeqsAndCountsWithoutTheHostCollectionArms`.
+- Host maps under the map verbs (decided 2026-10-04, oracle clj 1.12.6): `RT.find` takes a
+  `Map` by `containsKey` and answers the LOOKUP key's entry (anything else `find not
+  supported on type: <name>`); `select-keys` is `RT.find` per key (so a non-`Map` with no
+  keys answers `{}`); `kv-reduce` and a map's `cons` read any seq of `Map.Entry` (a `Map`
+  through its entries, `(.entrySet m)` too). Before: `find not supported on this type`,
+  `select-keys needs a map`, `reduce-kv needs a map or a vector`, `conj needs a map entry`,
+  a `MAPHASH` type error in `merge-with`. Arms, all behind the one `%clojure-host-seqable-p`:
+  a clause ahead of the fall-through of `%clojure-find` (`%clojure-host-find`, the host's
+  own lookup after `%clojure-host-key-p`, like `get`), `%clojure-kv-pairs` (so `reduce-kv`,
+  `update-vals`, `update-keys`, `map-invert`, `rename-keys`' map, a sorted `merge-with`),
+  `%clojure-merge-entry-plist`, `%clojure-sorted-entry-plist` and the lowered `entryPlist`
+  (`conj` onto a map; `%clojure-host-entry-plist`). Entries: `%clojure-host-entries`, a
+  `Map`'s `[k v]` vectors, else each member a host `Map$Entry` or a `[k v]` vector (the
+  deviation `seq-entry-plist` keeps), else the verb's refusal. Two views, since a test there
+  would not fold to the old form: `select-keys`' key list (`%clojure-host-select-keys keys
+  whole out`, which fills `out` by `%clojure-host-find` and answers nil; the walk's
+  `hash-table-p` test gains an `or` disjunct) -- an `if` arm would need the key form twice,
+  and a snapshot table of the host map would look up by `=`, not the host's `equals` -- and
+  the map `merge-with` walks (`%clojure-host-table`, a fresh table of the entries). Both
+  views and the library function behind the `if` test answer a `hash-table-p` first: the
+  view is asked of EVERY `select-keys`/`merge-with` map. A view body must keep the family
+  test as a bare `if`/`cond` test, never inside `and` (the library strip signals `a
+  host-object test where it cannot fold`). `format nil` in a host arm pulled the whole
+  `format` runtime in (+41 KB JVM class on the test program); the refusal words go through
+  `error`'s own arguments instead.
+  Cost, measured 2026-10-04 (load average 6-150; speeds are medians of 8-10 alternated
+  runs): a program naming no `java:` operator is byte-identical (wasm P1, `--optimize=size`,
+  component, JVM class with its runtime classes: `demo.clj` and a program over every verb
+  above, call and value forms, sorted and record inputs). A `java:` program: `count` + one
+  `.toUpperCase` 104,225 -> 104,251 B (the `hash-table-p` exit), one map verb +1.7-3.5 KB,
+  all of them 143,524 -> 147,828, the `clojure-spec.yaml` program 6,486,791 -> 6,504,280
+  (wasm P1 +4.1 KB). Speed there (JVM): `select-keys` of two keys +10% (one view call per
+  select-keys; +16% before the view's own `hash-table-p` exit), `merge-with` +2%, `conj`,
+  `find`, `reduce-kv` within noise. Interpreter (arms in every program): `select-keys` +3%,
+  `merge-with` +1% (+12-15% while the arm was an `if` on `%clojure-host-seqable-p`, a call per
+  map), `find`/`reduce-kv` within noise.
+  Pins: `ClojureInteropTest#aHostMapIsAMapToTheMapVerbs` (oracle-identical),
+  `ClojureLibraryTest#aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms`.
 
 ## Laziness
 

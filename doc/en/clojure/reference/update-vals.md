@@ -2,8 +2,8 @@
 
 `(update-vals m f)`
 
-Answers `m` with `(f value)` for every value: a map or record answers a fresh map,
-`nil` the empty map, and a vector stays a vector, like the oracle. As a value a
+Answers `m` with `(f value)` for every value: a map, record or Java `Map` answers a fresh
+map, `nil` the empty map, and a vector stays a vector, like the oracle. As a value a
 two-argument function.
 
 ```clojure
