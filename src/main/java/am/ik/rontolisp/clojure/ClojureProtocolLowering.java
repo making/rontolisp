@@ -252,25 +252,104 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The protocol methods a {@code defrecord}/{@code deftype} body implements, as
-	 * {@link ClojureLowering#inlineMethodKey}s: read leniently, since the pre-scan meets
-	 * the datum before its checks run (the definition refuses what is malformed), and a
-	 * group naming no known protocol contributes nothing.
+	 * The protocols a {@code defrecord}/{@code deftype} body names (var keys) and the
+	 * protocol methods it implements, as {@link ClojureLowering#inlineMethodKey}s: read
+	 * leniently, since the pre-scan meets the datum before its checks run (the definition
+	 * refuses what is malformed), and a group naming no known protocol contributes
+	 * nothing.
 	 */
-	private static Set<String> inlineMethods(ClojureLowering ctx, List<LispVal> items) {
-		Set<String> inline = new HashSet<>();
-		String protocolKey = null;
-		for (LispVal datum : items.subList(3, items.size())) {
-			if (datum instanceof LispSymbol s && !s.name().startsWith(":")) {
-				String key = ctx.isLocal(s.name()) ? null : ctx.lookupVar(s.name());
-				protocolKey = key != null && ctx.protocols.containsKey(key) ? key : null;
+	private record BodyProtocols(Set<String> protocols, Set<String> methods) {
+
+		static BodyProtocols of(ClojureLowering ctx, List<LispVal> items) {
+			Set<String> protocols = new HashSet<>();
+			Set<String> inline = new HashSet<>();
+			String protocolKey = null;
+			for (LispVal datum : items.subList(3, items.size())) {
+				if (datum instanceof LispSymbol s && !s.name().startsWith(":")) {
+					String key = ctx.isLocal(s.name()) ? null : ctx.lookupVar(s.name());
+					protocolKey = key != null && ctx.protocols.containsKey(key) ? key : null;
+					if (protocolKey != null) {
+						protocols.add(protocolKey);
+					}
+				}
+				else if (protocolKey != null && ClojureLowerUtil.items(datum) instanceof List<LispVal> impl
+						&& !impl.isEmpty() && impl.get(0) instanceof LispSymbol method) {
+					inline.add(ClojureLowering.inlineMethodKey(protocolKey, method.name()));
+				}
 			}
-			else if (protocolKey != null && ClojureLowerUtil.items(datum) instanceof List<LispVal> impl
-					&& !impl.isEmpty() && impl.get(0) instanceof LispSymbol method) {
-				inline.add(ClojureLowering.inlineMethodKey(protocolKey, method.name()));
+			return new BodyProtocols(protocols, inline);
+		}
+
+	}
+
+	/**
+	 * The interface a protocol defines, as the oracle names it: its namespace and name
+	 * munged ({@code my-app.core/my-p?} is {@code my_app.core.my_p_QMARK_}).
+	 */
+	static String interfaceName(String protocolKey) {
+		int slash = protocolKey.indexOf('/');
+		return munge(protocolKey.substring(0, slash)) + "." + munge(protocolKey.substring(slash + 1));
+	}
+
+	/** The oracle's {@code munge}: each special character to its word. */
+	private static String munge(String name) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < name.length(); i++) {
+			char c = name.charAt(i);
+			String word = MUNGED.get(c);
+			if (word != null) {
+				out.append(word);
+			}
+			else {
+				out.append(c);
 			}
 		}
-		return inline;
+		return out.toString();
+	}
+
+	/** The oracle's {@code Compiler.CHAR_MAP}. */
+	private static final Map<Character, String> MUNGED = Map.ofEntries(Map.entry('-', "_"), Map.entry(':', "_COLON_"),
+			Map.entry('+', "_PLUS_"), Map.entry('>', "_GT_"), Map.entry('<', "_LT_"), Map.entry('=', "_EQ_"),
+			Map.entry('~', "_TILDE_"), Map.entry('!', "_BANG_"), Map.entry('@', "_CIRCA_"), Map.entry('#', "_SHARP_"),
+			Map.entry('\'', "_SINGLEQUOTE_"), Map.entry('"', "_DOUBLEQUOTE_"), Map.entry('%', "_PERCENT_"),
+			Map.entry('^', "_CARET_"), Map.entry('&', "_AMPERSAND_"), Map.entry('*', "_STAR_"), Map.entry('|', "_BAR_"),
+			Map.entry('{', "_LBRACE_"), Map.entry('}', "_RBRACE_"), Map.entry('[', "_LBRACK_"),
+			Map.entry(']', "_RBRACK_"), Map.entry('/', "_SLASH_"), Map.entry('\\', "_BSLASH_"),
+			Map.entry('?', "_QMARK_"));
+
+	/**
+	 * The protocol whose interface is the class name, with its var key, or null.
+	 */
+	static Map.@Nullable Entry<String, ClojureLowering.ProtocolDef> protocolOfInterface(ClojureLowering ctx,
+			String className) {
+		for (Map.Entry<String, ClojureLowering.ProtocolDef> protocol : ctx.protocols.entrySet()) {
+			if (interfaceName(protocol.getKey()).equals(className)) {
+				return protocol;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * {@code instance?} of a protocol's interface: a record or deftype whose body names
+	 * the protocol (by class, read off the definitions at lowering), or a reify holding a
+	 * row under its fresh tag in the protocol's body table (every protocol its body names
+	 * has one, and no extension reaches the tag). An extension row is no interface, like
+	 * the oracle.
+	 */
+	static LispVal implementsForm(ClojureLowering ctx, Map.Entry<String, ClojureLowering.ProtocolDef> protocol,
+			LispVal value) {
+		String protocolKey = protocol.getKey();
+		List<String> classes = ctx.types.values()
+			.stream()
+			.filter(type -> type.protocols().contains(protocolKey))
+			.map(ClojureLowering.TypeDef::className)
+			.sorted()
+			.toList();
+		ctx.usedProtocols = true;
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IMPLEMENTS-P"), value,
+				protocol.getValue().inlineTable(),
+				classes.isEmpty() ? ClojureLowering.NIL_CONST : ClojureThrowables.quoted(classes));
 	}
 
 	/**
@@ -286,8 +365,9 @@ final class ClojureProtocolLowering {
 		List<String> mutable = mutableFields(items);
 		ClojureLowerUtil.isTrue(!record || mutable.isEmpty(),
 				":volatile-mutable or :unsynchronized-mutable not supported for record fields");
+		BodyProtocols body = BodyProtocols.of(ctx, items);
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
-				ctx.currentNs.replace('-', '_') + "." + name, mutable, inlineMethods(ctx, items));
+				ctx.currentNs.replace('-', '_') + "." + name, mutable, body.methods(), body.protocols());
 		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
 		ctx.globals.put(ctx.intern("->" + name, false), ClojureLowering.Kind.FUNCTION);
 		if (record) {
@@ -495,6 +575,20 @@ final class ClojureProtocolLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("gethash"), ClojureCollectionLowering.keywordForm(method), inner),
 						lambda));
+	}
+
+	/**
+	 * The row a body naming a protocol with no method stores: the tag's inner table, made
+	 * when absent, so the type satisfies and extends the protocol and a reify is an
+	 * instance of its interface, like the oracle's class implementing it.
+	 */
+	static LispVal emptyRowForm(LispSymbol table, LispVal key) {
+		// a row is a table, never nil, so a miss reads as nil
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), key, table),
+						ClojureCollectionLowering.makeTable()));
 	}
 
 	/**
@@ -833,6 +927,10 @@ final class ClojureProtocolLowering {
 			forms.add(mapCtor(ctx, name, def));
 		}
 		for (ClojureLowering.ImplGroup group : groups) {
+			ClojureLowering.ProtocolDef protocol = protocolOf(ctx, group.protocol());
+			if (protocol != null && group.methods().isEmpty()) {
+				forms.add(emptyRowForm(protocol.inlineTable(), typeTagForm(name)));
+			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				forms.add(methodRow(ctx, group.protocol(), typeTagForm(name), impl, def.fields(), def.mutableFields()));
 			}
@@ -1218,6 +1316,9 @@ final class ClojureProtocolLowering {
 			ClojureLowering.ProtocolDef def = protocolOf(ctx, group.protocol());
 			if (def == null) {
 				throw new LispReadException("No such protocol: " + group.protocol());
+			}
+			if (group.methods().isEmpty()) {
+				body.add(emptyRowForm(def.inlineTable(), ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), self)));
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
 				LispVal lambda = ClojureDispatchLowering.methodLambda(ctx, impl.params(), impl.body());

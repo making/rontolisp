@@ -3,7 +3,8 @@
 `(satisfies? Protocol x)`
 
 Whether the protocol reaches `x`: the tag's row, or the `Object` row an extension
-installed, like the oracle. The protocol is a literal name, like `defmethod`'s
+installed, like the oracle. A record, deftype or `reify` whose body names the protocol
+satisfies it, with methods or none. The protocol is a literal name, like `defmethod`'s
 multimethod.
 
 ```clojure

@@ -1185,6 +1185,16 @@
            (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
                 (member (nth 4 x) classes :test #'equal) t))))
 
+;; instance? of a protocol's interface: X is a record or deftype whose class
+;; is among CLASSES (the types whose body names the protocol), or a reify
+;; holding a row under its fresh tag in TABLE, the protocol's body table.
+(defun rontolisp::%clojure-implements-p (x table classes)
+  (and (consp x)
+       (if (eq (car x) :C%REIFY)
+           (and (gethash (car (cdr x)) table) t)
+           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (member (nth 4 x) classes :test #'equal) t))))
+
 ;; Whether X is a record or deftype declaring FIELD (a keyword): its declared
 ;; list holds the immutable fields only, since a mutable one is private.
 (defun rontolisp::%clojure-declared-field-p (x field)

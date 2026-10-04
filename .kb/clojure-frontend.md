@@ -854,6 +854,22 @@ constructor and consumer, and a regex `replace` with a function replacement.
   clojure-spec `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
   `ClojureInteropTest#instanceOfAHostClassTestsTheValuesKindAndTheHostObjectsClass`,
   `ClojureArmsTest#theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator`.
+  A protocol's interface (oracle-checked clj 1.12.6, 2026-10-04) is the class
+  `ClojureProtocolLowering.interfaceName` spells (namespace and name through the oracle's
+  `munge`/`CHAR_MAP`: `auto.ipr_dash_QMARK_`; an import resolves to it), matched before the
+  core-class tables: `%clojure-implements-p` (`clojure.lisp`) answers a record/deftype whose
+  class is among those whose body names the protocol (`TypeDef.protocols`, the pre-scan's
+  `BodyProtocols`, methods or none; quoted at lowering, so a type a later REPL input defines
+  is not seen) and a reify with a row under its fresh tag in the protocol's body table
+  (`inlineTable`). An `extend-type`/`extend-protocol` target is not an instance (its rows
+  share the tag with a record's body rows, hence the class list). A body naming a protocol
+  with no method stores an empty row (`emptyRowForm`), so `(deftype T [] P)`/`(reify P)` also
+  satisfy and extend it like the oracle (before: false). The bare protocol name (`P`, a var)
+  stays `unknown name` (oracle: `ClassCastException`). Size (wasm P1 / `--optimize=size` /
+  component / JVM class): a protocol program without it and `examples/clojure/demo.clj`
+  byte-identical; two `(instance? user.P x)` sites +694 / +622 / +701 / +1015 against one
+  `(instance? R x)`; an empty body group +498 / +498 / +502 / +118. Pin: clojure-spec
+  `instance-of-a-protocol-interface-tests-the-body-implementations`.
 - **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
   (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive`/`parents`/`ancestors`/
   `descendants` (`hierarchyArg`: a class spelling no local or var shadows) lower a class

@@ -2072,6 +2072,48 @@ cases:
       java.io.File ffffffffffffffffffffffffff
       java.util.AbstractList ffffffffffffffffffffffffff
       true false true true true true false
+  - name: instance-of-a-protocol-interface-tests-the-body-implementations
+    # A protocol defines the interface ns.P (munged): a record, deftype or reify naming
+    # it in its body is an instance, methods or none, an extend-type or extend-protocol
+    # target is not (satisfies? is). A body naming the protocol with no method
+    # satisfies and extends it too. Measured against clj 1.12.6, identical.
+    source: |
+      (defprotocol IprP (ipr-m [x]) (ipr-n [x]))
+      (defprotocol IprQ (ipr-q [x]))
+      (defprotocol IprM :extend-via-metadata true (ipr-mm [x]))
+      (defrecord IprR [] IprP (ipr-m [_] 1))
+      (defrecord IprS [])
+      (extend-type IprS IprP (ipr-m [_] 2))
+      (deftype IprT [] IprP)
+      (deftype IprU [a] IprQ (ipr-q [_] a))
+      (defrecord IprMR [] IprM (ipr-mm [_] 1))
+      (println (instance? auto.IprP (->IprR)) (instance? auto.IprP (->IprS)) (instance? auto.IprP (reify IprP (ipr-m [_] 3))))
+      (println (instance? auto.IprP (->IprT)) (instance? auto.IprP (->IprU 1)) (instance? auto.IprQ (->IprU 1)))
+      (println (instance? auto.IprP (reify IprP)) (instance? auto.IprP (reify IprQ (ipr-q [_] 1))) (instance? auto.IprP nil) (instance? auto.IprP 1) (instance? auto.IprP {}))
+      (println (map #(instance? auto.IprQ %) [(->IprU 1) (->IprR) 3]) (instance? auto.IprP (assoc (->IprR) :z 1)) (instance? auto.IprP (with-meta (->IprR) {:a 1})))
+      (println (instance? auto.IprM (->IprMR)) (instance? auto.IprM (reify IprM)) (instance? auto.IprM (with-meta {} {`ipr-mm (fn [_] 2)})) (ipr-mm (with-meta {} {`ipr-mm (fn [_] 2)})))
+      (println (satisfies? IprP (->IprT)) (satisfies? IprP (reify IprP)) (satisfies? IprM (reify IprM)) (satisfies? IprP (->IprS)) (satisfies? IprQ (->IprR)) (extends? IprP IprT))
+      (extend-protocol IprP nil (ipr-m [_] 0) Object (ipr-m [_] 9))
+      (println (instance? auto.IprP nil) (instance? auto.IprP 1) (instance? auto.IprP (->IprU 1)) (ipr-m (->IprU 1)))
+      (defprotocol ipr-dash? (ipr-d [x]))
+      (defrecord IprD [] ipr-dash? (ipr-d [_] 1))
+      (println (instance? auto.ipr_dash_QMARK_ (->IprD)))
+      (ns ipr-ns.core)
+      (defprotocol IprNsP (ipr-ns-m [x]))
+      (defrecord IprNsR [] IprNsP)
+      (ns auto (:require [clojure.string :as str]))
+      (defrecord IprZ [] ipr-ns.core/IprNsP)
+      (println (instance? ipr_ns.core.IprNsP (ipr-ns.core/->IprNsR)) (instance? ipr_ns.core.IprNsP (->IprZ)) (instance? ipr_ns.core.IprNsP (->IprR)) (str/upper-case "ok"))
+    expected: |
+      true false true
+      true false true
+      true false false false false
+      (true false false) true true
+      true true false 2
+      true true true true false true
+      false false false 9
+      true
+      true true false OK
   - name: a-multimethod-dispatches-on-an-exception-class-by-inheritance
     # A throwable class as a dispatch value is the keyword class answers for it, and the
     # hierarchy follows the class chain like the oracle's isa? follows Java inheritance:

@@ -47,8 +47,9 @@ final class ClojureDispatchLowering {
 	 * ({@link ClojureValueClasses}), a stream by its class, a condition by the throwable
 	 * classes implementing it, and a host object by its host class
 	 * ({@code %clojure-host-object-p}, an arm a program naming no {@code java:} operator
-	 * sheds, {@link ClojureArms.Family#HOST}). A class no value here has answers false; a
-	 * name no class has is the oracle's unresolved symbol.
+	 * sheds, {@link ClojureArms.Family#HOST}). A protocol's interface tests the records,
+	 * deftypes and reifies whose body names the protocol. A class no value here has
+	 * answers false; a name no class has is the oracle's unresolved symbol.
 	 */
 	static LispVal instanceOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "instance? takes a class and a value");
@@ -69,6 +70,11 @@ final class ClojureDispatchLowering {
 			throw new LispReadException("instance? takes a class name, not " + name);
 		}
 		String resolved = ClojureNamespaceLowering.resolveClass(ctx, name);
+		Map.Entry<String, ClojureLowering.ProtocolDef> protocol = ClojureProtocolLowering.protocolOfInterface(ctx,
+				resolved);
+		if (protocol != null) {
+			return ctx.booleanAnswer(ClojureProtocolLowering.implementsForm(ctx, protocol, lowered));
+		}
 		String lang = resolved.indexOf('.') < 0 ? ClojureValueClasses.clojureLang(resolved) : null;
 		String fqn = lang != null ? lang : resolved;
 		if (fqn.equals(ClojureClassBases.OBJECT)) {

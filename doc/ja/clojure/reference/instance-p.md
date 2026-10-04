@@ -8,6 +8,10 @@
 `clojure.lang.IFn` は関数・キーワード・シンボル・マップ・セット・ベクタ・var、`Comparable` は
 文字列・数値・キーワード・ベクタ、`java.io.Writer` は `*out*` について `true` です。`Object` は
 `nil` 以外のすべての値です。既知の record/deftype 名はディスパッチタグの検査になります。
+プロトコルのインタフェース（`user.P`。名前空間と名前はオラクルと同じく munge され、
+`my_app.core.my_p` のようになります）は、本体でそのプロトコルを挙げた record・deftype・`reify`
+について、メソッドの有無によらず `true` です。`extend-type` や `extend-protocol` の対象は
+インスタンスではありません（`satisfies?` は `true` です）。
 throwable クラス（`Exception`、`IllegalArgumentException`、`clojure.lang.ExceptionInfo`、
 ドット付きや import した名前）は、例外と実行時エラーをそのクラス（`class` が返すクラス）か
 そのサブクラスであるかで検査します。インタプリタと JVM ではホストのオブジェクトをホストの
@@ -20,4 +24,9 @@ throwable クラス（`Exception`、`IllegalArgumentException`、`clojure.lang.E
 (println (instance? String "a") (instance? String 1)) ; true false
 (println (instance? java.util.List [1]) (instance? clojure.lang.IFn :k) (instance? java.util.Map [1])) ; true true false
 (println (instance? RuntimeException (IllegalArgumentException. "x")) (instance? RuntimeException (Exception. "x"))) ; true false
+(defprotocol P (m [x]))
+(defrecord R [] P (m [_] 1))
+(defrecord S [])
+(extend-type S P (m [_] 2))
+(println (instance? user.P (->R)) (instance? user.P (->S)) (satisfies? P (->S))) ; true false true
 ```
