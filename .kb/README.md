@@ -26,7 +26,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Core language and evaluation
 
-- [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, `%` prefix, JVM method mangling, WASM rec-groups
+- [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, a function body's assignment of an unbound name as a global, `%` prefix, JVM method mangling, WASM rec-groups
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
@@ -35,7 +35,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [loop-iteration-heads.md](loop-iteration-heads.md) -- `loop` per-clause iteration heads: what is assigned before vs after the termination test
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` as let-bound lambdas + Lisp-2 call-site rewrite
 - [symbol-macrolet.md](symbol-macrolet.md) -- `symbol-macrolet` via one shared shadow-aware substitution
-- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a parameter named like a special, the by-name dispatch as a search
+- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker)
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback

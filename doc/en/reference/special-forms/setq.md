@@ -7,3 +7,11 @@ Assigns `value` to the variable `name`, evaluating `value` but not `name`. Multi
 ```lisp
 (let ((x 0)) (setq x 1 x (+ x 9)) x) ; => 10
 ```
+
+A `name` that no lexical binding holds and no `defvar` declares is the global variable of that name, wherever the `setq` stands -- inside a function body too -- on every backend, as in SBCL (which warns). Assigning an undeclared variable is undefined in Common Lisp; `defvar` or `defparameter` first is the portable spelling.
+
+```lisp
+(defun remember (v) (setq *last-seen* v))
+(remember 42)
+*last-seen* ; => 42
+```

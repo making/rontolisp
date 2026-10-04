@@ -1549,6 +1549,8 @@ final class JvmExprCompiler {
 			case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
 			case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
+			case LispNames.BOUNDP_RAW -> JvmSymbolApiCompiler.compileBoundpRaw(cons, ctx, className);
+			case LispNames.SPECIAL_BOUNDP -> JvmSymbolApiCompiler.compileSpecialBoundp(cons, ctx);
 			case LispNames.SYMBOL_IS -> JvmSymbolApiCompiler.compileSymbolIs(cons, ctx, className);
 			case LispNames.GLOBAL_STORE_SET -> JvmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx, className);
 			case LispNames.SET_MIRROR -> JvmSymbolApiCompiler.compileSetMirror(cons, ctx, className);

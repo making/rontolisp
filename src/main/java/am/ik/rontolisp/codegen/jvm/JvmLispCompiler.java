@@ -1603,9 +1603,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
 		// they force the eval runtime. fmakunbound writes the tombstone into that same
-		// _fenv.
+		// _fenv. A boundp of a special whose variable carries its bound-ness reads that
+		// variable alone, so a program whose every boundp is such a literal probe does
+		// not (the tracked set is checked again once the runtime is injected).
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
+				&& LispMacroExpander.boundpReachesMirror(program, SpecialVarCollector.collectProbedValuelessBound(
+						program, closRegistry.conditionReports().values(), specialVars, usesThreads));
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
-				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| boundpReadsMirror || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
 				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
@@ -1908,6 +1913,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
 			globals.add(LispNames.ERROR_OUTPUT_VAR);
 		}
+		// A name a function body assigns with no lexical binding in scope is a global,
+		// as on the interpreter and in SBCL. Last, so a name already a global (a special
+		// a
+		// local declaration proclaims) keeps its place and a program with none its
+		// indices.
+		globals.addAll(GlobalVarCollector.collectFreeAssignedInFunctionBodies(program));
 		// The one dispatch every access of a global by name goes through -- a computed
 		// symbol-value, a set, the eval runtime's variable lookup and assignment -- here
 		// because its arms are the FINAL global set. A program that only reads gets the
@@ -1963,8 +1974,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
 			boundSpecialVars.addAll(specialVars);
 		}
+		// The bound specials whose bound-ness the program probes and only a binding or
+		// an assignment gives a value: their _g$ starts as the UNBOUND marker, so boundp
+		// reads their variable instead of the eval mirror, which no binding writes
+		// (JvmDynVarRuntimeBuilder). A computed boundp dispatches its name over them
+		// through one shared runtime.
+		List<LispVal> probedForms = new ArrayList<>(compiledForms);
+		probedForms.addAll(closRegistry.conditionReports().values());
+		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
+		unboundSpecials.retainAll(boundSpecialVars);
+		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundSpecials);
+		}
+		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
+			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
+				inject(segment, defuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
+			}
+		}
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars, unboundSpecials,
+						globalFields);
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -4013,6 +4044,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (Utf8Entry dfName : dynVarRuntime.fieldNameUtfs()) {
 				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dfName,
 						dynVarRuntime.fieldDescUtf());
+			}
+			// The UNBOUND marker a probed valueless special's _g$ starts as; set in
+			// <clinit> with the ThreadLocals.
+			Utf8Entry unboundFieldName = dynVarRuntime.unboundFieldName();
+			if (unboundFieldName != null) {
+				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, unboundFieldName,
+						globalFieldDescUtf);
 			}
 		}
 		if (javaRuntime != null) {

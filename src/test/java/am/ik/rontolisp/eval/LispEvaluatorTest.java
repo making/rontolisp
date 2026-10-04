@@ -17361,6 +17361,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void boundpAnswersInsideABindingOfASpecialWithoutAValue() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: a special declared without a value is bound for the extent of any
+		// binding of it and unbound again after it, whatever a callee's setq, a set or
+		// an eval'd setq wrote inside the binding.
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
+	}
+
+	@Test
+	void boundpAndFboundpAreFunctionValues() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: #'boundp and #'fboundp reach mapcar, funcall and apply.
+		assertThat(printedLines(am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() {
 		// The reference answer for the compilers' searched name dispatch: reads, sets
 		// and progv bindings by name over more names than one segment holds, two pairs
@@ -22534,6 +22556,16 @@ class LispEvaluatorTest {
 		// (.kb/dynamic-special-variables.md).
 		assertThat(printedLines(am.ik.rontolisp.SpecialParameterFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+	}
+
+	@Test
+	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() {
+		// The reference answer for the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest), and SBCL's: a setq of
+		// an undeclared name in a function body assigns the global, which any later
+		// function or top-level form reads.
+		assertThat(printedLines(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
 	}
 
 	@Test

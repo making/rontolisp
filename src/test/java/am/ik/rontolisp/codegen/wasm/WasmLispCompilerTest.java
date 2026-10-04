@@ -1845,6 +1845,25 @@ class WasmLispCompilerTest {
 		assertThat(occurrences(compile(base), "PROBE-COUNTER")).isZero();
 	}
 
+	@Test
+	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() {
+		// The wasm twin of the JvmLispCompilerTest test of this name: a literal probe of
+		// a special whose module global carries its bound-ness reads that global alone,
+		// so a program whose every boundp is one carries neither the eval runtime nor
+		// its mirror stores -- its module is within a few bytes of the same program
+		// reading the variable instead. A literal probe of any other name still reads
+		// the mirror.
+		String probe = "(defvar *bx*) (defun bx-p () (boundp '*bx*)) (defun bx-s (v) (setq *bx* v))"
+				+ " (print (let ((*bx* 1)) (bx-p))) (bx-s 2) (print (bx-p))";
+		String read = probe.replace("(boundp '*bx*)", "(if *bx* t nil)");
+		String mixed = "(defvar *bn*) " + probe.replace("(boundp '*bx*)", "(list (boundp '*bx*) (boundp '*bn*))");
+		assertThat(storeCalls(probe)).isZero();
+		assertThat(storeCalls(mixed)).isPositive();
+		int probed = compile(probe).length;
+		assertThat(probed).isLessThan(compile(read).length + 64);
+		assertThat(compile(mixed).length).isGreaterThan(probed + 1024);
+	}
+
 	// How many call instructions of _store an unoptimized module spells (no shake, so
 	// the fixed index stays the index).
 	private static int storeCalls(String source) {

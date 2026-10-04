@@ -3539,11 +3539,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
 		// boundp/symbol-value/fboundp probe the eval global envs through
 		// _env_lookup/_lookup, so they force the eval runtime; intern needs the real
-		// _intern body (canonical offsets) which lives in the reader runtime.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
-				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
-				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
-				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+		// _intern body (canonical offsets) which lives in the reader runtime. A boundp of
+		// a special whose variable carries its bound-ness reads that variable alone, so a
+		// program whose every boundp is such a literal probe does not (the tracked set is
+		// checked again once the runtime is injected).
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
+				&& LispMacroExpander.boundpReachesMirror(program, SpecialVarCollector.collectProbedValuelessBound(
+						program, closRegistry.conditionReports().values(), specialVars, false));
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || boundpReadsMirror
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
+				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
 				// is scanned: the %set-symbol-function lowering happens per expression,
 				// after this gate).
@@ -4116,6 +4121,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
 			globals.add(LispNames.ERROR_OUTPUT_VAR);
 		}
+		// A name a function body assigns with no lexical binding in scope is a global,
+		// as on the interpreter and in SBCL. Last, so a name already a global (a special
+		// a
+		// local declaration proclaims) keeps its place and a program with none its
+		// indices.
+		globals.addAll(GlobalVarCollector.collectFreeAssignedInFunctionBodies(program));
 		// The one dispatch every access of a global by name goes through -- a computed
 		// symbol-value, a set, the eval runtime's variable lookup and assignment -- here
 		// because its arms are the FINAL global set. A program that only reads gets the
@@ -4144,6 +4155,31 @@ public final class WasmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
+		// The dynamically bound specials whose bound-ness the program probes and only a
+		// binding or an assignment gives a value: _start seeds their module global with
+		// the UNBOUND marker, so boundp reads their variable instead of the eval mirror,
+		// which no binding writes (Ctx.unboundSpecials). A computed boundp dispatches its
+		// name over them through one shared runtime.
+		List<LispVal> compiledForms = new ArrayList<>(program);
+		compiledForms.addAll(injectedForms);
+		List<LispVal> probedForms = new ArrayList<>(compiledForms);
+		probedForms.addAll(closRegistry.conditionReports().values());
+		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
+		@Nullable SequencedSet<String> boundSpecials = unboundSpecials.isEmpty() && !this.reentrant ? null
+				: SpecialVarCollector.collectDynamicallyBound(compiledForms, specialVars);
+		if (boundSpecials != null) {
+			unboundSpecials.retainAll(boundSpecials);
+		}
+		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundSpecials);
+		}
+		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
+			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
+				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
+			}
+		}
 		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
 		// per-call task record (WasmDynVars); every other special keeps its plain
 		// module-global read. The JVM hybrid's decision procedure, and the JVM's
@@ -4151,9 +4187,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// compile-time throw at the binding site, never a silent process-global binding.
 		Map<String, Integer> dynSlots = new LinkedHashMap<>();
 		if (this.reentrant) {
-			List<LispVal> compiled = new ArrayList<>(program);
-			compiled.addAll(injectedForms);
-			for (String name : SpecialVarCollector.collectDynamicallyBound(compiled, specialVars)) {
+			for (String name : Objects.requireNonNull(boundSpecials)) {
 				dynSlots.put(name, dynSlots.size());
 			}
 		}
@@ -4207,8 +4241,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
 		// mark it, because nil IS null), always the LAST globals so every mode-gated
 		// index above keeps its value. The sentinel is also the UNSUPPLIED marker of a
-		// physical optional (WasmPhysicalArgs), and Ctx.tSymGlobalIndex() reads the t
-		// global as the one right before it.
+		// physical optional (WasmPhysicalArgs) and the UNBOUND marker a special's module
+		// global holds while it has no value (Ctx.unboundSpecials), and
+		// Ctx.tSymGlobalIndex() reads the t global as the one right before it.
 		int tSymGlobalIndex = Math.max(Math.max(reentryGuardGlobalIndex, reentrantTaskGlobalIndex), lastModeGlobalIndex)
 				+ 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
@@ -4580,6 +4615,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.globals(globals)
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
+			.unboundSpecials(unboundSpecials)
 			.globalIndices(globalIndices)
 			.quoteGlobals(quoteGlobals)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
@@ -4806,6 +4842,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// task record too (a top-level let of a special), so seed one before any user
 		// code runs -- binding sites then never need a null check (WasmDynVars).
 		WasmDynVars.emitTaskBegin(ctx);
+
+		// A special whose module global carries its bound-ness starts UNBOUND: the
+		// marker (the raw-local sentinel) until something assigns it
+		// (Ctx.unboundSpecials).
+		for (String name : ctx.unboundSpecials) {
+			startWriter.write(Instruction.GET_GLOBAL);
+			startWriter.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+			startWriter.write(Instruction.SET_GLOBAL);
+			startWriter.writeUnsignedLeb128(Objects.requireNonNull(ctx.globalIndices.get(name)));
+		}
 
 		// A program that redirects *standard-output* / *standard-input* (the variable has
 		// a module global only then) seeds its global default with the designator t (the
@@ -10209,8 +10255,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * null shadow cannot carry that meaning -- nil IS null, and a local holding nil
 		 * must read as nil, not as the stale raw slot. It is also the UNSUPPLIED marker a
 		 * caller passes for a physical optional it has no argument for
-		 * ({@link WasmPhysicalArgs}); the global right before it caches the symbol
-		 * {@code t} ({@link #tSymGlobalIndex()}).
+		 * ({@link WasmPhysicalArgs}), and the UNBOUND marker the module global of a
+		 * special in {@link #unboundSpecials} holds while it has no value; the global
+		 * right before it caches the symbol {@code t} ({@link #tSymGlobalIndex()}).
 		 */
 		int rawSentinelGlobalIndex = -1;
 
@@ -10880,6 +10927,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> specialVars = Set.of();
 
 		/**
+		 * The specials whose module global carries their bound-ness: a probed valueless
+		 * special the program binds ({@code SpecialVarCollector.collectProbedValueless}).
+		 * {@code _start} seeds each global with the UNBOUND marker -- the raw-local
+		 * sentinel ({@link #rawSentinelGlobalIndex}) -- before any user code; a binding
+		 * saves and restores it like any value; a read answers nil for it
+		 * ({@code WasmExprCompiler.emitUnboundAsNil}) and {@code boundp} nil
+		 * ({@code WasmSymbolApiCompiler.compileSpecialBoundp}).
+		 */
+		Set<String> unboundSpecials = Set.of();
+
+		/**
 		 * Maps a top-level global variable name to its module-level wasm global index.
 		 */
 		Map<String, Integer> globalIndices = Map.of();
@@ -11206,6 +11264,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.globals = builder.globals;
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
+			this.unboundSpecials = builder.unboundSpecials;
 			this.globalIndices = builder.globalIndices;
 			this.quoteGlobals = builder.quoteGlobals;
 			this.futureTypeIndex = builder.futureTypeIndex;
@@ -11405,6 +11464,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<String> specialVars = Set.of();
 
+			private Set<String> unboundSpecials = Set.of();
+
 			private Map<String, Integer> globalIndices = Map.of();
 
 			private QuoteGlobals quoteGlobals = new QuoteGlobals(0);
@@ -11525,6 +11586,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.globals = proto.globals;
 				this.nestedDefunNames = proto.nestedDefunNames;
 				this.specialVars = proto.specialVars;
+				this.unboundSpecials = proto.unboundSpecials;
 				this.globalIndices = proto.globalIndices;
 				this.quoteGlobals = proto.quoteGlobals;
 				this.futureTypeIndex = proto.futureTypeIndex;
@@ -11919,6 +11981,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder specialVars(Set<String> specialVars) {
 				this.specialVars = specialVars;
+				return this;
+			}
+
+			Builder unboundSpecials(Set<String> unboundSpecials) {
+				this.unboundSpecials = unboundSpecials;
 				return this;
 			}
 

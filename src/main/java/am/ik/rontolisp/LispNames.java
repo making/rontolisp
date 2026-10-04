@@ -84,6 +84,32 @@ public final class LispNames {
 	public static final String SYMBOL_VALUE_DYNAMIC = "%SYMBOL-VALUE-DYNAMIC";
 
 	/**
+	 * Internal (compile-path only): the raw runtime {@code boundp} emission (the
+	 * eval-mirror probe), the fallback arm of the dispatch {@code (boundp x)} compiles to
+	 * in a program that tracks a special's bound-ness in its variable
+	 * ({@link #SPECIAL_BOUNDP}).
+	 */
+	public static final String BOUNDP_RAW = "%BOUNDP-RAW";
+
+	/**
+	 * Internal (compile-path only): {@code (%special-boundp 'S)}, the bound-ness of the
+	 * literal special {@code S} read from its variable -- the active dynamic binding,
+	 * else the global, which holds the unbound marker until something assigns it. Only
+	 * for a special the program binds, probes and declares without a value
+	 * ({@code SpecialVarCollector.collectProbedValueless}).
+	 */
+	public static final String SPECIAL_BOUNDP = "%SPECIAL-BOUNDP";
+
+	/**
+	 * Internal (compile-path only): the shared {@code boundp} runtime a computed name
+	 * calls in a program that tracks a special's bound-ness in its variable --
+	 * {@code (%boundp-dynamic name)}, a dispatch over those specials onto
+	 * {@link #SPECIAL_BOUNDP}, falling to {@link #BOUNDP_RAW}. Later segments are this
+	 * name suffixed {@code -1}, {@code -2}, ...
+	 */
+	public static final String BOUNDP_DYNAMIC = "%BOUNDP-DYNAMIC";
+
+	/**
 	 * Internal (compile-path only): {@code (%global-access name default store value)},
 	 * the one dispatch of a runtime name over the program's globals. With {@code store}
 	 * nil it reads: a special answers its variable -- the active dynamic binding, else

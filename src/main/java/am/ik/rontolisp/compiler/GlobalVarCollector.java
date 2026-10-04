@@ -1,5 +1,6 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -8,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Collects the names of top-level global variables in a program. Shared by the JVM and
@@ -16,7 +18,8 @@ import am.ik.rontolisp.LispVal;
  * assign it. A symbol is a top-level global when it is the name of a top-level
  * {@code defvar}/{@code defparameter}/{@code defconstant}, or the place of a top-level
  * {@code setq}/{@code setf} whose place is a bare symbol (Lisp-2: a top-level assignment
- * targets the global variable namespace).
+ * targets the global variable namespace), or a name a function body assigns with no
+ * lexical binding in scope ({@link #collectFreeAssignedInFunctionBodies}).
  */
 public final class GlobalVarCollector {
 
@@ -112,6 +115,147 @@ public final class GlobalVarCollector {
 			}
 		}
 		return names;
+	}
+
+	/**
+	 * Returns the names a top-level {@code defun}'s body assigns -- {@code setq},
+	 * {@code setf}, {@code psetq}, {@code psetf} or {@code multiple-value-setq} of a bare
+	 * symbol -- where no lexical binding of the name is in scope, in program order. The
+	 * body's lambdas, local functions and nested {@code defun}s count; the function's own
+	 * parameters, and every {@code let} or parameter between it and the assignment,
+	 * shadow it.
+	 * <p>
+	 * Assigning an undeclared variable is undefined in CL; SBCL warns and assigns the
+	 * global, and so does the interpreter, so such a name needs the backing store a
+	 * top-level {@code setq}'s gets. Without it the assignment compiled into a local of
+	 * the function, and a read anywhere else was refused. Unlike {@link #collect} this
+	 * walk is scope-aware ({@link FreeVarAnalyzer#findFreeVars}): almost every
+	 * {@code setq} in a function body assigns a {@code let} variable or a parameter, and
+	 * a store for each would grow every program. A name the body both reads free and
+	 * assigns under a binding still counts -- the read had no other store to reach.
+	 * @param program the whole program, top-level {@code defun}s included
+	 * @return the names in program order; empty for a program whose functions assign only
+	 * lexical variables
+	 */
+	public static LinkedHashSet<String> collectFreeAssignedInFunctionBodies(List<LispVal> program) {
+		LinkedHashSet<String> names = new LinkedHashSet<>();
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !LispNames.DEFUN.equals(head.name()) || !(cons.cdr() instanceof LispCons nameCell)
+					|| !(nameCell.cdr() instanceof LispCons lambdaListCell)) {
+				continue;
+			}
+			LinkedHashSet<String> assigned = new LinkedHashSet<>();
+			collectAssignedPlaces(lambdaListCell.cdr(), assigned);
+			// The standard stream variables and the multiple-value channel are never a
+			// collected global: the backends give them their own representation
+			// (FreeVarAnalyzer's SPECIAL_NAMES).
+			assigned.remove(LispNames.STANDARD_OUTPUT_VAR);
+			assigned.remove(LispNames.STANDARD_INPUT_VAR);
+			assigned.remove(LispNames.ERROR_OUTPUT_VAR);
+			assigned.remove(LispNames.MV_SPILL);
+			if (assigned.isEmpty()) {
+				continue;
+			}
+			// The defun as the lambda it is, its nested defuns as theirs: the walk binds
+			// a lambda's parameters and skips a defun.
+			LispVal function = new LispCons(new LispSymbol(LispNames.LAMBDA), nestedDefunsAsLambdas(lambdaListCell));
+			// The assigned names go in as enclosing lexicals only to lift the walk's
+			// exclusion of built-in names: (setq list 1) assigns a variable too.
+			for (String free : FreeVarAnalyzer.findFreeVars(List.of(function), Set.of(), Set.of(), Set.of(),
+					assigned)) {
+				if (assigned.contains(free)) {
+					names.add(free);
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Every bare-symbol place an assignment form names at any depth of {@code form},
+	 * excluding quoted data and keywords. Scope-blind: the caller decides which are free.
+	 */
+	private static void collectAssignedPlaces(LispVal form, Set<String> names) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				switch (head.name()) {
+					case LispNames.QUOTE -> {
+						return;
+					}
+					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF -> {
+						List<LispVal> parts = cons.toList();
+						for (int i = 1; i + 1 < parts.size(); i += 2) {
+							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
+								names.add(place.name());
+							}
+						}
+					}
+					case LispNames.MULTIPLE_VALUE_SETQ -> {
+						if (cons.cdr() instanceof LispCons varsCell) {
+							LispVal vars = varsCell.car();
+							while (vars instanceof LispCons varCons) {
+								if (varCons.car() instanceof LispSymbol place && !place.isKeyword()) {
+									names.add(place.name());
+								}
+								vars = varCons.cdr();
+							}
+						}
+					}
+					default -> {
+					}
+				}
+			}
+			collectAssignedPlaces(cons.car(), names);
+			node = cons.cdr();
+		}
+	}
+
+	/**
+	 * {@code form} with every {@code (defun name lambda-list . body)} inside it read as
+	 * {@code (lambda lambda-list . body)}, for the free-variable walk only: a nested
+	 * defun is a closure over the bindings around it. Answers {@code form} itself when it
+	 * holds no defun, so the common body allocates nothing; a rewritten path is a copy
+	 * the program never sees.
+	 */
+	private static LispVal nestedDefunsAsLambdas(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return form;
+			}
+			if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+					&& nameCell.cdr() instanceof LispCons lambdaListCell) {
+				return new LispCons(new LispSymbol(LispNames.LAMBDA), nestedDefunsAsLambdas(lambdaListCell));
+			}
+		}
+		// The element list exists only once an element changed.
+		@Nullable List<LispVal> elements = null;
+		LispVal node = cons;
+		while (node instanceof LispCons cell) {
+			LispVal element = nestedDefunsAsLambdas(cell.car());
+			if (elements == null && element != cell.car()) {
+				elements = new ArrayList<>();
+				for (LispVal seen = cons; seen != cell; seen = ((LispCons) seen).cdr()) {
+					elements.add(((LispCons) seen).car());
+				}
+			}
+			if (elements != null) {
+				elements.add(element);
+			}
+			node = cell.cdr();
+		}
+		if (elements == null) {
+			return form;
+		}
+		LispVal rebuilt = node;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			rebuilt = new LispCons(elements.get(i), rebuilt);
+		}
+		return rebuilt;
 	}
 
 	/**

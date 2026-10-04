@@ -19818,6 +19818,108 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void boundpAnswersInsideABindingOfASpecialWithoutAValue() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): such a special's _g$ starts as
+		// the UNBOUND marker, so boundp answers t for this thread's _d$ binding and nil
+		// again after it, instead of the _genv mirror's entry, which no binding writes
+		// and
+		// a callee's setq inside one writes for good.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
+		// A read of it while it has no value answers nil, never the marker.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED);
+		// A user definition under the shared dispatch's name (its segments extend it)
+		// keeps the runtime out, and each site spells the dispatch.
+		assertThat(compileAndRun(
+				"(defun %boundp-dynamic-shadow () :user)\n" + am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+	}
+
+	@Test
+	void boundpAndFboundpAreFunctionValues() throws Exception {
+		// #'boundp / #'fboundp are reference-gated wrappers over the computed probes, so
+		// they reach mapcar, funcall and apply and answer a special bound by a let.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
+	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
+		// The marker, its seeding and _dbound exist only where boundp can see a binding
+		// of
+		// a special no definer gives a value; a literal probe of one calls _dbound and
+		// never the mirror. A valued, never-bound or never-probed special keeps the plain
+		// representation, so such a program compiles as it did.
+		byte[] tracked = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader
+			.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))")));
+		assertThat(declaredFieldNames(tracked)).contains("_unbound");
+		assertThat(declaredMethodNames(tracked)).contains("_dbound");
+		assertThat(ownCallsIn(tracked, "UB-P", "_dbound")).isOne();
+		assertThat(ownCallsIn(tracked, "UB-P", "_envLookup")).isZero();
+		for (String untracked : List.of(
+				"(defvar *ub* 0) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))",
+				"(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p)) (defun ub-q () (let ((x 1)) x))",
+				"(defvar *ub*) (defun ub-p () *ub*) (print (let ((*ub* 1)) (ub-p)))")) {
+			byte[] classBytes = new JvmLispCompiler("Test")
+				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(untracked)));
+			assertThat(declaredFieldNames(classBytes)).as(untracked).doesNotContain("_unbound");
+			assertThat(declaredMethodNames(classBytes)).as(untracked).doesNotContain("_dbound");
+		}
+	}
+
+	@Test
+	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() throws Exception {
+		// A literal probe of a special whose variable carries its bound-ness reads that
+		// variable alone (_dbound), so a program whose every boundp is one carries
+		// neither the eval runtime nor its mirror writes. A literal probe of any other
+		// name still reads the mirror and brings both back.
+		byte[] literal = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE)));
+		assertThat(declaredMethodNames(literal)).contains("_dbound").doesNotContain("_eval", "_store", "_envLookup");
+		byte[] mixed = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb*)"
+					+ " (defun ub-p () (list (boundp '*ub*) (boundp '*nb*))) (print (let ((*ub* 1)) (ub-p)))")));
+		assertThat(declaredMethodNames(mixed)).contains("_dbound", "_envLookup");
+		assertThat(ownCallsIn(mixed, "UB-P", "_dbound")).isOne();
+		assertThat(runClass(mixed)).isEqualTo("(T NIL)");
+	}
+
+	@Test
+	void computedBoundpSitesDoNotEachPayForTheTrackedSpecials() throws Exception {
+		// A computed boundp of a program with specials whose variable carries their
+		// bound-ness calls the one shared dispatch over them, which no dispatcher row
+		// reaches; a site does not spell the set.
+		StringBuilder source = new StringBuilder();
+		for (int i = 0; i < 200; i++) {
+			source.append("(defvar *cb").append(i).append("*)\n");
+			source.append("(defun cb-bind")
+				.append(i)
+				.append(" (f) (let ((*cb")
+				.append(i)
+				.append("* ")
+				.append(i)
+				.append(")) (funcall f)))\n");
+		}
+		source.append("(defun cb-four (a b c d) (list (boundp a) (boundp b) (boundp c) (boundp d)))\n");
+		source.append("(print (cb-bind7 (lambda () (cb-four '*cb7* '*cb8* '*cb199* (intern \"*CB7*\")))))\n");
+		source.append("(print (cb-four '*cb7* '*cb8* '*cb199* 'cb-none))\n");
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source.toString())));
+		assertThat(codeLengthOf(classBytes, "CB-FOUR")).isLessThan(200);
+		assertThat(ownCallsIn(classBytes, "CB-FOUR", "$pctBOUNDP-DYNAMIC")).isEqualTo(4);
+		List<String> dispatchers = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("_invoke_"))
+			.toList();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctBOUNDP-DYNAMIC")).sum()).isZero();
+		assertThat(compileAndRun(source.toString())).isEqualTo("(T NIL NIL T)\n(NIL NIL NIL NIL)");
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a name dispatch searches the
 		// names' hashCodes, so *XO* / *Y0* and *A_* / *B@*, whose hashes are equal, land
@@ -20565,6 +20667,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a name a function body assigns
+		// with no lexical binding in scope gets a static field like a top-level setq's,
+		// so another defun and a top-level form read it and boundp sees the store
+		// (GlobalVarCollector.collectFreeAssignedInFunctionBodies).
+		assertThat(compileAndRun(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
+	}
+
+	@Test
 	void defparameterAndDeclaimSpecialAreDynamic() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *p* 5)
@@ -20759,6 +20871,30 @@ class JvmLispCompilerTest {
 				(:REBOUND :INNER)
 				(:OUTER :OUTER)
 				(:GLOBAL :NONE)""");
+	}
+
+	@Test
+	void boundpOfASpecialWithoutAValueIsThreadScoped() throws Exception {
+		// The UNBOUND marker lives in the shared _g$ and a binding in this thread's _d$
+		// cell, so a spawned thread sees no binding of the spawner's and the spawner none
+		// of its own (the interpreter answers the same, as SBCL's threads do).
+		assertThat(compileAndRun("""
+				(defvar *tv*)
+				(defun tv-p () (boundp '*tv*))
+				(defun run-thread (f)
+				  (let ((th (java:new "java.lang.Thread" f)))
+				    (java:call th "start")
+				    (java:call th "join")))
+				(let ((*tv* :outer))
+				  (run-thread (lambda (m) (print (list :spawned (tv-p)))))
+				  (run-thread (lambda (m) (let ((*tv* :inner)) (print (list :rebound (tv-p))))))
+				  (print (list :outer (tv-p))))
+				(print (list :global (tv-p)))
+				""")).isEqualTo("""
+				(:SPAWNED NIL)
+				(:REBOUND T)
+				(:OUTER T)
+				(:GLOBAL NIL)""");
 	}
 
 	@Test

@@ -65,7 +65,9 @@ stubs to hold fixed function indices, JVM needs none.
   `(print (+ 1 2))`.
 - **A literal `boundp` never reaches the gate**: `compiler/CompileTimeBoundp` folds `(boundp 'name)`
   on both compile paths and in the CLI/playground before the tree-shaker; only `(boundp (intern ...))`
-  opens it (`.kb/compile-time-boundp.md`).
+  opens it (`.kb/compile-time-boundp.md`). Nor does a literal probe of a tracked special
+  (`.kb/dynamic-special-variables.md`, "Bound-ness of a special without a value"): the `boundp` arm is
+  `LispMacroExpander.boundpReachesMirror` over the tracked set read before injection.
 
 ## Argument counts
 
@@ -167,8 +169,8 @@ since 2026-10-04 (`.todo/c89`): in a program that runs forms through eval, the r
 `setq`/`setf`/`push`/`pop` of a variable no eval'd binding holds also store through the shared
 accessor `%global-access` into the compiled global, and its variable lookup answers a SPECIAL
 from the variable before trying the mirror (`.kb/dynamic-special-variables.md`, "One home"), so
-the mirror is the value of the non-special globals and the `boundp` witness, never a special's
-value. Before, the mirror was write-through one-way: an eval'd `setq` stayed invisible to
+the mirror is the value of the non-special globals and the `boundp` witness (but of a special
+declared without a value, whose variable answers), never a special's value. Before, the mirror was write-through one-way: an eval'd `setq` stayed invisible to
 compiled code, and a special read through eval answered the mirror's stale value. Since b78
 (2026-10-02) the store mirrors WHEREVER it stands -- a defun/lambda body included --
 so a runtime `boundp`/`symbol-value` sees what the body assigned; before, only a

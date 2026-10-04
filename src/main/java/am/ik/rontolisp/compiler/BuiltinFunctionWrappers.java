@@ -207,6 +207,16 @@ public final class BuiltinFunctionWrappers {
 		// the _store mirror call, real only under usesEval, and the (function set)
 		// spelling fires the same scan.
 		gated.add(LispNames.SET);
+		// #'boundp / #'fboundp: the wrapper body is a COMPUTED probe, which reads the
+		// eval
+		// mirror (real only under usesEval) and, for a special declared without a value,
+		// the shared %boundp-dynamic dispatch that LispMacroExpander.boundpProbes sees
+		// only
+		// once the injected wrapper is among the forms it scans. A program that never
+		// names
+		// either keeps the output it always had.
+		gated.add(LispNames.BOUNDP);
+		gated.add(LispNames.FBOUNDP);
 		// #'widen-float-bits / #'narrow-float-bits (.todo/671): the wrapper bodies call
 		// the JVM's _widenFloatBits/_narrowFloatBits helpers, emitted only for a
 		// program whose OWN source names widen-float-bits/narrow-float-bits
@@ -2649,14 +2659,16 @@ public final class BuiltinFunctionWrappers {
 			optionalStreamBounded(LispNames.WRITE_STRING), writeToStringWrapper(),
 			// symbol runtime API: the pure string<->symbol converters get plain
 			// wrappers. find-symbol folds at compile time (literal-only, like
-			// symbol-function) and boundp/fboundp need the eval runtime, which is only
-			// emitted when the program calls them directly -- so neither can be a
-			// first-class value in compiled output (macroexpand precedent).
+			// symbol-function); boundp/fboundp need the eval runtime, which is only
+			// emitted when the program names them, so their wrappers are reference-gated.
 			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unaryOptionalSecond(LispNames.INTERN),
 			// symbol-value is the exception among those four since the progv work: its
 			// wrapper is REFERENCE-GATED (see above), and the #'symbol-value reference
 			// that injects it also fires the usesEval scan that makes its body real.
 			unary(LispNames.SYMBOL_VALUE),
+			// boundp and fboundp likewise (reference-gated): computed probes of the
+			// bound-ness of a variable and a function.
+			unary(LispNames.BOUNDP), unary(LispNames.FBOUNDP),
 			// set beside it, reference-gated for the same reason: the body is the
 			// backing-store chain plus the mirror store.
 			binary(LispNames.SET),

@@ -8,6 +8,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.wasm.Instruction;
@@ -127,8 +128,59 @@ final class WasmSymbolApiCompiler {
 		compileUnaryCall(cons, LispNames.MAKE_SYMBOL, WasmLispCompiler.FUNC_MAKE_SYMBOL, ctx, true);
 	}
 
+	/**
+	 * boundp. A special whose module global carries its bound-ness (it starts as the
+	 * UNBOUND marker, {@link WasmLispCompiler.Ctx#unboundSpecials}) is answered by it
+	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
+	 * {@code %special-boundp}, a computed name through the shared dispatch over them.
+	 * Every other name, and every name in a program without such a special, probes the
+	 * {@code GLOBAL_ENV} mirror.
+	 */
 	static void compileBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, ctx.unboundSpecials, ctx.specialVars,
+				ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
+		if (tracked != null) {
+			WasmExprCompiler.compileExpr(tracked, ctx);
+			return;
+		}
+		compileBoundpRaw(cons, ctx);
+	}
+
+	/**
+	 * The raw {@code boundp} emission (the {@code GLOBAL_ENV} probe) -- also reachable as
+	 * {@code %boundp-raw}, the fallback arm of the dispatch above.
+	 */
+	static void compileBoundpRaw(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		compileUnaryCall(cons, LispNames.BOUNDP, WasmLispCompiler.FUNC_BOUNDP, ctx);
+	}
+
+	/**
+	 * {@code (%special-boundp 'S)}: the special's current value -- the per-task binding
+	 * under {@code --reentrant}, else the module global, which shallow binding makes the
+	 * active binding -- compared with the UNBOUND marker: nil when it is the marker, t
+	 * otherwise.
+	 */
+	static void compileSpecialBoundp(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		String name = ((LispSymbol) ((LispCons) cons.toList().get(1)).toList().get(1)).name();
+		Integer globalIndex = ctx.globalIndices.get(name);
+		if (globalIndex == null || !ctx.unboundSpecials.contains(name)) {
+			throw new IllegalStateException(
+					"special variable " + name + " does not carry its bound-ness in its module global ("
+							+ LispNames.BOUNDP + " of it was lowered to " + LispNames.SPECIAL_BOUNDP + ")");
+		}
+		WasmExprCompiler.emitRawSpecialRead(ctx, name, globalIndex);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+		ctx.writer.write(Instruction.REF_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.ELSE);
+		WasmExprCompiler.compileExpr(LispTrue.INSTANCE, ctx);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

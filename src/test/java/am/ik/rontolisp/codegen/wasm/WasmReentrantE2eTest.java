@@ -127,6 +127,29 @@ class WasmReentrantE2eTest {
 		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
 	}
 
+	// boundp of a special declared without a value reads this call's binding: the
+	// task-record cell when one is active, else the module global, which holds the
+	// UNBOUND marker until something assigns it -- so each overlapped call sees its own
+	// binding across the suspend, and an export entered outside any binding sees none.
+	private static final String BOUNDP_MODULE = """
+			(rontolisp:wasm-import 'pause :from "env" :as "pause" :params '(:int) :returns :int :async t)
+			(defvar *ctx*)
+			(defun observe () (if (boundp '*ctx*) *ctx* 0))
+			(rontolisp:async-defun work (n)
+			  (let ((*ctx* n))
+			    (rontolisp:await (pause n))
+			    (+ (* 1000 (observe)) *ctx*)))
+			(rontolisp:wasm-export 'work :params '(:int) :returns :int)
+			(defun peek () (if (boundp '*ctx*) 1 0))
+			(rontolisp:wasm-export 'peek :params '() :returns :int)
+			""";
+
+	@Test
+	void overlappedCallsEachSeeTheirOwnBindingOfASpecialWithoutAValue() throws Exception {
+		Path wasm = compile("boundp.wasm", BOUNDP_MODULE);
+		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
+	}
+
 	// A binding the LOAD PATH makes is the load path's own, exactly like one an export
 	// call makes: an export the host enters from inside it reads the default. The top
 	// level compiles in contexts of its own, which bound the shared module global
