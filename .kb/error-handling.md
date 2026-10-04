@@ -1190,7 +1190,8 @@ operator it serves:
 every integer tier and over a ratio, `expt` of zero to a negative power -- signals a CATCHABLE
 `division-by-zero` (an `arithmetic-error`) reporting `ClosRegistry.DIVISION_BY_ZERO_MESSAGE`
 (`Division by zero`), byte-identical on all four backends (wasm-GC: in EH mode).** A float
-operand stays IEEE (`(/ 1.0 0)` is infinity, `(mod 7.5 0)` NaN) everywhere. Pinned by
+operand stays IEEE (`(/ 1.0 0)` is infinity, `(mod 7.5 0)` NaN) everywhere, except that a finite float
+rounded by an exact zero signals (below). Pinned by
 `DivisionByZeroFixture` (`LispEvaluatorTest`/`JvmLispCompilerTest`/
 `WasmLispCompilerIntegrationTest#divisionByZeroIsACatchableCondition`, P1 and component),
 `ci-spec.yaml`'s `division-by-zero-is-a-catchable-condition` and `clojure-spec.yaml`'s
@@ -1220,8 +1221,28 @@ by `ehAnUncaughtDivisionByZeroReportsBeforeTrapping`.
   message leaves; zlib (EH, no pad) +29 / +49 B, `--optimize=size` +26 / +46 B; `string.lisp`
   +58 / +51 B; a pad around `(/ 1 *z*)` (class baked) +88..+93 B on 23 KB; `unwind-protect` around a
   `floor` +49 / +51 B.
-- Not this invariant: `(floor 7.5 0)` -- a float rounded by an exact zero -- signals
-  `division-by-zero` on the JVM and the non-finite-rounding `simple-error` elsewhere (`.todo/c74`).
+- **A float rounded by an exact zero** (decided 2026-10-04): a FINITE float dividend over an exact
+  zero divisor in the two-argument rounding family (`(floor 7.5 0)`, `ceiling`/`truncate`/`round`,
+  `ffloor` and twins) signals `division-by-zero`, like an integer or ratio dividend; it used to be
+  `division-by-zero` on the JVM only and the non-finite-rounding `simple-error` (IEEE `7.5/0` =
+  infinity, then no integer) on the interpreter and both wasm-GC backends. Only an operation that
+  FAILED either way changed class; no value moved. SBCL signals `division-by-zero` for every one of
+  these; the two cuts that stay are deliberate and now pinned on all four backends
+  (`DivisionByZeroFixture`, `ci-spec.yaml`'s `division-by-zero-is-a-catchable-condition`):
+  - a zero FLOAT divisor (`(floor 7.5 0.0)`) keeps the non-finite-rounding `simple-error` -- float
+    division is IEEE by design, and `/`, `mod`, `rem` over a float dividend and an exact zero keep
+    their infinity / NaN values (`(/ 1.5 0)`, `(mod 7.5 0)`), which SBCL signals and rontolisp does
+    not;
+  - a NaN or infinite dividend keeps the non-finite-rounding `simple-error` even over an exact zero
+    (SBCL: `simple-error` for `(floor infinity 0)` too, measured), so the dividend's check comes
+    first on every backend.
+  Where: the interpreter's `ExactRounding.quotient` (before its zero-divisor decline); the JVM's
+  `_fdiv` already declined into `_div`, which signals; wasm-GC's `_f64_fdiv` at its zero-divisor
+  decline signals through `_div_zero` when the divisor is not a float and the module has the landing
+  (`divZeroLanding`; the parameter of `buildBody`), so a non-EH module keeps its bytes and its trap.
+- Not this invariant: `(expt 0 -1/2)` answers infinity on every backend where SBCL signals
+  `division-by-zero` (`(expt 0 -1)` signals); `/`, `mod`, `rem` with a float operand and an exact
+  zero stay IEEE.
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of

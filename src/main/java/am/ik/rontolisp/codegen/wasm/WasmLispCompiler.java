@@ -8217,7 +8217,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)
-				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody());
+				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody(divZeroLanding));
 				// closure-value name tag body (FUNC_FUN_NAME); a constant when the
 				// funcId -> name table has no rows
 				code.addFunction(WasmRuntimeBuilder.buildFunNameBody(stringTable,

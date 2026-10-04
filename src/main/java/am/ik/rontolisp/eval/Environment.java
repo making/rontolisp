@@ -9018,7 +9018,7 @@ public final class Environment implements Scope {
 	 * The signal of a division by an exact zero -- what {@code mod}/{@code rem} would
 	 * otherwise leave to the host's {@code ArithmeticException} and its own text.
 	 */
-	private static LispEvalException divisionByZero() {
+	static LispEvalException divisionByZero() {
 		return LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME,
 				ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
 	}
