@@ -133,7 +133,8 @@
  クラスオブジェクト（ホストオブジェクトの `class`、インタプリタと JVM）はその名前の
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
  `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
- 綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。プロトコルの
+ 綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。それ以外の
+クラス（`java.io.File`）はディスパッチ値でもクラスオブジェクトで、オラクル通りです。プロトコルの
  ディスパッチは階層を読まず（タグの
  完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
  区別します）。

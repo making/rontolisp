@@ -876,7 +876,23 @@ constructor and consumer, and a regex `replace` with a function replacement.
   holding it among its hierarchy ancestors; a class object PARENT of any other child is
   asked through its keywords. `parents`/`ancestors` answer class objects (the oracle's
   printing) plus what any key derives from; `descendants` of one refuses. Non-chained
-  spellings (`java.util.AbstractList`) keep lowering to `Class.forName`, a class object.
+  spellings (`java.util.AbstractList`) keep lowering to `Class.forName`, a class object --
+  a dispatch value too since 2026-10-04 (`dispatchClassKey` answers null for them; before,
+  `defmethod needs a core class`): the exact lookup hits the class object (`equal` on two
+  class objects is identity on the interpreter and the JVM), the miss search walks its
+  supers, so `AbstractList` beats `java.util.List` (`:list`) for an `ArrayList`. The
+  `defmethod` names `java:static`, so its program is a `java:` program (wasm: the
+  call-time `JAVA:STATIC` error where lowering refused). An unloadable capitalized name is
+  `unknown name: X` (the oracle's `Unable to resolve symbol`). Rejected: storing under the
+  class keyword (`:java.io.File`, `java:`-free) -- no row relates two such keywords, so
+  `AbstractList` and `AbstractCollection` methods tie (`Multiple methods`) where the oracle
+  picks the subclass. Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component
+  / JVM class): the `Exception`, `java.io.Writer` and keyword multimethods and
+  `examples/clojure/demo.clj` byte-identical (187,603 / 152,656 / 191,427 / 158,997;
+  89,846 / 75,050 / 91,238 / 99,415; 94,778 / 77,919 / 96,124 / 103,647; 91,151 / 78,254
+  / 92,481 / 119,448); `(defmethod f java.io.File ...)` + `java.util.AbstractList` over
+  host objects 13,247 / 13,177 / 14,663 / 137,186 (before: refused). Pin:
+  `ClojureInteropTest#aMultimethodDispatchesOnAHostClassOfNoKind`.
   Rejected: lowering every class spelling to a keyword and a class object to its keyword --
   `parents` would print `:java.util.AbstractList` and `(= (first (parents c))
   java.util.AbstractList)` would be false, where class objects match the oracle.

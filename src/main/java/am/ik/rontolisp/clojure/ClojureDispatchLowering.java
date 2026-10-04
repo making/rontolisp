@@ -297,9 +297,9 @@ final class ClojureDispatchLowering {
 	 * deftype names answer their tags; dotted, imported and {@code java.lang} spellings
 	 * resolve through {@link #resolveClass} first, so {@code java.util.Map} and
 	 * {@code clojure.lang.IPersistentVector} map like their simple names, and a throwable
-	 * or stream class answers its own name ({@link #classKey}). A capitalized name that
-	 * maps to nothing (an {@code Instant}, a {@code Date}, ...) is the
-	 * {@code extend-protocol} row's named refusal.
+	 * or stream class answers its own name ({@link #classKey}). Any other class is null
+	 * too: it lowers to its class object, which {@code class} answers for a host object
+	 * of it and the hierarchy walks through Java inheritance, like {@link #hierarchyArg}.
 	 */
 	static @Nullable LispVal dispatchClassKey(ClojureLowering ctx, String name) {
 		if (ctx.typeDefOf(name) == null && isObjectClassName(ctx, name)) {
@@ -308,11 +308,7 @@ final class ClojureDispatchLowering {
 		if (!ClojureNamespaceLowering.isClasslike(ctx, name) && ctx.typeDefOf(name) == null) {
 			return null;
 		}
-		LispVal key = classKey(ctx, name);
-		if (key == null) {
-			throw new LispReadException("defmethod needs a core class, not " + name);
-		}
-		return key;
+		return classKey(ctx, name);
 	}
 
 	/**

@@ -140,7 +140,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   its name's keyword and, by its simple name, a core kind's, so
   `(isa? (class (java.util.ArrayList.)) java.util.List)` is `true` -- and so is its `isa?`
   of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
-  `false`.
+  `false`. Any other class (`java.io.File`) is its class object, in a dispatch value too,
+  like the oracle.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.

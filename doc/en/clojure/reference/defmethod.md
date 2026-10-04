@@ -17,7 +17,11 @@ so `class` multis dispatch to it. A throwable class (`IllegalArgumentException`,
 `java.io.Reader`) stores under its name as a keyword, the one `class` answers for an exception
 or a stream, and the search follows the superclass chain like the oracle's Java inheritance:
 a `NumberFormatException` reaches an `IllegalArgumentException` method ahead of an
-`Exception` one. A true nil maps onto the `(:C%NIL)` marker
+`Exception` one. Any other host class (`java.io.File`, `java.util.AbstractList`) stores under
+its class object, the one `class` answers for a host object (interpreter and JVM), and the
+search follows its Java supers the same way: an `ArrayList` reaches a `java.util.AbstractList`
+method ahead of a `java.util.List` one. Such a dispatch value is host interop, so the
+`defmethod` fails at run time on wasm. A true nil maps onto the `(:C%NIL)` marker
 (no table ever keys on nil), so a literal `:nil` dispatch value answers only a `:nil`
 method, like the oracle, and
 `Object` matches every value past the search but ahead of the default.

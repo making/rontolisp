@@ -854,7 +854,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defmulti area :t) (get-method area Number)")).contains("\"number\"");
 		assertThatThrownBy(() -> Clojure.read("(defmulti area class) (defmethod area Instant [x] x)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("defmethod needs a core class, not Instant");
+			.hasMessageContaining("unknown name: Instant");
 		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("isa? takes a child and a parent");
 		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("RONTOLISP::%CLOJURE-EX-INFO")
