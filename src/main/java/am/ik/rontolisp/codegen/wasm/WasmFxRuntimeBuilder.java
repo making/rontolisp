@@ -205,10 +205,11 @@ final class WasmFxRuntimeBuilder {
 		return b.toByteArray();
 	}
 
-	// _fx_mod(a, b) -> i64: CL mod (the result takes the divisor's sign). Traps
-	// explicitly on b = 0 so the fast path keeps the generic _big_mod trap shape. In
-	// range for any i64 operands (|r| < |b|; rem_s(i64.min, -1) is a defined 0).
-	static byte[] buildFxModBody() {
+	// _fx_mod(a, b) -> i64: CL mod (the result takes the divisor's sign). Checks b = 0
+	// explicitly so the fast path keeps the generic _big_mod shape: division-by-zero with
+	// the landing (EH mode), a trap without it. In range for any i64 operands (|r| < |b|;
+	// rem_s(i64.min, -1) is a defined 0).
+	static byte[] buildFxModBody(boolean landing) {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		// locals: 2 = r (i64)
@@ -217,7 +218,7 @@ final class WasmFxRuntimeBuilder {
 		w.write(Type.I64);
 		final int r = 2;
 
-		emitZeroDivisorTrap(b);
+		emitZeroDivisorTrap(b, landing);
 		b.get(0);
 		b.get(1);
 		w.write(Instruction.I64_REM_S);
@@ -242,14 +243,14 @@ final class WasmFxRuntimeBuilder {
 		return b.toByteArray();
 	}
 
-	// _fx_rem(a, b) -> i64: truncating remainder, the divisor-zero trap made explicit
+	// _fx_rem(a, b) -> i64: truncating remainder, the divisor-zero check made explicit
 	// to match the generic _big_divrem shape.
-	static byte[] buildFxRemBody() {
+	static byte[] buildFxRemBody(boolean landing) {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		w.write(0); // no extra locals
 
-		emitZeroDivisorTrap(b);
+		emitZeroDivisorTrap(b, landing);
 		b.get(0);
 		b.get(1);
 		w.write(Instruction.I64_REM_S);
@@ -316,12 +317,12 @@ final class WasmFxRuntimeBuilder {
 		w.write(Instruction.I64_CLZ);
 	}
 
-	private static void emitZeroDivisorTrap(BodyWriter b) {
+	private static void emitZeroDivisorTrap(BodyWriter b, boolean landing) {
 		WasmWriter w = b.w;
 		b.get(1);
 		w.write(Instruction.I64_EQZ);
 		b.ifVoid();
-		w.write(Instruction.UNREACHABLE);
+		WasmRuntimeBuilder.emitDivisionByZero(w, landing);
 		b.end();
 	}
 

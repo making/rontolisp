@@ -16,7 +16,8 @@ import am.ik.wasm.WasmWriter;
  * the normalization and the demotion. Ratio arithmetic composes the tier-aware
  * {@code _big_*} helpers ({@link WasmBigIntRuntimeBuilder}); {@code _rat_div} always goes
  * through {@code _rat_new}, which gives Common Lisp exact division ({@code (/ 10 2)} is
- * {@code 5}, {@code (/ 10 3)} is the ratio {@code 10/3}) and traps on a zero denominator.
+ * {@code 5}, {@code (/ 10 3)} is the ratio {@code 10/3}) and signals
+ * {@code division-by-zero} on a zero denominator.
  */
 final class WasmRatioRuntimeBuilder {
 
@@ -40,12 +41,14 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	// _rat_new((ref null eq) num, (ref null eq) den) -> (ref null eq): two exact integers
-	// at any tier. Traps on den == 0, moves the sign to the numerator, reduces by the gcd
-	// and answers the integer itself for a denominator of one, through _big_cmp/_big_neg/
-	// _big_gcd/_big_divrem. i31Head (every level but --optimize=size, like the binary
-	// helpers' head) answers two i31 operands -- the ratios most programs make -- in i32
-	// with Euclid's loop inline first.
-	static byte[] buildRatNewBody(boolean i31Head) {
+	// at any tier. Signals division-by-zero on den == 0 (WasmRuntimeBuilder.
+	// emitDivisionByZero: _div_zero with the landing, a trap without it), moves the sign
+	// to the
+	// numerator, reduces by the gcd and answers the integer itself for a denominator of
+	// one, through _big_cmp/_big_neg/_big_gcd/_big_divrem. i31Head (every level but
+	// --optimize=size, like the binary helpers' head) answers two i31 operands -- the
+	// ratios most programs make -- in i32 with Euclid's loop inline first.
+	static byte[] buildRatNewBody(boolean i31Head, boolean landing) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -58,7 +61,7 @@ final class WasmRatioRuntimeBuilder {
 		if (i31Head) {
 			w.write(5);
 			w.write(Type.I32);
-			emitRatNewI31Head(w, 3, 4, 5, 6, 7);
+			emitRatNewI31Head(w, 3, 4, 5, 6, 7, landing);
 		}
 
 		// The tier-aware steps. A canonical zero is always the i31 0, and a canonical
@@ -67,7 +70,7 @@ final class WasmRatioRuntimeBuilder {
 		i31Const(w, 0);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
+		WasmRuntimeBuilder.emitDivisionByZero(w, landing);
 		w.write(Instruction.END);
 		getLocal(w, 1);
 		i31Const(w, 0);
@@ -121,7 +124,7 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_new's i31 head: two i31 operands normalize in i32 (|-2^30| still fits one,
 	// and _int_new boxes a component that leaves the i31 range when its sign moves) and
 	// return; anything else falls through to the tier-aware steps.
-	private static void emitRatNewI31Head(WasmWriter w, int n, int d, int a, int b, int t) {
+	private static void emitRatNewI31Head(WasmWriter w, int n, int d, int a, int b, int t, boolean landing) {
 		getLocal(w, 0);
 		refTestI31(w);
 		getLocal(w, 1);
@@ -134,11 +137,11 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 1);
 		WasmEmitHelper.castI31GetS(w);
 		setLocal(w, d);
-		// if (d == 0) trap
+		// if (d == 0) division-by-zero
 		getLocal(w, d);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
+		WasmRuntimeBuilder.emitDivisionByZero(w, landing);
 		w.write(Instruction.END);
 		// if (d < 0) { n = -n; d = -d; }
 		getLocal(w, d);

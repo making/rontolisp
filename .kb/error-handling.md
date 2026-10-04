@@ -25,8 +25,8 @@ a build that never knew about EH -- unless `--report-locations` asks for the unc
   `IndexOutOfBoundsException` (`program-error`) and cast / arithmetic / negative-size failure (the
   raw-failure classes) into one first, and only an `UnsupportedOperationException` (a limitation)
   left raw ("Argument-shape errors" below) -- JVM any `RuntimeException`, wasm-GC only `$lisp-cond`
-  throws -- raw traps there (failed ref.cast, integer divide by zero, `unreachable`) are uncatchable
-  and skip unwind-protect cleanups.
+  throws -- raw traps there (failed ref.cast, `unreachable`) are uncatchable and skip
+  unwind-protect cleanups.
 
 ## Phase 1 -- unwind-protect
 `LispEvaluator.evalUnwindProtect` (try/finally over both Java unwind channels, `LispEvalException`
@@ -1172,8 +1172,9 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries -- and everything
-  outside EH mode. (The array argument of an access and of an array-shape accessor is named since
+- **What still traps on wasm-GC**: the limb-tier boundaries (a left `ash` past the allocation
+  guard: `(ash 1 40000000)`) -- and everything outside EH mode. (A division by zero signals since
+  2026-10-04: "A division by zero signals division-by-zero".) (The array argument of an access and of an array-shape accessor is named since
   2026-09-27, a vector without a fill pointer handed the fill-pointer surface since 2026-09-28: "A
   sequence, array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
   2026-09-26: "A wrong-type argument names its operator".)
@@ -1183,6 +1184,44 @@ operator it serves:
   after changing a shared runtime helper.
 - Pre-existing edge unchanged: a condition thrown from INSIDE a wasm to-string capture leaves the
   capture flag set.
+
+## A division by zero signals division-by-zero
+**Invariant: a division by an exact zero -- `/`, the two-argument rounding family, `mod`/`rem`, at
+every integer tier and over a ratio, `expt` of zero to a negative power -- signals a CATCHABLE
+`division-by-zero` (an `arithmetic-error`) reporting `ClosRegistry.DIVISION_BY_ZERO_MESSAGE`
+(`Division by zero`), byte-identical on all four backends (wasm-GC: in EH mode).** A float
+operand stays IEEE (`(/ 1.0 0)` is infinity, `(mod 7.5 0)` NaN) everywhere. Pinned by
+`DivisionByZeroFixture` (`LispEvaluatorTest`/`JvmLispCompilerTest`/
+`WasmLispCompilerIntegrationTest#divisionByZeroIsACatchableCondition`, P1 and component),
+`ci-spec.yaml`'s `division-by-zero-is-a-catchable-condition` and `clojure-spec.yaml`'s
+`catch-takes-a-division-by-zero-as-an-arithmetic-exception` (oracle-identical); the uncaught report
+by `ehAnUncaughtDivisionByZeroReportsBeforeTrapping`.
+
+- **Interpreter**: `mod`/`rem`'s integer arms check the divisor (`Environment.nonZeroDivisor`);
+  they left it to Java's `%` / `BigInteger.remainder`, so the class was right (the pad's message
+  token) but the text was the host's `/ by zero` / `BigInteger divide by zero`.
+- **JVM**: `_mod`/`_rem` check the divisor on every arm (`JvmNumericRuntimeBuilder.DivZeroRefs`:
+  the Long arm, the BigInteger arm, the ratio arm's common denominator) and throw `_rat`'s
+  `ArithmeticException("Division by zero")`; a fused fixnum tree's `floorMod`/`lrem` throws into the
+  bail, which recomputes through them. +148 B on a class keeping both (zlib 180,537 -> 180,685).
+- **wasm-GC**: every zero divisor reaches one of four checks -- `_rat_new`'s zero denominator (both
+  arms: `/`, `rational`, `expt`, complex division, a ratio's `floor`/`mod`), `_big_divrem`'s (its
+  i64 fast path, where `rem_s`/`div_s` trapped natively, and its limb path: the rounding family's
+  `_big_fdiv`, `_big_mod`) and `_fx_mod`/`_fx_rem`'s (fused trees) -- each of which calls
+  `_div_zero` (`FUNC_DIV_ZERO`, `WasmRuntimeBuilder.buildDivZeroBody`). It throws the
+  `division-by-zero` instance where `usedLayoutTags` baked the class (a handler landing pad and a
+  `DIVISION_OPERATORS` name spelled), the `(nil . message)` payload elsewhere.
+- **The gate is `divZeroLanding`**: EH mode AND an operator that can divide by zero spelled (or any
+  name resolvable at run time). Without it the four helpers keep their old bytes and traps, so a
+  non-EH module and an EH module that never divides are byte-identical. Measured 2026-10-04
+  (P1 / component, default and `--optimize=size`): `size-report` hello/pi and the nine non-EH
+  `bench-report` programs byte-identical; an EH module spelling a division it never reaches
+  (`(handler-case (car 1) ...)`: the printer spells one) -2 B, the 16-byte address gap the cut
+  message leaves; zlib (EH, no pad) +29 / +49 B, `--optimize=size` +26 / +46 B; `string.lisp`
+  +58 / +51 B; a pad around `(/ 1 *z*)` (class baked) +88..+93 B on 23 KB; `unwind-protect` around a
+  `floor` +49 / +51 B.
+- Not this invariant: `(floor 7.5 0)` -- a float rounded by an exact zero -- signals
+  `division-by-zero` on the JVM and the non-finite-rounding `simple-error` elsewhere (`.todo/c74`).
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of

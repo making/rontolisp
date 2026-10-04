@@ -2826,7 +2826,7 @@ public final class Environment implements Scope {
 			for (int i = first; i < args.size(); i++) {
 				BigInteger divisorNum = numeratorOf(args.get(i));
 				if (divisorNum.signum() == 0) {
-					throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
+					throw divisionByZero();
 				}
 				num = num.multiply(denominatorOf(args.get(i)));
 				den = den.multiply(divisorNum);
@@ -2850,14 +2850,15 @@ public final class Environment implements Scope {
 			}
 			if (hasBigInteger(args)) {
 				BigInteger a = asBigInteger(args.get(0));
-				BigInteger b = asBigInteger(args.get(1));
+				BigInteger b = nonZeroDivisor(asBigInteger(args.get(1)));
 				BigInteger r = a.remainder(b);
 				if (r.signum() != 0 && r.signum() != b.signum()) {
 					r = r.add(b);
 				}
 				return normalizeBig(r);
 			}
-			return new LispInteger(Math.floorMod(asLong(args.get(0)), asLong(args.get(1))));
+			long a = asLong(args.get(0));
+			return new LispInteger(Math.floorMod(a, nonZeroDivisor(asLong(args.get(1)))));
 		}));
 		// rem: remainder whose result takes the sign of the dividend (Common Lisp rem).
 		env.defineFunction(LispNames.REM, new LispFunction(LispNames.REM, args -> {
@@ -2871,9 +2872,11 @@ public final class Environment implements Scope {
 				return rationalRemainder(args.get(0), args.get(1), false);
 			}
 			if (hasBigInteger(args)) {
-				return normalizeBig(asBigInteger(args.get(0)).remainder(asBigInteger(args.get(1))));
+				BigInteger a = asBigInteger(args.get(0));
+				return normalizeBig(a.remainder(nonZeroDivisor(asBigInteger(args.get(1)))));
 			}
-			return new LispInteger(asLong(args.get(0)) % asLong(args.get(1)));
+			long a = asLong(args.get(0));
+			return new LispInteger(a % nonZeroDivisor(asLong(args.get(1))));
 		}));
 		env.defineFunction(LispNames.ABS, new LispFunction(LispNames.ABS, args -> {
 			requireArgCount(LispNames.ABS, args, 1);
@@ -9011,12 +9014,35 @@ public final class Environment implements Scope {
 	 * computation the integer arm does, one level up. {@code divisorSigned} corrects the
 	 * remainder to the divisor's sign, which is what makes it {@code mod}.
 	 */
+	/**
+	 * The signal of a division by an exact zero -- what {@code mod}/{@code rem} would
+	 * otherwise leave to the host's {@code ArithmeticException} and its own text.
+	 */
+	private static LispEvalException divisionByZero() {
+		return LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME,
+				ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
+	}
+
+	private static long nonZeroDivisor(long divisor) {
+		if (divisor == 0) {
+			throw divisionByZero();
+		}
+		return divisor;
+	}
+
+	private static BigInteger nonZeroDivisor(BigInteger divisor) {
+		if (divisor.signum() == 0) {
+			throw divisionByZero();
+		}
+		return divisor;
+	}
+
 	private static LispVal rationalRemainder(LispVal a, LispVal b, boolean divisorSigned) {
 		BigInteger aDen = denominatorOf(a);
 		BigInteger bDen = denominatorOf(b);
 		BigInteger quotientDen = aDen.multiply(numeratorOf(b));
 		if (quotientDen.signum() == 0) {
-			throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
+			throw divisionByZero();
 		}
 		BigInteger r = numeratorOf(a).multiply(bDen).remainder(quotientDen);
 		// Denominators are positive, so quotientDen carries the divisor's sign.
@@ -9354,7 +9380,7 @@ public final class Environment implements Scope {
 
 	private static LispVal exactDiv(LispVal a, LispVal b) {
 		if (numeratorOf(b).signum() == 0) {
-			throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
+			throw divisionByZero();
 		}
 		return LispRatio.valueOf(numeratorOf(a).multiply(denominatorOf(b)), denominatorOf(a).multiply(numeratorOf(b)));
 	}
@@ -9521,7 +9547,7 @@ public final class Environment implements Scope {
 	private static LispVal[] exactDivComplex(LispVal a, LispVal b, LispVal c, LispVal d) {
 		LispVal denom = exactAdd(exactMul(c, c), exactMul(d, d));
 		if (isZeroReal(denom)) {
-			throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
+			throw divisionByZero();
 		}
 		return new LispVal[] { exactDiv(exactAdd(exactMul(a, c), exactMul(b, d)), denom),
 				exactDiv(exactSub(exactMul(b, c), exactMul(a, d)), denom) };

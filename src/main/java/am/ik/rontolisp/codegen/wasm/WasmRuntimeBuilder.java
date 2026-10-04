@@ -2865,6 +2865,69 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Emits the signal of a division by an exact zero, which never returns:
+	 * {@code call _div_zero; unreachable} where the module signals through the landing
+	 * ({@link #buildDivZeroBody}: EH mode, and an operator that can divide by zero
+	 * reachable), a bare {@code unreachable} elsewhere -- the trap the module always had.
+	 * @param w the writer
+	 * @param landing whether the module signals through {@code _div_zero}
+	 */
+	static void emitDivisionByZero(WasmWriter w, boolean landing) {
+		if (landing) {
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DIV_ZERO);
+		}
+		w.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Builds {@code _div_zero () -> ()}, the landing of every division by an exact zero
+	 * ({@link #emitDivisionByZero}; it never returns). In EH mode it throws
+	 * {@link ClosRegistry#DIVISION_BY_ZERO_MESSAGE} on {@code $lisp-cond} as a
+	 * {@code division-by-zero} instance where the module baked the class -- a handler
+	 * landing pad and a division operator spelled -- and as the instance-less
+	 * {@code (nil . message)} payload otherwise, which the entry landing pad reports the
+	 * same way. Where no site signals through it (outside EH mode, or nothing divides) it
+	 * is a bare {@code unreachable}.
+	 * @param message the interned quote-framed message, or null where no site signals
+	 * @param instance the class's shape, or null for the instance-less payload
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @return the function body
+	 */
+	static byte[] buildDivZeroBody(WasmLispCompiler.StringTable.@Nullable StringEntry message,
+			@Nullable ConditionInstance instance, boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		if (message == null) {
+			w.write(0); // no locals
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		if (instance == null) {
+			w.write(0); // no locals
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			emitStrConst(w, message);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			// locals: 0 = the message, 1 = the slot vector
+			w.write(1);
+			w.write(2);
+			w.writeRefType(true, Type.EQ.code());
+			emitStrConst(w, message);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			emitConditionThrow(w, instance, 1, 0);
+		}
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds the condition instance the way {@code %obj-new} does -- every slot nil but
 	 * {@code format-control}, which holds the message in {@code msgLocal} as its text
 	 * control ({@link #emitTildeCall}, what {@code %text-control} compiles to) -- and

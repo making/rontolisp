@@ -18299,6 +18299,54 @@ cases:
       (NIL NUMBER NIL "+: The value NIL is not of type NUMBER")
       (NIL INTEGER NIL "LOGAND: The value NIL is not of type INTEGER")
       TYPE-ERROR
+  - name: division-by-zero-is-a-catchable-condition
+    source: |
+      ;; A division by an exact zero through every integer and ratio path signals
+      ;; a CATCHABLE division-by-zero reporting "Division by zero" on every
+      ;; backend (on the wasm pair it trapped past every handler; mod and rem
+      ;; reported the host's "/ by zero" on the interpreter and the JVM).
+      (defvar *ci-dz-zero* 0)
+      (defvar *ci-dz-long* 10000000000)
+      (defvar *ci-dz-wide* 100000000000000000000000)
+      (defun ci-dz (thunk)
+        (handler-case (list :value (funcall thunk))
+          (division-by-zero (e) (list :division-by-zero (princ-to-string e) (typep e 'arithmetic-error)))
+          (error (e) (list :other (type-of e) (princ-to-string e)))))
+      (print (ci-dz (lambda () (/ 1 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (/ *ci-dz-zero*))))
+      (print (ci-dz (lambda () (/ 1/2 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (/ *ci-dz-wide* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (/ #c(1 2) *ci-dz-zero*))))
+      (print (ci-dz (lambda () (floor 7 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (truncate *ci-dz-long* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (round *ci-dz-wide* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (floor 1/2 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (mod 7 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (rem *ci-dz-long* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (mod *ci-dz-wide* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (rem 1/2 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (expt *ci-dz-zero* -1))))
+      (print (ci-dz (lambda () (let ((s 0)) (dotimes (i 3) (setq s (+ s (rem (* i 3) (- i i))))) s))))
+      (print (ci-dz (lambda () (funcall #'/ 1 *ci-dz-zero*))))
+      (print (handler-case (/ 1 *ci-dz-zero*) (arithmetic-error (e) (type-of e))))
+    expected: |
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      DIVISION-BY-ZERO
   - name: operand-type-errors-name-the-operator-wherever-it-compiles
     source: |
       ;; A wrong-type operand's report names the same operator on every backend

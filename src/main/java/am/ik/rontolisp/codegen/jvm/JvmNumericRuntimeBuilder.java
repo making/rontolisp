@@ -381,7 +381,7 @@ final class JvmNumericRuntimeBuilder {
 
 		MethodRefEntry objEquals = cp.methodRef(objectClass, "equals", "(" + OBJ + ")Z");
 		MethodRefEntry aeInit = cp.methodRef(arithEx, "<init>", "(Ljava/lang/String;)V");
-		StringEntry divZeroStr = cp.stringEntry("Division by zero");
+		StringEntry divZeroStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
 		StringEntry ashTooLargeStr = cp.stringEntry("ash: shift count too large");
 		StringEntry rationalNonFiniteStr = cp.stringEntry("rational of a non-finite float is undefined");
 		StringEntry roundingNonFiniteStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
@@ -536,11 +536,13 @@ final class JvmNumericRuntimeBuilder {
 				ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf));
 		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
 				numDoubleValue, doubleValueOf));
+		DivZeroRefs divZero = new DivZeroRefs(arithEx, aeInit, divZeroStr, biSignum);
 		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
 				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod, ratArrClass,
-				rRatNum, rRatDen, rRat, biMul));
+				rRatNum, rRatDen, rRat, biMul, divZero));
 		methods.add(buildRem(nRem, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, doubleClass, rDbl,
-				numberClass, numDoubleValue, doubleValueOf, rFrem, ratArrClass, rRatNum, rRatDen, rRat, biMul));
+				numberClass, numDoubleValue, doubleValueOf, rFrem, ratArrClass, rRatNum, rRatDen, rRat, biMul,
+				divZero));
 		methods.add(buildFmod(nFmod, dFmod, rFrem));
 		methods.add(buildFrem(nFrem, dFmod));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
@@ -908,14 +910,14 @@ final class JvmNumericRuntimeBuilder {
 
 	// _mod(Object a, Object b): Common Lisp modulo whose result takes the sign of the
 	// divisor. Long fast path via Math.floorMod; BigInteger path corrects the remainder
-	// by
-	// adding the divisor when the signs differ.
+	// by adding the divisor when the signs differ. An exact zero divisor throws
+	// "Division by zero" on every arm, never the host's "/ by zero".
 	private static NumericMethod buildMod(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
 			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
 			MethodRefEntry biRem, MethodRefEntry floorModLong, MethodRefEntry biSignum, MethodRefEntry biAdd,
 			ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue,
 			MethodRefEntry doubleValueOf, MethodRefEntry rFmod, ClassEntry ratArrClass, MethodRefEntry rRatNum,
-			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul) {
+			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul, DivZeroRefs divZero) {
 		MethodCode c = new MethodCode();
 		// A float operand takes CL's divisor-signed float modulo, the same _fmod the
 		// double-literal emission calls -- without this arm a Double reaching the
@@ -927,6 +929,7 @@ final class JvmNumericRuntimeBuilder {
 		emitRatioGuard(c, ratArrClass, toRatio);
 		MethodCode.Label toSlow = c.newLabel();
 		emitLongLongGuard(c, longClass, toSlow);
+		emitLongDivisorCheck(c, longClass, longValue, divZero);
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
 		c.invokestatic(floorModLong);
@@ -940,6 +943,7 @@ final class JvmNumericRuntimeBuilder {
 		c.aload(1);
 		c.invokestatic(rBig);
 		c.astore(3);
+		emitBigDivisorCheck(c, 3, divZero);
 		c.aload(2);
 		c.aload(3);
 		c.invokevirtual(biRem);
@@ -949,7 +953,7 @@ final class JvmNumericRuntimeBuilder {
 		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(toRatio);
-		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem);
+		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem, divZero);
 		emitDivisorSignCorrection(c, biSignum, biAdd);
 		c.aload(4);
 		emitRatioRemainderDenominator(c, rRatDen, biMul, rRat);
@@ -957,12 +961,14 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _rem(Object a, Object b): remainder whose result takes the sign of the dividend
-	// (Java/BigInteger remainder). Long fast path, BigInteger.remainder otherwise.
+	// (Java/BigInteger remainder). Long fast path, BigInteger.remainder otherwise. An
+	// exact zero divisor throws "Division by zero", as _mod does.
 	private static NumericMethod buildRem(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
 			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
 			MethodRefEntry biRem, ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass,
 			MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf, MethodRefEntry rFrem, ClassEntry ratArrClass,
-			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul) {
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul,
+			DivZeroRefs divZero) {
 		MethodCode c = new MethodCode();
 		// A float operand keeps the dividend's sign -- _frem, which is DREM plus CLHS's
 		// sign for a ZERO remainder, and is what the double-literal emission of
@@ -973,15 +979,28 @@ final class JvmNumericRuntimeBuilder {
 		emitRatioGuard(c, ratArrClass, toRatio);
 		MethodCode.Label toSlow = c.newLabel();
 		emitLongLongGuard(c, longClass, toSlow);
+		emitLongDivisorCheck(c, longClass, longValue, divZero);
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
 		c.lrem();
 		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(toSlow);
-		emitBigBinary(c, rBig, biRem, rNorm);
+		// _norm(_big(a).remainder(B)), B = _big(b) checked first
+		c.aload(0);
+		c.invokestatic(rBig);
+		c.astore(2);
+		c.aload(1);
+		c.invokestatic(rBig);
+		c.astore(3);
+		emitBigDivisorCheck(c, 3, divZero);
+		c.aload(2);
+		c.aload(3);
+		c.invokevirtual(biRem);
+		c.invokestatic(rNorm);
+		c.areturn();
 		c.labelBinding(toRatio);
-		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem);
+		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem, divZero);
 		c.aload(4);
 		emitRatioRemainderDenominator(c, rRatDen, biMul, rRat);
 		return new NumericMethod(name, desc, c);
@@ -3563,6 +3582,44 @@ final class JvmNumericRuntimeBuilder {
 		c.ifeq(slow);
 	}
 
+	/**
+	 * What a zero divisor's check throws: {@code new ArithmeticException("Division by
+	 * zero")}, the text {@code _rat} throws too.
+	 */
+	record DivZeroRefs(ClassEntry arithEx, MethodRefEntry aeInit, StringEntry message, MethodRefEntry biSignum) {
+
+		void emitThrow(MethodCode c) {
+			c.new_(this.arithEx);
+			c.dup();
+			c.ldc(this.message);
+			c.invokespecial(this.aeInit);
+			c.athrow();
+		}
+
+	}
+
+	// Emits: if (((Long) b).longValue() == 0) throw -- over local 1, a Long.
+	private static void emitLongDivisorCheck(MethodCode c, ClassEntry longClass, MethodRefEntry longValue,
+			DivZeroRefs divZero) {
+		emitUnboxLong(c, 1, longClass, longValue);
+		c.lconst_0();
+		c.lcmp();
+		MethodCode.Label nonZero = c.newLabel();
+		c.ifne(nonZero);
+		divZero.emitThrow(c);
+		c.labelBinding(nonZero);
+	}
+
+	// Emits: if (slot.signum() == 0) throw -- over a BigInteger local.
+	private static void emitBigDivisorCheck(MethodCode c, int slot, DivZeroRefs divZero) {
+		c.aload(slot);
+		c.invokevirtual(divZero.biSignum());
+		MethodCode.Label nonZero = c.newLabel();
+		c.ifne(nonZero);
+		divZero.emitThrow(c);
+		c.labelBinding(nonZero);
+	}
+
 	// Emits: load slot, checkcast Long, Long.longValue() -> long on stack.
 	private static void emitUnboxLong(MethodCode c, int slot, ClassEntry longClass, MethodRefEntry longValue) {
 		c.aload(slot);
@@ -3717,14 +3774,15 @@ final class JvmNumericRuntimeBuilder {
 	// local 4, the same slots the BigInteger path uses, so _mod's sign correction is
 	// shared.
 	private static void emitRatioRemainderPrefix(MethodCode c, MethodRefEntry rRatNum, MethodRefEntry rRatDen,
-			MethodRefEntry biMul, MethodRefEntry biRem) {
-		// BigInteger d = _ratden(a).multiply(_ratnum(b));
+			MethodRefEntry biMul, MethodRefEntry biRem, DivZeroRefs divZero) {
+		// BigInteger d = _ratden(a).multiply(_ratnum(b)); zero exactly when b is
 		c.aload(0);
 		c.invokestatic(rRatDen);
 		c.aload(1);
 		c.invokestatic(rRatNum);
 		c.invokevirtual(biMul);
 		c.astore(3);
+		emitBigDivisorCheck(c, 3, divZero);
 		// BigInteger r = _ratnum(a).multiply(_ratden(b)).remainder(d);
 		c.aload(0);
 		c.invokestatic(rRatNum);

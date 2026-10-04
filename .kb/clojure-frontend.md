@@ -232,7 +232,9 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   `%clojure-host-chain`), message and cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
   `C%E-PARTS` (a host throwable has no data). `ex-message` of a non-exception is `nil` (was the
   rendering before 2026-10-03); of a CL condition its report (`Division by zero`, the oracle's
-  `Divide by zero`; wasm-GC traps on division by zero, so the spec uses `(assoc [0 1] :a :x)`).
+  `Divide by zero`; the spec's `ex-message` case uses `(assoc [0 1] :a :x)`, from when wasm-GC
+  trapped on division by zero -- it signals since 2026-10-04, and clojure-spec
+  `catch-takes-a-division-by-zero-as-an-arithmetic-exception` pins the catch, oracle-identical).
 - `ex-info` takes an optional cause; nil data is `{}` (the oracle's); a non-exception cause is
   refused.
 - A construction is an exception (`ClojureInteropLowering.throwableConstruction`, untagged
