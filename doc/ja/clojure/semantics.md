@@ -204,8 +204,9 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `*standard-input*`/`*error-output*` です。フラグは `clojure -M` でのオラクルの値を持ち
 （`*print-length*` は `nil`、`*assert*` は `true`、`*data-readers*` は `{}`、
 `*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
-プリンタは `*print-length*`、`*print-level*`、`*print-readably*` に従います（それ以外は
-ただの値です）。`*ns*`、`*file*`、`*source-path*`、`*repl*`、`*1`/`*2`/`*3`/`*e` は
+プリンタは `*print-length*`、`*print-level*`、`*print-readably*`、`*print-meta*`、
+`*print-namespace-maps*` に従い（キーが一つの名前空間を共有するマップは `#:a{:b 1}` と
+印字されます）、`assert` は展開される時点の `*assert*` を読みます。それ以外はただの値です。`*ns*`、`*file*`、`*source-path*`、`*repl*`、`*1`/`*2`/`*3`/`*e` は
 ここでは値を持ちません。`with-in-str` は `*in*` を文字列リーダに束縛し、`read-line`、
 `read`、`(.read *in*)` はそこから読みます。`defstruct` はキーベクターを名前の裏に保持します。
 `struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は

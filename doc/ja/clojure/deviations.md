@@ -27,8 +27,11 @@
  `toString` を答えます。文字列入力ストリームは `with-in-str` の
  `clojure.lang.LineNumberingPushbackReader` で、オラクルが `StringReader` の上の
  `java.io.PushbackReader` を答える場合も同じです。
-- `*print-meta*` と `*print-namespace-maps*` はプリンタが読まないただの値で（名前空間
- 付きキーのマップは `{:a/b 1}` と印字されます）、`*assert*` は `assert` を無効にせず、
+- `*print-meta*` はオラクル同様に値のメタデータを値の前に書きますが、クォートしたリストは
+ オラクルのリーダーが付ける `:line`/`:column` メタデータを持ちません。`*print-dup*` は
+ プリンタが読まないただの値です。`assert` は展開される時点の `*assert*` を読むため、
+ トップレベルでリテラルに `set!` すると以降の `assert` が無効になります。関数の中の
+ `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
  Clojure 値に対する `~S`/`~A` は Common Lisp 記法のままです（`format` は CL サーフェス）。
  `print-method`/`pprint` はありません。
 - マップ・セット・memoize のキーは、ベクター・リスト・マップ・セットも含めて本家と同じく

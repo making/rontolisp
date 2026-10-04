@@ -904,6 +904,14 @@ public final class ClojureLowering {
 	boolean usedReader;
 
 	/**
+	 * What {@code *assert*} holds where the next {@code assert} lowers: the oracle reads
+	 * it when the macro expands, so a top-level {@code set!} of it to a literal switches
+	 * off (or back on) every {@code assert} lowered after it, and a {@code binding}
+	 * around an expanded one changes nothing.
+	 */
+	boolean assertEnabled = true;
+
+	/**
 	 * The classes a session already registered for the run-time reader, by class name: a
 	 * later buffer registers only what it adds or redefines (files register every class
 	 * at once).
@@ -2150,6 +2158,15 @@ public final class ClojureLowering {
 			}
 			if (items != null && !items.isEmpty() && ClojureTestLowering.isDeftestHead(this, items.get(0))) {
 				return ClojureTestLowering.deftestForms(this, items, form);
+			}
+			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "set!")) {
+				// runs before the next top-level form expands, like the oracle's
+				LispVal lowered = lower(form);
+				Boolean flag = ClojureProtocolLowering.assertSetTo(this, items);
+				if (flag != null) {
+					this.assertEnabled = flag;
+				}
+				return List.of(lowered);
 			}
 			return List.of(lower(form));
 		}

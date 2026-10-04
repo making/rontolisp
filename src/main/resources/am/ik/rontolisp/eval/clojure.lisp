@@ -29,10 +29,10 @@
 ;;
 ;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
 ;; nil IS the empty list (stays nil, never ()); map/set walk order is unspecified
-;; (same as keys/vals); *print-meta* and *print-namespace-maps* are not honored
-;; (*print-length*, *print-level* and *print-readably* are); ~S/~A on Clojure values
-;; stay Common Lisp notation (format is a CL surface); print-method/pprint stay
-;; absent; unreadable values (functions, host objects) print #<..>, except a
+;; (same as keys/vals); ~S/~A on Clojure values stay Common Lisp notation
+;; (format is a CL surface); print-method/pprint stay absent, and *print-dup*
+;; is a plain value (the other print flags are honoured); unreadable values
+;; (functions, host objects) print #<..>, except a
 ;; host class object, which prints its name like the oracle's; a condition prints
 ;; its report (an exception's is its toString).
 
@@ -258,6 +258,147 @@
 
 (defvar rontolisp::%clojure-print-depth 0)
 
+;; *print-meta* and *print-namespace-maps*, read by the printer only, each through
+;; one test arm: %clojure-print-meta-p (ClojureArms PRINT_META, whose producer is
+;; the flag: its root is false) and %clojure-print-ns-map-p (NAMESPACE_MAP, whose
+;; producers are the qualified keywords and symbols: no other map has a namespace
+;; to lift). *print-meta*'s root is the false object itself (the value the
+;; lowering binds rontolisp::%clojure-false to), since a compiled program defines
+;; the library's specials first and its own definition of the flag then keeps it.
+(defvar rontolisp::%clojure-print-meta '|false|)
+
+(defvar rontolisp::%clojure-print-namespace-maps t)
+
+(defun rontolisp::%clojure-print-meta-p (x readable stream labels)
+  "Write X's metadata ahead of it, ^ and the map and a space, when *print-meta*
+   is on, the side is pr's (where nil is spelled nil) and the map is not empty,
+   like the oracle's print-meta (a lone :tag writes its value); answers NIL, so
+   the printer goes on to write X itself."
+  (let ((m
+         (if (and readable
+                  (rontolisp::%clojure-truthy rontolisp::%clojure-print-meta))
+             (rontolisp::%clojure-meta x)
+             nil)))
+    (if m
+        (let ((table
+               (cond ((hash-table-p m) m)
+                     ((rontolisp::%clojure-sorted-map-p m)
+                      (rontolisp::%clojure-sorted-table m "meta"))
+                     (t (car (cdr (cdr (cdr m))))))))
+          (if (> (hash-table-count table) 0)
+              (let ((tag (gethash (list :C%KEYWORD "tag") table)))
+                (let ((shown
+                       (if (and (= (hash-table-count table) 1)
+                                (rontolisp::%clojure-truthy tag))
+                           tag
+                           m)))
+                  (write-char #\^ stream)
+                  (rontolisp::%clojure-write shown "nil" readable stream labels)
+                  (write-char #\Space stream))))))
+    nil))
+
+(defun rontolisp::%clojure-ident-spelling (k)
+  "The spelling of the keyword or symbol K (a symbol's demangled), NIL for
+   anything else."
+  (cond ((rontolisp::%clojure-keyword-p k) (car (cdr k)))
+        ((rontolisp::%clojure-real-symbol-p k)
+         (rontolisp::%clojure-symbol-full-name k))
+        (t nil)))
+
+(defun rontolisp::%clojure-slash-at (s)
+  "The index of the first slash in the spelling S, NIL when it has none or is
+   the lone slash (the symbol /, which has no namespace)."
+  (let ((n (length s)) (i 0))
+    (do ()
+        ((or (>= i n) (char= (char s i) #\/)))
+      (setq i (+ i 1)))
+    (if (and (< i n) (> n 1)) i nil)))
+
+(defun rontolisp::%clojure-same-namespace-p (a b at)
+  "Whether the spelling B, whose first slash is at AT, has the namespace of the
+   spelling A."
+  (let ((same (eql (rontolisp::%clojure-slash-at a) at)) (i 0))
+    (do ()
+        ((or (not same) (>= i at)) same)
+      (if (char= (char a i) (char b i)) (setq i (+ i 1)) (setq same nil)))))
+
+(defun rontolisp::%clojure-map-namespace (x)
+  "The spelling of a key of the hash or sorted map X whose namespace (up to its
+   first slash) every key shares, or NIL when a key is no keyword or symbol or
+   has no namespace, two differ, or X is empty: the oracle's lift-ns."
+  (let ((first nil) (lifted t))
+    (let ((step
+           (lambda (k)
+             (if lifted
+                 (let ((s (rontolisp::%clojure-ident-spelling k)))
+                   (let ((at (if s (rontolisp::%clojure-slash-at s) nil)))
+                     (cond ((null at) (setq lifted nil))
+                           ((null first) (setq first s))
+                           ((not
+                             (rontolisp::%clojure-same-namespace-p first s at))
+                            (setq lifted nil)))))))))
+      (if (rontolisp::%clojure-sorted-p x)
+          (let ((items (car (cdr (cdr (cdr x))))))
+            (dotimes (i (length items)) (funcall step (aref (aref items i) 0))))
+          (maphash (lambda (k v) (funcall step k)) x)))
+    (if lifted first nil)))
+
+(defun rontolisp::%clojure-print-ns-map-p (x)
+  "Whether X is a map *print-namespace-maps* writes as #:ns{...}: a hash or
+   sorted map whose keys share a namespace, the flag on."
+  (and (rontolisp::%clojure-truthy rontolisp::%clojure-print-namespace-maps)
+       (or (hash-table-p x) (rontolisp::%clojure-sorted-map-p x))
+       (rontolisp::%clojure-map-namespace x) t))
+
+(defun rontolisp::%clojure-write-chars (s start end stream)
+  "Write the characters of the string S from START below END."
+  (do ((i start (+ i 1)))
+      ((>= i end))
+    (write-char (char s i) stream)))
+
+(defun rontolisp::%clojure-write-bare-ident (k stream)
+  "Write the qualified keyword or symbol K without its namespace."
+  (let ((s (rontolisp::%clojure-ident-spelling k)))
+    (if (rontolisp::%clojure-keyword-p k) (write-char #\: stream))
+    (rontolisp::%clojure-write-chars s (+ (rontolisp::%clojure-slash-at s) 1)
+                                     (length s) stream)))
+
+(defun rontolisp::%clojure-write-ns-map
+    (x nil-replacement readable stream labels)
+  "Write the map X, whose keys share a namespace, as #:ns{k v, ...} with the
+   keys bare, like the oracle's print-map: a sorted map in order, cut after
+   *print-length* entries with ..., each value one level deeper."
+  (let ((ns (rontolisp::%clojure-map-namespace x))
+        (n
+         (if (rontolisp::%clojure-print-cut-p x)
+             (rontolisp::%clojure-print-limit rontolisp::%clojure-print-length)
+             nil))
+        (i 0))
+    (let ((entry
+           (lambda (k v)
+             (if (or (null n) (<= i n))
+                 (progn
+                   (if (> i 0) (write-string ", " stream))
+                   (if (and n (= i n))
+                       (write-string "..." stream)
+                       (progn
+                         (rontolisp::%clojure-write-bare-ident k stream)
+                         (write-char #\Space stream)
+                         (rontolisp::%clojure-write-nested v nil-replacement
+                                                           readable stream
+                                                           labels)))))
+             (setq i (+ i 1)))))
+      (write-string "#:" stream)
+      (rontolisp::%clojure-write-chars ns 0 (rontolisp::%clojure-slash-at ns)
+                                       stream)
+      (write-char #\{ stream)
+      (if (rontolisp::%clojure-sorted-p x)
+          (let ((items (car (cdr (cdr (cdr x))))))
+            (dotimes (j (length items))
+              (funcall entry (aref (aref items j) 0) (aref (aref items j) 1))))
+          (maphash (lambda (k v) (funcall entry k v)) x))
+      (write-char #\} stream))))
+
 (defun rontolisp::%clojure-print-readable (readable)
   "READABLE, unless *print-readably* is logical false, under which pr writes
    like print (strings bare, characters as glyphs), like the oracle."
@@ -477,6 +618,7 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
+        ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
          ;; realized as it prints, like the oracle: empty is (), anything
@@ -507,6 +649,9 @@
          (write-char #\> stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
+        ((rontolisp::%clojure-print-ns-map-p x)
+         (rontolisp::%clojure-write-ns-map x nil-replacement readable stream
+                                           labels))
         ((rontolisp::%clojure-print-cut-p x)
          (rontolisp::%clojure-write-cut x nil-replacement readable stream
                                         labels))

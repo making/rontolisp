@@ -16,8 +16,20 @@ Reader metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints) on a 
 or a local parses and drops; only `binding` reads `^:dynamic`. On a vector, map or set
 literal it attaches, like the oracle's reader: `^:k [1]` carries `{:k true}`.
 
+Under `*print-meta*` true, `pr`, `prn`, `pr-str` and `str` write non-empty metadata ahead
+of the value (`^{:k 1} [1 2]`, a lone `:tag` as `^String [1]`); `print` and `println`
+never do.
+
 ```clojure
 (def v (with-meta [1 2] {:tag :x}))
 (println v (meta v))  ; [1 2] {:tag :x}
 (println (meta [1 2])) ; nil
+```
+
+```clojure
+(binding [*print-meta* true] (prn (with-meta [1 2] {:k 1})))
+```
+
+```
+^{:k 1} [1 2]
 ```

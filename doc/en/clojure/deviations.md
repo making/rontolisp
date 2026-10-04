@@ -26,10 +26,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   its `toString` the same way: a string input stream is a
   `clojure.lang.LineNumberingPushbackReader` (`with-in-str`'s), also where the oracle's is
   a `java.io.PushbackReader` over a `StringReader`.
-- `*print-meta*` and `*print-namespace-maps*` are plain values the printer does not
-  read (a map with namespaced keys prints `{:a/b 1}`), `*assert*` does not switch
-  `assert` off, and `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a
-  CL surface); `print-method`/`pprint` stay absent.
+- `*print-meta*` writes a value's metadata ahead of it like the oracle, but no quoted
+  list carries the oracle reader's `:line`/`:column` metadata; `*print-dup*` is a plain
+  value the printer does not read. `assert` reads `*assert*` where it expands, so a
+  top-level `set!` of it to a literal switches off the asserts after it; a `set!` inside
+  a function, or to a computed value, does not (the oracle's takes effect once it runs).
+  `~S`/`~A` on Clojure values stay Common Lisp notation (`format` is a CL surface);
+  `print-method`/`pprint` stay absent.
 - A map, set or memo key finds an `=` key like the oracle's, vectors, lists, maps and
   sets included, but a stored collection key is the first `=` key of its kind (vector,
   list, lazy seq) the program stored, so its metadata and the spelling of a nested

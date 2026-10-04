@@ -7,7 +7,21 @@
 メッセージは else 節にあるため、失敗時にのみ評価されます -- oracle と同様に遅延します。
 `and`/`or` と同様に、`assert` に関数値はありません。
 
+`assert` はオラクルのマクロと同様に展開される時点の `*assert*` を読みます。トップレベルの
+`(set! *assert* false)`（または `nil`）の後の `assert` は、トップレベルで `true` に戻すまで
+テストもメッセージも評価せず `nil` になります。`assert` を囲む `*assert*` の `binding` は
+何も変えません。
+
 ```clojure
 (println (assert (= 1 1))) ; nil
 (println (try (assert (= 1 2) "oops") (catch AssertionError e (ex-message e)))) ; Assert failed: oops、次の行に (= 1 2)
+```
+
+```clojure
+(set! *assert* false)
+(println (assert (= 1 2)))
+```
+
+```
+nil
 ```
