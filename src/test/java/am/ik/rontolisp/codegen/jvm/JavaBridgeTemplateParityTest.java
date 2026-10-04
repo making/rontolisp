@@ -145,7 +145,9 @@ class JavaBridgeTemplateParityTest {
 				new Object[] { BigInteger.class, "pow", List.of(integer(5)) },
 				new Object[] { BigDecimal.class, "valueOf", List.of(integer(5)) },
 				new Object[] { Math.class, "sqrt", List.of(bignum(BigInteger.TWO.pow(64))) },
-				new Object[] { Math.class, "max", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) });
+				new Object[] { Math.class, "max", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) },
+				new Object[] { new HashMap<>().entrySet().iterator().getClass(), "hasNext", List.of() },
+				new Object[] { new HashMap<>().keySet().iterator().getClass(), "next", List.of() });
 		int checked = 0;
 		for (Object[] row : corpus) {
 			Class<?> type = (Class<?>) row[0];
@@ -164,7 +166,20 @@ class JavaBridgeTemplateParityTest {
 			assertThat(template[2]).as("%s packs the same way", what).isEqualTo(shared.packed());
 			checked++;
 		}
-		assertThat(checked).isGreaterThan(42);
+		assertThat(checked).isGreaterThan(44);
+	}
+
+	// A non-public receiver class whose method is declared on a non-public superclass
+	// (HashMap's entry iterator, hasNext on HashMap$HashIterator) is called through the
+	// receiver's own interface (Iterator.hasNext) in both copies.
+	@Test
+	void aNonPublicReceiverReachesItsOwnInterface() throws Exception {
+		Class<?> iterator = new HashMap<>().entrySet().iterator().getClass();
+		Object[] template = templateChoice(iterator, "hasNext", List.of());
+		assertThat(Objects.requireNonNull(template)[0]).isEqualTo(java.util.Iterator.class.getMethod("hasNext"));
+		JavaOverloads.Overload shared = sharedChoice(iterator, "hasNext", List.of());
+		assertThat(((ReflectiveJavaClasses.Member) Objects.requireNonNull(shared).executable()).executable())
+			.isEqualTo(java.util.Iterator.class.getMethod("hasNext"));
 	}
 
 	// A covariant variant is never chosen over the method it overrides: both copies pick

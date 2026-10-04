@@ -1044,7 +1044,7 @@ final class JavaBridgeTemplate {
 			List<Method> candidates = new ArrayList<>();
 			for (Method method : cls.getMethods()) {
 				if (method.getName().equals(methodName)) {
-					Method accessible = accessibleMethod(method);
+					Method accessible = accessibleMethod(cls, method);
 					if (accessible != null) {
 						candidates.add(accessible);
 					}
@@ -1075,12 +1075,13 @@ final class JavaBridgeTemplate {
 
 	// A public method declared in a non-exported/non-public class (e.g. the List.of
 	// result type) cannot be invoked reflectively; re-resolve it to the same method on
-	// an accessible superclass or interface declaration (as in eval/JavaInterop).
-	private static @Nullable Method accessibleMethod(Method method) {
+	// an accessible superclass or interface declaration of the receiver class, the walk
+	// starting at the receiver (as in compiler/ReflectiveJavaClasses).
+	private static @Nullable Method accessibleMethod(Class<?> receiver, Method method) {
 		if (method.trySetAccessible()) {
 			return method;
 		}
-		for (Class<?> c = method.getDeclaringClass(); c != null; c = c.getSuperclass()) {
+		for (Class<?> c = receiver; c != null; c = c.getSuperclass()) {
 			Method onInterface = accessibleOnInterfaces(c, method);
 			if (onInterface != null) {
 				return onInterface;
