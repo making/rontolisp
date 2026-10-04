@@ -21319,31 +21319,29 @@ public final class LispMacroExpander {
 		// One whole-program answer, because ignore-errors hands its condition back as a
 		// SECONDARY value and nothing but a consumer can read one.
 		boolean multipleValues = receivesMultipleValues(program);
-		// The hold side must not trip over the keyword constructor every
-		// define-condition splices ((defun %make-X (...) (%obj-new '%class-X ...)) --
-		// its %obj-new RETURNS the instance, but the defun sits there whether or not
+		// Neither side may trip over the keyword constructor every define-condition
+		// splices ((defun %make-X (...) (%obj-new '%class-X ...)) -- its %obj-new
+		// builds and RETURNS the instance, but the defun sits there whether or not
 		// anything can call it. A constructor whose name no other form references is
 		// skipped; a referenced one (a make-instance expansion, a #'%make-X) makes the
 		// whole answer true.
 		java.util.Set<LispVal> exemptForms = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-		if (holdOnly) {
-			java.util.Map<LispVal, String> constructors = new java.util.IdentityHashMap<>();
-			for (LispVal form : program) {
-				String name = conditionConstructorName(form, closRegistry);
-				if (name != null) {
-					constructors.put(form, name);
-				}
+		java.util.Map<LispVal, String> constructors = new java.util.IdentityHashMap<>();
+		for (LispVal form : program) {
+			String name = conditionConstructorName(form, closRegistry);
+			if (name != null) {
+				constructors.put(form, name);
 			}
-			for (java.util.Map.Entry<LispVal, String> ctor : constructors.entrySet()) {
-				String member = memberOf(ctor.getValue());
-				for (LispVal other : program) {
-					if (other != ctor.getKey() && referencesFunction(other, member)) {
-						return true;
-					}
-				}
-			}
-			exemptForms.addAll(constructors.keySet());
 		}
+		for (java.util.Map.Entry<LispVal, String> ctor : constructors.entrySet()) {
+			String member = memberOf(ctor.getValue());
+			for (LispVal other : program) {
+				if (other != ctor.getKey() && referencesFunction(other, member)) {
+					return true;
+				}
+			}
+		}
+		exemptForms.addAll(constructors.keySet());
 		for (LispVal form : program) {
 			if (exemptForms.contains(form)) {
 				continue;
@@ -21473,7 +21471,85 @@ public final class LispMacroExpander {
 		if (holdOnly) {
 			return constructsHeldCondition(head, form, closRegistry);
 		}
-		return constructsInstance(head, form);
+		if (LispNames.ERROR.equals(head) && signalsItsTextControl(form, closRegistry)) {
+			// Its message is the text it was given, so signalling it renders nothing,
+			// and the instance it throws reaches a printer only through a hold this
+			// walk counts where it happens.
+			return false;
+		}
+		return constructsInstance(head, form) || instantiatesConditionClass(head, form, closRegistry);
+	}
+
+	/**
+	 * Whether the form makes an instance of a condition class through the keyword
+	 * constructor the walk exempts: {@code make-instance}, {@code allocate-instance} or
+	 * {@code change-class} naming one, or an unquotable class argument, which may.
+	 */
+	private static boolean instantiatesConditionClass(String head, LispCons form, ClosRegistry closRegistry) {
+		if (!LispNames.MAKE_INSTANCE.equals(head) && !LispNames.ALLOCATE_INSTANCE.equals(head)
+				&& !LispNames.CHANGE_CLASS.equals(head)) {
+			return false;
+		}
+		// change-class takes the object first, so its class argument is one later.
+		List<LispVal> parts = form.toList();
+		int classIndex = LispNames.CHANGE_CLASS.equals(head) ? 2 : 1;
+		if (parts.size() <= classIndex) {
+			return false;
+		}
+		LispSymbol className = quotedSymbol(parts.get(classIndex));
+		return className == null || isConditionClass(closRegistry, className.name());
+	}
+
+	/**
+	 * Whether the form is {@code (error 'type ... :format-control (%text-control text)
+	 * ...)} over a variable {@code text}, of a condition class that reports through its
+	 * {@code format-control} -- no {@code :report} anywhere along its precedence list --
+	 * with no {@code :format-arguments}: its report is exactly {@code text}, so its
+	 * message needs no renderer ({@link #expandTypedSignal}'s unrouted message is that
+	 * variable).
+	 */
+	private static boolean signalsItsTextControl(LispCons form, ClosRegistry closRegistry) {
+		List<LispVal> parts = form.toList();
+		LispSymbol type = parts.size() > 1 ? quotedSymbol(parts.get(1)) : null;
+		ClosRegistry.ClassInfo cls = type == null ? null : closRegistry.findClass(type.name());
+		if (cls == null || !isConditionClass(closRegistry, cls.name())
+				|| cls.slots().stream().noneMatch(slot -> "FORMAT-CONTROL".equals(slot.baseName()))
+				|| cls.cpl().stream().anyMatch(walk -> closRegistry.findConditionReport(walk) != null)
+				|| parts.size() % 2 != 0) {
+			return false;
+		}
+		boolean textControl = false;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()
+					|| ":FORMAT-ARGUMENTS".equals(key.name())) {
+				return false;
+			}
+			if (":FORMAT-CONTROL".equals(key.name())) {
+				textControl = textControlOfVariable(parts.get(i + 1)) != null;
+			}
+		}
+		return textControl;
+	}
+
+	/**
+	 * The variable {@code v} when the temporary holding a typed signal's
+	 * {@code :format-control} is bound to {@code (%text-control v)}, else null.
+	 */
+	private static @Nullable LispSymbol textControlVariable(LispVal supplied, List<LispVal> bindings) {
+		for (LispVal binding : bindings) {
+			if (binding instanceof LispCons pair && pair.car() == supplied && pair.cdr() instanceof LispCons init) {
+				return textControlOfVariable(init.car());
+			}
+		}
+		return null;
+	}
+
+	/** The variable {@code v} when the form is {@code (%text-control v)}, else null. */
+	private static @Nullable LispSymbol textControlOfVariable(LispVal form) {
+		return form instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& LispNames.TEXT_CONTROL_INTERNAL.equals(op.name()) && call.cdr() instanceof LispCons arg
+				&& arg.cdr() instanceof LispNil && arg.car() instanceof LispSymbol variable && !variable.isKeyword()
+						? variable : null;
 	}
 
 	/**
@@ -21488,20 +21564,11 @@ public final class LispMacroExpander {
 			case LispNames.LOAD:
 				// Runs code this scan never saw; anything can hold anything.
 				return true;
-			case LispNames.MAKE_INSTANCE, LispNames.ALLOCATE_INSTANCE, LispNames.CHANGE_CLASS: {
+			case LispNames.MAKE_INSTANCE, LispNames.ALLOCATE_INSTANCE, LispNames.CHANGE_CLASS:
 				// make-instance of a condition class reaches the spliced constructor the
 				// walk exempted; an unquotable class argument makes the answer
 				// unknowable.
-				// change-class takes the object first, so its class argument is one
-				// later.
-				List<LispVal> parts = form.toList();
-				int classIndex = LispNames.CHANGE_CLASS.equals(head) ? 2 : 1;
-				if (parts.size() <= classIndex) {
-					return false;
-				}
-				LispSymbol className = quotedSymbol(parts.get(classIndex));
-				return className == null || isConditionClass(closRegistry, className.name());
-			}
+				return instantiatesConditionClass(head, form, closRegistry);
 			case LispNames.WARN: {
 				// A typed (or object) warn PRINTS a message that renders through the
 				// report machinery -- observable output, unlike error's (a trap here).
@@ -28831,11 +28898,15 @@ public final class LispMacroExpander {
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
 					: rendered;
 		}
-		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal formatControl) {
+		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal supplied) {
 			// A simple-* style class with a supplied :format-control: the message is
 			// its value (lite: :format-arguments are carried in the instance but not
 			// rendered into the message), preserving the (error (make-condition
-			// 'simple-error :format-control "...")) idiom's output.
+			// 'simple-error :format-control "...")) idiom's output -- and the text
+			// control of a variable's message is that variable, the report every
+			// backend prints.
+			LispSymbol text = textControlVariable(supplied, bindings);
+			LispVal formatControl = text != null ? text : supplied;
 			message = warn ? listToCons(
 					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), formatControl))
 					: formatControl;

@@ -100,11 +100,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the program with the one-line report, and a trap on WASM; only the JVM backend catches it,
   like the oracle. `use-fixtures` is refused by name.
 - A `catch` (and `thrown?`) takes a runtime error by the class the oracle throws where the
-  runtime signals its Common Lisp condition. A refusal whose condition names no class -- most
-  of the Clojure runtime's own refusals (`(first 5)`, the oracle's
-  `IllegalArgumentException`), a failed `assert` (the oracle's `AssertionError`, which an
-  `Exception` catch does not take), a failed host call -- is taken by the first catch of any
-  class but `clojure.lang.ExceptionInfo`. An index past its bound is an
+  runtime signals its Common Lisp condition, and a refusal of the Clojure runtime by the class
+  the oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed
+  `assert` an `AssertionError`, which an `Exception` catch does not take). An error naming no
+  class -- a refusal of a construct the oracle accepts (a regex lookahead,
+  `(partition 0 coll)`), a failed host call -- is taken by the first catch of any class but
+  `clojure.lang.ExceptionInfo`. A misuse a lower verb refuses first carries that verb's class:
+  `(shuffle 5)` is the `IllegalArgumentException` of `seq`, where the oracle casts to
+  `java.util.Collection`. An index past its bound is an
   `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's
   `aget` throws `ArrayIndexOutOfBoundsException`, `.charAt` a
   `StringIndexOutOfBoundsException`). A catch must name a class that resolves on this host
@@ -118,8 +121,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   for a class that carries nothing but a message and a cause; one with members of its own
   (`java.net.URISyntaxException`) stays a host object until it is thrown. `class` of an
   exception answers its class name as a keyword (`:java.lang.Exception`, where the oracle
-  answers the host class), `:java.lang.RuntimeException` for a refusal whose condition names
-  no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
+  answers the host class), `:java.lang.RuntimeException` for an error naming no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
   `.getStackTrace` answers an empty vector; `.getClass` answers what `class` does; every other
   method but `.getMessage`, `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is

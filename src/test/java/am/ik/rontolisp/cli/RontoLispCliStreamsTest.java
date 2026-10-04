@@ -715,6 +715,24 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aClojureRefusalReportsTheSameLineWhetherOrNotTheProgramReadsAClass() throws Exception {
+		// a refusal carries the class the oracle throws only in a program reading one
+		// (a catch by class elsewhere), and reports its message either way, on the
+		// interpreter, the compiled class and the jar
+		Path plain = this.tempDir.resolve("plain_refusal.clj");
+		Files.writeString(plain, "(println 2)\n(first 5)\n");
+		Path reading = this.tempDir.resolve("reading_refusal.clj");
+		Files.writeString(reading, "(println (try (inc 1) (catch IllegalStateException e :x)))\n(first 5)\n");
+		for (Path program : List.of(plain, reading)) {
+			String[] result = runReporting(program.toString());
+			assertThat(result[0]).isEqualTo("1");
+			assertThat(result[1]).isEqualTo("2\n");
+			assertThat(result[2].lines()).containsExactly("Unhandled condition: seq needs a collection");
+			assertCompiledRunsReport(program, result[2]);
+		}
+	}
+
+	@Test
 	void aClojureProgramIsRefusedByTheScalarBackend() throws Exception {
 		Path program = this.tempDir.resolve("scalar.clj");
 		Files.writeString(program, "(defn f [x] (* x 2))\n");

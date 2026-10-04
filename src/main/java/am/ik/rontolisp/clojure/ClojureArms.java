@@ -33,7 +33,9 @@ import org.jspecify.annotations.Nullable;
  * {@code let} pair each binding site adds to rebind it, and the program's definition of
  * it, go from a program that never reads it. A special a load switches
  * ({@link Family#switches}) is the fifth: its switching statements, rebinding pairs and
- * definition go the same way.
+ * definition go the same way. A refusal carrier ({@link Family#refusals}) is the sixth:
+ * its call folds to the plain {@code error} with its message, and the condition class
+ * only the carriers signal ({@link Family#conditions}) goes with them.
  *
  * <p>
  * The shape every arm keeps, which {@link #strip} checks: a test's arguments, and a
@@ -167,6 +169,20 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A refusal carrying the class the oracle throws where the run-time library or
+		 * the lowering refuses ({@link Family#refusals}): only a program reading a
+		 * condition's class -- a catch by class, {@code class} or {@code instance?} of
+		 * one -- can tell it from the plain error reporting its message, so those readers
+		 * are the family's producers. Ahead of it {@link #EXCEPTION} folds the
+		 * {@code class} arm of a program that can hold no condition.
+		 */
+		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(),
+				Map.of(ClojureRefusals.SUBS, "SUBSEQ"),
+				Set.of("RONTOLISP::%CLOJURE-CATCHES", ClojureDispatchLowering.EXCEPTION_CLASS,
+						ClojureDispatchLowering.INSTANCE_OF),
+				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),
+
+		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
 		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns} and
 		 * {@code find-ns} hand one to the program.
@@ -232,6 +248,20 @@ public final class ClojureArms {
 		 */
 		final Set<String> switches;
 
+		/**
+		 * The refusal carriers: a call {@code (carrier message [value])} signals the
+		 * message as the class the carrier names (an {@code -of} carrier picks it by the
+		 * value the oracle was handed), and folds to the plain {@code error} reporting
+		 * the same message ({@code Stripper.refusalAsError}).
+		 */
+		final Set<String> refusals;
+
+		/**
+		 * The condition classes only the family's arms signal: the top-level
+		 * {@code define-condition} of one goes with the arms.
+		 */
+		final Set<String> conditions;
+
 		Family(String label, Set<String> switches) {
 			this(label, Set.of(), Set.of(), Map.of(), Set.of(), Set.of(), false, switches);
 		}
@@ -248,6 +278,12 @@ public final class ClojureArms {
 
 		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
 				Set<String> depths, boolean qualifiedIdents, Set<String> switches) {
+			this(label, tests, views, aliases, producers, depths, qualifiedIdents, switches, Set.of(), Set.of());
+		}
+
+		Family(String label, Set<String> tests, Set<String> views, Map<String, String> aliases, Set<String> producers,
+				Set<String> depths, boolean qualifiedIdents, Set<String> switches, Set<String> refusals,
+				Set<String> conditions) {
 			this.label = label;
 			this.tests = tests;
 			this.views = views;
@@ -256,6 +292,8 @@ public final class ClojureArms {
 			this.depths = depths;
 			this.qualifiedIdents = qualifiedIdents;
 			this.switches = switches;
+			this.refusals = refusals;
+			this.conditions = conditions;
 		}
 
 		/**
@@ -308,7 +346,8 @@ public final class ClojureArms {
 	}
 
 	private static void scanInto(LispVal form, Family family, boolean[] found, boolean quoted) {
-		if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)) {
+		if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
+				|| isConditionDefinition(form, family)) {
 			found[1] = true;
 			return;
 		}
@@ -341,7 +380,8 @@ public final class ClojureArms {
 			if (family.producers.contains(name) || family.depths.contains(name) || family.switches.contains(name)) {
 				found[0] = true;
 			}
-			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)) {
+			else if (family.tests.contains(name) || family.views.contains(name) || family.aliases.containsKey(name)
+					|| family.refusals.contains(name)) {
 				found[1] = true;
 			}
 			else if (quoted && family.qualifiedIdents && name.startsWith("c%") && hasNamespace(name.substring(2))) {
@@ -383,7 +423,8 @@ public final class ClojureArms {
 		List<LispVal> out = new ArrayList<>(forms.size());
 		boolean changed = false;
 		for (LispVal form : forms) {
-			if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)) {
+			if (isDepthDefinition(form, family) || isSwitchDefinition(form, family) || isSwitchSetq(form, family)
+					|| isConditionDefinition(form, family)) {
 				changed = true;
 				continue;
 			}
@@ -426,6 +467,9 @@ public final class ClojureArms {
 					}
 					requirePure(args.cdr(), form);
 					return walkCode(args.car());
+				}
+				if (this.family.refusals.contains(name)) {
+					return refusalAsError(cons);
 				}
 				String alias = this.family.aliases.get(name);
 				if (alias != null) {
@@ -632,6 +676,38 @@ public final class ClojureArms {
 		}
 
 		/**
+		 * {@code (carrier message [value])}: the plain {@code error} reporting the same
+		 * message -- a literal as its text control (each {@code ~} doubled, so a message
+		 * without one is the literal itself), {@code (format nil control args...)} as
+		 * {@code (error control args...)}, anything else through {@code "~A"}. The
+		 * message's own forms are kept, so what a refusal computes is unchanged; the
+		 * value, which only picks the class, must be a variable or a read of one.
+		 */
+		private LispVal refusalAsError(LispCons call) {
+			if (!(call.cdr() instanceof LispCons arg) || !(arg.cdr() instanceof LispNil
+					|| arg.cdr() instanceof LispCons culprit && culprit.cdr() instanceof LispNil)) {
+				throw new IllegalStateException("a refusal takes a message and an optional value: " + call.print());
+			}
+			// the value only picks the class, so it goes like a test's argument
+			requirePure(arg.cdr(), call);
+			LispSymbol error = new LispSymbol("ERROR");
+			LispVal message = walkCode(arg.car());
+			if (message instanceof LispString text) {
+				String control = text.value().replace("~", "~~");
+				LispVal literal = control.equals(text.value()) ? text : LispString.literal(control);
+				return LispCons.rebuilt(call, error, LispCons.rebuilt(arg, literal, LispNil.INSTANCE));
+			}
+			if (message instanceof LispCons format && format.car() instanceof LispSymbol head
+					&& head.name().equals("FORMAT") && format.cdr() instanceof LispCons destination
+					&& destination.car() instanceof LispNil && destination.cdr() instanceof LispCons control
+					&& control.car() instanceof LispString) {
+				return LispCons.rebuilt(call, error, control);
+			}
+			return LispCons.rebuilt(call, error,
+					new LispCons(LispString.literal("~A"), LispCons.rebuilt(arg, message, LispNil.INSTANCE)));
+		}
+
+		/**
 		 * Refuses an argument a fold would drop with an effect: anything but a variable,
 		 * a constant or a {@code car}/{@code cdr} read of one.
 		 */
@@ -689,11 +765,22 @@ public final class ClojureArms {
 		for (Family family : Family.values()) {
 			if (family.tests.contains(symbolName) || family.views.contains(symbolName)
 					|| family.aliases.containsKey(symbolName) || family.producers.contains(symbolName)
-					|| family.depths.contains(symbolName) || family.switches.contains(symbolName)) {
+					|| family.depths.contains(symbolName) || family.switches.contains(symbolName)
+					|| family.refusals.contains(symbolName)) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the top-level form defines one of the condition classes only the family's
+	 * arms signal, {@code (define-condition name ...)}: it goes with them.
+	 */
+	private static boolean isConditionDefinition(LispVal form, Family family) {
+		return !family.conditions.isEmpty() && form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& head.name().equals("DEFINE-CONDITION") && cons.cdr() instanceof LispCons name
+				&& name.car() instanceof LispSymbol condition && family.conditions.contains(condition.name());
 	}
 
 	/**

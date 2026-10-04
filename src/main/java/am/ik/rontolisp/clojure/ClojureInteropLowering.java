@@ -830,7 +830,7 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(arity)),
 					call.apply(argForms)));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("wrong number of arguments passed to: " + spelling))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
@@ -1116,7 +1116,7 @@ final class ClojureInteropLowering {
 		LispSymbol all = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
-		LispVal miss = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal miss = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
 						LispString.literal("no proxy method: "), got));
 		LispVal dispatch = miss;
@@ -1252,7 +1252,7 @@ final class ClojureInteropLowering {
 		LispSymbol thisSym = ctx.localSym("this");
 		LispSymbol got = ctx.freshTemp();
 		LispSymbol rest = ctx.freshTemp();
-		LispVal miss = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal miss = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("concatenate"), ClojureLowerUtil.quoted("string"),
 						LispString.literal("no proxy method: "), got));
 		LispVal dispatch = miss;
@@ -1502,7 +1502,7 @@ final class ClojureInteropLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("condition"))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), recv),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+						ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
 								LispString.literal("NullPointerException: toString of nil"))),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(STREAM_P), recv),
 						ClojureLowerUtil.list(new LispSymbol(STREAM_STRING), recv)),
@@ -1702,7 +1702,7 @@ final class ClojureInteropLowering {
 					ClojureLowerUtil.list(ClojureLowerUtil.list(value, args.get(0))),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), value),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+							ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
 									LispString.literal("NullPointerException: write takes a value, not nil")),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), value, recv)));
 		}

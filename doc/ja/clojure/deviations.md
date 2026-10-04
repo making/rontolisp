@@ -99,11 +99,13 @@
   1 行の報告でプログラムが終了し、WASM ではトラップになります。本家と同じく捕捉するのは
   JVM バックエンドだけです。`use-fixtures` は名前を挙げて拒否します。
 - `catch`（と `thrown?`）は、ランタイムが Common Lisp のコンディションをシグナルする箇所で
-  オラクルが投げるクラスとして実行時エラーを捕捉します。コンディションがクラスを示さない
-  拒否 -- Clojure ランタイム自身の拒否の大半（`(first 5)`、オラクルでは
-  `IllegalArgumentException`）、失敗した `assert`（オラクルでは `Exception` の catch が捕捉
-  しない `AssertionError`）、失敗したホスト呼び出し -- は、`clojure.lang.ExceptionInfo` 以外の
-  どのクラスの catch でも最初のものが捕捉します。範囲外の添字は `IndexOutOfBoundsException` で、
+  オラクルが投げるクラスとして実行時エラーを捕捉し、Clojure ランタイム自身の拒否は同じ呼び出しで
+  オラクルが投げるクラスとして捕捉します（`(first 5)` は `IllegalArgumentException`、失敗した
+  `assert` は `Exception` の catch が捕捉しない `AssertionError`）。クラスを示さないエラー --
+  オラクルが受け付ける構文の拒否（正規表現の先読み、`(partition 0 coll)`）、失敗したホスト呼び出し
+  -- は、`clojure.lang.ExceptionInfo` 以外のどのクラスの catch でも最初のものが捕捉します。
+  下位の関数が先に拒否する誤用は、その関数のクラスになります。`(shuffle 5)` は `seq` の
+  `IllegalArgumentException` で、オラクルは `java.util.Collection` へのキャストで失敗します。範囲外の添字は `IndexOutOfBoundsException` で、
   そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException`、
   `.charAt` は `StringIndexOutOfBoundsException` を投げます）。catch が名指すクラスはこの
   ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable）。オラクルの
@@ -116,8 +118,7 @@
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
   （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
   例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
-  クラスを返します）、クラスを示さないコンディションの拒否には `:java.lang.RuntimeException`
-  を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
+  クラスを返します）、クラスを示さないエラーには `:java.lang.RuntimeException` を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
   空のベクターを返します。`.getClass` は `class` と同じ値を返します。`.getMessage`、
   `.getLocalizedMessage`、`.getCause`、`.toString` 以外のメソッドは拒否します。例外でない値の `throw` は、値のレンダリングをメッセージとする

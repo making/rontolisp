@@ -212,7 +212,7 @@ final class ClojureMacroLowering {
 									ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 											ClojureLowerUtil.list(only.params()), only.wrapped()),
 									args),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+							ClojureRefusals.refusal(ClojureRefusals.ARITY,
 									LispString.literal("wrong number of arguments passed to macro: " + name))));
 		}
 		LispSymbol count = ctx.freshTemp();
@@ -226,7 +226,7 @@ final class ClojureMacroLowering {
 						.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()), clause.wrapped()),
 							args)));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("wrong number of arguments passed to macro: " + name))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(args), ClojureLowerUtil.list(
 				ClojureLowerUtil.sym("let"),

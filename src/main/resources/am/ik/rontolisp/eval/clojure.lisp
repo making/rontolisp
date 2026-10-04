@@ -962,6 +962,190 @@
              (error () nil)))
       (java:call x "toString")))
 
+;;;; Refusals: the runtime's own errors, as the class the oracle throws.
+;;
+;; A refusal of this library or of the lowering names the class the oracle
+;; throws where it refuses, by calling the carrier of that class over its
+;; message: the carrier signals a %clojure-refusal, a simple error reporting the
+;; message that also carries the class's chain, which a catch, class and
+;; instance? read. Only a program with one of those readers can tell it from
+;; the plain error with that message, so every other program has each carrier
+;; call folded back to that error before the splice, and this class and its
+;; test with it (clojure/ClojureArms, the refusal family): it compiles exactly
+;; as if refusals carried no class. Where the oracle casts a value it was handed,
+;; the -of carrier takes that value too: nil there is the oracle's
+;; NullPointerException, its method call on the nil it cast. Each chain is
+;; clojure/ClojureThrowables' for the class (ClojureRefusalsTest).
+
+(define-condition rontolisp::%clojure-refusal (simple-error)
+  ((rontolisp::%clojure-refusal-chain :initarg :chain)))
+
+(defun rontolisp::%clojure-refusal-p (c)
+  "Whether the condition C is a refusal carrying its class chain. The arm test
+   of the refusal family: a program that reads no condition's class folds it."
+  (typep c 'rontolisp::%clojure-refusal))
+
+(defun rontolisp::%clojure-refuse (chain message)
+  "Signal the refusal MESSAGE as the class whose chain is CHAIN. The chain is
+   the slot after the simple error's two, read in place (%clojure-exact-chain)."
+  (error 'rontolisp::%clojure-refusal
+         :chain chain
+         :format-control (%text-control message)))
+
+(defun rontolisp::%clojure-illegal-argument-exception (message)
+  "A refusal the oracle throws as an IllegalArgumentException."
+  (rontolisp::%clojure-refuse '("java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-state-exception (message)
+  "A refusal the oracle throws as an IllegalStateException."
+  (rontolisp::%clojure-refuse '("java.lang.IllegalStateException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-class-cast-exception (message)
+  "A refusal the oracle throws as a ClassCastException."
+  (rontolisp::%clojure-refuse '("java.lang.ClassCastException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-null-pointer-exception (message)
+  "A refusal the oracle throws as a NullPointerException."
+  (rontolisp::%clojure-refuse '("java.lang.NullPointerException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-index-out-of-bounds-exception (message)
+  "A refusal the oracle throws as an IndexOutOfBoundsException."
+  (rontolisp::%clojure-refuse '("java.lang.IndexOutOfBoundsException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-string-index-out-of-bounds-exception (message)
+  "A refusal the oracle throws as a StringIndexOutOfBoundsException."
+  (rontolisp::%clojure-refuse '("java.lang.StringIndexOutOfBoundsException"
+                                "java.lang.IndexOutOfBoundsException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-unsupported-operation-exception (message)
+  "A refusal the oracle throws as an UnsupportedOperationException."
+  (rontolisp::%clojure-refuse '("java.lang.UnsupportedOperationException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-number-format-exception (message)
+  "A refusal the oracle throws as a NumberFormatException."
+  (rontolisp::%clojure-refuse '("java.lang.NumberFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-arithmetic-exception (message)
+  "A refusal the oracle throws as an ArithmeticException."
+  (rontolisp::%clojure-refuse '("java.lang.ArithmeticException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-arity-exception (message)
+  "A refusal the oracle throws as a clojure.lang.ArityException: a wrong
+   argument count."
+  (rontolisp::%clojure-refuse '("clojure.lang.ArityException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-runtime-exception (message)
+  "A refusal the oracle throws as a RuntimeException."
+  (rontolisp::%clojure-refuse
+   '("java.lang.RuntimeException" "java.lang.Exception" "java.lang.Throwable")
+   message))
+
+(defun rontolisp::%clojure-exception (message)
+  "A refusal the oracle throws as a plain java.lang.Exception."
+  (rontolisp::%clojure-refuse '("java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-class-not-found-exception (message)
+  "A refusal the oracle throws as a ClassNotFoundException."
+  (rontolisp::%clojure-refuse '("java.lang.ClassNotFoundException"
+                                "java.lang.ReflectiveOperationException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-pattern-syntax-exception (message)
+  "A refusal the oracle throws as a java.util.regex.PatternSyntaxException: a
+   malformed regular expression."
+  (rontolisp::%clojure-refuse '("java.util.regex.PatternSyntaxException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-illegal-format-conversion-exception (message)
+  "A refusal the oracle throws as a java.util.IllegalFormatConversionException:
+   a format argument of the wrong kind for its directive."
+  (rontolisp::%clojure-refuse '("java.util.IllegalFormatConversionException"
+                                "java.util.IllegalFormatException"
+                                "java.lang.IllegalArgumentException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
+(defun rontolisp::%clojure-assertion-error (message)
+  "A refusal the oracle throws as an AssertionError."
+  (rontolisp::%clojure-refuse
+   '("java.lang.AssertionError" "java.lang.Error" "java.lang.Throwable")
+   message))
+
+(defun rontolisp::%clojure-class-cast-exception-of (message value)
+  "A refusal the oracle throws as a ClassCastException casting VALUE: its
+   NullPointerException when VALUE is nil."
+  (if value
+      (rontolisp::%clojure-class-cast-exception message)
+      (rontolisp::%clojure-null-pointer-exception message)))
+
+(defun rontolisp::%clojure-illegal-argument-exception-of (message value)
+  "A refusal the oracle throws as an IllegalArgumentException over VALUE: its
+   NullPointerException when VALUE is nil."
+  (if value
+      (rontolisp::%clojure-illegal-argument-exception message)
+      (rontolisp::%clojure-null-pointer-exception message)))
+
+(defun rontolisp::%clojure-map-entry-refusal (message coll)
+  "A refusal of COLL where the oracle reads its members as map entries: it
+   seqs COLL and casts each member, so a value that cannot be seqed is its
+   IllegalArgumentException, and so is a vector, which its map conj refuses
+   for being no pair; anything else its ClassCastException of a member."
+  (if (and (rontolisp::%clojure-is-seqable coll)
+           (not (and (vectorp coll) (not (stringp coll)))))
+      (rontolisp::%clojure-class-cast-exception message)
+      (rontolisp::%clojure-illegal-argument-exception message)))
+
+(defun rontolisp::%clojure-subs (s start &optional end)
+  "(subs S START END): subseq, whose refusal of bounds outside a string is the
+   oracle's StringIndexOutOfBoundsException here, in subseq's own words. The
+   refusal family's alias of subseq: a program that reads no condition's class
+   calls subseq itself."
+  (let ((n (if (stringp s) (length s) 0)))
+    (if (and (stringp s) (integerp start) (or (null end) (integerp end))
+             (not (<= 0 start (if end end n) n)))
+        (rontolisp::%clojure-string-index-out-of-bounds-exception
+         (format nil "SUBSEQ: invalid bounds ~D, ~D for string of length ~D"
+                 start (if end end n) n))
+        (subseq s start end))))
+
 ;;;; Exceptions: what a program throws, catches and reads.
 ;;
 ;; An exception is a condition on every backend. A runtime error is the Common
@@ -1088,7 +1272,7 @@
   (if (null x)
       nil
       (or (rontolisp::%clojure-exception-of x)
-          (error
+          (rontolisp::%clojure-class-cast-exception
            (concatenate 'string "cannot cast "
                         (rontolisp::%clojure-str-of x "nil" t)
                         " to class java.lang.Throwable")))))
@@ -1107,7 +1291,7 @@
    the oracle's refusal."
   (if (or (null message) (stringp message))
       (c%e-new chain message nil (rontolisp::%clojure-cause-of cause))
-      (error
+      (rontolisp::%clojure-illegal-argument-exception
        (concatenate 'string "No matching ctor found for class " (car chain)))))
 
 (defun rontolisp::%clojure-exception-new-1 (chain x)
@@ -1155,30 +1339,33 @@
 ;; literals and assoc growth), a smaller one an array map; nil is the oracle's
 ;; NullPointerException.
 (defun rontolisp::%clojure-no-method (x words method)
-  (if (null x) (error "NullPointerException: ~A of nil" method))
-  (error "~A~A" words
-         (cond ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
-          ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
-          ((rontolisp::%clojure-sorted-map-p x)
-           "clojure.lang.PersistentTreeMap")
-          ((rontolisp::%clojure-sorted-set-p x)
-           "clojure.lang.PersistentTreeSet")
-          ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
-          ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
-                (stringp (nth 4 x)))
-           (nth 4 x))
-          ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
-          ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
-          ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
-          ((and (consp x) (keywordp (car x))) "java.lang.Object")
-          ((consp x) "clojure.lang.PersistentList")
-          ((hash-table-p x)
-           (if (> (hash-table-count x) 8)
-               "clojure.lang.PersistentHashMap"
-               "clojure.lang.PersistentArrayMap"))
-          ((vectorp x) "clojure.lang.PersistentVector")
-          ((rationalp x) "clojure.lang.Ratio")
-          (t "clojure.lang.Symbol"))))
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       (format nil "NullPointerException: ~A of nil" method)))
+  (rontolisp::%clojure-illegal-argument-exception
+   (format nil "~A~A" words
+           (cond ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
+            ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
+            ((rontolisp::%clojure-sorted-map-p x)
+             "clojure.lang.PersistentTreeMap")
+            ((rontolisp::%clojure-sorted-set-p x)
+             "clojure.lang.PersistentTreeSet")
+            ((rontolisp::%clojure-lazy-p x) "clojure.lang.LazySeq")
+            ((and (consp x) (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                  (stringp (nth 4 x)))
+             (nth 4 x))
+            ((rontolisp::%clojure-atom-p x) "clojure.lang.Atom")
+            ((and (consp x) (eq (car x) :C%PATTERN)) "java.util.regex.Pattern")
+            ((and (consp x) (eq (car x) :C%VAR)) "clojure.lang.Var")
+            ((and (consp x) (keywordp (car x))) "java.lang.Object")
+            ((consp x) "clojure.lang.PersistentList")
+            ((hash-table-p x)
+             (if (> (hash-table-count x) 8)
+                 "clojure.lang.PersistentHashMap"
+                 "clojure.lang.PersistentArrayMap"))
+            ((vectorp x) "clojure.lang.PersistentVector")
+            ((rationalp x) "clojure.lang.Ratio")
+            (t "clojure.lang.Symbol")))))
 
 ;; Whether X is a typed value whose own body implements METHOD (a keyword) of
 ;; the protocol whose inline rows TABLE holds: a record or deftype of one of
@@ -1213,7 +1400,10 @@
 ;; IndexOutOfBoundsException (nth answers nil there).
 (defun rontolisp::%clojure-list-get (coll i)
   (let* ((miss (list nil)) (got (rontolisp::%clojure-nth coll i miss)))
-    (if (eq got miss) (error "Index ~A out of bounds" i) got)))
+    (if (eq got miss)
+        (rontolisp::%clojure-index-out-of-bounds-exception
+         (format nil "Index ~A out of bounds" i))
+        got)))
 
 ;; (.indexOf coll x) / (.lastIndexOf coll x) over a vector, list or lazy seq:
 ;; the index of the first (last when FROM-END) member = to X, else -1, like
@@ -1282,16 +1472,24 @@
     (dolist (c chain) (if (equal c name) (setq found t)))
     found))
 
+(defun rontolisp::%clojure-exact-chain (c)
+  "The class chain the condition C carries itself: an exception's, a
+   refusal's (the slot after the simple error's two, read in place), NIL for
+   any other condition."
+  (let ((parts (c%e-parts c)))
+    (cond (parts (car parts))
+          ((rontolisp::%clojure-refusal-p c) (%obj-ref c 2)))))
+
 (defun rontolisp::%clojure-catches (c chain)
   "Whether a catch of the class whose chain is CHAIN takes the condition C:
-   an exception when its class is that class or a subclass of it; a runtime
-   error when the class the oracle throws for it is that class, a superclass
-   or a subclass of it (the operation may throw a subclass: aget's
+   an exception or a refusal when its class is that class or a subclass of it;
+   a runtime error when the class the oracle throws for it is that class, a
+   superclass or a subclass of it (the operation may throw a subclass: aget's
    ArrayIndexOutOfBoundsException), or, when its type tells no class, unless
    the catch names ExceptionInfo."
-  (let ((parts (c%e-parts c)))
-    (if parts
-        (rontolisp::%clojure-chain-has (car parts) (car chain))
+  (let ((exact (rontolisp::%clojure-exact-chain c)))
+    (if exact
+        (rontolisp::%clojure-chain-has exact (car chain))
         (let ((class (rontolisp::%clojure-error-chain c)))
           (if class
               (or (rontolisp::%clojure-chain-has class (car chain))
@@ -1313,14 +1511,11 @@
   (typep x 'condition))
 
 (defun rontolisp::%clojure-condition-chain (c)
-  "The class chain of the condition C: an exception's own, a runtime error's
-   the one the oracle throws for it, RuntimeException's when it names none."
-  (let ((parts (c%e-parts c)))
-    (if parts
-        (car parts)
-        (or (rontolisp::%clojure-error-chain c)
-            '("java.lang.RuntimeException" "java.lang.Exception"
-              "java.lang.Throwable")))))
+  "The class chain of the condition C: an exception's or a refusal's own, a
+   runtime error's the one the oracle throws for it, RuntimeException's when
+   it names none."
+  (or (rontolisp::%clojure-exact-chain c) (rontolisp::%clojure-error-chain c)
+   '("java.lang.RuntimeException" "java.lang.Exception" "java.lang.Throwable")))
 
 (defun rontolisp::%clojure-exception-class (c)
   "class of an exception or a runtime error C: its class name as a keyword,
@@ -1735,8 +1930,9 @@
   (cond ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
          (java:call x "length"))
         ((rontolisp::%clojure-host-sized-p x) (java:call x "size"))
-        (t (error "count not supported on this type: ~A"
-                  (java:call (java:call x "getClass") "getSimpleName")))))
+        (t (rontolisp::%clojure-unsupported-operation-exception
+            (format nil "count not supported on this type: ~A"
+                    (java:call (java:call x "getClass") "getSimpleName"))))))
 
 (defun rontolisp::%clojure-host-empty-p (x)
   "empty? of the host object X (%clojure-host-seqable-p): whether its count,
@@ -1777,8 +1973,9 @@
          (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k)))
         ((rontolisp::%clojure-host-instance-p x "java.util.Set")
          (and (rontolisp::%clojure-host-key-p k) (java:call x "contains" k)))
-        (t (error "contains? not supported on type: ~A"
-                  (java:call (java:call x "getClass") "getName")))))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            (format nil "contains? not supported on type: ~A"
+                    (java:call (java:call x "getClass") "getName"))))))
 
 (defun rontolisp::%clojure-host-find (x k)
   "find of K in the host object X (%clojure-host-seqable-p): the entry
@@ -1788,8 +1985,9 @@
       (if (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k))
           (vector k (java:call x "get" k))
           nil)
-      (error "find not supported on type: ~A"
-             (java:call (java:call x "getClass") "getName"))))
+      (rontolisp::%clojure-illegal-argument-exception
+       (format nil "find not supported on type: ~A"
+               (java:call (java:call x "getClass") "getName")))))
 
 (defun rontolisp::%clojure-host-select-keys (keys x out)
   "select-keys' view over the key list KEYS of the map X: when X is a host
@@ -1847,12 +2045,14 @@
       (rontolisp::%clojure-host-seq x)
       (mapcar (lambda (m)
                 (cond ((rontolisp::%clojure-entry-p m) m)
-                 ((rontolisp::%clojure-host-instance-p m "java.util.Map$Entry")
-                  (vector (java:call m "getKey") (java:call m "getValue")))
-                 (name (error "~A needs a map or a vector" name))
-                 (t (error
-                     "conj needs a map entry: a map, a [k v] vector or nil"))))
-              (rontolisp::%clojure-host-seq x))))
+                      ((rontolisp::%clojure-host-instance-p m
+                        "java.util.Map$Entry")
+                       (vector (java:call m "getKey") (java:call m "getValue")))
+                      (name (rontolisp::%clojure-class-cast-exception-of
+                             (format nil "~A needs a map or a vector" name) m))
+                      (t (rontolisp::%clojure-class-cast-exception-of
+                          "conj needs a map entry: a map, a [k v] vector or nil"
+                          m)))) (rontolisp::%clojure-host-seq x))))
 
 (defun rontolisp::%clojure-host-entry-plist (x)
   "The entries a map gains from the host object X (%clojure-host-seqable-p),
@@ -2132,14 +2332,19 @@
    indexes and values applied left to right, an index equal to the count
    appending, like the oracle; a non-integer index, one out of range or a
    string V signals."
-  (if (stringp v) (error "assoc needs a map or a vector, not a string"))
+  (if (stringp v)
+      (rontolisp::%clojure-class-cast-exception
+       "assoc needs a map or a vector, not a string"))
   (let ((out (rontolisp::%clojure-vector-copy v (length v))))
     (do ((p plist (cdr (cdr p))))
         ((null p) out)
       (let ((i (car p)) (n (length out)))
-        (if (not (integerp i)) (error "Key must be integer"))
+        (if (not (integerp i))
+            (rontolisp::%clojure-illegal-argument-exception
+             "Key must be integer"))
         (if (or (< i 0) (< n i))
-            (error "Index ~D out of bounds for length ~D" i n))
+            (rontolisp::%clojure-index-out-of-bounds-exception
+             (format nil "Index ~D out of bounds for length ~D" i n)))
         (if (< i n)
             (setf (aref out i) (car (cdr p)))
             (progn
@@ -2191,14 +2396,17 @@
                (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-keyword-p f)
          (if (or (null args) (cdr (cdr args)))
-             (error "Wrong number of args (~D) passed to: :~A" (length args)
-                    (car (cdr f)))
+             (rontolisp::%clojure-arity-exception
+              (format nil "Wrong number of args (~D) passed to: :~A"
+                      (length args) (car (cdr f))))
              (rontolisp::%clojure-call-keyword f (car args)
               (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-real-symbol-p f)
          (if (or (null args) (cdr (cdr args)))
-             (error "Wrong number of args (~D) passed to: clojure.lang.Symbol"
-                    (length args))
+             (rontolisp::%clojure-arity-exception
+              (format nil
+                      "Wrong number of args (~D) passed to: clojure.lang.Symbol"
+                      (length args)))
              (rontolisp::%clojure-call-keyword f (car args)
               (if (cdr args) (car (cdr args)) nil))))
         ((rontolisp::%clojure-var-p f)
@@ -2207,8 +2415,9 @@
          (rontolisp::%clojure-sorted-get f (car args)
                                          (if (cdr args) (car (cdr args)) nil)))
         ((rontolisp::%clojure-unbound-p f)
-         (error "Attempting to call unbound fn: #'~A" (car (cdr f))))
-        (t (error "not a function"))))
+         (rontolisp::%clojure-illegal-state-exception
+          (format nil "Attempting to call unbound fn: #'~A" (car (cdr f)))))
+        (t (rontolisp::%clojure-class-cast-exception-of "not a function" f))))
 
 (defun rontolisp::%clojure-as-fn (f)
   "F as a real function for a runtime worker to funcall: F itself when it is
@@ -2262,40 +2471,46 @@
   "The strict list view of COLL: the original cond, now shared by every backend
    through this one defun instead of inline in the lowering."
   (cond ((null coll) nil)
-   ((rontolisp::%clojure-set-p coll)
-    (let ((acc nil))
-      (maphash (lambda (k v)
-                 (declare (ignore v))
-                 (setq acc (cons k acc))) (car (cdr coll)))
-      acc))
-   ((rontolisp::%clojure-record-p coll)
-    (let ((acc nil))
-      (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
-               (car (cdr (cdr (cdr coll)))))
-      acc))
-   ((rontolisp::%clojure-typed-opaque-p coll) (error "seq needs a collection"))
-   ((or (rontolisp::%clojure-re-pattern-p coll)
-        (rontolisp::%clojure-re-matcher-p coll))
-    (error "seq needs a collection"))
-   ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-   ;; too, so the oracle signals instead of seqing (the conj-guard
-   ;; precedent)
-   ((rontolisp::%clojure-atom-p coll) (error "seq needs a collection"))
-   ;; a sorted collection is a cons wrapper: its arm costs no other kind a test
-   ((consp coll)
-    (if (rontolisp::%clojure-sorted-p coll)
-        (rontolisp::%clojure-sorted-seq coll)
-        coll))
-   ((vectorp coll) (coerce coll 'list))
-   ((stringp coll) (coerce coll 'list))
-   ((hash-table-p coll)
-    (let ((acc nil))
-      (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
-      acc))
-   ((eq coll rontolisp::%clojure-false) nil)
-   ((rontolisp::%clojure-host-seqable-p coll)
-    (rontolisp::%clojure-host-seq coll))
-   (t (error "seq needs a collection"))))
+        ((rontolisp::%clojure-set-p coll)
+         (let ((acc nil))
+           (maphash (lambda (k v)
+                      (declare (ignore v))
+                      (setq acc (cons k acc))) (car (cdr coll)))
+           acc))
+        ((rontolisp::%clojure-record-p coll)
+         (let ((acc nil))
+           (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
+                    (car (cdr (cdr (cdr coll)))))
+           acc))
+        ((rontolisp::%clojure-typed-opaque-p coll)
+         (rontolisp::%clojure-illegal-argument-exception
+          "seq needs a collection"))
+        ((or (rontolisp::%clojure-re-pattern-p coll)
+             (rontolisp::%clojure-re-matcher-p coll))
+         (rontolisp::%clojure-illegal-argument-exception
+          "seq needs a collection"))
+        ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
+        ;; too, so the oracle signals instead of seqing (the conj-guard
+        ;; precedent)
+        ((rontolisp::%clojure-atom-p coll)
+         (rontolisp::%clojure-illegal-argument-exception
+          "seq needs a collection"))
+        ;; a sorted collection is a cons wrapper: its arm costs no other kind a test
+        ((consp coll)
+         (if (rontolisp::%clojure-sorted-p coll)
+             (rontolisp::%clojure-sorted-seq coll)
+             coll))
+        ((vectorp coll) (coerce coll 'list))
+        ((stringp coll) (coerce coll 'list))
+        ((hash-table-p coll)
+         (let ((acc nil))
+           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
+           acc))
+        ((eq coll rontolisp::%clojure-false) nil)
+        ((rontolisp::%clojure-host-seqable-p coll)
+         (rontolisp::%clojure-host-seq coll))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "seq needs a collection"))))
 
 (defun rontolisp::%clojure-realize (x)
   "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.
@@ -2965,7 +3180,8 @@
         ((rontolisp::%clojure-real-symbol-p x)
          (rontolisp::%clojure-split-name
           (rontolisp::%clojure-symbol-full-name x)))
-        (t (error "name needs a string, keyword or symbol"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "name needs a string, keyword or symbol" x))))
 
 (defun rontolisp::%clojure-namespace (x)
   "The namespace of X: a keyword's spelling before the slash, a symbol's
@@ -2976,7 +3192,8 @@
         ((rontolisp::%clojure-real-symbol-p x)
          (rontolisp::%clojure-split-namespace
           (rontolisp::%clojure-symbol-full-name x)))
-        (t (error "namespace needs a keyword or symbol"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "namespace needs a keyword or symbol" x))))
 
 (defun rontolisp::%clojure-keyword-1 (x)
   "The keyword for X: itself for a keyword, the demangled spelling for a
@@ -2998,17 +3215,18 @@
         ((stringp x)
          (intern
           (concatenate 'string "c%" (rontolisp::%clojure-escape-part x))))
-        (t (error "symbol needs a string, keyword or symbol"))))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "symbol needs a string, keyword or symbol"))))
 
 (defun rontolisp::%clojure-keyword-2 (ns nm)
   "The keyword for namespace NS and name NM (a NIL namespace drops, like the
    oracle; a NIL name signals)."
   (if (null ns)
       (if (null nm)
-          (error "keyword needs a name")
+          (rontolisp::%clojure-null-pointer-exception "keyword needs a name")
           (rontolisp::%clojure-keyword-1 nm))
       (if (null nm)
-          (error "keyword needs a name")
+          (rontolisp::%clojure-null-pointer-exception "keyword needs a name")
           (list :C%KEYWORD (concatenate 'string ns "/" nm)))))
 
 (defun rontolisp::%clojure-symbol-2 (ns nm)
@@ -3025,7 +3243,8 @@
    for a number; anything else signals."
   (cond ((characterp x) x)
         ((numberp x) (code-char (truncate x)))
-        (t (error "char needs a character or a number"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "char needs a character or a number" x))))
 
 ;;;; Regular expressions: patterns, matchers, and the pattern arms of
 ;;;; split/replace.
@@ -3097,7 +3316,9 @@
 (defun rontolisp::%clojure-re-as-pattern (x message)
   "X when it is a pattern, else the MESSAGE signal (re-find and friends take
    patterns, never strings, like the oracle)."
-  (if (rontolisp::%clojure-re-pattern-p x) x (error message)))
+  (if (rontolisp::%clojure-re-pattern-p x)
+      x
+      (rontolisp::%clojure-class-cast-exception-of message x)))
 
 (defun rontolisp::%clojure-re-word-char-p (code)
   "Whether CODE is an ASCII word character ([A-Za-z0-9_], like the oracle)."
@@ -3144,7 +3365,8 @@
   "The (ops ngroups) of the pattern SOURCE, or a signal."
   (let ((r (rontolisp::%clojure-re-parse-alt source (length source) 0 0)))
     (if (not (= (car r) (length source)))
-        (error "unsupported regex: unmatched )")
+        (rontolisp::%clojure-pattern-syntax-exception
+         "unsupported regex: unmatched )")
         (list (car (cdr r)) (car (cdr (cdr r)))))))
 
 (defun rontolisp::%clojure-re-parse-alt (s len i n)
@@ -3220,7 +3442,8 @@
                           (not (= (char-code (char s k)) (char-code #\}))))
                       nil
                       (if (and hi (< hi lo))
-                          (error "unsupported regex: bad repetition range")
+                          (rontolisp::%clojure-pattern-syntax-exception
+                           "unsupported regex: bad repetition range")
                           (rontolisp::%clojure-re-quant-tail s len (+ k 1) lo hi
                                                              :greedy)))))
               (if (or (>= j len)
@@ -3241,11 +3464,13 @@
      ((= c (char-code #\$)) (list (+ i 1) (list :eol) n))
      ((= c (char-code #\\)) (rontolisp::%clojure-re-parse-escape s len i n nil))
      ((or (= c (char-code #\*)) (= c (char-code #\+)) (= c (char-code #\?)))
-      (error "unsupported regex: dangling quantifier"))
+      (rontolisp::%clojure-pattern-syntax-exception
+       "unsupported regex: dangling quantifier"))
      ((or (= c (char-code #\{)) (= c (char-code #\})))
       (list (+ i 1) (list :lit c) n))
      ((or (= c (char-code #\))) (= c (char-code #\|)))
-      (error "unsupported regex: unmatched delimiter"))
+      (rontolisp::%clojure-pattern-syntax-exception
+       "unsupported regex: unmatched delimiter"))
      (t (list (+ i 1) (list :lit c) n)))))
 
 (defun rontolisp::%clojure-re-parse-group (s len i n)
@@ -3256,7 +3481,8 @@
         (let ((r (rontolisp::%clojure-re-parse-alt s len (+ i 1) idx)))
           (let ((j (car r)))
             (if (or (>= j len) (not (= (char-code (char s j)) (char-code #\)))))
-                (error "unsupported regex: unclosed group")
+                (rontolisp::%clojure-pattern-syntax-exception
+                 "unsupported regex: unclosed group")
                 (list (+ j 1) (list :grp idx (car (cdr r)))
                       (car (cdr (cdr r))))))))))
 
@@ -3268,13 +3494,15 @@
       (let ((r (rontolisp::%clojure-re-parse-alt s len (+ i 3) n)))
         (let ((j (car r)))
           (if (or (>= j len) (not (= (char-code (char s j)) (char-code #\)))))
-              (error "unsupported regex: unclosed group")
+              (rontolisp::%clojure-pattern-syntax-exception
+               "unsupported regex: unclosed group")
               (list (+ j 1) (car (cdr r)) (car (cdr (cdr r)))))))))
 
 (defun rontolisp::%clojure-re-parse-escape (s len i n in-class)
   "An escape at I (the backslash): (pos node ngroups)."
   (if (>= (+ i 1) len)
-      (error "unsupported regex: trailing backslash")
+      (rontolisp::%clojure-pattern-syntax-exception
+       "unsupported regex: trailing backslash")
       (let ((e (char-code (char s (+ i 1)))))
         (cond ((= e (char-code #\w)) (list (+ i 2) (list :cls nil (list :w)) n))
               ((= e (char-code #\W)) (list (+ i 2) (list :cls t (list :w)) n))
@@ -3288,15 +3516,18 @@
                    (list (+ i 2) (list :wb) n)))
               ((= e (char-code #\B))
                (if in-class
-                   (error "unsupported regex: bad escape")
+                   (rontolisp::%clojure-pattern-syntax-exception
+                    "unsupported regex: bad escape")
                    (list (+ i 2) (list :nwb) n)))
               ((= e (char-code #\A))
                (if in-class
-                   (error "unsupported regex: bad escape")
+                   (rontolisp::%clojure-pattern-syntax-exception
+                    "unsupported regex: bad escape")
                    (list (+ i 2) (list :bol) n)))
               ((= e (char-code #\z))
                (if in-class
-                   (error "unsupported regex: bad escape")
+                   (rontolisp::%clojure-pattern-syntax-exception
+                    "unsupported regex: bad escape")
                    (list (+ i 2) (list :zend) n)))
               ((= e (char-code #\G))
                (error "unsupported regex: \\G is not supported"))
@@ -3314,21 +3545,26 @@
                (rontolisp::%clojure-re-parse-control s len (+ i 2) n))
               ((= e (char-code #\Q))
                (rontolisp::%clojure-re-parse-quoted s len (+ i 2) n))
-              ((= e (char-code #\E)) (error "unsupported regex: lone \\E"))
+              ((= e (char-code #\E))
+               (rontolisp::%clojure-pattern-syntax-exception
+                "unsupported regex: lone \\E"))
               ((= e 48) (rontolisp::%clojure-re-parse-octal s len (+ i 1) n))
               ((and (<= 49 e) (<= e 57))
                (rontolisp::%clojure-re-parse-backref s len (+ i 2) (- e 48) n))
               ((rontolisp::%clojure-re-alpha-code-p e)
-               (error "unsupported regex: bad escape"))
+               (rontolisp::%clojure-pattern-syntax-exception
+                "unsupported regex: bad escape"))
               (t (list (+ i 2) (list :lit e) n))))))
 
 (defun rontolisp::%clojure-re-parse-hex (s len j count n)
   "COUNT hex digits at J: (pos node ngroups)."
   (if (> (+ j count) len)
-      (error "unsupported regex: bad hex escape")
+      (rontolisp::%clojure-pattern-syntax-exception
+       "unsupported regex: bad hex escape")
       (let ((v (rontolisp::%clojure-re-hex-acc s j (+ j count) 0)))
         (if (null v)
-            (error "unsupported regex: bad hex escape")
+            (rontolisp::%clojure-pattern-syntax-exception
+             "unsupported regex: bad hex escape")
             (list (+ j count) (list :lit v) n)))))
 
 (defun rontolisp::%clojure-re-hex-acc (s j end v)
@@ -3343,13 +3579,15 @@
 (defun rontolisp::%clojure-re-parse-control (s len j n)
   "A \\cX control character at J: (pos node ngroups)."
   (if (>= j len)
-      (error "unsupported regex: bad control escape")
+      (rontolisp::%clojure-pattern-syntax-exception
+       "unsupported regex: bad control escape")
       (let ((c (char-code (char s j))))
         (if (and (<= 65 c) (<= c 90))
             (list (+ j 1) (list :lit (- c 64)) n)
             (if (and (<= 97 c) (<= c 122))
                 (list (+ j 1) (list :lit (- c 96)) n)
-                (error "unsupported regex: bad control escape"))))))
+                (rontolisp::%clojure-pattern-syntax-exception
+                 "unsupported regex: bad control escape"))))))
 
 (defun rontolisp::%clojure-re-parse-octal (s len j n)
   "An octal escape at J (the leading zero): (pos node ngroups)."
@@ -3422,7 +3660,9 @@
 
 (defun rontolisp::%clojure-re-class-rest (s len j acc)
   "The class tail from J over the reversed ACC: (endpos items)."
-  (cond ((>= j len) (error "unsupported regex: unclosed character class"))
+  (cond ((>= j len)
+         (rontolisp::%clojure-pattern-syntax-exception
+          "unsupported regex: unclosed character class"))
         ((= (char-code (char s j)) 93) (list (+ j 1) acc))
         (t (let ((step (rontolisp::%clojure-re-class-item s len j acc)))
              (rontolisp::%clojure-re-class-rest s len (car step)
@@ -3446,7 +3686,8 @@
            (not (= (char-code (char s (+ k 1))) (char-code #\]))))
       (let ((r (rontolisp::%clojure-re-class-range-end s len (+ k 1))))
         (if (> lo (car (cdr r)))
-            (error "unsupported regex: bad character range")
+            (rontolisp::%clojure-pattern-syntax-exception
+             "unsupported regex: bad character range")
             (list (car r) (cons (list :r lo (car (cdr r))) acc))))
       (list k (cons lo acc))))
 
@@ -3457,7 +3698,8 @@
         (let ((v (car (cdr r))))
           (if (and (consp v) (eq (car v) :lit))
               (list (car r) (car (cdr v)))
-              (error "unsupported regex: bad character range"))))
+              (rontolisp::%clojure-pattern-syntax-exception
+               "unsupported regex: bad character range"))))
       (list (+ j 1) (char-code (char s j)))))
 
 (defun rontolisp::%clojure-re-class-escaped (s len j acc)
@@ -3469,11 +3711,13 @@
              (rontolisp::%clojure-re-class-range s len j acc (car (cdr v)) k))
             ((and (consp v) (eq (car v) :cls))
              (if (rontolisp::%clojure-re-dash-follows s len k)
-                 (error "unsupported regex: bad character range")
+                 (rontolisp::%clojure-pattern-syntax-exception
+                  "unsupported regex: bad character range")
                  (list k (cons v acc))))
             ((and (consp v) (eq (car v) :seq))
              (rontolisp::%clojure-re-class-splice s len k acc (cdr v)))
-            (t (error "unsupported regex: bad escape"))))))
+            (t (rontolisp::%clojure-pattern-syntax-exception
+                "unsupported regex: bad escape"))))))
 
 (defun rontolisp::%clojure-re-dash-follows (s len k)
   "Whether a range dash follows at K (a dash past a non-] char)."
@@ -3731,7 +3975,8 @@
 (defun rontolisp::%clojure-re-compile (source)
   "The pattern value for the SOURCE string (parsed eagerly, like the oracle)."
   (if (not (stringp source))
-      (error "re-pattern takes a pattern or a string")
+      (rontolisp::%clojure-class-cast-exception-of
+       "re-pattern takes a pattern or a string" source)
       (let ((parsed (rontolisp::%clojure-re-parse source)))
         (list :C%PATTERN (gensym "re") source (car parsed)
               (car (cdr parsed))))))
@@ -3749,7 +3994,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "re-matcher takes a pattern and a string")))
     (if (not (stringp s))
-        (error "re-matcher takes a pattern and a string")
+        (rontolisp::%clojure-class-cast-exception-of
+         "re-matcher takes a pattern and a string" s)
         (list :C%MATCHER (gensym "re") p s (cons 0 nil)))))
 
 (defun rontolisp::%clojure-re-find (pat s)
@@ -3758,7 +4004,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "re-find takes a matcher, or a pattern and a string")))
     (if (not (stringp s))
-        (error "re-find takes a matcher, or a pattern and a string")
+        (rontolisp::%clojure-class-cast-exception-of
+         "re-find takes a matcher, or a pattern and a string" s)
         (let ((m (list :C%MATCHER (gensym "re") p s (cons 0 nil))))
           (let ((found (rontolisp::%clojure-re-next m)))
             (if (null found)
@@ -3769,7 +4016,8 @@
 (defun rontolisp::%clojure-re-find-m (m)
   "The matcher's next match, or NIL."
   (if (not (rontolisp::%clojure-re-matcher-p m))
-      (error "re-find takes a matcher, or a pattern and a string")
+      (rontolisp::%clojure-class-cast-exception-of
+       "re-find takes a matcher, or a pattern and a string" m)
       (let ((found (rontolisp::%clojure-re-next m)))
         (if (null found)
             nil
@@ -3786,7 +4034,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "re-seq takes a pattern and a string")))
     (if (not (stringp s))
-        (error "re-seq takes a pattern and a string")
+        (rontolisp::%clojure-class-cast-exception-of
+         "re-seq takes a pattern and a string" s)
         (let ((m (list :C%MATCHER (gensym "re") p s (cons 0 nil)))
               (ngroups (rontolisp::%clojure-re-pat-ngroups p)))
           (do ((found
@@ -3803,7 +4052,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "re-matches takes a pattern and a string")))
     (if (not (stringp s))
-        (error "re-matches takes a pattern and a string")
+        (rontolisp::%clojure-class-cast-exception-of
+         "re-matches takes a pattern and a string" s)
         (let ((len (length s)))
           (let ((hit
                  (rontolisp::%clojure-re-match
@@ -3818,10 +4068,11 @@
   "The last match's groups as a vector (the whole first), or a signal past no
    match, like the oracle."
   (if (not (rontolisp::%clojure-re-matcher-p m))
-      (error "re-groups takes a matcher")
+      (rontolisp::%clojure-class-cast-exception-of "re-groups takes a matcher"
+                                                   m)
       (let ((last (cdr (rontolisp::%clojure-re-match-cell m))))
         (if (null last)
-            (error "No match found")
+            (rontolisp::%clojure-illegal-state-exception "No match found")
             (rontolisp::%clojure-re-value (rontolisp::%clojure-re-match-input m)
                                           last
                                           (rontolisp::%clojure-re-pat-ngroups
@@ -3862,7 +4113,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "split takes a string and a pattern")))
     (if (not (stringp s))
-        (error "split takes a string and a pattern")
+        (rontolisp::%clojure-class-cast-exception-of
+         "split takes a string and a pattern" s)
         (if (= (length s) 0)
             (list "")
             (let ((parts
@@ -3899,10 +4151,11 @@
               ((= c 36)
                (let ((r (rontolisp::%clojure-re-parse-digits repl len (+ i 1))))
                  (if (null r)
-                     (error "Illegal group reference: group index is missing")
+                     (rontolisp::%clojure-illegal-argument-exception
+                      "Illegal group reference: group index is missing")
                      (let ((nn (car (cdr r))))
                        (if (> nn ngroups)
-                           (error
+                           (rontolisp::%clojure-index-out-of-bounds-exception
                             (concatenate 'string "No group "
                              (rontolisp::%clojure-str-of nn "" nil)))
                            (rontolisp::%clojure-re-interp-pieces repl len
@@ -3948,7 +4201,8 @@
          (rontolisp::%clojure-re-as-pattern pat
           "replace takes a string, a match and a replacement")))
     (if (not (stringp s))
-        (error "replace takes a string, a match and a replacement")
+        (rontolisp::%clojure-class-cast-exception-of
+         "replace takes a string, a match and a replacement" s)
         (let ((m (rontolisp::%clojure-re-fresh-matcher p s))
               (len (length s))
               (ngroups (rontolisp::%clojure-re-pat-ngroups p)))
@@ -3985,7 +4239,8 @@
 
 (defun rontolisp::%clojure-arity-error (n name)
   "Signal the oracle's arity error for the core fn NAME called with N args."
-  (error "Wrong number of args (~D) passed to: clojure.core/~A" n name))
+  (rontolisp::%clojure-arity-exception
+   (format nil "Wrong number of args (~D) passed to: clojure.core/~A" n name)))
 
 (defun rontolisp::%clojure-check-arity (args min max name)
   "The count of ARGS, or the oracle's arity error when it falls outside MIN..MAX
@@ -4101,7 +4356,8 @@
   "A vector's last member, a list's first, nil of nil or an empty vector."
   (cond ((null coll) nil)
         ((not (rontolisp::%clojure-stack-p coll))
-         (error "peek needs a vector or a list"))
+         (rontolisp::%clojure-class-cast-exception-of
+          "peek needs a vector or a list" coll))
         ((consp coll) (car coll))
         ((= (length coll) 0) nil)
         (t (aref coll (- (length coll) 1)))))
@@ -4115,9 +4371,11 @@
   "A vector without its last member, a list without its first; nil of nil."
   (cond ((null coll) nil)
         ((not (rontolisp::%clojure-stack-p coll))
-         (error "pop needs a vector or a list"))
+         (rontolisp::%clojure-class-cast-exception-of
+          "pop needs a vector or a list" coll))
         ((consp coll) (cdr coll))
-        ((= (length coll) 0) (error "Can't pop empty vector"))
+        ((= (length coll) 0)
+         (rontolisp::%clojure-illegal-state-exception "Can't pop empty vector"))
         (t (subseq coll 0 (- (length coll) 1)))))
 
 (defun rontolisp::%clojure-pop-v (&rest args)
@@ -4146,9 +4404,9 @@
          (rontolisp::%clojure-put-meta (make-hash-table :test 'equal)
                                        (rontolisp::%clojure-meta x)))
         ((rontolisp::%clojure-record-p x)
-         (error "~A"
-                (concatenate 'string "Can't create empty: "
-                             (car (cdr (cdr (cdr (cdr x))))))))
+         (rontolisp::%clojure-unsupported-operation-exception
+          (concatenate 'string "Can't create empty: "
+                       (car (cdr (cdr (cdr (cdr x))))))))
         ((rontolisp::%clojure-set-p x)
          (rontolisp::%clojure-put-meta
           (list :C%SET (make-hash-table :test 'equal))
@@ -4232,7 +4490,8 @@
                  x)))
           ((rontolisp::%clojure-sorted-map-p smap)
            (lambda (x) (rontolisp::%clojure-sorted-get smap x x)))
-          (t (error "replace needs a map or a vector")))))
+          (t (rontolisp::%clojure-illegal-argument-exception
+              "replace needs a map or a vector")))))
 
 (defun rontolisp::%clojure-replace (smap coll)
   "(replace SMAP COLL): a vector COLL answers a vector, anything else its seq
@@ -4257,24 +4516,28 @@
    oracle's intValue; anything else (nil included) signals."
   (cond ((integerp x) x)
         ((floatp x) (truncate x))
-        (t (error "subvec needs integer bounds"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "subvec needs integer bounds" x))))
 
 (defun rontolisp::%clojure-subvec (v start end)
   "(subvec V START END): a fresh vector of V's members from START up to END; a
    non-vector V (a string included) signals, and so does a bound out of range or
    START past END, like the oracle's IndexOutOfBoundsException."
-  (if (or (not (vectorp v)) (stringp v)) (error "subvec needs a vector"))
+  (if (or (not (vectorp v)) (stringp v))
+      (rontolisp::%clojure-class-cast-exception-of "subvec needs a vector" v))
   (let ((s (rontolisp::%clojure-subvec-index start))
         (e (rontolisp::%clojure-subvec-index end)))
     (if (or (< s 0) (< e s) (< (length v) e))
-        (error "Index out of bounds for subvec ~D ~D of length ~D" s e
-               (length v)))
+        (rontolisp::%clojure-index-out-of-bounds-exception
+         (format nil "Index out of bounds for subvec ~D ~D of length ~D" s e
+                 (length v))))
     (let ((out (make-array (- e s))))
       (dotimes (j (- e s) out) (setf (aref out j) (aref v (+ s j)))))))
 
 (defun rontolisp::%clojure-subvec-from (v start)
   "(subvec V START): V from START to its end."
-  (if (or (not (vectorp v)) (stringp v)) (error "subvec needs a vector"))
+  (if (or (not (vectorp v)) (stringp v))
+      (rontolisp::%clojure-class-cast-exception-of "subvec needs a vector" v))
   (rontolisp::%clojure-subvec v start (length v)))
 
 (defun rontolisp::%clojure-subvec-v (&rest args)
@@ -4305,7 +4568,8 @@
          (rontolisp::%clojure-sorted-find coll key))
         ((rontolisp::%clojure-host-seqable-p coll)
          (rontolisp::%clojure-host-find coll key))
-        (t (error "find not supported on this type"))))
+        (t (rontolisp::%clojure-illegal-argument-exception
+            "find not supported on this type"))))
 
 (defun rontolisp::%clojure-find-v (&rest args)
   "find as a value."
@@ -4322,7 +4586,7 @@
   "The key of the map entry E; anything but a two-member vector signals."
   (if (rontolisp::%clojure-entry-p e)
       (aref e 0)
-      (error "key needs a map entry")))
+      (rontolisp::%clojure-class-cast-exception-of "key needs a map entry" e)))
 
 (defun rontolisp::%clojure-key-v (&rest args)
   "key as a value."
@@ -4333,7 +4597,7 @@
   "The value of the map entry E; anything but a two-member vector signals."
   (if (rontolisp::%clojure-entry-p e)
       (aref e 1)
-      (error "val needs a map entry")))
+      (rontolisp::%clojure-class-cast-exception-of "val needs a map entry" e)))
 
 (defun rontolisp::%clojure-val-v (&rest args)
   "val as a value."
@@ -4354,7 +4618,8 @@
   "(rseq V): the members of the vector V, last first, as a list; nil when V is
    empty. Anything but a vector (nil, a list, a seq, a string, a map) signals,
    like the oracle."
-  (if (or (not (vectorp v)) (stringp v)) (error "rseq needs a vector"))
+  (if (or (not (vectorp v)) (stringp v))
+      (rontolisp::%clojure-class-cast-exception-of "rseq needs a vector" v))
   (let ((out nil))
     (dotimes (i (length v) out) (setq out (cons (aref v i) out)))))
 
@@ -4373,8 +4638,12 @@
 (defun rontolisp::%clojure-find-keyword-2 (ns nm)
   "(find-keyword NS NM): the keyword NS/NM; a nil NS drops, a nil NM or a
    non-string part signals, like the oracle."
-  (cond ((not (or (null ns) (stringp ns))) (error "find-keyword needs strings"))
-        ((not (stringp nm)) (error "find-keyword needs strings"))
+  (cond ((not (or (null ns) (stringp ns)))
+         (rontolisp::%clojure-class-cast-exception
+          "find-keyword needs strings"))
+        ((not (stringp nm))
+         (rontolisp::%clojure-class-cast-exception-of
+          "find-keyword needs strings" nm))
         (t (rontolisp::%clojure-keyword-2 ns nm))))
 
 (defun rontolisp::%clojure-find-keyword-v (&rest args)
@@ -4492,8 +4761,9 @@
    as DEFAULTS, like the oracle's arities."
   (lambda (&rest args)
     (if (< (length args) (length defaults))
-        (error "Wrong number of args (~D) passed to: clojure.core/fnil/fn"
-               (length args))
+        (rontolisp::%clojure-arity-exception
+         (format nil "Wrong number of args (~D) passed to: clojure.core/fnil/fn"
+                 (length args)))
         (apply f (rontolisp::%clojure-fnil-patch args defaults)))))
 
 (defun rontolisp::%clojure-fnil-v (&rest args)
@@ -4590,7 +4860,8 @@
         ((rontolisp::%clojure-host-seqable-p coll)
          (mapcar (lambda (e) (cons (aref e 0) (aref e 1)))
                  (rontolisp::%clojure-host-entries coll name)))
-        (t (error "~A needs a map or a vector" name))))
+        (t (rontolisp::%clojure-map-entry-refusal
+            (format nil "~A needs a map or a vector" name) coll))))
 
 (defun rontolisp::%clojure-reduce-kv (f init coll)
   "(f acc k v) folded over COLL's pairs from INIT, stopping at a reduced
@@ -4727,12 +4998,15 @@
   (if (numberp x)
       (and (floatp x)
        (or (> x most-positive-double-float) (< x most-negative-double-float)))
-      (error "infinite? needs a number")))
+      (rontolisp::%clojure-class-cast-exception-of "infinite? needs a number"
+                                                   x)))
 
 (defun rontolisp::%clojure-is-nan (x)
   "NaN?: a double that is not = to itself; anything else that is no number
    signals, like the oracle's cast."
-  (if (numberp x) (and (floatp x) (/= x x)) (error "NaN? needs a number")))
+  (if (numberp x)
+      (and (floatp x) (/= x x))
+      (rontolisp::%clojure-class-cast-exception-of "NaN? needs a number" x)))
 
 (defun rontolisp::%clojure-is-ident (x)
   "ident?: a keyword or a symbol."
@@ -4757,7 +5031,8 @@
    the oracle's cast."
   (cond ((rontolisp::%clojure-lazy-p x) (null (car (car (cdr x)))))
         ((rontolisp::%clojure-is-list x) t)
-        (t (error "realized? needs a lazy seq"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "realized? needs a lazy seq" x))))
 
 (defun rontolisp::%clojure-is-bound (vars)
   "bound?: every one of VARS is a var whose root is no unbound marker (a
@@ -4769,7 +5044,9 @@
     (dolist (v vars ok)
       (if ok
           (progn
-            (if (not (rontolisp::%clojure-var-p v)) (error "bound? needs vars"))
+            (if (not (rontolisp::%clojure-var-p v))
+                (rontolisp::%clojure-class-cast-exception-of "bound? needs vars"
+                                                             v))
             (let ((root
                    (if (rontolisp::%clojure-truthy
                         (rontolisp::%clojure-call-keyword
@@ -4789,7 +5066,8 @@
       (if ok
           (progn
             (if (not (rontolisp::%clojure-var-p v))
-                (error "thread-bound? needs vars"))
+                (rontolisp::%clojure-class-cast-exception-of
+                 "thread-bound? needs vars" v))
             (let ((depth (cdr (cdr (cdr v)))))
               (if (or (null depth) (<= (funcall (car depth)) 0))
                   (setq ok nil))))))))
@@ -4857,7 +5135,9 @@
    falls outside MIN..MAX (a nil MAX has no upper bound)."
   (let ((n (length args)))
     (if (or (< n min) (and max (> n max)))
-        (error "Wrong number of args (~D) passed to: clojure.set/~A" n name)
+        (rontolisp::%clojure-arity-exception
+         (format nil "Wrong number of args (~D) passed to: clojure.set/~A" n
+                 name))
         n)))
 
 (defun rontolisp::%clojure-set-count (coll)
@@ -4892,7 +5172,8 @@
           ((vectorp coll) (and (integerp x) (<= 0 x) (< x (length coll))))
           ((rontolisp::%clojure-sorted-p coll)
            (rontolisp::%clojure-sorted-contains coll x))
-          (t (error "contains? not supported on this collection")))))
+          (t (rontolisp::%clojure-illegal-argument-exception
+              "contains? not supported on this collection")))))
 
 (defun rontolisp::%clojure-set-of (members)
   "A fresh set of the list MEMBERS."
@@ -4914,20 +5195,19 @@
    empty; else a set gains each in a fresh copy, a vector each at its end, nil
    or a seq each at its front; anything else signals."
   (cond ((null items) base)
-        ((rontolisp::%clojure-set-p base)
-         (let ((out (rontolisp::%clojure-set-copy base)))
-           (dolist (x items out)
-             (rontolisp::%clojure-set-put (car (cdr out)) x))))
-        ((and (vectorp base) (not (stringp base)))
-         (coerce (append (coerce base 'list) items) 'vector))
-        ((rontolisp::%clojure-sequential-p base)
-         (let ((out (rontolisp::%clojure-seq-all base)))
-           (dolist (x items out) (setq out (cons x out)))))
-        ((rontolisp::%clojure-sorted-set-p base)
-         (let ((out base))
-           (dolist (x items out)
-             (setq out (rontolisp::%clojure-sorted-conj out x)))))
-        (t (error "clojure.set needs sets"))))
+   ((rontolisp::%clojure-set-p base)
+    (let ((out (rontolisp::%clojure-set-copy base)))
+      (dolist (x items out) (rontolisp::%clojure-set-put (car (cdr out)) x))))
+   ((and (vectorp base) (not (stringp base)))
+    (coerce (append (coerce base 'list) items) 'vector))
+   ((rontolisp::%clojure-sequential-p base)
+    (let ((out (rontolisp::%clojure-seq-all base)))
+      (dolist (x items out) (setq out (cons x out)))))
+   ((rontolisp::%clojure-sorted-set-p base)
+    (let ((out base))
+      (dolist (x items out)
+        (setq out (rontolisp::%clojure-sorted-conj out x)))))
+   (t (rontolisp::%clojure-class-cast-exception "clojure.set needs sets"))))
 
 (defun rontolisp::%clojure-set-shrink (base drops)
   "(reduce disj BASE DROPS) for the list DROPS: BASE itself when DROPS is empty
@@ -4945,7 +5225,7 @@
              (remhash (rontolisp::%clojure-table-key
                        (rontolisp::%clojure-sorted-key x base) table) table))
            (rontolisp::%clojure-sorted-shrunk (list :C%SET table) base)))
-        (t (error "disj needs a set"))))
+        (t (rontolisp::%clojure-class-cast-exception "disj needs a set"))))
 
 (defun rontolisp::%clojure-set-bubble (sets largest)
   "The oracle's bubble-max-key over the list SETS by count (LARGEST true) or by
@@ -5055,7 +5335,8 @@
         ((hash-table-p m) m)
         ((rontolisp::%clojure-sorted-map-p m)
          (rontolisp::%clojure-sorted-table m name))
-        (t (error "~A needs a map" name))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            (format nil "~A needs a map" name) m))))
 
 (defun rontolisp::%clojure-set-keys (m name)
   "The keys of the map M as a list (none of nil)."
@@ -5389,7 +5670,8 @@
      (rontolisp::%clojure-symbol-full-name b)))
    ((and (vectorp a) (not (stringp a)) (vectorp b) (not (stringp b)))
     (rontolisp::%clojure-compare-vectors a b))
-   (t (error "compare needs two values of one comparable kind"))))
+   (t (rontolisp::%clojure-class-cast-exception
+       "compare needs two values of one comparable kind"))))
 
 (defun rontolisp::%clojure-compare-v (&rest args)
   "compare as a value."
@@ -5419,7 +5701,8 @@
                  ((< r -2147483648) -2147483648)
                  (t (truncate r))))
           ((numberp r) (truncate r))
-          (t (error "a comparator answers a number or a boolean")))))
+          (t (rontolisp::%clojure-class-cast-exception-of
+              "a comparator answers a number or a boolean" r)))))
 
 (defun rontolisp::%clojure-sorted-order (cmp a b)
   "The order of A and B under a sorted collection's comparator CMP: its
@@ -5433,10 +5716,10 @@
    value compare orders."
   (if (or cmp (rontolisp::%clojure-comparable-p k))
       k
-      (error "~A"
-             (concatenate 'string
-              "Default comparator requires nil, Number, or Comparable: "
-              (rontolisp::%clojure-str-of k "null" nil)))))
+      (rontolisp::%clojure-class-cast-exception
+       (concatenate 'string
+                    "Default comparator requires nil, Number, or Comparable: "
+                    (rontolisp::%clojure-str-of k "null" nil)))))
 
 (defun rontolisp::%clojure-sorted-item-key (s item)
   "The key of ITEM in the sorted collection S: the member itself in a set, the
@@ -5493,7 +5776,8 @@
    without a value, a CMP that is no function and, under compare, a key it does
    not order signal like the oracle."
   (if (and cmp (not (functionp cmp)))
-      (error "a sorted collection needs a comparator function"))
+      (rontolisp::%clojure-class-cast-exception
+       "a sorted collection needs a comparator function"))
   (let ((entries nil))
     (if setp
         (dolist (x items)
@@ -5502,9 +5786,9 @@
         (do ((p items (cdr (cdr p))))
             ((null p))
           (if (null (cdr p))
-              (error "~A"
-                     (concatenate 'string "No value supplied for key: "
-                      (rontolisp::%clojure-str-of (car p) "null" nil))))
+              (rontolisp::%clojure-illegal-argument-exception
+               (concatenate 'string "No value supplied for key: "
+                            (rontolisp::%clojure-str-of (car p) "null" nil))))
           (setq entries
                 (cons (vector (rontolisp::%clojure-sorted-check cmp (car p))
                               (car (cdr p))) entries))))
@@ -5556,7 +5840,9 @@
 (defun rontolisp::%clojure-sorted-assoc (s plist)
   "(assoc S k v ...) for the sorted collection S: each pair in turn through
    %clojure-sorted-put; a sorted set signals, like the oracle."
-  (if (car (cdr s)) (error "assoc needs a map or a vector, not a set"))
+  (if (car (cdr s))
+      (rontolisp::%clojure-class-cast-exception
+       "assoc needs a map or a vector, not a set"))
   (let ((out s))
     (do ((p plist (cdr (cdr p))))
         ((null p) out)
@@ -5567,10 +5853,10 @@
    of a [k v] vector, a map's or record's entries, and -- ONE false -- a set's
    members each a [k v] vector (the oracle casts them to map entries); anything
    else, a list included, signals."
-  (cond (one
-         (if (and (vectorp item) (not (stringp item)) (= (length item) 2))
-             (list (aref item 0) (aref item 1))
-             (error "conj needs a map entry: a map, a [k v] vector or nil")))
+  (cond (one (if (and (vectorp item) (not (stringp item)) (= (length item) 2))
+                 (list (aref item 0) (aref item 1))
+                 (rontolisp::%clojure-class-cast-exception-of
+                  "conj needs a map entry: a map, a [k v] vector or nil" item)))
         ((null item) nil)
         ((and (vectorp item) (not (stringp item)) (= (length item) 2))
          (list (aref item 0) (aref item 1)))
@@ -5588,7 +5874,8 @@
         ((consp item) (rontolisp::%clojure-seq-entry-plist item))
         ((rontolisp::%clojure-host-seqable-p item)
          (rontolisp::%clojure-host-entry-plist item))
-        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+        (t (rontolisp::%clojure-map-entry-refusal
+            "conj needs a map entry: a map, a [k v] vector or nil" item))))
 
 (defun rontolisp::%clojure-seq-entry-plist (item)
   "The entries a sorted map or a seq (strict or lazy) ITEM adds to a map, as a
@@ -5603,7 +5890,8 @@
           (let ((m (car s)))
             (if (and (vectorp m) (not (stringp m)) (= (length m) 2))
                 (setq acc (cons (aref m 1) (cons (aref m 0) acc)))
-                (error "conj needs a map entry: a map, a [k v] vector or nil")))
+                (rontolisp::%clojure-class-cast-exception-of
+                 "conj needs a map entry: a map, a [k v] vector or nil" m)))
           (setq s (rontolisp::%clojure-seq-rest s))))))
 
 (defun rontolisp::%clojure-merge-entry-plist (item)
@@ -5620,7 +5908,8 @@
         ((consp item) (rontolisp::%clojure-seq-entry-plist item))
         ((rontolisp::%clojure-host-seqable-p item)
          (rontolisp::%clojure-host-entry-plist item))
-        (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
+        (t (rontolisp::%clojure-map-entry-refusal
+            "conj needs a map entry: a map, a [k v] vector or nil" item))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member
@@ -5651,7 +5940,9 @@
 (defun rontolisp::%clojure-sorted-find (s k)
   "(find S K): the stored [k v] entry of the sorted map S whose key compares
    equal to K, nil when none; a sorted set signals, like the oracle."
-  (if (car (cdr s)) (error "find not supported on this type"))
+  (if (car (cdr s))
+      (rontolisp::%clojure-illegal-argument-exception
+       "find not supported on this type"))
   (let ((i (rontolisp::%clojure-sorted-search s k)))
     (if (>= i 0) (aref (car (cdr (cdr (cdr s)))) i) nil)))
 
@@ -5673,7 +5964,8 @@
   "The keys (WHICH 0) or values (WHICH 1) of the sorted map S in order, nil
    when it is empty; a sorted set signals, like the oracle."
   (if (car (cdr s))
-      (error (if (= which 0) "keys needs a map" "vals needs a map")))
+      (rontolisp::%clojure-class-cast-exception
+       (if (= which 0) "keys needs a map" "vals needs a map")))
   (let ((acc nil) (items (car (cdr (cdr (cdr s))))))
     (do ((i (- (length items) 1) (- i 1)))
         ((< i 0) acc)
@@ -5701,7 +5993,9 @@
    (dissoc's copy, select-keys, the later maps of merge-with), whose lookups
    pass through %clojure-sorted-key first, so a key comparing equal finds its
    entry. A sorted set signals in NAME's words."
-  (if (car (cdr s)) (error "~A needs a map" name))
+  (if (car (cdr s))
+      (rontolisp::%clojure-class-cast-exception
+       (format nil "~A needs a map" name)))
   (rontolisp::%clojure-plist-table nil (rontolisp::%clojure-sorted-plist s)))
 
 (defun rontolisp::%clojure-sorted-hashed (x)
@@ -5876,7 +6170,8 @@
   "S, or NAME's refusal when it is no sorted collection."
   (if (rontolisp::%clojure-sorted-p s)
       s
-      (error "~A needs a sorted collection" name)))
+      (rontolisp::%clojure-class-cast-exception-of
+       (format nil "~A needs a sorted collection" name) s)))
 
 (defun rontolisp::%clojure-sorted-test (test)
   "The test of subseq or rsubseq as one of the core tests (:< :<= :> :>=):
@@ -6004,12 +6299,12 @@
           ((integerp x) x)
           ((floatp x) (if (or (/= x x) (< x lo) (> x hi)) nil (truncate x)))
           ((numberp x) (truncate x))
-          (t (error "~A"
-              (concatenate 'string kind " needs a number or a character"))))))
+          (t (rontolisp::%clojure-class-cast-exception-of
+              (concatenate 'string kind " needs a number or a character") x)))))
     (if (or (null n) (< n lo) (> n hi))
-        (error "~A"
-               (concatenate 'string "Value out of range for " kind ": "
-                            (princ-to-string (if (null n) x n))))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for " kind ": "
+                      (princ-to-string (if (null n) x n))))
         n)))
 
 (defun rontolisp::%clojure-byte (x)
@@ -6022,7 +6317,9 @@
 
 (defun rontolisp::%clojure-double (x)
   "(double x): a number widened to a double; anything else signals."
-  (if (numberp x) (float x) (error "double needs a number")))
+  (if (numberp x)
+      (float x)
+      (rontolisp::%clojure-class-cast-exception-of "double needs a number" x)))
 
 (defun rontolisp::%clojure-float (x)
   "(float x): a number widened to a double (doubles only here) that must lie in
@@ -6030,14 +6327,16 @@
   (let ((d (rontolisp::%clojure-double x)))
     (if (and (= d d)
              (or (> d 3.4028234663852886e38) (< d -3.4028234663852886e38)))
-        (error "~A"
-               (concatenate 'string "Value out of range for float: "
-                            (princ-to-string d)))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for float: "
+                      (princ-to-string d)))
         d)))
 
 (defun rontolisp::%clojure-num (x)
   "(num x): a number itself, nil as nil; anything else signals."
-  (if (or (numberp x) (null x)) x (error "num needs a number")))
+  (if (or (numberp x) (null x))
+      x
+      (rontolisp::%clojure-class-cast-exception "num needs a number")))
 
 (defun rontolisp::%clojure-wrap-bits (n bits)
   "The integer N as a signed two's-complement value of BITS bits (a mask, not a
@@ -6050,25 +6349,30 @@
    wraps to BITS bits, a double truncates after saturating to the int range
    (the long range when WIDE; NaN is 0) and then wraps, a character is its
    code when CHARP; anything else signals."
-  (cond
-   ((characterp x)
-    (if charp
-        (char-code x)
-        (error "~A" (concatenate 'string "unchecked-" kind " needs a number"))))
-   ((floatp x)
-    (rontolisp::%clojure-wrap-bits (cond ((/= x x) 0)
-                                         (wide
-                                          (cond ((>= x 9.223372036854775807e18)
-                                                 9223372036854775807)
-                                                ((<= x -9.223372036854775808e18)
-                                                 -9223372036854775808)
-                                                (t (truncate x))))
-                                         (t
-                                          (cond ((>= x 2147483647.0) 2147483647)
-                                           ((<= x -2147483648.0) -2147483648)
-                                           (t (truncate x))))) bits))
-   ((rationalp x) (rontolisp::%clojure-wrap-bits (truncate x) bits))
-   (t (error "~A" (concatenate 'string "unchecked-" kind " needs a number")))))
+  (cond ((characterp x)
+         (if charp
+             (char-code x)
+             (rontolisp::%clojure-class-cast-exception
+              (concatenate 'string "unchecked-" kind " needs a number"))))
+        ((floatp x)
+         (rontolisp::%clojure-wrap-bits (cond ((/= x x) 0)
+                                              (wide
+                                               (cond ((>= x
+                                                       9.223372036854775807e18)
+                                                      9223372036854775807)
+                                                     ((<= x
+                                                       -9.223372036854775808e18)
+                                                      -9223372036854775808)
+                                                     (t (truncate x))))
+                                              (t (cond ((>= x 2147483647.0)
+                                                        2147483647)
+                                                       ((<= x -2147483648.0)
+                                                        -2147483648)
+                                                       (t (truncate x)))))
+                                        bits))
+        ((rationalp x) (rontolisp::%clojure-wrap-bits (truncate x) bits))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            (concatenate 'string "unchecked-" kind " needs a number") x))))
 
 (defun rontolisp::%clojure-unchecked-int (x)
   "(unchecked-int x): X wrapped to a signed 32-bit integer."
@@ -6094,16 +6398,24 @@
          (code-char
           (logand (rontolisp::%clojure-unchecked-cast x 64 t nil "char")
                   65535)))
-        (t (error "unchecked-char needs a number or a character"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "unchecked-char needs a number or a character" x))))
 
 (defun rontolisp::%clojure-unchecked-double (x)
   "(unchecked-double x): a number widened to a double."
-  (if (numberp x) (float x) (error "unchecked-double needs a number")))
+  (if (numberp x)
+      (float x)
+      (rontolisp::%clojure-class-cast-exception-of
+       "unchecked-double needs a number" x)))
 
 (defun rontolisp::%clojure-unchecked-float (x)
   "(unchecked-float x): a number widened to a double (doubles only here); past
    the float range it is the infinity of its sign, like the oracle's cast."
-  (let ((d (if (numberp x) (float x) (error "unchecked-float needs a number"))))
+  (let ((d
+         (if (numberp x)
+             (float x)
+             (rontolisp::%clojure-class-cast-exception-of
+              "unchecked-float needs a number" x))))
     (cond ((> d 3.4028234663852886e38) (* most-positive-double-float 2.0d0))
           ((< d -3.4028234663852886e38) (* most-negative-double-float 2.0d0))
           (t d))))
@@ -6152,14 +6464,15 @@
         (when (= edigits 0) (setq digits 0))
         (when eneg (setq ex (- ex)))))
     (if (or (= digits 0) (< i n))
-        (error "~A" (concatenate 'string "Invalid decimal number: " s))
+        (rontolisp::%clojure-number-format-exception
+         (concatenate 'string "Invalid decimal number: " s))
         (let ((r (* mant (expt 10 (- ex scale))))) (if neg (- r) r)))))
 
 (defun rontolisp::%clojure-decimal-of-float (x)
   "The exact rational of the shortest decimal a double prints as, which is
    what the oracle's BigDecimal.valueOf reads; NaN and the infinities signal."
   (if (rontolisp::%clojure-symbolic-float-p x)
-      (error "Infinite or NaN")
+      (rontolisp::%clojure-number-format-exception "Infinite or NaN")
       (rontolisp::%clojure-parse-decimal (princ-to-string x))))
 
 (defun rontolisp::%clojure-rationalize (x)
@@ -6168,7 +6481,8 @@
   (cond ((null x) nil)
         ((rationalp x) x)
         ((floatp x) (rontolisp::%clojure-decimal-of-float x))
-        (t (error "rationalize needs a number"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "rationalize needs a number" x))))
 
 (defun rontolisp::%clojure-bigint (x)
   "(bigint x): a number truncated to an integer, a decimal string parsed;
@@ -6177,7 +6491,7 @@
         ((rationalp x) (truncate x))
         ((floatp x)
          (if (rontolisp::%clojure-symbolic-float-p x)
-             (error "Infinite or NaN")
+             (rontolisp::%clojure-number-format-exception "Infinite or NaN")
              (truncate x)))
         ((stringp x)
          ;; parse-integer skips surrounding whitespace, BigInteger refuses it: the
@@ -6188,9 +6502,11 @@
                       (or (digit-char-p (char x 0)) (char= (char x 0) #\+)
                           (char= (char x 0) #\-)))
                      (not (digit-char-p (char x (- n 1)))))
-             (error "~A" (concatenate 'string "Invalid integer: " x)))
+             (rontolisp::%clojure-number-format-exception
+              (concatenate 'string "Invalid integer: " x)))
            (parse-integer x)))
-        (t (error "bigint needs a number or a string"))))
+        (t (rontolisp::%clojure-illegal-argument-exception-of
+            "bigint needs a number or a string" x))))
 
 (defun rontolisp::%clojure-biginteger (x)
   "(biginteger x): the same integer as bigint."
@@ -6210,23 +6526,26 @@
                    (t (setq go nil))))
            (if (= d 1)
                x
-               (error
+               (rontolisp::%clojure-arithmetic-exception
                 "Non-terminating decimal expansion; no exact representable decimal result."))))
         ((floatp x) (rontolisp::%clojure-decimal-of-float x))
         ((stringp x) (rontolisp::%clojure-parse-decimal x))
-        (t (error "bigdec needs a number or a string"))))
+        (t (rontolisp::%clojure-illegal-argument-exception-of
+            "bigdec needs a number or a string" x))))
 
 (defun rontolisp::%clojure-numerator (x)
   "(numerator x): the numerator of a ratio; anything else signals."
   (if (and (rationalp x) (not (integerp x)))
       (numerator x)
-      (error "numerator needs a ratio")))
+      (rontolisp::%clojure-class-cast-exception-of "numerator needs a ratio"
+                                                   x)))
 
 (defun rontolisp::%clojure-denominator (x)
   "(denominator x): the denominator of a ratio; anything else signals."
   (if (and (rationalp x) (not (integerp x)))
       (denominator x)
-      (error "denominator needs a ratio")))
+      (rontolisp::%clojure-class-cast-exception-of "denominator needs a ratio"
+                                                   x)))
 
 (defun rontolisp::%clojure-unchecked-int-v (&rest args)
   "unchecked-int as a value."
@@ -6282,14 +6601,18 @@
 (defun rontolisp::%clojure-int-arg (x)
   "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
    double (truncated) inside the int range; anything else signals."
-  (cond ((integerp x)
-         (if (<= -2147483648 x 2147483647) x (error "integer overflow")))
-        ((floatp x)
-         (if (and (>= x -2147483648.0) (<= x 2147483647.0))
-             (truncate x)
-             (error "Value out of range for int")))
-        ((rationalp x) (rontolisp::%clojure-int-arg (truncate x)))
-        (t (error "int needs a number"))))
+  (cond
+   ((integerp x)
+    (if (<= -2147483648 x 2147483647)
+        x
+        (rontolisp::%clojure-arithmetic-exception "integer overflow")))
+   ((floatp x)
+    (if (and (>= x -2147483648.0) (<= x 2147483647.0))
+        (truncate x)
+        (rontolisp::%clojure-arithmetic-exception
+         "Value out of range for int")))
+   ((rationalp x) (rontolisp::%clojure-int-arg (truncate x)))
+   (t (rontolisp::%clojure-class-cast-exception-of "int needs a number" x))))
 
 (defun rontolisp::%clojure-unchecked-add (a b)
   "(unchecked-add a b): the sum, an integer wrapped to 64 bits."
@@ -6347,14 +6670,16 @@
    32 bits (only -2147483648 / -1 wraps); a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
-        (error "Divide by zero")
+        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
         (rontolisp::%clojure-wrap-int (truncate x y)))))
 
 (defun rontolisp::%clojure-unchecked-remainder-int (a b)
   "(unchecked-remainder-int a b): the remainder of two ints, signed like the
    dividend; a zero divisor signals."
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
-    (if (= y 0) (error "Divide by zero") (rem x y))))
+    (if (= y 0)
+        (rontolisp::%clojure-arithmetic-exception "Divide by zero")
+        (rem x y))))
 
 (defun rontolisp::%clojure-unchecked-inc-v (&rest args)
   "unchecked-inc as a value."
@@ -6495,20 +6820,21 @@
                        nil)
                       (t (truncate x))))
                ((numberp x) (truncate x))
-               (t (error "vector-of needs a number or a character")))))
+               (t (rontolisp::%clojure-class-cast-exception-of
+                   "vector-of needs a number or a character" x)))))
     (if (or (null n) (> n 9223372036854775807) (< n -9223372036854775808))
-        (error "~A"
-               (concatenate 'string "Value out of range for long: "
-                            (rontolisp::%clojure-str-of x "null" nil)))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Value out of range for long: "
+                      (rontolisp::%clojure-str-of x "null" nil)))
         n)))
 
 (defun rontolisp::%clojure-vector-of-range (x n lo hi kind)
   "N (X's integer value) when it lies in LO..HI, else the oracle's refusal for
    the primitive KIND, spelling X."
   (if (or (< n lo) (> n hi))
-      (error "~A"
-             (concatenate 'string "Value out of range for " kind ": "
-                          (rontolisp::%clojure-str-of x "null" nil)))
+      (rontolisp::%clojure-illegal-argument-exception
+       (concatenate 'string "Value out of range for " kind ": "
+                    (rontolisp::%clojure-str-of x "null" nil)))
       n))
 
 (defun rontolisp::%clojure-vector-of-1 (kind x)
@@ -6521,7 +6847,7 @@
         ((equal kind "int")
          (let ((n (rontolisp::%clojure-vector-of-long x)))
            (if (or (< n -2147483648) (> n 2147483647))
-               (error "integer overflow")
+               (rontolisp::%clojure-arithmetic-exception "integer overflow")
                n)))
         ((equal kind "short")
          (rontolisp::%clojure-vector-of-range x
@@ -6543,7 +6869,8 @@
                                                             ((< x 0) -1)
                                                             (t (truncate x))) 0
                                                       65535 "char")))
-               (t (error "vector-of needs a number or a character"))))
+               (t (rontolisp::%clojure-class-cast-exception-of
+                   "vector-of needs a number or a character" x))))
         (t (if (rontolisp::%clojure-truthy x) t rontolisp::%clojure-false))))
 
 (defun rontolisp::%clojure-vector-of (type items)
@@ -6557,9 +6884,9 @@
          (or (equal kind "int") (equal kind "long") (equal kind "float")
              (equal kind "double") (equal kind "byte") (equal kind "short")
              (equal kind "char") (equal kind "boolean")))
-        (error "~A"
-               (concatenate 'string "Unrecognized type "
-                            (rontolisp::%clojure-str-of type "" nil))))
+        (rontolisp::%clojure-illegal-argument-exception
+         (concatenate 'string "Unrecognized type "
+                      (rontolisp::%clojure-str-of type "" nil))))
     (let ((out (make-array (length items))) (i 0))
       (dolist (x items out)
         (setf (aref out i) (rontolisp::%clojure-vector-of-1 kind x))
@@ -6597,7 +6924,8 @@
   (if (or (null m) (hash-table-p m) (rontolisp::%clojure-record-p m)
           (rontolisp::%clojure-sorted-map-p m))
       m
-      (error "with-meta takes a map as metadata")))
+      (rontolisp::%clojure-class-cast-exception
+       "with-meta takes a map as metadata")))
 
 (defun rontolisp::%clojure-put-meta (x m)
   "X with the metadata map M recorded for it (none for a nil M); answers X."
@@ -6631,7 +6959,8 @@
               (not (eq x rontolisp::%clojure-false)))
          (rontolisp::%clojure-check-meta m)
          x)
-        (t (error "with-meta takes a collection, a record or a function"))))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "with-meta takes a collection, a record or a function" x))))
 
 (defun rontolisp::%clojure-with-meta-v (&rest args)
   "with-meta as a value."
@@ -6731,7 +7060,7 @@
    reduced value, var-get does not)."
   (if (rontolisp::%clojure-var-p v)
       (rontolisp::%clojure-var-get v)
-      (error "var-get needs a var")))
+      (rontolisp::%clojure-class-cast-exception-of "var-get needs a var" v)))
 
 (defun rontolisp::%clojure-var-root-v (&rest args)
   "var-get as a value."
@@ -6807,7 +7136,7 @@
   "find-ns: the namespace the symbol X names when the program created it
    (KNOWN, the names it created before the call), else nil."
   (if (not (rontolisp::%clojure-real-symbol-p x))
-      (error "find-ns needs a symbol"))
+      (rontolisp::%clojure-class-cast-exception-of "find-ns needs a symbol" x))
   (let ((name (rontolisp::%clojure-symbol-full-name x)) (found nil))
     (dolist (k known) (if (equal k name) (setq found t)))
     (if found (rontolisp::%clojure-ns-object name) nil)))
@@ -6820,8 +7149,9 @@
       (let ((ns (rontolisp::%clojure-find-ns x known)))
         (if ns
             ns
-            (error "No namespace: ~A found"
-                   (rontolisp::%clojure-symbol-full-name x))))))
+            (rontolisp::%clojure-exception
+             (format nil "No namespace: ~A found"
+                     (rontolisp::%clojure-symbol-full-name x)))))))
 
 (defun rontolisp::%clojure-ns-name (x known)
   "ns-name: the name of the namespace X (or the symbol naming one) as a
@@ -6904,8 +7234,8 @@
   "deref of anything but an atom cell: a reduced value's content (the oracle's
    Reduced is an IDeref), a var's root, else the oracle's cast failure."
   (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
-        ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
-        (t (error "deref needs an atom"))))
+   ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
+   (t (rontolisp::%clojure-class-cast-exception-of "deref needs an atom" x))))
 
 (defun rontolisp::%clojure-seq-rest (s)
   "The seq past the head of the realized seq S: its tail, realized one level
@@ -7584,7 +7914,8 @@
   (dolist (ns namespaces)
     (let ((name (rontolisp::%clojure-test-ns-name ns)))
       (if (not (rontolisp::%clojure-test-known-p name known))
-          (error (concatenate 'string "No namespace: " name " found")))))
+          (rontolisp::%clojure-exception
+           (concatenate 'string "No namespace: " name " found")))))
   (let ((rontolisp::%clojure-test-counters (vector 0 0 0 0)))
     (dolist (ns namespaces)
       (let ((name (rontolisp::%clojure-test-ns-name ns))
@@ -7770,13 +8101,13 @@
   "The datum starting at RD's next character, or :C%READ-SKIP after a #_
    discard; the end of input signals."
   (let ((c (rontolisp::%clojure-rd-next rd)))
-    (cond ((null c) (error "EOF while reading"))
+    (cond ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
           ((char= c #\() (rontolisp::%clojure-rd-seq rd #\)))
           ((char= c #\[) (coerce (rontolisp::%clojure-rd-seq rd #\]) 'vector))
           ((char= c #\{) (rontolisp::%clojure-rd-map rd))
           ((or (char= c #\)) (char= c #\]) (char= c #\}))
-           (error "~A"
-                  (concatenate 'string "Unmatched delimiter: " (string c))))
+           (rontolisp::%clojure-runtime-exception
+            (concatenate 'string "Unmatched delimiter: " (string c))))
           ((char= c #\") (rontolisp::%clojure-rd-string rd))
           ((char= c #\\) (rontolisp::%clojure-rd-char rd))
           ((char= c #\') (rontolisp::%clojure-rd-wrap rd "quote"))
@@ -7821,13 +8152,14 @@
         (done (nreverse items))
       (rontolisp::%clojure-rd-skip rd)
       (let ((c (rontolisp::%clojure-rd-peek rd)))
-        (cond ((null c) (error "EOF while reading"))
-              ((char= c close)
-               (rontolisp::%clojure-rd-next rd)
-               (setq done t))
-              (t (let ((form (rontolisp::%clojure-rd-form rd)))
-                   (if (not (eq form :C%READ-SKIP))
-                       (setq items (cons form items))))))))))
+        (cond
+         ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
+         ((char= c close)
+          (rontolisp::%clojure-rd-next rd)
+          (setq done t))
+         (t (let ((form (rontolisp::%clojure-rd-form rd)))
+              (if (not (eq form :C%READ-SKIP))
+                  (setq items (cons form items))))))))))
 
 (defun rontolisp::%clojure-rd-map (rd)
   "A map literal's entries up to }, as a map whose keys go through the
@@ -7835,7 +8167,8 @@
    in source."
   (let ((items (rontolisp::%clojure-rd-seq rd #\})))
     (if (oddp (length items))
-        (error "Map literal must contain an even number of forms"))
+        (rontolisp::%clojure-runtime-exception
+         "Map literal must contain an even number of forms"))
     (rontolisp::%clojure-plist-table nil items)))
 
 (defun rontolisp::%clojure-rd-set (rd)
@@ -7846,9 +8179,9 @@
       (if (not
            (eq (gethash (rontolisp::%clojure-table-key x table) table miss)
                miss))
-          (error "~A"
-                 (concatenate 'string "Duplicate key: "
-                              (rontolisp::%clojure-str-of x "nil" t))))
+          (rontolisp::%clojure-illegal-argument-exception
+           (concatenate 'string "Duplicate key: "
+                        (rontolisp::%clojure-str-of x "nil" t))))
       (rontolisp::%clojure-set-put table x))
     (list :C%SET table)))
 
@@ -7860,7 +8193,9 @@
         (done (coerce (nreverse (if high (cons (code-char high) chars) chars))
                       'string))
       (let ((c (rontolisp::%clojure-rd-next rd)))
-        (cond ((null c) (error "EOF while reading string"))
+        (cond ((null c)
+               (rontolisp::%clojure-runtime-exception
+                "EOF while reading string"))
               ((char= c #\") (setq done t))
               (t (let ((code
                         (if (char= c #\\)
@@ -7886,7 +8221,8 @@
    \\f \\b \\\\ \\\", \\u plus four hex digits, \\0 to \\377 in octal; any other
    is the oracle's refusal."
   (let ((e (rontolisp::%clojure-rd-next rd)))
-    (if (null e) (error "EOF while reading string"))
+    (if (null e)
+        (rontolisp::%clojure-runtime-exception "EOF while reading string"))
     (let ((code (char-code e)))
       (cond ((= code 110) 10)
             ((= code 116) 9)
@@ -7898,20 +8234,22 @@
             ((and (>= code 48) (<= code 55))
              (rontolisp::%clojure-rd-octal rd (- code 48)))
             ((or (= code 56) (= code 57))
-             (error "~A" (concatenate 'string "Invalid digit: " (string e))))
-            (t (error "~A"
-                      (concatenate 'string "Unsupported escape character: \\"
-                                   (string e))))))))
+             (rontolisp::%clojure-illegal-argument-exception
+              (concatenate 'string "Invalid digit: " (string e))))
+            (t (rontolisp::%clojure-runtime-exception
+                (concatenate 'string "Unsupported escape character: \\"
+                             (string e))))))))
 
 (defun rontolisp::%clojure-rd-unicode (rd)
   "A \\u escape's value, the u consumed: four hex digits, stopping early at a
    stop character; a bad first digit, a bad later digit and a short escape
    are the oracle's refusals."
   (let ((first (rontolisp::%clojure-rd-peek rd)))
-    (if (null first) (error "EOF while reading string"))
+    (if (null first)
+        (rontolisp::%clojure-runtime-exception "EOF while reading string"))
     (let ((d (rontolisp::%clojure-rd-digit first 16)))
       (if (null d)
-          (error "~A"
+          (rontolisp::%clojure-runtime-exception
            (concatenate 'string "Invalid unicode escape: \\u" (string first))))
       (rontolisp::%clojure-rd-next rd)
       (let ((value d) (count 1))
@@ -7922,15 +8260,15 @@
                  (rontolisp::%clojure-rd-escape-stops-p c)))
           (let ((digit (rontolisp::%clojure-rd-digit c 16)))
             (if (null digit)
-                (error "~A" (concatenate 'string "Invalid digit: " (string c))))
+                (rontolisp::%clojure-illegal-argument-exception
+                 (concatenate 'string "Invalid digit: " (string c))))
             (rontolisp::%clojure-rd-next rd)
             (setq value (+ (* value 16) digit))
             (setq count (+ count 1))))
         (if (< count 4)
-            (error "~A"
-                   (concatenate 'string "Invalid character length: "
-                                (string (code-char (+ 48 count)))
-                                ", should be: 4")))
+            (rontolisp::%clojure-illegal-argument-exception
+             (concatenate 'string "Invalid character length: "
+                          (string (code-char (+ 48 count))) ", should be: 4")))
         value))))
 
 (defun rontolisp::%clojure-rd-octal (rd value)
@@ -7941,12 +8279,14 @@
         ((or (>= count 3) (null c) (rontolisp::%clojure-rd-escape-stops-p c)))
       (let ((digit (rontolisp::%clojure-rd-digit c 8)))
         (if (null digit)
-            (error "~A" (concatenate 'string "Invalid digit: " (string c))))
+            (rontolisp::%clojure-illegal-argument-exception
+             (concatenate 'string "Invalid digit: " (string c))))
         (rontolisp::%clojure-rd-next rd)
         (setq value (+ (* value 8) digit))
         (setq count (+ count 1))))
     (if (> value 255)
-        (error "Octal escape sequence must be in range [0, 377]."))
+        (rontolisp::%clojure-runtime-exception
+         "Octal escape sequence must be in range [0, 377]."))
     value))
 
 (defun rontolisp::%clojure-rd-char (rd)
@@ -7954,7 +8294,8 @@
    it is plus the token after it -- one character, a u and four hex digits,
    an o and one to three octal digits, or a lowercase name."
   (let ((first (rontolisp::%clojure-rd-next rd)))
-    (if (null first) (error "EOF while reading character"))
+    (if (null first)
+        (rontolisp::%clojure-runtime-exception "EOF while reading character"))
     (let* ((token (rontolisp::%clojure-rd-token rd first))
            (n (length token))
            (code
@@ -7972,7 +8313,8 @@
                   ((string= token "formfeed") 12)
                   (t nil))))
       (if (null code)
-          (error "~A" (concatenate 'string "Unsupported character: \\" token))
+          (rontolisp::%clojure-runtime-exception
+           (concatenate 'string "Unsupported character: \\" token))
           (code-char code)))))
 
 (defun rontolisp::%clojure-rd-atom (rd first)
@@ -7985,7 +8327,8 @@
           ((rontolisp::%clojure-rd-number-shaped-p token)
            (let ((number (rontolisp::%clojure-rd-number token)))
              (if (null number)
-                 (error "~A" (concatenate 'string "Invalid number: " token))
+                 (rontolisp::%clojure-number-format-exception
+                  (concatenate 'string "Invalid number: " token))
                  number)))
           ((char= first #\:) (rontolisp::%clojure-rd-keyword rd token))
           ((and rontolisp::%clojure-rd-args (char= first #\%))
@@ -8135,21 +8478,23 @@
    refusals otherwise."
   (let ((ctx (cdr rd)))
     (if (< (length token) 2)
-        (error "~A" (concatenate 'string "a keyword needs a name: " token)))
+        (rontolisp::%clojure-runtime-exception
+         (concatenate 'string "a keyword needs a name: " token)))
     (if (not (char= (char token 1) #\:))
         (list :C%KEYWORD (subseq token 1))
         (let* ((rest (subseq token 2)) (slash (search "/" rest)))
           (cond ((null slash)
                  (if (= (length rest) 0)
-                     (error "~A" (concatenate 'string "Invalid token: " token)))
+                     (rontolisp::%clojure-runtime-exception
+                      (concatenate 'string "Invalid token: " token)))
                  (list :C%KEYWORD (concatenate 'string (car ctx) "/" rest)))
                 (t (let* ((alias (subseq rest 0 slash))
                           (tail (subseq rest (+ slash 1)))
                           (ns (rontolisp::%clojure-rd-alias ctx alias)))
                      (if (or (= (length alias) 0) (= (length tail) 0)
                              (search "/" tail) (null ns))
-                         (error "~A"
-                                (concatenate 'string "Invalid token: " token)))
+                         (rontolisp::%clojure-runtime-exception
+                          (concatenate 'string "Invalid token: " token)))
                      (list :C%KEYWORD (concatenate 'string ns "/" tail)))))))))
 
 (defun rontolisp::%clojure-rd-alias (ctx alias)
@@ -8172,7 +8517,9 @@
    argument literal of the body read as its parameter, the vector running from
    p1 to the highest number used (one the body skipped generated after it),
    then & rest for %&. A #(...) inside another signals, like the oracle's."
-  (if rontolisp::%clojure-rd-args (error "Nested #()s are not allowed"))
+  (if rontolisp::%clojure-rd-args
+      (rontolisp::%clojure-illegal-state-exception
+       "Nested #()s are not allowed"))
   (let ((rontolisp::%clojure-rd-args (list :C%ARGS)))
     (let ((body (rontolisp::%clojure-rd-seq rd #\))) (high 0) (params nil))
       (dolist (entry (cdr rontolisp::%clojure-rd-args))
@@ -8199,7 +8546,9 @@
                      (rontolisp::%clojure-rd-digit (char token 1) 10))
                 (rontolisp::%clojure-rd-integer token 1 (length token) 10))
                (t nil))))
-    (if (null n) (error "arg literal must be %, %& or %integer"))
+    (if (null n)
+        (rontolisp::%clojure-illegal-state-exception
+         "arg literal must be %, %& or %integer"))
     (rontolisp::%clojure-rd-arg-param n)))
 
 (defun rontolisp::%clojure-rd-arg-param (n)
@@ -8228,7 +8577,7 @@
   "A # form, the hash consumed: #' #_ #( #{ #\" #^ and a record literal;
    anything else is the source reader's refusal."
   (let ((c (rontolisp::%clojure-rd-peek rd)))
-    (cond ((null c) (error "EOF while reading"))
+    (cond ((null c) (rontolisp::%clojure-runtime-exception "EOF while reading"))
           ((char= c #\')
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-wrap rd "var"))
@@ -8252,7 +8601,7 @@
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-symbolic rd))
           ((alpha-char-p c) (rontolisp::%clojure-rd-record rd))
-          (t (error "~A"
+          (t (rontolisp::%clojure-runtime-exception
               (concatenate 'string "unsupported reader form #" (string c)))))))
 
 (defun rontolisp::%clojure-rd-symbolic (rd)
@@ -8267,12 +8616,12 @@
            (* most-negative-double-float 2.0d0))
           ((and (symbolp form) form (not (eq form t))
                 (not (eq form rontolisp::%clojure-false)) (not (keywordp form)))
-           (error "~A"
-                  (concatenate 'string "Unknown symbolic value: ##"
-                               (rontolisp::%clojure-str-of form "null" nil))))
-          (t (error "~A"
-                    (concatenate 'string "Invalid token: ##"
-                     (rontolisp::%clojure-str-of form "null" nil)))))))
+           (rontolisp::%clojure-runtime-exception
+            (concatenate 'string "Unknown symbolic value: ##"
+                         (rontolisp::%clojure-str-of form "null" nil))))
+          (t (rontolisp::%clojure-runtime-exception
+              (concatenate 'string "Invalid token: ##"
+                           (rontolisp::%clojure-str-of form "null" nil)))))))
 
 (defun rontolisp::%clojure-rd-regex (rd)
   "A regex literal, its #\" consumed: the source verbatim up to the closing
@@ -8283,11 +8632,15 @@
         (done
          (rontolisp::%clojure-re-compile (coerce (nreverse chars) 'string)))
       (let ((c (rontolisp::%clojure-rd-next rd)))
-        (cond ((null c) (error "EOF while reading regex"))
+        (cond ((null c)
+               (rontolisp::%clojure-runtime-exception
+                "EOF while reading regex"))
               ((char= c #\") (setq done t))
               ((char= c #\\)
                (let ((e (rontolisp::%clojure-rd-next rd)))
-                 (if (null e) (error "EOF while reading regex"))
+                 (if (null e)
+                     (rontolisp::%clojure-runtime-exception
+                      "EOF while reading regex"))
                  (setq chars (cons e (cons c chars)))
                  (if (char= e #\Q)
                      (setq chars
@@ -8300,7 +8653,8 @@
     (do ()
         (done chars)
       (let ((c (rontolisp::%clojure-rd-next rd)))
-        (if (null c) (error "EOF while reading regex"))
+        (if (null c)
+            (rontolisp::%clojure-runtime-exception "EOF while reading regex"))
         (setq chars (cons c chars))
         (if (and (char= c #\\) (eql (rontolisp::%clojure-rd-peek rd) #\E))
             (progn
@@ -8316,8 +8670,8 @@
     (if (not (search "." tag))
         (if (or (string= tag "inst") (string= tag "uuid"))
             (error "~A" (concatenate 'string "unsupported reader form #" tag))
-            (error "~A"
-                   (concatenate 'string "No reader function for tag " tag))))
+            (rontolisp::%clojure-runtime-exception
+             (concatenate 'string "No reader function for tag " tag))))
     (rontolisp::%clojure-rd-skip rd)
     (let ((c (rontolisp::%clojure-rd-peek rd)))
       (cond ((eql c #\[)
@@ -8328,10 +8682,10 @@
              (rontolisp::%clojure-rd-next rd)
              (rontolisp::%clojure-rd-build-record tag
               (rontolisp::%clojure-rd-seq rd #\}) t))
-            (t (error "~A"
-                      (concatenate 'string
-                       "Unreadable constructor form starting with \"#" tag
-                       "\"")))))))
+            (t (rontolisp::%clojure-runtime-exception
+                (concatenate 'string
+                             "Unreadable constructor form starting with \"#" tag
+                             "\"")))))))
 
 (defun rontolisp::%clojure-rd-build-record (tag items map-body)
   "The record of class TAG over the body ITEMS: keyword/value pairs when
@@ -8341,27 +8695,29 @@
   (if map-body
       (let ((seen nil))
         (if (oddp (length items))
-            (error "Map literal must contain an even number of forms"))
+            (rontolisp::%clojure-runtime-exception
+             "Map literal must contain an even number of forms"))
         (do ((rest items (cdr (cdr rest))))
             ((null rest))
           (if (not (rontolisp::%clojure-keyword-p (car rest)))
-              (error "~A"
-                     (concatenate 'string
-                      "Unreadable defrecord form: key must be of type clojure.lang.Keyword, got "
-                      (rontolisp::%clojure-str-of (car rest) "nil" nil))))
+              (rontolisp::%clojure-runtime-exception
+               (concatenate 'string
+                            "Unreadable defrecord form: key must be of type clojure.lang.Keyword, got "
+                            (rontolisp::%clojure-str-of (car rest) "nil" nil))))
           (dolist (k seen)
             (if (equal k (car rest))
-                (error "~A"
-                       (concatenate 'string "Duplicate key: :"
-                                    (car (cdr (car rest)))))))
+                (rontolisp::%clojure-illegal-argument-exception
+                 (concatenate 'string "Duplicate key: :"
+                              (car (cdr (car rest)))))))
           (setq seen (cons (car rest) seen)))))
   (let ((entry nil))
     (dolist (e rontolisp::%clojure-read-records)
       (if (and (null entry) (string= (car e) tag)) (setq entry e)))
     (if (null entry)
-        (error "~A"
-               (concatenate 'string
-                "a record literal needs a defined record class, not " tag)))
+        (rontolisp::%clojure-class-not-found-exception
+         (concatenate 'string
+                      "a record literal needs a defined record class, not "
+                      tag)))
     (if (null (car (cdr (cdr (cdr entry)))))
         (error "~A"
          (concatenate 'string "a deftype literal is not supported yet: " tag)))
@@ -8375,11 +8731,11 @@
             (setf (gethash (car rest) table) (car (cdr rest))))
           (progn
             (if (/= (length items) (length keys))
-                (error "~A"
-                       (concatenate 'string
-                        "Unexpected number of constructor arguments to class "
-                        tag ": got "
-                        (rontolisp::%clojure-str-of (length items) "nil" nil))))
+                (rontolisp::%clojure-runtime-exception
+                 (concatenate 'string
+                  "Unexpected number of constructor arguments to class " tag
+                  ": got "
+                  (rontolisp::%clojure-str-of (length items) "nil" nil))))
             (do ((k keys (cdr k)) (v items (cdr v)))
                 ((null k))
               (setf (gethash (car k) table) (car v)))))
@@ -8401,7 +8757,9 @@
         ((or eof (not (eq form :C%READ-SKIP))) (if eof eof-value form))
       (rontolisp::%clojure-rd-skip rd)
       (if (null (rontolisp::%clojure-rd-peek rd))
-          (if eof-error (error "EOF while reading") (setq eof t))
+          (if eof-error
+              (rontolisp::%clojure-runtime-exception "EOF while reading")
+              (setq eof t))
           (setq form (rontolisp::%clojure-rd-form rd))))))
 
 (defun rontolisp::%clojure-read-opt-eof (opts)
@@ -8417,13 +8775,17 @@
 (defun rontolisp::%clojure-read-string (s ctx)
   "(read-string s): the first datum of the string S, CTX the calling
    namespace context."
-  (if (not (stringp s)) (error "read-string needs a string"))
+  (if (not (stringp s))
+      (rontolisp::%clojure-class-cast-exception-of "read-string needs a string"
+                                                   s))
   (rontolisp::%clojure-read-from (cons (cons s 0) ctx) t nil))
 
 (defun rontolisp::%clojure-read-string-opts (opts s ctx)
   "(read-string opts s): the first datum of the string S, the options map
    OPTS deciding the end of input."
-  (if (not (stringp s)) (error "read-string needs a string"))
+  (if (not (stringp s))
+      (rontolisp::%clojure-class-cast-exception-of "read-string needs a string"
+                                                   s))
   (let ((eof (rontolisp::%clojure-read-opt-eof opts)))
     (rontolisp::%clojure-read-from (cons (cons s 0) ctx) (car eof) (cdr eof))))
 
@@ -8431,8 +8793,8 @@
   "X when it is a character input stream; anything else signals."
   (if (streamp x)
       x
-      (error
-       "read needs a reader: a clojure.java.io/reader, a PushbackReader over one, or *in*")))
+      (rontolisp::%clojure-class-cast-exception-of "read needs a reader: a clojure.java.io/reader, a PushbackReader over one, or *in*"
+                                                   x)))
 
 (defun rontolisp::%clojure-read (stream eof-error eof-value ctx)
   "(read stream eof-error? eof-value): one datum from STREAM, which is left

@@ -84,7 +84,8 @@ public final class ClojureLibrary {
 			  nil)
 			(defun rontolisp::%clojure-host-method (x method)
 			  (declare (ignore x))
-			  (error (concatenate 'string "No matching field found: " method)))
+			  (rontolisp::%clojure-illegal-argument-exception
+			   (concatenate 'string "No matching field found: " method)))
 			""";
 
 	@Nullable private static volatile Set<String> functionNames;

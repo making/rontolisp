@@ -204,6 +204,53 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theRefusalFamilyFoldsEachRefusalToThePlainErrorOfItsMessage() {
+		// a program reading no condition's class signals what it signalled before
+		// refusals carried one: a literal (each ~ doubled, so the report stays the
+		// text), a format over its control, anything else through ~A; the culprit,
+		// which only picks the class, goes; subs is subseq again
+		List<LispVal> forms = read("(f (rontolisp::%clojure-illegal-argument-exception \"seq needs a collection\"))"
+				+ " (rontolisp::%clojure-class-cast-exception-of \"name needs a name\" x)"
+				+ " (rontolisp::%clojure-assertion-error \"Assert failed: (= x \\\"~a\\\")\")"
+				+ " (rontolisp::%clojure-index-out-of-bounds-exception (format nil \"Index ~D of ~D\" i (length v)))"
+				+ " (rontolisp::%clojure-arity-exception (concatenate 'string \"a\" b))"
+				+ " (rontolisp::%clojure-map-entry-refusal \"conj needs a map entry\" (car item))"
+				+ " (rontolisp::%clojure-subs s 1 e) (if (rontolisp::%clojure-refusal-p c) (%obj-ref c 2) nil)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.REFUSAL);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.REFUSAL).stream().map(LispVal::print)).containsExactly(
+				"(F (ERROR \"seq needs a collection\"))", "(ERROR \"name needs a name\")",
+				"(ERROR \"Assert failed: (= x \\\"~~a\\\")\")", "(ERROR \"Index ~D of ~D\" I (LENGTH V))",
+				"(ERROR \"~A\" (CONCATENATE 'STRING \"a\" B))", "(ERROR \"conj needs a map entry\")", "(SUBSEQ S 1 E)",
+				"NIL");
+		// the condition class goes with them
+		List<LispVal> condition = read(
+				"(define-condition rontolisp::%clojure-refusal (simple-error) ((c :initarg :chain))) (f)");
+		assertThat(ClojureArms.strip(condition, ClojureArms.Family.REFUSAL).stream().map(LispVal::print))
+			.containsExactly("(F)");
+		// a culprit with an effect cannot go
+		assertThatThrownBy(() -> ClojureArms.strip(read("(rontolisp::%clojure-class-cast-exception-of \"m\" (pop xs))"),
+				ClojureArms.Family.REFUSAL))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("an argument with an effect");
+	}
+
+	@Test
+	void theRefusalFamilyIsMadeByAReaderOfAConditionsClass() {
+		// a catch by class, class and instance? of a condition read the class a refusal
+		// carries; a catch of Throwable, which takes every condition untested, does not
+		String refusal = "(rontolisp::%clojure-illegal-argument-exception \"m\")";
+		for (String reader : List.of("(defun c%e-catches-x (c) (rontolisp::%clojure-catches c '(\"x\")))",
+				"(rontolisp::%clojure-exception-class e)", "(rontolisp::%clojure-instance-of e '(\"x\"))")) {
+			assertThat(ClojureArms.scan(read(refusal + reader), ClojureArms.Family.REFUSAL).builds()).as(reader)
+				.isTrue();
+		}
+		assertThat(ClojureArms.scan(read("(handler-case " + refusal + " (error (e) e))"), ClojureArms.Family.REFUSAL)
+			.strips()).isTrue();
+	}
+
+	@Test
 	void theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator() {
 		// no host object exists without a java: operator: the host arm goes, and a core
 		// class a host object may be tests the kind alone, as before host objects counted

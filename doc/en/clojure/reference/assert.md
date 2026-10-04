@@ -2,7 +2,8 @@
 
 `(assert test)` / `(assert test msg)`
 
-`nil` when the test is truthy, else a signal. Its message is `Assert failed: <form>`,
+`nil` when the test is truthy, else an `AssertionError`, which an `Exception` catch does not
+take. Its message is `Assert failed: <form>`,
 or `Assert failed: <msg>\n<form>` with a message, the failed form printed readably like
 the oracle. The message sits in the else branch, so it evaluates only on failure --
 lazily, like the oracle. Like `and`/`or`, `assert` has no function value.

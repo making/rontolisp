@@ -184,8 +184,8 @@ final class ClojureStateLowering {
 		LispSymbol cell = ctx.freshTemp();
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), body.apply(cell), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("error"), LispString.literal(op + " needs an atom"))));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), body.apply(cell), ClojureRefusals
+					.refusal(ClojureRefusals.CLASS_CAST_OF, LispString.literal(op + " needs an atom"), cell)));
 	}
 
 	static LispVal atomOf(ClojureLowering ctx, List<LispVal> items) {
@@ -445,7 +445,7 @@ final class ClojureStateLowering {
 														ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), verdict),
 														ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), verdict,
 																ctx.falseVariable)),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+												ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
 														LispString.literal("Invalid reference state")),
 												write)),
 								write))));
@@ -457,7 +457,7 @@ final class ClojureStateLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), new LispSymbol("C%STM-DEPTH"), new LispInteger(0)),
 				guarded,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("No transaction running")));
+				ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE, LispString.literal("No transaction running")));
 	}
 
 	/**
@@ -1037,7 +1037,7 @@ final class ClojureStateLowering {
 						ClojureLowerUtil.list(want, ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), slots)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), have, want),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+						ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 								LispString.literal("Too many arguments to " + op + " constructor")),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), fill, table)));
 	}

@@ -330,11 +330,11 @@ final class ClojureHierarchyLowering {
 				hfn("IF", hfn("BEATS-ALL?", hfn("CAR", ss), surv), hfn("CAR", ss), hfn("FIND", hfn("CDR", ss)))));
 		runtime.add(hdefun("C%H-PICK", List.of(surv, prefers), hlabels(List.of(beatsFn, findFn), hfn("FIND", surv))));
 		// (defun c%h-dispatch (name methods prefers hier default dv args) ...)
-		LispVal noMethod = hfn("ERROR",
+		LispVal noMethod = hfn(ClojureRefusals.ILLEGAL_ARGUMENT,
 				hfn("CONCATENATE", ClojureLowerUtil.quoted("string"), LispString.literal("No method in "), name,
 						LispString.literal(" for dispatch value: "),
 						hfn("RONTOLISP::%CLOJURE-STR-OF", dv, LispString.literal("nil"), ClojureLowering.NIL_CONST)));
-		LispVal ambiguous = hfn("ERROR",
+		LispVal ambiguous = hfn(ClojureRefusals.ILLEGAL_ARGUMENT,
 				hfn("CONCATENATE", ClojureLowerUtil.quoted("string"),
 						LispString.literal("Multiple methods in multimethod '"), name,
 						LispString.literal("' match dispatch value: "),

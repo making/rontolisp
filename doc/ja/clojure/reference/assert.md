@@ -2,7 +2,7 @@
 
 `(assert test)` / `(assert test msg)`
 
-テストが真なら `nil`、そうでなければシグナルします。メッセージは `Assert failed: <form>`、メッセージ付きなら
+テストが真なら `nil`、そうでなければ `Exception` の catch が捕捉しない `AssertionError` をシグナルします。メッセージは `Assert failed: <form>`、メッセージ付きなら
 `Assert failed: <msg>\n<form>` で、失敗したフォームは oracle と同様に readable に出力されます。
 メッセージは else 節にあるため、失敗時にのみ評価されます -- oracle と同様に遅延します。
 `and`/`or` と同様に、`assert` に関数値はありません。

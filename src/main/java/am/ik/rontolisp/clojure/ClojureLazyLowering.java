@@ -49,7 +49,7 @@ final class ClojureLazyLowering {
 		LispVal two = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEAT-N"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("repeat takes a value, or a count and a value"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -92,7 +92,7 @@ final class ClojureLazyLowering {
 		LispVal two = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY-N"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowering.realFun(ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args))));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("repeatedly takes a function, or a count and a function"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -122,7 +122,7 @@ final class ClojureLazyLowering {
 		LispVal two = rangeForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), second,
 				new LispInteger(1));
 		LispVal three = rangeForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), second, third);
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("range takes an end, or a start, an end and an optional step"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -250,7 +250,7 @@ final class ClojureLazyLowering {
 	 */
 	static LispVal dorunValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("dorun-args"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("dorun takes a collection and an optional count"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -277,7 +277,7 @@ final class ClojureLazyLowering {
 	 */
 	static LispVal doallValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("doall-args"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("doall takes a collection and an optional count"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),

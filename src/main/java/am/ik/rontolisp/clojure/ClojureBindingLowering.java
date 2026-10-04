@@ -443,7 +443,7 @@ final class ClojureBindingLowering {
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(clause.fixed()));
 			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(call)));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("wrong number of arguments passed to: " + name))));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(callName),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
@@ -673,7 +673,7 @@ final class ClojureBindingLowering {
 			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 					ClojureLowerUtil.list(bindings), clause.body())));
 		}
-		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("wrong number of arguments passed to: " + owner))));
 		LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
