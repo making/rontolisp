@@ -337,6 +337,15 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `(%special-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
   (`boundpDynamicRuntime`, a segmented name dispatch onto `%special-boundp`, the miss on
   `%boundp-raw`, the old mirror probe); any other name keeps the raw probe.
+- `#'boundp` is a reference-gated wrapper (`BuiltinFunctionWrappers`, beside `#'symbol-value`),
+  so `(mapcar #'boundp names)` is a computed probe: the injected body is among the forms
+  `boundpProbes` reads, which tracks every valueless special exactly as a computed call does.
+  Measured 2026-10-04: size-report, bench-report and the examples naming neither wrapper are
+  byte-identical (P1, `--optimize=size`, component, JVM class); a program naming `#'boundp` pays
+  the call's own cost (wasm +8 B, JVM +47 B over the same program with the call spelled out).
+  Pins: `BoundpFunctionValueFixture` on `boundpAndFboundpAreFunctionValues` (`LispEvaluatorTest`,
+  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), ci-spec
+  `boundp-and-fboundp-as-function-values`.
 - Still nil, not an error, for a read of a tracked special while unbound (a direct read,
   `symbol-value`, `eval`), as for every unassigned global; a `progv` short of values binds nil
   (both documented).

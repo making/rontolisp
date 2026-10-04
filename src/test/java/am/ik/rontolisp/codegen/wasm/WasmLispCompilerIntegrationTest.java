@@ -23690,6 +23690,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void boundpAndFboundpAreFunctionValues() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String source = am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(source))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: a name dispatch searches the names' string-table offsets, shared

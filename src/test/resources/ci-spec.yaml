@@ -12444,6 +12444,29 @@ cases:
       ((7 T) NIL)
       ((T T) NIL)
       (T T 8 T)
+  - name: boundp-and-fboundp-as-function-values
+    source: |
+      ;; #'boundp and #'fboundp reach mapcar, funcall and apply. BoundpFunctionValueFixture.
+      (defvar *fv* 1)
+      (defvar *fv-nv*)
+      (defun fv-fn () 1)
+      (print (mapcar #'boundp '(*fv* *fv-none* *fv-nv*)))
+      (print (let ((*fv-nv* 1)) (mapcar #'boundp '(*fv-nv* *fv*))))
+      (print (list (funcall #'boundp '*fv*) (apply #'boundp '(*fv-nv*))))
+      (print (mapcar #'boundp '(t nil :fv-kw)))
+      (print (mapcar #'fboundp '(fv-none)))
+      (print (and (funcall #'fboundp 'car) t))
+      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none)))
+      (print (and (apply #'fboundp '(fv-fn)) t))
+    expected: |
+      (T NIL NIL)
+      (T T)
+      (T NIL)
+      (T T T)
+      (NIL)
+      T
+      (T T NIL)
+      T
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,

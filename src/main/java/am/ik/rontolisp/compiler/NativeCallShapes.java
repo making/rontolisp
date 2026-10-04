@@ -89,9 +89,9 @@ final class NativeCallShapes {
 	private static Map<String, Row> buildRows() {
 		Map<String, Row> rows = new HashMap<>();
 		// COMMON-LISP functions.
-		for (String name : new String[] { LispNames.ARRAY_DIMENSIONS, LispNames.ARRAYP, LispNames.BOUNDP,
-				LispNames.CHAR_NAME, LispNames.DELETE_PACKAGE, LispNames.EVAL, LispNames.FBOUNDP, LispNames.FDEFINITION,
-				LispNames.FMAKUNBOUND, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.HASH_TABLE_REHASH_SIZE,
+		for (String name : new String[] { LispNames.ARRAY_DIMENSIONS, LispNames.ARRAYP, LispNames.CHAR_NAME,
+				LispNames.DELETE_PACKAGE, LispNames.EVAL, LispNames.FDEFINITION, LispNames.FMAKUNBOUND,
+				LispNames.GET_OUTPUT_STREAM_STRING, LispNames.HASH_TABLE_REHASH_SIZE,
 				LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST,
 				LispNames.OPEN_STREAM_P, LispNames.PACKAGE_NICKNAMES, LispNames.PACKAGE_SHADOWING_SYMBOLS,
 				LispNames.PROVIDE, LispNames.RATIONALP, LispNames.SYMBOL_FUNCTION, LispNames.SYMBOL_PACKAGE }) {

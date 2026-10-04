@@ -19839,6 +19839,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void boundpAndFboundpAreFunctionValues() throws Exception {
+		// #'boundp / #'fboundp are reference-gated wrappers over the computed probes, so
+		// they reach mapcar, funcall and apply and answer a special bound by a let.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
 	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
 		// The marker, its seeding and _dbound exist only where boundp can see a binding
 		// of

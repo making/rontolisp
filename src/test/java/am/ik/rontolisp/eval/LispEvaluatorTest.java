@@ -17373,6 +17373,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void boundpAndFboundpAreFunctionValues() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: #'boundp and #'fboundp reach mapcar, funcall and apply.
+		assertThat(printedLines(am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() {
 		// The reference answer for the compilers' searched name dispatch: reads, sets
 		// and progv bindings by name over more names than one segment holds, two pairs
