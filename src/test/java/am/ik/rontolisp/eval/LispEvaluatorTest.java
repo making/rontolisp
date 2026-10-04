@@ -978,6 +978,23 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalErrorOutputIsOneStreamValue() {
+		assertThat(eval("""
+				(list (eq *error-output* *error-output*)
+				      (let ((a *error-output*) (b *error-output*)) (eq a b))
+				      (eq *error-output* (symbol-value '*error-output*)))""").print()).isEqualTo("(T T T)");
+	}
+
+	@Test
+	void evalStreamDirectionPredicatesAtTheTopLevel() {
+		assertThat(eval("""
+				(list (input-stream-p *error-output*)
+				      (output-stream-p *error-output*)
+				      (output-stream-p (make-string-input-stream "a"))
+				      (input-stream-p (make-string-output-stream)))""").print()).isEqualTo("(NIL T NIL NIL)");
+	}
+
+	@Test
 	void evalWithOutputToStringEmptyBody() {
 		assertThat(eval("(with-output-to-string (s))")).isEqualTo(new LispString(""));
 	}

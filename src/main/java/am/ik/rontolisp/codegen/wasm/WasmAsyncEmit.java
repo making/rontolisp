@@ -843,6 +843,10 @@ final class WasmAsyncEmit {
 			// built or written through at the SYNCHRONOUS top level must resolve like
 			// the same form inside a defun.
 			.usesSynonymStreams(proto.usesSynonymStreams)
+			// NOT optional, same reason: without it a top-level input-stream-p /
+			// output-stream-p falls back to streamp and answers t for either direction
+			// while the same form inside a defun answers the real one.
+			.asksStreamDirection(proto.asksStreamDirection)
 			// NOT optional either: the test tag rides in a table's header COUNT, so a
 			// chunk that reads or writes a count has to agree with the rest of the
 			// module about whether the tag is there -- a table made at the synchronous

@@ -6905,6 +6905,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void errorOutputIsOneStreamValue() throws Exception {
+		// A program that never binds the variable reads the seeded value, not a value
+		// constructed per read; symbol-value's global-environment mirror holds the same
+		// object.
+		assertThat(compileAndRun("""
+				(print (list (eq *error-output* *error-output*)
+				             (let ((a *error-output*) (b *error-output*)) (eq a b))
+				             (eq *error-output* (symbol-value '*error-output*))))""")).isEqualTo("(T T T)");
+		assertThat(compileAndRun("""
+				(defun eo-rebind () (let ((*error-output* *error-output*)) *error-output*))
+				(print (list (eq (eo-rebind) *error-output*)
+				             (eq *error-output* (symbol-value '*error-output*))))""")).isEqualTo("(T T)");
+	}
+
+	@Test
+	void streamDirectionPredicatesAtTheTopLevel() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (input-stream-p *error-output*)
+				             (output-stream-p *error-output*)
+				             (output-stream-p (make-string-input-stream "a"))
+				             (input-stream-p (make-string-output-stream))))""")).isEqualTo("(NIL T NIL NIL)");
+	}
+
+	@Test
 	void errorOutputIsTheProcessErrorStream() throws Exception {
 		// *error-output* is the standard ERROR designator (the reserved handle 2), so a
 		// diagnostic written through it stays off the program's standard output.

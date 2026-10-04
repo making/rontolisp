@@ -56,7 +56,18 @@ through `WasmEmitHelper.streamFdOrStdin`.
 handle `2` — `StreamDesignators.standardError()` (compile backends) / `standardErrorValue()`
 (interpreter) — whose handle is literally the WASI stderr fd. Self-describing, so
 `(streamp *error-output*)` answers off the value. NAMING the variable turns the instance gate
-on; a global cell without naming seeds the raw handle instead. Interpreter and JVM number
+on; a global cell without naming seeds the raw handle instead.
+
+**One value, one home.** Naming the variable also gives it a global (JVM `_g$` field, wasm
+module global) seeded ONCE in `<clinit>` / `_start`, even when nothing binds it, and the eval
+runtime's `GLOBAL_ENV` mirror is seeded by reading that global back. Until 2026-10-04 an
+unbound program compiled every read to the constructor form (the `JvmExprCompiler` /
+`WasmExprCompiler` fallback arm, now reached only by a read the source scan misses) and the
+mirror built a second instance: `(eq *error-output* *error-output*)` was NIL on the JVM and both
+wasm backends, `(eq *error-output* (symbol-value '*error-output*))` NIL even with a binding,
+and Clojure's `(identical? *err* *err*)` false. Measured cost: +19 bytes wasm, +34 bytes
+`.jar` for `(format *error-output* ...)` alone; a program with several reads or a `warn` gets
+smaller on wasm (-52 bytes for three reads plus a `warn`). Interpreter and JVM number
 their own stream tables, so both **reserve handles 0/1/2** (`Environment.registerIO` starts at
 `StreamDesignators.FIRST_USER_HANDLE`; the JVM's `_addStream` at 3).
 
@@ -64,7 +75,7 @@ their own stream tables, so both **reserve handles 0/1/2** (`Environment.registe
   `JvmIoRuntimeBuilder.emitStderrBranch` intercepts the handle in `_writeStr`, `_writeLine`,
   `_freshLine`, `_forceOutput`, `_close`, `_openStreamP`. Branches AND the table reservation
   gate on `programUsesSymbol(program, *ERROR-OUTPUT*)`; `JvmWarnCompiler` keeps its direct
-  `System.err.println` unless the program BINDS the variable.
+  `System.err.println` unless the variable is a global (named, bound, or a thread program).
   **The gate is "named OR a global"**: `warn` takes the `_writeLine` redirect whenever the
   variable is in `ctx.globals`, and a thread-using program puts it there without naming it
   (the make-thread stream specials), so a `(warn 'cond-class ...)` there once wrote through a
@@ -74,7 +85,7 @@ their own stream tables, so both **reserve handles 0/1/2** (`Environment.registe
   `_streams` left the table null while handle 2 was live and `_writeString`'s socket probe
   dereferenced it. `<clinit>` allocates them whenever `usesErrorOutput`.
 - **WASM**: nothing to intercept, fd 2 IS stderr. `WasmWarnCompiler` passes the constant i31 2
-  unless the program binds the variable; `_start` seeds the global with i31 2, not `_t_sym`.
+  unless the variable has a module global (named or bound); `_start` seeds the global with i31 2, not `_t_sym`.
   **Those are the COMPLETE list of ways a compiled wasm module can put handle 2 into a stream
   designator, and `--component` depends on it**: `WasmLispCompiler` scans the SOURCE for
   `*ERROR-OUTPUT*` / `WARN` / `%WARN` (gives up under `--dynamic`) and, finding none, retains
@@ -93,8 +104,8 @@ their own stream tables, so both **reserve handles 0/1/2** (`Environment.registe
 These become special exactly when the program BINDS one --
 `SpecialVarCollector.collectForm` runs `collectDynamicallyBound` on every top-level form, so a
 `let`/`let*` or a built-in binding macro implicitly proclaims it. A program that never binds
-compiles BYTE-IDENTICALLY to before: a bare read compiles to the constant `t`, one of
-`*error-output*` to the constant handle 2. Gate: the variable is in `ctx.globals` (JVM) /
+compiles BYTE-IDENTICALLY to before: a bare read compiles to the constant `t`.
+`*error-output*` is the exception: naming it is enough for a global ("One value, one home"). Gate: the variable is in `ctx.globals` (JVM) /
 `ctx.globalIndices` (WASM) only when the redirect is active. Second, independent gate: the
 eval runtime's global-environment mirror is seeded when the program merely NAMES the variable
 -- naming is weaker than binding.
@@ -125,6 +136,7 @@ Each name below exists in `LispEvaluatorTest` (`eval`-prefixed), `JvmLispCompile
 `synonymStreamOverStandardOutputFollowsALaterBinding`,
 `funcallOfPrintFamilyForwardsItsStreamArgument` (the JVM copy also asserts `#'listen`),
 `errorOutputIsTheProcessErrorStream`, `bindingErrorOutputCapturesWarnAndRestores`,
+`errorOutputIsOneStreamValue`, `streamDirectionPredicatesAtTheTopLevel`,
 `bindingStandardInputRedirectsTheStreamlessReadFamily`,
 `makeSynonymStreamOverStandardInputFollowsALaterBinding`, plus
 `LispEvaluatorTest.formatDestinationNilReturnsTheStringEvenThroughAVariable`.
@@ -132,4 +144,6 @@ Each name below exists in `LispEvaluatorTest` (`eval`-prefixed), `JvmLispCompile
 ci-spec: `s-sql-enablement-language-group`, `postmodern-language-incidentals`,
 `synonym-stream-value`, `first-class-print-family-stream-argument`,
 `error-output-designator` (the driver compares stdout, so its first assertion is that the
-stderr lines do NOT appear there), `quri-enablement-language-group`, `pm-input-designators`.
+stderr lines do NOT appear there), `error-output-identity-and-top-level-stream-direction`, the
+standalone `error-output-is-one-value-without-a-binding` (the shared corpus binds the variable,
+so only a standalone program reaches the unbound read), `quri-enablement-language-group`, `pm-input-designators`.

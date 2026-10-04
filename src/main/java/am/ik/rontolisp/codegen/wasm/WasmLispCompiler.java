@@ -4084,6 +4084,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// union them in before indices are assigned; a let/let* of one of these names
 		// becomes a dynamic binding (WasmLetCompiler).
 		globals.addAll(specialVars);
+		// *error-output*'s default is a stream VALUE, not a constant like the t the other
+		// two standard stream variables hold, so a program that names it reads it from a
+		// module global seeded once in _start: a read that built the value afresh would
+		// answer a new object each time, and (eq *error-output* *error-output*) would be
+		// false.
+		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
+			globals.add(LispNames.ERROR_OUTPUT_VAR);
+		}
 		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
 		// per-call task record (WasmDynVars); every other special keeps its plain
 		// module-global read. The JVM hybrid's decision procedure, and the JVM's
@@ -4777,7 +4785,16 @@ public final class WasmLispCompiler implements LispCompiler {
 			// than shadowing it. The name goes through the string table, so its offset is
 			// the one _env_lookup compares a runtime-interned symbol against.
 			WasmEmitHelper.compileStringLiteral(streamVar.getKey(), ctx);
-			emitStandardStreamDefault(startWriter, streamVar.getValue(), ctx);
+			if (streamGlobal != null) {
+				// The very value the module global was just seeded with: a second
+				// construction would make symbol-value answer an object that is not eq to
+				// what a direct read answers.
+				startWriter.write(Instruction.GET_GLOBAL);
+				startWriter.writeUnsignedLeb128(streamGlobal);
+			}
+			else {
+				emitStandardStreamDefault(startWriter, streamVar.getValue(), ctx);
+			}
 			WasmEmitHelper.emitNewCons(startWriter, this.usesIdentityHashTables);
 			startWriter.write(Instruction.GET_GLOBAL);
 			startWriter.writeUnsignedLeb128(GLOBAL_ENV);

@@ -15207,6 +15207,28 @@ cases:
       T
       T
 
+  - name: error-output-identity-and-top-level-stream-direction
+    source: |
+      ;; *error-output* holds ONE stream value: two reads answer the same
+      ;; object, and the eval runtime's symbol-value answers that object too.
+      (print (list (eq *error-output* *error-output*)
+                   (let ((a *error-output*) (b *error-output*)) (eq a b))
+                   (eq *error-output* (symbol-value '*error-output*))))
+      ;; The direction predicates answer the real direction at the top level
+      ;; exactly as inside a defun.
+      (print (list (input-stream-p *error-output*)
+                   (output-stream-p *error-output*)
+                   (output-stream-p (make-string-input-stream "a"))
+                   (input-stream-p (make-string-output-stream))))
+      (defun eo-directions (in out)
+        (list (input-stream-p in) (output-stream-p in)
+              (input-stream-p out) (output-stream-p out)))
+      (print (eo-directions (make-string-input-stream "a") (make-string-output-stream)))
+    expected: |
+      (T T T)
+      (NIL T NIL NIL)
+      (T NIL NIL T)
+
   - name: binary-standard-output
     source: |
       ;; write-byte / write-sequence take the same stream DESIGNATOR every other
@@ -21327,3 +21349,14 @@ standalone:
     stderr: |
       Unhandled condition: boom: 42
     fails: true
+  # A program that never BINDS *error-output* (the shared corpus does): every
+  # read answers the one seeded stream value, and symbol-value answers it too.
+  - name: error-output-is-one-value-without-a-binding
+    source: |
+      (print (list (eq *error-output* *error-output*)
+                   (let ((a *error-output*) (b *error-output*)) (eq a b))
+                   (eq *error-output* (symbol-value '*error-output*))))
+      (print (list (input-stream-p *error-output*) (output-stream-p *error-output*)))
+    stdout: |
+      (T T T)
+      (NIL T)

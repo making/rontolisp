@@ -1876,6 +1876,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			specialVars.add(LispNames.ERROR_OUTPUT_VAR);
 		}
 		globals.addAll(specialVars);
+		// *error-output*'s default is a stream VALUE, not a constant like the t the
+		// other two standard stream variables hold, so a program that names it reads it
+		// from a field seeded once: a read that built the value afresh would answer a new
+		// object each time, and (eq *error-output* *error-output*) would be false.
+		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
+			globals.add(LispNames.ERROR_OUTPUT_VAR);
+		}
 		Map<String, FieldRefEntry> globalFields = new HashMap<>();
 		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Entry globalFieldDescUtf = cp.utf8Entry("Ljava/lang/Object;");
@@ -4254,8 +4261,16 @@ public final class JvmLispCompiler implements LispCompiler {
 					clinitCode.aastore();
 					clinitCode.dup();
 					clinitCode.iconst_1();
-					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
-							streamLayoutField, streamKindStandardStr);
+					if (globalField != null) {
+						// The very value the field was just seeded with: a second
+						// construction would make symbol-value answer an object that
+						// is not eq to what a direct read answers.
+						clinitCode.getstatic(globalField);
+					}
+					else {
+						emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
+								objectClass, streamLayoutField, streamKindStandardStr);
+					}
 					clinitCode.aastore();
 					clinitCode.aastore();
 					clinitCode.dup();
