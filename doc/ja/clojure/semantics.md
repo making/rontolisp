@@ -48,6 +48,14 @@ Common Lisp ファイルはこの名前で呼び出します。
 どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
 oracle と同じ文言のエラーになります。
 
+`*ns*` は現在の名前空間を値として持ちます。`ns` と `in-ns` が実行された時点で切り替わり、
+読むコードの実行時に読まれるため、関数は呼び出し側の名前空間を答えます。require された
+ファイルの実行中は `*ns*` が再束縛され（ファイルの `ns` が切り替え、終われば require した側の
+名前空間に戻ります）、`*file*` はルートからのファイルのパス（`my_app/core.clj`）、
+`*source-path*` はファイル名を持ちます。エントリファイルの `*file*` はその絶対パスです。
+[the-ns](reference/the-ns.md)、[find-ns](reference/find-ns.md)、
+[ns-name](reference/ns-name.md) は名前から名前空間を得ます。
+
 ```bash
 # deps.edn は {:paths ["src"]}、demo.main と demo.main-test が demo.lib を require する
 rontolisp src/demo/main.clj          # ルート: src（自身の ns）、src（deps.edn）
@@ -187,7 +195,7 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 ありません。プログラムの定義が占めていない名前と `clojure.core/` の綴りは core の var
 （`#'clojure.core/inc`）です。ルートは core の値で、マクロのルートはシグナルを上げ、
 メタデータは `:name`、`:ns` とマクロの `:macro` です。ここで値を持たない core の var
-（`#'*ns*`、`#'*file*`）は拒否されます。
+（`#'all-ns`）は拒否されます。
 
 `ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
 （単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`
@@ -206,8 +214,8 @@ docstring の `:doc`、名前のメタデータと attr マップ（定義の位
 `*command-line-args*` はプログラムの引数、`*clojure-version*` は 1.12.6 など）、
 プリンタは `*print-length*`、`*print-level*`、`*print-readably*`、`*print-meta*`、
 `*print-namespace-maps*` に従い（キーが一つの名前空間を共有するマップは `#:a{:b 1}` と
-印字されます）、`assert` は展開される時点の `*assert*` を読みます。それ以外はただの値です。`*ns*`、`*file*`、`*source-path*`、`*repl*`、`*1`/`*2`/`*3`/`*e` は
-ここでは値を持ちません。`with-in-str` は `*in*` を文字列リーダに束縛し、`read-line`、
+印字されます）、`assert` は展開される時点の `*assert*` を読みます。それ以外はただの値です。`*ns*`、`*file*`、`*source-path*` はロードに従い（上述）、`*repl*` は
+`false`、`*1`/`*2`/`*3`/`*e` は [REPL](repl.md) の外では `nil` です。`with-in-str` は `*in*` を文字列リーダに束縛し、`read-line`、
 `read`、`(.read *in*)` はそこから読みます。`defstruct` はキーベクターを名前の裏に保持します。
 `struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は
 `*standard-output*` を文字列ストリームに束縛し（リテラルの
@@ -294,7 +302,7 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
-| ここで値を持たない var（`*file*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
+| 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
 | `future`、`future-done?`/`future-cancelled?`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |

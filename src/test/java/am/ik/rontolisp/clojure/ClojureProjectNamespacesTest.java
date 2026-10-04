@@ -177,6 +177,12 @@ class ClojureProjectNamespacesTest {
 					(ns app.shared)
 					(println "loading shared")
 					(defn s [] :shared!)
+					"""), Map.entry("src/app/where.clj", """
+					(ns app.where)
+					(prn :loading (str *ns*) *file* *source-path*)
+					(defn here [] [(str *ns*) *file* *source-path*])
+					(in-ns 'app.elsewhere)
+					(clojure.core/prn :switched (clojure.core/str clojure.core/*ns*))
 					"""), Map.entry("test/app/a.clj", """
 					(ns app.a (:require [app.shared :as sh]))
 					(println (sh/s) :from-a)
@@ -275,6 +281,46 @@ class ClojureProjectNamespacesTest {
 		if (HostWasmtime.isAvailable()) {
 			assertThat(runOnWasm(entry, false)).isEqualTo(INBOX_OUT);
 		}
+	}
+
+	/**
+	 * {@code *ns*}, {@code *file*} and {@code *source-path*} are bound while a file
+	 * loads: a required namespace's file reads its own namespace and its root-relative
+	 * path, its {@code in-ns} switches only there, and the entry reads its own again
+	 * afterwards; a function reads the values of whoever calls it, like the oracle.
+	 */
+	private static final String WHERE = """
+			(ns app.where-test (:require [app.where :as w]))
+			(prn (str *ns*) *file* *source-path*)
+			(prn (w/here))
+			(in-ns 'user)
+			(prn (app.where/here))
+			""";
+
+	private static String whereOut(Path entry) {
+		String file = "\"" + entry + "\" \"where_test.clj\"";
+		return """
+				:loading "app.where" "app/where.clj" "where.clj"
+				:switched "app.elsewhere"
+				"app.where-test" %1$s
+				["app.where-test" %1$s]
+				["user" %1$s]
+				""".formatted(file);
+	}
+
+	@Test
+	void aLoadingFileReadsItsOwnNamespaceAndPathOnTheInterpreterAndTheJvm() throws Exception {
+		Path entry = entry("where_test.clj", WHERE);
+		assertThat(interpret(entry)).isEqualTo(whereOut(entry));
+		assertThat(runOnJvm(entry, "ProjWhere")).isEqualTo(whereOut(entry));
+	}
+
+	@Test
+	void aLoadingFileReadsItsOwnNamespaceAndPathOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = entry("where_test.clj", WHERE);
+		assertThat(runOnWasm(entry, false)).isEqualTo(whereOut(entry));
+		assertThat(runOnWasm(entry, true)).isEqualTo(whereOut(entry));
 	}
 
 	/**

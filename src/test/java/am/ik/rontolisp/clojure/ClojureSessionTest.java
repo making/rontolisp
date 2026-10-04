@@ -11,17 +11,38 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ClojureSessionTest {
 
+	/** How an input's forms start: under the *e record, their value the *1 record. */
+	private static final String INPUT = "(HANDLER-BIND ((ERROR #'RONTOLISP::%CLOJURE-REPL-ERROR))"
+			+ " (RONTOLISP::%CLOJURE-REPL-RESULT (PROGN ";
+
+	/** An input of the given forms, as the session evaluates it. */
+	private static String input(String forms) {
+		return INPUT + forms + ")))";
+	}
+
 	@Test
 	void aLaterBufferCallsWhatAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		assertThat(session.read("(defn twice [x] (* 2 x))").get(0).forms().stream().map(LispVal::print).toList())
-			.hasSize(3)
-			.startsWith("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|))")
+			.hasSize(2)
+			.startsWith("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)")
 			.last()
 			.asString()
-			.startsWith("(RONTOLISP::%CLOJURE-VAR \"user/twice\"");
+			.startsWith(INPUT + "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|)) (RONTOLISP::%CLOJURE-VAR \"user/twice\"");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
-		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly("(|c%twice| 21)");
+		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly(input("(|c%twice| 21)"));
+	}
+
+	@Test
+	void anInputRecordsItsValueAndAnNsInputNil() {
+		// the oracle's REPL records every input's value as *1 and an exception as *e;
+		// an ns shows nothing and records nil, after switching *ns*
+		ClojureSession session = new ClojureSession();
+		session.read("1");
+		assertThat(forms(session.read("(ns sess.a)")))
+			.contains(input("(SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"sess.a\")) NIL"));
+		assertThat(forms(session.read("(in-ns 'sess.b)"))).containsExactly(
+				input("(PROGN (SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"sess.b\")) NIL)"));
 	}
 
 	@Test
@@ -32,7 +53,7 @@ class ClojureSessionTest {
 		ClojureSession session = new ClojureSession();
 		assertThat(forms(session.read("(declare later)"))).anyMatch(form -> form
 			.contains("(UNLESS (BOUNDP '|c%later|) (SETQ |c%later| (RONTOLISP::%CLOJURE-UNBOUND \"user/later\")))"));
-		assertThat(forms(session.read("(later 1)"))).contains("(|c%later| 1)");
+		assertThat(forms(session.read("(later 1)"))).contains(input("(|c%later| 1)"));
 		assertThat(forms(session.read("(map later [1])")))
 			.anyMatch(form -> form.contains("(IF (FBOUNDP '|c%later|) #'|c%later| |c%later|)"));
 	}
@@ -44,7 +65,7 @@ class ClojureSessionTest {
 		ClojureSession session = new ClojureSession();
 		assertThat(forms(session.read("(assert false)"))).anyMatch(form -> form.contains("Assert failed: false"));
 		session.read("(set! *assert* false)");
-		assertThat(forms(session.read("(assert false)"))).containsExactly("NIL");
+		assertThat(forms(session.read("(assert false)"))).containsExactly(input("NIL"));
 		session.read("(set! *assert* true)");
 		assertThat(forms(session.read("(assert false)"))).anyMatch(form -> form.contains("Assert failed: false"));
 	}
@@ -239,9 +260,9 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(required).contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))");
+		assertThat(required).anyMatch(form -> form.contains("(DEFUN |c%app.lib/f| (|c%x|) (+ |c%x| 1))"));
 		assertThat(session.read("(l/f 1)").get(0).forms().stream().map(LispVal::print).toList())
-			.containsExactly("(|c%app.lib/f| 1)");
+			.containsExactly(input("(|c%app.lib/f| 1)"));
 		List<String> again = session.read("(require 'app.lib)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
@@ -264,16 +285,20 @@ class ClojureSessionTest {
 			.toList();
 		assertThat(required).anyMatch(form -> form.contains("(DEFVAR |c%app.lib%loaded| NIL)"))
 			.anyMatch(form -> form.contains("(SETQ |c%app.lib%init| (LAMBDA NIL (FUNCALL |c%app.lib%init-1|)))"))
-			.anyMatch(form -> form
-				.contains("(UNLESS |c%app.lib%loaded| (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))"));
+			.anyMatch(form -> form.contains("(UNLESS |c%app.lib%loaded| (LET (" + LOADING
+					+ ") (FUNCALL |c%app.lib%init|))" + " (SETQ |c%app.lib%loaded| T))"));
 		List<String> reloaded = session.read("(require '[app.lib] :reload)")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(reloaded)
-			.anyMatch(form -> form.contains("(PROGN (FUNCALL |c%app.lib%init|) (SETQ |c%app.lib%loaded| T))"));
+		assertThat(reloaded).anyMatch(form -> form
+			.contains("(PROGN (LET (" + LOADING + ") (FUNCALL |c%app.lib%init|)) (SETQ |c%app.lib%loaded| T))"));
 	}
+
+	/** What a load of app.lib binds around its init. */
+	private static final String LOADING = "(RONTOLISP::%CLOJURE-NS RONTOLISP::%CLOJURE-NS)"
+			+ " (RONTOLISP::%CLOJURE-FILE \"app/lib.clj\") (RONTOLISP::%CLOJURE-SOURCE-PATH \"lib.clj\")";
 
 	@Test
 	void isCompleteCountsBracketsStringsAndComments() {

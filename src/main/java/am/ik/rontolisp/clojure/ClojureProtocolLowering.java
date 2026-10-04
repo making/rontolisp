@@ -38,14 +38,6 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The flags {@code clojure.main} binds around every load (measured on the oracle,
-	 * Clojure CLI 1.12) that have no value here ({@link ClojureCoreSpecials} has the
-	 * rest): a {@code set!} of one answers the value there, so it answers the value here
-	 * too, with no effect.
-	 */
-	private static final Set<String> ALWAYS_BOUND_FLAGS = Set.of("*ns*");
-
-	/**
 	 * The tag heading a record value: a record is
 	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table "ns.Name")}, beside
 	 * the {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers; the trailing
@@ -521,8 +513,8 @@ final class ClojureProtocolLowering {
 	 * global or an unbound dynamic one (the run-time
 	 * {@code Can't change/establish root binding}, after the value evaluates). A
 	 * {@code clojure.core} special ({@link ClojureCoreSpecials}) assigns like a dynamic
-	 * var, a flag {@code clojure.main} binds at the top level too; {@code *ns*} answers
-	 * the value with no effect. A host field stays refused by name.
+	 * var, a flag {@code clojure.main} binds at the top level too. A host field stays
+	 * refused by name.
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -569,11 +561,6 @@ final class ClojureProtocolLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), temp),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
-		}
-		if (ALWAYS_BOUND_FLAGS.contains(name)) {
-			// a clojure.main-bound compiler flag: bound around every load on the
-			// oracle, so a set! there answers the value; here it has no effect
-			return ctx.lower(items.get(2));
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
 				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");

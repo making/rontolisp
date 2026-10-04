@@ -172,7 +172,15 @@
   定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
   上げます（オラクルは展開関数を答えます）。`clojure.core` の var のメタデータは `:name`、
   `:ns` とマクロの `:macro` だけです（オラクルは `:arglists`、`:doc`、`:added` と位置も
-  持ちます）。ここで値を持たない core の var（`#'*ns*`、`#'*file*`）は拒否されます。
+  持ちます）。ここで値を持たない core の var（`#'all-ns`）は拒否されます。
+- 名前空間は oracle の `#object[clojure.lang.Namespace "user"]` から identity hash を除いた
+  形で印字され、その `class` は `:clojure.lang.Namespace` を答えます。`the-ns` と `find-ns` が
+  知っているのは、呼び出しより上でプログラムが作った名前空間、require したライブラリ、
+  `clj -M` が先にロードする 4 つ（`clojure.core`、`clojure.edn`、`clojure.java.io`、
+  `clojure.string`）です。`in-ns` は `nil` を答えます（oracle は名前空間を答えます）。
+  `*ns*` への `set!` や `binding` は `*ns*` が読む値を変えますが、以降のフォームが解決される
+  名前空間は変えません。それはリテラルの名前をとる `ns` と `in-ns` が決めます。コンパイル
+  したプログラムの `*file*` は、コンパイル時のエントリファイルのパスです。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで、ホストオブジェクト（インタプリタと JVM）はホストクラスで答えます。

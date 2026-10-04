@@ -116,7 +116,7 @@ answered `2 5 3` before).
 | `with-out-str` | `let*` rebinding `*standard-output*` to `make-string-output-stream`, read back | never a literal `with-output-to-string`: it flips a WASM module into EH mode |
 | `with-in-str` / `read-line` | `let*` rebinding `*standard-input*` to `make-string-input-stream` (body behind the `try` barrier) / `(read-line *standard-input* nil nil)` | `read-line` as a value is `%clojure-read-line-v`; clojure-spec `with-in-str-binds-in-to-the-string-and-read-line-reads-it` |
 | `time` | the value timed with `get-internal-real-time`, printing `Elapsed time: N.0 msecs` | a double like the oracle's `nanoTime` quotient (whole milliseconds here), so the book's `\d+\.\d+` match holds; only the shape pins |
-| `*out*` `*in*` `*err*` `*agent*`, the flags | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>`; a stream READ as a value calls its `Special.reader` (`%clojure-out`/`-in`/`-err`, "Streams as values") | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
+| `*out*` `*in*` `*err*` `*agent*`, the flags, `*ns*` `*file*` `*source-path*` `*repl*` `*1`..`*e` | one special each (`ClojureCoreSpecials`): `*standard-output*`, `*standard-input*`, `*error-output*`, `C%AGENT`, `rontolisp::%clojure-<name>` (`%clojure-history-1`..`-e`); a stream READ as a value calls its `Special.reader` (`%clojure-out`/`-in`/`-err`, "Streams as values") | "State"; `binding`/`set!` take either spelling, bare or `clojure.core/`-qualified; a program var of the name wins |
 | `defstruct` `struct` `struct-map` | a key vector behind the name plus fresh-table builders | missing keys `nil`, too many values signal |
 | `with-meta` `meta` `vary-meta`, reader `^` | "Vars and metadata" | |
 | `var` / `#'` | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)` | "Vars and metadata" |
@@ -1160,7 +1160,7 @@ resolve var`.
   `coreValueOrNull` gives `clojure.core/x`; a macro's (`ClojureCoreNames.MACROS`, the
   oracle's 79) root signals `Can't take value of a macro`. META is `:name`/`:ns` (+
   `:macro`) only -- the oracle's `:arglists`/`:doc`/`:added`/position would be a table
-  per core name (deviation). A core name with no value here (`*ns*`, `*file*`) keeps the
+  per core name (deviation). A core name with no value here (`#'all-ns`) keeps the
   refusal `var of a clojure.core var is not supported yet`. The core specials
   (`ClojureCoreSpecials`: the streams, `*agent*`, the flags) are `%clojure-var-dynamic`
   sites. Measured 2026-10-03 (clj 1.12.6, `clj -M file` and the REPL alike):
@@ -1301,12 +1301,44 @@ resolve var`.
   change/establish root binding of: x with set` -- the counter has dynamic extent, so a
   callee outside the binding's lexical extent still sets it. A core special with a
   counter (`*out*`, `*err*`, `*print-dup*`, ...) assigns the same way; a main-bound flag
-  is a plain `setq` anywhere, like the oracle's top-level `(set! *print-length* 2)`.
-  `*ns*` answers the value with no effect; anything else is refused.
+  is a plain `setq` anywhere, like the oracle's top-level `(set! *print-length* 2)`
+  (`*ns*`, `*file*`, `*1` included); anything else is refused.
 - The flags hold the oracle's `clj -M` root (`ClojureCoreSpecials`: `*data-readers*`
   `{}`, `*command-line-args*` `(cdr (%host-argv))`, `*clojure-version*` 1.12.6,
-  `*compile-path*` `"classes"`, ...). Not here: `*ns*` (no namespace value), `*file*`,
-  `*source-path*`, `*repl*` and the REPL's `*1`..`*e`.
+  `*compile-path*` `"classes"`, ...).
+- **The load's specials** (measured 2026-10-04, clj 1.12.6: `*ns*` is the namespace `ns` /
+  `in-ns` switch to WHERE THEY RUN and a function reads its caller's; a required file runs
+  with `*ns*` rebound, `*file*` its root-relative path `app/where.clj`, `*source-path*`
+  `where.clj`; the entry's `*file*` is `getAbsolutePath` of the argument; all main-bound but
+  `*repl*`). `*ns*` is the special `%clojure-ns` over an interned namespace value
+  `(:C%NS-OBJECT "name")` (`clojure.lisp` "Namespaces": printer `#object[clojure.lang.Namespace
+  "user"]` without the hash, `str` the name, `class` `:clojure.lang.Namespace`; `the-ns` /
+  `find-ns` / `ns-name` take the names created above the call, `ClojureLowering.knownNamespaces`,
+  since namespaces exist only at lower time). `ns` and `in-ns` lower to a `(setq %clojure-ns
+  (%clojure-ns-object "x"))` statement (`nsSwitch`; `in-ns` `(progn SWITCH nil)`), the require
+  site runs an init under `(let ((%clojure-ns %clojure-ns) (%clojure-file "a/b.clj")
+  (%clojure-source-path "b.clj")) (funcall init))` (`ClojureLowering.loading`), and a macro
+  expands under the same three bound to its site. Roots: `user`, `ClojureSourcePath.entryPath`
+  / `entryName` (`NO_SOURCE_PATH` / `NO_SOURCE_FILE` without a file). The switches, the pairs
+  and the defvars are arms of `ClojureArms.Family.NS_SWITCH` / `FILE_SWITCH` /
+  `SOURCE_PATH_SWITCH` (the fifth arm shape, `Family.switches`: a let left without a pair is
+  its body, a progn with one form that form); any other mention of the special keeps them, so
+  a program reading none compiles byte-identically -- an init holding only a switch is no init
+  (`hasInit`), and init chunks cut by the switch-free print length. Measured 2026-10-04 (wasm,
+  `--optimize=size`, component and class bytes all md5-identical before -> after):
+  `(prn [1 "a"])`, an `ns` + `in-ns` program, a `try`/`class` program,
+  `examples/clojure/demo.clj` and a `deps.edn` project requiring a printing and a
+  definitions-only namespace. Reading one: `(println (str *ns*))` wasm 37,458 / class 65,856
+  (`(println (str "user"))` 36,296 / 64,327), `(prn *ns*)` 33,157 (`(prn [1 "a"])` 32,305),
+  `(println *source-path*)` 16,879 (`(println "u3.clj")` 16,840). Deviations: `set!`/`binding`
+  of `*ns*` do not move the lowering's namespace; `in-ns` answers nil; a compiled `*file*` is
+  the compile-time path. `*repl*` has a counter (false and unbound in a file; a session defines
+  it true with the counter at 1); `*1`/`*2`/`*3`/`*e` are main-bound nil roots
+  (`%clojure-history-N`, with library defvars) that a session records into (see "A session").
+  Pinned by clojure-spec `ns-is-the-current-namespace-and-the-load-specials-have-their-values`,
+  `ClojureProjectNamespacesTest#aLoadingFileReadsItsOwnNamespaceAndPath*` (all four backends),
+  `ClojureArmsTest#theSwitchFamiliesDropTheSwitchesOfAProgramReadingNoLoadSpecial`,
+  `ClojureLibraryTest#aProgramReadingNoLoadSpecialShedsTheirSwitches`.
 - `assert` reads `*assert*` at lower time, like the oracle's macroexpansion:
   `ClojureLowering.assertEnabled`, set by a TOP-LEVEL `(set! *assert* literal)`
   (`topLevelsOf`, so a required namespace's too, and a REPL input's for the next input;
@@ -1428,6 +1460,15 @@ its inits evaluate against the OLD binding (like one file). `SourceSession` prom
 bracket counting over `()[]{}` (outside strings and comments) plus a reader probe for a
 trailing dispatch prefix. A buffer's `require` loads from the working directory's source
 path; an `ns` buffer echoes nothing; `*ns*` carries across buffers.
+
+Each input's forms evaluate as one `(handler-bind ((error #'%clojure-repl-error))
+(%clojure-repl-result (progn FORMS...)))` (`ClojureLowering.evaluated`): the value rotates
+into `*1`/`*2`/`*3` (an `ns` input records nil, `(progn ... nil)`), a condition is stored as
+`*e` and declined, so the REPL's report is unchanged; a lowering refusal records nothing (the
+oracle's compiler exception does). `class` of `*e` needs the exception reader, which a session
+emits like a catching file's (`needsExceptionReader`). Pinned by
+`PlaygroundReplTest#aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars`,
+`ClojureSessionTest#anInputRecordsItsValueAndAnNsInputNil`.
 
 The echo of a top-level `def`/`defn`/`defn-`/`defmacro`/`defmulti`/`defonce`/`defstruct` is the
 var it defined (`#'user/f`, `#'foo/x`; `ClojureLowering.echoingTopLevelsOf`, appended as the

@@ -9,3 +9,6 @@
 | `use` | `(do (use '[clojure.string :only [upper-case]]) (upper-case "hi"))` | `HI` |
 | `import` | `(do (import java.util.Date) nil)` | `nil` |
 | `in-ns` | `(do (in-ns 'demo) nil)` | `nil` |
+| `the-ns` | `(str (the-ns 'user))` | `"user"` |
+| `find-ns` | `(find-ns 'no-such)` | `nil` |
+| `ns-name` | `(ns-name *ns*)` | `user` |

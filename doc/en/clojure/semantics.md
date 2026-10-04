@@ -48,6 +48,14 @@ defines into the requiring namespace. `use` and `:refer :all` bring in every pub
 file no root holds, a cycle of requires and a refer of a missing or private var are errors
 in the oracle's words.
 
+`*ns*` is the current namespace as a value, switched by `ns` and `in-ns` where they run and
+read when the reading code runs, so a function answers its caller's namespace. While a
+required file runs, `*ns*` is rebound (the file's `ns` switches it, and the requiring
+namespace is back afterwards), `*file*` holds the file's path below its root
+(`my_app/core.clj`) and `*source-path*` its name; the entry file's `*file*` is its absolute
+path. [the-ns](reference/the-ns.md), [find-ns](reference/find-ns.md) and
+[ns-name](reference/ns-name.md) reach a namespace by name.
+
 ```bash
 # deps.edn holds {:paths ["src"]}; demo.main and demo.main-test require demo.lib
 rontolisp src/demo/main.clj          # roots: src (its ns), src (deps.edn)
@@ -196,7 +204,7 @@ where the definition stands, so `^{:test (fn [] ...)}` works), `:line`/`:column`
 var. A name no program definition claims, or a `clojure.core/` spelling, is the core var
 (`#'clojure.core/inc`): its root is the core value, a macro's root signals, and its
 metadata is `:name`, `:ns` and a macro's `:macro`. A core var with no value here
-(`#'*ns*`, `#'*file*`) is refused.
+(`#'all-ns`) is refused.
 
 A `ref` is the atom cell with a transaction discipline: `dosync` opens the
 extent (single-threaded, so no retries and no isolation), `alter`/`commute`
@@ -217,8 +225,8 @@ extent; anything else is refused. `*out*`/`*in*`/`*err*` are `*standard-output*`
 the printer honours `*print-length*`, `*print-level*`, `*print-readably*`,
 `*print-meta*` and `*print-namespace-maps*` (a map whose keys share a namespace prints
 `#:a{:b 1}`), `assert` reads `*assert*` where it expands, and the others are plain
-values. `*ns*`, `*file*`, `*source-path*`, `*repl*` and
-`*1`/`*2`/`*3`/`*e` have no value here. `with-in-str` binds `*in*` to a string
+values. `*ns*`, `*file*` and `*source-path*` follow the load (above), `*repl*` is
+`false`, and `*1`/`*2`/`*3`/`*e` are `nil` outside the [REPL](repl.md). `with-in-str` binds `*in*` to a string
 reader, which `read-line`, `read` and `(.read *in*)` take from. `defstruct` holds its key vector
 behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
 binds `*standard-output*` to a string stream (never a literal
@@ -296,7 +304,7 @@ Each refusal names the missing design, never `unknown name`:
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
-| `set!` of a var with no value here (`*file*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
+| `set!` of a core var that is no special (`inc`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no var to assign; the `java:` surface has no field write |
 | `future`, `future-done?`/`future-cancelled?`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |

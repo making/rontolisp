@@ -14,8 +14,8 @@ evaluates -- the same error a non-dynamic global's `set!` signals. The
 `clojure.core` specials assign the same way (`*out*`, `*err*`, `*print-dup*`, ...),
 except the flags `clojure.main` binds around a script (`*warn-on-reflection*`,
 `*unchecked-math*`, `*print-length*`, `*print-level*`, `*assert*`, ...): those are
-always bound, so `set!` assigns them anywhere, like the oracle. `*ns*` answers the
-value with no effect here.
+always bound, so `set!` assigns them anywhere, like the oracle -- `*ns*`, `*file*` and
+`*1` included. `*repl*` is bound only in the REPL.
 
 Any other target is refused like the oracle: a local, a parameter or an immutable
 field with `Cannot assign to non-mutable: ...`; a host field is not supported yet

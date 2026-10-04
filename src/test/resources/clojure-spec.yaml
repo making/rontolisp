@@ -6825,3 +6825,37 @@ cases:
       1.0E19|[1.0E-10] 1.0E20 {:a 1.0E-10} 1.0E300
        2.5E-8
       [1.0E20 1.5] {:k 1.0E21} #{1.0E30} (1.0E-9) InfinityNaN ##Inf 1.23456789012E11
+  - name: ns-is-the-current-namespace-and-the-load-specials-have-their-values
+    # Oracle-identical (clj 1.12.6, clj -M file) but for two spellings: the oracle prints a
+    # namespace with its identity hash (#object[clojure.lang.Namespace 0x1dfd5f51 "nsv-a"])
+    # and class answers the class, where class answers a keyword here. *ns* is the
+    # namespace ns and in-ns switch to while the file runs, read when a function runs, so
+    # nsv-here answers its caller's; binding rebinds it. *file* and *source-path* name the
+    # file (a path that differs per leg), *repl* is false and not thread-bound, and the REPL
+    # history vars are nil and thread-bound.
+    source: |
+      (ns nsv-a)
+      (prn *ns* (str *ns*) (ns-name *ns*) (symbol? (ns-name *ns*)))
+      (println *ns*)
+      (defn nsv-here [] (str *ns*))
+      (in-ns 'nsv-b)
+      (clojure.core/prn (clojure.core/str clojure.core/*ns*) (nsv-a/nsv-here))
+      (clojure.core/in-ns 'nsv-a)
+      (prn (= *ns* (the-ns 'nsv-a)) (identical? *ns* (find-ns 'nsv-a)) (find-ns 'nsv-none) (str (the-ns *ns*)) (ns-name 'nsv-b))
+      (prn (binding [*ns* (the-ns 'nsv-b)] (nsv-here)) (nsv-here) (map ns-name [(the-ns 'nsv-b)]) (some? (find-ns 'clojure.core)))
+      (prn (try (the-ns 'nsv-none) (catch Exception e (ex-message e))))
+      (prn (class *ns*) (thread-bound? #'*ns*) #'*ns* (meta *ns*) (seq? *ns*) (coll? *ns*))
+      (prn [(string? *file*) (string? *source-path*) *repl* *1 *2 *3 *e])
+      (prn (map thread-bound? [#'*file* #'*source-path* #'*1 #'*2 #'*3 #'*e #'*repl*]))
+      (prn (try (set! *repl* true) (catch Exception e (ex-message e))) (set! *3 5) *3 (binding [*repl* 1] [*repl* (thread-bound? #'*repl*)]))
+    expected: |
+      #object[clojure.lang.Namespace "nsv-a"] "nsv-a" nsv-a true
+      #object[clojure.lang.Namespace nsv-a]
+      "nsv-b" "nsv-b"
+      true true nil "nsv-a" nsv-b
+      "nsv-b" "nsv-a" (nsv-b) true
+      "No namespace: nsv-none found"
+      :clojure.lang.Namespace true #'clojure.core/*ns* nil false false
+      [true true false nil nil nil nil]
+      (true true true true true true false)
+      "Can't change/establish root binding of: *repl* with set" 5 5 [1 true]

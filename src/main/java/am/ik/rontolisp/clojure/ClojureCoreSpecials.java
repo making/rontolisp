@@ -37,8 +37,16 @@ import org.jspecify.annotations.Nullable;
  * ({@link ClojureArms.Family#PRINT_META}) and {@code *print-namespace-maps*}
  * ({@link ClojureArms.Family#NAMESPACE_MAP}); {@code assert} reads {@code *assert*} where
  * it lowers, after a top-level {@code set!} of it to a literal. Every other flag is a
- * plain value. {@code *ns*}, {@code *file*}, {@code *source-path*}, {@code *repl*} and
- * the REPL's {@code *1}/{@code *2}/{@code *3}/{@code *e} are not here.
+ * plain value.
+ *
+ * <p>
+ * What {@code clojure.main} binds around a load: {@code *ns*} holds the namespace
+ * {@code ns} and {@code in-ns} switch to, {@code *file*} the file's path (the entry's
+ * absolute, a required namespace's below its root) and {@code *source-path*} its name,
+ * each rebound around a required namespace's load ({@link ClojureArms.Family#NS_SWITCH}
+ * and its siblings: a program reading none sheds the switches). {@code *repl*} is true
+ * and bound in a session only; the REPL's {@code *1}/{@code *2}/{@code *3}/{@code *e} are
+ * nil in a file and a session records into them.
  */
 final class ClojureCoreSpecials {
 
@@ -75,6 +83,24 @@ final class ClojureCoreSpecials {
 		}
 
 	}
+
+	/** The special {@code *ns*} lowers to. */
+	static final LispSymbol NS = new LispSymbol("RONTOLISP::%CLOJURE-NS");
+
+	/** The special {@code *file*} lowers to. */
+	static final LispSymbol FILE = new LispSymbol("RONTOLISP::%CLOJURE-FILE");
+
+	/** The special {@code *source-path*} lowers to. */
+	static final LispSymbol SOURCE_PATH = new LispSymbol("RONTOLISP::%CLOJURE-SOURCE-PATH");
+
+	/** The library function interning a namespace by name ({@code clojure.lisp}). */
+	static final String NS_OBJECT = "RONTOLISP::%CLOJURE-NS-OBJECT";
+
+	/** {@code *file*} where no file is read: a session, a program read without one. */
+	static final String NO_SOURCE_PATH = "NO_SOURCE_PATH";
+
+	/** {@code *source-path*} where no file is read. */
+	static final String NO_SOURCE_FILE = "NO_SOURCE_FILE";
 
 	private static final Map<String, Special> SPECIALS = table();
 
@@ -138,7 +164,45 @@ final class ClojureCoreSpecials {
 		flag(table, "*reader-resolver*", nil, false);
 		flag(table, "*suppress-read*", nil, false);
 		flag(table, "*use-context-classloader*", yes, false);
+		// the load's own: the roots are the lowering's (rootOf)
+		table.put("*ns*", new Special("*ns*", NS, null, false, null, null));
+		table.put("*file*", new Special("*file*", FILE, null, false, null, null));
+		table.put("*source-path*", new Special("*source-path*", SOURCE_PATH, null, false, null, null));
+		table.put("*repl*", new Special("*repl*", flagSymbol("*repl*"), null, false, counterSymbol("*repl*"), null));
+		history(table, "*1", "1");
+		history(table, "*2", "2");
+		history(table, "*3", "3");
+		history(table, "*e", "E");
 		return table;
+	}
+
+	private static void history(Map<String, Special> table, String name, String suffix) {
+		table.put(name, new Special(name, new LispSymbol("RONTOLISP::%CLOJURE-HISTORY-" + suffix),
+				new LispSymbol("nil"), false, null, null));
+	}
+
+	/**
+	 * A namespace, interned by name.
+	 * @param name the namespace
+	 * @return the lowered form
+	 */
+	static LispVal namespaceObject(String name) {
+		return ClojureLowerUtil.list(new LispSymbol(NS_OBJECT), LispString.literal(name));
+	}
+
+	/**
+	 * The root of a special as a lowered form, or null when the variable is defined
+	 * elsewhere: the table's, or for the load's own the lowering's -- {@code user}, the
+	 * entry file and its name, and whether a session reads.
+	 */
+	private static @Nullable LispVal rootOf(ClojureLowering ctx, Special special) {
+		return switch (special.name()) {
+			case "*ns*" -> namespaceObject("user");
+			case "*file*" -> LispString.literal(ctx.rootFile);
+			case "*source-path*" -> LispString.literal(ctx.rootSourcePath);
+			case "*repl*" -> ctx.session ? ClojureLowering.TRUE_CONST : ctx.lower(new LispSymbol("false"));
+			default -> special.root() == null ? null : special.lowered() ? special.root() : ctx.lower(special.root());
+		};
 	}
 
 	private static void stream(Map<String, Special> table, String name, String symbol, @Nullable String reader) {
@@ -211,12 +275,15 @@ final class ClojureCoreSpecials {
 			if (!names.contains(special.name())) {
 				continue;
 			}
-			if (special.root() != null) {
-				LispVal root = special.lowered() ? special.root() : ctx.lower(special.root());
+			LispVal root = rootOf(ctx, special);
+			if (root != null) {
 				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), special.symbol(), root));
 			}
 			if (special.counter() != null) {
-				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), special.counter(), new LispInteger(0)));
+				// a session binds *repl* around every input, like the oracle's REPL
+				int depth = ctx.session && special.name().equals("*repl*") ? 1 : 0;
+				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), special.counter(),
+						new LispInteger(depth)));
 			}
 		}
 		return forms;

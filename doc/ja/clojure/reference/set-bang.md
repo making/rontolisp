@@ -14,7 +14,8 @@ dynamic グローバルの `set!` と同じエラーです。`clojure.core` の�
 `*err*`、`*print-dup*` など）も同様に代入しますが、`clojure.main` がスクリプトの周りで
 束縛するフラグ（`*warn-on-reflection*`、`*unchecked-math*`、`*print-length*`、
 `*print-level*`、`*assert*` など）は常に束縛されているため、オラクル同様どこでも
-`set!` で代入できます。`*ns*` は値をそのまま返し、効果はありません。
+`set!` で代入できます。`*ns*`、`*file*`、`*1` も同様です。`*repl*` が束縛されているのは
+REPL の中だけです。
 
 それ以外の代入先はオラクル同様に拒否されます。ローカル・パラメータ・不変フィールドは
 `Cannot assign to non-mutable: ...`、ホストフィールドはまだサポートしていません
