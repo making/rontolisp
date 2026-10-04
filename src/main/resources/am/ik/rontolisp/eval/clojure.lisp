@@ -924,6 +924,24 @@
                      "isInstance" x)
         (error () nil))))
 
+(defun rontolisp::%clojure-host-object-p (x class-name)
+  "instance?'s host arm: whether X is a host object of the class CLASS-NAME.
+   The arm test of the host-object family (clojure/ClojureArms): a program
+   naming no java: operator, where no host object exists, folds it away."
+  (rontolisp::%clojure-host-instance-p x class-name))
+
+(defun rontolisp::%clojure-host-number-p (x)
+  "instance? of Number: a number or a host Number (a BigDecimal). A program
+   naming no java: operator calls numberp in its place (the strip's alias)."
+  (or (numberp x) (rontolisp::%clojure-host-instance-p x "java.lang.Number")))
+
+(defun rontolisp::%clojure-host-char-sequence-p (x)
+  "instance? of CharSequence: a string or a host CharSequence (a
+   StringBuilder). A program naming no java: operator calls stringp in its
+   place (the strip's alias)."
+  (or (stringp x)
+      (rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")))
+
 (defun rontolisp::%clojure-host-string (x)
   "X's toString when X is a host object, str's answer (a class object's is
    \"class java.lang.String\"), else NIL. The host test is the getClass

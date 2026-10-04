@@ -684,7 +684,16 @@ final class ClojureFnLowering {
 	 */
 	static LispVal symbolRaw(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
-		LispVal test = ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))), symbolTest(ctx, one));
+	}
+
+	/**
+	 * {@link #symbolRaw}'s test over a value it may read several times: a variable or a
+	 * constant.
+	 */
+	static LispVal symbolTest(ClojureLowering ctx, LispVal one) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("symbolp"), one),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one)),
@@ -692,8 +701,6 @@ final class ClojureFnLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ClojureLowering.TRUE_CONST)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable)));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, lowered))), test);
 	}
 
 	/** {@code symbol?} as a value: a one-argument lambda answering {@code T}-or-false. */

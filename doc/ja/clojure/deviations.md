@@ -203,8 +203,12 @@
   フィールドでもない名前は同じように拒否します（オラクルは `No matching field found`）。
   後の REPL 入力が record・deftype を定義しても、それより前に lower された呼び出し箇所は
   そのメソッドもフィールドも見ません。
-- `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
-  他のクラスは誤答の代わりに名前付きで拒否されます。
+- `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
+  `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
+  `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
+  `java.util.Map$Entry` です（`map-entry?`）。整数は `(int 1)` も含めて `Long` で、`Integer` には
+  なりません。どの種類の値もインスタンスにならない `clojure.lang` のクラス
+  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換（`int`・`long`・`short`・
   `byte`・`char`・`double`・`float`）と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは
   通常の整数なので、オラクルでは折り返されない bigint のオペランド

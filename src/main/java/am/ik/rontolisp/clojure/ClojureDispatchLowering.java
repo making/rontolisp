@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -39,9 +40,15 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * {@code instance?}: the class name mapped onto the predicate the backends share.
-	 * Only the core classes lower -- a host width we do not have (or any other class) is
-	 * a named refusal instead of a wrong answer.
+	 * {@code instance?}: whether the value is an instance of the named class, the
+	 * oracle's {@code isInstance}. A record or deftype name tests the dispatch tag,
+	 * {@code Object} every value but nil, a throwable class the class chain; any other
+	 * class tests each kind of value whose oracle class is or implements it
+	 * ({@link ClojureValueClasses}), a stream by its class, a condition by the throwable
+	 * classes implementing it, and a host object by its host class
+	 * ({@code %clojure-host-object-p}, an arm a program naming no {@code java:} operator
+	 * sheds, {@link ClojureArms.Family#HOST}). A class no value here has answers false; a
+	 * name no class has is the oracle's unresolved symbol.
 	 */
 	static LispVal instanceOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "instance? takes a class and a value");
@@ -49,7 +56,6 @@ final class ClojureDispatchLowering {
 			throw new LispReadException("instance? takes a class name, not " + items.get(1).print());
 		}
 		String name = cls.name();
-		String simple = name.lastIndexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1) : name;
 		LispVal lowered = ctx.lower(items.get(2));
 		ClojureLowering.TypeDef known = ctx.typeDefOf(name);
 		if (known != null) {
@@ -59,34 +65,188 @@ final class ClojureDispatchLowering {
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
 					ClojureProtocolLowering.typeTagForm(known.tagSpelling())));
 		}
-		LispVal raw = switch (simple) {
-			case "String", "CharSequence" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), lowered);
-			case "Character" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), lowered);
-			case "Boolean" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), lowered, ClojureLowering.TRUE_CONST),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), lowered, ctx.falseVariable));
-			case "Number" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), lowered);
-			case "Long" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), lowered);
-			case "Double" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("floatp"), lowered);
-			case "Object" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lowered));
-			case "Keyword" -> ClojureFilterLowering.keywordTest(lowered);
-			case "Symbol" -> ClojureFnLowering.symbolRaw(ctx, lowered);
-			default -> throwableInstance(ctx, name, lowered);
+		if (name.startsWith(":") || !ClojureNamespaceLowering.isClasslike(ctx, name)) {
+			throw new LispReadException("instance? takes a class name, not " + name);
+		}
+		String resolved = ClojureNamespaceLowering.resolveClass(ctx, name);
+		String lang = resolved.indexOf('.') < 0 ? ClojureValueClasses.clojureLang(resolved) : null;
+		String fqn = lang != null ? lang : resolved;
+		if (fqn.equals(ClojureClassBases.OBJECT)) {
+			return ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lowered)));
+		}
+		List<String> chain = ClojureThrowables.chainOf(fqn);
+		if (chain != null) {
+			return ctx.booleanAnswer(throwableInstance(ctx, chain, lowered));
+		}
+		String alias = HOST_ALIASES.get(fqn);
+		if (alias != null) {
+			// a core kind's test a program naming no java: operator calls plain
+			// (ClojureArms.Family.HOST), so it lowers as before host objects counted
+			return ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol(alias), lowered));
+		}
+		List<ClojureValueClasses.Kind> kinds = ClojureValueClasses.kindsOf(fqn);
+		if (kinds.equals(List.of(ClojureValueClasses.Kind.SYMBOL))) {
+			return ctx.booleanAnswer(ClojureFnLowering.symbolRaw(ctx, lowered));
+		}
+		// every number kind is one numberp
+		boolean numbers = kinds.containsAll(List.of(ClojureValueClasses.Kind.LONG, ClojureValueClasses.Kind.DOUBLE,
+				ClojureValueClasses.Kind.RATIO));
+		List<Arm> arms = new ArrayList<>();
+		for (ClojureValueClasses.Kind kind : kinds) {
+			if (numbers && kind == ClojureValueClasses.Kind.LONG) {
+				arms.add(cl(Use.ONCE, "numberp"));
+			}
+			else if (!numbers || (kind != ClojureValueClasses.Kind.DOUBLE && kind != ClojureValueClasses.Kind.RATIO)) {
+				arms.add(kindArm(ctx, kind));
+			}
+		}
+		List<String> streams = ClojureValueClasses.streamClassesOf(fqn);
+		if (!streams.isEmpty()) {
+			arms.add(streamArm(streams));
+		}
+		for (String throwable : ClojureValueClasses.throwablesImplementing(fqn)) {
+			List<String> throwableChain = ClojureThrowables.chainOf(throwable);
+			if (throwableChain != null) {
+				arms.add(new Arm(Use.ONCE, v -> throwableInstance(ctx, throwableChain, v)));
+			}
+		}
+		boolean loads = ClojureValueClasses.loads(fqn);
+		if (ClojureValueClasses.hostMayHold(fqn, loads)) {
+			arms.add(new Arm(Use.VARIABLE,
+					v -> ClojureLowerUtil.list(new LispSymbol(HOST_OBJECT_P), v, LispString.literal(fqn))));
+		}
+		if (arms.isEmpty()) {
+			if (!loads) {
+				throw new LispReadException("unknown name: " + name);
+			}
+			// a class no value here has (Integer: an int is a Long)
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), lowered, ctx.falseVariable);
+		}
+		return armsAnswer(ctx, arms, lowered);
+	}
+
+	/**
+	 * The classes a core kind's value is or implements that a host object may be too, to
+	 * the test answering both, which a program naming no {@code java:} operator calls as
+	 * the kind's own test ({@link ClojureArms.Family#HOST}'s aliases).
+	 */
+	private static final Map<String, String> HOST_ALIASES = Map.of("java.lang.Number",
+			"RONTOLISP::%CLOJURE-HOST-NUMBER-P", "java.lang.CharSequence", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P");
+
+	/** {@code instance?}'s host arm ({@code clojure.lisp}). */
+	static final String HOST_OBJECT_P = "RONTOLISP::%CLOJURE-HOST-OBJECT-P";
+
+	/**
+	 * How an arm reads the value: once, several times (a variable or a constant then), or
+	 * as a family arm test, whose argument the strip requires to be a variable or a
+	 * literal.
+	 */
+	private enum Use {
+
+		ONCE, MANY, VARIABLE
+
+	}
+
+	/** One test of {@code instance?} over the value. */
+	private record Arm(Use use, Function<LispVal, LispVal> test) {
+
+	}
+
+	/**
+	 * The arms' disjunction as the {@code T}-or-false answer, the value bound to a
+	 * variable unless every arm may read it as it is: a variable always, a constant where
+	 * no family arm reads it, any form where one arm reads it once.
+	 */
+	private static LispVal armsAnswer(ClojureLowering ctx, List<Arm> arms, LispVal lowered) {
+		boolean constant = !(lowered instanceof LispCons) || lowered instanceof LispCons quote
+				&& quote.car() instanceof LispSymbol head && head.name().equals("QUOTE");
+		boolean variableArm = arms.stream().anyMatch(arm -> arm.use() == Use.VARIABLE);
+		boolean once = arms.size() == 1 && arms.get(0).use() == Use.ONCE;
+		boolean bind = !(lowered instanceof LispSymbol) && (variableArm || !(once || constant));
+		LispVal value = bind ? ctx.freshTemp() : lowered;
+		List<LispVal> tests = new ArrayList<>();
+		for (Arm arm : arms) {
+			tests.add(arm.test().apply(value));
+		}
+		LispVal answer = ctx
+			.booleanAnswer(tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests));
+		if (!bind) {
+			return answer;
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, lowered))), answer);
+	}
+
+	/** The test of one kind of value over the value. */
+	private static Arm kindArm(ClojureLowering ctx, ClojureValueClasses.Kind kind) {
+		return switch (kind) {
+			case STRING -> cl(Use.ONCE, "stringp");
+			case CHAR -> cl(Use.ONCE, "characterp");
+			case BOOLEAN -> new Arm(Use.MANY,
+					v -> ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), v, ClojureLowering.TRUE_CONST),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), v, ctx.falseVariable)));
+			case LONG -> cl(Use.ONCE, "integerp");
+			case DOUBLE -> cl(Use.ONCE, "floatp");
+			case RATIO -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-RATIO");
+			case KEYWORD -> new Arm(Use.MANY, ClojureFilterLowering::keywordTest);
+			case SYMBOL -> new Arm(Use.MANY, v -> ClojureFnLowering.symbolTest(ctx, v));
+			case VECTOR -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-VECTOR");
+			case MAP_ENTRY -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-ENTRY-P");
+			case LIST -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-LIST");
+			case LAZY_SEQ -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-LAZY-P");
+			case MAP -> cl(Use.ONCE, "hash-table-p");
+			case SORTED_MAP -> new Arm(Use.VARIABLE, ClojureSortedLowering::sortedMapTest);
+			case SET -> new Arm(Use.MANY, ClojureCollectionLowering::isSetForm);
+			case SORTED_SET -> new Arm(Use.VARIABLE, ClojureSortedLowering::sortedSetTest);
+			case FUNCTION -> cl(Use.ONCE, "functionp");
+			case ATOM -> new Arm(Use.MANY,
+					v -> ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureStateLowering.isAtomForm(v),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+									ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VOLATILE"), v))));
+			case VOLATILE -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-IS-VOLATILE");
+			case VAR -> runtime(Use.ONCE, "RONTOLISP::%CLOJURE-VAR-P");
+			case PATTERN -> new Arm(Use.ONCE, ClojureStringLowering::isPatternForm);
+			case MATCHER -> new Arm(Use.ONCE, ClojureStringLowering::isMatcherForm);
+			case NAMESPACE -> runtime(Use.VARIABLE, "RONTOLISP::%CLOJURE-NS-OBJECT-P");
+			case RECORD -> new Arm(Use.MANY, ClojureProtocolLowering::isRecordForm);
+			case DEFTYPE -> new Arm(Use.MANY, ClojureProtocolLowering::isDeftypeForm);
+			case REIFY -> new Arm(Use.MANY, ClojureProtocolLowering::isReifyForm);
 		};
-		return ctx.booleanAnswer(raw);
+	}
+
+	private static Arm cl(Use use, String predicate) {
+		return new Arm(use, v -> ClojureLowerUtil.list(ClojureLowerUtil.sym(predicate), v));
+	}
+
+	private static Arm runtime(Use use, String function) {
+		return new Arm(use, v -> ClojureLowerUtil.list(new LispSymbol(function), v));
+	}
+
+	/**
+	 * A stream whose class is one of the classes: any stream when they are every class
+	 * {@code %clojure-stream-class} answers, else the stream's class among them. A family
+	 * arm a program making no stream sheds ({@link ClojureArms.Family#STREAM}).
+	 */
+	private static Arm streamArm(List<String> classes) {
+		if (classes.size() == ClojureValueClasses.STREAM_CLASSES.size()) {
+			return runtime(Use.VARIABLE, ClojureInteropLowering.STREAM_P);
+		}
+		return new Arm(Use.VARIABLE,
+				v -> ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), v),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CHAIN-HAS"),
+								ClojureThrowables.quoted(classes),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STREAM-CLASS"), v))));
 	}
 
 	/**
 	 * {@code instance?} of a throwable class: whether the value is an exception or a
 	 * runtime error whose class is the class or a subclass of it (the class {@code class}
-	 * answers), or a host {@code Throwable} of it; any other class is a named refusal.
+	 * answers), or a host {@code Throwable} of it.
 	 */
-	private static LispVal throwableInstance(ClojureLowering ctx, String name, LispVal lowered) {
-		List<String> chain = ClojureThrowables.chainOf(ClojureNamespaceLowering.resolveClass(ctx, name));
-		if (chain == null) {
-			throw new LispReadException("instance? needs a core class, not " + name);
-		}
+	private static LispVal throwableInstance(ClojureLowering ctx, List<String> chain, LispVal lowered) {
 		ctx.readsExceptionParts = true;
 		ctx.recordChain(chain);
 		return ClojureLowerUtil.list(new LispSymbol(INSTANCE_OF), lowered, ClojureThrowables.quoted(chain));

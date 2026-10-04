@@ -8,6 +8,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -172,7 +173,17 @@ public final class ClojureArms {
 		 */
 		NAMESPACE("namespace", Set.of("RONTOLISP::%CLOJURE-NS-OBJECT-P"), Set.of(), Map.of(),
 				Set.of(ClojureCoreSpecials.NS_OBJECT, "RONTOLISP::%CLOJURE-THE-NS", "RONTOLISP::%CLOJURE-FIND-NS"),
-				Set.of());
+				Set.of()),
+
+		/**
+		 * A host object, which {@code instance?} asks the host the class of: only a
+		 * {@code java:} operator hands one to the program. The aliases are
+		 * {@code instance?} of a class a core kind's value is and a host object may be
+		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
+		 */
+		HOST("host-object", Set.of(ClojureDispatchLowering.HOST_OBJECT_P), Set.of(), Map
+			.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P", "STRINGP"),
+				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of());
 
 		private final String label;
 

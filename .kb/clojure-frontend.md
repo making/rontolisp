@@ -821,8 +821,39 @@ constructor and consumer, and a regex `replace` with a function replacement.
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
   stay `unsupported reader form`).
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
-- `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
-  else refuses; it has no value.
+- `instance?` (oracle-checked clj 1.12.6, 2026-10-04; it has no value): a record/deftype name
+  tests the tag, `Object` non-nil, a throwable class its chain ("Catching"). Any other class
+  is a disjunction over the bound value (`ClojureDispatchLowering.instanceOf`): one test per
+  kind whose oracle class is or implements it (`ClojureValueClasses.Kind`: per kind the
+  class and its `supers`, tables read off the oracle -- `clojure.lang` is not on this class
+  path -- one row per representation, so a strict seq is a `PersistentList` and a `[k v]`
+  a `MapEntry`; all three number kinds fold to `numberp`), a stream arm over
+  `%clojure-stream-class` (`ClojureValueClasses.STREAM_CLASSES` mirrors it), a
+  `%clojure-instance-of` per highest tabled throwable implementing an interface
+  (`Serializable` -> `Throwable`), and `%clojure-host-object-p` when the host loads the class
+  and no host value of it is converted at the `java:` boundary (`String`, the boxes,
+  `BigInteger`). The host arm is the test of `ClojureArms.Family.HOST` (producers: the
+  `java:` operators), so a program naming none sheds it; `Number`/`CharSequence` lower to
+  `%clojure-host-number-p`/`-char-sequence-p`, the family's aliases to `NUMBERP`/`STRINGP`,
+  so such a program compiles them as before. The value is bound to a temp unless it is a
+  variable, or every arm reads it once or it is a constant no family arm reads (a family
+  test needs a variable or literal argument; `(instance? Boolean (f))` evaluated `(f)`
+  twice before). A bare `clojure.lang` simple name (`Keyword`, `IPersistentMap`) resolves
+  like the dispatch keywords; a loadable class no kind or host object can be (`Integer`) is
+  `(progn x false)`; anything else is `unknown name: X` (`clojure.lang.PersistentQueue`
+  too, where the oracle answers false). Measured against the oracle over 59 classes x 29
+  values on all four backends and 59 x 5 host objects on the interpreter and the JVM:
+  identical but the strict `(map inc [1])` (`IPersistentList`, `Counted`, not `LazySeq`)
+  and `[1 2]` (`Map$Entry`). Size (wasm P1 / `--optimize=size` / component / JVM class,
+  before -> after): `(instance? Number x)` in a `defn`, an exception, a record and
+  `examples/clojure/demo.clj` byte-identical; the core classes over impure arguments
+  65,667 / 55,403 / 66,924 / 76,656 -> 65,593 / 55,355 / 66,848 / 76,522 (`Boolean`'s
+  argument bound once); `(instance? Number (java.math.BigDecimal. "1"))` JVM 90,005 ->
+  94,328 (the host arm; wasm refuses `java:` either way); `(instance? java.util.List x)` in
+  a `defn`, no `java:`, 17,742 / 14,184 / 18,934 / 60,317 (before: refused). Pins:
+  clojure-spec `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
+  `ClojureInteropTest#instanceOfAHostClassTestsTheValuesKindAndTheHostObjectsClass`,
+  `ClojureArmsTest#theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator`.
 - **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
   (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive`/`parents`/`ancestors`/
   `descendants` (`hierarchyArg`: a class spelling no local or var shadows) lower a class

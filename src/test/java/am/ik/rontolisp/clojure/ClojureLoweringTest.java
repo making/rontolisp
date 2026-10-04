@@ -1034,7 +1034,7 @@ class ClojureLoweringTest {
 					+ " \"java.lang.RuntimeException\" \"java.lang.Exception\" \"java.lang.Throwable\"))")
 			.contains("(DEFUN C%E-PARTS");
 		assertThatThrownBy(() -> Clojure.read("(instance? Foo 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("instance? needs a core class, not Foo");
+			.hasMessageContaining("unknown name: Foo");
 		// the stack-trace methods answer from the library, with no java: call
 		assertThat(lowered("(fn [e] (.printStackTrace e))")).contains("(RONTOLISP::%CLOJURE-PRINT-STACK-TRACE |c%e|)")
 			.doesNotContain("JAVA:CALL");
@@ -1937,10 +1937,21 @@ class ClojureLoweringTest {
 			.contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(symbol? 'a)")).contains("SYMBOLP");
 		assertThat(lowered("(instance? String \"a\")")).contains("STRINGP");
+		// an interface tests every kind implementing it, then the host object, the value
+		// bound once
+		assertThat(lowered("(instance? java.util.Map (identity {}))")).contains("(HASH-TABLE-P ")
+			.contains("(RONTOLISP::%CLOJURE-SORTED-MAP-P ")
+			.contains("(RONTOLISP::%CLOJURE-HOST-OBJECT-P ")
+			.contains("\"java.util.Map\")")
+			.contains("(LET* ((");
+		assertThat(lowered("(def x 1) (instance? Number x)")).contains("(RONTOLISP::%CLOJURE-HOST-NUMBER-P |c%x|)");
+		assertThat(lowered("(def x 1) (instance? clojure.lang.IFn x)")).doesNotContain("HOST-OBJECT-P")
+			.contains("FUNCTIONP");
+		assertThat(lowered("(instance? Integer 1)")).contains("(PROGN 1 RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
 		assertThat(lowered("(int 1.5)")).contains("TRUNCATE");
 		assertThatThrownBy(() -> Clojure.read("(instance? Point 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("instance? needs a core class, not Point");
+			.hasMessageContaining("unknown name: Point");
 	}
 
 	@Test

@@ -204,6 +204,22 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator() {
+		// no host object exists without a java: operator: the host arm goes, and a core
+		// class a host object may be tests the kind alone, as before host objects counted
+		List<LispVal> forms = read("(if (or (rontolisp::%clojure-is-vector x) (rontolisp::%clojure-host-object-p x"
+				+ " \"java.util.List\")) t f) (if (rontolisp::%clojure-host-object-p x \"java.io.File\") t f)"
+				+ " (if (rontolisp::%clojure-host-number-p (g)) t f) (rontolisp::%clojure-host-char-sequence-p y)");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.HOST);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.HOST).stream().map(LispVal::print)).containsExactly(
+				"(IF (RONTOLISP::%CLOJURE-IS-VECTOR X) T F)", "F", "(IF (NUMBERP (G)) T F)", "(STRINGP Y)");
+		assertThat(ClojureArms.scan(read("(java:new \"java.io.File\" \"x\")"), ClojureArms.Family.HOST).builds())
+			.isTrue();
+	}
+
+	@Test
 	void thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch() {
 		List<LispVal> forms = read("(cond ((rontolisp::%clojure-print-deep-p x) (a))"
 				+ " ((rontolisp::%clojure-print-cut-p x) (b)) (t (rontolisp::%clojure-write-nested x r)))"

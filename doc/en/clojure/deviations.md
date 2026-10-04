@@ -211,8 +211,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is refused that way too, where the oracle says `No matching field found`; a site lowered
   before a later REPL input defines a record or deftype does not see its methods or
   fields.
-- `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
-  names; any other class is a named refusal instead of a wrong answer.
+- `instance?` answers a class by the oracle classes of each kind of value: a list or strict
+  seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
+  `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector
+  is a `java.util.Map$Entry` (`map-entry?`); an integer is a `Long`, `(int 1)` too, never an
+  `Integer`. A `clojure.lang` class no kind is an instance of
+  (`clojure.lang.PersistentQueue`) is an unknown name, where the oracle answers `false`.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   (`int`, `long`, `short`, `byte`, `char`, `double`, `float`) match the oracle, with one deviation:
   an integer past 64 bits is a plain integer here, so the oracle's unwrapped bigint operand

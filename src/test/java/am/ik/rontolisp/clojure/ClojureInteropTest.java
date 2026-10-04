@@ -224,6 +224,36 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void instanceOfAHostClassTestsTheValuesKindAndTheHostObjectsClass() throws Exception {
+		// measured against clj 1.12.6: a class no kind or chain names tests a host object
+		// by its host class, and an interface a Clojure value implements tests the kind
+		assertBothEqual("(println (instance? java.io.File (java.io.File. \"x\")) (instance? java.util.List [1])"
+				+ " (instance? java.util.AbstractList (java.util.ArrayList.)))", "true true true\n");
+		assertBothEqual(
+				"(println (instance? java.util.Map (java.util.HashMap.)) (instance? java.util.Map {:a 1})"
+						+ " (instance? java.util.Map [1]) (instance? java.io.File \"x\")"
+						+ " (instance? java.util.RandomAccess (java.util.ArrayList.)))",
+				"true true false false true\n");
+		// a core class a host object may also be: Number, CharSequence
+		assertBothEqual(
+				"(println (instance? Number (java.math.BigDecimal. \"1.5\")) (instance? Number 1)"
+						+ " (instance? Number \"1\") (instance? CharSequence (StringBuilder. \"a\"))"
+						+ " (instance? CharSequence \"a\") (instance? CharSequence 1))",
+				"true true false true true false\n");
+		assertBothEqual(
+				"(println (instance? Comparable (java.io.File. \"x\")) (instance? Comparable :k)"
+						+ " (instance? Iterable (java.util.ArrayDeque.)) (instance? Iterable #{1}))",
+				"true true true true\n");
+		// the value is evaluated once
+		assertBothEqual("(let [f (fn [] (println :made) (java.util.LinkedList.))]"
+				+ " (println (instance? java.util.Deque (f)) (instance? java.util.AbstractList (f))"
+				+ " (instance? Boolean (f))))", ":made\n:made\n:made\ntrue true false\n");
+		assertBothEqual("(println (instance? java.io.Serializable (Exception. \"x\"))"
+				+ " (instance? java.io.Serializable (java.io.File. \"x\")) (instance? Object (java.io.File. \"x\")))",
+				"true true true\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
