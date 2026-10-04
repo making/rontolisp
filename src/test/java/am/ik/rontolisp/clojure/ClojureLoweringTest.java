@@ -852,6 +852,13 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defmulti area :t) (defmethod area ::k [x] x)")).contains("\"user/k\"");
 		assertThat(lowered("(defmulti area :t) (remove-method area String)")).contains("\"string\"");
 		assertThat(lowered("(defmulti area :t) (get-method area Number)")).contains("\"number\"");
+		assertThat(lowered("(defmulti area :t) (methods area)")).contains("RONTOLISP::%CLOJURE-METHODS")
+			.contains("|c%area%methods|");
+		assertThatThrownBy(() -> Clojure.read("(methods missing)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: missing");
+		assertThatThrownBy(() -> Clojure.read("(defn plain [] 1) (methods plain)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: plain");
 		assertThatThrownBy(() -> Clojure.read("(defmulti area class) (defmethod area Instant [x] x)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: Instant");

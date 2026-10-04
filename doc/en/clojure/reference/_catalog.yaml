@@ -342,6 +342,7 @@ categories:
       - { slug: defmethod, name: "defmethod" }
       - { slug: remove-method, name: "remove-method" }
       - { slug: get-method, name: "get-method" }
+      - { slug: methods, name: "methods" }
       - { slug: prefer-method, name: "prefer-method" }
       - { slug: derive, name: "derive" }
       - { slug: underive, name: "underive" }

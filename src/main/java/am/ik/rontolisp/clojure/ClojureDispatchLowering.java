@@ -951,6 +951,23 @@ final class ClojureDispatchLowering {
 				ClojureLowering.NIL_CONST);
 	}
 
+	/**
+	 * {@code (methods name)}: the multimethod's table as a map, a copy the later
+	 * {@code defmethod} and {@code remove-method} do not reach, with the nil marker row
+	 * keyed by nil ({@code rontolisp::%clojure-methods}). The {@code Object} and the
+	 * default rows are in it like the oracle's, and a host class's row is under the
+	 * keyword {@code class} answers for it.
+	 */
+	static LispVal methodsOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 2, "methods takes a multimethod");
+		String name = ClojureLowerUtil.plainName(items.get(1), "methods");
+		String key = multimethodKey(ctx, name);
+		if (!ctx.multimethods.contains(key)) {
+			throw new LispReadException("No such multimethod: " + name);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-METHODS"), tableGlobal(key, "%methods"));
+	}
+
 	// protocols/records: defprotocol/defrecord/deftype/reify/extend/satisfies? over the
 	// table runtime
 

@@ -145,6 +145,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.
+- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
+  name (a `defmulti` var, through an alias or a referred one), not an expression: a local
+  bound to a multimethod is refused at lowering. The map `methods` answers keys a host
+  class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry

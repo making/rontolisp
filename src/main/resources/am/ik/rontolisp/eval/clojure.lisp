@@ -1859,6 +1859,20 @@
           (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
                 (car (cdr p)))))))
 
+(defun rontolisp::%clojure-methods (table)
+  "The map (methods f) answers for the method table TABLE: a copy, its nil
+   marker row keyed by nil like a map's nil key."
+  (let ((out (rontolisp::%clojure-plist-table table nil))
+        (marker (list :C%NIL))
+        (miss (list nil)))
+    (let ((row (gethash marker out miss)))
+      (if (eq row miss)
+          out
+          (progn
+            (remhash marker out)
+            (setf (gethash nil out) row)
+            out)))))
+
 (defun rontolisp::%clojure-vector-assoc (v plist)
   "(assoc V k v ...) for a vector V: a fresh vector with PLIST's alternating
    indexes and values applied left to right, an index equal to the count

@@ -3258,6 +3258,8 @@ public final class ClojureLowering {
 			case "newline":
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+			case "methods":
+				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":
 				return ClojureCollectionLowering.countOf(this, items);
 			case "seq":

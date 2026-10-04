@@ -2114,6 +2114,50 @@ cases:
       false false false 9
       true
       true true false OK
+  - name: methods-answers-the-method-table-as-a-map
+    # (methods mt) is a copy of the table: the nil row keyed by nil, the Object and the
+    # default rows in it, a later defmethod or remove-method not reaching it. A host
+    # class row is under the keyword class answers for the class (the oracle keys it by
+    # the Class itself). Measured against clj 1.12.6, identical on what is printed here.
+    source: |
+      (defmulti mt-f class)
+      (defmethod mt-f String [x] :s)
+      (defmethod mt-f nil [x] :n)
+      (defmethod mt-f Object [x] :o)
+      (defmethod mt-f :default [x] :d)
+      (defmethod mt-f clojure.lang.Keyword [x] :kw)
+      (println (map? (methods mt-f)) (count (methods mt-f)) (contains? (methods mt-f) nil) (contains? (methods mt-f) :default))
+      (println ((get (methods mt-f) nil) 1) ((get (methods mt-f) (class "x")) 1) (sort (map #(% 1) (vals (methods mt-f)))))
+      (defmulti mt-g :t)
+      (println (methods mt-g) (empty? (methods mt-g)) (count (methods mt-g)))
+      (defmethod mt-g :a [x] 1)
+      (defmethod mt-g [:v 1] [x] 3)
+      (let [m (methods mt-g)]
+        (defmethod mt-g :b [x] 2)
+        (println (count m) (count (methods mt-g)))
+        (remove-method mt-g :a)
+        (println (count m) (count (methods mt-g)) (map str (sort-by str (keys (methods mt-g))))))
+      (println (get (into {} (map (fn [[k v]] [k (v {})])) (methods mt-g)) :b))
+      (println (= (methods mt-g) (methods mt-g)) ((get (methods mt-g) [:v 1]) {}) (count (assoc (methods mt-g) :z 1)) (count (methods mt-g)))
+      (ns mt-ns)
+      (defmulti mt-m :t)
+      (defmethod mt-m :x [_] 1)
+      (ns auto (:require [mt-ns :as mt]))
+      (defmethod mt/mt-m :y [_] 2)
+      (println (sort (keys (methods mt/mt-m))) (sort (keys (methods mt-ns/mt-m))) (count (methods mt-f)))
+      (println (count (clojure.core/methods mt-g)))
+      (println (let [methods (fn [x] [:mine x])] (methods 1)))
+    expected: |
+      true 5 true true
+      :n :s (:d :kw :n :o :s)
+      {} true 0
+      2 3
+      2 2 (:b [:v 1])
+      2
+      true 3 3 2
+      (:x :y) (:x :y) 5
+      2
+      [:mine 1]
   - name: a-multimethod-dispatches-on-an-exception-class-by-inheritance
     # A throwable class as a dispatch value is the keyword class answers for it, and the
     # hierarchy follows the class chain like the oracle's isa? follows Java inheritance:

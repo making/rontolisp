@@ -761,6 +761,16 @@ constructor and consumer, and a regex `replace` with a function replacement.
   a class spelling to the keyword `class` answers for it, `nil` to the `(:C%NIL)` marker
   (the dispatcher maps a true nil there, so no table keys on nil and a literal `:nil` keeps
   its own row), `Object` to `:object` plus the slot, literal vectors element by element.
+- `(methods mt)` (a `builtin` row, so a program var or local of that name shadows it) lowers to
+  `%clojure-methods` over the `%methods` global: a copy (`%clojure-plist-table`, keys are
+  representatives already) with the `(:C%NIL)` marker row re-keyed by nil, which is how a map
+  keys nil. The `:object` and default rows stay. Takes a `defmulti` NAME like `get-method`
+  (a local alias of a multimethod is refused: the table is reached through the var key, and
+  nothing ties a function value to it); a name no `defmulti` made is `No such multimethod`.
+  A host class row keeps the keyword `class` answers (the oracle: the `Class`), so
+  `(get (methods f) (class x))` works while `(contains? (methods f) String)` is false.
+  Programs that do not call it compile byte-identically (measured 2026-10-04: wasm P1,
+  `--optimize=size`, component and JVM class of a Clojure demo and a multimethod program).
 - A `defmulti` of a var that holds a multimethod lowers to `nil`, like the oracle's (the
   corpus's second `(defmulti my-print class :default :everything-else)` keeps the first's
   methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
