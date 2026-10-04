@@ -47,6 +47,43 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
   `JvmJavaInteropCompilerTest#eqAndEqlOnHostObjectsAreIdentity`),
   `ClojureInteropTest#identicalOnHostObjectsIsIdentity` (oracle-identical).
 
+### `equal` of a host object and a Lisp value (decided 2026-10-04)
+
+- A host object on the LEFT asks its `equals`, handed what an `Object` parameter receives:
+  nil's `null`, another host object, or the receiver rule's one object
+  ([java-interop.md](java-interop.md), "A Lisp value as a `java:call` receiver"); any other
+  value (symbol, cons, vector, ratio, function, table) is `equal` to no host object and
+  `equals` is not asked. A Lisp value on the left is never `equal` to a host object. Clojure's
+  `=` asks its left operand (`Util.equiv`), so `%clojure-equal`'s `equal` arm agrees.
+- Why not convert a list or vector to the `ArrayList` a `java:call` argument gets: a host
+  list would then be `equal` to `(1 2)` while `(1 2)` is not `equal` to it. With atoms
+  only, a host object honouring `equals`' symmetry is never `equal` to a Lisp value (every
+  converted image is a final JDK class -- `String`, the boxes, `BigInteger`, `Character`,
+  `Boolean` -- that no host object is, `unmarshal` turns them into Lisp values), so only
+  an `equals` breaking symmetry answers T, and then as in Clojure and Java.
+- The `equal` hash is unchanged: a host hashes by its `hashCode`, a Lisp value
+  structurally. They could agree only for an `equals` breaking symmetry, for which a table
+  promises nothing (`java.util.HashMap` neither).
+- Copies: interpreter `LispEquality.equal` over `LispJavaObject.receiverObject` (also
+  `JavaInterop`'s receiver, its one interpreter copy); JVM `_equal`'s host arm over
+  `_jrecv` (`JvmJavaDirectSites.receiver()`, passed in as `hostReceiver`).
+- Before (measured 2026-10-04): the interpreter answered NIL for every Lisp value (the
+  `LispJavaObject` record's `equals` refuses another record type); the JVM handed `equals`
+  the compiled representation (a framed `"\"s\""`, an `int[]` character, `"T"`, a symbol's
+  name, a cons `Object[]`, a ratio), so a reify answering true was `equal` to all of them;
+  clj `(= p [1])` was true on the JVM (oracle false).
+- Cost (2026-10-04): programs without `java:` byte-identical (wasm P1, `--optimize=size`,
+  component, JVM jar: hello_world, pi_approx, zlib, calc, contact-book, word-frequency,
+  sorting, error-handling, `demo.clj`). A `java:` program using `equal` grows by the arm
+  (+23 B, `life-gui.lisp`) or, when it had no `_jrecv`/`_jkind`, by them too (+597/598 B
+  class `java-store.lisp`/`swing.lisp`, +287 B the pinning program); `java-interop.lisp` (no `equal`) unchanged. Speed
+  within noise: interpreter 10.8M `equal` over atoms, JVM 108M in a `java:` program.
+- Pins: `JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_PROGRAM` (`JavaInteropTest` /
+  `JvmJavaInteropCompilerTest#equalOfAHostObjectAndALispValueAsksEqualsWithTheValueAsJavaSeesIt`),
+  `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand` (oracle-identical),
+  `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays`
+  (the interpreter copy beside the bridge's and `_jrecv`).
+
 ## Why not box identity (SBCL's answer)
 
 CLHS (`eq`, its notes and examples) leaves `eq` on numbers and characters implementation-dependent

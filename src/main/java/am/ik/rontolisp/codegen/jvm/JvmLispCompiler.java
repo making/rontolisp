@@ -2229,10 +2229,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		final ClassEntry hasComplexAbsent = usesComplex ? cp.classEntry("java/lang/ClassNotFoundException") : null;
 		// A java: program compares a host object by identity under eql and by equals
-		// under equal; the shared test is built on first use, so a program without
-		// java: names it nowhere.
+		// under equal, handing equals a Lisp value as Java sees it; the shared test and
+		// conversion are built on first use, so a program without java: names neither.
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
-				strvMethod, instanceLayoutClass, usesComplex, javaSites != null ? javaSites.direct().host() : null);
+				strvMethod, instanceLayoutClass, usesComplex, javaSites != null ? javaSites.direct().host() : null,
+				javaSites != null ? javaSites.direct().receiver() : null);
 		// A wrong-type operand's report names the operator (JvmOperandTypeRuntime); the
 		// thread-local record a pad reads the datum from exists only when a pad does.
 		final Utf8Entry teTlName = hasLandingPad ? cp.utf8Entry(JvmOperandTypeRuntime.TL_FIELD) : null;

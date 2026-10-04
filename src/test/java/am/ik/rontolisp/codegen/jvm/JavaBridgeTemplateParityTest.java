@@ -19,6 +19,19 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
@@ -284,12 +297,13 @@ class JavaBridgeTemplateParityTest {
 		}
 	}
 
-	// The object a java:call on a Lisp value is made on is one rule with three copies:
-	// the shared JavaOverloads.isReceiverKind / receiverClassName, the bridge's
-	// receiverObject and the _jrecv a resolved site calls. Over the compiled
-	// representation of every kind, the two run-time copies answer the same object, of
-	// the class the shared rule names (a fixnum's narrowest box, which it leaves to the
-	// value), and none for nil, a function or a value of no kind.
+	// The object a java:call on a Lisp value is made on -- and the one equal hands a host
+	// object's equals -- is one rule with four copies: the shared
+	// JavaOverloads.isReceiverKind / receiverClassName, the interpreter's
+	// LispJavaObject.receiverObject, the bridge's receiverObject and the _jrecv a
+	// resolved site and _equal call. Over every kind, the three run-time copies answer
+	// the same object, of the class the shared rule names (a fixnum's narrowest box,
+	// which it leaves to the value), and none for nil, a function or a value of no kind.
 	@Test
 	void theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays(@TempDir Path dir) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("ReceiverTest");
@@ -316,6 +330,8 @@ class JavaBridgeTemplateParityTest {
 				Object direct = jrecv.invoke(null, value.compiled());
 				Object bridge = invoke("receiverObject", new Class<?>[] { Object.class }, value.compiled());
 				assertThat(direct).as("_jrecv %s", kind).isEqualTo(bridge);
+				assertThat(LispJavaObject.receiverObject(interpreted(value))).as("interpreter %s", kind)
+					.isEqualTo(bridge);
 				if (!JavaOverloads.isReceiverKind(kind)) {
 					assertThat(bridge).as("bridge %s", kind).isNull();
 					continue;
@@ -335,7 +351,30 @@ class JavaBridgeTemplateParityTest {
 				assertThat(invoke("receiverObject", new Class<?>[] { Object.class }, none)).as("bridge %s", none)
 					.isNull();
 			}
+			for (LispVal none : List.of(new LispSymbol("FOO"), new LispRatio(BigInteger.ONE, BigInteger.TWO),
+					new LispCons(new LispInteger(1), LispNil.INSTANCE))) {
+				assertThat(LispJavaObject.receiverObject(none)).as("interpreter %s", none.print()).isNull();
+			}
 		}
+	}
+
+	// The interpreter's value of an argument's compiled representation, for the kinds the
+	// receiver rule is pinned over.
+	private static LispVal interpreted(Arg value) {
+		Object compiled = value.compiled();
+		return switch ((JavaKind.Lisp) value.kind()) {
+			case NIL -> LispNil.INSTANCE;
+			case T -> LispTrue.INSTANCE;
+			case INTEGER -> new LispInteger((Long) Objects.requireNonNull(compiled));
+			case BIGNUM -> new LispBigInteger((BigInteger) Objects.requireNonNull(compiled));
+			case FLOAT -> new LispDouble((Double) Objects.requireNonNull(compiled));
+			case STRING, STRING_1 -> {
+				String framed = (String) Objects.requireNonNull(compiled);
+				yield new LispString(framed.substring(1, framed.length() - 1));
+			}
+			case CHAR, SUPPLEMENTARY_CHAR -> new LispChar(((int[]) Objects.requireNonNull(compiled))[0]);
+			case FUNCTION -> new LispFunction("car", args -> LispNil.INSTANCE);
+		};
 	}
 
 	// A specialized vector reaches a site as the same elements whichever copy reads it:

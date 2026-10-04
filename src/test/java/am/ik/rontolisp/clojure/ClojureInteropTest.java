@@ -613,6 +613,20 @@ class ClojureInteropTest {
 				""", "false true true\nfalse false false\nP\nfalse true\ntrue 1 1\n");
 	}
 
+	// Oracle (clj 1.12.6): = asks the left operand, so a proxy whose equals answers
+	// true is = to a number, a string, nil, true and a character, while none of them
+	// is = to it; a vector is compared as a collection, never handed to equals. Before,
+	// measured 2026-10-04: the interpreter answered false for the first row, the JVM
+	// true for (= p [1]).
+	@Test
+	void equalsOfAHostObjectAndAValueAsksTheLeftOperand() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [Object] [] (equals [o] true) (toString [] "P")))
+				(println (= p 1) (= p "s") (= p nil) (= p true) (= p \\a) (= p 1.5))
+				(println (= 1 p) (= "s" p) (= nil p) (= p [1]))
+				""", "true true true true true true\nfalse false false false\n");
+	}
+
 	// Oracle: a protected method overrides -- paintComponent records -- while an
 	// unnamed one is inherited.
 	@Test

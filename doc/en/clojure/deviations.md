@@ -40,6 +40,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   per distinct value and kind. A repeated set-literal element is refused by spelling.
   `=` compares vectors, lists and lazy seqs element-wise like the oracle, and since `nil`
   is the empty list, `(= [] nil)` is `true` where the oracle answers `false`.
+  `=` asks a Java object on the left its `equals` like the oracle, but hands it only a
+  number, string, character, `true`, `nil` or Java object: `false`, a keyword, a symbol
+  or a collection is `=` to no Java object, and a Java collection is not `=` to a Clojure one
+  (the oracle: `(= (java.util.ArrayList. [1 2]) [1 2])` is `true`).
 - `clojure.set/union` whose largest input is a map signals, where the oracle conjoins
   the other inputs' `[k v]` members into it; a `clojure.set` answer carries no metadata.
 - A map entry is a plain two-member vector, so `map-entry?` is `true` of every `[k v]`

@@ -70,7 +70,10 @@ public final class LispEquality {
 	 * The {@code equal} predicate: identical objects are equal; two conses are equal when
 	 * their cars and cdrs are recursively equal; everything else falls back to
 	 * {@code eql} (numbers and characters by value and type, strings and instances
-	 * structurally through their own {@code equals}, other aggregates by identity).
+	 * structurally through their own {@code equals}, other aggregates by identity). A
+	 * host object on the left asks its own {@code equals} with the right operand as Java
+	 * receives it ({@link LispJavaObject#receiverObject}, {@code .kb/eq-numbers.md},
+	 * "Host objects").
 	 * @param a the first value
 	 * @param b the second value
 	 * @return whether the two values are {@code equal}
@@ -103,6 +106,14 @@ public final class LispEquality {
 		}
 		if (b instanceof LispCons) {
 			return false;
+		}
+		if (a instanceof LispJavaObject host) {
+			// A host object asks its own equals, handed what an Object parameter
+			// receives: another host object, nil's null, or a receiver-kind value's
+			// one object -- as Clojure's = asks its left operand. Any other value
+			// converts to no one object, and is equal to no host object.
+			Object other = LispJavaObject.receiverObject(b);
+			return (other != null || b instanceof LispNil) && host.ref().equals(other);
 		}
 		if (a instanceof LispNil || b instanceof LispNil) {
 			return a instanceof LispNil && b instanceof LispNil;

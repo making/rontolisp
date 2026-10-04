@@ -173,27 +173,11 @@ final class JavaInterop {
 	}
 
 	static LispVal callInstance(LispVal target, String methodName, List<LispVal> args, Caller caller) {
-		Object receiver = receiverObject(target, caller);
+		Object receiver = LispJavaObject.receiverObject(target);
 		if (receiver == null) {
 			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
 		}
 		return invoke(ReflectiveJavaClasses.of(receiver.getClass()), receiver, methodName, args, caller);
-	}
-
-	/**
-	 * The object a {@code java:call} is made on: a host object's own, or the one a Lisp
-	 * value of a receiver kind ({@link JavaOverloads#isReceiverKind}) converts to for an
-	 * {@code Object} parameter -- a string's {@code String}, an integer's narrowest box.
-	 * @return the object, or {@code null} when the value is neither
-	 */
-	private static @Nullable Object receiverObject(LispVal target, Caller caller) {
-		if (target instanceof LispJavaObject obj) {
-			return obj.ref();
-		}
-		if (kindOf(target) instanceof JavaKind.Lisp kind && JavaOverloads.isReceiverKind(kind)) {
-			return convert(target, Object.class, caller);
-		}
-		return null;
 	}
 
 	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
@@ -439,7 +423,7 @@ final class JavaInterop {
 		Object target = null;
 		if (receiver != null) {
 			boolean call = site.operator() == JavaSite.Operator.CALL;
-			target = call ? receiverObject(receiver, caller)
+			target = call ? LispJavaObject.receiverObject(receiver)
 					: receiver instanceof LispJavaObject obj ? obj.ref() : null;
 			if (target == null) {
 				throw new LispEvalException(

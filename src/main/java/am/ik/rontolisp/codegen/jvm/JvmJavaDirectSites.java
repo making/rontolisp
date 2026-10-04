@@ -1960,7 +1960,14 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	private MethodRefEntry receiver() {
+	/**
+	 * The one conversion a {@code java:} program hands Java a Lisp value by where Java
+	 * takes it as one object -- the bridge's {@code receiverObject}: the object a
+	 * {@code java:call} on the value is made on, and what {@code _equal} hands a host
+	 * object's {@code equals}. Built on first use.
+	 * @return {@code _jrecv(Object)Object}
+	 */
+	MethodRefEntry receiver() {
 		MethodRefEntry ref = this.receiver;
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(RECEIVER);

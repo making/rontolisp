@@ -1141,6 +1141,19 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.HOST_IDENTITY_OUTPUT);
 	}
 
+	// equal of a host object on the left and a Lisp value asks its equals with the value
+	// as an Object parameter receives it (Clojure's =, which asks the left operand);
+	// a value that converts to no one object is equal to no host object. Before,
+	// measured 2026-10-04: the interpreter answered NIL for every Lisp value (the
+	// wrapper record's equals refused it) and the JVM handed equals the compiled
+	// representation -- a framed string, an int[] character, "T", a symbol's name, a
+	// cons array -- so a reify whose equals answers true was equal to all of them.
+	@Test
+	void equalOfAHostObjectAndALispValueAsksEqualsWithTheValueAsJavaSeesIt() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_OUTPUT);
+	}
+
 	// A packed float / integer vector -- a bare double[] / float[] / short[] / long[] /
 	// byte[] with its header in the compiled program -- converts element-wise like a
 	// general vector at a dispatched site and at the bridge, and a bignum is a

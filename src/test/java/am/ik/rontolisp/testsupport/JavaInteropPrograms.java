@@ -495,6 +495,39 @@ public final class JavaInteropPrograms {
 			:TO-F1
 			(NIL 1 NIL 2 3 4 5)""";
 
+	/**
+	 * {@code equal} of a host object and a Lisp value asks the host object's
+	 * {@code equals} with the value as a Java method's {@code Object} parameter receives
+	 * it -- so the method sees the value itself, a string unframed, a mutable string
+	 * rendered, a character a {@code Character}, {@code nil} {@code null} -- and only
+	 * when the host object is on the left, as Clojure's {@code =} asks its left operand.
+	 * A value no {@code Object} parameter takes as one object (a symbol, a list, a
+	 * vector, a ratio, a function) is equal to no host object, and {@code equals} is not
+	 * asked. Prints {@link #HOST_EQUAL_LISP_VALUE_OUTPUT}.
+	 */
+	public static final String HOST_EQUAL_LISP_VALUE_PROGRAM = """
+			(let* ((seen nil)
+			       (r (java:reify "java.lang.Runnable" "run" (lambda () nil)
+			                      "equals" (lambda (o) (setq seen (cons o seen)) t)))
+			       (f (java:new "java.io.File" "x"))
+			       (s (make-array 1 :element-type 'character :initial-element #\\s :adjustable t
+			                        :fill-pointer 1)))
+			  (print (list (equal r 1) (equal r "s") (equal r nil) (equal r t) (equal r #\\a) (equal r 1.5)
+			               (equal r (expt 10 20)) (equal r s) (equalp r 2)))
+			  (print (reverse seen))
+			  (setq seen nil)
+			  (print (list (equal r 'sym) (equal r '(1)) (equal r (vector 1)) (equal r 1/2) (equal r #'car)
+			               (equal 1 r) (equal "s" r) (equal nil r) (equalp 2 r) seen))
+			  (print (list (equal f "x") (equal "x" f) (equal f (java:new "java.io.File" "x")))))
+			""";
+
+	/** What {@link #HOST_EQUAL_LISP_VALUE_PROGRAM} prints. */
+	public static final String HOST_EQUAL_LISP_VALUE_OUTPUT = """
+			(T T T T T T T T T)
+			(1 "s" NIL T #\\a 1.5 100000000000000000000 "s" 2)
+			(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)
+			(NIL NIL T)""";
+
 	private JavaInteropPrograms() {
 	}
 
