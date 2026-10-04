@@ -283,6 +283,34 @@ class WasmStringParamBoundaryE2eTest {
 		assertThat(run(module, host, false, OptimizeLevel.SIZE, "gate793")).isEqualTo("bc");
 	}
 
+	// A literal :string site at the TOP LEVEL stages into the same reserved block as one
+	// inside a defun, so the block is sized for it too. Sized for the defun sites alone,
+	// a
+	// long top-level literal ran past the block into the runtime intern table, and a
+	// symbol interned before the call was not found after it.
+	@Test
+	void aTopLevelLiteralSiteStagesInsideTheReservedBlock() throws Exception {
+		String module = """
+				(rontolisp:wasm-import 'show :from "env" :as "show" :params '(:string) :returns :int)
+				(defvar *s* (intern (format nil "Z~a" 1)))
+				(defvar *n* (show "%s"))
+				(defun same () (if (eq *s* (intern (format nil "Z~a" 1))) *n* -1))
+				(rontolisp:wasm-export 'same :params '() :returns :int)
+				""".formatted("A".repeat(20000));
+		String host = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+				const env = { show: (p, n) => (str(p, n) === 'A'.repeat(20000) ? n : -2) };
+				const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+				inst = new WebAssembly.Instance(mod, { env });
+				inst.exports._initialize();
+				console.log(inst.exports.same());
+				""";
+		assertThat(run(module, host, false, OptimizeLevel.DEFAULT, "top-level-literal")).isEqualTo("20000");
+	}
+
 	private String run(String module, String driverJs, boolean reentrant) throws Exception {
 		return run(module, driverJs, reentrant, OptimizeLevel.NONE, reentrant ? "reentrant" : "strings");
 	}

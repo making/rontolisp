@@ -112,7 +112,8 @@ slot it already had, so no array grew:
 - **The general arm of `array-element-type` is GATED, per WIDTH.**
   `LispMacroExpander.makeArrayElementTypeCodes(program, registry)` answers a bit MASK; a
   program with no qualifying `make-array` compiles byte-identically. **Trap: on wasm the mask
-  rides in `Ctx.typedArrayCodes` and must be copied in `WasmAsyncEmit.freshCtx`** — without
+  rides in `Ctx.typedArrayCodes` and must reach `WasmAsyncEmit.freshCtx`** (inherited by
+  construction since 2026-10-04) — without
   it a top-level `(array-element-type a)` answers `t` while the same form inside a defun
   answers the remembered type.
 - **`type-of` had to ask the simplicity question FIRST**, because a typed array can have a

@@ -981,10 +981,11 @@ constructs `simple-*` instances), and `Ctx.restartMode`. **All of these pre-scan
 where the expansions happen, so none of them can see the expansion products -- that is why the gate
 is a separate surface scan.**
 
-- **Trap**: the WASM chunked top level clones `Ctx` through `WasmAsyncEmit.freshCtx`, which
-  enumerates flags EXPLICITLY. Without `restartMode` there, top-level chunks compiled the signal hook
+- **Trap (closed)**: the WASM chunked top level clones `Ctx` through `WasmAsyncEmit.freshCtx`, which
+  enumerated flags EXPLICITLY. Without `restartMode` there, top-level chunks compiled the signal hook
   OFF while defun bodies had it ON, so a `handler-bind` at top level silently never ran its handlers.
-  **Any future `Ctx` flag needs the same line.**
+  Since 2026-10-04 it inherits every `Ctx.Builder` field by construction
+  ([wasm-function-body-size.md](wasm-function-body-size.md)).
 - Interpreter: no injection pass, so `ensureRestartRuntimeLoaded()` evaluates the same generated AST
   on the first restart-system form or the first resolution of a restart-runtime name. The flag
   doubles as the signal-hook gate; the interpreter re-expands per evaluation so later signals pick
@@ -2113,10 +2114,9 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     replacement. That leak is closed (`.todo/192`, the every-exit restore in
     [dynamic-special-variables.md](dynamic-special-variables.md)) and the guard is green over the
     real cl-ppcre corpus on both compiled backends.
-  - `WasmAsyncEmit.freshCtx` must forward `arityChkFuncIndex`: it builds the SYNCHRONOUS top level
-    too, so dropping it leaves a top-level literal `apply` unguarded while the same form inside a
-    defun reports -- the same trap `callArityCeiling` and `extraDispatchFuncBase` are listed there
-    for.
+  - `WasmAsyncEmit.freshCtx` must carry `arityChkFuncIndex` (it inherits every `Ctx.Builder` field
+    since 2026-10-04): it builds the SYNCHRONOUS top level too, so dropping it left a top-level
+    literal `apply` unguarded while the same form inside a defun reports.
 - **Naming the operator** (2026-09-26). The interpreter's Java built-ins always named themselves
   (`requireArgCount(name, ...)`); a function value that is a `BuiltinFunctionWrappers` lambda said
   `Function` -- on the compiled backends for every built-in, in the interpreter for the ones it

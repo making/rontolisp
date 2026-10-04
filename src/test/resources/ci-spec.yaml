@@ -20258,6 +20258,33 @@ cases:
       (NIL NIL NIL)
       (:FOUND :HALF)
       ((3.0) 1)
+  - name: top-level-forms-answer-like-defun-bodies
+    source: |
+      ;; Each form at the top level answers what the same form answers inside a
+      ;; defun: a special bound by let or progv is what symbol-value reads, ...
+      (defvar *tlf-x* 1)
+      ;; (One symbol-value per form: each site expands over every special.)
+      (defun tlf-let-bound () (let ((*tlf-x* 5)) (symbol-value '*tlf-x*)))
+      (defun tlf-progv-bound () (progv '(*tlf-x*) '(2) (setq *tlf-x* 3) (symbol-value '*tlf-x*)))
+      (print (list (tlf-let-bound) (tlf-progv-bound)))
+      (print (let ((*tlf-x* 5)) (symbol-value '*tlf-x*)))
+      (print (progv '(*tlf-x*) '(2) (setq *tlf-x* 3) (symbol-value '*tlf-x*)))
+      ;; ... a struct accessor the program redefines is called as redefined, its
+      ;; slot :type no longer describing what it answers, ...
+      (defstruct tlf-box (v nil :type (simple-array double-float (*))))
+      (defun tlf-box-v (b) (declare (ignore b)) (vector 10 20 30))
+      (defvar *tlf-b* (make-tlf-box :v (make-array 3 :element-type 'double-float :initial-element 1d0)))
+      (defun tlf-second (b) (aref (tlf-box-v b) 1))
+      (print (list (tlf-second *tlf-b*) (aref (tlf-box-v *tlf-b*) 1)))
+      ;; ... and a global an async function assigns is what eval reads back.
+      (rontolisp:async-defun tlf-assign () (setq *tlf-x* 7) (eval '*tlf-x*))
+      (print (rontolisp:await (tlf-assign)))
+    expected: |
+      (5 3)
+      5
+      3
+      (20 20)
+      7
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all, one whose subject is a gate the

@@ -15249,6 +15249,51 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void topLevelSymbolValueReadsTheActiveSpecialBinding() throws Exception {
+		// A program that uses progv reads symbol-value dynamic-first; the top level,
+		// compiled in contexts of its own, has to read it the same way a defun does.
+		String program = """
+				(defvar *x* 1)
+				(defun bound () (list (let ((*x* 5)) (symbol-value '*x*))
+				                      (progv '(*x*) '(2) (setq *x* 3) (symbol-value '*x*))))
+				(print (bound))
+				(print (list (let ((*x* 5)) (symbol-value '*x*))
+				             (progv '(*x*) '(2) (setq *x* 3) (symbol-value '*x*))))""";
+		assertThat(compileAndRun(program)).isEqualTo("(5 3)\n(5 3)");
+		assertThat(compileComponentAndRun(program)).isEqualTo("(5 3)\n(5 3)");
+	}
+
+	@Test
+	void topLevelCallOfARedefinedStructAccessorDoesNotTrustTheSlotType() throws Exception {
+		// The accessor's slot :type describes only the body defstruct generated; once
+		// the program redefines the name, a top-level call site must not cast to it
+		// any more than a defun's does.
+		String program = """
+				(defstruct box (v nil :type (simple-array double-float (*))))
+				(defun box-v (b) (declare (ignore b)) (vector 10 20 30))
+				(defvar *b* (make-box :v (make-array 3 :element-type 'double-float :initial-element 1d0)))
+				(defun second-of (b) (aref (box-v b) 1))
+				(print (list (second-of *b*) (aref (box-v *b*) 1)))""";
+		assertThat(compileAndRun(program)).isEqualTo("(20 20)");
+		assertThat(compileComponentAndRun(program)).isEqualTo("(20 20)");
+	}
+
+	@Test
+	void anAsyncFunctionsAssignmentIsWhatEvalReadsBack() throws Exception {
+		// On the component an async-defun's body is a resume function compiled in a
+		// context of its own; a global it assigns must reach eval's environment exactly
+		// as a plain defun's assignment does.
+		String program = """
+				(defvar *x* 1)
+				(defun plain () (setq *x* 2) (eval '*x*))
+				(rontolisp:async-defun job () (setq *x* 3) (eval '*x*))
+				(print (plain))
+				(print (rontolisp:await (job)))""";
+		assertThat(compileAndRun(program)).isEqualTo("2\n3");
+		assertThat(compileComponentAndRun(program)).isEqualTo("2\n3");
+	}
+
+	@Test
 	void errorOutputIsTheProcessErrorStream() throws Exception {
 		// *error-output* is the standard ERROR designator (the handle 2, here literally
 		// the WASI fd), so a diagnostic written through it stays off standard output.

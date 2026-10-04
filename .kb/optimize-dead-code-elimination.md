@@ -909,10 +909,11 @@ has no case would resolve and then fall through to the ladder's default arm.
 (`Wasm/JvmFunctionFormCompiler` for `#'name`, `Wasm/JvmLambdaCompiler` for every `(lambda ...)`
 value, `WasmAsyncEmit`'s waiter closure). Collected DURING emission, not from a pre-scan, which is
 the whole point: a `#'identity` a macro synthesizes in Pass 2 is invisible to any source scan.
-**TRAP: `WasmAsyncEmit.freshCtx` rebuilds a `Ctx` field by field** and also builds the SYNCHRONOUS
-top level; omitting `valueFuncIds` there silently lost every closure the top level makes and
-`(funcall f 1)` trapped. **Any module-wide MUTABLE `Ctx` field must be listed there.** The 20
-fields it still drops, and inheriting by construction instead: `.todo/c77`.
+`WasmAsyncEmit.freshCtx` also builds the SYNCHRONOUS top level; when it rebuilt a `Ctx` field by
+field, omitting `valueFuncIds` silently lost every closure the top level makes and `(funcall f 1)`
+trapped. It now inherits every `Ctx.Builder` field (`Ctx.builder(proto)`, pinned by
+`CtxBuilderSeedTest`): [wasm-function-body-size.md](wasm-function-body-size.md), "A chunk context
+inherits every module-wide field by construction".
 
 **Source 2, the names a runtime SYMBOL designator can resolve** (on WASM live when the registry is:
 `usesEval || usesRuntimeDesignator || usesApplyRuntime`, `.kb/eval-runtime.md`). `_lookup` matches

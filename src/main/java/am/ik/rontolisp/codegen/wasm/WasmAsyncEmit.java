@@ -76,13 +76,12 @@ final class WasmAsyncEmit {
 	 * @param freeVarNames the captured variables (an async-lambda's; empty for defuns and
 	 * the top level)
 	 * @param topLevel whether this is the implicit top-level async function
-	 * @param usesEval the top-level eval-mirror flag
 	 * @param frame the {@code --report-locations} frame the body runs in, or {@code null}
 	 * ({@link WasmUncaughtLocations})
 	 * @return the resume identity
 	 */
 	static Resume compileResume(WasmLispCompiler.Ctx proto, List<String> paramNames, List<LispVal> bodyExprs,
-			List<String> freeVarNames, boolean topLevel, boolean usesEval, WasmUncaughtLocations.@Nullable Spec frame) {
+			List<String> freeVarNames, boolean topLevel, WasmUncaughtLocations.@Nullable Spec frame) {
 		int funcId = proto.nextFuncId[0]++;
 		int funcIndex = proto.userFuncBase + proto.numDefuns + proto.lambdaDecls.size();
 		int lambdaIdx = proto.lambdaDecls.size();
@@ -97,7 +96,6 @@ final class WasmAsyncEmit {
 		WasmLispCompiler.Ctx ctx = freshCtx(proto, bodyWriter, bodyBuf);
 		ctx.asyncResume = new WasmLispCompiler.AsyncResume(funcId);
 		ctx.topLevel = topLevel;
-		ctx.usesEval = usesEval;
 		for (int i = 0; i < paramNames.size(); i++) {
 			ctx.locals.put(paramNames.get(i), SPILL_BASE + i);
 		}
@@ -742,7 +740,7 @@ final class WasmAsyncEmit {
 		enclosingLexicals.addAll(ctx.captures.keySet());
 		List<String> freeVars = new ArrayList<>(FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),
 				ctx.functions.keySet(), ctx.globals, enclosingLexicals));
-		Resume resume = compileResume(ctx, paramNames, bodyExprs, freeVars, false, false, ctx.injectedRuntimeBody ? null
+		Resume resume = compileResume(ctx, paramNames, bodyExprs, freeVars, false, ctx.injectedRuntimeBody ? null
 				: WasmUncaughtLocations.asyncBodySpec(ctx.uncaughtLocations, null, cons, bodyExprs));
 		int entryFuncId = ctx.nextFuncId[0]++;
 		int entryFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
@@ -782,8 +780,12 @@ final class WasmAsyncEmit {
 	}
 
 	/**
-	 * Builds a fresh compilation context sharing {@code proto}'s module-wide state over a
-	 * new writer (the async pairs compile their halves out of line).
+	 * Builds a fresh compilation context over a new writer: {@code proto}'s module-wide
+	 * state, inherited whole ({@code Ctx.builder(proto)}), with fresh per-body state. The
+	 * async pairs compile their halves out of line through it, and so does EVERY
+	 * synchronous top-level chunk ({@link WasmToplevelEmit}) -- so a form has to compile
+	 * here exactly as it does in a defun body, which is why nothing module-wide is listed
+	 * (and so forgettable) here.
 	 * @param proto the prototype context
 	 * @param writer the new writer
 	 * @param bodyStream the new body stream
@@ -791,160 +793,11 @@ final class WasmAsyncEmit {
 	 */
 	static WasmLispCompiler.Ctx freshCtx(WasmLispCompiler.Ctx proto, WasmWriter writer,
 			ByteArrayOutputStream bodyStream) {
-		WasmLispCompiler.Ctx ctx = WasmLispCompiler.Ctx.builder()
-			.writer(writer)
-			.bodyStream(bodyStream)
-			.stringTable(proto.stringTable)
-			.functions(proto.functions)
-			.lambdaDecls(proto.lambdaDecls)
-			.indirectCallArities(proto.indirectCallArities)
-			.fdlibmUsed(proto.fdlibmUsed)
-			// Module-wide and MUTATED during emission, like indirectCallArities above:
-			// a designator the async body dispatches without being able to read it must
-			// still arm the name registry (see Ctx.runtimeDesignatorDispatch).
-			.runtimeDesignatorDispatch(proto.runtimeDesignatorDispatch)
-			.injectedRuntimeLambdas(proto.injectedRuntimeLambdas)
-			// Module-wide and MUTATED during emission, like indirectCallArities above:
-			// freshCtx also builds the synchronous top level, so dropping it here loses
-			// every closure the top level materializes and the dispatch ladders lose
-			// their cases for them (a trap at the first (funcall f ...)).
-			.valueFuncIds(proto.valueFuncIds)
-			// Module-wide and MUTATED during emission for the same reason: a literal
-			// the synchronous top level spells must keep arming the dispatch gate's
-			// name probes.
-			.spelledLiterals(proto.spelledLiterals)
-			.userSpelledLiterals(proto.userSpelledLiterals)
-			.nextFuncId(proto.nextFuncId)
-			.dynamic(proto.dynamic)
-			// The level decides emission shape (the fusion/unboxed-local trades), so a
-			// chunk built here must carry it: an async module's SYNCHRONOUS top level is
-			// built through this method too, and would otherwise fuse under
-			// --optimize=size while the same form in a defun did not.
-			.optimize(proto.optimize)
-			.component(proto.component)
-			.filePosition(proto.filePosition)
-			.noWasi(proto.noWasi)
-			.hostRandom(proto.hostRandom)
-			.hostFetch(proto.hostFetch)
-			.serve(proto.serve)
-			.ehMode(proto.ehMode)
-			.blockExitTag(proto.blockExitTag)
-			.restartMode(proto.restartMode)
-			// NOT optional (the restartMode lesson): without it a top-level chunk would
-			// compile %signal-cond with the depth test alone while defun bodies match
-			// clause types, and a top-level unmatched signal would abort again.
-			.signalClauseMatch(proto.signalClauseMatch)
-			// NOT optional, same lesson: a top-level %program-error must carry its
-			// instance exactly where a defun body's does.
-			.hasLandingPad(proto.hasLandingPad)
-			.printControls(proto.printControls)
-			.printControlVariables(proto.printControlVariables)
-			// NOT optional, same reason as the instance pair below: a synonym stream
-			// built or written through at the SYNCHRONOUS top level must resolve like
-			// the same form inside a defun.
-			.usesSynonymStreams(proto.usesSynonymStreams)
-			// NOT optional, same reason: without it a top-level input-stream-p /
-			// output-stream-p falls back to streamp and answers t for either direction
-			// while the same form inside a defun answers the real one.
-			.asksStreamDirection(proto.asksStreamDirection)
-			// NOT optional either: the test tag rides in a table's header COUNT, so a
-			// chunk that reads or writes a count has to agree with the rest of the
-			// module about whether the tag is there -- a table made at the synchronous
-			// top level would otherwise be counted in units of one and printed in units
-			// of four.
-			.usesEqualpHashTables(proto.usesEqualpHashTables)
-			.usesIdentityHashTables(proto.usesIdentityHashTables)
-			.usesStreamValues(proto.usesStreamValues)
-			// NOT optional: freshCtx builds the synchronous top level, and
-			// array-element-type's general arm is emitted only for the element type
-			// codes this names -- dropping it makes a top-level (array-element-type a)
-			// answer t while the same form inside a defun answers the remembered type.
-			.typedArrayCodes(proto.typedArrayCodes)
-			.usesSeqString(proto.usesSeqString)
-			// NOT optional: a producer site inside an async chunk must wrap exactly
-			// like the same form in a defun, or an async program's format nil /
-			// concatenate result would lose its identity depending on where it ran.
-			.mutableStringProducers(proto.mutableStringProducers)
-			// NOT optional: the boundary normalization has to be emitted in a chunk
-			// exactly where it is emitted in a defun. Taking the default (true) would
-			// not be wrong, only heavier -- one chunk's call is enough to root the
-			// 1,961-byte group in a module that can never make a character vector.
-			.charvecPossible(proto.charvecPossible)
-			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
-			.operandOpGlobalIndex(proto.operandOpGlobalIndex)
-			.operandOperators(proto.operandOperators)
-			.uncaughtLocations(proto.uncaughtLocations)
-			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an
-			// unboxed local's shadow is marked authoritative by reading this module
-			// global. Without it the chunk emits `global.get -1` and the module does not
-			// parse.
-			.rawSentinelGlobalIndex(proto.rawSentinelGlobalIndex)
-			.simd(proto.simd)
-			.userFuncBase(proto.userFuncBase)
-			// NOT optional either, for the same reason as the instance pair below: a
-			// funcall wider than the fixed dispatcher block would compile to a call-time
-			// signal at the top level while the same form inside a defun reached the
-			// module's own extra dispatcher.
-			.callArityCeiling(proto.callArityCeiling)
-			.extraDispatchFuncBase(proto.extraDispatchFuncBase)
-			// NOT optional either: freshCtx also builds the synchronous top level, so
-			// dropping it leaves a literal (apply #'f list) there unguarded while the
-			// same form inside a defun reports a wrong argument count
-			// (Ctx.arityChkFuncIndex).
-			.arityChkFuncIndex(proto.arityChkFuncIndex)
-			// With it, whether that guard bakes a built-in callee's funcId in.
-			.namesArityOperators(proto.namesArityOperators)
-			.arityNamedCallees(proto.arityNamedCallees)
-			// NOT optional for the same reason: a chunk built here compiles call sites
-			// too, and a literal :string host-import site must lower the same way at the
-			// top level as it does inside a defun.
-			.litStageFuncIndex(proto.litStageFuncIndex)
-			.importDecls(proto.importDecls)
-			.numDefuns(proto.numDefuns)
-			.userDefunNames(proto.userDefunNames)
-			.builtinShapedDefuns(proto.builtinShapedDefuns)
-			.usesFmakunbound(proto.usesFmakunbound)
-			.usesRuntimePackages(proto.usesRuntimePackages)
-			.packageTable(proto.packageTable)
-			.packageUseTable(proto.packageUseTable)
-			.symbolPrintTable(proto.symbolPrintTable)
-			.structAccessors(proto.structAccessors)
-			.closRegistry(proto.closRegistry)
-			.captureMemo(proto.captureMemo)
-			.regionMemo(proto.regionMemo)
-			.globals(proto.globals)
-			// NOT optional: a chunk built here compiles call sites too, and a name whose
-			// only definition is its global variable must dispatch through it there as
-			// well (WasmFunctionCallCompiler).
-			.nestedDefunNames(proto.nestedDefunNames)
-			.specialVars(proto.specialVars)
-			.globalIndices(proto.globalIndices)
-			// NOT optional: a quote site compiled in a fresh context (a top-level
-			// chunk, an async resume body) must reach the one compilation-wide
-			// quoted-datum table, or its global.get names an index the module never
-			// declares.
-			.quoteGlobals(proto.quoteGlobals)
-			.futureTypeIndex(proto.futureTypeIndex)
-			.frameTypeIndex(proto.frameTypeIndex)
-			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)
-			// Same reason as the instance pair below: freshCtx builds the SYNCHRONOUS top
-			// level too, and a top-level %stream-new must not compile with no stream type
-			// while the same form inside a defun has one.
-			.p1StreamTypeIndex(proto.p1StreamTypeIndex)
-			.p1StreamFuncBase(proto.p1StreamFuncBase)
-			// NOT optional: freshCtx also builds the SYNCHRONOUS top level, so without
-			// these a top-level %obj-* would compile with no type index and no layout
-			// addresses while the same form inside a defun worked.
-			.instanceTypeIndex(proto.instanceTypeIndex)
-			.layoutAddresses(proto.layoutAddresses)
-			.asyncFuncBase(proto.asyncFuncBase)
-			.asyncDefunNames(proto.asyncDefunNames)
-			.currentTaskGlobalIndex(proto.currentTaskGlobalIndex)
-			.callbackExports(proto.callbackExports)
-			.build();
+		WasmLispCompiler.Ctx ctx = WasmLispCompiler.Ctx.builder(proto).writer(writer).bodyStream(bodyStream).build();
 		// A top level split across several contexts is still ONE top level: defvar's
 		// compile-time "already initialized" set has to be the same object, or a name
-		// defvar'd in two chunks is initialized twice.
+		// defvar'd in two chunks is initialized twice. It is per-body state in a defun
+		// (only the top level reads it), so no builder carries it.
 		ctx.definedGlobals = proto.definedGlobals;
 		return ctx;
 	}

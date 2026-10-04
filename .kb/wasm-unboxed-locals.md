@@ -36,7 +36,7 @@ shadow, INCLUDING nil". Sentinel: a private `TYPE_CELL` in an immutable module g
 - Not special, not captured by a nested lambda (`FreeVarAnalyzer`), not a duplicate binding name in
   the same `let`; not under `--dynamic`, not in an async body (`ctx.asyncResume`/await).
 - **Top level is NOT excluded** (`.kb/eval-runtime.md`); a chunked top level reaches the sentinel
-  through `WasmAsyncEmit.freshCtx`, which must carry `rawSentinelGlobalIndex`.
+  through `WasmAsyncEmit.freshCtx`, which must carry `rawSentinelGlobalIndex` (inherited).
 - At least one assignment is integer-tree-SHAPED (`isRawAssignShaped`) -- a heuristic; precision
   affects performance only, since `compileRawStore` boxes what does not classify.
 - Scoping mirrors `ctx.locals`. A name in `rawLocals` is never in `ctx.locals`
