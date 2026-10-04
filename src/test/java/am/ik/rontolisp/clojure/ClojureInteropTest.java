@@ -672,6 +672,9 @@ class ClojureInteropTest {
 		// with-open closes: reading after the close signals, like the oracle
 		assertBothEqual(prelude + "(def closed (jio/reader " + path + "))" + "(with-open [r closed] (line-seq r))"
 				+ "(println (try (line-seq closed) (catch Exception e :closed)))", ":closed\n");
+		// class of a file reader names its host class like the printer does
+		assertBothEqual(prelude + "(with-open [r (jio/reader " + path + ")] (println (class r)))",
+				":java.io.BufferedReader\n");
 		// the line-seq path form keeps answering strictly
 		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");
 	}

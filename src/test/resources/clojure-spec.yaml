@@ -6044,6 +6044,50 @@ cases:
       #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
       #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
       #object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"] #object[clojure.lang.LineNumberingPushbackReader "clojure.lang.LineNumberingPushbackReader"]
+  - name: class-of-a-stream-answers-the-host-class-of-its-kind
+    # class answers a keyword for every kind (the oracle answers the host class, which
+    # prints without the colon): a stream answers the class its printer names, :java.io.X
+    # where the oracle says java.io.X. *out*, *in* and *err* at the root, a StringWriter,
+    # with-in-str's *in*, with-out-str's *out* (a StringWriter) and a PushbackReader over a
+    # StringReader (the oracle's java.io.PushbackReader deviates, see the printer case).
+    # Dispatch on class tells the kinds apart like any keyword.
+    source: |
+      (prn (class *out*) (class *in*) (class *err*))
+      (prn (class (java.io.StringWriter.)) (with-out-str (prn (class *out*))))
+      (with-in-str "abc" (prn (class *in*)))
+      (prn (class (java.io.PushbackReader. (java.io.StringReader. "x"))))
+      (prn (= (class *out*) (class *out*)) (= (class *out*) (class *err*)) (= (class (java.io.StringWriter.)) (class (java.io.StringWriter.))))
+      (prn (map class [*out* (java.io.StringWriter.) 1 "s"]))
+      (defmulti stream-kind class)
+      (defmethod stream-kind :java.io.StringWriter [_] :writer)
+      (defmethod stream-kind :java.io.OutputStreamWriter [_] :stdout)
+      (defmethod stream-kind :default [_] :other)
+      (prn (stream-kind (java.io.StringWriter.)) (stream-kind *out*) (stream-kind *err*) (stream-kind 1))
+    expected: |
+      :java.io.OutputStreamWriter :clojure.lang.LineNumberingPushbackReader :java.io.PrintWriter
+      :java.io.StringWriter ":java.io.StringWriter\n"
+      :clojure.lang.LineNumberingPushbackReader
+      :clojure.lang.LineNumberingPushbackReader
+      true false true
+      (:java.io.OutputStreamWriter :java.io.StringWriter :number :string)
+      :writer :stdout :other :other
+  - name: var-get-answers-the-root-of-a-var
+    # Oracle-identical (clj 1.12.6): var-get is the root of a var, the same as deref of
+    # it, a binding included, over a function value and a core var, and a non-var signals
+    # where deref of an atom would answer (a reduced value is no var).
+    source: |
+      (def vg-x 5)
+      (def ^:dynamic *vg-d* 1)
+      (defn vg-f [] 7)
+      (prn (var-get #'vg-x) (var-get #'*vg-d*) ((var-get (var vg-f))) (identical? (var-get #'*out*) *out*))
+      (binding [*vg-d* 9] (prn (var-get #'*vg-d*) @#'*vg-d*))
+      (prn (map var-get [#'vg-x #'*vg-d*]) (apply var-get [#'vg-x]) ((var-get #'inc) 1))
+      (prn (try (var-get 1) (catch Exception e :refused)) (try (var-get (atom 1)) (catch Exception e :refused)) (try (var-get (reduced 1)) (catch Exception e :refused)))
+    expected: |
+      5 1 7 true
+      9 9
+      (5 1) 5 2
+      :refused :refused :refused
   - name: print-length-level-and-readably-shape-the-printer
     # Oracle-identical (clj 1.12.6): *print-length* cuts a seq, vector, map, set, sorted
     # collection or record after that many members with ... (an infinite seq realizes only

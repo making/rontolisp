@@ -25,6 +25,7 @@ categories:
       - { slug: meta, name: "meta" }
       - { slug: vary-meta, name: "vary-meta" }
       - { slug: var, name: "var" }
+      - { slug: var-get, name: "var-get" }
       - { slug: core-test, name: "test" }
       - { slug: comment, name: "comment" }
       - { slug: declare, name: "declare" }

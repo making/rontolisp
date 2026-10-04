@@ -144,6 +144,9 @@ final class ClojureCoreLowering {
 			case "test":
 				arity(name, n, 1, 1);
 				return ClojureVarLowering.testOf(ctx.lower(items.get(1)));
+			case "var-get":
+				arity(name, n, 1, 1);
+				return ClojureVarLowering.getOf(ctx.lower(items.get(1)));
 			case "vary-meta":
 				arity(name, n, 2, -1);
 				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.realFnValue(ctx, items.get(2)),
@@ -183,6 +186,7 @@ final class ClojureCoreLowering {
 			case "map-entry?" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime("map-entry-p-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
 			case "test" -> ClojureVarLowering.testValue();
+			case "var-get" -> ClojureVarLowering.getValue();
 			case "read-string", "read" -> ClojureReadLowering.valueOf(ctx, name);
 			default -> null;
 		};

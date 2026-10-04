@@ -1149,7 +1149,9 @@ resolve var`.
   Constant values stay a datum at each `#'` site; evaluated ones are stored into
   `|c%x%meta|` ahead of the definition. A site above a redefinition sees the older
   metadata. Anything other than `def`/`defn`/`defn-`/`defmacro` carries only
-  `:name`/`:ns`. `test` calls `(:test (meta v))`.
+  `:name`/`:ns`. `test` calls `(:test (meta v))`. `var-get` (measured 2026-10-04: `unknown name: var-get`) is
+  `%clojure-var-root` (`ClojureVarLowering.getOf`, value `-v`): the root of a var, and unlike
+  `deref` (atoms, reduced values) a signal for anything that is no var, like the oracle.
 - **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's
   unbound var: the value cell holds `(:C%UNBOUND "ns/name")` (`%clojure-unbound`), truthy,
   `str` `Unbound: #'ns/name`, printing `#<Unbound: #'ns/name>` (the oracle's `#object` has a
@@ -1218,6 +1220,17 @@ resolve var`.
   `ClojureArmsTest#theStreamFamilyFoldsThePrinterArmOfAProgramMakingNoStream`,
   `ClojureLibraryTest#aProgramMakingNoStreamSplicesTheLibraryWithoutItsStreamArms`, the
   direction lines of `StringStreamPrograms`.
+  **`class` of a stream** (measured 2026-10-04: every one signalled `class needs a value of
+  a known kind`, `(class *out*)` answered `:boolean`) is an arm of `ClojureDispatchLowering.classForm`
+  on the same `%clojure-stream-p` test, so the same family sheds it: the keyword of
+  `%clojure-stream-class`, `:java.io.OutputStreamWriter` where the oracle's class prints
+  `java.io.OutputStreamWriter`, like an exception's class keyword. A program with no stream
+  producer compiles `(prn (class 1))` with no mention of it (wasm bytes: no
+  `OutputStreamWriter` string). Pinned by clojure-spec
+  `class-of-a-stream-answers-the-host-class-of-its-kind`, `ClojureInteropTest#filesRoundTripThroughReaderAndLineSeq`
+  and `ClojureWasmFileIoTest` (the file reader), `ClojureLibraryTest#classOfAStreamIsAnArmAProgramMakingNoStreamSheds`.
+  `defmethod` on a stream CLASS SPELLING (`java.io.StringWriter`) is still the "needs a core
+  class" refusal (a keyword dispatch value works).
 - `with-meta`/`vary-meta` answer a shallow copy recorded in the eq table
   `%clojure-meta-table`; `meta` reads it. IObj kinds only (a string, number, keyword,
   boolean, atom, deftype or pattern signals; a symbol answers itself).

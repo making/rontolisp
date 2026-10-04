@@ -120,6 +120,11 @@ final class ClojureDispatchLowering {
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isReifyForm(one),
 				ClojureCollectionLowering.keywordForm("reify")));
+		// a stream answers the host class its printer names, as a keyword like every
+		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureCollectionLowering.KEYWORD_TAG,
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-STREAM-CLASS"), one))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), one),
 				ctx.inDispatchFn ? ClojureLowering.NIL_CONST : ClojureCollectionLowering.keywordForm("nil")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), one, ctx.falseVariable),

@@ -6027,6 +6027,18 @@
   "The root of the var V."
   (funcall (car (cdr (cdr v)))))
 
+(defun rontolisp::%clojure-var-root (v)
+  "var-get: the root of V, which must be a var (deref also reads an atom or a
+   reduced value, var-get does not)."
+  (if (rontolisp::%clojure-var-p v)
+      (rontolisp::%clojure-var-get v)
+      (error "var-get needs a var")))
+
+(defun rontolisp::%clojure-var-root-v (&rest args)
+  "var-get as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "var-get")
+  (rontolisp::%clojure-var-root (car args)))
+
 (defun rontolisp::%clojure-unbound (name)
   "The unbound root of the var NAME (\"ns/name\")."
   (list :C%UNBOUND name))

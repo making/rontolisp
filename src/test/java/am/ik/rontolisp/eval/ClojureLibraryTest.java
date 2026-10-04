@@ -79,6 +79,21 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void classOfAStreamIsAnArmAProgramMakingNoStreamSheds() {
+		// the library keeps its own defuns (the tree-shaker prunes them later); the arm
+		// is
+		// in the program's forms
+		List<LispVal> plain = Clojure.read("(prn (class 1) (class [1]))", null);
+		assertThat(
+				ClojureLibrary.process(plain).stream().map(LispVal::print).filter(text -> !text.startsWith("(DEFUN ")))
+			.noneMatch(text -> text.contains("%CLOJURE-STREAM-CLASS"));
+		List<LispVal> stream = Clojure.read("(prn (class *out*))", null);
+		assertThat(
+				ClojureLibrary.process(stream).stream().map(LispVal::print).filter(text -> !text.startsWith("(DEFUN ")))
+			.anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-STREAM-CLASS"));
+	}
+
+	@Test
 	void aProgramReadingNoStreamDepthShedsTheRebindingPairs() {
 		// with-out-str, a binding of *out* and an agent action rebind the counters, which
 		// only a #'*out* / #'*in* / #'*agent* site reads: without one the pairs go and
