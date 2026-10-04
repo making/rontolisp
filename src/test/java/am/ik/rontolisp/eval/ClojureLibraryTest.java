@@ -281,6 +281,29 @@ class ClojureLibraryTest {
 				"(RONTOLISP::%CLOJURE-HOST-CONTAINS-P ", "(RONTOLISP::%CLOJURE-HOST-KEYS ");
 	}
 
+	@Test
+	void aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms() {
+		// only a java: operator hands a program a host map: without one, find,
+		// select-keys, reduce-kv, conj, merge and merge-with keep what they lowered to
+		String verbs = "(prn (find {1 2} 1) (select-keys {1 2} [1]) (reduce-kv (fn [a k v] (+ a v)) 0 {1 2})"
+				+ " (conj {} {1 2}) (merge {} {1 2}) (merge-with + {} {1 2}) (apply merge-with + [{} {1 2}]))";
+		List<String> library = List.of("RONTOLISP::%CLOJURE-FIND", "RONTOLISP::%CLOJURE-KV-PAIRS",
+				"RONTOLISP::%CLOJURE-MERGE-ENTRY-PLIST");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(verbs, null));
+		for (String name : library) {
+			assertThat(defun(ClojureLibrary.forms(), name)).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P ");
+			assertThat(defun(plain, name)).doesNotContain("HOST");
+		}
+		assertThat(program(plain, verbs)).doesNotContain("HOST");
+		String withJava = "(def hm (java.util.HashMap.)) " + verbs;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		for (String name : library) {
+			assertThat(defun(host, name)).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P ");
+		}
+		assertThat(program(host, withJava)).contains("(RONTOLISP::%CLOJURE-HOST-SELECT-KEYS ",
+				"(RONTOLISP::%CLOJURE-HOST-ENTRY-PLIST ", "(RONTOLISP::%CLOJURE-HOST-TABLE ");
+	}
+
 	/** The processed forms of the program itself: the tail past the spliced library. */
 	private static String program(List<LispVal> processed, String source) {
 		int own = Clojure.read(source, null).size();

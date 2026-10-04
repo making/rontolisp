@@ -40,9 +40,11 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * The host arm test of {@code seq}, {@code count}, {@code empty?}, {@code get},
-	 * {@code contains?}, {@code keys} and {@code vals} ({@code clojure.lisp}): a host
-	 * {@code Iterable}, {@code Map} or {@code CharSequence}, which only a {@code java:}
-	 * operator hands the program ({@link ClojureArms.Family#HOST}).
+	 * {@code contains?}, {@code keys}, {@code vals} and the map verbs ({@code find},
+	 * {@code select-keys}, {@code reduce-kv}, {@code conj}, {@code merge},
+	 * {@code merge-with}; {@code clojure.lisp}): a host {@code Iterable}, {@code Map} or
+	 * {@code CharSequence}, which only a {@code java:} operator hands the program
+	 * ({@link ClojureArms.Family#HOST}).
 	 */
 	static final String HOST_SEQABLE_P = "RONTOLISP::%CLOJURE-HOST-SEQABLE-P";
 
@@ -872,8 +874,9 @@ final class ClojureCollectionLowering {
 
 	/**
 	 * The entries one conjoined item adds to a map, as a plist: none of nil, a map's own
-	 * pairs, a two-vector's pair, a set's members each as an entry, or a sorted map's
-	 * pairs and a seq's members. A list of non-entries is none, like the oracle's.
+	 * pairs, a two-vector's pair, a set's members each as an entry, a sorted map's pairs
+	 * and a seq's members, or a host map's entries. A list of non-entries is none, like
+	 * the oracle's.
 	 */
 	static LispVal entryPlist(ClojureLowering ctx, LispVal item) {
 		List<LispVal> branches = new ArrayList<>();
@@ -898,6 +901,8 @@ final class ClojureCollectionLowering {
 		// signal inside the worker)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), item),
 				ClojureSortedLowering.runtime("seq-entry-plist", item)));
+		// a host map's entries, or a host seq's, each an entry
+		branches.add(hostArm(item, hostCall("ENTRY-PLIST", item)));
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));

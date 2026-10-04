@@ -1679,15 +1679,17 @@
 
 ;; seq, count, empty?, get, contains?, keys and vals of a host object, the
 ;; oracle's RT arms for a java.lang.Iterable, a java.util.Map and a
-;; java.lang.CharSequence. The test is the host-object family's
+;; java.lang.CharSequence, and the map verbs over a Map (find, select-keys,
+;; reduce-kv, conj, merge, merge-with). The test is the host-object family's
 ;; (clojure/ClojureArms): each verb asks it ahead of its own fall-through, and a
 ;; program naming no java: operator, where no host object exists, folds it away.
 (defun rontolisp::%clojure-host-seqable-p (x)
   "Whether X is a host object the oracle's seq takes: an Iterable, a Map or a
    CharSequence."
   ;; the kinds reaching a verb's fall-through answer without a call: this is
-  ;; asked of every list empty? walks and every vector count reads
-  (and (not (or (consp x) (arrayp x) (symbolp x) (numberp x)))
+  ;; asked of every list empty? walks, every vector count reads and every map
+  ;; select-keys and merge-with read
+  (and (not (or (consp x) (arrayp x) (symbolp x) (numberp x) (hash-table-p x)))
        (not (rontolisp::%clojure-lisp-value-p x))
        (or (rontolisp::%clojure-host-instance-p x "java.lang.Iterable")
            (rontolisp::%clojure-host-instance-p x "java.util.Map")
@@ -1770,6 +1772,68 @@
          (and (rontolisp::%clojure-host-key-p k) (java:call x "contains" k)))
         (t (error "contains? not supported on type: ~A"
                   (java:call (java:call x "getClass") "getName")))))
+
+(defun rontolisp::%clojure-host-find (x k)
+  "find of K in the host object X (%clojure-host-seqable-p): the entry
+   [K value] when a Map holds the key K by its own lookup, else nil. Any other
+   host object is refused, like the oracle's RT.find."
+  (if (rontolisp::%clojure-host-instance-p x "java.util.Map")
+      (if (and (rontolisp::%clojure-host-key-p k) (java:call x "containsKey" k))
+          (vector k (java:call x "get" k))
+          nil)
+      (error "find not supported on type: ~A"
+             (java:call (java:call x "getClass") "getName"))))
+
+(defun rontolisp::%clojure-host-select-keys (keys x out)
+  "select-keys' view over the key list KEYS of the map X: when X is a host
+   object, OUT gains the entry %clojure-host-find answers for each key, like
+   the oracle's select-keys over RT.find, and the answer is nil, leaving the
+   verb's own table walk nothing; anything else answers KEYS. A program naming
+   no java: operator folds the view to KEYS (clojure/ClojureArms)."
+  ;; a map answers without a call: this is asked of every select-keys
+  (cond ((hash-table-p x) keys)
+        ((rontolisp::%clojure-host-seqable-p x)
+         (dolist (k keys nil)
+           (let ((e (rontolisp::%clojure-host-find x k)))
+             (if e
+                 (setf (gethash (rontolisp::%clojure-store-key k out) out)
+                       (aref e 1))))))
+        (t keys)))
+
+(defun rontolisp::%clojure-host-entries (x name)
+  "The entries of the host object X (%clojure-host-seqable-p) as [key value]
+   vectors: a Map's own, else the members of its seq, each a host Map.Entry or
+   a [k v] vector (a map entry here); any other member signals, like the
+   oracle's cast to Map.Entry, in the words of the verb NAME (nil for conj)."
+  (if (rontolisp::%clojure-host-instance-p x "java.util.Map")
+      (rontolisp::%clojure-host-seq x)
+      (mapcar (lambda (m)
+                (cond ((rontolisp::%clojure-entry-p m) m)
+                 ((rontolisp::%clojure-host-instance-p m "java.util.Map$Entry")
+                  (vector (java:call m "getKey") (java:call m "getValue")))
+                 (name (error "~A needs a map or a vector" name))
+                 (t (error
+                     "conj needs a map entry: a map, a [k v] vector or nil"))))
+              (rontolisp::%clojure-host-seq x))))
+
+(defun rontolisp::%clojure-host-entry-plist (x)
+  "The entries a map gains from the host object X (%clojure-host-seqable-p),
+   as a plist: conj, merge and merge-with read a host Map, or a seq of
+   entries, like the oracle's map cons."
+  (let ((acc nil))
+    (dolist (e (rontolisp::%clojure-host-entries x nil) (reverse acc))
+      (setq acc (cons (aref e 1) (cons (aref e 0) acc))))))
+
+(defun rontolisp::%clojure-host-table (x)
+  "merge-with's view of the map X it walks: when X is a host object
+   (%clojure-host-seqable-p), a fresh map of its entries, anything else X. A
+   program naming no java: operator folds the view to X (clojure/ClojureArms)."
+  ;; a map answers without a call: this is asked of every map merge-with walks
+  (cond ((hash-table-p x) x)
+        ((rontolisp::%clojure-host-seqable-p x)
+         (rontolisp::%clojure-plist-table nil
+          (rontolisp::%clojure-host-entry-plist x)))
+        (t x)))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
   "= as a function value: T when every neighbouring pair is equal, the false
@@ -4185,8 +4249,9 @@
 (defun rontolisp::%clojure-find (coll key)
   "(find COLL KEY): the entry [k v] as a vector, nil when COLL holds no KEY. A
    map or record answers the key it stores (the = representative of a structural
-   one); a vector takes an integer index in range; nil is nil; any other COLL
-   (a set, a string, a list) signals like the oracle."
+   one); a vector takes an integer index in range; nil is nil; a host Map
+   looks KEY up itself; any other COLL (a set, a string, a list) signals like
+   the oracle."
   (cond ((null coll) nil)
         ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
          (let* ((table (rontolisp::%clojure-set-entries coll "find"))
@@ -4200,6 +4265,8 @@
              nil))
         ((rontolisp::%clojure-sorted-p coll)
          (rontolisp::%clojure-sorted-find coll key))
+        ((rontolisp::%clojure-host-seqable-p coll)
+         (rontolisp::%clojure-host-find coll key))
         (t (error "find not supported on this type"))))
 
 (defun rontolisp::%clojure-find-v (&rest args)
@@ -4467,8 +4534,8 @@
 
 (defun rontolisp::%clojure-kv-pairs (coll name)
   "The (key . value) pairs NAME walks: a map's or record's entries in the
-   table's walk order, a vector's (index . member) pairs, none of nil; anything
-   else signals."
+   table's walk order, a vector's (index . member) pairs, none of nil, a host
+   Map's entries (or a host seq's, each an entry); anything else signals."
   (cond ((null coll) nil)
         ((or (hash-table-p coll) (rontolisp::%clojure-record-p coll))
          (let ((acc nil))
@@ -4482,6 +4549,9 @@
            (reverse acc)))
         ((rontolisp::%clojure-sorted-map-p coll)
          (rontolisp::%clojure-sorted-kv-pairs coll))
+        ((rontolisp::%clojure-host-seqable-p coll)
+         (mapcar (lambda (e) (cons (aref e 0) (aref e 1)))
+                 (rontolisp::%clojure-host-entries coll name)))
         (t (error "~A needs a map or a vector" name))))
 
 (defun rontolisp::%clojure-reduce-kv (f init coll)
@@ -5478,6 +5548,8 @@
              (setq acc
                    (append acc (rontolisp::%clojure-sorted-entry-plist m t))))))
         ((consp item) (rontolisp::%clojure-seq-entry-plist item))
+        ((rontolisp::%clojure-host-seqable-p item)
+         (rontolisp::%clojure-host-entry-plist item))
         (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
 
 (defun rontolisp::%clojure-seq-entry-plist (item)
@@ -5508,6 +5580,8 @@
         ((rontolisp::%clojure-record-p item)
          (rontolisp:hash-table-plist (car (cdr (cdr (cdr item))))))
         ((consp item) (rontolisp::%clojure-seq-entry-plist item))
+        ((rontolisp::%clojure-host-seqable-p item)
+         (rontolisp::%clojure-host-entry-plist item))
         (t (error "conj needs a map entry: a map, a [k v] vector or nil"))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)

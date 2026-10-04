@@ -292,8 +292,15 @@ final class ClojureUpdateLowering {
 	}
 
 	/**
+	 * The view of {@code select-keys}' key list ({@code clojure.lisp}): over a host map
+	 * the answer's entries by the map's own lookup and no key left to walk, anything else
+	 * the key list ({@link ClojureArms.Family#HOST}).
+	 */
+	static final String HOST_SELECT_KEYS = "RONTOLISP::%CLOJURE-HOST-SELECT-KEYS";
+
+	/**
 	 * {@code select-keys}: a fresh map holding the present keys only. Of nil, the empty
-	 * map; anything else that is no map signals.
+	 * map; a host map through its own lookup; anything else that is no map signals.
 	 */
 	static LispVal selectKeysForm(ClojureLowering ctx, LispVal map, LispVal keys) {
 		LispSymbol whole = ctx.freshTemp();
@@ -305,9 +312,12 @@ final class ClojureUpdateLowering {
 		LispVal keep = ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), held, out), got);
 		LispSymbol src = ctx.freshTemp();
+		// a host map answers through its own lookup, the view filling out and leaving
+		// the walk no keys (an arm a program naming no java: operator sheds)
+		LispVal walked = ClojureLowerUtil.list(new LispSymbol(HOST_SELECT_KEYS), keys, whole, out);
 		// the entry keeps the map's own key, like the oracle's find
 		LispVal gather = ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, keys)),
+			.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(List.of(one, walked)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 							ClojureLowerUtil.list(List.of(
 									ClojureLowerUtil.list(held,
@@ -333,7 +343,10 @@ final class ClojureUpdateLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 								ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, norm))),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), src),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), src),
+												ClojureLowerUtil.list(
+														new LispSymbol(ClojureCollectionLowering.HOST_SEQABLE_P), src)),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), gather, out),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
 												LispString.literal("select-keys needs a map"))))));
@@ -395,7 +408,7 @@ final class ClojureUpdateLowering {
 			// arm a program building no sorted collection sheds); anything opaque
 			// signals in the maphash, like the oracle
 			LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(one),
-					ClojureProtocolLowering.typedTableOf(one), sortedEntries(one, "merge-with"));
+					ClojureProtocolLowering.typedTableOf(one), hostEntries(sortedEntries(one, "merge-with")));
 			LispVal join = ClojureLowerUtil.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil.list(
 					ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil
@@ -433,6 +446,21 @@ final class ClojureUpdateLowering {
 	}
 
 	/**
+	 * The view of the map {@code merge-with} walks with {@code maphash}
+	 * ({@code clojure.lisp}): a host map or seq of entries as a table of its entries,
+	 * anything else itself ({@link ClojureArms.Family#HOST}).
+	 */
+	static final String HOST_TABLE = "RONTOLISP::%CLOJURE-HOST-TABLE";
+
+	/**
+	 * A map {@code merge-with} walks with {@code maphash}: {@code walked} through the
+	 * host view (an arm a program naming no {@code java:} operator sheds).
+	 */
+	static LispVal hostEntries(LispVal walked) {
+		return ClojureLowerUtil.list(new LispSymbol(HOST_TABLE), walked);
+	}
+
+	/**
 	 * {@code merge-with} as a value: the function, then any number of maps, grown map by
 	 * map through {@code f} like a call and rewrapped in the first rest map's record when
 	 * there is one. Of no maps, {@code nil}.
@@ -457,8 +485,8 @@ final class ClojureUpdateLowering {
 		LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), left);
 		LispVal src = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isRecordForm(head),
 				ClojureProtocolLowering.typedTableOf(head),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(head),
-						ClojureSortedLowering.runtime("sorted-table", head, LispString.literal("merge-with")), head));
+				hostEntries(ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedMapTest(head),
+						ClojureSortedLowering.runtime("sorted-table", head, LispString.literal("merge-with")), head)));
 		LispVal join = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("maphash"), ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(key, val)), ClojureLowerUtil.list(

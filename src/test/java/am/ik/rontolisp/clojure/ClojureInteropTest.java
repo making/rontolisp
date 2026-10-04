@@ -721,6 +721,39 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6, 2026-10-04): RT.find (and select-keys over it) takes a Map by
+	// its own containsKey and refuses any other host object, kv-reduce reads a Map's
+	// entries (reduce-kv, update-vals, update-keys, map-invert), and a map's cons takes
+	// any seq of Map.Entry (conj, merge, merge-with, into). Before, each signalled.
+	@Test
+	void aHostMapIsAMapToTheMapVerbs() throws Exception {
+		assertBothEqual(
+				"""
+						(require 'clojure.set)
+						(def hm (doto (java.util.TreeMap.) (.put "a" 1) (.put "b" 2)))
+						(def al (java.util.ArrayList. [1 2]))
+						(def hh (java.util.HashMap. hm))
+						(println (find hm "a") (find hm "z") (apply find [hm "b"]) (select-keys hm ["a" "z"]) (select-keys hm []) (apply select-keys [hm ["b"]]))
+						(println (reduce-kv (fn [a k v] (+ a v)) 0 hm) (reduce-kv (fn [a k v] (conj a k)) [] hm) (apply reduce-kv [(fn [a k v] (+ a v)) 0 hm]) (update-vals hm inc) (update-keys hm keyword))
+						(println (merge {} hm) (merge {"c" 3} hm nil) (conj {} hm) (conj {"a" 0} hm) (apply merge [{} hm]) (apply conj [{} hm]) (into {} hm))
+						(println (merge-with + {"a" 10} hm) (apply merge-with + [{"a" 10} hm]) (clojure.set/map-invert hm) (clojure.set/rename-keys {"a" 5} hm))
+						(println (merge (sorted-map "z" 0) hm) (conj (sorted-map "z" 0) hm) (merge-with + (sorted-map "a" 10) hm))
+						(println (conj {} (.entrySet hm)) (reduce-kv (fn [a k v] (+ a v)) 0 (.entrySet hm)) (conj {} (java.util.ArrayList.)) (find hh :a) (select-keys hh [:a {:b 1} "a"]))
+						(println (try (find al 0) (catch Exception e (.getMessage e))))
+						(println (try (select-keys al [0]) (catch Exception e (.getMessage e))))
+						""",
+				"""
+						[a 1] nil [b 2] {a 1} {} {b 2}
+						3 [a b] 3 {a 2, b 3} {:a 1, :b 2}
+						{a 1, b 2} {c 3, a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2}
+						{a 11, b 2} {a 11, b 2} {1 a, 2 b} {1 5}
+						{a 1, b 2, z 0} {a 1, b 2, z 0} {a 11, b 2}
+						{a 1, b 2} 3 {} nil {a 1}
+						find not supported on type: java.util.ArrayList
+						find not supported on type: java.util.ArrayList
+						""");
+	}
+
 	// Oracle: a protected method overrides -- paintComponent records -- while an
 	// unnamed one is inherited.
 	@Test

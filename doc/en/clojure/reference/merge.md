@@ -4,7 +4,7 @@
 
 Answers one fresh table over every argument's pairs, later maps winning; no argument is
 mutated. `(merge)` is `nil`, and a merge of all-`nil` arguments is `nil` too. The result keeps a record's type only when the first argument is one, like the oracle: a `nil` first argument answers a plain map even when a later map is a record.
-Merge is `conj` folded over the maps, so a later argument may also be a sorted map, a `[k v]` vector or a seq of entries; `nil` adds nothing and a list of non-entries signals.
+Merge is `conj` folded over the maps, so a later argument may also be a sorted map, a `[k v]` vector, a seq of entries or a Java `Map` (interpreter and JVM); `nil` adds nothing and a list of non-entries signals.
 
 As a value a rest lambda over the maps.
 
