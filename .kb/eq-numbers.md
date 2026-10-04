@@ -29,6 +29,11 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
   `"s"` one key; JVM: a nil key `NullPointerException`, a character never found, a host by
   `equals`). Both now go through eq (`Environment.isEqStrict`, the JVM `_pEql` helper via
   `JvmEqGeneralCompiler.emitCall`). Pins: `RemfIndicatorFixture` (interpreter, JVM, wasm).
+  The wasm walk also answered NIL for a pair removed past the first key (measured 2026-10-04,
+  both wasm backends; `br` out of the `if` targeted the void `$nil` block, one label short of
+  `$result`, which dropped the `t`). Now T on all four, pinned by the fixture's answer rows and
+  ci-spec `remf-answer-past-the-first-key`; the fix is one operand byte, so no size moved
+  (a program without `remf` is byte-identical).
 - Before (measured 2026-10-04): `(eq (java:new "java.io.File" "x") (java:new "java.io.File"
   "x"))` T on both; on the JVM the LEFT operand's `equals` decided, so a reify/proxy whose
   `equals` answers true was `eq` to `t` and `1` and printed as `true` (the printer's first
