@@ -4061,6 +4061,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.checkSequenceRuntimeWrapper(), defuns, injectedRuntimeDefuns, injectedForms,
 					specialVars);
 		}
+		// The shared dynamic-first symbol-value dispatch a computed name calls in a
+		// progv-using program. When it is absent a site spells the dispatch inline
+		// (LispMacroExpander.dynamicFirstSymbolValue).
+		if (programUsesSymbol(program, LispNames.PROGV) && !specialVars.isEmpty()
+				&& !LispMacroExpander.definesSymbolValueRuntimeName(userDefinedNames)
+				&& (LispMacroExpander.programUsesComputedSymbolValue(program)
+						|| LispMacroExpander.programUsesComputedSymbolValue(injectedForms) || LispMacroExpander
+							.programUsesComputedSymbolValue(closRegistry.conditionReports().values()))) {
+			for (LispVal segment : LispMacroExpander.symbolValueDynamicRuntime(specialVars)) {
+				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+			}
+		}
 
 		// Collect top-level global variables and give each its own module-level wasm
 		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).

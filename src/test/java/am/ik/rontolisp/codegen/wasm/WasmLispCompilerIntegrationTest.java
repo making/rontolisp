@@ -24072,6 +24072,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void symbolValueSitesReadTheActiveBinding() throws Exception {
+		// The wasm twin of
+		// JvmLispCompilerTest#symbolValueSitesDoNotEachPayForTheSpecialSet
+		// on Preview 1 and the component: a literal name folds, a computed one calls the
+		// shared dispatch (the size half is WasmLispCompilerTest's).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.SymbolValueSiteFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SymbolValueSiteFixture.EXPECTED);
+	}
+
+	@Test
 	void progvSymbolValueSeesTheSetqInsideTheExtent() throws Exception {
 		// The cl-json aggregate-scope shape: (progv vars (mapcar #'symbol-value vars))
 		// re-binds each scope variable to its CURRENT value, where "current" includes a

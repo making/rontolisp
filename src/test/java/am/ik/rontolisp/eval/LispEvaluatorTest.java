@@ -22487,6 +22487,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void symbolValueSitesReadTheActiveBinding() {
+		// The reference answer for the compiled backends' twins
+		// (JvmLispCompilerTest#symbolValueSitesDoNotEachPayForTheSpecialSet,
+		// WasmLispCompilerIntegrationTest#symbolValueSitesReadTheActiveBinding): a
+		// literal
+		// and a computed name alike read the active progv/let binding, a progv-bound
+		// undeclared name included.
+		assertThat(printedLines(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SymbolValueSiteFixture.EXPECTED);
+	}
+
+	@Test
 	void specialVariablesAreThreadScoped() throws Exception {
 		// The flagship acceptance case: one shared evaluator (like the HTTP handler,
 		// which

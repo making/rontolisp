@@ -132,17 +132,19 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * symbol-value. In a program that uses {@code progv} the emission is DYNAMIC-FIRST:
-	 * the runtime name is dispatched over the special set and a match reads the variable
-	 * (the module-global / per-task read), so an active {@code progv}/{@code let} binding
-	 * -- and a {@code setq} inside its extent -- is answered instead of the
+	 * symbol-value. In a program that uses {@code progv} the emission is DYNAMIC-FIRST
+	 * ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal special reads the
+	 * variable (the module-global / per-task read), a computed name calls the shared
+	 * dispatch over the special set, so an active {@code progv}/{@code let} binding --
+	 * and a {@code setq} inside its extent -- is answered instead of the
 	 * {@code GLOBAL_ENV} mirror's global default (cl-json's
 	 * {@code (mapcar #'symbol-value scope-variables)} snapshot). Programs without
 	 * {@code progv} keep the raw emission unchanged.
 	 */
 	static void compileSymbolValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (ctx.usesProgv && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
-			WasmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars), ctx);
+			WasmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars,
+					ctx.functions.containsKey(LispNames.SYMBOL_VALUE_DYNAMIC)), ctx);
 			return;
 		}
 		compileSymbolValueRaw(cons, ctx);

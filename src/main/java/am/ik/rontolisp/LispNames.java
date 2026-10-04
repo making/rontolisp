@@ -75,6 +75,15 @@ public final class LispNames {
 	 */
 	public static final String SYMBOL_VALUE_RAW = "%SYMBOL-VALUE-RAW";
 
+	/**
+	 * Internal (compile-path only): the shared dynamic-first {@code symbol-value} runtime
+	 * a computed name calls in a program that uses {@code progv} --
+	 * {@code (%symbol-value-dynamic name)}, the dispatch over the special set defined
+	 * ONCE instead of at every site. Its later segments are this name suffixed
+	 * {@code -1}, {@code -2}, ...
+	 */
+	public static final String SYMBOL_VALUE_DYNAMIC = "%SYMBOL-VALUE-DYNAMIC";
+
 	/** The {@code progn} special form. */
 	public static final String PROGN = "PROGN";
 
