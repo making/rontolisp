@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.SequencedSet;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -52,13 +53,9 @@ public final class GlobalVarCollector {
 					}
 				}
 				case LispNames.SETQ, LispNames.SETF -> {
-					// setq/setf take place/value pairs; record each place that is a bare
-					// symbol (a symbol place under setf expands to setq).
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-							globals.add(place.name());
-						}
-					}
+					// Record each place that is a bare symbol (a symbol place under setf
+					// expands to setq).
+					assignedPlaces(head.name(), cons, globals::add);
 					// The values may hold further assignments -- a namespace init is a
 					// top-level setq of a lambda over the namespace's setqs -- and those
 					// assign the same globals a head-position setq would (nested in a
@@ -237,6 +234,54 @@ public final class GlobalVarCollector {
 	}
 
 	/**
+	 * Whether {@code op} heads a form that assigns bare-symbol places
+	 * ({@link #assignedPlaces}).
+	 */
+	public static boolean isAssignmentHead(@Nullable String op) {
+		return LispNames.SETQ.equals(op) || LispNames.SETF.equals(op) || LispNames.PSETQ.equals(op)
+				|| LispNames.PSETF.equals(op) || LispNames.MULTIPLE_VALUE_SETQ.equals(op);
+	}
+
+	/**
+	 * Hands {@code sink} each bare symbol the assignment form {@code form}, headed by
+	 * {@code op}, stores to: the places of {@code setq}, {@code setf}, {@code psetq} and
+	 * {@code psetf}, the variables of {@code multiple-value-setq}. The one recognition of
+	 * what assigns a variable, shared by every walk that asks which names a program
+	 * stores. Keywords and non-symbol places ({@code (setf (car x) 1)}) are skipped, and
+	 * a form of any other head, or a malformed one, yields what it has.
+	 * @param op the head's name, as the caller reads it
+	 * @param form the whole form
+	 * @param sink receives each assigned name, in order
+	 */
+	public static void assignedPlaces(String op, LispCons form, Consumer<String> sink) {
+		switch (op) {
+			case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF -> {
+				// Place/value pairs: every other element, starting at the first.
+				LispVal node = form.cdr();
+				while (node instanceof LispCons placeCell && placeCell.cdr() instanceof LispCons valueCell) {
+					if (placeCell.car() instanceof LispSymbol place && !place.isKeyword()) {
+						sink.accept(place.name());
+					}
+					node = valueCell.cdr();
+				}
+			}
+			case LispNames.MULTIPLE_VALUE_SETQ -> {
+				if (form.cdr() instanceof LispCons varsCell) {
+					LispVal vars = varsCell.car();
+					while (vars instanceof LispCons varCons) {
+						if (varCons.car() instanceof LispSymbol place && !place.isKeyword()) {
+							sink.accept(place.name());
+						}
+						vars = varCons.cdr();
+					}
+				}
+			}
+			default -> {
+			}
+		}
+	}
+
+	/**
 	 * Every bare-symbol place an assignment form names at any depth of {@code form},
 	 * excluding quoted data and keywords. Scope-blind: the caller decides which are free.
 	 */
@@ -248,25 +293,9 @@ public final class GlobalVarCollector {
 					case LispNames.QUOTE -> {
 						return;
 					}
-					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF -> {
-						List<LispVal> parts = cons.toList();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-								names.add(place.name());
-							}
-						}
-					}
-					case LispNames.MULTIPLE_VALUE_SETQ -> {
-						if (cons.cdr() instanceof LispCons varsCell) {
-							LispVal vars = varsCell.car();
-							while (vars instanceof LispCons varCons) {
-								if (varCons.car() instanceof LispSymbol place && !place.isKeyword()) {
-									names.add(place.name());
-								}
-								vars = varCons.cdr();
-							}
-						}
-					}
+					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF,
+							LispNames.MULTIPLE_VALUE_SETQ ->
+						assignedPlaces(head.name(), cons, names::add);
 					default -> {
 					}
 				}
@@ -392,14 +421,7 @@ public final class GlobalVarCollector {
 							globals.add(name.name());
 						}
 					}
-					case LispNames.SETQ, LispNames.SETF -> {
-						List<LispVal> parts = cons.toList();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-								globals.add(place.name());
-							}
-						}
-					}
+					case LispNames.SETQ, LispNames.SETF -> assignedPlaces(head.name(), cons, globals::add);
 					default -> {
 					}
 				}

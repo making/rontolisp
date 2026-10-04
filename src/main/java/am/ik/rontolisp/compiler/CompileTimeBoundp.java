@@ -208,13 +208,10 @@ public final class CompileTimeBoundp {
 							(binds && !nodeDeferred ? bound : poisoned).add(name.name());
 						}
 					}
-					case LispNames.SETQ, LispNames.SETF -> {
-						List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-								(nodeDeferred ? poisoned : bound).add(place.name());
-							}
-						}
+					case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF,
+							LispNames.MULTIPLE_VALUE_SETQ -> {
+						Names target = nodeDeferred ? poisoned : bound;
+						GlobalVarCollector.assignedPlaces(op, cons, target::add);
 					}
 					case LispNames.DEFUN -> {
 						if (!nodeTopLevel && cons.cdr() instanceof LispCons nameCell
@@ -278,13 +275,8 @@ public final class CompileTimeBoundp {
 					out.add(name.name());
 				}
 			}
-			case LispNames.SETQ, LispNames.SETF -> {
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-						out.add(place.name());
-					}
-				}
-			}
+			case LispNames.SETQ, LispNames.SETF, LispNames.PSETQ, LispNames.PSETF, LispNames.MULTIPLE_VALUE_SETQ ->
+				GlobalVarCollector.assignedPlaces(member(head.name()), cons, out::add);
 			case LispNames.PROGN -> {
 				for (int i = 1; i < parts.size(); i++) {
 					unconditional(parts.get(i), out);
@@ -382,7 +374,7 @@ public final class CompileTimeBoundp {
 	private static LispVal finishCell(LispCons cons, @Nullable String op, LispVal car, LispVal cdr, State state,
 			boolean topLevelForm) {
 		if (op != null && (LispNames.DEFVAR.equals(op) || LispNames.DEFPARAMETER.equals(op)
-				|| LispNames.DEFCONSTANT.equals(op) || LispNames.SETQ.equals(op) || LispNames.SETF.equals(op))) {
+				|| LispNames.DEFCONSTANT.equals(op) || GlobalVarCollector.isAssignmentHead(op))) {
 			state.prefixClean = false;
 		}
 		LispVal rebuilt = LispCons.rebuilt(cons, car, cdr);

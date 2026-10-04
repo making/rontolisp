@@ -50,9 +50,19 @@ unbound.
   leaves open" below). A name no top-level form assigns is a global too when a function
   body assigns it with no lexical binding in scope (`.kb/core-representation.md`); before
   2026-10-04 that store was a function local and the probe answered NIL.
-- The poison scan recognises `setq`/`setf` (and `defvar`-family, nested `defun`) only: a
-  `psetq`/`psetf`/`multiple-value-setq` in a function body is missed and a later probe folds
-  to NIL (`.todo/d04`).
+- The poison scan reads assignments through `GlobalVarCollector.assignedPlaces`, the one
+  recognition of `setq`/`setf`/`psetq`/`psetf`/`multiple-value-setq` shared with the
+  function-body collector (`isAssignmentHead` feeds the prefix flag). Before 2026-10-04 the
+  scan knew `setq`/`setf` only: a `psetq`/`psetf`/`multiple-value-setq` in a function body was
+  missed and a later probe folded to NIL, where SBCL and the interpreter answer T. A top-level
+  one now binds the name for later probes as a `setq` does.
+- Measured 2026-10-04: `(defun pp () (psetq *pa* 1 *pb* 2)) (pp) (print (list (boundp '*pa*)
+  *pa*))` plus the `multiple-value-setq` twin printed `(NIL 1)` / `(NIL 3)` on the JVM and both
+  WASM, now `(T 1)` / `(T 3)` as SBCL (JVM 11,795 -> 12,026, P1 4,658 -> 6,279, component
+  5,823 -> 7,446: the variable the answer needs). examples, size-report, bench-report: byte-identical
+  (P1 and JVM; size-report and bench-report also `--optimize=size` and component); ci-spec
+  program P1 identical but for the build-info string. Pins: `CompileTimeBoundpTest`,
+  `ProbedUnboundGlobalFixture` (`psetq`, `multiple-value-setq`, `psetf` in a body).
 
 ## A probe the fold leaves open (all four backends, 2026-10-04)
 
