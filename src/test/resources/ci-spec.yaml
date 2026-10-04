@@ -13431,15 +13431,18 @@ cases:
     # unwind-protect cleanup or the code after a catch reads must be the one the
     # collector left behind, not the one the throwing call was entered with. 5M conses
     # exceed every wasm GC pre-grow size, so a collection during lp-churn is certain.
+    # They are made 250 at a time by make-list: the same cells, allocated in the same
+    # call, in 20,000 iterations instead of 5M -- each iteration costs the interpreter
+    # leg ~1 us, which made this case half of that leg's run.
     source: |
       (defvar *lp-saved* nil)
       (defvar *lp-cleanup* nil)
       (defun lp-nop (x) x)
       (defun lp-churn ()
-        (dotimes (i 5000000) (cons i i))
+        (dotimes (i 20000) (make-list 250))
         (error "lp-boom"))
       (defun lp-churn-throw ()
-        (dotimes (i 5000000) (cons i i))
+        (dotimes (i 20000) (make-list 250))
         (throw 'lp-tag nil))
       (defun lp-handler-case ()
         (let ((s (list 1 2)))

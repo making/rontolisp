@@ -1978,18 +1978,28 @@ public final class LispPreludeLibrary {
 				(defun %package-symbols-where (%psw-pat %psw-exact %psw-pkg)
 				  (let ((%psw-pkgs (if (null %psw-pkg) (list-all-packages) (list %psw-pkg)))
 				        (%psw-op (if %psw-exact "FIND-ALL-SYMBOLS" "APROPOS-LIST"))
-				        (%psw-acc nil))
+				        (%psw-acc nil)
+				        ;; Two tables, so neither check is a scan: the rows already
+				        ;; looked at (most packages use cl, so a large program's ~16,000
+				        ;; rows over ~60 packages hold ~2,400 distinct symbols, and a
+				        ;; repeated row normalizes to what its first sighting did), and
+				        ;; the symbols already answered.
+				        (%psw-visited (make-hash-table :test 'equal))
+				        (%psw-seen (make-hash-table :test 'equal)))
 				    (dolist (%psw-p %psw-pkgs (nreverse %psw-acc))
 				      (dolist (%psw-s (%do-symbols-list %psw-p nil %psw-op))
-				        ;; Normalize to the spelling code uses (a re-export redirect
-				        ;; resolved to its home); a symbol nothing can see keeps its
-				        ;; enumerated spelling.
-				        (let ((%psw-n (%package-spelling-normalize %psw-s)))
-				          (when (if %psw-exact
-				                    (string= %psw-pat (symbol-name %psw-n))
-				                    (search %psw-pat (string-upcase (symbol-name %psw-n))))
-				            (unless (member %psw-n %psw-acc :test #'equal)
-				              (push %psw-n %psw-acc))))))))
+				        (unless (gethash %psw-s %psw-visited)
+				          (setf (gethash %psw-s %psw-visited) t)
+				          ;; Normalize to the spelling code uses (a re-export redirect
+				          ;; resolved to its home); a symbol nothing can see keeps its
+				          ;; enumerated spelling.
+				          (let ((%psw-n (%package-spelling-normalize %psw-s)))
+				            (when (if %psw-exact
+				                      (string= %psw-pat (symbol-name %psw-n))
+				                      (search %psw-pat (string-upcase (symbol-name %psw-n))))
+				              (unless (gethash %psw-n %psw-seen)
+				                (setf (gethash %psw-n %psw-seen) t)
+				                (push %psw-n %psw-acc)))))))))
 				""");
 		SOURCES.put(LispNames.SPLIT_PACKED_INTERNAL, """
 				(defun %split-packed (%sp-s)
@@ -2003,44 +2013,55 @@ public final class LispPreludeLibrary {
 				              (setq %sp-i (+ %sp-k %sp-len)))))
 				        (nreverse %sp-acc))))
 				""");
-		SOURCES.put(LispNames.DO_SYMBOLS_LIST_INTERNAL,
-				"""
-						(defun %do-symbols-list (%dsl-pkg %dsl-ext-only %dsl-op)
-						  (let ((%dsl-p (find-package %dsl-pkg))
-						        (%dsl-acc nil))
-						    (if (null %dsl-p)
-						        (error (concatenate 'string %dsl-op ": no package named ~A") %dsl-pkg))
-						    ;; The baked rows carry each universe as one packed string
-						    ;; (quoted symbols would trip the backends' reference scans
-						    ;; and grow the top-level body past the wasmtime bound);
-						    ;; unpack, then materialize through intern.
-						    (dolist (%dsl-e %baked-packages%)
-						      (when (string= (string %dsl-p) (car %dsl-e))
-						        (setq %dsl-acc (append %dsl-acc (mapcar (lambda (%dsl-s) (intern %dsl-s))
-						                                               (%split-packed (if %dsl-ext-only (fifth %dsl-e) (cadddr %dsl-e))))))))
-						    ;; A runtime entry: its own and imported members (the external
-						    ;; ones alone for do-external-symbols), plus -- for do-symbols --
-						    ;; what it inherits: the externals of every package it uses, a
-						    ;; runtime entry's external members or a baked row's external
-						    ;; universe.
-						    (dolist (%dsl-r %runtime-packages%)
-						      (when (string= (string %dsl-p) (string (car %dsl-r)))
-						        (dolist (%dsl-m (cadddr %dsl-r))
-						          (when (or (not %dsl-ext-only) (eq (caddr %dsl-m) :external))
-						            (setq %dsl-acc (append %dsl-acc (list (cadr %dsl-m))))))
-						        (unless %dsl-ext-only
-						          (dolist (%dsl-u (cadr %dsl-r))
-						            (let ((%dsl-ue (%runtime-package-find (string %dsl-u))))
-						              (if %dsl-ue
-						                  (dolist (%dsl-m (cadddr %dsl-ue))
-						                    (when (eq (caddr %dsl-m) :external)
-						                      (setq %dsl-acc (append %dsl-acc (list (cadr %dsl-m))))))
-						                  (dolist (%dsl-e %baked-packages%)
-						                    (when (string= (string %dsl-u) (car %dsl-e))
-						                      (setq %dsl-acc (append %dsl-acc (mapcar (lambda (%dsl-s) (intern %dsl-s))
-						                                                             (%split-packed (fifth %dsl-e)))))))))))))
-						    (remove-duplicates %dsl-acc :test #'equal)))
-						""");
+		SOURCES.put(LispNames.DO_SYMBOLS_LIST_INTERNAL, """
+				(defun %do-symbols-list (%dsl-pkg %dsl-ext-only %dsl-op)
+				  ;; %dsl-acc collects the universe NEWEST FIRST (a push per row, not
+				  ;; an append per row), and the dedup at the end reads it in that
+				  ;; order.
+				  (let ((%dsl-p (find-package %dsl-pkg))
+				        (%dsl-acc nil))
+				    (if (null %dsl-p)
+				        (error (concatenate 'string %dsl-op ": no package named ~A") %dsl-pkg))
+				    ;; The baked rows carry each universe as one packed string
+				    ;; (quoted symbols would trip the backends' reference scans
+				    ;; and grow the top-level body past the wasmtime bound);
+				    ;; unpack, then materialize through intern.
+				    (dolist (%dsl-e %baked-packages%)
+				      (when (string= (string %dsl-p) (car %dsl-e))
+				        (dolist (%dsl-s (%split-packed (if %dsl-ext-only (fifth %dsl-e) (cadddr %dsl-e))))
+				          (push (intern %dsl-s) %dsl-acc))))
+				    ;; A runtime entry: its own and imported members (the external
+				    ;; ones alone for do-external-symbols), plus -- for do-symbols --
+				    ;; what it inherits: the externals of every package it uses, a
+				    ;; runtime entry's external members or a baked row's external
+				    ;; universe.
+				    (dolist (%dsl-r %runtime-packages%)
+				      (when (string= (string %dsl-p) (string (car %dsl-r)))
+				        (dolist (%dsl-m (cadddr %dsl-r))
+				          (when (or (not %dsl-ext-only) (eq (caddr %dsl-m) :external))
+				            (push (cadr %dsl-m) %dsl-acc)))
+				        (unless %dsl-ext-only
+				          (dolist (%dsl-u (cadr %dsl-r))
+				            (let ((%dsl-ue (%runtime-package-find (string %dsl-u))))
+				              (if %dsl-ue
+				                  (dolist (%dsl-m (cadddr %dsl-ue))
+				                    (when (eq (caddr %dsl-m) :external)
+				                      (push (cadr %dsl-m) %dsl-acc)))
+				                  (dolist (%dsl-e %baked-packages%)
+				                    (when (string= (string %dsl-u) (car %dsl-e))
+				                      (dolist (%dsl-s (%split-packed (fifth %dsl-e)))
+				                        (push (intern %dsl-s) %dsl-acc))))))))))
+				    ;; remove-duplicates' answer -- the LAST occurrence of each
+				    ;; symbol, in order -- through a table instead of a scan per
+				    ;; row: walking newest first, the first sighting IS the last
+				    ;; occurrence, and pushing it rebuilds the original order.
+				    (let ((%dsl-seen (make-hash-table :test 'equal))
+				          (%dsl-out nil))
+				      (dolist (%dsl-s %dsl-acc %dsl-out)
+				        (unless (gethash %dsl-s %dsl-seen)
+				          (setf (gethash %dsl-s %dsl-seen) t)
+				          (push %dsl-s %dsl-out))))))
+				""");
 		SOURCES.put(LispNames.PACKAGE_ERROR_PACKAGE, """
 				(defun package-error-package (%pep-c) (slot-value %pep-c 'package))
 				""");

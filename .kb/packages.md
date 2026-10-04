@@ -493,6 +493,16 @@ made table-aware. The model:
   anything for them. Keywords are never listed (no keyword table). A runtime entry
   enumerates its member table plus the externals of its uses (a baked row's packed
   externals, a runtime entry's `:external` members).
+  **Both dedups are `equal` hash tables, never a scan** (2026-10-04): `%do-symbols-list`
+  pushes its rows and keeps the last occurrence of each (`remove-duplicates`' answer) by
+  table; `%package-symbols-where` normalizes each distinct row once and keeps the first
+  answer by table. They were `remove-duplicates :test #'equal` and a `member` scan of the
+  answer: in the ci-spec corpus (66 packages, 16,245 rows, 2,436 distinct) one walk cost
+  4-25 s on JVM/WASM and `runtime-package-api` was 79-95% of every compiled leg. Pinned by
+  `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` (32,000
+  rows: do-symbols 3.9 s -> 0.1 s, apropos-list 18 s -> 0.7 s). Still superlinear on
+  WASM: each row's `intern` is a linear scan of the symbol table (32,000 fresh symbols:
+  4.6 s per walk against the JVM's 0.1 s).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends (the unknown-name
