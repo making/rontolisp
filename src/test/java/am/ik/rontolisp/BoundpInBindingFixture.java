@@ -1,0 +1,87 @@
+package am.ik.rontolisp;
+
+/**
+ * Programs that probe {@code boundp} of a special declared without a value: inside a
+ * binding of it (a {@code let}, a parameter, {@code progv}), after one, after a callee's
+ * {@code setq}, a {@code set} or an {@code eval}'d {@code setq} inside one, through a
+ * computed name, from a closure built inside the extent, and past every exit of the
+ * binding. The answer is the variable's: T for the extent of any binding, NIL again once
+ * it ends, T for good after a global assignment. On the compile paths {@code boundp} used
+ * to answer from the eval runtime's mirror, which no binding writes and a store inside
+ * one writes for good: NIL inside the binding, T after it once a callee assigned it.
+ * {@link #SOURCE} uses neither {@code set}, {@code eval} nor {@code progv};
+ * {@link #STORE_SOURCE} does. The expected texts are SBCL's. Shared by the backend
+ * suites; {@code ci-spec.yaml}'s {@code boundp-of-a-special-inside-its-binding} runs both
+ * on the native binary.
+ */
+public final class BoundpInBindingFixture {
+
+	private BoundpInBindingFixture() {
+	}
+
+	/** The program without {@code set}, {@code eval} or {@code progv}. */
+	public static final String SOURCE = """
+			(defvar *bib*)
+			(declaim (special *bib-d*))
+			(defun bib-set (v) (setq *bib* v))
+			(defun bib-probe () (boundp '*bib*))
+			(defun bib-name () (intern "*BIB*"))
+			(defun bib-param (*bib*) (list (boundp '*bib*) (bib-probe)))
+			(print (list (boundp '*bib*) (let ((*bib* 1)) (list (boundp '*bib*) (bib-probe))) (boundp '*bib*) (bib-probe)))
+			(print (progn (let ((*bib* 1)) (bib-set 2)) (list (boundp '*bib*) (bib-probe))))
+			(print (list (bib-param 5) (boundp '*bib*)))
+			(print (list (let ((*bib* 1)) (boundp (bib-name))) (boundp (bib-name))))
+			(print (list (boundp '*bib-d*) (let ((*bib-d* 1)) (boundp '*bib-d*)) (boundp '*bib-d*)))
+			(print (let ((f (let ((*bib* 1)) (lambda () (boundp '*bib*))))) (list (funcall f) (let ((*bib* 2)) (funcall f)))))
+			(print (list (catch 'bib-tag (let ((*bib* 1)) (throw 'bib-tag (bib-probe)))) (bib-probe)))
+			(print (list (handler-case (let ((*bib* 1)) (bib-set 3) (error "bib")) (error () (bib-probe))) (boundp '*bib*)))
+			(print (list (let ((*bib* 1)) (let ((*bib* 2)) (bib-set 4)) (list *bib* (bib-probe))) (bib-probe)))
+			(bib-set 9)
+			(print (list (boundp '*bib*) (let ((*bib* 1)) (bib-probe)) (bib-probe) *bib* (boundp (bib-name))))
+			""";
+
+	/** What {@link #SOURCE} prints, one value per line. */
+	public static final String EXPECTED = String.join("\n", "(NIL (T T) NIL NIL)", "(NIL NIL)", "((T T) NIL)",
+			"(T NIL)", "(NIL T NIL)", "(NIL T)", "(T NIL)", "(NIL NIL)", "((1 T) NIL)", "(T T T 9 T)");
+
+	/**
+	 * The program that also stores through {@code set} and {@code eval} and binds through
+	 * {@code progv}.
+	 */
+	public static final String STORE_SOURCE = """
+			(defvar *bis*)
+			(defun bis-probe () (boundp '*bis*))
+			(defun bis-name () (intern "*BIS*"))
+			(print (list (progv '(*bis*) '(3) (list (boundp '*bis*) (bis-probe) (symbol-value '*bis*))) (bis-probe)))
+			(print (list (let ((*bis* 1)) (set '*bis* 4) (list *bis* (bis-probe))) (bis-probe)))
+			(print (list (let ((*bis* 1)) (eval '(setq *bis* 7)) (list *bis* (bis-probe))) (boundp (bis-name))))
+			(print (list (progv (list (bis-name)) '(5) (list (boundp (bis-name)) (bis-probe))) (bis-probe)))
+			(set (bis-name) 8)
+			(print (list (boundp '*bis*) (bis-probe) *bis* (let ((*bis* 2)) (bis-probe))))
+			""";
+
+	/** What {@link #STORE_SOURCE} prints, one value per line. */
+	public static final String STORE_EXPECTED = String.join("\n", "((T T 3) NIL)", "((4 T) NIL)", "((7 T) NIL)",
+			"((T T) NIL)", "(T T 8 T)");
+
+	/**
+	 * Compile paths only: a read of such a special while it has no value answers nil
+	 * there (documented; the interpreter signals, as SBCL does), never the marker its
+	 * variable holds -- a direct read, {@code symbol-value} of a literal and of a
+	 * computed name, {@code eval}, a binding's init form, and a {@code progv} short of
+	 * values, which binds the symbol to nil.
+	 */
+	public static final String UNBOUND_READ_SOURCE = """
+			(defvar *bil*)
+			(defun bil-probe () (boundp '*bil*))
+			(print (list (let ((*bil* 1)) (bil-probe)) (bil-probe)))
+			(print (list *bil* (symbol-value '*bil*) (symbol-value (intern "*BIL*")) (eval '*bil*)))
+			(print (let ((*bil* *bil*)) (list *bil* (bil-probe))))
+			(print (list (progv '(*bil*) '() (list *bil* (bil-probe))) (bil-probe)))
+			""";
+
+	/** What {@link #UNBOUND_READ_SOURCE} prints on the compile paths. */
+	public static final String UNBOUND_READ_EXPECTED = String.join("\n", "(T NIL)", "(NIL NIL NIL NIL)", "(NIL T)",
+			"((NIL T) NIL)");
+
+}

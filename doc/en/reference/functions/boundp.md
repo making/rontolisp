@@ -2,9 +2,9 @@
 
 `(boundp symbol)`
 
-Returns `t` when `symbol` names a bound **global** variable (`defvar`/`defparameter`/top-level `setq`), nil otherwise. Like Common Lisp's dynamic-only `boundp`, lexical bindings (`let`, function parameters) are invisible. `t`, `nil` and keywords are self-evaluating constants, so `boundp` of any of them is `t`. On the compiled backends a special variable declared without a value (`(defvar *x*)`) answers nil even inside a `let` that binds it.
+Returns `t` when `symbol` names a bound **dynamic** variable -- one with a global value (`defvar`/`defparameter`/top-level `setq`) or an active dynamic binding (a `let` of a special variable, a parameter named like one, `progv`) -- nil otherwise. Like Common Lisp's `boundp`, lexical bindings (a `let` of an ordinary variable, function parameters) are invisible. `t`, `nil` and keywords are self-evaluating constants, so `boundp` of any of them is `t`.
 
-On the compiled backends a `boundp` of a LITERAL symbol is answered at compile time and costs nothing: a compiled program cannot make a global appear at run time, so the definitions before the call decide the answer. A computed symbol (`(boundp (intern name))`) is resolved against the embedded eval runtime's global environment instead, and pulls that runtime into the output like `eval` does — as [`symbol-value`](symbol-value.md) and [`fboundp`](fboundp.md) do whatever their argument is. A program compiled with `--dynamic`, or one that calls `eval`/`load`, keeps the run-time check throughout.
+On the compiled backends a `boundp` of a LITERAL symbol is answered at compile time and costs nothing when the definitions before the call decide it: a compiled program cannot make a global appear at run time. A special variable declared without a value is answered at run time, by its variable. A computed symbol (`(boundp (intern name))`) is resolved at run time too, and pulls the embedded eval runtime into the output like `eval` does — as [`symbol-value`](symbol-value.md) and [`fboundp`](fboundp.md) do whatever their argument is. A program compiled with `--dynamic`, or one that calls `eval`/`load`, keeps the run-time check throughout.
 
 ```lisp
 (defvar *level* 7)
@@ -21,4 +21,11 @@ On the compiled backends a `boundp` of a LITERAL symbol is answered at compile t
 
 ```lisp
 (let ((x 1)) (boundp 'x)) ; => NIL
+```
+
+A special variable declared without a value is bound only for the extent of a binding of it:
+
+```lisp
+(defvar *request*)
+(list (boundp '*request*) (let ((*request* :r)) (boundp '*request*)) (boundp '*request*)) ; => (NIL T NIL)
 ```

@@ -12395,6 +12395,55 @@ cases:
       ((3 3) 1 1 1 1)
       ((:PV :PV :PV-SET :PV-SET) 1 1)
       (:FREE NIL)
+  - name: boundp-of-a-special-inside-its-binding
+    source: |
+      ;; boundp of a special declared without a value answers its variable: T for the
+      ;; extent of any binding of it (let, parameter, progv), NIL again once it ends,
+      ;; whatever a callee's setq, a set or an eval'd setq wrote inside the binding,
+      ;; through a literal or a computed name. The two programs of
+      ;; BoundpInBindingFixture (the backend suites).
+      (defvar *bib*)
+      (declaim (special *bib-d*))
+      (defun bib-set (v) (setq *bib* v))
+      (defun bib-probe () (boundp '*bib*))
+      (defun bib-name () (intern "*BIB*"))
+      (defun bib-param (*bib*) (list (boundp '*bib*) (bib-probe)))
+      (print (list (boundp '*bib*) (let ((*bib* 1)) (list (boundp '*bib*) (bib-probe))) (boundp '*bib*) (bib-probe)))
+      (print (progn (let ((*bib* 1)) (bib-set 2)) (list (boundp '*bib*) (bib-probe))))
+      (print (list (bib-param 5) (boundp '*bib*)))
+      (print (list (let ((*bib* 1)) (boundp (bib-name))) (boundp (bib-name))))
+      (print (list (boundp '*bib-d*) (let ((*bib-d* 1)) (boundp '*bib-d*)) (boundp '*bib-d*)))
+      (print (let ((f (let ((*bib* 1)) (lambda () (boundp '*bib*))))) (list (funcall f) (let ((*bib* 2)) (funcall f)))))
+      (print (list (catch 'bib-tag (let ((*bib* 1)) (throw 'bib-tag (bib-probe)))) (bib-probe)))
+      (print (list (handler-case (let ((*bib* 1)) (bib-set 3) (error "bib")) (error () (bib-probe))) (boundp '*bib*)))
+      (print (list (let ((*bib* 1)) (let ((*bib* 2)) (bib-set 4)) (list *bib* (bib-probe))) (bib-probe)))
+      (bib-set 9)
+      (print (list (boundp '*bib*) (let ((*bib* 1)) (bib-probe)) (bib-probe) *bib* (boundp (bib-name))))
+      (defvar *bis*)
+      (defun bis-probe () (boundp '*bis*))
+      (defun bis-name () (intern "*BIS*"))
+      (print (list (progv '(*bis*) '(3) (list (boundp '*bis*) (bis-probe) (symbol-value '*bis*))) (bis-probe)))
+      (print (list (let ((*bis* 1)) (set '*bis* 4) (list *bis* (bis-probe))) (bis-probe)))
+      (print (list (let ((*bis* 1)) (eval '(setq *bis* 7)) (list *bis* (bis-probe))) (boundp (bis-name))))
+      (print (list (progv (list (bis-name)) '(5) (list (boundp (bis-name)) (bis-probe))) (bis-probe)))
+      (set (bis-name) 8)
+      (print (list (boundp '*bis*) (bis-probe) *bis* (let ((*bis* 2)) (bis-probe))))
+    expected: |
+      (NIL (T T) NIL NIL)
+      (NIL NIL)
+      ((T T) NIL)
+      (T NIL)
+      (NIL T NIL)
+      (NIL T)
+      (T NIL)
+      (NIL NIL)
+      ((1 T) NIL)
+      (T T T 9 T)
+      ((T T 3) NIL)
+      ((4 T) NIL)
+      ((7 T) NIL)
+      ((T T) NIL)
+      (T T 8 T)
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,

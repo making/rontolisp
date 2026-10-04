@@ -17361,6 +17361,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void boundpAnswersInsideABindingOfASpecialWithoutAValue() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: a special declared without a value is bound for the extent of any
+		// binding of it and unbound again after it, whatever a callee's setq, a set or
+		// an eval'd setq wrote inside the binding.
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() {
 		// The reference answer for the compilers' searched name dispatch: reads, sets
 		// and progv bindings by name over more names than one segment holds, two pairs

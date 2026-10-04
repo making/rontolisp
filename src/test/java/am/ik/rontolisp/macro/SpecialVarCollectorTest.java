@@ -95,4 +95,38 @@ class SpecialVarCollectorTest {
 		assertThat(SpecialVarCollector.collectDynamicallyBound(program, declared)).containsExactly("*Z*", "*X*", "*Y*");
 	}
 
+	/**
+	 * The specials whose bound-ness the compile paths keep in their variable: a probed
+	 * one declared without a value -- a {@code (defvar *x*)} or a {@code special}
+	 * declaration -- and never given one by a definer. A literal probe names one; a
+	 * computed probe can name any of them; a {@code cl} symbol, quoted data and a
+	 * self-evaluating argument never count.
+	 */
+	@Test
+	void aProbedSpecialWithoutADefinersValueCarriesItsBoundnessInItsVariable() {
+		SequencedSet<String> specials = new LinkedHashSet<>(
+				List.of("*A*", "*B*", "*C*", "*D*", "*E*", "*PRINT-BASE*", "*STANDARD-OUTPUT*"));
+		List<LispVal> literal = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b* nil)
+				(defparameter *c* 1)
+				(declaim (special *d*))
+				(defun p () (list (boundp '*a*) (boundp '*b*) (boundp '*c*) (boundp '*d*) (boundp '*print-base*)
+				                  '(boundp '*e*)))
+				""");
+		assertThat(SpecialVarCollector.collectProbedValueless(literal, specials)).containsExactly("*A*", "*D*");
+		List<LispVal> computed = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b* nil)
+				(defun p (s) (boundp s))
+				(defun q () (when (cond) (defvar *e* 2)))
+				""");
+		assertThat(SpecialVarCollector.collectProbedValueless(computed, specials)).containsExactly("*A*", "*C*", "*D*");
+		List<LispVal> unprobed = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defun p () (list *a* '(boundp x) (symbol-value '*a*) (boundp :k) (boundp nil) (boundp t) (boundp 1)))
+				""");
+		assertThat(SpecialVarCollector.collectProbedValueless(unprobed, specials)).isEmpty();
+	}
+
 }

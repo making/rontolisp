@@ -233,8 +233,52 @@ final class JvmSymbolApiCompiler {
 				ctx.usesRuntimePackages), ctx, className);
 	}
 
-	/** boundp: nil/t/keyword are self-bound, otherwise probe the {@code _genv} mirror. */
+	/**
+	 * boundp. A special whose variable carries its bound-ness
+	 * ({@link JvmDynVarRuntimeBuilder}, the UNBOUND marker) is answered by it
+	 * ({@link LispMacroExpander#dynamicFirstBoundp}): a literal one by
+	 * {@code %special-boundp}, a computed name through the shared dispatch over them.
+	 * Every other name, and every name in a program without such a special, takes the raw
+	 * probe.
+	 */
 	static void compileBoundp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		if (dyn != null) {
+			LispVal tracked = LispMacroExpander.dynamicFirstBoundp(cons, dyn.unboundSpecials(), ctx.specialVars,
+					ctx.functions.containsKey(LispNames.BOUNDP_DYNAMIC));
+			if (tracked != null) {
+				JvmExprCompiler.compileExpr(tracked, ctx, className);
+				return;
+			}
+		}
+		compileBoundpRaw(cons, ctx, className);
+	}
+
+	/**
+	 * {@code (%special-boundp 'S)}: {@code _dbound} over the special's ThreadLocal and
+	 * global -- this thread's binding, else a global that is not the UNBOUND marker.
+	 */
+	static void compileSpecialBoundp(LispCons cons, JvmLispCompiler.Ctx ctx) {
+		String name = ((LispSymbol) ((LispCons) cons.toList().get(1)).toList().get(1)).name();
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		MethodRefEntry dbound = dyn == null ? null : dyn.dbound();
+		FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
+		if (dyn == null || dbound == null || tlField == null || !dyn.unboundSpecials().contains(name)) {
+			throw new IllegalStateException(
+					"special variable " + name + " does not carry its bound-ness in its variable (" + LispNames.BOUNDP
+							+ " of it was lowered to " + LispNames.SPECIAL_BOUNDP + ")");
+		}
+		ctx.body.getstatic(tlField);
+		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+		ctx.body.invokestatic(dbound);
+	}
+
+	/**
+	 * The raw {@code boundp} emission: nil/t/keyword are self-bound, otherwise probe the
+	 * {@code _genv} mirror -- also reachable as {@code %boundp-raw}, the fallback arm of
+	 * the dispatch above.
+	 */
+	static void compileBoundpRaw(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.BOUNDP);
 		int tempSlot = compileArgToTemp(parts.get(1), ctx, className);
 		// nil -> t

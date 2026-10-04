@@ -244,15 +244,11 @@ final class WasmExprCompiler {
 		// binding function the lexical slot exists only so nested lambdas can capture
 		// it -- reads go to the module global, so a called function's dynamic
 		// rebinding or setq is visible. Inside a closure, the CAPTURE wins: the
-		// closure may run after the extent ended and restored the global.
+		// closure may run after the extent ended and restored the global. The binding
+		// is active here, so the value is never the UNBOUND marker.
 		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
 				&& ctx.globalIndices.containsKey(name)) {
-			if (WasmDynVars.handles(ctx, name)) {
-				WasmDynVars.emitRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
-				return;
-			}
-			ctx.writer.write(Instruction.GET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+			emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
 			return;
 		}
 		// An unboxed (dual-representation) local: box on demand (an i31 for the fixnum
@@ -289,12 +285,8 @@ final class WasmExprCompiler {
 		// the per-call task record (WasmDynVars), the global being only its default.
 		Integer globalIndex = ctx.globalIndices.get(name);
 		if (globalIndex != null) {
-			if (WasmDynVars.handles(ctx, name)) {
-				WasmDynVars.emitRead(ctx, name, globalIndex);
-				return;
-			}
-			ctx.writer.write(Instruction.GET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(globalIndex);
+			emitRawSpecialRead(ctx, name, globalIndex);
+			emitUnboundAsNil(ctx, name);
 			return;
 		}
 		if (ctx.dynamic) {
@@ -322,6 +314,55 @@ final class WasmExprCompiler {
 		// Lisp-2: a bare symbol is a variable reference only; functions must be
 		// referenced via (function name) / #'name.
 		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
+	}
+
+	/**
+	 * A global's current value as stored: the per-task binding of a dynamically-bound
+	 * special under {@code --reentrant}, else the module global (under shallow binding a
+	 * special's active binding) -- the UNBOUND marker of {@link #emitUnboundAsNil}
+	 * included. Leaves one {@code (ref null eq)} on the stack.
+	 * @param ctx the compilation context
+	 * @param name the global's name
+	 * @param globalIndex its module global
+	 */
+	static void emitRawSpecialRead(WasmLispCompiler.Ctx ctx, String name, int globalIndex) {
+		if (WasmDynVars.handles(ctx, name)) {
+			WasmDynVars.emitRead(ctx, name, globalIndex);
+			return;
+		}
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(globalIndex);
+	}
+
+	/**
+	 * Turns the value on the stack into nil when it is the UNBOUND marker -- the
+	 * raw-local sentinel, which the module global of a special in
+	 * {@code Ctx.unboundSpecials} holds until something assigns it -- so a read of such a
+	 * special answers nil there, as every other special's unassigned global does. Emits
+	 * nothing for any other name.
+	 * @param ctx the compilation context
+	 * @param name the variable read
+	 */
+	private static void emitUnboundAsNil(WasmLispCompiler.Ctx ctx, String name) {
+		if (!ctx.unboundSpecials.contains(name)) {
+			return;
+		}
+		int value = ctx.allocTemp();
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeUnsignedLeb128(value);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
+		ctx.writer.write(Instruction.REF_EQ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(value);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**
@@ -1834,6 +1875,8 @@ final class WasmExprCompiler {
 			case LispNames.PROGV_GENV -> WasmProgvCompiler.compileGenvRead(ctx);
 			case LispNames.PROGV_GENV_SET -> WasmProgvCompiler.compileGenvWrite(cons, ctx);
 			case LispNames.SYMBOL_VALUE_RAW -> WasmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx);
+			case LispNames.BOUNDP_RAW -> WasmSymbolApiCompiler.compileBoundpRaw(cons, ctx);
+			case LispNames.SPECIAL_BOUNDP -> WasmSymbolApiCompiler.compileSpecialBoundp(cons, ctx);
 			case LispNames.SYMBOL_IS -> WasmSymbolApiCompiler.compileSymbolIs(cons, ctx);
 			case LispNames.GLOBAL_STORE_SET -> WasmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx);
 			case LispNames.SET_MIRROR -> WasmSymbolApiCompiler.compileSetMirror(cons, ctx);

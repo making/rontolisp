@@ -143,7 +143,9 @@ backend.
 = quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp, and symbol-value of a name no
 special has, read the `_genv` mirror via `_envLookup` (binding pair `Object[2]`, value = index 1;
 unbound throws `The variable X is unbound`) -- a special's value comes from its variable
-(`.kb/dynamic-special-variables.md`, "One home"); computed fboundp probes `_fenv` then `_lookup`. All three are in
+(`.kb/dynamic-special-variables.md`, "One home"), and the bound-ness of one declared without a
+value too ("Bound-ness of a special without a value"); computed fboundp probes `_fenv` then
+`_lookup`. All three are in
 the `usesEval` force list, which also turns on the top-level `_store` mirroring.
 
 **WASM** (`WasmSymbolApiCompiler` + `WasmSymbolApiRuntimeBuilder`): five always-present unary
@@ -296,10 +298,10 @@ side, answering the value -- so only `set` needs the per-backend work.
   4M computed `set`s of a bound special over 300 specials: JVM 4.2-4.7 s, wasm 3.1-3.5 s,
   before and after alike (the mirror's `_store` walk dominates).
 - **The mirror is still written inside an active binding** (`%set-mirror` runs first,
-  as a callee's `setq` mirrors). Since `.todo/c89` no read takes a special's VALUE from it
-  (`symbol-value` and `eval` read the variable); `boundp` still takes its entry as the
-  "bound" witness, so after a `set` inside a binding of a special with no global value it
-  answers t (`.todo/c95`).
+  as a callee's `setq` mirrors). No read takes a special's VALUE from it (`symbol-value` and
+  `eval` read the variable), and `boundp` of a special declared without a value reads its
+  variable too (`.kb/dynamic-special-variables.md`, "Bound-ness of a special without a
+  value"), so a `set` inside a binding leaves it unbound after the extent.
 - Tests: `LispEvaluatorTest#set*`, `JvmLispCompilerTest#compileAndRunSet*`,
   `WasmLispCompilerIntegrationTest#set*`, `CompileTimeBoundpTest`
   (the gate arm), `BuiltinFunctionWrapperCatalogTest` (the `#'set` value), ci-spec

@@ -23666,6 +23666,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void boundpAnswersInsideABindingOfASpecialWithoutAValue() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: such a special's module global starts as the UNBOUND marker,
+		// which a shallow binding saves and restores like any value, so boundp answers t
+		// for the extent of a binding and nil again after it; a read of it while it has
+		// no value answers nil, never the marker.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.BoundpInBindingFixture.SOURCE, am.ik.rontolisp.BoundpInBindingFixture.EXPECTED },
+				{ am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE,
+						am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED },
+				{ am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE,
+						am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED },
+				// A user definition under the shared dispatch's name (its segments
+				// extend it) keeps the runtime out, and each site spells the dispatch.
+				{ "(defun %boundp-dynamic-shadow () :user)\n" + am.ik.rontolisp.BoundpInBindingFixture.SOURCE,
+						am.ik.rontolisp.BoundpInBindingFixture.EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: a name dispatch searches the names' string-table offsets, shared

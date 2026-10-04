@@ -6,7 +6,9 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.SequencedSet;
@@ -192,6 +194,72 @@ public final class SpecialVarCollector {
 			}
 		}
 		return bound;
+	}
+
+	/**
+	 * The specials of a program whose BOUND-NESS it probes and nothing but an assignment
+	 * or a binding gives a value: no {@code defvar}, {@code defparameter} or
+	 * {@code defconstant} with a value names one anywhere, and a {@code boundp} call
+	 * names it literally -- or some {@code boundp} call computes its argument, which can
+	 * name any of them. A {@code cl} symbol is never one (the backends seed the standard
+	 * variables they declare). The compile paths carry the bound-ness of such a special
+	 * in its variable when a binding can change it (the caller keeps the dynamically
+	 * bound ones): the eval mirror they answer every other name from is written by no
+	 * binding, and for good by a store inside one, so {@code (boundp '*x*)} of a
+	 * {@code (defvar *x*)} must be T inside {@code (let ((*x* 1)) ...)} and NIL again
+	 * after it. A special whose definer gives it a value is bound from that form on; only
+	 * a binding made before the form ran could tell the two apart.
+	 * @param forms the program's forms, the injected runtime's included
+	 * @param specials the program's special-variable names
+	 * @return those specials, in {@code specials} order
+	 */
+	public static LinkedHashSet<String> collectProbedValueless(Collection<LispVal> forms,
+			SequencedSet<String> specials) {
+		LinkedHashSet<String> out = new LinkedHashSet<>();
+		if (specials.isEmpty()) {
+			return out;
+		}
+		Set<String> probed = new HashSet<>();
+		boolean computed = false;
+		for (LispVal form : forms) {
+			computed |= LispMacroExpander.boundpProbes(form, probed);
+		}
+		if (!computed && probed.isEmpty()) {
+			return out;
+		}
+		Set<String> valued = new HashSet<>();
+		for (LispVal form : forms) {
+			collectValued(form, valued);
+		}
+		for (String name : specials) {
+			if ((computed || probed.contains(name)) && !valued.contains(name) && !PackageRegistry.isClSymbol(name)
+					&& !PackageRegistry.isClSymbol(member(name))) {
+				out.add(name);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Records the name of every {@code defvar} with a value, {@code defparameter} and
+	 * {@code defconstant} in the form, quoted data skipped.
+	 */
+	private static void collectValued(LispVal form, Set<String> out) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				String h = head.name();
+				if (LispNames.QUOTE.equals(h)) {
+					return;
+				}
+				if ((LispNames.DEFVAR.equals(h) || LispNames.DEFPARAMETER.equals(h) || LispNames.DEFCONSTANT.equals(h))
+						&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol name
+						&& (!LispNames.DEFVAR.equals(h) || nameCell.cdr() instanceof LispCons)) {
+					out.add(name.name());
+				}
+			}
+			collectValued(cons.car(), out);
+			form = cons.cdr();
+		}
 	}
 
 	/** Whether the form contains a {@code progv} head anywhere outside quoted data. */

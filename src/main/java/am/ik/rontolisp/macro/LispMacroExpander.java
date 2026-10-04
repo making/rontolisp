@@ -5136,6 +5136,120 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * {@code boundp} of a program whose specials {@code tracked} carry their bound-ness
+	 * in their variable ({@code SpecialVarCollector.collectProbedValueless}): such a
+	 * special's global holds the unbound marker until something assigns it, a binding
+	 * covers it for its extent, and its restore puts the marker back -- the answer the
+	 * eval mirror cannot give, since no binding writes it and a store inside one writes
+	 * it for good. No site pays for the tracked set:
+	 * <ul>
+	 * <li>a LITERAL tracked name folds to {@code (%special-boundp 'S)}, the variable's
+	 * own answer; any other literal keeps the raw mirror probe (null here);</li>
+	 * <li>a computed name calls the shared {@link #boundpDynamicRuntime} when the program
+	 * carries it ({@code shared});</li>
+	 * <li>otherwise -- a user definition took the runtime's name -- the dispatch is
+	 * spelled inline.</li>
+	 * </ul>
+	 * @param cons the {@code (boundp x)} form
+	 * @param tracked the specials whose bound-ness their variable carries
+	 * @param specials the program's special-variable names
+	 * @param shared whether the program carries {@link #boundpDynamicRuntime}
+	 * @return the expansion, or null when the raw probe answers this form
+	 */
+	public static @Nullable LispVal dynamicFirstBoundp(LispCons cons, java.util.Collection<String> tracked,
+			java.util.Collection<String> specials, boolean shared) {
+		List<LispVal> parts = cons.toList();
+		if (tracked.isEmpty() || parts.size() != 2) {
+			return null;
+		}
+		LispVal arg = parts.get(1);
+		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons body && body.cdr() instanceof LispNil) {
+			return body.car() instanceof LispSymbol name && tracked.contains(name.name())
+					? callOf(LispNames.SPECIAL_BOUNDP, quotedData(name)) : null;
+		}
+		if (!(arg instanceof LispCons || arg instanceof LispSymbol sym && !sym.isKeyword())) {
+			// Self-evaluating: nil, t, a keyword, a number -- no variable's name.
+			return null;
+		}
+		if (shared) {
+			return callOf(LispNames.BOUNDP_DYNAMIC, arg);
+		}
+		LispSymbol n = new LispSymbol(freshName("__BOUNDP_NAME", specials));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(n, arg)))),
+				nameChain(n, new ArrayList<>(tracked), s -> callOf(LispNames.SPECIAL_BOUNDP, quotedData(s)),
+						callOf(LispNames.BOUNDP_RAW, n))));
+	}
+
+	/**
+	 * The shared {@code boundp} runtime a computed name calls
+	 * ({@link #dynamicFirstBoundp}): {@code (%boundp-dynamic name)} dispatches the name
+	 * over the tracked specials onto {@code (%special-boundp 'S)}, any other name falling
+	 * to the raw mirror probe. Segmented ({@link #segmentedNameDispatch}), so no body
+	 * grows with the set.
+	 * @param tracked the specials whose bound-ness their variable carries
+	 * @param specials the program's special-variable names
+	 * @return the segments' definitions, wrapper-shaped, the entry first
+	 */
+	public static List<LispVal> boundpDynamicRuntime(java.util.Collection<String> tracked,
+			java.util.Collection<String> specials) {
+		LispSymbol n = new LispSymbol(freshName("%BD-NAME", specials));
+		return segmentedNameDispatch(LispNames.BOUNDP_DYNAMIC, List.of(n), new ArrayList<>(tracked),
+				s -> callOf(LispNames.SPECIAL_BOUNDP, quotedData(s)), callOf(LispNames.BOUNDP_RAW, n));
+	}
+
+	/**
+	 * Whether any form calls {@code boundp} on a COMPUTED name -- every call but
+	 * {@code (boundp 'literal)} -- i.e. whether {@link #boundpDynamicRuntime} could have
+	 * a caller. Quoted data is skipped.
+	 * @param forms the program's (or the injected runtime's) forms
+	 * @return true when a computed site can occur
+	 */
+	public static boolean programUsesComputedBoundp(java.util.Collection<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (boundpProbes(form, new java.util.HashSet<>())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Records the name every {@code (boundp 'name)} call in the form probes, quoted data
+	 * skipped. A self-evaluating argument -- nil, t, a keyword, a number -- probes no
+	 * variable; a variable or any other form computes the name.
+	 * @param form the form to walk
+	 * @param names collects the literally probed names
+	 * @return whether a {@code boundp} call computes its argument
+	 */
+	static boolean boundpProbes(LispVal form, java.util.Set<String> names) {
+		boolean computed = false;
+		// The cdr is walked in the loop, so a long list costs no stack.
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.QUOTE.equals(head.name())) {
+					return computed;
+				}
+				if (LispNames.BOUNDP.equals(head.name()) && cons.cdr() instanceof LispCons args) {
+					LispVal arg = args.car();
+					if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+							&& LispNames.QUOTE.equals(q.name())) {
+						if (quoted.cdr() instanceof LispCons body && body.car() instanceof LispSymbol name) {
+							names.add(name.name());
+						}
+					}
+					else if (arg instanceof LispCons || arg instanceof LispSymbol sym && !sym.isKeyword()) {
+						computed = true;
+					}
+				}
+			}
+			computed |= boundpProbes(cons.car(), names);
+			form = cons.cdr();
+		}
+		return computed;
+	}
+
+	/**
 	 * The most arms one segment of a shared name dispatch
 	 * ({@link #segmentedNameDispatch}) holds, so a segment's body stays bounded however
 	 * many specials or globals the program declares: the JVM's 64 KB method limit, and

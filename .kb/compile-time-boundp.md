@@ -41,8 +41,10 @@ unbound.
   prefix flag is cleared by passing any definer or entering a deferring/repeating head.
 - Inside a **deferred body** (`lambda`/`defun`/`flet`/...) only the `nil` direction.
 - Never answered: a **`cl` symbol** (some are born bound), a valueless **`(defvar x)`**, a
-  name in any **`special` declaration** (a TYPE-only `declaim` does not block), a
-  **computed designator** (`(boundp (intern ...))`), which keeps the eval runtime.
+  name in any **`special` declaration** (a TYPE-only `declaim` does not block) -- such a
+  special's variable answers at run time (`.kb/dynamic-special-variables.md`, "Bound-ness of a
+  special without a value") -- and a **computed designator** (`(boundp (intern ...))`), which
+  keeps the eval runtime.
 - Never answered either: a name assigned only inside a deferred body. That
   assignment poisons the name, so the probe is left to the run time, where the
   eval mirror answers it -- every store to a global feeds the mirror since b78

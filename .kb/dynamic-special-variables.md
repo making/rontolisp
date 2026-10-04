@@ -228,15 +228,12 @@ native `evalProgv`).
    restores its own on the way out), which is why no catch-site save stack was needed: the
    `.todo/192` sketch's objection -- the slots live in the thrower's dead frames -- holds only
    for a CATCHER doing the restore.
-2. `boundp` of a special with no global value answers nil inside a binding of it (SBCL: t),
-   and t after a callee's `setq` inside a binding gave the mirror an entry the extent does not
-   remove. Its answer is the `_genv`/`GLOBAL_ENV` mirror's entry, a witness of "a global store
-   happened", because neither variable representation has an unbound state (`nil` is Java
-   `null` / a null ref). VALUES are right since 2026-10-04: `symbol-value` and `eval` read a
-   special through its variable (the one-home rule below). Until then they read the mirror,
-   which the shallow save/restore never updates: the global default inside a binding, and after
-   a store from a frame not holding the binding's lexical slot (a callee's `setq`, any `set`)
-   the binding's value long after the extent. `.todo/c95`.
+2. `boundp` of a special whose definer gives it a value still answers the eval mirror's entry,
+   a witness of "a global store happened" that no binding writes. It differs from the variable
+   only for a binding made before that definer ran (where SBCL, reading the file in order,
+   would not even bind it dynamically). A special declared without a value answers its
+   variable ("Bound-ness of a special without a value" below). VALUES by name read the
+   variable for every special ("One home" below).
 
 ## One home for a special's value by name (all four backends, 2026-10-04)
 
@@ -262,7 +259,8 @@ wrote the mirror only, so compiled code kept reading 1.
   as before. Only where the program runs forms through eval: the runtime is also switched on by
   `boundp`, `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
   those modules stay byte-identical. The compiled mirror (`mirrorGlobal`) still writes every
-  store: it is the value of every non-special global and the `boundp` witness of every name.
+  store: it is the value of every non-special global and the `boundp` witness of every name
+  but a tracked special ("Bound-ness of a special without a value" below).
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM, except the Cloudflare Worker rows, whose libraries run
   `eval`: hello-clack 697,130 -> 698,493 (+1,363; gzip 185,160 -> 185,513), tiny-routes +1,518 to
@@ -312,6 +310,47 @@ and both compilers recognise it (`compiler/NameDispatch.match`: `if`s testing
   The gzip rows barely move because an arm's information -- its offset and its global -- is
   the same either way. Pins: `WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare`, the
   `aNameDispatchAnswersEveryNameItsChainDoes` four, `NameDispatchTest`.
+
+## Bound-ness of a special without a value (all four backends, 2026-10-04)
+
+**Invariant: `boundp` of a special the program declares without a value and binds answers its
+variable: T for the extent of any binding (`let`, a parameter, `progv`, a `make-thread`
+hand-over), NIL again after it, T for good after a global store.** The idiom is
+`(defvar *request*)` bound per request and probed by code that may run outside one. Before, the
+compile paths answered from the mirror, which no binding writes and a store inside one writes
+for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d it there.
+
+- The TRACKED specials (`SpecialVarCollector.collectProbedValueless`, kept where dynamically
+  bound): no `defvar` with a value, `defparameter` or `defconstant` names one anywhere
+  (scope-blind), not a `cl` symbol, and a `(boundp 'S)` names it -- or some `boundp` computes
+  its argument, which makes every such special tracked. A self-evaluating argument probes
+  nothing. A program with none compiles byte-identically.
+- Representation: an UNBOUND marker in the GLOBAL cell until a global store overwrites it; a
+  binding saves and restores it like any value. JVM (`JvmDynVarRuntimeBuilder`): `_unbound`, a
+  `new Object()` set in `<clinit>` with the tracked `_g$` seeded from it, `_dget` reading it as
+  nil, `_dbound(tl, global)` t for this thread's `_d$` cell or a non-marker global. Wasm: the
+  raw-local sentinel (`Ctx.unboundSpecials`), stored by `_start` before user code; a read
+  answers nil for it through an inline `ref.eq` (`WasmExprCompiler.emitUnboundAsNil`, ~15 B a
+  site), except in the binding's own frame, where the binding is active; `--reentrant` reads
+  the task cell first as before.
+- `boundp` (`LispMacroExpander.dynamicFirstBoundp`): a literal tracked name is
+  `(%special-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
+  (`boundpDynamicRuntime`, a segmented name dispatch onto `%special-boundp`, the miss on
+  `%boundp-raw`, the old mirror probe); any other name keeps the raw probe.
+- Still nil, not an error, for a read of a tracked special while unbound (a direct read,
+  `symbol-value`, `eval`), as for every unassigned global; a `progv` short of values binds nil
+  (both documented).
+- Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
+  `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
+  httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
+  locally declared specials, 54 read sites. examples: byte-identical but for build-info strings
+  except the same shape (the ningle, postmodern and bbs-api programs, +1.25 to +1.47 KB wasm,
+  +0.56 to +0.73 KB JVM) and cffi-sqlite JVM -321 B. ci-spec program before its new case: P1
+  +1,847, `--optimize=size` +217, component +214, JVM -221. The idiom alone, `(defvar *x*)`
+  probed in a callee of a binding: wasm 2,183 -> 2,128 B, JVM 10,231 -> 10,088 B. 20M reads of
+  a tracked special: inside a binding unchanged (JVM 47 ms, wasm 93 ms), outside it JVM +3 ms,
+  wasm +5%; 20M `boundp`: JVM 304 -> ~20 ms, wasm 1.3 -> ~0.12 s (a variable read where the
+  mirror probe walked an alist).
 
 ## Parameters named like a special (all four backends, 2026-10-03)
 
@@ -462,6 +501,14 @@ Name dispatch: `NameDispatchFixture` (154 specials, two hash-colliding pairs) on
 `WasmLispCompilerIntegrationTest` -- Preview 1 and component),
 `WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare` (a 128-arm accessor < 32 B an arm),
 `NameDispatchTest`.
+
+Bound-ness without a value: `BoundpInBindingFixture` (SBCL's answers; a compile-path read
+while unbound) on `boundpAnswersInsideABindingOfASpecialWithoutAValue` (`LispEvaluatorTest`,
+`JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` -- Preview 1 and component), ci-spec
+`boundp-of-a-special-inside-its-binding`; `JvmLispCompilerTest#onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker`,
+`#computedBoundpSitesDoNotEachPayForTheTrackedSpecials`, `#boundpOfASpecialWithoutAValueIsThreadScoped`;
+`WasmReentrantE2eTest#overlappedCallsEachSeeTheirOwnBindingOfASpecialWithoutAValue`;
+`SpecialVarCollectorTest#aProbedSpecialWithoutADefinersValueCarriesItsBoundnessInItsVariable`.
 
 Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one

@@ -1963,8 +1963,25 @@ public final class JvmLispCompiler implements LispCompiler {
 			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
 			boundSpecialVars.addAll(specialVars);
 		}
+		// The bound specials whose bound-ness the program probes and only a binding or
+		// an assignment gives a value: their _g$ starts as the UNBOUND marker, so boundp
+		// reads their variable instead of the eval mirror, which no binding writes
+		// (JvmDynVarRuntimeBuilder). A computed boundp dispatches its name over them
+		// through one shared runtime.
+		List<LispVal> probedForms = new ArrayList<>(compiledForms);
+		probedForms.addAll(closRegistry.conditionReports().values());
+		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
+		unboundSpecials.retainAll(boundSpecialVars);
+		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
+				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
+			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
+				inject(segment, defuns, injectedForms, specialVars);
+				callOnlyRuntimes.add(defuns.getLast().name);
+			}
+		}
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars, unboundSpecials,
+						globalFields);
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -4013,6 +4030,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (Utf8Entry dfName : dynVarRuntime.fieldNameUtfs()) {
 				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dfName,
 						dynVarRuntime.fieldDescUtf());
+			}
+			// The UNBOUND marker a probed valueless special's _g$ starts as; set in
+			// <clinit> with the ThreadLocals.
+			Utf8Entry unboundFieldName = dynVarRuntime.unboundFieldName();
+			if (unboundFieldName != null) {
+				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, unboundFieldName,
+						globalFieldDescUtf);
 			}
 		}
 		if (javaRuntime != null) {
