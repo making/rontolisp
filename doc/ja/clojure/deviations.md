@@ -138,6 +138,10 @@
  ディスパッチは階層を読まず（タグの
  完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
  区別します）。
+- `(methods mt)` と `get-method`・`remove-method`・`prefer-method` は式ではなく multimethod の
+  名前（`defmulti` の var。alias や refer 経由も可）を取ります。multimethod を束縛した
+  ローカルは降低時に拒否されます。`methods` が返すマップはホストクラスの行を `class` が
+  答えるキーワードで引き、オラクルは `Class` 自身で引きます。
 - record はオラクル同様リテラルで印字されます（`#user.R{:a 7}`）。ただし `str` も
  そのリテラルを綴ります（オラクルは `user.R@<hash>`）。deftype はラッパーリスト
  （`(:C%TYPE ...)`）、reify は `(:C%REIFY ...)` で印字されます。決定的に印字されるのは
@@ -203,8 +207,15 @@
   フィールドでもない名前は同じように拒否します（オラクルは `No matching field found`）。
   後の REPL 入力が record・deftype を定義しても、それより前に lower された呼び出し箇所は
   そのメソッドもフィールドも見ません。
-- `instance?` は中心的なクラス（`String`・`Long` 等）と既知の record/deftype 名のみ。
-  他のクラスは誤答の代わりに名前付きで拒否されます。
+- `instance?` は値の種類ごとのオラクルのクラスで答えます。リストと正格な seq は
+  `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
+  `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
+  `java.util.Map$Entry` です（`map-entry?`）。整数は `(int 1)` も含めて `Long` で、`Integer` には
+  なりません。どの種類の値もインスタンスにならない `clojure.lang` のクラス
+  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。プロトコルの
+  インタフェース（`user.P`）が知るのはその箇所を lower した時点で定義済みの record と deftype
+  なので、後の REPL 入力で定義したものはそこではインスタンスになりません。プロトコル自身の名前
+  （var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
 - `unchecked-` の算術は整数を64ビット（`-int` 系は32ビット）に折り返し、型変換（`int`・`long`・`short`・
   `byte`・`char`・`double`・`float`）と合わせてオラクルと同じです。ただし64ビットを超える整数もここでは
   通常の整数なので、オラクルでは折り返されない bigint のオペランド

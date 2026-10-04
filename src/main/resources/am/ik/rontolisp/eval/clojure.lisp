@@ -924,6 +924,24 @@
                      "isInstance" x)
         (error () nil))))
 
+(defun rontolisp::%clojure-host-object-p (x class-name)
+  "instance?'s host arm: whether X is a host object of the class CLASS-NAME.
+   The arm test of the host-object family (clojure/ClojureArms): a program
+   naming no java: operator, where no host object exists, folds it away."
+  (rontolisp::%clojure-host-instance-p x class-name))
+
+(defun rontolisp::%clojure-host-number-p (x)
+  "instance? of Number: a number or a host Number (a BigDecimal). A program
+   naming no java: operator calls numberp in its place (the strip's alias)."
+  (or (numberp x) (rontolisp::%clojure-host-instance-p x "java.lang.Number")))
+
+(defun rontolisp::%clojure-host-char-sequence-p (x)
+  "instance? of CharSequence: a string or a host CharSequence (a
+   StringBuilder). A program naming no java: operator calls stringp in its
+   place (the strip's alias)."
+  (or (stringp x)
+      (rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")))
+
 (defun rontolisp::%clojure-host-string (x)
   "X's toString when X is a host object, str's answer (a class object's is
    \"class java.lang.String\"), else NIL. The host test is the getClass
@@ -1164,6 +1182,16 @@
        (if (eq (car x) :C%REIFY)
            (let ((row (gethash (car (cdr x)) table)))
              (and row (gethash method row) t))
+           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (member (nth 4 x) classes :test #'equal) t))))
+
+;; instance? of a protocol's interface: X is a record or deftype whose class
+;; is among CLASSES (the types whose body names the protocol), or a reify
+;; holding a row under its fresh tag in TABLE, the protocol's body table.
+(defun rontolisp::%clojure-implements-p (x table classes)
+  (and (consp x)
+       (if (eq (car x) :C%REIFY)
+           (and (gethash (car (cdr x)) table) t)
            (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
                 (member (nth 4 x) classes :test #'equal) t))))
 
@@ -1830,6 +1858,20 @@
             ((null p) out)
           (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
                 (car (cdr p)))))))
+
+(defun rontolisp::%clojure-methods (table)
+  "The map (methods f) answers for the method table TABLE: a copy, its nil
+   marker row keyed by nil like a map's nil key."
+  (let ((out (rontolisp::%clojure-plist-table table nil))
+        (marker (list :C%NIL))
+        (miss (list nil)))
+    (let ((row (gethash marker out miss)))
+      (if (eq row miss)
+          out
+          (progn
+            (remhash marker out)
+            (setf (gethash nil out) row)
+            out)))))
 
 (defun rontolisp::%clojure-vector-assoc (v plist)
   "(assoc V k v ...) for a vector V: a fresh vector with PLIST's alternating

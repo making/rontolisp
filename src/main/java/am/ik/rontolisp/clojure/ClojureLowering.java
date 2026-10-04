@@ -914,9 +914,11 @@ public final class ClojureLowering {
 	 * {@code inlineMethods} are the protocol methods its body implements, each as
 	 * {@link #inlineMethodKey}: the methods of its host class, which an instance call
 	 * reaches ({@code (.m r)}), where an {@code extend-type} row is none.
+	 * {@code protocols} are the var keys of the protocols its body names, with methods or
+	 * none: the interfaces of its host class, which {@code instance?} tests.
 	 */
 	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className,
-			List<String> mutableFields, Set<String> inlineMethods) {
+			List<String> mutableFields, Set<String> inlineMethods, Set<String> protocols) {
 	}
 
 	/**
@@ -3256,6 +3258,8 @@ public final class ClojureLowering {
 			case "newline":
 				ClojureLowerUtil.isTrue(n == 0, "newline takes no argument");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("princ"), LispString.literal("\n"));
+			case "methods":
+				return ClojureDispatchLowering.methodsOf(this, items);
 			case "count":
 				return ClojureCollectionLowering.countOf(this, items);
 			case "seq":

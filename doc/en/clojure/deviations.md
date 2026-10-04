@@ -145,6 +145,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.
+- `(methods mt)` and `get-method`, `remove-method`, `prefer-method` take the multimethod's
+  name (a `defmulti` var, through an alias or a referred one), not an expression: a local
+  bound to a multimethod is refused at lowering. The map `methods` answers keys a host
+  class row by the keyword `class` answers for it, where the oracle keys it by the `Class`.
 - A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
@@ -211,8 +215,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is refused that way too, where the oracle says `No matching field found`; a site lowered
   before a later REPL input defines a record or deftype does not see its methods or
   fields.
-- `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
-  names; any other class is a named refusal instead of a wrong answer.
+- `instance?` answers a class by the oracle classes of each kind of value: a list or strict
+  seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
+  `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector
+  is a `java.util.Map$Entry` (`map-entry?`); an integer is a `Long`, `(int 1)` too, never an
+  `Integer`. A `clojure.lang` class no kind is an instance of
+  (`clojure.lang.PersistentQueue`) is an unknown name, where the oracle answers `false`. A
+  protocol's interface (`user.P`) knows the records and deftypes defined when the site is
+  lowered, so one a later REPL input defines is not an instance there; the protocol's own
+  name (`P`, a var) is an unknown name, where the oracle throws a `ClassCastException`.
 - The `unchecked-` arithmetic verbs wrap integers at 64 bits (`-int` verbs at 32) and the casts
   (`int`, `long`, `short`, `byte`, `char`, `double`, `float`) match the oracle, with one deviation:
   an integer past 64 bits is a plain integer here, so the oracle's unwrapped bigint operand

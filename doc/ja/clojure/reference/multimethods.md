@@ -8,6 +8,7 @@ multimethod はメソッドテーブルとディスパッチャです。階層�
 | `defmethod` | `(do (defmulti a :k) (defmethod a :x [m] 1) (a {:k :x}))` | `1` |
 | `remove-method` | `(do (defmulti r :k) (defmethod r :x [m] 1) (remove-method r :x) nil)` | `nil` |
 | `get-method` | `(do (defmulti g :k) (defmethod g :x [m] 1) (if (get-method g :x) :yes :no))` | `:yes` |
+| `methods` | `(do (defmulti m :k) (defmethod m :x [v] 1) (count (methods m)))` | `1` |
 | `prefer-method` | `(do (defmulti p :k) (defmethod p :x [m] 1) (defmethod p :y [m] 2) (derive :x :y) (prefer-method p :x :y) (p {:k :x}))` | `1` |
 | `derive` | `(do (derive :circle :shape) nil)` | `nil` |
 | `underive` | `(do (underive :circle :shape) nil)` | `nil` |

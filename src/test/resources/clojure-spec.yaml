@@ -1980,6 +1980,206 @@ cases:
       java.lang.Exception: boom
       :printed
       0 nil
+  - name: instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind
+    # instance? of any class answers what the oracle's isInstance does for every kind
+    # of value: an interface the kind's host class implements (java.util.List of a
+    # vector), a class no value here has (java.io.File) false. Measured against clj
+    # 1.12.6, identical.
+    source: |
+      (defprotocol IokP (iok-m [x]))
+      (defrecord IokR [a])
+      (deftype IokT [a])
+      (def iok-v 1)
+      (def iok-vals ["s" \c true 1 1.5 1/2 :k 'x [1] '(1) (lazy-seq [1]) {1 2} #{1} (sorted-map 1 2) (sorted-set 1)
+        (fn [] 1) (atom 1) (volatile! 1) #'iok-v #"a" (->IokR 1) (IokT. 1) (reify IokP (iok-m [_] 1)) *out* (ex-info "m" {}) nil])
+      (defmacro iok-row [c] `(println '~c (apply str (map (fn [v#] (if (instance? ~c v#) "t" "f")) iok-vals))))
+      (iok-row java.util.List)
+      (iok-row java.util.Map)
+      (iok-row java.util.Collection)
+      (iok-row java.util.Set)
+      (iok-row Iterable)
+      (iok-row Comparable)
+      (iok-row java.io.Serializable)
+      (iok-row Runnable)
+      (iok-row java.util.RandomAccess)
+      (iok-row java.util.Comparator)
+      (iok-row clojure.lang.IFn)
+      (iok-row clojure.lang.ISeq)
+      (iok-row clojure.lang.IPersistentCollection)
+      (iok-row clojure.lang.IPersistentMap)
+      (iok-row clojure.lang.Sequential)
+      (iok-row clojure.lang.Counted)
+      (iok-row clojure.lang.Associative)
+      (iok-row clojure.lang.IObj)
+      (iok-row clojure.lang.IDeref)
+      (iok-row clojure.lang.Named)
+      (iok-row clojure.lang.IRecord)
+      (iok-row clojure.lang.IType)
+      (iok-row clojure.lang.Fn)
+      (iok-row clojure.lang.Atom)
+      (iok-row clojure.lang.Volatile)
+      (iok-row clojure.lang.Var)
+      (iok-row clojure.lang.Ratio)
+      (iok-row clojure.lang.LazySeq)
+      (iok-row clojure.lang.Sorted)
+      (iok-row clojure.lang.IExceptionInfo)
+      (iok-row java.util.regex.Pattern)
+      (iok-row java.io.Writer)
+      (iok-row java.io.Closeable)
+      (iok-row CharSequence)
+      (iok-row Number)
+      (iok-row Integer)
+      (iok-row java.io.File)
+      (iok-row java.util.AbstractList)
+      (println (instance? java.util.Map {1 2}) (instance? clojure.lang.Sorted 1/2) (instance? Comparable 1.5) (instance? java.io.Writer *out*) (instance? clojure.lang.Named :k) (instance? clojure.lang.IDeref (atom 1)) (instance? Integer 1))
+    expected: |
+      java.util.List fffffffftttfffffffffffffff
+      java.util.Map ffffffffffftftfffffftfffff
+      java.util.Collection fffffffftttftftfffffffffff
+      java.util.Set fffffffffffftftfffffffffff
+      Iterable fffffffftttttttffffftfffff
+      Comparable tttttttttfffffffffffffffff
+      java.io.Serializable ttttttttttttttttfftttffftf
+      Runnable fffffftttfftttttfftfffffff
+      java.util.RandomAccess fffffffftfffffffffffffffff
+      java.util.Comparator ffffffffffffffftffffffffff
+      clojure.lang.IFn fffffftttfftttttfftfffffff
+      clojure.lang.ISeq fffffffffttfffffffffffffff
+      clojure.lang.IPersistentCollection fffffffftttttttffffftfffff
+      clojure.lang.IPersistentMap ffffffffffftftfffffftfffff
+      clojure.lang.Sequential fffffffftttfffffffffffffff
+      clojure.lang.Counted ffffffffttfttttffffftfffff
+      clojure.lang.Associative fffffffftfftftfffffftfffff
+      clojure.lang.IObj ffffffftttttttttfffftftfff
+      clojure.lang.IDeref fffffffffffffffftttfffffff
+      clojure.lang.Named ffffffttffffffffffffffffff
+      clojure.lang.IRecord fffffffffffffffffffftfffff
+      clojure.lang.IType ffffffffffffffffffffftffff
+      clojure.lang.Fn ffffffffffffffftffffffffff
+      clojure.lang.Atom fffffffffffffffftfffffffff
+      clojure.lang.Volatile ffffffffffffffffftffffffff
+      clojure.lang.Var fffffffffffffffffftfffffff
+      clojure.lang.Ratio ffffftffffffffffffffffffff
+      clojure.lang.LazySeq fffffffffftfffffffffffffff
+      clojure.lang.Sorted fffffffffffffttfffffffffff
+      clojure.lang.IExceptionInfo fffffffffffffffffffffffftf
+      java.util.regex.Pattern ffffffffffffffffffftffffff
+      java.io.Writer ffffffffffffffffffffffftff
+      java.io.Closeable ffffffffffffffffffffffftff
+      CharSequence tfffffffffffffffffffffffff
+      Number ffftttffffffffffffffffffff
+      Integer ffffffffffffffffffffffffff
+      java.io.File ffffffffffffffffffffffffff
+      java.util.AbstractList ffffffffffffffffffffffffff
+      true false true true true true false
+  - name: instance-of-a-protocol-interface-tests-the-body-implementations
+    # A protocol defines the interface ns.P (munged): a record, deftype or reify naming
+    # it in its body is an instance, methods or none, an extend-type or extend-protocol
+    # target is not (satisfies? is). A body naming the protocol with no method
+    # satisfies and extends it too. Measured against clj 1.12.6, identical.
+    source: |
+      (defprotocol IprP (ipr-m [x]) (ipr-n [x]))
+      (defprotocol IprQ (ipr-q [x]))
+      (defprotocol IprM :extend-via-metadata true (ipr-mm [x]))
+      (defrecord IprR [] IprP (ipr-m [_] 1))
+      (defrecord IprS [])
+      (extend-type IprS IprP (ipr-m [_] 2))
+      (deftype IprT [] IprP)
+      (deftype IprU [a] IprQ (ipr-q [_] a))
+      (defrecord IprMR [] IprM (ipr-mm [_] 1))
+      (println (instance? auto.IprP (->IprR)) (instance? auto.IprP (->IprS)) (instance? auto.IprP (reify IprP (ipr-m [_] 3))))
+      (println (instance? auto.IprP (->IprT)) (instance? auto.IprP (->IprU 1)) (instance? auto.IprQ (->IprU 1)))
+      (println (instance? auto.IprP (reify IprP)) (instance? auto.IprP (reify IprQ (ipr-q [_] 1))) (instance? auto.IprP nil) (instance? auto.IprP 1) (instance? auto.IprP {}))
+      (println (map #(instance? auto.IprQ %) [(->IprU 1) (->IprR) 3]) (instance? auto.IprP (assoc (->IprR) :z 1)) (instance? auto.IprP (with-meta (->IprR) {:a 1})))
+      (println (instance? auto.IprM (->IprMR)) (instance? auto.IprM (reify IprM)) (instance? auto.IprM (with-meta {} {`ipr-mm (fn [_] 2)})) (ipr-mm (with-meta {} {`ipr-mm (fn [_] 2)})))
+      (println (satisfies? IprP (->IprT)) (satisfies? IprP (reify IprP)) (satisfies? IprM (reify IprM)) (satisfies? IprP (->IprS)) (satisfies? IprQ (->IprR)) (extends? IprP IprT))
+      (extend-protocol IprP nil (ipr-m [_] 0) Object (ipr-m [_] 9))
+      (println (instance? auto.IprP nil) (instance? auto.IprP 1) (instance? auto.IprP (->IprU 1)) (ipr-m (->IprU 1)))
+      (defprotocol ipr-dash? (ipr-d [x]))
+      (defrecord IprD [] ipr-dash? (ipr-d [_] 1))
+      (println (instance? auto.ipr_dash_QMARK_ (->IprD)))
+      (ns ipr-ns.core)
+      (defprotocol IprNsP (ipr-ns-m [x]))
+      (defrecord IprNsR [] IprNsP)
+      (ns auto (:require [clojure.string :as str]))
+      (defrecord IprZ [] ipr-ns.core/IprNsP)
+      (println (instance? ipr_ns.core.IprNsP (ipr-ns.core/->IprNsR)) (instance? ipr_ns.core.IprNsP (->IprZ)) (instance? ipr_ns.core.IprNsP (->IprR)) (str/upper-case "ok"))
+    expected: |
+      true false true
+      true false true
+      true false false false false
+      (true false false) true true
+      true true false 2
+      true true true true false true
+      false false false 9
+      true
+      true true false OK
+  - name: a-vector-import-spec-registers-its-classes
+    # (:import [pkg A B]) and (import '[pkg A B]) register the classes like the list
+    # spelling, a host class or another namespace's protocol interface (munged package).
+    # Measured against clj 1.12.6, identical.
+    source: |
+      (ns vi-ns.core)
+      (defprotocol ViNsP (vi-ns-m [x]))
+      (defrecord ViNsR [] ViNsP (vi-ns-m [_] 2))
+      (ns vi-use
+        (:import [java.io File] [java.util Map List] (java.util TreeMap) [vi_ns.core ViNsP]))
+      (println (instance? File "x") (instance? Map {}) (instance? Map [1]) (instance? List [1]) (instance? TreeMap {}))
+      (println (instance? ViNsP (vi-ns.core/->ViNsR)) (instance? ViNsP {}))
+      (import '[java.util Set] '(java.util Collection))
+      (println (instance? Set #{1}) (instance? Set {}) (instance? Collection [1]))
+      (import [java.util Iterator])
+      (println (instance? Iterator [1]))
+      (ns auto)
+    expected: |
+      false true false true false
+      true false
+      true false true
+      false
+  - name: methods-answers-the-method-table-as-a-map
+    # (methods mt) is a copy of the table: the nil row keyed by nil, the Object and the
+    # default rows in it, a later defmethod or remove-method not reaching it. A host
+    # class row is under the keyword class answers for the class (the oracle keys it by
+    # the Class itself). Measured against clj 1.12.6, identical on what is printed here.
+    source: |
+      (defmulti mt-f class)
+      (defmethod mt-f String [x] :s)
+      (defmethod mt-f nil [x] :n)
+      (defmethod mt-f Object [x] :o)
+      (defmethod mt-f :default [x] :d)
+      (defmethod mt-f clojure.lang.Keyword [x] :kw)
+      (println (map? (methods mt-f)) (count (methods mt-f)) (contains? (methods mt-f) nil) (contains? (methods mt-f) :default))
+      (println ((get (methods mt-f) nil) 1) ((get (methods mt-f) (class "x")) 1) (sort (map #(% 1) (vals (methods mt-f)))))
+      (defmulti mt-g :t)
+      (println (methods mt-g) (empty? (methods mt-g)) (count (methods mt-g)))
+      (defmethod mt-g :a [x] 1)
+      (defmethod mt-g [:v 1] [x] 3)
+      (let [m (methods mt-g)]
+        (defmethod mt-g :b [x] 2)
+        (println (count m) (count (methods mt-g)))
+        (remove-method mt-g :a)
+        (println (count m) (count (methods mt-g)) (map str (sort-by str (keys (methods mt-g))))))
+      (println (get (into {} (map (fn [[k v]] [k (v {})])) (methods mt-g)) :b))
+      (println (= (methods mt-g) (methods mt-g)) ((get (methods mt-g) [:v 1]) {}) (count (assoc (methods mt-g) :z 1)) (count (methods mt-g)))
+      (ns mt-ns)
+      (defmulti mt-m :t)
+      (defmethod mt-m :x [_] 1)
+      (ns auto (:require [mt-ns :as mt]))
+      (defmethod mt/mt-m :y [_] 2)
+      (println (sort (keys (methods mt/mt-m))) (sort (keys (methods mt-ns/mt-m))) (count (methods mt-f)))
+      (println (count (clojure.core/methods mt-g)))
+      (println (let [methods (fn [x] [:mine x])] (methods 1)))
+    expected: |
+      true 5 true true
+      :n :s (:d :kw :n :o :s)
+      {} true 0
+      2 3
+      2 2 (:b [:v 1])
+      2
+      true 3 3 2
+      (:x :y) (:x :y) 5
+      2
+      [:mine 1]
   - name: a-multimethod-dispatches-on-an-exception-class-by-inheritance
     # A throwable class as a dispatch value is the keyword class answers for it, and the
     # hierarchy follows the class chain like the oracle's isa? follows Java inheritance:

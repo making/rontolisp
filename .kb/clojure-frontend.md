@@ -761,6 +761,19 @@ constructor and consumer, and a regex `replace` with a function replacement.
   a class spelling to the keyword `class` answers for it, `nil` to the `(:C%NIL)` marker
   (the dispatcher maps a true nil there, so no table keys on nil and a literal `:nil` keeps
   its own row), `Object` to `:object` plus the slot, literal vectors element by element.
+- `(methods mt)` (a `builtin` row, so a program var or local of that name shadows it) lowers to
+  `%clojure-methods` over the `%methods` global: a copy (`%clojure-plist-table`, keys are
+  representatives already) with the `(:C%NIL)` marker row re-keyed by nil, which is how a map
+  keys nil. The `:object` and default rows stay. Takes a `defmulti` NAME like `get-method`
+  (a local alias of a multimethod is refused: the table is reached through the var key, and
+  nothing ties a function value to it); a name no `defmulti` made is `No such multimethod`.
+  A host class row keeps the keyword `class` answers (the oracle: the `Class`), so
+  `(get (methods f) (class x))` works while `(contains? (methods f) String)` is false.
+  Programs that do not call it compile byte-identically (measured 2026-10-04: wasm P1,
+  `--optimize=size`, component and JVM class of a Clojure demo and a multimethod program).
+- `:import` / `import` read a `[pkg A B]` vector like the `(pkg A B)` list: the reader's
+  `VECTOR` marker leads the items and is skipped (`importSpecs`, as `referNames` does), so a
+  vector spelling no longer registers `<marker>.pkg` and `<marker>.A`.
 - A `defmulti` of a var that holds a multimethod lowers to `nil`, like the oracle's (the
   corpus's second `(defmulti my-print class :default :everything-else)` keeps the first's
   methods and default): `ClojureLowering.multimethods`, by var key, survives buffers and
@@ -821,8 +834,55 @@ constructor and consumer, and a regex `replace` with a function replacement.
   literal is refused; an undotted `#P{}` is `No reader function for tag P` (`#inst`/`#uuid`
   stay `unsupported reader form`).
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
-- `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
-  else refuses; it has no value.
+- `instance?` (oracle-checked clj 1.12.6, 2026-10-04; it has no value): a record/deftype name
+  tests the tag, `Object` non-nil, a throwable class its chain ("Catching"). Any other class
+  is a disjunction over the bound value (`ClojureDispatchLowering.instanceOf`): one test per
+  kind whose oracle class is or implements it (`ClojureValueClasses.Kind`: per kind the
+  class and its `supers`, tables read off the oracle -- `clojure.lang` is not on this class
+  path -- one row per representation, so a strict seq is a `PersistentList` and a `[k v]`
+  a `MapEntry`; all three number kinds fold to `numberp`), a stream arm over
+  `%clojure-stream-class` (`ClojureValueClasses.STREAM_CLASSES` mirrors it), a
+  `%clojure-instance-of` per highest tabled throwable implementing an interface
+  (`Serializable` -> `Throwable`), and `%clojure-host-object-p` when the host loads the class
+  and no host value of it is converted at the `java:` boundary (`String`, the boxes,
+  `BigInteger`). The host arm is the test of `ClojureArms.Family.HOST` (producers: the
+  `java:` operators), so a program naming none sheds it; `Number`/`CharSequence` lower to
+  `%clojure-host-number-p`/`-char-sequence-p`, the family's aliases to `NUMBERP`/`STRINGP`,
+  so such a program compiles them as before. The value is bound to a temp unless it is a
+  variable, or every arm reads it once or it is a constant no family arm reads (a family
+  test needs a variable or literal argument; `(instance? Boolean (f))` evaluated `(f)`
+  twice before). A bare `clojure.lang` simple name (`Keyword`, `IPersistentMap`) resolves
+  like the dispatch keywords; a loadable class no kind or host object can be (`Integer`) is
+  `(progn x false)`; anything else is `unknown name: X` (`clojure.lang.PersistentQueue`
+  too, where the oracle answers false). Measured against the oracle over 59 classes x 29
+  values on all four backends and 59 x 5 host objects on the interpreter and the JVM:
+  identical but the strict `(map inc [1])` (`IPersistentList`, `Counted`, not `LazySeq`)
+  and `[1 2]` (`Map$Entry`). Size (wasm P1 / `--optimize=size` / component / JVM class,
+  before -> after): `(instance? Number x)` in a `defn`, an exception, a record and
+  `examples/clojure/demo.clj` byte-identical; the core classes over impure arguments
+  65,667 / 55,403 / 66,924 / 76,656 -> 65,593 / 55,355 / 66,848 / 76,522 (`Boolean`'s
+  argument bound once); `(instance? Number (java.math.BigDecimal. "1"))` JVM 90,005 ->
+  94,328 (the host arm; wasm refuses `java:` either way); `(instance? java.util.List x)` in
+  a `defn`, no `java:`, 17,742 / 14,184 / 18,934 / 60,317 (before: refused). Pins:
+  clojure-spec `instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind`,
+  `ClojureInteropTest#instanceOfAHostClassTestsTheValuesKindAndTheHostObjectsClass`,
+  `ClojureArmsTest#theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator`.
+  A protocol's interface (oracle-checked clj 1.12.6, 2026-10-04) is the class
+  `ClojureProtocolLowering.interfaceName` spells (namespace and name through the oracle's
+  `munge`/`CHAR_MAP`: `auto.ipr_dash_QMARK_`; an import resolves to it), matched before the
+  core-class tables: `%clojure-implements-p` (`clojure.lisp`) answers a record/deftype whose
+  class is among those whose body names the protocol (`TypeDef.protocols`, the pre-scan's
+  `BodyProtocols`, methods or none; quoted at lowering, so a type a later REPL input defines
+  is not seen) and a reify with a row under its fresh tag in the protocol's body table
+  (`inlineTable`). An `extend-type`/`extend-protocol` target is not an instance (its rows
+  share the tag with a record's body rows, hence the class list). A body naming a protocol
+  with no method stores an empty row (`emptyRowForm`), so `(deftype T [] P)`/`(reify P)` also
+  satisfy and extend it like the oracle (before: false). The bare protocol name (`P`, a var)
+  stays `unknown name` (oracle: `ClassCastException`). Size (wasm P1 / `--optimize=size` /
+  component / JVM class): a protocol program without it and `examples/clojure/demo.clj`
+  byte-identical; two `(instance? user.P x)` sites +694 / +622 / +701 / +1015 against one
+  `(instance? R x)`; an empty body group +498 / +498 / +502 / +118. Pin: clojure-spec
+  `instance-of-a-protocol-interface-tests-the-body-implementations`.
 - **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
   (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive`/`parents`/`ancestors`/
   `descendants` (`hierarchyArg`: a class spelling no local or var shadows) lower a class
