@@ -114,24 +114,15 @@
 
 ;;; The image hooks. Real lists with real registration, because a library may push
 ;;; onto one at load time and only the DUMP is impossible.
-;;
-;; Upstream routes both through (register-hook-function '*image-dump-hook* ...),
-;; which pushes onto a variable named at RUN time -- (setf (symbol-value var) ...),
-;; not a place on any backend, which is why uiop/utility's register-hook-function
-;; signals. Naming the variable literally is the same registration without that
-;; primitive. Re-evaluation trigger: the day (setf (symbol-value ...)) is a place,
-;; both bodies become the one register-hook-function call upstream writes.
 (defun uiop/image:register-image-restore-hook
     (%rirh-hook &optional (%rirh-call-now-p t))
-  (pushnew %rirh-hook uiop/image:*image-restore-hook* :test 'equal)
-  (when %rirh-call-now-p (uiop/utility:call-function %rirh-hook))
-  (values))
+  (uiop/utility:register-hook-function 'uiop/image:*image-restore-hook*
+                                       %rirh-hook %rirh-call-now-p))
 
 (defun uiop/image:register-image-dump-hook
     (%ridh-hook &optional %ridh-call-now-p)
-  (pushnew %ridh-hook uiop/image:*image-dump-hook* :test 'equal)
-  (when %ridh-call-now-p (uiop/utility:call-function %ridh-hook))
-  (values))
+  (uiop/utility:register-hook-function 'uiop/image:*image-dump-hook* %ridh-hook
+                                       %ridh-call-now-p))
 
 (defun uiop/image:call-image-restore-hook ()
   (uiop/utility:call-functions (reverse uiop/image:*image-restore-hook*)))

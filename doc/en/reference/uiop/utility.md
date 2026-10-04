@@ -132,7 +132,7 @@ read and evaluated as a function name.
 | `uiop:call-functions` | `call-function` over a list, in order |
 | `uiop:access-at` | apply a chain of accessors: an integer is `elt`, a keyword is `getf`, `nil` is identity, a symbol or function is called, a cons is `ensure-function` |
 | `uiop:access-at-count` | how many sub-objects an `access-at` specifier reads |
-| `uiop:register-hook-function` | push a hook onto a variable — see [What is missing](#what-is-missing) |
+| `uiop:register-hook-function` | `pushnew` a hook (by `equal`) onto the variable a symbol names at run time, and call it now when the third argument is true |
 
 ```lisp
 (print (funcall (uiop:ensure-function 'car) (list 9 8)))
@@ -144,6 +144,13 @@ read and evaluated as a function name.
 9
 3
 20
+```
+
+```lisp
+(defvar *hooks* nil)
+(uiop:register-hook-function '*hooks* 'car)
+(uiop:register-hook-function '*hooks* 'car)
+*hooks* ; => (CAR)
 ```
 
 ## Conditions
@@ -257,17 +264,15 @@ of strings is `character`.
 
 ## What is missing
 
-Two members name what rontolisp does not have, rather than pretending, and both
-signal `uiop:not-implemented-error` with the reason:
+One member names what rontolisp does not have, rather than pretending, and
+signals `uiop:not-implemented-error` with the reason:
 
-- **`uiop:register-hook-function`** would push onto a variable named at run time,
-  which needs `(setf (symbol-value var) ...)` — not a place on any backend.
 - **`uiop:load-uiop-debug-utility`** (and `uiop:uiop-debug`, which calls it)
   would `load` a computed pathname at run time; `load` is a compile-time splice
   on every backend. `uiop:*uiop-debug-utility*` still holds upstream's default
   form.
 
 ```console
-$ rontolisp -e '(uiop:register-hook-function (quote *h*) (lambda () 1))'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/UTILITY:REGISTER-HOOK-FUNCTION pushing onto a hook needs (setf (symbol-value ...)), which is not a place on any backend
+$ rontolisp -e '(uiop:uiop-debug)'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/UTILITY:LOAD-UIOP-DEBUG-UTILITY loading a debug utility needs a run-time LOAD of a computed pathname; load is a compile-time splice here
 ```

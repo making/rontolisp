@@ -4374,12 +4374,18 @@ class JvmLispCompilerTest {
 				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
 				         (uiop:style-warn "styled ~A" 2)
 				         :sw-done))
-				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
-				         (uiop:not-implemented-error (c) :nie)))
 				""")).isEqualTo("""
 				:MUFFLED
-				:SW-DONE
-				:NIE""");
+				:SW-DONE""");
+	}
+
+	@Test
+	void compileAndRunUiopRegisterHookFunction() throws Exception {
+		// Upstream's body over the symbol-value place, so the program is a set site:
+		// the hook lands in an active binding of the variable, as on the interpreter
+		// (LispEvaluatorTest#uiopRegisterHookFunctionPushesOntoAVariableNamedAtRunTime).
+		assertThat(compileAndRun(am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
 	}
 
 	@Test

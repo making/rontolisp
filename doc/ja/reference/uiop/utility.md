@@ -131,7 +131,7 @@ T
 | `uiop:call-functions` | リストに対して順に `call-function` |
 | `uiop:access-at` | アクセサの連鎖を適用します。整数は `elt`、キーワードは `getf`、`nil` は恒等、シンボルや関数は呼び出し、コンスは `ensure-function` です |
 | `uiop:access-at-count` | `access-at` の指定が読む部分オブジェクトの個数 |
-| `uiop:register-hook-function` | フックを変数に push します — [未実装のもの](#what-is-missing)を参照 |
+| `uiop:register-hook-function` | 実行時にシンボルで指定された変数にフックを (`equal` で) `pushnew` し、第 3 引数が真なら即座に呼びます |
 
 ```lisp
 (print (funcall (uiop:ensure-function 'car) (list 9 8)))
@@ -143,6 +143,13 @@ T
 9
 3
 20
+```
+
+```lisp
+(defvar *hooks* nil)
+(uiop:register-hook-function '*hooks* 'car)
+(uiop:register-hook-function '*hooks* 'car)
+*hooks* ; => (CAR)
 ```
 
 ## コンディション
@@ -254,18 +261,15 @@ rontolisp には更新すべきイメージがありません — プログラ�
 
 ## 未実装のもの
 
-2 つのメンバは、あるふりをするのではなく rontolisp に無いものを名指しします。
-どちらも理由とともに `uiop:not-implemented-error` をシグナルします。
+1 つのメンバは、あるふりをするのではなく rontolisp に無いものを名指しし、
+理由とともに `uiop:not-implemented-error` をシグナルします。
 
-- **`uiop:register-hook-function`** は実行時に名前で指定された変数に push しますが、
-  それには `(setf (symbol-value var) ...)` が必要で、どのバックエンドでもこれは
-  場所 (place) ではありません。
 - **`uiop:load-uiop-debug-utility`** (およびそれを呼ぶ `uiop:uiop-debug`) は
   実行時に計算されたパス名を `load` しますが、`load` はどのバックエンドでも
   コンパイル時の展開です。`uiop:*uiop-debug-utility*` には本家の既定のフォームが
   入ったままです。
 
 ```console
-$ rontolisp -e '(uiop:register-hook-function (quote *h*) (lambda () 1))'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/UTILITY:REGISTER-HOOK-FUNCTION pushing onto a hook needs (setf (symbol-value ...)), which is not a place on any backend
+$ rontolisp -e '(uiop:uiop-debug)'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/UTILITY:LOAD-UIOP-DEBUG-UTILITY loading a debug utility needs a run-time LOAD of a computed pathname; load is a compile-time splice here
 ```

@@ -423,17 +423,13 @@
 (defun uiop/utility:call-functions (%cfs-specs)
   (dolist (%cfs-spec %cfs-specs nil) (uiop/utility:call-function %cfs-spec)))
 
-;; The one member of uiop/utility that needs a primitive no backend has:
-;; pushing onto a hook means (setf (symbol-value VARIABLE) ...) over a variable
-;; named at RUN time, and symbol-value is read-only on all four backends (it is
-;; not a setf place, and there is no cl:set). Naming that is the honest answer;
-;; the alternative -- silently dropping the hook -- would make an image-hook
-;; caller believe it registered something. See .kb/uiop.md.
+;; Upstream's body: the variable is named at RUN time, so the push goes through
+;; the symbol-value place, which assigns the variable's current dynamic binding
+;; when one is active, as setq would.
 (defun uiop/utility:register-hook-function
     (%rhf-variable %rhf-hook &optional %rhf-call-now-p)
-  (declare (ignore %rhf-variable %rhf-hook %rhf-call-now-p))
-  (uiop/utility:not-implemented-error "UIOP/UTILITY:REGISTER-HOOK-FUNCTION"
-                                      "pushing onto a hook needs (setf (symbol-value ...)), which is not a place on any backend"))
+  (pushnew %rhf-hook (symbol-value %rhf-variable) :test 'equal)
+  (when %rhf-call-now-p (uiop/utility:call-function %rhf-hook)))
 
 ;;; CLOS. The class designator algebra, over rontolisp's find-class: a keyword
 ;;; is looked up as a name in PACKAGE, a string is read as a symbol, a class

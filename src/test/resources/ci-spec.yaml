@@ -17753,9 +17753,7 @@ cases:
       ;;
       ;; The hooks are REAL lists on every backend: a library may register into
       ;; one at load time, and only the act of DUMPING an image is impossible.
-      ;; Upstream registers through register-hook-function, which needs a
-      ;; (setf (symbol-value ...)) no backend has; naming the variable literally
-      ;; is the same registration without that primitive.
+      ;; Both registrars go through register-hook-function, as upstream's do.
       (uiop:register-image-dump-hook 'ci-image-a)
       (uiop:register-image-dump-hook 'ci-image-b)
       (uiop:register-image-dump-hook 'ci-image-a)

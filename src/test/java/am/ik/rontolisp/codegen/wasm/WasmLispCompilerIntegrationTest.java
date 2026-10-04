@@ -5361,12 +5361,21 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
 				         (uiop:style-warn "styled ~A" 2)
 				         :sw-done))
-				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
-				         (uiop:not-implemented-error (c) :nie)))
 				""")))).isEqualTo("""
 				:MUFFLED
-				:SW-DONE
-				:NIE""");
+				:SW-DONE""");
+	}
+
+	@Test
+	void uiopRegisterHookFunctionCompileAndRun() throws Exception {
+		// The wasm twin of JvmLispCompilerTest#compileAndRunUiopRegisterHookFunction, on
+		// Preview 1 and the component.
+		String source = am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(source))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
 	}
 
 	@Test

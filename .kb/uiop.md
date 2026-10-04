@@ -117,8 +117,11 @@ nothing implements yet.
 
 `uiop/utility` — `with-upgradability` -> `progn`; one character type (`+character-types+` =
 `#(character)`, `+non-base-chars-exist-p+` NIL, `base-string-p` always t);
-`register-hook-function` signals (needs `(setf (symbol-value var) ...)` to be a place — the day it
-is, the body is three `pushnew` lines); `uiop-debug`/`load-uiop-debug-utility` signal (need a
+`register-hook-function` is upstream's body over the `symbol-value` place (2026-10-04, `.todo/367`
+closed: the place landed with `.todo/852`, the active-binding store with `.todo/c86`), and
+`uiop/image`'s two registrars call it as upstream does (a program registering one image hook:
+wasm 316,628 -> 306,477 B, JVM 555,618 -> 547,019; ci-spec +764 B wasm, +911 B JVM);
+`uiop-debug`/`load-uiop-debug-utility` signal (need a
 run-time `load` of a computed pathname); `match-condition-p`'s STRING pattern compares against the
 ALREADY FORMATTED message; `coerce-class` drops upstream's `*package*` fallback;
 `ensure-function`'s `:package` ignored; `timestamps<` chains from `nil` = +infinity (upstream's
