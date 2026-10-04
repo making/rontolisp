@@ -23666,6 +23666,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: a name dispatch searches the names' string-table offsets, shared
+		// and inline (a set's in statement position) alike.
+		for (String source : List.of(am.ik.rontolisp.NameDispatchFixture.SOURCE,
+				am.ik.rontolisp.NameDispatchFixture.INLINE_SOURCE)) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+			assertThat(runComponentFrontendProgramWithDir(source))
+				.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+		}
+	}
+
+	@Test
 	void setWritesTheActiveDynamicBinding() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: the module global IS the active binding (shallow binding), and
