@@ -608,7 +608,8 @@ final class ClojureNamespaceLowering {
 				continue;
 			}
 			List<LispVal> parts = ClojureLowerUtil.items(unwrapped);
-			// a [pkg Class ...] vector leads with the reader's marker, a (pkg Class ...) list does not
+			// a [pkg Class ...] vector leads with the reader's marker, a (pkg Class ...)
+			// list does not
 			int head = parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR ? 1 : 0;
 			if (parts == null || parts.size() <= head || !(parts.get(head) instanceof LispSymbol pack)) {
 				throw new LispReadException("import takes class names, not " + spec.print());
