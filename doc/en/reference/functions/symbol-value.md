@@ -2,7 +2,7 @@
 
 `(symbol-value symbol)`
 
-Returns the value of the **global** variable named by `symbol`; an unbound name signals an error (a trap on WASM). Like Common Lisp's dynamic-only `symbol-value`, lexical bindings are invisible. `t`, `nil` and keywords evaluate to themselves. Use [`boundp`](boundp.md) to test first, and [`intern`](intern.md) to build the name at runtime.
+Returns the current value of the **dynamic** (global) variable named by `symbol`: the innermost dynamic binding -- a `let` of a special variable, a parameter named like one, `progv` -- when one is active, else the global value; an unbound name signals an error (a trap on WASM). Like Common Lisp's `symbol-value`, lexical bindings are invisible. On the compiled backends a special variable declared without a value (`(defvar *x*)`) reads `nil` instead of signalling, as a reference to it does. `t`, `nil` and keywords evaluate to themselves. Use [`boundp`](boundp.md) to test first, and [`intern`](intern.md) to build the name at runtime.
 
 ```lisp
 (defvar *level* 7)

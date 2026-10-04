@@ -195,8 +195,8 @@ public final class BuiltinFunctionWrappers {
 		// whose string arm calls the gated %schar-set-runtime helper
 		// (LispMacroExpander's reachesScharSet scan, which names map-into).
 		gated.add(LispNames.MAP_INTO);
-		// #'symbol-value: the wrapper body is the raw eval-mirror probe (or, in a
-		// progv-using program, the dynamic-first dispatch), and the _genv/_env_lookup
+		// #'symbol-value: the wrapper body is the raw eval-mirror probe (or, in a program
+		// with specials, the dispatch over them first), and the _genv/_env_lookup
 		// machinery it calls is real only under usesEval -- whose scan sees the source
 		// program, not the injected wrappers. The (function symbol-value) spelling that
 		// injects this wrapper is ALSO a symbol occurrence that scan counts, so gating

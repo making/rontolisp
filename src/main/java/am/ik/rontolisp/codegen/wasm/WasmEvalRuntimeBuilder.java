@@ -282,6 +282,60 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 	}
 
+	/**
+	 * {@link #emitGlobalVariableStore} for the place and value on the operand stack,
+	 * which it leaves there: they pass through {@code placeSlot} and {@code valueSlot}.
+	 * Nothing when the module carries no accessor.
+	 */
+	private static void emitGlobalVariableStoreOfPair(WasmWriter w, int globalAccessIndex, int placeSlot, int valueSlot,
+			int envSlot) {
+		if (globalAccessIndex < 0) {
+			return;
+		}
+		setLocal(w, valueSlot);
+		setLocal(w, placeSlot);
+		emitGlobalVariableStore(w, globalAccessIndex, placeSlot, valueSlot, envSlot);
+		getLocal(w, placeSlot);
+		getLocal(w, valueSlot);
+	}
+
+	/**
+	 * Emits {@code if (place is a symbol && _env_lookup(place, env) == null)
+	 * %global-access(place, nil, place, value);} -- the assignment of a variable no
+	 * binding of the eval'd code holds reaches the compiled global the name names, as a
+	 * compiled {@code setq} does (the module global: the active binding under shallow
+	 * binding); the {@code _store} that follows keeps the mirror. The place itself is the
+	 * non-nil store flag. Nothing when the module carries no accessor.
+	 */
+	private static void emitGlobalVariableStore(WasmWriter w, int globalAccessIndex, int placeSlot, int valueSlot,
+			int envSlot) {
+		if (globalAccessIndex < 0) {
+			return;
+		}
+		getLocal(w, placeSlot);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, placeSlot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		getLocal(w, envSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		getLocal(w, placeSlot);
+		emitNull(w);
+		getLocal(w, placeSlot);
+		getLocal(w, valueSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(globalAccessIndex);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
 	// === stubs (emitted when the program does not call eval, to keep indices stable) ===
 
 	/** {@code _lookup} stub: {@code (i32) -> i32}, always -1. */
@@ -484,9 +538,15 @@ final class WasmEvalRuntimeBuilder {
 	 * well as interpreted closures produced by {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
 	 * @param counts what the arms that check their own argument count report through
+	 * @param globalAccessIndex the function index of the shared accessor
+	 * ({@code %global-access name default store value}) a special's read and a global's
+	 * assignment go through, or -1 when the program runs no form through eval or does not
+	 * carry it: a variable then lives in the {@code GLOBAL_ENV} mirror alone, as it
+	 * always did
 	 * @return the encoded function body
 	 */
-	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, boolean identityHash) {
+	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, int globalAccessIndex,
+			boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -552,9 +612,34 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, TMP);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// not bound lexically: try the global environment. Lisp-2: a bare symbol
-		// resolves the variable namespace only, never the function registry. An
-		// unbound symbol evaluates to itself.
+		// not bound lexically: a special answers its variable (the active binding),
+		// never the mirror, which no binding's restore touches; REST holds the miss
+		// sentinel, a fresh cons nothing else can hold. Then the global environment.
+		// Lisp-2: a bare symbol resolves the variable namespace only, never the
+		// function registry. An unbound symbol evaluates to itself.
+		if (globalAccessIndex >= 0) {
+			emitNull(w);
+			emitNull(w);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			setLocal(w, REST);
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			getLocal(w, VAL);
+			getLocal(w, REST);
+			emitNull(w);
+			emitNull(w);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(globalAccessIndex);
+			setLocal(w, TMP);
+			getLocal(w, TMP);
+			getLocal(w, REST);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, TMP);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
 		emitGlobalLookupReturn(w, OFF, TMP);
 		getLocal(w, VAL);
 		w.write(Instruction.RETURN);
@@ -987,6 +1072,7 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, BINDCUR);
 		setLocal(w, NEWCELL);
 		emitEvalCar(w, NEWCELL, ENV);
+		emitGlobalVariableStoreOfPair(w, globalAccessIndex, BODY, ELEM, ENV);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
@@ -1008,6 +1094,7 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, REST);
 		setLocal(w, NEWCELL);
 		emitEvalCar(w, NEWCELL, ENV); // value
+		emitGlobalVariableStoreOfPair(w, globalAccessIndex, BODY, ELEM, ENV);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
@@ -1028,6 +1115,7 @@ final class WasmEvalRuntimeBuilder {
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, ACC);
 		// _store(place, newval, env)
+		emitGlobalVariableStore(w, globalAccessIndex, BODY, ACC, ENV);
 		getLocal(w, BODY);
 		getLocal(w, ACC);
 		getLocal(w, ENV);
@@ -1058,6 +1146,7 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, TMP);
 		w.write(Instruction.END);
 		// _store(place, cdr, env), discard; return saved car
+		emitGlobalVariableStore(w, globalAccessIndex, BODY, TMP, ENV);
 		getLocal(w, BODY);
 		getLocal(w, TMP);
 		getLocal(w, ENV);

@@ -2,7 +2,7 @@
 
 `(eval form)`
 
-Evaluates a form -- typically a list produced by `read`, `read-from-string`, or quoting -- in the global environment and returns its result. Works in all three backends: the interpreter evaluates directly, while the JVM and WASM compilers emit a small runtime tree-walking interpreter that shares the compiled value representation. Top-level globals defined by the compiled program are mirrored into the eval environment, so an eval'd expression can see them.
+Evaluates a form -- typically a list produced by `read`, `read-from-string`, or quoting -- in the global environment and returns its result. Works in all three backends: the interpreter evaluates directly, while the JVM and WASM compilers emit a small runtime tree-walking interpreter that shares the compiled value representation. Top-level globals defined by the compiled program are mirrored into the eval environment, so an eval'd expression can see them; an eval'd assignment of one is seen by the compiled code too, and a special variable answers its current dynamic binding.
 
 ```lisp
 (eval '(+ 1 2)) ; => 3

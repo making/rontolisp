@@ -162,8 +162,14 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
 
 When `usesEval`, a `setq`/`defvar`/`defparameter`/`defconstant` of a name with a
 global backing store (`compiler/GlobalVarCollector`) also calls
-`_store(name, value, genv)` (`Jvm/WasmSetqCompiler.mirrorGlobal`); the compiled value stays in
-a `main`/`_start` local, so the mirror is write-through one-way. Since b78
+`_store(name, value, genv)` (`Jvm/WasmSetqCompiler.mirrorGlobal`). The other direction exists
+since 2026-10-04 (`.todo/c89`): in a program that runs forms through eval, the runtime's
+`setq`/`setf`/`push`/`pop` of a variable no eval'd binding holds also store through the shared
+accessor `%global-access` into the compiled global, and its variable lookup answers a SPECIAL
+from the variable before trying the mirror (`.kb/dynamic-special-variables.md`, "One home"), so
+the mirror is the value of the non-special globals and the `boundp` witness, never a special's
+value. Before, the mirror was write-through one-way: an eval'd `setq` stayed invisible to
+compiled code, and a special read through eval answered the mirror's stale value. Since b78
 (2026-10-02) the store mirrors WHEREVER it stands -- a defun/lambda body included --
 so a runtime `boundp`/`symbol-value` sees what the body assigned; before, only a
 top-level store mirrored and a probe of a lambda-assigned global read stale
@@ -187,6 +193,10 @@ same per call since b78).
   `WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
   (+ `--component` twin)
 - `Jvm/WasmLispCompilerTest.aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv`
+- `aSpecialReadByNameAnswersTheActiveBinding` on `LispEvaluatorTest` / `JvmLispCompilerTest` /
+  `WasmLispCompilerIntegrationTest` (`SpecialReadByNameFixture`) and ci-spec
+  `eval-and-symbol-value-read-the-binding` -- eval reads a special's binding, an eval'd `setq`
+  reaches compiled code.
 - `JvmLispCompilerTest.compileAndRunBoundpSeesAnAssignmentMadeInsideALambda`,
   `WasmLispCompilerIntegrationTest.boundpSeesAnAssignmentMadeInsideALambda` (+ `--component`
   twin), the `symbol-runtime-api` ci-spec case -- a runtime `boundp` of a
