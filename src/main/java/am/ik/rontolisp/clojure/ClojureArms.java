@@ -176,13 +176,15 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
-		 * A host object, which {@code instance?} asks the host the class of: only a
-		 * {@code java:} operator hands one to the program. The aliases are
-		 * {@code instance?} of a class a core kind's value is and a host object may be
-		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
+		 * A host object, which {@code instance?} asks the host the class of and {@code =}
+		 * compares as a collection with a Clojure one: only a {@code java:} operator
+		 * hands one to the program. The aliases are {@code instance?} of a class a core
+		 * kind's value is and a host object may be ({@code Number},
+		 * {@code CharSequence}), each to the kind's own test.
 		 */
-		HOST("host-object", Set.of(ClojureDispatchLowering.HOST_OBJECT_P), Set.of(), Map
-			.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P", "STRINGP"),
+		HOST("host-object", Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P"), Set.of(),
+				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
+						"STRINGP"),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of());
 
 		private final String label;

@@ -9,9 +9,9 @@ element-wise across kinds, all deeply and structurally; a string is no sequentia
 `false` for `(= [] nil)`). The comparison is `equal`-shaped, not truthiness: `(= false nil)` is
 `false`, the two objects being distinct. A Java object on the left is asked its own `equals`,
 as in the oracle, so `(= o 1)` hands it the number while `(= 1 o)` is `false`; `false`, a
-keyword, a symbol or a collection is never handed to `equals` (the oracle hands it), and a Java collection is
-not `=` to a Clojure one (the oracle compares them element-wise). Works as a function value of
-the same arity.
+keyword, a symbol or a collection is never handed to `equals` (the oracle hands it). A Java `List`,
+`Map` or `Set` is `=` to a Clojure sequential, map or set of `=` elements, either side first,
+as in the oracle. Works as a function value of the same arity.
 
 ```clojure
 (println (= 1 1 1)) ; true

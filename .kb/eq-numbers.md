@@ -84,6 +84,50 @@ asks `equals`, so `equal` keeps doing it (a host collection included).
   `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCallALispValueAsTheSharedRuleSays`
   (the interpreter copy beside the bridge's and `_jrecv`).
 
+### Clojure `=` of a host collection (decided 2026-10-04)
+
+- The oracle's `Util.equiv` hands a pair holding an `IPersistentCollection` to that
+  collection's `equiv` (`pcequiv`), which takes a `java.util.List` (element by element with a
+  sequential), `Map` (with a map) or `Set` (with a set) of its kind, either operand first;
+  `equals` is never asked. `%clojure-equal` asks `%clojure-host-equal-p` last, after `equal`
+  answered NIL (`(t (or (equal a b) ...))`, and before `(t nil)` in `%clojure-sorted-equal`):
+  `equal` hands a host no collection (above), so the order changes no answer. CL `equal` is
+  untouched (the symmetry argument above).
+- The walk reads the host through `toArray` (unmarshalled: atoms become Lisp values, a nested
+  host collection stays one and recurses through `%clojure-equal`) and looks each key or
+  member up in the CLOJURE side by its own lookup (`%clojure-sorted-lookup`: `=`, a sorted
+  one's comparator), sizes compared first. Iterating the host side is forced: a keyword key
+  cannot be marshalled for a host `containsKey`. Not an iterator: `(java:call it "hasNext")`
+  on a `HashMap$EntryIterator` is refused (declared on the non-public `HashIterator`).
+- A host collection is no structural key, and `%clojure-hash` is unchanged: a table finds it
+  by its own `equals`/`hashCode`. The oracle agrees for its hash maps and sets
+  (`(contains? #{[1 2]} al)` false) and not for its array maps, which scan by `=`
+  (`(get {[1 2] :v} al)` `:v`, here nil; `frequencies` likewise). Making it a key would put a
+  host test on every lookup and break `(count (set [al [1 2]]))` 2, the oracle's answer.
+- Not modeled: Java `equals` between host keys that unmarshal to one Lisp value (an
+  `Integer` and a `Long` key are both `1`), a host `Boolean.FALSE` element (unmarshalled to
+  nil, `java-interop.md`), `nil` as the empty list (`(= (java.util.ArrayList.) nil)` true, like
+  `(= [] nil)`).
+- A `java:` program only: the test is the second of `ClojureArms.Family.HOST`'s, so a program
+  naming no `java:` operator sheds the arm and both bodies are what they were.
+- Measured 2026-10-04 (oracle clj 1.12.6): 51 pairs of lists, maps, sets, sorted collections,
+  records, lazy and infinite seqs, nested host lists -- 29 answers wrong before, oracle-identical
+  after on the interpreter and the JVM; `List/of`, `subList`,
+  `unmodifiableList`, `Map/of`, `ConcurrentHashMap`, `LinkedHashMap`, `TreeMap`, `Set/of`,
+  `TreeSet`, `LinkedHashSet`, `keySet` agree too.
+- Cost: programs without `java:` byte-identical (wasm P1, `--optimize=size`, component, JVM
+  class: `demo.clj`, a 10x10 `=` matrix over every kind incl. sorted, a `defn` over `=`; all
+  four backends print the same). A `java:` program reaching `=` grows by the two functions,
+  `%clojure-host-instance-p` and `%clojure-sorted-lookup`: JVM class 113,241 -> 117,288 and
+  115,397 -> 120,653 B (a first cut through `%clojure-set-count` pulled the seq runtime:
+  +7.6 KB). Speed: JVM `=` loop in a `java:` program, 3M unequal pairs, 1,604 -> 1,645 ms
+  (medians of 5); interpreter, which keeps the arm, 600k unequal pairs straight into
+  `%clojure-equal` 7.1 -> 8.7 s (medians of 5, noisy host; the arm's call alone measured
+  ~7.8, the type tests ahead of `%clojure-lisp-value-p` cut it from ~9.8), a mixed program
+  (`cond` over keywords, `filter`, `frequencies`, `distinct`) 12.4 -> 12.3 s, within noise.
+- Pins: `ClojureInteropTest#aHostCollectionIsEqualToAClojureCollectionOfItsKind`
+  (oracle-identical), `ClojureLibraryTest#aProgramNamingNoJavaOperatorComparesWithoutTheHostCollectionArm`.
+
 ## Why not box identity (SBCL's answer)
 
 CLHS (`eq`, its notes and examples) leaves `eq` on numbers and characters implementation-dependent

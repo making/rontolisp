@@ -1617,7 +1617,65 @@
          (= a b))
         ((or (rontolisp::%clojure-sorted-p a) (rontolisp::%clojure-sorted-p b))
          (rontolisp::%clojure-sorted-equal a b))
-        (t (equal a b))))
+        ;; equal hands a host object no collection, so a host collection and a
+        ;; Clojure one reach the host-object family's arm
+        (t (or (equal a b) (rontolisp::%clojure-host-equal-p a b)))))
+
+;; = of a host collection and a Clojure one, the oracle's pcequiv: Util.equiv
+;; hands a pair holding a Clojure collection to that collection's equiv, which
+;; takes a java.util.List, Map or Set of its kind. The two functions are the
+;; host-object family's (clojure/ClojureArms): = and the sorted = ask the test
+;; last, and a program naming no java: operator, where no host object exists,
+;; folds it away.
+(defun rontolisp::%clojure-host-equal-p (a b)
+  "Whether one of A and B is a host object and the other a Lisp value = to it
+   as a collection of its kind (%clojure-host-collection-equal), either one
+   first."
+  (cond ((and (or (consp a) (numberp a) (arrayp a) (symbolp a))
+              (or (consp b) (numberp b) (arrayp b) (symbolp b)))
+         ;; the common unequal pairs, answered without a call: the interpreter
+         ;; asks this after every unequal = that reaches equal
+         nil)
+        ((rontolisp::%clojure-lisp-value-p a)
+         (and (not (rontolisp::%clojure-lisp-value-p b))
+              (rontolisp::%clojure-host-collection-equal b a)))
+        ((rontolisp::%clojure-lisp-value-p b)
+         (rontolisp::%clojure-host-collection-equal a b))))
+
+(defun rontolisp::%clojure-host-collection-equal (h c)
+  "Whether the host object H is = to the Lisp value C as the oracle's equiv of
+   the Clojure collection C decides it: a java.util.List element by element
+   with a sequential, a Map of C's count whose every key C holds under an =
+   value with a map, a Set of C's count whose every member C holds with a set.
+   C finds a key or member as its lookups do (by =, a sorted one by its
+   comparator); H's elements are read through toArray. Anything else is
+   unequal."
+  (if (rontolisp::%clojure-sequential-p c)
+      (and (rontolisp::%clojure-host-instance-p h "java.util.List")
+           (rontolisp::%clojure-seq-equal c (java:call h "toArray")))
+      (let ((setp
+             (or (rontolisp::%clojure-set-p c)
+                 (rontolisp::%clojure-sorted-set-p c))))
+        (and (or setp (hash-table-p c) (rontolisp::%clojure-sorted-map-p c))
+             (rontolisp::%clojure-host-instance-p h
+              (if setp "java.util.Set" "java.util.Map"))
+             (eql (java:call h "size")
+                  (if (rontolisp::%clojure-sorted-p c)
+                      (rontolisp::%clojure-sorted-count c)
+                      (hash-table-count (if setp (car (cdr c)) c))))
+             (let ((miss (list nil)) (ok t))
+               (dolist (e (java:call (if setp h (java:call h "entrySet"))
+                                     "toArray") ok)
+                 (if ok
+                     (let ((w
+                            (rontolisp::%clojure-sorted-lookup c
+                             (if setp e (java:call e "getKey")) miss)))
+                       (if (or (eq w miss)
+                               (and (not setp)
+                                    (not
+                                     (rontolisp::%clojure-equal w
+                                      (java:call e "getValue")))))
+                           (setq ok nil))))))))))
 
 (defun rontolisp::%clojure-equal-values (&rest values)
   "= as a function value: T when every neighbouring pair is equal, the false
@@ -5558,6 +5616,7 @@
                                (not (rontolisp::%clojure-equal (cdr kv) w)))
                            (setq ok nil)))))
                nil))
+          ((rontolisp::%clojure-host-equal-p a b) t)
           (t nil))))
 
 (defun rontolisp::%clojure-sorted-hash (s)

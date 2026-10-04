@@ -246,6 +246,21 @@ class ClojureLibraryTest {
 		return rest instanceof LispSymbol symbol && names.contains(symbol.name());
 	}
 
+	@Test
+	void aProgramNamingNoJavaOperatorComparesWithoutTheHostCollectionArm() {
+		// only a java: operator hands a program a host collection: without one, = and the
+		// sorted = keep the bodies they had before a host collection counted
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-EQUAL"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-SORTED-EQUAL"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (= [1] (sorted-set 1) (list 1)))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-EQUAL")).doesNotContain("HOST").endsWith("(T (EQUAL A B))))");
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-SORTED-EQUAL")).doesNotContain("HOST");
+		List<LispVal> host = ClojureLibrary.process(Clojure.read("(prn (= [1] (java.util.ArrayList. [1])))", null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-EQUAL")).contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+	}
+
 	private static String defun(List<LispVal> forms, String name) {
 		return forms.stream()
 			.map(LispVal::print)
