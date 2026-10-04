@@ -1214,7 +1214,17 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   vector in a `java:` program within noise (3.97 -> 3.95 s / 20, medians of 5); the
   interpreter, which keeps the arm in every program, pays one call per value reaching the
   fall-through (integers): `pr-str` of a 50k-integer vector 6.87 -> 7.40 s / 4 (+8%, medians
-  of 5, load 3-13).
+  of 5, load 3-13). An integer therefore takes `((integerp x) (princ x stream))` right after
+  the `nil` arm (it has no metadata, is no collection, carries no label; a bignum is an
+  integer, a ratio still falls through to the same `princ`): the same `pr-str` x 5 on the
+  interpreter 12.2 -> 6.0 s (the load, compile and `princ` share is the rest), JVM 200k x 20
+  3.24 -> 3.09 s, wasm and component 4.9 -> 4.6 s (3-5%, near noise: the compiled kind tests
+  are cheap). Cost, measured 2026-10-04: a program that prints a non-literal value
+  grows by the one clause, wasm +46 B (P1, `--optimize=size`, component alike; 36,796 ->
+  36,842), and any JVM program that links the printer, `(println "n")` included, grows
+  +288-336 B of class (59,347 -> 59,635); a program linking no printer (wasm
+  `(println "n")`, a JVM `(def x 1)`) is byte-identical. Output identical on the four backends
+  (`an-integer-and-a-ratio-print-as-their-digits-under-every-flag`).
   Pins: `ClojureInteropTest#aHostCollectionPrintsReadablyLikeItsClojureKind`
   (oracle-identical but the `#<java C>` lines),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm`.

@@ -6457,6 +6457,21 @@ cases:
       x
       [1 ...]
       [1 2]
+  - name: an-integer-and-a-ratio-print-as-their-digits-under-every-flag
+    # Oracle-identical (clj 1.12.6): a number is no collection, so *print-level* and
+    # *print-length* leave it whole, at any depth, under pr, print and str alike.
+    source: |
+      (prn 0 -7 9223372036854775807 3/4 -3/4 [1 -2 3/4])
+      (binding [*print-level* 0] (prn 5 -5 3/4 [1]))
+      (binding [*print-level* 1 *print-length* 2] (prn [[1 2 3] -4 5 6] '(7 (8))))
+      (println 12 -34 5/6 [7 -8 9/10] (pr-str [1 2]) (str [-1 2/3]))
+      (binding [*print-readably* false] (prn -1 [2 3/4]))
+    expected: |
+      0 -7 9223372036854775807 3/4 -3/4 [1 -2 3/4]
+      5 -5 3/4 #
+      [# -4 ...] (7 #)
+      12 -34 5/6 [7 -8 9/10] [1 2] [-1 2/3]
+      -1 [2 3/4]
   - name: a-map-whose-keys-share-a-namespace-prints-it-lifted
     # Oracle-identical (clj 1.12.6): under *print-namespace-maps*, which clojure.main binds
     # true, a map whose every key is a keyword or symbol of one namespace prints as
