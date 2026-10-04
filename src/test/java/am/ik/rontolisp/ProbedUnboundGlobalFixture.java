@@ -7,13 +7,14 @@ package am.ik.rontolisp;
  * {@code (defvar x)} never bound, a counter a loop in a function bumps through its own
  * probe, a {@code setf} in a function, and a name a top-level lambda assigns probed from
  * another, plus the parallel and multiple-value assignments ({@code psetq},
- * {@code psetf}, {@code multiple-value-setq}) in a function body. The fold cannot answer
- * any of the function-body cases ({@code CompileTimeBoundp}: a deferred body or a
- * valueless {@code defvar}), and with no eval runtime in the program the compile paths
- * answer from the variable, which holds an UNBOUND marker until the first store
- * ({@code GlobalVarCollector.collectProbedUnbound}); until 2026-10-04 each probe asked
- * the eval mirror, which put the whole eval runtime in the program. The expected text is
- * SBCL's. Shared by the backend suites.
+ * {@code psetf}, {@code multiple-value-setq}) in a function body and at top level, where
+ * a {@code let} of the same name keeps it lexical, and assignments in a {@code defvar}'s
+ * initform. The fold cannot answer any of the function-body cases
+ * ({@code CompileTimeBoundp}: a deferred body or a valueless {@code defvar}), and with no
+ * eval runtime in the program the compile paths answer from the variable, which holds an
+ * UNBOUND marker until the first store ({@code GlobalVarCollector.collectProbedUnbound});
+ * until 2026-10-04 each probe asked the eval mirror, which put the whole eval runtime in
+ * the program. The expected text is SBCL's. Shared by the backend suites.
  */
 public final class ProbedUnboundGlobalFixture {
 
@@ -62,11 +63,24 @@ public final class ProbedUnboundGlobalFixture {
 			(print (boundp '*pg-g*))
 			(pg-psetf)
 			(print (list (boundp '*pg-g*) *pg-g* *pg-h*))
+			(defun pg-tprobe () (list (boundp '*pg-ta*) (boundp '*pg-tv*)))
+			(print (pg-tprobe))
+			(psetq *pg-ta* 1 *pg-tb* 2)
+			(print (list *pg-ta* *pg-tb* (boundp '*pg-ta*)))
+			(multiple-value-setq (*pg-tv* *pg-tw*) (floor 9 2))
+			(print (list *pg-tv* *pg-tw* (pg-tprobe)))
+			(print (list (progn (psetf *pg-tf* 6) *pg-tf*) (let ((*pg-ta* 10)) (psetq *pg-ta* 11) *pg-ta*) *pg-ta*))
+			(mapc (lambda (x) (multiple-value-setq (*pg-tl*) (floor x 2))) '(3 9))
+			(print *pg-tl*)
+			(let ((a 0) (b 0)) (multiple-value-setq (a b) (floor 11 3)) (psetq a b b a) (print (list a b)))
+			(defvar *pg-ti* (progn (setq *pg-tj* 1) (psetq *pg-tk* 2) (+ *pg-tj* *pg-tk*)))
+			(defun pg-tjk () (list *pg-tj* *pg-tk*))
+			(print (list *pg-ti* (pg-tjk) (boundp '*pg-tj*) (boundp '*pg-tk*)))
 			""";
 
 	/** What {@link #SOURCE} prints, one value per line. */
 	public static final String EXPECTED = String.join("\n", "(NIL NIL)", "(T T NIL NIL)", "(T 3 4)", "NIL", "(T 5)",
 			"NIL", "(T :U)", "5", "NIL", "(T (1))", "(NIL :NONE)", "(T 2)", "(NIL NIL)", "(T 1 T 2)", "NIL", "(T 3 1)",
-			"NIL", "(T 4 5)");
+			"NIL", "(T 4 5)", "(NIL NIL)", "(1 2 T)", "(4 1 (T T))", "(6 11 1)", "4", "(2 3)", "(3 (1 2) T T)");
 
 }

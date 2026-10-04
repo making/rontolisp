@@ -4121,12 +4121,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
 			globals.add(LispNames.ERROR_OUTPUT_VAR);
 		}
-		// A name a function body assigns with no lexical binding in scope is a global,
-		// as on the interpreter and in SBCL. Last, so a name already a global (a special
-		// a
-		// local declaration proclaims) keeps its place and a program with none its
-		// indices.
-		globals.addAll(GlobalVarCollector.collectFreeAssignedInFunctionBodies(program));
+		// A name a function body or a top-level form assigns with no lexical binding in
+		// scope is a global, as on the interpreter and in SBCL. Last, so a name already a
+		// global (a special a local declaration proclaims) keeps its place and a program
+		// with none its indices.
+		globals.addAll(GlobalVarCollector.collectFreeAssigned(program));
 		// The one dispatch every access of a global by name goes through -- a computed
 		// symbol-value, a set, the eval runtime's variable lookup and assignment -- here
 		// because its arms are the FINAL global set. A program that only reads gets the

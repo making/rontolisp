@@ -48,8 +48,9 @@ unbound.
 - Never answered either: a name assigned only inside a deferred body. That
   assignment poisons the name, so the probe is left to the run time ("A probe the fold
   leaves open" below). A name no top-level form assigns is a global too when a function
-  body assigns it with no lexical binding in scope (`.kb/core-representation.md`); before
-  2026-10-04 that store was a function local and the probe answered NIL.
+  body assigns it with no lexical binding in scope (`.kb/core-representation.md`,
+  `collectFreeAssigned`); before 2026-10-04 that store was a function local and the probe
+  answered NIL.
 - The poison scan reads assignments through `GlobalVarCollector.assignedPlaces`, the one
   recognition of `setq`/`setf`/`psetq`/`psetf`/`multiple-value-setq` shared with the
   function-body collector (`isAssignmentHead` feeds the prefix flag). Before 2026-10-04 the
@@ -79,7 +80,7 @@ the probe is `(%global-boundp 'G)`.
   computed probe, `symbol-value`, ...) keeps the mirror probe, which answers the same, so it
   compiles byte-identically. The gate reads a SUBSET of the final set off the program
   before injection (`collectProbedUnboundBeforeInjection`: the specials, `collect` of the
-  non-defun forms, nested defuns, function-body free assignments);
+  non-defun forms, nested defuns, `collectFreeAssigned`);
   `requireBoundpOffMirror` checks the final set.
 - JVM: the marker is `JvmDynVarRuntimeBuilder.unboundMarker` (`_unbound`, seeded in
   `<clinit>`), independent of the ThreadLocal runtime. A global without a `_d$` field reads

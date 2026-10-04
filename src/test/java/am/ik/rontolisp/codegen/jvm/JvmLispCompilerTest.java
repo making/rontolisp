@@ -20675,7 +20675,7 @@ class JvmLispCompilerTest {
 		// Interpreter parity (the LispEvaluatorTest twin): a name a function body assigns
 		// with no lexical binding in scope gets a static field like a top-level setq's,
 		// so another defun and a top-level form read it and boundp sees the store
-		// (GlobalVarCollector.collectFreeAssignedInFunctionBodies).
+		// (GlobalVarCollector.collectFreeAssigned).
 		assertThat(compileAndRun(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
 	}

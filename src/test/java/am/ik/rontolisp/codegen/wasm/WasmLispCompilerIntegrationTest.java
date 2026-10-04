@@ -24096,7 +24096,7 @@ class WasmLispCompilerIntegrationTest {
 	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component, both through the whole front end: the name gets a module
-		// global (GlobalVarCollector.collectFreeAssignedInFunctionBodies).
+		// global (GlobalVarCollector.collectFreeAssigned).
 		assertThat(compileAndRunProgram(
 				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE,
 						am.ik.rontolisp.reader.Features.WASM, true, false)))

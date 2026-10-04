@@ -1841,31 +1841,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		// of such a name is only ever in its global variable, so a call and a #'name have
 		// to reach the variable before the --dynamic late-binding fallback does.
 		Set<String> nestedDefunNames = GlobalVarCollector.collectAllNestedDefunNames(program);
-		// Promote any top-level *free* variable that is also assigned somewhere (a setq /
-		// setf bare-symbol place) to a global field. Per Common Lisp such an assignment
-		// targets the global namespace; giving it a persistent static field (rather than
-		// a
-		// main() local) lets the top-level body be split across several methods (below)
-		// without a value set in one chunk becoming unreachable from a later one. The
-		// free
-		// test (scope-aware, via FreeVarAnalyzer) keeps a lexical that a lambda closes
-		// over
-		// out of the global set, and the assigned test keeps a genuinely-unbound read
-		// (e.g. a function name in value position) erroring instead of silently reading
-		// nil.
-		Set<String> functionNames = new HashSet<>();
-		for (DefunDecl defun : defuns) {
-			functionNames.add(defun.name);
-		}
-		Set<String> assignedSymbols = new HashSet<>();
-		for (LispVal expr : topLevelExprs) {
-			collectAssignedSymbols(expr, assignedSymbols);
-		}
-		for (String free : FreeVarAnalyzer.findFreeVars(topLevelExprs, Set.of(), functionNames, globals)) {
-			if (assignedSymbols.contains(free)) {
-				globals.add(free);
-			}
-		}
 		// Special (dynamically bound) variables, collected before Pass 1. Each needs the
 		// same global backing store (a let of a special save/restores over it), so union
 		// them into the globals set before fields are minted; a let/let* of one of these
@@ -1913,12 +1888,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)) {
 			globals.add(LispNames.ERROR_OUTPUT_VAR);
 		}
-		// A name a function body assigns with no lexical binding in scope is a global,
-		// as on the interpreter and in SBCL. Last, so a name already a global (a special
-		// a
-		// local declaration proclaims) keeps its place and a program with none its
-		// indices.
-		globals.addAll(GlobalVarCollector.collectFreeAssignedInFunctionBodies(program));
+		// A name a function body or a top-level form assigns with no lexical binding in
+		// scope is a global, as on the interpreter and in SBCL. Last, so a name already a
+		// global (a special a local declaration proclaims) keeps its place and a program
+		// with none its indices.
+		globals.addAll(GlobalVarCollector.collectFreeAssigned(program));
 		// The one dispatch every access of a global by name goes through -- a computed
 		// symbol-value, a set, the eval runtime's variable lookup and assignment -- here
 		// because its arms are the FINAL global set. A program that only reads gets the
@@ -5430,42 +5404,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			val = cons.cdr();
 		}
 		return false;
-	}
-
-	/**
-	 * Collects every symbol that appears as the target of a {@code setq} place or a
-	 * {@code setf} bare-symbol place anywhere in the given form (quoted data excluded).
-	 * This is an over-approximation (it does not track lexical scope); it is intersected
-	 * with the scope-aware free-variable set to decide which top-level variables become
-	 * global fields.
-	 */
-	private static void collectAssignedSymbols(LispVal val, Set<String> out) {
-		if (!(val instanceof LispCons cons)) {
-			return;
-		}
-		List<LispVal> parts = cons.toList();
-		if (cons.car() instanceof LispSymbol head) {
-			switch (head.name()) {
-				case LispNames.QUOTE -> {
-					return;
-				}
-				case LispNames.SETQ, LispNames.SETF -> {
-					// place/value pairs; a bare-symbol place is a variable assignment (a
-					// non-symbol setf place like (car x) names a location, not a
-					// variable).
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-							out.add(place.name());
-						}
-					}
-				}
-				default -> {
-				}
-			}
-		}
-		for (LispVal part : parts) {
-			collectAssignedSymbols(part, out);
-		}
 	}
 
 	/**
