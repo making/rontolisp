@@ -107,7 +107,7 @@ answered `2 5 3` before).
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` converts), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
-| `assert` | `if` around `error` | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
+| `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
 | `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
@@ -125,7 +125,7 @@ answered `2 5 3` before).
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
-| `subs` | `subseq` | |
+| `subs` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
@@ -203,8 +203,9 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- A runtime error whose condition names no class is taken by any catch but `ExceptionInfo`'s
-  ("Catching"). Exceptions: see "Exceptions".
+- An error naming no class (a refusal of a construct the oracle accepts, a failed host call) is
+  taken by any catch but `ExceptionInfo`'s ("Catching"); a misuse a lower verb refuses first
+  carries that verb's class ("Refusals"). Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
@@ -261,11 +262,12 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   prefix; `throw` of a non-exception is a `ClassCastException` whose message is its rendering
   (the oracle's names the two classes; until 2026-10-03 it signalled the rendering as a plain
   error, which an `IllegalArgumentException` catch took).
-- Size, wasm P1, measured 2026-10-03 against the tree before: `(try (throw (ex-info ..)) (catch
-  Exception e (ex-message e)))` 145,619 -> 146,474 B; a `try` reading no exception 83,311 B
-  unchanged; `(.toString 5)` 51,108 -> 51,192 B (the condition disjunct);
-  `(throw (Exception. "boom"))` + `.getMessage` 147,067 B (before: a 3,588 B module failing on
-  `JAVA:CALL`).
+- Size, wasm P1, measured 2026-10-04: `(println (ex-message (ex-info "m" {})))` 51,358 B;
+  `(try (throw (ex-info ..)) (catch Exception e (ex-message e)))` 147,548 B, the caught
+  condition reaching a printer (the report renderer); `(.toString 5)` 51,477 B; `(throw
+  (Exception. "boom"))` + `.getMessage` 148,010 B. An `ex-info` program carried ~75 KB more
+  until then: `%clojure-cause-of`'s refusal was `(error <computed string>)`, the
+  object-designator expansion; a refusal carrier now ("Refusals").
 - Pins: clojure-spec `get-message-reads-a-caught-runtime-error`,
   `throwable-constructions-are-exceptions-on-every-backend`, `ex-info-carries-data-through-throw`;
   `ClojureInteropTest.aThrownHostThrowableKeepsItsClassAndMessage` (interpreter and JVM).
@@ -299,8 +301,9 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   quoted chain: `satisfies` takes one symbol, so the chain cannot ride the clause.
   `thrown?`/`thrown-with-msg?` lower to the same clause around the body
   (`ClojureTestLowering.caughtOf`), so another class's exception reaches the `is` as an ERROR.
-- `%clojure-catches` (`clojure.lisp`, "Catching"): an exception (`C%E-PARTS`) when the catch's
-  class is in its chain; a runtime error by `%clojure-error-chain`, the class the oracle throws
+- `%clojure-catches` (`clojure.lisp`, "Catching"): an exception (`C%E-PARTS`) or a refusal
+  ("Refusals") when the catch's class is in its own chain (`%clojure-exact-chain`); a runtime
+  error by `%clojure-error-chain`, the class the oracle throws
   where the runtime signals that condition type: `arithmetic-error` `ArithmeticException`;
   `type-error` `ClassCastException`, `NullPointerException` for a nil datum,
   `IndexOutOfBoundsException` for an `(INTEGER 0 (D))` expected type,
@@ -308,16 +311,13 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   type (the JVM pad's type-error synthesized from a raw host failure: a compiled `.charAt` past
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
-  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a
-  `simple-error` refusal of the Clojure runtime, a failed host call, `assert`) matches every
-  catch but `ExceptionInfo`'s: the oracle's classes there are all over the place (52 runtime
-  errors probed: IAE, CCE, IOOBE, NPE, ISE, NFE, CNFE, AssertionError, ...), and a catch-all
-  keeps every program that caught one working. Attributing them needs a class carrier at the
-  refusal sites (`.todo/c63`); a failed host call's throwable is reduced to text at the
-  `java:` boundary (`.todo/c64`).
+  subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
+  of a construct the oracle accepts, a failed host call) matches every catch but
+  `ExceptionInfo`'s, so a program that caught one keeps working; a failed host call's throwable
+  is reduced to text at the `java:` boundary (`.todo/c64`).
 - A program that catches by class but builds no exception carries `C%E-PARTS` answering NIL
-  (`catchRuntime`'s reader) instead of the exception runtime, whose `define-condition` report
-  reaches the printer (~100 KB of wasm). A session emits the reader while no buffer built an
+  (`catchRuntime`'s reader) instead of the exception runtime (measured 2026-10-04: a one-`try`
+  program 48,229 B of wasm, 64,068 B with an `ex-info` built beside it). A session emits the reader while no buffer built an
   exception; the exception runtime's own `C%E-PARTS` replaces it once one does.
 - The type-error slots are read in place (`%clojure-type-error-class`): `(%obj-ref c 0)` /
   `(%obj-ref c 1)` behind `(%obj-is c '|%class-TYPE-ERROR| '|%class-SIMPLE-TYPE-ERROR|)`, the
@@ -338,16 +338,15 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   catch, a program with no catch, a `class` multimethod with none and `examples/clojure/demo.clj`
   byte-identical.
 - `class`, `instance?` and the stack-trace methods read the class a program can name
-  (`%clojure-condition-chain`): an exception's own, a runtime error's from
-  `%clojure-error-chain`, `RuntimeException`'s for a condition naming none (the superclass of
-  every Clojure-runtime refusal but `assert`'s). `class` answers `(:C%KEYWORD "<class>")`, the
+  (`%clojure-condition-chain`): an exception's or a refusal's own, a runtime error's from
+  `%clojure-error-chain`, `RuntimeException`'s for a condition naming none. `class` answers `(:C%KEYWORD "<class>")`, the
   keyword shape of every kind, through an arm of `classForm` ahead of the host arm
   (`%clojure-exception-p`, family `ClojureArms.Family.EXCEPTION`, whose producer is a
   definition of `C%E-PARTS`): a program that can hold no condition sheds it and compiles as
   before. The catch runtime's reader therefore also travels where `class` meets a catch of
   any class, and wherever `instance?` names a throwable class (`needsExceptionReader`).
-  `instance?` of a throwable class is `%clojure-instance-of` over the chain (exact, so a
-  refusal naming no class is an instance of RuntimeException and its superclasses only, where
+  `instance?` of a throwable class is `%clojure-instance-of` over the chain (exact, so an
+  error naming no class is an instance of RuntimeException and its superclasses only, where
   a catch takes it whatever it names); a host `Throwable` asks the host. `.printStackTrace` /
   `.getStackTrace` of a receiver of unknown or plain-throwable class are
   `%clojure-print-stack-trace` (the report line to `*error-output*`) /
@@ -360,8 +359,7 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   life-without-multi, macros, chain-1/3) report what they did before on the interpreter and the
   JVM.
 - Pins: clojure-spec `catch-takes-an-exception-of-its-class-or-a-subclass`,
-  `catch-takes-a-runtime-error-by-the-class-the-oracle-throws`,
-  `a-refusal-naming-no-class-is-taken-by-any-catch-but-exception-info`,
+  `catch-takes-a-runtime-error-by-the-class-the-oracle-throws`, the "Refusals" pins,
   `thrown-matches-the-class-and-reports-any-other-exception-as-an-error`, the `assert-*` cases
   (an `AssertionError` catch); `ClojureThrowablesTest`, `ClojureLoweringTest`
   `aCatchTestsItsClassThroughAPredicateOverTheClassChain`/`aCatchOfNoThrowableClassIsTheOraclesRefusal`,
@@ -371,6 +369,73 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `classInstanceAndTheStackTraceMethodsReadAnExceptionsClass`, `ClojureArmsTest`
   `theExceptionFamilyFoldsClassReadingAConditionWhereNoReaderIsDefined`,
   `ClojureInteropTest.aHostThrowableAnswersInstanceAndItsStackTraceFromTheHost`.
+
+## Refusals
+
+**A refusal of the run-time library or of the lowering carries the class the oracle throws
+for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 2026-10-04).
+
+- Carriers (`clojure.lisp` "Refusals", `ClojureRefusals`): one function per class over the
+  message (`%clojure-illegal-argument-exception`, `-illegal-state-`, `-class-cast-`,
+  `-null-pointer-`, `-index-out-of-bounds-`, `-string-index-out-of-bounds-`,
+  `-unsupported-operation-`, `-number-format-`, `-arithmetic-`, `-arity-`, `-runtime-`,
+  `-class-not-found-`, `-pattern-syntax-`, `-illegal-format-conversion-exception`,
+  `%clojure-exception` for `java.lang.Exception`, `%clojure-assertion-error`), each signalling
+  through `%clojure-refuse` -- the one typed signal -- a `%clojure-refusal`, a `simple-error`
+  whose third slot holds the chain (read in place by `%clojure-exact-chain`) and whose report
+  is the message. Where the oracle casts a value it was handed, the `-of` carriers
+  (`-class-cast-exception-of`, `-illegal-argument-exception-of`) take that value too: nil is
+  its NullPointerException, the method call on the nil it cast. `%clojure-map-entry-refusal`
+  is the seq-then-cast of a map's `conj`/`merge`/`reduce-kv`: IAE for a value that cannot be
+  seqed (or a vector, no pair), else CCE. A message is a literal, `(format nil control
+  args...)` or a form answering the text. The lowering builds the same calls
+  (`ClojureRefusals.refusal`/`formatted`).
+- **Free where nothing reads a class** (`ClojureArms.Family.REFUSAL`, after `EXCEPTION`): only
+  a catch by class (`%clojure-catches`), `class` or `instance?` of a condition can tell a
+  refusal from the plain error with its message, so those are the producers. Anywhere else the
+  strip folds each carrier back to that error -- a literal with each `~` doubled (its text
+  control; a literal without one is itself), `(format nil c a...)` to `(error c a...)`,
+  anything else `(error "~A" x)` -- drops the value (a variable or a read of one), folds
+  `%clojure-refusal-p`, drops the `define-condition`, and turns `%clojure-subs` back into
+  `subseq`. Such a program compiles to the bytes it did before, except where a site was
+  `(error <computed string>)`: that object-designator expansion pulled the run-time dispatch
+  and the printer, `(error "~A" x)` does not (measured 2026-10-04: an `ex-info` doc example
+  134,530 -> 60,598 B of wasm, `assert` with a message 161,811 -> 94,454, the hierarchy and
+  proxy runtimes 137-1,642 B less JVM class). The uncaught report is the message either way,
+  so a catch elsewhere changes nothing a program prints.
+- **The condition gate** (`.kb/error-handling.md`, "The routing gate"): `%clojure-refuse`'s
+  signal over the text control of a variable reports that variable, so it routes no report,
+  and the `define-condition`'s unreferenced keyword constructor builds nothing. Without either,
+  every class-reading program carried the renderer and the printer hook (+10.5 KB wasm,
+  +9.5 KB JVM class on a one-`try` program).
+- `subs` is `%clojure-subs`, the family's alias of `subseq`: a bound outside a string is the
+  oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words.
+- Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
+  `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
+  `Can't take value of a macro` (a compile error in the oracle), a failed host call
+  (`.todo/c64`), internal invariants. A misuse a lower verb refuses first carries that verb's
+  class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`. A verb that
+  answers where the oracle refuses (`(count :a)` is 2) is not a refusal.
+- Size, measured 2026-10-04 (wasm P1 / component / JVM class, before -> after): `(println (try
+  (first 5) (catch Exception e :caught)))` 47,858 / 49,368 / 68,410 -> 48,222 / 49,773 / 69,269;
+  the IAE-past-an-`ArithmeticException` plus `AssertionError` pair 48,783 / 50,360 / 70,648 ->
+  49,254 / 50,903 / 71,695; a `Throwable` catch, an uncaught refusal, `examples/clojure/demo.clj`,
+  every example / size-report / bench program and 413 of the 458 Clojure doc examples
+  byte-identical (the 45 others are class readers, +67..+610 B wasm, or the shrinks above).
+  The fixed-arity carriers matter: an `&optional` value cost the JVM class 828 B more.
+- Run time: a caught refusal builds its instance (200k `(try (first 5) (catch
+  IllegalArgumentException e 1))` 260 -> 305 ms wasm, 335 -> 381 ms JVM); `subs` in a
+  class-reading program checks its bounds before `subseq` does (a 2M-call loop 1.30 ->
+  1.52 s wasm, the JVM unchanged).
+- Pins: clojure-spec `a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws`,
+  `refusals-of-the-runtime-carry-the-oracles-classes` (each probe first passes a catch of a
+  class no refusal is, so a refusal naming no class fails it), `class-instance-and-stack-traces-of-an-exception`;
+  `ClojureArmsTest#theRefusalFamily*`,
+  `ClojureLibraryTest#aProgramReadingNoConditionsClassSplicesEveryRefusalAsThePlainError`,
+  `ClojureRefusalsTest` (each chain is `ClojureThrowables`'),
+  `RontoLispCliStreamsTest#aClojureRefusalReportsTheSameLineWhetherOrNotTheProgramReadsAClass`,
+  `LispMacroExpanderTest#anUnreferencedConditionConstructorBuildsNothingToRender` /
+  `#aSignalOfItsOwnTextControlNeedsNoRenderer`.
 
 ## Sorted collections
 
@@ -1780,7 +1845,8 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
 - `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
-  `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
+  `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureRefusalsTest`
+  (the refusal carriers' chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,
@@ -1789,7 +1855,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureArmsTest` (the sorted-collection and unbound-root strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root and refusal strips).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

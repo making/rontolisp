@@ -381,7 +381,7 @@ final class ClojureCollectionLowering {
 	static LispVal assocValue(ClojureLowering ctx) {
 		LispSymbol map = new LispSymbol(ClojureLowering.mangle("assoc-map"));
 		LispSymbol pairs = new LispSymbol(ClojureLowering.mangle("assoc-pairs"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				LispString.literal("assoc takes a map and key/value pairs"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
@@ -575,7 +575,7 @@ final class ClojureCollectionLowering {
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("get-rest"));
 		LispVal two = getForm(ctx, coll, key, ClojureLowering.NIL_CONST);
 		LispVal three = getForm(ctx, coll, key, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("get takes a map, a key and an optional default"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), two),
@@ -866,8 +866,8 @@ final class ClojureCollectionLowering {
 						// (the regex-guard precedent)
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStateLowering.isAtomForm(collSym))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), item, collSym)));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("error"), LispString.literal("conj needs a collection and an item"))));
+		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
+			.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("conj needs a collection and an item"))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
 	}
@@ -904,8 +904,8 @@ final class ClojureCollectionLowering {
 		// a host map's entries, or a host seq's, each an entry
 		branches.add(hostArm(item, hostCall("ENTRY-PLIST", item)));
 		branches
-			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));
+			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.MAP_ENTRY,
+					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"), item)));
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
 	}
 
@@ -948,9 +948,9 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), key, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("elt"), key, new LispInteger(1)))));
-		branches
-			.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-					LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"))));
+		branches.add(
+				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+						LispString.literal("conj needs a map entry: a map, a [k v] vector or nil"), key)));
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches);
 	}
 
@@ -1013,7 +1013,7 @@ final class ClojureCollectionLowering {
 		body.add(ClojureLowerUtil.list(table, makeTable()));
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(body), copy,
 				remhashes(ctx, items, table, set), shrunkSet(table, set));
-		LispVal needSet = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("disj needs a set"));
+		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(set, ctx.lower(items.get(1))))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), set,
@@ -1090,7 +1090,7 @@ final class ClojureCollectionLowering {
 		LispVal kept = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(table, makeTable()))), copy, drops,
 				shrunkSet(table, bound));
-		LispVal needSet = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("disj needs a set"));
+		LispVal needSet = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal("disj needs a set"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(set, ClojureLowering.AMPERSAND_REST, members)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -1169,7 +1169,7 @@ final class ClojureCollectionLowering {
 	 */
 	static LispVal mapConstructorValue(ClojureLowering ctx, String what) {
 		LispSymbol pairs = new LispSymbol(ClojureLowering.mangle(what + "-pairs"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				LispString.literal(what + " takes key/value pairs"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
@@ -1220,14 +1220,15 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureProtocolLowering.isDeftypeForm(coll),
 						ClojureProtocolLowering.isReifyForm(coll)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
-		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
+				ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
+						LispString.literal("count needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll), ClojureRefusals
+			.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
 		// too, so the oracle signals instead of counting (the conj-guard
 		// precedent)
-		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("count needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll), ClojureRefusals
+			.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), coll)));
 		// the false object counts as empty, like the oracle; a seq counts its
@@ -1266,14 +1267,15 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureProtocolLowering.isDeftypeForm(coll),
 						ClojureProtocolLowering.isReifyForm(coll)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("empty? needs a collection"))));
-		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("empty? needs a collection"))));
+				ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
+						LispString.literal("empty? needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll), ClojureRefusals
+			.refusal(ClojureRefusals.ILLEGAL_ARGUMENT, LispString.literal("empty? needs a collection"))));
 		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
 		// too, so the oracle signals instead of answering false (the
 		// conj-guard precedent)
-		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal("empty? needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll), ClojureRefusals
+			.refusal(ClojureRefusals.ILLEGAL_ARGUMENT, LispString.literal("empty? needs a collection"))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), coll))));

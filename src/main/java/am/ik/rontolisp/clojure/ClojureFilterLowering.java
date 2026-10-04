@@ -484,7 +484,7 @@ final class ClojureFilterLowering {
 	/** {@code sort} as a value: a one- or two-argument lambda over the same sort. */
 	static LispVal sortValue(ClojureLowering ctx) {
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("sort-args"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("sort takes a collection and an optional comparator"));
 		LispVal one = sortForm(ctx,
 				ClojureSeqLowering.seqAllForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)), null);
@@ -571,7 +571,7 @@ final class ClojureFilterLowering {
 	static LispVal sortByValue(ClojureLowering ctx) {
 		LispSymbol key = new LispSymbol(ClojureLowering.mangle("sort-by-key"));
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("sort-by-args"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("sort-by takes a key function, a collection and an optional comparator"));
 		LispVal one = sortByForm(ctx, ClojureBindingLowering.FnArg.of(key),
 				ClojureSeqLowering.seqAllForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)), null);
@@ -641,7 +641,7 @@ final class ClojureFilterLowering {
 	static LispVal mapvValue(ClojureLowering ctx) {
 		LispSymbol fn = new LispSymbol(ClojureLowering.mangle("mapv-fn"));
 		LispSymbol colls = new LispSymbol(ClojureLowering.mangle("mapv-colls"));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("mapv takes a function and collections"));
 		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), ClojureLowering.realFun(fn),
 				colls);

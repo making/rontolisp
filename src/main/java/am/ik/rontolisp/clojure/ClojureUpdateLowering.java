@@ -169,7 +169,7 @@ final class ClojureUpdateLowering {
 				ClojureLowerUtil.list(self, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), left), inner));
 		LispVal go = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), left),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+				ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER,
 						LispString.literal("update-in takes a non-empty vector of keys")),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"),
@@ -348,7 +348,7 @@ final class ClojureUpdateLowering {
 												ClojureLowerUtil.list(
 														new LispSymbol(ClojureCollectionLowering.HOST_SEQABLE_P), src)),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), gather, out),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+										ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 												LispString.literal("select-keys needs a map"))))));
 	}
 

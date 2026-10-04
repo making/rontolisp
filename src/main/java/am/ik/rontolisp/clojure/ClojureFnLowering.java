@@ -62,10 +62,10 @@ final class ClojureFnLowering {
 		LispSymbol coll = ctx.freshTemp();
 		LispSymbol key = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
-		LispVal arityError = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-				LispString.literal("Wrong number of args (~D) passed to: :~A"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)));
+		LispVal arityError = ClojureRefusals.formatted(ClojureRefusals.ARITY,
+				"Wrong number of args (~D) passed to: :~A", ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), key)));
 		LispVal badCount = ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("cdr"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
@@ -186,7 +186,7 @@ final class ClojureFnLowering {
 		LispVal two = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-KEYWORD-2"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("keyword takes a name, or a namespace and a name"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -225,7 +225,7 @@ final class ClojureFnLowering {
 		LispVal two = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-2"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args), ClojureLowerUtil
 					.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("symbol takes a name, or a namespace and a name"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),
@@ -286,7 +286,7 @@ final class ClojureFnLowering {
 		// linked.
 		LispVal text = n == 1 && rendered != null ? LispString.literal("Assert failed: " + rendered)
 				: ClojureStringLowering.concat(ctx, parts);
-		LispVal failure = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), text);
+		LispVal failure = ClojureRefusals.refusal(ClojureRefusals.ASSERTION_ERROR, text);
 		return ctx.ifFalsey(test, ClojureLowering.NIL_CONST, failure);
 	}
 
@@ -312,7 +312,7 @@ final class ClojureFnLowering {
 		LispVal one = ClojureLowerUtil.list(ClojureLowerUtil.sym("*"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("random"), new LispDouble(1.0)));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("rand takes no bound, or one bound"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), none),
@@ -355,9 +355,9 @@ final class ClojureFnLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), realized),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("random"), new LispDouble(1.0))));
 		LispVal hit = ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), index, realized);
-		LispVal emptyErr = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal emptyErr = ClojureRefusals.refusal(ClojureRefusals.INDEX_OUT_OF_BOUNDS,
 				LispString.literal("rand-nth of an empty collection"));
-		LispVal refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal refusal = ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
 				LispString.literal("rand-nth needs a vector, string, list or seq"));
 		LispVal pick = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(realized,
@@ -396,8 +396,8 @@ final class ClojureFnLowering {
 		LispSymbol whole = ctx.freshTemp();
 		LispVal items = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), whole);
 		LispVal shuffled = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SHUFFLE"), items);
-		LispVal refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-				LispString.literal("shuffle needs a vector, list or set"));
+		LispVal refusal = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+				LispString.literal("shuffle needs a vector, list or set"), whole);
 		LispVal check = ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"),
 				List.of(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), whole), refusal),
 						ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), whole), refusal),

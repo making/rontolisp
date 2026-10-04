@@ -1273,15 +1273,17 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defrecord R [^:unsynchronized-mutable a])", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining(":volatile-mutable or :unsynchronized-mutable not supported for record fields");
-		// a non-dynamic global signals at run time, after the value evaluates
-		assertThat(lowered("(def y 1) (set! y 2)"))
-			.contains("(PROGN 2 (ERROR \"Can't change/establish root binding of: y with set\"))");
+		// a non-dynamic global signals at run time, after the value evaluates: the
+		// oracle's IllegalStateException
+		assertThat(lowered("(def y 1) (set! y 2)")).contains(
+				"(PROGN 2 (RONTOLISP::%CLOJURE-ILLEGAL-STATE-EXCEPTION \"Can't change/establish root binding of: y with set\"))");
 		// a thread-bound dynamic var sets the thread-local value inside a
 		// binding (the depth counter beside the var says whether it is bound)
 		// and signals the same error outside one, after the value evaluates
 		assertThat(lowered("(def ^:dynamic *d* 1) (set! *d* 2)")).contains("%bound-depth")
 			.contains("(SETQ |c%*d*|")
-			.contains("(ERROR \"Can't change/establish root binding of: *d* with set\")");
+			.contains(
+					"(RONTOLISP::%CLOJURE-ILLEGAL-STATE-EXCEPTION \"Can't change/establish root binding of: *d* with set\")");
 		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 5] (set! *d* 2))")).contains("(LET*")
 			.contains("(|c%*d*| 5)")
 			.contains("(|c%*d*%bound-depth| (+ |c%*d*%bound-depth| 1))");
@@ -1294,7 +1296,8 @@ class ClojureLoweringTest {
 			.endsWith("(SETQ RONTOLISP::%CLOJURE-UNCHECKED-MATH RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(set! *print-dup* true)")).contains("(> RONTOLISP::%CLOJURE-PRINT-DUP-DEPTH 0)")
 			.contains("(SETQ RONTOLISP::%CLOJURE-PRINT-DUP ")
-			.contains("(ERROR \"Can't change/establish root binding of: *print-dup* with set\")");
+			.contains(
+					"(RONTOLISP::%CLOJURE-ILLEGAL-STATE-EXCEPTION \"Can't change/establish root binding of: *print-dup* with set\")");
 		assertThat(lowered("(set! *out* *out*)")).contains("(> RONTOLISP::%CLOJURE-OUT-DEPTH 0)")
 			.contains("(SETQ *STANDARD-OUTPUT* ");
 		assertThat(lowered("(set! *ns* 1)")).endsWith("\n(SETQ RONTOLISP::%CLOJURE-NS 1)");

@@ -209,9 +209,8 @@ final class ClojureStringLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ctx.localSym(plain)),
 						new LispInteger(arity)), reCall(ctx, name, callItems)));
 			}
-			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-							LispString.literal(name + " called with wrong number of arguments"))));
+			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
+					LispString.literal(name + " called with wrong number of arguments"))));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ctx.localSym(plain))),
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms));
@@ -241,9 +240,8 @@ final class ClojureStringLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ctx.localSym(plain)),
 						new LispInteger(arity)), stringCall(ctx, var, callItems)));
 			}
-			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-							LispString.literal(var + " called with wrong number of arguments"))));
+			arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals.refusal(ClojureRefusals.ARITY,
+					LispString.literal(var + " called with wrong number of arguments"))));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 					ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, ctx.localSym(plain))),
 					ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms));
@@ -314,8 +312,8 @@ final class ClojureStringLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), lim),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), lim)),
-				result, ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-						LispString.literal("split takes an integer limit")));
+				result, ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+						LispString.literal("split takes an integer limit"), lim));
 		// a pattern splits around matches (an empty input one empty part); a string
 		// or character splits literally, like ever (the literal-only pin holds)
 		LispVal literal = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -324,10 +322,9 @@ final class ClojureStringLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), raw), raw),
 								ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), raw),
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("string"), raw)),
-								ClojureLowerUtil
-									.list(ClojureLowering.TRUE_CONST,
-											ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
-													LispString.literal("split takes a string to split on"))))))),
+								ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+										ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+												LispString.literal("split takes a string to split on"), raw)))))),
 				result);
 		LispVal regex = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RE-SPLIT"), raw, str, lim);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
@@ -562,7 +559,7 @@ final class ClojureStringLowering {
 		LispSymbol rawRep = ctx.freshTemp();
 		LispSymbol mat = ctx.freshTemp();
 		LispSymbol rep = ctx.freshTemp();
-		LispVal bad = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal bad = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST,
 				LispString.literal("replace takes a string match and replacement, or a character pair"));
 		LispVal matchNorm = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
@@ -709,14 +706,19 @@ final class ClojureStringLowering {
 										ClojureLowerUtil.quoted("list")))));
 	}
 
-	/** {@code subs}: the substring from the start, past the optional end. */
+	/**
+	 * {@code subs}: the substring from the start, past the optional end, through
+	 * {@code subseq} -- by its refusal family's alias ({@link ClojureRefusals#SUBS}), so
+	 * a bound outside the string is the oracle's {@code StringIndexOutOfBoundsException}
+	 * where the program reads a condition's class.
+	 */
 	static LispVal subsOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "subs takes a string, a start and an optional end");
 		return n == 3
-				? ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), ctx.lower(items.get(1)),
+				? ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), ctx.lower(items.get(1)),
 						ctx.lower(items.get(2)), ctx.lower(items.get(3)))
-				: ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), ctx.lower(items.get(1)),
+				: ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), ctx.lower(items.get(1)),
 						ctx.lower(items.get(2)));
 	}
 
@@ -725,10 +727,10 @@ final class ClojureStringLowering {
 		LispSymbol str = new LispSymbol(ClojureLowering.mangle("subs-s"));
 		LispSymbol from = new LispSymbol(ClojureLowering.mangle("subs-from"));
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("subs-args"));
-		LispVal two = ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), str, from);
-		LispVal three = ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), str, from,
+		LispVal two = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, from);
+		LispVal three = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, from,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("subs takes a string, a start and an optional end"));
 		LispVal body = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), two,
@@ -1321,8 +1323,8 @@ final class ClojureStringLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, arg))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym(predicate), one), one,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"), LispString.literal(message))));
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(predicate), one), one, ClojureRefusals
+							.refusal(ClojureRefusals.ILLEGAL_FORMAT_CONVERSION, LispString.literal(message))));
 	}
 
 	// namespaces: ns clauses, require/use/import as alias wiring

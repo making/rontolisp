@@ -247,6 +247,29 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramReadingNoConditionsClassSplicesEveryRefusalAsThePlainError() {
+		// a refusal carries the class the oracle throws only where a catch by class,
+		// class or instance? can read it: anywhere else it is the error it signalled
+		// before, and the refusal's condition class is gone with it
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"seq needs a collection\")");
+		for (String source : List.of("(println (first 5))", "(println (try (first 5) (catch Throwable e :x)))")) {
+			List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(plain, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source)
+				.contains("(ERROR \"seq needs a collection\")")
+				.doesNotContain("EXCEPTION");
+			assertThat(plain.stream().map(LispVal::print)).as(source)
+				.noneMatch(text -> text.startsWith("(DEFINE-CONDITION RONTOLISP::%CLOJURE-REFUSAL "));
+		}
+		for (String source : List.of("(println (try (first 5) (catch IllegalArgumentException e :x)))",
+				"(println (instance? Exception 5))", "(println (try (first 5) (catch Exception e (class e))))")) {
+			List<LispVal> reading = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(reading, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source)
+				.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"seq needs a collection\")");
+		}
+	}
+
+	@Test
 	void aProgramNamingNoJavaOperatorComparesWithoutTheHostCollectionArm() {
 		// only a java: operator hands a program a host collection: without one, = and the
 		// sorted = keep the bodies they had before a host collection counted

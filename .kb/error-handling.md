@@ -381,6 +381,21 @@ fails. What decides the gate is whether program code can ever HOLD that instance
 - **`ignore-errors` counts only where a SECOND value can be read** (`receivesMultipleValues`, a
   whole-program answer): any occurrence of
   `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/`%mv-spill` turns it back on.
+- **A keyword constructor no form references builds nothing, on both sides** (since 2026-10-04;
+  the hold side alone before): `define-condition` splices `(defun %make-X ... (%obj-new ...))`
+  whether or not anything can call it, so a referenced one (a `make-instance` expansion, a
+  `#'%make-X`) makes the answer true and an unreferenced one is skipped, `make-instance` /
+  `allocate-instance` / `change-class` naming a condition class (or an unquotable class) counting
+  in its place (`instantiatesConditionClass`). The Clojure refusal class needed it: its
+  constructor alone put the renderer in every class-reading program.
+- **A signal reporting its own text needs no renderer** (`signalsItsTextControl`): `(error 'c ...
+  :format-control (%text-control v) ...)` over a variable `v`, of a class reporting through its
+  `format-control` (no `:report` along its precedence list) and with no `:format-arguments`,
+  reports exactly `v`, so the broad gate does not count it, and its unrouted message is `v` itself
+  (`textControlVariable`); a held instance still counts where it is held. Only the Clojure
+  refusals spell it (`%clojure-refuse`); `%struct-type-error`'s control is a rendered expression,
+  not a variable, and keeps its answer. Measured 2026-10-04: every example, size-report and
+  bench program byte-identical (the version string of a fetch program aside).
 - **A clause HEAD is not a call, and that skip is shared.** `evaluatedClauseForms` is the one helper
   answering "which sub-forms of this clause-bearing operator are EVALUATED", used by this scan and by
   `needsRuntimeErrorDispatch`. **A new scan that walks a program as code goes through it** -- the

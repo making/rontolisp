@@ -496,7 +496,7 @@ final class ClojureProtocolLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), found, miss), objectRow, found)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), chosen, miss),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+						ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 								LispString.literal("No implementation of method :" + method + " of protocol :"
 										+ protocol + " found")),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"), chosen, args)));
@@ -533,7 +533,7 @@ final class ClojureProtocolLowering {
 				extended);
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+				ClojureRefusals.refusal(ClojureRefusals.ARITY,
 						LispString.literal("wrong number of arguments passed to: " + method)),
 				lookup);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
@@ -668,7 +668,7 @@ final class ClojureProtocolLowering {
 		}
 		if (key != null && !ctx.dynamicVars.contains(key)) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+					ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
 							LispString.literal("Can't change/establish root binding of: " + name + " with set")));
 		}
 		if (key != null) {
@@ -682,7 +682,7 @@ final class ClojureProtocolLowering {
 				.of(ClojureLowerUtil.list(temp, value))), ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), depth, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), temp),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+						ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
 								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
@@ -738,7 +738,7 @@ final class ClojureProtocolLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym(">"), counter, new LispInteger(0)),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), target, temp),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+						ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_STATE,
 								LispString.literal("Can't change/establish root binding of: " + name + " with set"))));
 	}
 

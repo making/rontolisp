@@ -1061,6 +1061,37 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void anUnreferencedConditionConstructorBuildsNothingToRender() {
+		// define-condition splices a keyword constructor; with nothing referencing it no
+		// instance of the class can exist, on the message-rendering backends too
+		assertThat(routesReports("(define-condition zc (error) ()) (print 1)")).isFalse();
+		assertThat(routesReports("(define-condition zc (error) ()) (print (make-instance 'zc))")).isTrue();
+	}
+
+	@Test
+	void aSignalOfItsOwnTextControlNeedsNoRenderer() {
+		// a format-control class signalled over the text control of a variable's
+		// message reports exactly that message, so signalling it renders nothing: the
+		// message is the variable, and only a held instance routes reports
+		String signal = "(define-condition zt (simple-error) ((ch :initarg :ch)))"
+				+ " (defun f (m) (error 'zt :ch 1 :format-control (%text-control m)))";
+		assertThat(routesReports(signal + " (f \"x\")")).isFalse();
+		assertThat(routesReports(signal + " (print (handler-case (f \"x\") (error (e) (princ-to-string e))))"))
+			.isTrue();
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(signal + " (f \"x\")"),
+				new HashMap<>(), registry);
+		LispCons call = (LispCons) LispReader.readAllFromString("(error 'zt :ch 1 :format-control (%text-control m))")
+			.get(0);
+		// the message the signal carries is the variable itself
+		assertThat(LispMacroExpander.expandError(call, registry).print()).endsWith(" M))");
+		// arguments, or a control the program spelled, keep the renderer's answer
+		assertThat(routesReports("(define-condition zt (simple-error) ()) (defun f (m)"
+				+ " (error 'zt :format-control (%text-control m) :format-arguments (list 1))) (f \"x\")"))
+			.isTrue();
+	}
+
+	@Test
 	void anEntryReportRendersEveryBuildableConditionButRoutesNoPrinterUnlessOneIsHeld() {
 		// The entry report reads every condition that escapes, so the renderer is in as
 		// soon as one can be built; a printing operator can only be handed one program

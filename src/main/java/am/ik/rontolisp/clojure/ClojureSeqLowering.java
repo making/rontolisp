@@ -447,7 +447,7 @@ final class ClojureSeqLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), args)),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
-		LispVal arity = ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("reduce takes a function, an optional value and a collection"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
 				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), args), arity),

@@ -1938,24 +1938,53 @@ cases:
       :arith
       :rte
       :ex
-  - name: a-refusal-naming-no-class-is-taken-by-any-catch-but-exception-info
-    # Deviation: a refusal of the runtime whose condition names no class (first
-    # of a number, a failed assert) is taken by the first catch of any class but
-    # ExceptionInfo. The oracle throws an IllegalArgumentException past the
-    # ArithmeticException catch here, and an AssertionError, which an Exception
-    # catch does not take, to the Error one.
+  - name: a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws
+    # Oracle-identical (clj 1.12.6, 2026-10-04): a refusal of the Clojure runtime
+    # carries the class the oracle throws there, so an IllegalArgumentException
+    # passes an ArithmeticException catch and an AssertionError an Exception one.
     source: |
-      (println (try (try (first 5) (catch ArithmeticException e :taken)) (catch Exception e :oracle)))
+      (println (try (try (first 5) (catch ArithmeticException e :taken)) (catch IllegalArgumentException e :oracle)))
       (println (try (assert false) (catch Exception e :taken) (catch Error e :oracle)))
     expected: |
-      :taken
-      :taken
+      :oracle
+      :oracle
+  - name: refusals-of-the-runtime-carry-the-oracles-classes
+    # Oracle-identical (clj 1.12.6, 2026-10-04): each refusal passes a catch of a
+    # class no refusal is and is taken by one of the class the oracle throws for
+    # the same call (every probe answers :ok there). nil where the oracle casts a
+    # value is its NullPointerException.
+    # The last line deviates as documented: class answers a keyword, and the
+    # message is the runtime's own (the oracle's "Don't know how to create ISeq
+    # from: java.lang.Long").
+    source: |
+      (defmacro rfc [cls form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch ~cls e# :ok)) (catch Throwable e# (class e#))))
+      (declare rfc-unbound)
+      (defmulti rfc-area :shape)
+      (defprotocol RfcP (rfc-m [x]))
+      (def ^:dynamic *rfc-dyn* 1)
+      (defrecord Rfc [a])
+      (println [(rfc IllegalArgumentException (seq 5)) (rfc IllegalArgumentException (reduce + 5)) (rfc IllegalArgumentException (conj {} 5)) (rfc IllegalArgumentException (assoc [1 2] :a 1)) (rfc IllegalArgumentException (rfc-area {:shape :c})) (rfc IllegalArgumentException (rfc-m 5)) (rfc IllegalArgumentException (find #{1} 1)) (rfc IllegalArgumentException (sorted-map 1 2 3))])
+      (println [(rfc ClassCastException (name 5)) (rfc ClassCastException (deref 5)) (rfc ClassCastException (re-pattern 5)) (rfc ClassCastException (peek #{1})) (rfc ClassCastException (char "a")) (rfc ClassCastException (compare 1 "a")) (rfc ClassCastException (let [f "abc"] (f 1))) (rfc ClassCastException (conj {} "ab")) (rfc ClassCastException (swap! 5 inc))])
+      (println [(rfc NullPointerException (name nil)) (rfc NullPointerException (deref nil)) (rfc NullPointerException (let [f nil] (f 1))) (rfc NullPointerException (.foo nil)) (rfc NullPointerException (subvec nil 0)) (rfc NullPointerException (with-meta nil {}))])
+      (println [(rfc IndexOutOfBoundsException (assoc [1 2] 5 1)) (rfc IndexOutOfBoundsException (rand-nth [])) (rfc IndexOutOfBoundsException (subvec [1 2] 0 5)) (rfc IndexOutOfBoundsException (.get [1 2] 5))])
+      (println [(rfc IllegalStateException (alter (ref 1) inc)) (rfc IllegalStateException (pop [])) (rfc IllegalStateException (rfc-unbound 1)) (rfc IllegalStateException (set! *rfc-dyn* 2)) (rfc IllegalStateException (re-groups (re-matcher #"a" "b")))])
+      (println [(rfc RuntimeException (read-string "(1 2")) (rfc NumberFormatException (bigint "abc")) (rfc NumberFormatException (bigdec "abc")) (rfc StringIndexOutOfBoundsException (subs "abc" 5)) (rfc clojure.lang.ArityException (let [k :a] (k {} 1 2))) (rfc AssertionError (assert false))])
+      (println [(rfc UnsupportedOperationException (empty (->Rfc 1))) (rfc ArithmeticException (unchecked-divide-int 1 0)) (rfc java.util.regex.PatternSyntaxException (re-pattern "(a")) (rfc Exception (the-ns 'no.such.ns)) (rfc java.util.IllegalFormatConversionException (format "%d" "a"))])
+      (println (try (first 5) (catch Exception e [(class e) (instance? IllegalArgumentException e) (instance? ClassCastException e) (ex-message e)])))
+    expected: |
+      [:ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok]
+      [:java.lang.IllegalArgumentException true false seq needs a collection]
   - name: class-instance-and-stack-traces-of-an-exception
-    # class of an exception or a runtime error answers its class as a keyword,
-    # the shape class answers for every kind (the oracle answers the host class,
-    # which prints without the colon); a refusal naming no class answers
-    # RuntimeException (the oracle's first of a number is an
-    # IllegalArgumentException). instance? of a throwable class is the oracle's.
+    # class of an exception, a runtime error or a refusal answers its class as a
+    # keyword, the shape class answers for every kind (the oracle answers the host
+    # class, which prints without the colon). instance? of a throwable class is
+    # the oracle's.
     # .printStackTrace writes the toString line to *err* (the oracle writes it
     # and a line per frame to the process's stderr, whatever *err* is bound to)
     # and .getStackTrace answers no frames (the oracle's thirteen here).
@@ -1972,7 +2001,7 @@ cases:
     expected: |
       :clojure.lang.ExceptionInfo :java.lang.IllegalArgumentException
       :java.lang.ClassCastException :java.lang.NullPointerException
-      :java.lang.RuntimeException
+      :java.lang.IllegalArgumentException
       true false
       true false true
       [true true false]
