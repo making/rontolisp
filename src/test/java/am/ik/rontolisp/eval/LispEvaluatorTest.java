@@ -22559,6 +22559,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() {
+		// The reference answer for the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest), and SBCL's: a setq of
+		// an undeclared name in a function body assigns the global, which any later
+		// function or top-level form reads.
+		assertThat(printedLines(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
+	}
+
+	@Test
 	void symbolValueSitesReadTheActiveBinding() {
 		// The reference answer for the compiled backends' twins
 		// (JvmLispCompilerTest#symbolValueSitesDoNotEachPayForTheSpecialSet,
