@@ -23641,6 +23641,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setWritesTheActiveDynamicBinding() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: the module global IS the active binding (shallow binding), and
+		// symbol-value in a set-using program reads it rather than the eval mirror.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED },
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED },
+				{ am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE,
+						am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void setOfAConstantTraps() throws Exception {
 		assertThat(compileAndRunExpectTrap("(set nil 1)")).contains("unreachable");
 		assertThat(compileAndRunExpectTrap("(set t 2)")).contains("unreachable");

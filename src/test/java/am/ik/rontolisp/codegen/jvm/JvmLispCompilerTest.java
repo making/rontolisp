@@ -19791,6 +19791,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void setWritesTheActiveDynamicBinding() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a set arm writes the
+		// thread's active _d$ cell when one exists and falls to the _g$ default
+		// otherwise, like setq; symbol-value in a set-using program -- a modify macro
+		// over a symbol-value place is a set site too -- reads dynamic-first.
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSetOfAConstantSignals() throws Exception {
 		assertThat(compileAndRun("""
 				(print (handler-case (set nil 1) (error (e) :nil)))

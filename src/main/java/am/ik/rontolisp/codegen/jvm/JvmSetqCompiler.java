@@ -196,7 +196,7 @@ final class JvmSetqCompiler {
 	 * special assigns the current dynamic binding. Every other global stays a plain
 	 * {@code putstatic}.
 	 */
-	private static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
+	static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {
 			ctx.body.dup();
 			ctx.mvChannel.emitStore(ctx);

@@ -132,17 +132,17 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * symbol-value. In a program that uses {@code progv} the emission is DYNAMIC-FIRST
-	 * ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal special reads the
-	 * variable (the module-global / per-task read), a computed name calls the shared
-	 * dispatch over the special set, so an active {@code progv}/{@code let} binding --
-	 * and a {@code setq} inside its extent -- is answered instead of the
-	 * {@code GLOBAL_ENV} mirror's global default (cl-json's
-	 * {@code (mapcar #'symbol-value scope-variables)} snapshot). Programs without
-	 * {@code progv} keep the raw emission unchanged.
+	 * symbol-value. In a program that uses {@code progv} or {@code set} the emission is
+	 * DYNAMIC-FIRST ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal
+	 * special reads the variable (the module-global / per-task read), a computed name
+	 * calls the shared dispatch over the special set, so an active
+	 * {@code progv}/{@code let} binding -- and a {@code setq} inside its extent -- is
+	 * answered instead of the {@code GLOBAL_ENV} mirror's global default (cl-json's
+	 * {@code (mapcar #'symbol-value scope-variables)} snapshot), as is a binding a
+	 * {@code set} wrote. Other programs keep the raw emission unchanged.
 	 */
 	static void compileSymbolValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (ctx.usesProgv && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
+		if (ctx.symbolValueDynamicFirst && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
 			WasmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars,
 					ctx.functions.containsKey(LispNames.SYMBOL_VALUE_DYNAMIC)), ctx);
 			return;
@@ -279,10 +279,9 @@ final class WasmSymbolApiCompiler {
 	 * that module global ({@link #compileGlobalStoreSet}) through the shared
 	 * {@code %set-global} dispatch over the globals, or the same dispatch inline when the
 	 * program lacks it -- matched by canonical string-table offset, so a caller's literal
-	 * and a run-time {@code intern} agree. Deliberately deaf to an already-active dynamic
-	 * binding, like the JVM twin: the store targets the global namespace on every backend
-	 * alike. Forces {@code usesEval} in {@link WasmLispCompiler} like the rest of the
-	 * symbol API.
+	 * and a run-time {@code intern} agree. Like {@code setq}, the store assigns an
+	 * already-active dynamic binding of a special. Forces {@code usesEval} in
+	 * {@link WasmLispCompiler} like the rest of the symbol API.
 	 */
 	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
@@ -367,8 +366,10 @@ final class WasmSymbolApiCompiler {
 
 	/**
 	 * {@code (%global-store-set NAME value)} -- {@code global.set} into the module global
-	 * of the literal global {@code NAME}, deaf to an active dynamic binding (the store
-	 * {@code set} targets); answers nil.
+	 * of the literal global {@code NAME}, which under shallow binding IS a special's
+	 * active binding; under {@code --reentrant} a dynamically-bound special writes this
+	 * call's task-record cell when one is active ({@link WasmDynVars#emitWrite}), the
+	 * store {@code setq} makes. Answers nil.
 	 */
 	static void compileGlobalStoreSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
@@ -378,8 +379,16 @@ final class WasmSymbolApiCompiler {
 			throw new IllegalStateException("global " + name + " has no module global for " + LispNames.SET);
 		}
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
-		ctx.writer.write(Instruction.SET_GLOBAL);
-		ctx.writer.writeUnsignedLeb128(index);
+		if (WasmDynVars.handles(ctx, name)) {
+			int valueSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(valueSlot);
+			WasmDynVars.emitWrite(ctx, name, index, valueSlot);
+		}
+		else {
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(index);
+		}
 		emitNil(ctx);
 	}
 

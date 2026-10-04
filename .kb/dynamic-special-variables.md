@@ -126,11 +126,14 @@ native `evalProgv`).
   `%progv-genv`/`%progv-genv-set`. Mirror maintenance is included only when the eval runtime
   exists (`Ctx.evalStoreRef != null` / `Ctx.usesEval` -- progv does NOT force it); both flags are
   carried by EVERY compile context, not just the top-level one.
-- `symbol-value` is DYNAMIC-FIRST in a progv-using program
-  (`LispMacroExpander.dynamicFirstSymbolValue`, gated on `Ctx.usesProgv`), falling back to
+- `symbol-value` is DYNAMIC-FIRST in a program that uses progv or `set`
+  (`LispMacroExpander.dynamicFirstSymbolValue`, gated on `Ctx.symbolValueDynamicFirst`:
+  progv spelled, or `programUsesSet` -- a `set` call or a `symbol-value` place a `setf` or
+  modify macro writes; `set` since 2026-10-04, `.todo/c86`), falling back to
   `%symbol-value-raw`. This is what makes cl-json's `(progv vars (mapcar #'symbol-value vars)
-  ...)` see values its decoder `setq`s in the enclosing extent. Programs without progv keep the
-  raw emission byte-identically. `#'symbol-value` has a REFERENCE-GATED
+  ...)` see values its decoder `setq`s in the enclosing extent, and `symbol-value` answer the
+  binding a `set` wrote (`.kb/symbol-runtime-api.md`). Other programs keep the raw emission
+  byte-identically. `#'symbol-value` has a REFERENCE-GATED
   `BuiltinFunctionWrappers` entry. No site pays for the special set (2026-10-04, `.todo/c78`):
   - a LITERAL name folds: a special -> the variable read, any other quoted datum ->
     `%symbol-value-raw`;
@@ -226,9 +229,12 @@ native `evalProgv`).
    `.todo/192` sketch's objection -- the slots live in the thrower's dead frames -- holds only
    for a CATCHER doing the restore.
 2. `symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding, on the compile
-   path -- EXCEPT `symbol-value` in a progv-using program. They read the `_genv`/`GLOBAL_ENV`
-   mirror, which the shallow save/restore does not update. Direct reads/`setq` are correct and
-   both stores agree again after the `let`. The mirror does carry the global default for the
+   path -- EXCEPT `symbol-value` in a program that uses progv or `set`. They read the
+   `_genv`/`GLOBAL_ENV` mirror, which the shallow save/restore does not update. Direct
+   reads/`setq` are correct. The two stores do NOT always agree again after the `let`: a
+   store from a frame that does not hold the binding's lexical slot (a callee's `setq`, any
+   `set`) writes the mirror too, and nothing restores it, so after the extent the mirror holds
+   the binding's value (`.todo/c89`). The mirror does carry the global default for the
    three standard stream variables (`.kb/symbol-runtime-api.md`).
 
 ## Parameters named like a special (all four backends, 2026-10-03)
@@ -348,6 +354,12 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 `WasmReentrantCompilerTest`, `ClJsonE2eTest`, `ClPpcreE2eTest`, ci-spec
 `special-variable-dynamic-binding`, `progv-compiles-on-every-backend`,
 `special-let-restores-on-every-exit`, `top-level-forms-answer-like-defun-bodies`.
+
+set inside an active binding: `SetInDynamicBindingFixture` on
+`setWritesTheActiveDynamicBinding` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest`), ci-spec `set-writes-the-active-dynamic-binding`,
+`WasmReentrantE2eTest#overlappedCallsEachSetTheirOwnDynamicBinding`
+(`.kb/symbol-runtime-api.md`).
 
 progv and set sites: `ProgvSetSiteFixture` (300 specials, four `progv` and four `set` sites a
 defun and a top-level form) on `LispEvaluatorTest#progvAndSetSitesBindAndStoreByName`,

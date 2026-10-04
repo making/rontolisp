@@ -88,8 +88,9 @@ Until 2026-10-04 `freshCtx` copied fields by hand, and each forgotten one made a
 form answer differently than in a defun -- fixed one at a time nine times, then the last 20 at
 once. What those 20 were (classified 2026-10-04, `.todo/c77`):
 
-- Wrong at the top level (each pinned by a test that failed first): `usesProgv` (a top-level
-  `(let ((*x* 5)) (symbol-value '*x*))` read the default; ci-spec
+- Wrong at the top level (each pinned by a test that failed first): `usesProgv` (now
+  `symbolValueDynamicFirst`; a top-level `(let ((*x* 5)) (symbol-value '*x*))` read the
+  default; ci-spec
   `top-level-forms-answer-like-defun-bodies`), `duplicatedDefunNames` (a top-level call of a
   REDEFINED struct accessor trusted the slot `:type` and trapped; same case),
   `reentrant`/`dynSlots`/`reentrantTaskGlobalIndex` (a top-level special binding under

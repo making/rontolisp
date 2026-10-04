@@ -17336,6 +17336,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setWritesTheActiveDynamicBinding() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: set assigns the current dynamic binding, as setq does, whether a let,
+		// a parameter or progv made it, and reaches the global only when none is active.
+		// A progv binding of an undeclared name stays progv's: boundp is nil after it.
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED);
+	}
+
+	@Test
 	void setOfAConstantOrNonSymbolSignals() {
 		assertThatThrownBy(() -> eval("(set nil 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("SET expects a symbol");
