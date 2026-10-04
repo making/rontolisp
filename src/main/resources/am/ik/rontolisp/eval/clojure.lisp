@@ -619,9 +619,29 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
-        ;; an integer carries no metadata, is no collection and has no label:
-        ;; it skips every kind test below
+        ;; an integer, string, character, float and keyword carry no metadata, are
+        ;; no collection and have no label: they skip every kind test below
         ((integerp x) (princ x stream))
+        ((stringp x)
+         (if readable
+             (rontolisp::%clojure-write-readable-string x stream)
+             (write-string x stream)))
+        ((characterp x)
+         (if readable
+             (rontolisp::%clojure-write-readable-char x stream)
+             (write-char x stream)))
+        ((floatp x)
+         (if (rontolisp::%clojure-symbolic-float-p x)
+             ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
+             ;; print and pr alike (str alone says NaN and Infinity)
+             (write-string
+              (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf")) stream)
+             ;; the Common Lisp printer spells the exponent marker in lowercase;
+             ;; the oracle's Double.toString says 1.0E19 and 1.5E-7
+             (write-string (string-upcase (princ-to-string x)) stream)))
+        ((rontolisp::%clojure-keyword-p x)
+         (write-char #\: stream)
+         (write-string (car (cdr x)) stream))
         ((rontolisp::%clojure-print-meta-p x readable stream labels))
         ((rontolisp::%clojure-print-deep-p x) (write-char #\# stream))
         ((rontolisp::%clojure-lazy-p x)
@@ -641,9 +661,6 @@
          (write-string (rontolisp::%clojure-re-pat-source
                         (rontolisp::%clojure-re-match-pat x)) stream)
          (write-char #\> stream))
-        ((rontolisp::%clojure-keyword-p x)
-         (write-char #\: stream)
-         (write-string (car (cdr x)) stream))
         ((rontolisp::%clojure-var-p x)
          (write-string "#'" stream)
          (write-string (car (cdr x)) stream))
@@ -679,14 +696,6 @@
                                            nil-replacement readable stream
                                            labels)
          (write-char #\> stream))
-        ((stringp x)
-         (if readable
-             (rontolisp::%clojure-write-readable-string x stream)
-             (write-string x stream)))
-        ((characterp x)
-         (if readable
-             (rontolisp::%clojure-write-readable-char x stream)
-             (write-char x stream)))
         ((symbolp x)
          (if (keywordp x)
              (let ((name (symbol-name x)))
@@ -737,14 +746,6 @@
            (rontolisp::%clojure-write-nested (car rest) nil-replacement readable
                                              stream labels))
          (write-char #\) stream))
-        ((and (floatp x) (rontolisp::%clojure-symbolic-float-p x))
-         ;; the oracle's print-method spells these ##NaN, ##Inf, ##-Inf under
-         ;; print and pr alike (str alone says NaN and Infinity)
-         (write-string (cond ((/= x x) "##NaN") ((> x 0) "##Inf") (t "##-Inf"))
-                       stream))
-        ;; the Common Lisp printer spells the exponent marker in lowercase; the
-        ;; oracle's Double.toString says 1.0E19 and 1.5E-7
-        ((floatp x) (write-string (string-upcase (princ-to-string x)) stream))
         ((rontolisp::%clojure-stream-p x)
          (rontolisp::%clojure-write-stream x readable stream))
         ((functionp x) (write-string "#<procedure>" stream))

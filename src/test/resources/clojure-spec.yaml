@@ -6472,6 +6472,26 @@ cases:
       [# -4 ...] (7 #)
       12 -34 5/6 [7 -8 9/10] [1 2] [-1 2/3]
       -1 [2 3/4]
+  - name: a-keyword-string-character-and-float-print-the-same-under-every-flag
+    # Oracle-identical (clj 1.12.6): these scalars carry no metadata and are no collection,
+    # so *print-meta*, *print-level* and *print-length* leave them whole, at any depth;
+    # *print-readably* alone picks the quoted spelling of a string and character.
+    source: |
+      (prn :a :b/c "s\"t\n" \a \space 1.5 -0.25 1.0E19 1.5E-7 ##NaN ##Inf ##-Inf [:k "v" 2.5 \z])
+      (binding [*print-level* 0] (prn :a "s" \c 1.5 [:a]))
+      (binding [*print-level* 1 *print-length* 2] (prn [[:a "b"] :c "d" 1.5] '(:e (:f))))
+      (binding [*print-meta* true] (prn :a "s" \c 2.5 [:a "s"] ^{:m 1} [:b "t"]))
+      (println :a :b/c "s\"t" \a 1.5 ##NaN ##-Inf [:k "v" 2.5 \z] (pr-str [:k "v\n" 2.5]) (str [:k "v" 2.5 \z]) (str :a "s" \c 1.5 ##Inf))
+      (binding [*print-readably* false] (prn :a "s\"t" \c 1.5 [:k "v" 2.5 \z]))
+      (prn {:a "s"} {"k" 1.5} {2.5 :v} {:a/x "s" :a/y 1.5})
+    expected: |
+      :a :b/c "s\"t\n" \a \space 1.5 -0.25 1.0E19 1.5E-7 ##NaN ##Inf ##-Inf [:k "v" 2.5 \z]
+      :a "s" \c 1.5 #
+      [# :c ...] (:e #)
+      :a "s" \c 2.5 [:a "s"] ^{:m 1} [:b "t"]
+      :a :b/c s"t a 1.5 ##NaN ##-Inf [:k v 2.5 z] [:k "v\n" 2.5] [:k "v" 2.5 \z] :asc1.5Infinity
+      :a s"t c 1.5 [:k v 2.5 z]
+      {:a "s"} {"k" 1.5} {2.5 :v} #:a{:x "s", :y 1.5}
   - name: a-map-whose-keys-share-a-namespace-prints-it-lifted
     # Oracle-identical (clj 1.12.6): under *print-namespace-maps*, which clojure.main binds
     # true, a map whose every key is a keyword or symbol of one namespace prints as
