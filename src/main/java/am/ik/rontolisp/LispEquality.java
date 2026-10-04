@@ -134,7 +134,10 @@ public final class LispEquality {
 	/**
 	 * The {@code eql} predicate: like {@code eq}, but numbers of the same type and value
 	 * are {@code eql}. Cons cells, instances and allocated strings compare by reference
-	 * identity ({@link #isIdentityAggregate}).
+	 * identity ({@link #isIdentityAggregate}), and a host object by the identity of the
+	 * object it wraps: the wrapper is fresh on every Java call that answers the object,
+	 * and the object's own {@code equals} is {@link #equal}'s answer, not this one's
+	 * ({@code .kb/eq-numbers.md}, "Host objects").
 	 * @param a the first value
 	 * @param b the second value
 	 * @return whether the two values are {@code eql}
@@ -142,6 +145,9 @@ public final class LispEquality {
 	public static boolean eql(LispVal a, LispVal b) {
 		if (isIdentityAggregate(a) || isIdentityAggregate(b)) {
 			return a == b;
+		}
+		if (a instanceof LispJavaObject host) {
+			return b instanceof LispJavaObject other && host.ref() == other.ref();
 		}
 		if (a instanceof LispNil || b instanceof LispNil) {
 			return a instanceof LispNil && b instanceof LispNil;

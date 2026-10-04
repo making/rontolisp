@@ -2200,8 +2200,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final StringEntry hasComplexTarget = usesComplex ? cp.stringEntry("am.ik.rontolisp.runtime.RontoComplex")
 				: null;
 		final ClassEntry hasComplexAbsent = usesComplex ? cp.classEntry("java/lang/ClassNotFoundException") : null;
+		// A java: program compares a host object by identity under eql and by equals
+		// under equal; the shared test is built on first use, so a program without
+		// java: names it nowhere.
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
-				strvMethod, instanceLayoutClass, usesComplex);
+				strvMethod, instanceLayoutClass, usesComplex, javaSites != null ? javaSites.direct().host() : null);
 		// A wrong-type operand's report names the operator (JvmOperandTypeRuntime); the
 		// thread-local record a pad reads the datum from exists only when a pad does.
 		final Utf8Entry teTlName = hasLandingPad ? cp.utf8Entry(JvmOperandTypeRuntime.TL_FIELD) : null;
@@ -3164,8 +3167,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)),
 				strvMethod != null ? strvMethod : null, instanceLayoutClass != null ? instanceLayoutClass : null,
-				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable() : null)
-				: List.of();
+				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable() : null,
+				javaSites != null ? javaSites.direct().host() : null) : List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
 		// the

@@ -62,12 +62,15 @@ final class JvmRemfTailCompiler {
 		MethodCode.Label ifNextNotConsPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNextNotConsPos);
 
-		// Compare car(nextKeyCell) with indicator
+		// Compare car(nextKeyCell) with indicator under eq, as the first key is: the
+		// shared eq helper, never the key's own equals, which threw on a nil key, never
+		// found a character and asked a host object.
 		// car(nextKeyCell) = ((Object[])nextKeyCell)[0]
 		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
-		ctx.body.aload(indicatorSlot).invokevirtual(ctx.objectEquals);
+		ctx.body.aload(indicatorSlot);
+		JvmEqGeneralCompiler.emitCall(ctx, className);
 		MethodCode.Label ifNoMatchPos = ctx.body.newLabel();
-		ctx.body.ifeq(ifNoMatchPos);
+		ctx.body.ifnull(ifNoMatchPos);
 
 		// Match! splice: rplacd(valueCell, cddr(nextKeyCell))
 		// ((Object[])valueCell)[1] = ((Object[])((Object[])nextKeyCell)[1])[1]

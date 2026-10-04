@@ -109,6 +109,10 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends; its rows print the message
   too since 2026-09-27).
 
+- `eq`/`eql` on a host object is identity, `equal`/`equalp` its `equals`; on the JVM the
+  equality helpers ask `_jhost` in a `java:` program only ([eq-numbers.md](eq-numbers.md),
+  "Host objects").
+
 ## A Lisp value as a `java:call` receiver (one rule, three copies)
 - A receiver that is no host object but a Lisp value of a receiver kind
   (`JavaOverloads.isReceiverKind`: every kind but NIL and FUNCTION) is called as what `convert`

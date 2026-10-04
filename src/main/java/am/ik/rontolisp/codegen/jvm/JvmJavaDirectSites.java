@@ -723,7 +723,12 @@ final class JvmJavaDirectSites {
 				|| name.startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
-	private MethodRefEntry host() {
+	/**
+	 * The one test a {@code java:} program tells a host object from a Lisp value by --
+	 * the bridge's {@code isJavaObject}, test for test. Built on first use.
+	 * @return {@code _jhost(Object)Z}
+	 */
+	MethodRefEntry host() {
 		MethodRefEntry ref = this.host;
 		if (ref == null) {
 			Utf8Entry name = this.cp.utf8Entry(HOST);

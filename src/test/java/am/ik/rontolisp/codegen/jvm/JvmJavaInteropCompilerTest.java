@@ -1130,6 +1130,17 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
 	}
 
+	// eq/eql on host objects are identity, as Clojure's identical? and every eq/eql
+	// surface (sequence functions, case, getf/remf, catch tags, eq/eql tables) agree;
+	// equal still asks equals. Before, measured 2026-10-04: eq/eql answered the LEFT
+	// operand's equals, so a reify whose equals answers true was eq to T and 1, and
+	// equal on two empty host lists was NIL (the interpreter: T).
+	@Test
+	void eqAndEqlOnHostObjectsAreIdentity() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_IDENTITY_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_IDENTITY_OUTPUT);
+	}
+
 	// A packed float / integer vector -- a bare double[] / float[] / short[] / long[] /
 	// byte[] with its header in the compiled program -- converts element-wise like a
 	// general vector at a dispatched site and at the bridge, and a bignum is a

@@ -132,13 +132,20 @@ public final class LispHashTable implements LispVal {
 		}
 
 		// The hash the test agrees with: an eql/eq table's aggregates hash by
-		// identity, so a key mutated after insertion keeps its bucket; everything
+		// identity, so a key mutated after insertion keeps its bucket, and so does a
+		// host object, by the identity of the object it wraps (its own hashCode moves
+		// when it is mutated, and the wrapper is fresh per Java call); everything
 		// else -- including an eql/eq table's numbers, symbols and source-literal
 		// strings, which compare by value exactly as equal compares them -- hashes
 		// structurally.
 		private static int placementHash(LispVal val, int testCode) {
-			if ((testCode == TEST_EQL || testCode == TEST_EQ) && LispEquality.isIdentityAggregate(val)) {
-				return System.identityHashCode(val);
+			if (testCode == TEST_EQL || testCode == TEST_EQ) {
+				if (LispEquality.isIdentityAggregate(val)) {
+					return System.identityHashCode(val);
+				}
+				if (val instanceof LispJavaObject host) {
+					return System.identityHashCode(host.ref());
+				}
 			}
 			return LispEquality.hash(val);
 		}

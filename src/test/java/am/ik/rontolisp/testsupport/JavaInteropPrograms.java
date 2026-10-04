@@ -442,6 +442,59 @@ public final class JavaInteropPrograms {
 			("[1, 2]" 994 T "java.util.ImmutableCollections$List12")
 			("#<java-reify java.lang.Runnable>" T T)""";
 
+	/**
+	 * {@code eq} and {@code eql} on host objects are identity -- two equal {@code File}s
+	 * are distinct, one object answered twice by a Java call is itself, and a
+	 * {@code java:reify} whose {@code equals} answers true is still neither {@code T} nor
+	 * {@code 1} and does not print as {@code T} -- through every surface that compares
+	 * with them: the sequence functions, {@code case}, {@code getf}/{@code remf},
+	 * {@code catch} tags and {@code eq}/{@code eql} hash tables, where a key mutated
+	 * after insertion keeps its bucket. {@code equal} asks {@code equals}, a host
+	 * collection included, and so does an {@code equal} table. Prints
+	 * {@link #HOST_IDENTITY_OUTPUT}.
+	 */
+	public static final String HOST_IDENTITY_PROGRAM = """
+			(let* ((f1 (java:new "java.io.File" "x"))
+			       (f2 (java:new "java.io.File" "x"))
+			       (holder (java:new "java.util.ArrayList"))
+			       (e1 (java:new "java.util.ArrayList"))
+			       (e2 (java:new "java.util.ArrayList"))
+			       (r (java:reify "java.lang.Runnable" "run" (lambda () nil) "equals" (lambda (o) t)))
+			       (s (java:new "java.util.HashSet"))
+			       (eqt (make-hash-table :test 'eq))
+			       (eqlt (make-hash-table :test 'eql))
+			       (equalt (make-hash-table :test 'equal))
+			       (plist (list f1 1 'k 2))
+			       (tail (list 'k 2 f1 1)))
+			  (java:call holder "add" f1)
+			  (print (list (eq f1 f2) (eql f1 f2) (eq f1 f1) (eq f1 (java:call holder "get" 0))
+			               (equal f1 f2) (equalp f1 f2)))
+			  (print (list (eq e1 e2) (eql e1 e2) (equal e1 e2)))
+			  (print (list (java:call r "equals" 1) (eq r t) (eq t r) (eql r 1) (equal r r)
+			               (string= (prin1-to-string r) "T") (string= (princ-to-string r) "T")))
+			  (print (list (member f2 (list f1)) (position f2 (list f1)) (assoc f2 (list (cons f1 1)))
+			               (find f2 (list f1)) (count f2 (list f1)) (length (remove-duplicates (list f1 f2)))
+			               (position f2 (list f1) :test #'equal) (case f1 (1 'one) (t 'other))))
+			  (print (list (getf plist f2) (getf plist f1) (progn (remf plist f2) (length plist))
+			               (progn (remf tail f2) (length tail))))
+			  (print (catch f1 (catch f2 (throw f1 :to-f1)) :caught-by-f2))
+			  (setf (gethash f1 eqt) 1 (gethash f1 eqlt) 2 (gethash f1 equalt) 3 (gethash e1 equalt) 4
+			        (gethash s eqt) 5)
+			  (java:call s "add" 1)
+			  (print (list (gethash f2 eqt) (gethash f1 eqt) (gethash f2 eqlt) (gethash f1 eqlt)
+			               (gethash f2 equalt) (gethash e2 equalt) (gethash s eqt))))
+			""";
+
+	/** What {@link #HOST_IDENTITY_PROGRAM} prints. */
+	public static final String HOST_IDENTITY_OUTPUT = """
+			(NIL NIL T T T T)
+			(NIL NIL T)
+			(T NIL NIL NIL T NIL NIL)
+			(NIL NIL NIL NIL 0 2 0 OTHER)
+			(NIL 1 4 4)
+			:TO-F1
+			(NIL 1 NIL 2 3 4 5)""";
+
 	private JavaInteropPrograms() {
 	}
 

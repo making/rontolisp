@@ -27007,6 +27007,14 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
 	}
 
+	// The interpreter twin is LispEvaluatorTest#remfPastTheFirstKeyComparesWithEq.
+	@Test
+	void remfPastTheFirstKeyComparesWithEq() throws Exception {
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.RemfIndicatorFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.RemfIndicatorFixture.EXPECTED);
+	}
+
 	@Test
 	void standardConditionTypeNamesAreClSymbols() throws Exception {
 		// cl owns the condition type names, so a (:use #:cl) package

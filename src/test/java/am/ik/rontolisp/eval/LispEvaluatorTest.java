@@ -13580,6 +13580,14 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
 	}
 
+	// The twins: JvmLispCompilerTest#remfPastTheFirstKeyComparesWithEq and
+	// WasmLispCompilerIntegrationTest#remfPastTheFirstKeyComparesWithEq.
+	@Test
+	void remfPastTheFirstKeyComparesWithEq() {
+		assertThat(printedLines(am.ik.rontolisp.RemfIndicatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RemfIndicatorFixture.EXPECTED);
+	}
+
 	@Test
 	void arefOutOfBoundsAndNegativeMakeArrayAreCatchable() {
 		// These used to escape even handler-case as raw Java exceptions; the
