@@ -12,7 +12,9 @@ answers its class name as a keyword (`:java.lang.IllegalArgumentException`,
 condition names no class `:java.lang.RuntimeException`). A stream (`*out*`, `*in*`, `*err*`, a `StringWriter`, a reader) answers the host class its printer names as a keyword
 (`:java.io.OutputStreamWriter`, `:java.io.StringWriter`, `:java.io.BufferedReader`, ...). A host
 object answers its host class on the interpreter and the JVM, so a `class` dispatch over one reaches an `Object` or
-`:default` method. As a value a one-argument lambda.
+`:default` method. `.getClass` of an exception or a stream answers the same keyword, and a
+`defmethod`, `isa?` or `derive` naming the class reads it as that keyword. As a value a
+one-argument lambda.
 
 ```clojure
 (println (class "a") (class 1)) ; :string :number

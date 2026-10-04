@@ -205,6 +205,7 @@ Each is a real work item unless the reason says otherwise.
 - A runtime error whose condition names no class is taken by any catch but `ExceptionInfo`'s
   ("Catching"). Exceptions: see "Exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
+  class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
   tag; `class` answers a kind keyword (host classes exist on no wasm backend), an exception
   its class name as a keyword, a host object its host class (interpreter and JVM).
@@ -251,9 +252,8 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   `No matching field found: m`), so the lowering carries no `java:` operator and wasm compiles
   it without the `JAVA:CALL` warning.
 - Deviations: `class` answers a keyword and `.printStackTrace`/`.getStackTrace` no frames
-  ("Catching"); any other method but the three readers and `.toString` is refused (`.getClass`
-  among them: routing it through the library would splice the exception runtime into every
-  program calling `.getClass` on a value of unknown class, `.todo/c65`); a runtime error's `str` has no class
+  ("Catching"); `.getClass` answers what `class` does ("Dispatch", "Class chains"); any other
+  method but the three readers and `.toString` is refused; a runtime error's `str` has no class
   prefix; `throw` of a non-exception is a `ClassCastException` whose message is its rendering
   (the oracle's names the two classes; until 2026-10-03 it signalled the rendering as a plain
   error, which an `IllegalArgumentException` catch took).
@@ -348,8 +348,8 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `.getStackTrace` of a receiver of unknown or plain-throwable class are
   `%clojure-print-stack-trace` (the report line to `*error-output*`) /
   `%clojure-stack-trace` (`[]`), the host method for anything but a condition; they read no
-  slot, so they need no reader. A `defmethod` over a throwable class stays refused
-  (`dispatchClassKey`; `.todo/c65`).
+  slot, so they need no reader. A `defmethod` over a throwable class dispatches by
+  inheritance ("Dispatch", "Class chains").
 - Measured against the oracle: 52 runtime-error kinds under a catch of the oracle's class, all
   four backends alike, differ only where documented (`nth` past the end answers nil; the
   division message); the shcloj4 drivers with `catch`/`thrown?` sites (interop, exploring,
@@ -820,6 +820,46 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `reify`: a fresh tag per evaluation with a row per method; `=` is identity.
 - `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
   else refuses; it has no value.
+- **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
+  (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive` (`hierarchyArg`: a
+  class spelling no local or var shadows, `Object` aside) lower a class spelling through
+  `classKey` to the keyword `class` answers for its values: a core class its kind, a record
+  its tag, a throwable or stream class (`chainedClassKey`) its own name. The oracle's
+  `isa?` follows Java inheritance (`isAssignableFrom`, then each of `supers` through the
+  hierarchy); here `C%H-ISA?`'s last arm is `C%H-CLASS-ISA?`: a class keyword whose name
+  has an edge in `C%H-SUPERS` (an alist of name to superclass) is a child of whatever its
+  superclass is, so `(derive Exception ::e)` reaches every subclass and the most-specific
+  search ranks `IllegalArgumentException` over `Exception`. The edges are the chains the
+  lowering resolved (`ClojureLowering.recordChain`: constructions, including throwables
+  that stay host objects, catches, `instance?`, the spellings) plus, once a throwable is
+  spelled, the classes a runtime error or `ex-info` may have (`RUNTIME_THROWABLES`), and
+  once a stream class is, the `STREAM_SUPERS` table. Interfaces and `Object` are in no
+  chain. Everything rides on `usedClassChains`: a hierarchy runtime of a program spelling
+  no such class is byte-identical (a session adds the walk, a redefined `C%H-ISA?` and the
+  edges ahead of the first buffer spelling one, then `append`s later buffers' edges,
+  `ClojureSessionTest#aBufferSpellingAThrowableOrStreamClassJoinsTheClassChainWalkOnce`).
+  Gaps: the class of a host throwable no construction names (one a host method returned)
+  has no edges, so it `isa?` only itself; `parents`/`ancestors`/`descendants` of a class
+  answer only what `derive` recorded (the oracle adds bases/supers, interfaces included;
+  `.todo/c73`).
+  Rejected: registering the chain at run time where `class` reads a condition -- every
+  program calling `class` on one would carry the table and the write, where the edges are
+  known at lowering time for every class a value can have but that host-returned one.
+- `.getClass` of a receiver of unknown class (or a plain-throwable / stream class) is
+  `getClassForm`: an EXCEPTION arm answering `%clojure-exception-class` and a STREAM arm
+  answering the stream's class keyword ahead of the host call, so both shed where no
+  condition or stream can reach it (before: a `java:call` refusal on the interpreter and
+  the JVM, a call-time error on wasm).
+- Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component / JVM class): a
+  `class` multimethod with a `String` method, a `.getClass` of a parameter, a catch reading
+  `class`, a `class` multimethod over a caught error, `examples/clojure/demo.clj`:
+  byte-identical. `(defmethod f Exception ...)` over a caught error against the same program
+  spelling `:java.lang.Exception` (exact hit only) 184,464 / 149,718 / 188,247 / 156,625 ->
+  185,329 / 150,413 / 189,138 / 157,603; `(defmethod f java.io.Writer ...)` over `*out*`
+  against `:java.io.Writer` 88,031 / 73,414 / 89,378 / 96,502 -> 88,747 / 74,019 / 90,122 /
+  97,655; `(.getClass e)` of a caught error 63,530 (a refusal) -> 63,547.
+- Pins: clojure-spec `a-multimethod-dispatches-on-an-exception-class-by-inheritance`,
+  `a-multimethod-dispatches-on-a-stream-class-by-inheritance`.
 
 ## Java interop
 

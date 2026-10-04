@@ -12,7 +12,9 @@
 `:java.lang.RuntimeException`）。ストリーム（`*out*`・`*in*`・`*err*`、`StringWriter`、リーダー）はプリンタが示すホストクラスを
 キーワードで返します（`:java.io.OutputStreamWriter`・`:java.io.StringWriter`・`:java.io.BufferedReader` など）。ホストオブジェクトは
 インタプリタと JVM でホストクラスを返すため、それに対する `class` ディスパッチは `Object` か
-`:default` のメソッドに届きます。値としては1引数ラムダです。
+`:default` のメソッドに届きます。例外やストリームの `.getClass` も同じキーワードを返し、
+そのクラスを書いた `defmethod`・`isa?`・`derive` はクラス名をそのキーワードとして読みます。
+値としては1引数ラムダです。
 
 ```clojure
 (println (class "a") (class 1)) ; :string :number

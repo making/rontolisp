@@ -312,8 +312,14 @@ final class ClojureInteropLowering {
 	static @Nullable LispVal throwableConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
 		Class<?> type = plainThrowable(cls);
 		if (type == null) {
+			// a throwable host object becomes an exception of its class once thrown
+			List<String> hostChain = ClojureThrowables.chainOf(cls);
+			if (hostChain != null) {
+				ctx.recordChain(hostChain);
+			}
 			return null;
 		}
+		ctx.recordChain(ClojureThrowables.chainOf(type));
 		LispVal chain = ClojureThrowables.quoted(ClojureThrowables.chainOf(type));
 		LispVal call = switch (args.size()) {
 			case 0 -> hasConstructor(type) ? ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EXCEPTION_NEW),
@@ -1422,6 +1428,9 @@ final class ClojureInteropLowering {
 				// methods answer through the core verbs, any other is refused by name
 				call = ClojureValueMethodLowering.valueArm(ctx, method, recv, args, call);
 			}
+		}
+		if (method.equals("getClass") && args.isEmpty()) {
+			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
 		}
 		LispVal mapped = stringMethod(ctx, method, recv, args);
 		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {

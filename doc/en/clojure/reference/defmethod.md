@@ -12,7 +12,12 @@ Dispatch values compare like map keys, by `=`, so a vector dispatch value hits i
 directly. A dispatch value
 may name a host class (`String`, `Number`, `java.util.Map`,
 `clojure.lang.IPersistentVector`, ...) and stores under the keyword `class` answers for it,
-so `class` multis dispatch to it; a true nil maps onto the `(:C%NIL)` marker
+so `class` multis dispatch to it. A throwable class (`IllegalArgumentException`,
+`clojure.lang.ExceptionInfo`) or a stream class (`java.io.StringWriter`, `java.io.Writer`,
+`java.io.Reader`) stores under its name as a keyword, the one `class` answers for an exception
+or a stream, and the search follows the superclass chain like the oracle's Java inheritance:
+a `NumberFormatException` reaches an `IllegalArgumentException` method ahead of an
+`Exception` one. A true nil maps onto the `(:C%NIL)` marker
 (no table ever keys on nil), so a literal `:nil` dispatch value answers only a `:nil`
 method, like the oracle, and
 `Object` matches every value past the search but ahead of the default.
@@ -31,4 +36,9 @@ from `Double`.
 (defmethod m2 Number [n] (str "num:" n))
 (println (m2 "a")) ; str:a
 (println (m2 1)) ; num:1
+
+(defmulti m3 class)
+(defmethod m3 IllegalArgumentException [e] :iae)
+(defmethod m3 Exception [e] :exception)
+(println (m3 (NumberFormatException. "x")) (m3 (ex-info "m" {}))) ; :iae :exception
 ```

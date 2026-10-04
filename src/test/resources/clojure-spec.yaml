@@ -1957,6 +1957,38 @@ cases:
       java.lang.Exception: boom
       :printed
       0 nil
+  - name: a-multimethod-dispatches-on-an-exception-class-by-inheritance
+    # A throwable class as a dispatch value is the keyword class answers for it, and the
+    # hierarchy follows the class chain like the oracle's isa? follows Java inheritance:
+    # the most specific method wins, prefer-method breaks a tie, derive on a class reaches
+    # its subclasses. isa? and derive read a class spelling as that keyword too, so a core
+    # class matches its kind. .getClass of an exception answers what class answers (the
+    # oracle answers the host class, which prints without the colon).
+    source: |
+      (defmulti xdh-handle class)
+      (defmethod xdh-handle IllegalArgumentException [e] :iae)
+      (defmethod xdh-handle Exception [e] :exception)
+      (defmethod xdh-handle :default [e] :default)
+      (println (xdh-handle (NumberFormatException. "x")) (xdh-handle (IllegalStateException. "x")) (xdh-handle (ex-info "m" {})) (xdh-handle 1))
+      (println (xdh-handle (try (+ 1 "a") (catch Exception e e))) (xdh-handle (try (inc nil) (catch Exception e e))))
+      (defmulti xdh-fails class)
+      (defmethod xdh-fails RuntimeException [e] :runtime)
+      (defmethod xdh-fails Throwable [e] :throwable)
+      (println (xdh-fails (try (+ 1 nil) (catch Exception e e))) (xdh-fails (AssertionError. "x")))
+      (prefer-method xdh-fails Throwable RuntimeException)
+      (println (xdh-fails (ex-info "x" {})))
+      (println (isa? (class (NumberFormatException. "x")) IllegalArgumentException) (isa? IllegalArgumentException (class (NumberFormatException. "x"))) (isa? NumberFormatException RuntimeException))
+      (derive Exception ::xdh-failure)
+      (println (isa? (class (ex-info "a" {})) ::xdh-failure) (isa? (class "a") String) (isa? (class [1]) String))
+      (println (.getClass (Exception. "x")) (try (+ 1 "a") (catch Exception e (.getClass e))))
+    expected: |
+      :iae :exception :exception :default
+      :exception :exception
+      :runtime :throwable
+      :throwable
+      true false true
+      true true false
+      :java.lang.Exception :java.lang.ClassCastException
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance
@@ -6071,6 +6103,21 @@ cases:
       true false true
       (:java.io.OutputStreamWriter :java.io.StringWriter :number :string)
       :writer :stdout :other :other
+  - name: a-multimethod-dispatches-on-a-stream-class-by-inheritance
+    # A stream's host class as a dispatch value is the keyword class answers for it, and
+    # java.io.Writer / java.io.Reader take every stream of their kind, like the oracle's
+    # Java inheritance. .getClass of a stream answers what class answers (the oracle
+    # answers the host class, which prints without the colon).
+    source: |
+      (defmulti xds-kind class)
+      (defmethod xds-kind java.io.StringWriter [w] :string-writer)
+      (defmethod xds-kind java.io.Writer [w] :writer)
+      (defmethod xds-kind java.io.Reader [w] :reader)
+      (println (xds-kind (java.io.StringWriter.)) (xds-kind *out*) (xds-kind *err*) (xds-kind *in*) (with-in-str "x" (xds-kind *in*)))
+      (println (isa? (class *out*) java.io.Writer) (isa? (class *in*) java.io.Writer) (.getClass (java.io.StringWriter.)))
+    expected: |
+      :string-writer :writer :writer :reader :reader
+      true false :java.io.StringWriter
   - name: var-get-answers-the-root-of-a-var
     # Oracle-identical (clj 1.12.6): var-get is the root of a var, the same as deref of
     # it, a binding included, over a function value and a core var, and a non-var signals

@@ -105,8 +105,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers the host class), `:java.lang.RuntimeException` for a refusal whose condition names
   no class; `.printStackTrace` writes the `toString` line to `*err*` (the oracle writes it
   and a line per frame to the process's stderr, whatever `*err*` is bound to) and
-  `.getStackTrace` answers an empty vector; every other method but `.getMessage`,
-  `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
+  `.getStackTrace` answers an empty vector; `.getClass` answers what `class` does; every other
+  method but `.getMessage`, `.getLocalizedMessage`, `.getCause` and `.toString` is refused. `throw` of a value that is
   no exception is a `ClassCastException` whose message is the value's rendering, where the
   oracle's message names the two classes.
 - Multimethod dispatch values compare like map keys (by `=`, vectors included);
@@ -121,7 +121,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   / `def`'d function re-lowered from its recorded definition, or a call to one
   nested inside an inline dispatch datum (inlined at the call site the same way),
   like the oracle);
-  an `Object` method catches past the search but ahead of the default.
+  an `Object` method catches past the search but ahead of the default. A throwable or
+  stream class stores under its name as a keyword (the one `class` answers), and the search
+  follows its superclass chain like the oracle's Java inheritance, without interfaces
+  (`java.io.Serializable`, `java.io.Closeable`) or `Object`; `isa?`, `derive` and
+  `underive` read a class spelling as the same keyword, so `(isa? (class "a") String)` is
+  `true`, but `parents`/`ancestors` of a class answer only what `derive` recorded (the
+  oracle adds the Java supers). Since the keyword is the class here, a keyword spelled
+  `:java.lang.Exception` is that class too.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.

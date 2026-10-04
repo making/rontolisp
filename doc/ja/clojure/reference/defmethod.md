@@ -8,7 +8,12 @@
 メソッドへ直接届きます。ディスパッチ値にはホスト
 クラス（`String`、`Number`、`java.util.Map`、`clojure.lang.IPersistentVector`、…）を
 書けて、`class` が答えるキーワードの下に格納されるので、`class` の multimethod がそこへ
-ディスパッチします。真の nil は `(:C%NIL)` マーカーへ写されます（どの表も
+ディスパッチします。throwable のクラス（`IllegalArgumentException`、
+`clojure.lang.ExceptionInfo`）やストリームのクラス（`java.io.StringWriter`、
+`java.io.Writer`、`java.io.Reader`）は、`class` が例外やストリームに答えるクラス名の
+キーワードの下に格納され、検索はオラクルの Java の継承と同じくスーパークラスの連鎖を
+たどります。`NumberFormatException` は `Exception` のメソッドより先に
+`IllegalArgumentException` のメソッドへ届きます。真の nil は `(:C%NIL)` マーカーへ写されます（どの表も
 nil をキーにしません）。リテラルの `:nil` ディスパッチ値は `:nil` メソッドにだけ答えます
 （オラクル通り）。`Object` は検索の
 後・デフォルトの先ですべての値に一致します。
@@ -27,4 +32,9 @@ nil をキーにしません）。リテラルの `:nil` ディスパッチ値�
 (defmethod m2 Number [n] (str "num:" n))
 (println (m2 "a")) ; str:a
 (println (m2 1)) ; num:1
+
+(defmulti m3 class)
+(defmethod m3 IllegalArgumentException [e] :iae)
+(defmethod m3 Exception [e] :exception)
+(println (m3 (NumberFormatException. "x")) (m3 (ex-info "m" {}))) ; :iae :exception
 ```
