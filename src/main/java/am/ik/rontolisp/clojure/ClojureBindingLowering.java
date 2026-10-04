@@ -306,7 +306,8 @@ final class ClojureBindingLowering {
 		LispSymbol fn = ClojureLowering.defnSym(key, definition);
 		String callName = fn.name();
 		List<LispVal> fnParts = new ArrayList<>();
-		fnParts.add(new LispSymbol("fn"));
+		fnParts.add(new LispSymbol("fn*")); // a special form: no program macro captures
+											// it
 		fnParts.addAll(items.subList(at, items.size()));
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
 		// recorded ahead of the body, so a #' of the name inside it sees this
@@ -561,32 +562,6 @@ final class ClojureBindingLowering {
 	}
 
 	static LispVal fn(ClojureLowering ctx, List<LispVal> items) {
-		if (items.size() > 1 && items.get(1) == ClojureReader.FN_ANON) {
-			ClojureLowerUtil.isTrue(items.size() >= 2, "the anon form #(...) needs a body");
-			LispVal form = items.size() == 3 ? items.get(2)
-					: new LispCons(items.get(2), ClojureLowerUtil.list(items.subList(3, items.size())));
-			String outer = ctx.anonArgs;
-			ctx.anonArgs = ClojureLowering.mangle("anon-args");
-			String argsName = ctx.anonArgs;
-			// the anon form is its own recur target, but an unchecked one: its
-			// arity is the highest %N the body uses, known only after the body
-			// lowers, so a wrong count signals at run time, like any other call
-			ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(ctx.freshRecurName(), false);
-			ctx.pushRecurTarget(target);
-			try {
-				LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, new LispSymbol(argsName)),
-						ctx.lowerTail(form));
-				if (!target.used()) {
-					return lambda;
-				}
-				return ClojureLowering.labelsSelfCall(target.callName(), lambda);
-			}
-			finally {
-				ctx.recurTargets.pop();
-				ctx.anonArgs = outer;
-			}
-		}
 		int at = 1;
 		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
 		String self = null;

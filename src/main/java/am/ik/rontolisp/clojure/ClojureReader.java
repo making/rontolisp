@@ -6,6 +6,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -30,13 +31,11 @@ import org.jspecify.annotations.Nullable;
  * marked list {@code (%hash-set ...)}: markers the lowering consumes and no identifier
  * can spell (user identifiers are mangled behind {@code ClojureLowering.PREFIX}).
  * {@code nil} / {@code true} / {@code false} stay symbols; the lowering decides what they
- * mean. A {@code #(...)} anonymous function reads as {@code (fn %anon ...)}:
- * {@link #FN_ANON} stands for the parameter vector.
+ * mean. A {@code #(...)} anonymous function reads as the oracle's reader reads it,
+ * {@code (fn* [p1__N# ...] (body...))}, every argument literal replaced by its generated
+ * parameter.
  */
 final class ClojureReader {
-
-	/** Stands for the parameter vector of a {@code #(...)} anonymous function literal. */
-	static final LispSymbol FN_ANON = new LispSymbol("%anon");
 
 	static final LispSymbol VECTOR = new LispSymbol("%vector");
 
@@ -80,6 +79,20 @@ final class ClojureReader {
 	 */
 	private final Map<LispVal, Integer> offsets = new IdentityHashMap<>();
 
+	/**
+	 * The parameters of the {@code #(...)} being read, by argument number ({@code -1} for
+	 * {@code %&}), or null outside one.
+	 */
+	private @Nullable TreeMap<Integer, LispSymbol> anonArgs;
+
+	/**
+	 * The last number a generated {@code #(...)} parameter took. It restarts at each
+	 * top-level form: the oracle's counter is process-wide, but a parameter only has to
+	 * differ from the ones a form can nest it in, and a form's spelling then stays the
+	 * same wherever it sits in its file.
+	 */
+	private int anonId;
+
 	ClojureReader(String source, @Nullable String file) {
 		this.source = source;
 		this.file = file;
@@ -111,6 +124,7 @@ final class ClojureReader {
 		skipSpace();
 		this.endsInDiscard = false;
 		while (this.pos < this.source.length()) {
+			this.anonId = 0;
 			LispVal datum = readDatum();
 			this.endsInDiscard = datum == DISCARD;
 			if (datum != DISCARD) {
@@ -410,14 +424,74 @@ final class ClojureReader {
 		throw error("Unsupported character: \\" + token);
 	}
 
+	/**
+	 * One {@code #(...)}, positioned at its parenthesis: the oracle's
+	 * {@code (fn* [params] (body...))}. Each argument literal in the body reads as its
+	 * parameter ({@link #anonArg}); the vector runs from {@code p1} to the highest number
+	 * used, a number the body skipped generated after it, then {@code & rest} when
+	 * {@code %&} occurs. A {@code #(...)} inside another is refused, like the oracle's.
+	 */
 	private LispVal readAnonFn() {
-		next();
-		List<LispVal> body = readSeq(')');
-		List<LispVal> fn = new ArrayList<>();
-		fn.add(new LispSymbol("fn"));
-		fn.add(FN_ANON);
-		fn.addAll(body);
-		return list(fn);
+		if (this.anonArgs != null) {
+			throw error("Nested #()s are not allowed");
+		}
+		int start = this.pos;
+		TreeMap<Integer, LispSymbol> args = new TreeMap<>();
+		this.anonArgs = args;
+		LispVal body;
+		try {
+			next();
+			body = list(readSeq(')'));
+		}
+		finally {
+			this.anonArgs = null;
+		}
+		this.offsets.putIfAbsent(body, start);
+		List<LispVal> params = new ArrayList<>();
+		int high = args.isEmpty() ? 0 : Math.max(args.lastKey(), 0);
+		for (int n = 1; n <= high; n++) {
+			params.add(args.computeIfAbsent(n, this::anonParam));
+		}
+		LispSymbol rest = args.get(-1);
+		if (rest != null) {
+			params.add(new LispSymbol("&"));
+			params.add(rest);
+		}
+		return list(List.of(new LispSymbol("fn*"), marked(VECTOR, params), body));
+	}
+
+	/**
+	 * The parameter an argument literal of the {@code #(...)} being read stands for:
+	 * {@code %} and {@code %1} the first, {@code %N} the Nth, {@code %&} the rest, each
+	 * generated on its first use. Anything else after a {@code %} is the oracle's
+	 * refusal.
+	 */
+	private LispSymbol anonArg(String token, TreeMap<Integer, LispSymbol> args) {
+		int n;
+		if (token.equals("%")) {
+			n = 1;
+		}
+		else if (token.equals("%&")) {
+			n = -1;
+		}
+		else if (token.length() > 1 && token.substring(1).chars().allMatch(c -> c >= '0' && c <= '9')) {
+			try {
+				n = Integer.parseInt(token.substring(1));
+			}
+			catch (NumberFormatException ex) {
+				throw error("arg literal must be %, %& or %integer");
+			}
+		}
+		else {
+			throw error("arg literal must be %, %& or %integer");
+		}
+		return args.computeIfAbsent(n, this::anonParam);
+	}
+
+	/** A fresh parameter for argument number N, spelled like the oracle's. */
+	private LispSymbol anonParam(int n) {
+		this.anonId++;
+		return new LispSymbol((n == -1 ? "rest" : "p" + n) + "__" + this.anonId + "#");
 	}
 
 	private LispVal readBraced() {
@@ -748,6 +822,9 @@ final class ClojureReader {
 		}
 		if (token.equals("nil") || token.equals("true") || token.equals("false")) {
 			return new LispSymbol(token);
+		}
+		if (this.anonArgs != null && token.charAt(0) == '%') {
+			return anonArg(token, this.anonArgs);
 		}
 		LispVal n = tryNumber(token);
 		if (n != null) {

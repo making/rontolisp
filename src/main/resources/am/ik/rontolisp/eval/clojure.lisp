@@ -6747,7 +6747,8 @@
 ;; holds: an identifier interns behind c%, a keyword is (:C%KEYWORD spelling)
 ;; with ::kw resolved against the calling namespace, a vector is a CL vector,
 ;; a map and a set the equal tables, reader metadata drops, #(...) is the
-;; source reader's (fn %anon ...), and a record literal builds the record
+;; oracle's (fn* [p1__N# ...] (body)) like the source reader's (N counting per
+;; datum read), and a record literal builds the record
 ;; through the classes the program registered (%clojure-read-register). The
 ;; two readers part in one place, where this one follows the oracle: a token
 ;; ends where the oracle's does (# and ' inside a token are constituents, a
@@ -6772,6 +6773,15 @@
   "The record and deftype classes a record literal may name, newest first:
    entries (class tag fields record-p) over strings, registered by the
    lowering of a program that reads.")
+
+(defvar rontolisp::%clojure-rd-args
+  nil
+  "Inside the #(...) being read, (:C%ARGS (n . parameter) ...), n -1 for %&;
+   NIL elsewhere.")
+
+(defvar rontolisp::%clojure-rd-arg-id
+  0
+  "The last number a generated #(...) parameter took in the datum being read.")
 
 (defun rontolisp::%clojure-read-register (entries)
   "Make the classes of ENTRIES readable, ahead of the ones registered before
@@ -7095,6 +7105,8 @@
                  (error "~A" (concatenate 'string "Invalid number: " token))
                  number)))
           ((char= first #\:) (rontolisp::%clojure-rd-keyword rd token))
+          ((and rontolisp::%clojure-rd-args (char= first #\%))
+           (rontolisp::%clojure-rd-arg token))
           (t (rontolisp::%clojure-rd-symbol token)))))
 
 (defun rontolisp::%clojure-rd-number-shaped-p (token)
@@ -7272,6 +7284,63 @@
            alias)
           (t nil))))
 
+(defun rontolisp::%clojure-rd-anon-fn (rd)
+  "#(...), the hash and the parenthesis consumed: (fn* [params] (body)), each
+   argument literal of the body read as its parameter, the vector running from
+   p1 to the highest number used (one the body skipped generated after it),
+   then & rest for %&. A #(...) inside another signals, like the oracle's."
+  (if rontolisp::%clojure-rd-args (error "Nested #()s are not allowed"))
+  (let ((rontolisp::%clojure-rd-args (list :C%ARGS)))
+    (let ((body (rontolisp::%clojure-rd-seq rd #\))) (high 0) (params nil))
+      (dolist (entry (cdr rontolisp::%clojure-rd-args))
+        (if (> (car entry) high) (setq high (car entry))))
+      (do ((n 1 (+ n 1)))
+          ((> n high))
+        (setq params (cons (rontolisp::%clojure-rd-arg-param n) params)))
+      (let ((tail (assoc -1 (cdr rontolisp::%clojure-rd-args))))
+        (if tail
+            (setq params
+                  (cons (cdr tail)
+                        (cons (rontolisp::%clojure-rd-symbol "&") params)))))
+      (list (rontolisp::%clojure-rd-symbol "fn*")
+            (coerce (nreverse params) 'vector) body))))
+
+(defun rontolisp::%clojure-rd-arg (token)
+  "The parameter the argument literal TOKEN stands for inside the #(...) being
+   read: % and %1 the first, %N the Nth, %& the rest; anything else after a %
+   signals, like the oracle's."
+  (let ((n
+         (cond ((string= token "%") 1)
+               ((string= token "%&") -1)
+               ((and (> (length token) 1)
+                     (rontolisp::%clojure-rd-digit (char token 1) 10))
+                (rontolisp::%clojure-rd-integer token 1 (length token) 10))
+               (t nil))))
+    (if (null n) (error "arg literal must be %, %& or %integer"))
+    (rontolisp::%clojure-rd-arg-param n)))
+
+(defun rontolisp::%clojure-rd-arg-param (n)
+  "The parameter for argument number N of the #(...) being read, generated on
+   its first use and spelled like the oracle's (p1__N#, rest__N#)."
+  (let ((entry (assoc n (cdr rontolisp::%clojure-rd-args))))
+    (if entry
+        (cdr entry)
+        (progn
+          (setq rontolisp::%clojure-rd-arg-id
+                (+ rontolisp::%clojure-rd-arg-id 1))
+          (let* ((stem
+                  (if (= n -1)
+                      "rest"
+                      (concatenate 'string "p" (princ-to-string n))))
+                 (param
+                  (rontolisp::%clojure-rd-symbol
+                   (concatenate 'string stem "__"
+                                (princ-to-string rontolisp::%clojure-rd-arg-id)
+                                "#"))))
+            (rplacd rontolisp::%clojure-rd-args
+                    (cons (cons n param) (cdr rontolisp::%clojure-rd-args)))
+            param)))))
+
 (defun rontolisp::%clojure-rd-dispatch (rd)
   "A # form, the hash consumed: #' #_ #( #{ #\" #^ and a record literal;
    anything else is the source reader's refusal."
@@ -7286,9 +7355,7 @@
            :C%READ-SKIP)
           ((char= c #\()
            (rontolisp::%clojure-rd-next rd)
-           (cons (rontolisp::%clojure-rd-symbol "fn")
-                 (cons (rontolisp::%clojure-rd-symbol "%anon")
-                       (rontolisp::%clojure-rd-seq rd #\)))))
+           (rontolisp::%clojure-rd-anon-fn rd))
           ((char= c #\{)
            (rontolisp::%clojure-rd-next rd)
            (rontolisp::%clojure-rd-set rd))
@@ -7446,7 +7513,7 @@
   "One datum from RD, past whitespace and #_ discards: at the end of input
    before a datum, EOF-VALUE, or the oracle's error when EOF-ERROR; an end
    inside a datum always signals."
-  (let ((form :C%READ-SKIP) (eof nil))
+  (let ((form :C%READ-SKIP) (eof nil) (rontolisp::%clojure-rd-arg-id 0))
     (do ()
         ((or eof (not (eq form :C%READ-SKIP))) (if eof eof-value form))
       (rontolisp::%clojure-rd-skip rd)

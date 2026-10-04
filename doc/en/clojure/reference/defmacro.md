@@ -20,7 +20,7 @@ A `defmacro` of a core name -- a function like `inc` or a form like `with-out-st
 shadows it from its definition on: a call site above the definition keeps the core
 meaning, like the oracle's form-by-form compile, and `clojure.core/name` names the core
 var whatever the program defines. A special form (`if`, `do`, `let*`, `new`, ...) or a
-head the reader spells (`deref`, `with-meta`, `fn`, `syntax-quote`, `ns`, `in-ns`)
+head the reader spells (`deref`, `with-meta`, `syntax-quote`, `ns`, `in-ns`)
 cannot name a macro.
 
 ```clojure

@@ -2412,6 +2412,57 @@ cases:
       (+ 1 2)
       true
       true
+  - name: a-macro-argument-holding-a-regex-literal-expands
+    # A macro argument travels quoted into the expander and its answer reads back as a
+    # datum: a regex literal answers its pattern, which reads back as the literal (the
+    # oracle hands the one Pattern object through; here the expansion compiles it again).
+    source: |
+      (defmacro rx-trace [form] `(println '~form "=>" ~form))
+      (rx-trace (re-find #"a" "cat"))
+      (rx-trace (re-seq #"\d+" "a1b22"))
+      (rx-trace [#"x" (str #"y")])
+    expected: |
+      (re-find #"a" cat) => a
+      (re-seq #"\d+" a1b22) => (1 22)
+      [#"x" (str #"y")] => [#"x" y]
+  - name: anon-fn-reads-as-fn-star-over-generated-parameters
+    # #(...) reads like the oracle's reader, quoted, read or expanded: (fn* [p1__N# ...]
+    # (body)), % and %1 one parameter, every %N up to the highest used (an unused lower
+    # one generated after the body), %& the rest parameter, % inside a quote replaced
+    # too. N counts per top-level form here; the oracle's counter is process-wide, so
+    # its numbers differ (p1__145#, p1__150# p2__148# & rest__149#, ...).
+    source: |
+      (prn '#(inc %))
+      (prn '#(+ %2 %&))
+      (prn '[#(* % %1) #(do 7)])
+      (prn (read-string "#(list '% %)"))
+      (println (#(apply + %&) 1 2 3) (#(do 7)) (map #(+ %1 %2) [1 2] [3 4]))
+      (println (try (read-string "#(#(inc %))") (catch Exception e (ex-message e))))
+      (println (try (read-string "#(%x)") (catch Exception e (ex-message e))))
+      (prn (read-string "%"))
+    expected: |
+      (fn* [p1__1#] (inc p1__1#))
+      (fn* [p1__3# p2__1# & rest__2#] (+ p2__1# rest__2#))
+      [(fn* [p1__1#] (* p1__1# p1__1#)) (fn* [] (do 7))]
+      (fn* [p1__1#] (list (quote p1__1#) p1__1#))
+      6 7 (4 6)
+      Nested #()s are not allowed
+      arg literal must be %, %& or %integer
+      %
+  - name: a-macro-argument-holding-an-anonymous-fn-expands
+    # The #(...) datum travels through the expander and back as the fn* form it reads
+    # as; one inside a syntax-quote gets fresh parameters per expansion. Oracle-identical
+    # but for the parameter numbers (p1__175#, rest__180#).
+    source: |
+      (defmacro af-trace [form] `(println '~form "=>" ~form))
+      (af-trace (map #(inc %) [1 2]))
+      (af-trace (#(apply list %&) 1 2))
+      (defmacro af-inc-all [xs] `(map #(inc %) ~xs))
+      (println (af-inc-all [1 2]))
+    expected: |
+      (map (fn* [p1__1#] (inc p1__1#)) [1 2]) => (2 3)
+      ((fn* [& rest__1#] (apply list rest__1#)) 1 2) => (1 2)
+      (2 3)
   - name: chain-macros-rebuild-dot-forms
     # The book's chain_1..5, ported: list/concat bodies, then syntax-quote bodies with
     # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
@@ -5038,6 +5089,34 @@ cases:
       (2 3) 3
       11 (2 3)
       :declared :declared
+  - name: a-program-macro-named-fn-captures-fn-calls-only
+    # (defmacro fn ...) is accepted, like the oracle: its call sites expand, while
+    # #(...) reads as the special form fn* and stays a function. The lowering's own
+    # (fn ...) datum -- a defn's recorded dispatch function, re-lowered by a defmulti
+    # -- is not a call site, so the macro never captures it, and clojure.core/fn is
+    # the core form. The case runs in its own namespace. Oracle: clj 1.12.6.1673.
+    source: |
+      (ns fn-macro-ns)
+      (defmacro fn [& r] 42)
+      (println (fn [x] x))
+      (println (map #(inc %) [1]))
+      (println ((clojure.core/fn [x] (inc x)) 1))
+      (println (macroexpand-1 '(fn [x] x)))
+      (defn fn-macro-class [x] (class x))
+      (defmulti fn-macro-mm fn-macro-class)
+      (defmethod fn-macro-mm nil [_] "was-nil")
+      (defmethod fn-macro-mm :default [x] "dflt")
+      (println (fn-macro-mm nil) (fn-macro-mm "a"))
+      (defn fn-macro-id [x] x)
+      (println (fn-macro-id 5))
+      (in-ns 'other)
+    expected: |
+      42
+      (2)
+      2
+      42
+      was-nil dflt
+      5
   - name: string-writer-binds-to-out-and-str-answers-without-clearing
     # a zero-argument (new java.io.StringWriter) lowers to a Common Lisp
     # string output stream on every backend (never a host Writer, which no backend

@@ -356,7 +356,7 @@ final class ClojureDispatchLowering {
 
 	/**
 	 * Records a definition's dispatch-function datum for a later {@code defmulti} over
-	 * its name: a {@code defn}'s rebuilt {@code (fn ...)} datum, or a {@code def}'s
+	 * its name: a {@code defn}'s rebuilt {@code (fn* ...)} datum, or a {@code def}'s
 	 * {@code (fn ...)} value datum (a name aliasing an already-recorded one shares its
 	 * datum). Only a class-calling definition is kept -- anything else (including a
 	 * value-less {@code def} and a {@code ^:dynamic} name, whose calls route through the
@@ -381,14 +381,21 @@ final class ClojureDispatchLowering {
 			return;
 		}
 		List<LispVal> parts = ClojureLowerUtil.items(valueDatum);
-		if (parts != null && !parts.isEmpty()
-				&& (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn") || parts.get(0) == ClojureReader.FN_ANON)
-				&& containsClassCall(valueDatum)) {
+		if (parts != null && !parts.isEmpty() && isFnHead(ctx, parts.get(0)) && containsClassCall(valueDatum)) {
 			ctx.classDispatchFns.put(name, valueDatum);
 		}
 		else {
 			ctx.classDispatchFns.remove(name);
 		}
+	}
+
+	/**
+	 * Whether a head spells a function form: {@code fn*}, or {@code fn} unless a program
+	 * macro of that name owns it (the call then expands to whatever the macro answers).
+	 */
+	private static boolean isFnHead(ClojureLowering ctx, LispVal head) {
+		return ClojureLowerUtil.isSymbolNamed(head, "fn*")
+				|| ClojureLowerUtil.isSymbolNamed(head, "fn") && ClojureMacroLowering.macroKey(ctx, "fn") == null;
 	}
 
 	/**

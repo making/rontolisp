@@ -586,9 +586,6 @@ public final class ClojureLowering {
 		return ClojureBindingLowering.labelsWithHead(callName, List.of(), lambda);
 	}
 
-	/** The rest parameter of the {@code #(...)} being lowered, or null outside one. */
-	@Nullable String anonArgs;
-
 	/** The false value, referenced (never rebuilt) wherever {@code false} lowers. */
 	final LispSymbol falseVariable = new LispSymbol(FALSE_VARIABLE);
 
@@ -1610,7 +1607,6 @@ public final class ClojureLowering {
 		boolean outerTail = this.tailPosition;
 		int outerTry = this.tryDepth;
 		int outerMacroDepth = this.macroDepth;
-		@Nullable String outerAnon = this.anonArgs;
 		boolean outerDispatch = this.inDispatchFn;
 		@Nullable String outerTestLocation = this.testLocation;
 		boolean outerEcho = this.nestedDefAnswersVar;
@@ -1626,7 +1622,6 @@ public final class ClojureLowering {
 		this.tailPosition = false;
 		this.tryDepth = 0;
 		this.macroDepth = 0;
-		this.anonArgs = null;
 		this.inDispatchFn = false;
 		this.testLocation = null;
 		this.reader = fileReader;
@@ -1690,7 +1685,6 @@ public final class ClojureLowering {
 			this.tailPosition = outerTail;
 			this.tryDepth = outerTry;
 			this.macroDepth = outerMacroDepth;
-			this.anonArgs = outerAnon;
 			this.inDispatchFn = outerDispatch;
 			this.testLocation = outerTestLocation;
 			this.nestedDefAnswersVar = outerEcho;
@@ -2257,7 +2251,7 @@ public final class ClojureLowering {
 			ClojureLowerUtil.isTrue(forms.size() == 1, "a defmacro lowers to one form");
 			return forms.get(0);
 		}
-		if (head == ClojureReader.FN_ANON || ClojureLowerUtil.isSymbolNamed(head, "fn")) {
+		if (ClojureLowerUtil.isSymbolNamed(head, "fn") || ClojureLowerUtil.isSymbolNamed(head, "fn*")) {
 			return capturingMutableFields(() -> ClojureBindingLowering.fn(this, items));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "let")) {
@@ -3627,17 +3621,6 @@ public final class ClojureLowering {
 			// a gensym a macro expansion returned: uninterned, so it lowers to
 			// itself instead of mangling behind the prefix
 			return s;
-		}
-		if (name.equals("%") || name.length() > 1 && name.charAt(0) == '%'
-				&& name.substring(1).chars().allMatch(Character::isDigit)) {
-			if (this.anonArgs == null) {
-				throw new LispReadException(name + " outside the anon form #(...)");
-			}
-			String args = this.anonArgs;
-			int oneBased = name.equals("%") ? 1 : Integer.parseInt(name.substring(1));
-			ClojureLowerUtil.isTrue(oneBased <= 9, "the anon form #(...) takes at most 9 arguments");
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(oneBased - 1),
-					new LispSymbol(args));
 		}
 		String core = ClojureCoreNames.coreSpelling(name);
 		if (core != null) {

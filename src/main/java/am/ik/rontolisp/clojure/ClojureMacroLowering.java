@@ -57,13 +57,15 @@ final class ClojureMacroLowering {
 
 	/**
 	 * The heads the reader itself spells ({@code `x}, {@code ~x}, {@code ~@x},
-	 * {@code @x}, {@code #(...)}) plus the two the pre-scan reads a namespace from: a
-	 * macro of one would capture the reader's own forms (the oracle reads {@code @x} as
+	 * {@code @x}) plus the two the pre-scan reads a namespace from: a macro of one would
+	 * capture the reader's own forms (the oracle reads {@code @x} as
 	 * {@code clojure.core/deref}, which no program macro shadows), so a {@code defmacro}
-	 * of one is refused by name. {@code ^m x} reads as {@code %with-meta}, reserved by
-	 * its {@code %}, so a {@code with-meta} macro shadows the call only.
+	 * of one is refused by name. {@code #(...)} reads as {@code fn*}, a special form, so
+	 * {@code fn} is no reader head: a {@code fn} macro captures {@code fn} call sites
+	 * only. {@code ^m x} reads as {@code %with-meta}, reserved by its {@code %}, so a
+	 * {@code with-meta} macro shadows the call only.
 	 */
-	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "fn", "ns",
+	static final Set<String> READER_HEADS = Set.of("syntax-quote", "unquote", "unquote-splicing", "deref", "ns",
 			"in-ns");
 
 	/**
@@ -241,11 +243,8 @@ final class ClojureMacroLowering {
 	 * the head names no macro.
 	 */
 	static @Nullable LispVal macroCall(ClojureLowering ctx, String name, List<LispVal> items) {
-		if (ctx.isLocal(name)) {
-			return null; // a local binding shadows the macro
-		}
-		String key = ctx.resolveVar(name);
-		if (key == null || ctx.globals.get(key) != ClojureLowering.Kind.MACRO) {
+		String key = macroKey(ctx, name);
+		if (key == null) {
 			return null;
 		}
 		LispVal expander = ctx.macros.get(key);
@@ -253,6 +252,18 @@ final class ClojureMacroLowering {
 			throw new LispReadException("macro `" + name + "` used before its definition");
 		}
 		return expandMacro(ctx, name, expander, items);
+	}
+
+	/**
+	 * The var key of the program macro a head names at the current point, or null: a
+	 * local binding shadows the macro, and a name no macro owns has none.
+	 */
+	static @Nullable String macroKey(ClojureLowering ctx, String name) {
+		if (ctx.isLocal(name)) {
+			return null; // a local binding shadows the macro
+		}
+		String key = ctx.resolveVar(name);
+		return key != null && ctx.globals.get(key) == ClojureLowering.Kind.MACRO ? key : null;
 	}
 
 	/**
@@ -306,9 +317,9 @@ final class ClojureMacroLowering {
 	/**
 	 * A macro answer back to a datum: the inverse of {@link #quote}, so the expansion
 	 * lowers the way the quoted call-site data would. Mangled symbols shed the prefix,
-	 * keyword and set wrappers answer their datum, vectors and tables their literals, and
-	 * a gensym ({@code #:}-spelled, uninterned) travels as itself so the {@code #:}
-	 * bypass lowers it back to the same symbol.
+	 * keyword and set wrappers answer their datum, a pattern its regex literal, vectors
+	 * and tables their literals, and a gensym ({@code #:}-spelled, uninterned) travels as
+	 * itself so the {@code #:} bypass lowers it back to the same symbol.
 	 */
 	static LispVal decodeDatum(ClojureLowering ctx, LispVal value) {
 		if (value instanceof LispNil) {
@@ -343,6 +354,9 @@ final class ClojureMacroLowering {
 				}
 				if (tag.name().equals(":C%SORTED")) {
 					return decodeSorted(ctx, cons);
+				}
+				if (tag.name().equals(":C%PATTERN")) {
+					return decodePattern(cons);
 				}
 				if (tag.name().equals(":C%ATOM")) {
 					throw new LispReadException("an atom cannot travel through a macro expansion");
@@ -436,6 +450,19 @@ final class ClojureMacroLowering {
 				}
 			}
 			return ClojureLowerUtil.list(elements);
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * A pattern answer back to the regex literal of its source, which compiles to an
+	 * equivalent pattern (the oracle's expansion holds the one Pattern object; this one
+	 * compiles its own, so only identity tells them apart).
+	 */
+	static LispVal decodePattern(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 5 && parts.get(2) instanceof LispString source) {
+			return ClojureLowerUtil.list(ClojureReader.REGEX, source);
 		}
 		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}

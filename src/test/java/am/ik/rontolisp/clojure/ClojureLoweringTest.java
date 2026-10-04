@@ -327,9 +327,10 @@ class ClojureLoweringTest {
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
 			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) (+ |c%a| |c%b|)) 1 2)");
-		assertThat(lowered("(map #(* % %) '(1 2))")).contains("%CLOJURE-MAP").contains("NTH");
+		assertThat(lowered("(map #(* % %) '(1 2))")).contains("%CLOJURE-MAP")
+			.contains("(LAMBDA (|c%p1__1#|) (* |c%p1__1#| |c%p1__1#|))");
 		assertThatThrownBy(() -> Clojure.read("%", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("outside the anon form");
+			.hasMessageContaining("%");
 	}
 
 	@Test
