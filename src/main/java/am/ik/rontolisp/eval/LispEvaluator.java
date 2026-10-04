@@ -6530,33 +6530,6 @@ public final class LispEvaluator {
 									env = letEnv;
 									break dispatch;
 								}
-								case LispNames.PROGV:
-									result = evalProgv(cons, env);
-									break frame;
-								case LispNames.DEFUN:
-									result = evalDefun(cons, env);
-									break frame;
-								case LispNames.DEFMACRO:
-									result = evalDefmacro(cons, env);
-									break frame;
-								case LispNames.DEFSTRUCT:
-									result = singleValue(evalDefstruct(cons, env));
-									break frame;
-								case LispNames.DEFCLASS:
-									ensureAsdfClassesFor(cons);
-									ensureGeomClassesFor(cons);
-									ensureObjcTypesFor(cons);
-									result = singleValue(evalDefclass(cons, env));
-									break frame;
-								case LispNames.DEFGENERIC:
-									result = singleValue(evalDefgeneric(cons, env));
-									break frame;
-								case LispNames.DEFMETHOD:
-									ensureAsdfClassesFor(cons);
-									ensureGeomClassesFor(cons);
-									ensureObjcTypesFor(cons);
-									result = singleValue(evalDefmethod(cons, env));
-									break frame;
 								case LispNames.MAKE_INSTANCE:
 									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
 										break dispatch;
@@ -6565,10 +6538,6 @@ public final class LispEvaluator {
 									ensureGeomClassesFor(cons);
 									ensureObjcTypesFor(cons);
 									next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
-									break dispatch;
-								case LispNames.CHANGE_CLASS:
-									next = LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env),
-											this.closRegistry, false);
 									break dispatch;
 								case LispNames.SLOT_VALUE:
 									result = singleValue(evalSlotValue(cons, env));
@@ -6579,20 +6548,6 @@ public final class LispEvaluator {
 								case LispNames.WITH_ACCESSORS:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithAccessors);
 									break dispatch;
-								case LispNames.DEFVAR:
-									result = evalDefvar(cons, env, false);
-									break frame;
-								case LispNames.DEFPARAMETER:
-									result = evalDefvar(cons, env, true);
-									break frame;
-								case LispNames.DEFCONSTANT:
-									result = evalDefconstant(cons, env);
-									break frame;
-								case LispNames.ASDF_DEFSYSTEM:
-									// A special form: the system options are plain data,
-									// not evaluated.
-									result = singleValue(evalDefsystem(cons));
-									break frame;
 								case LispNames.FUNCTION:
 									result = singleValue(evalFunction(cons, env));
 									break frame;
@@ -6610,15 +6565,6 @@ public final class LispEvaluator {
 								case LispNames.LAMBDA:
 									result = evalLambdaForm(cons, env);
 									break frame;
-								case LispNames.ASYNC_QUALIFIED:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandAsync);
-									break dispatch;
-								case LispNames.ASYNC_DEFUN_QUALIFIED:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandAsyncDefun);
-									break dispatch;
-								case LispNames.ASYNC_LAMBDA_QUALIFIED:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandAsyncLambda);
-									break dispatch;
 								case LispNames.AWAIT_QUALIFIED:
 									result = evalAwait(cons, env);
 									break frame;
@@ -6633,9 +6579,6 @@ public final class LispEvaluator {
 									break dispatch;
 								case LispNames.ECASE:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandEcase);
-									break dispatch;
-								case LispNames.CCASE:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandCcase);
 									break dispatch;
 								case LispNames.ERROR:
 									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
@@ -6679,9 +6622,6 @@ public final class LispEvaluator {
 									next = LispMacroExpander.expandSignalMacro(cons, this.closRegistry,
 											this.restartRuntimeLoaded);
 									break dispatch;
-								case LispNames.SIGNAL_COND_INTERNAL:
-									result = singleValue(evalSignalCond(cons, env));
-									break frame;
 								case LispNames.HANDLER_CASE:
 									ensureWitLoadedForConditionClass(cons);
 									ensureConditionReportRuntimeLoaded();
@@ -6692,14 +6632,6 @@ public final class LispEvaluator {
 									ensureConditionReportRuntimeLoaded();
 									ensureRestartRuntimeLoaded();
 									next = LispMacroExpander.expandHandlerBind(cons, this.closRegistry);
-									break dispatch;
-								case LispNames.RESTART_BIND:
-									ensureRestartRuntimeLoaded();
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandRestartBind);
-									break dispatch;
-								case LispNames.WITH_SIMPLE_RESTART:
-									ensureRestartRuntimeLoaded();
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithSimpleRestart);
 									break dispatch;
 								case LispNames.IGNORE_ERRORS:
 									ensureConditionReportRuntimeLoaded();
@@ -6805,9 +6737,6 @@ public final class LispEvaluator {
 								case LispNames.PROG1:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandProg1);
 									break dispatch;
-								case LispNames.TIME:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandTime);
-									break dispatch;
 								case LispNames.UNLESS:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandUnless);
 									break dispatch;
@@ -6873,42 +6802,6 @@ public final class LispEvaluator {
 									}
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandFourth);
 									break dispatch;
-								case LispNames.FIFTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandFifth);
-									break dispatch;
-								case LispNames.SIXTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandSixth);
-									break dispatch;
-								case LispNames.SEVENTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandSeventh);
-									break dispatch;
-								case LispNames.EIGHTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandEighth);
-									break dispatch;
-								case LispNames.NINTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandNinth);
-									break dispatch;
-								case LispNames.TENTH:
-									if (properLength != 2) {
-										break;
-									}
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandTenth);
-									break dispatch;
 								case LispNames.SETF: {
 									// (setf (macro-function 'new) (macro-function
 									// 'existing)) is a write to the MACRO table, which
@@ -6942,9 +6835,6 @@ public final class LispEvaluator {
 								case LispNames.POP:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandPop);
 									break dispatch;
-								case LispNames.REMF:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandRemf);
-									break dispatch;
 								case LispNames.LET_STAR:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandLetStar);
 									break dispatch;
@@ -6960,121 +6850,14 @@ public final class LispEvaluator {
 								case LispNames.FORMAT:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandFormat);
 									break dispatch;
-								case LispNames.WITH_OPEN_FILE:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithOpenFile);
-									break dispatch;
 								case LispNames.WITH_OUTPUT_TO_STRING:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithOutputToString);
-									break dispatch;
-								case LispNames.PPRINT_LOGICAL_BLOCK:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandPprintLogicalBlock);
-									break dispatch;
-								case LispNames.WITH_ARENA_QUALIFIED:
-									// A reclamation boundary for --no-gc; a real GC
-									// already reclaims, so the interpreter runs the body
-									// as a plain progn.
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithArena);
-									break dispatch;
-								case LispNames.WITH_MUTEX_QUALIFIED:
-								case LispNames.WITH_LOCK_HELD_QUALIFIED:
-								case LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
-									// Acquire / body / release-on-every-exit;
-									// bordeaux-threads' with-lock-held is the same shape
-									// over the same primitives, and its recursive twin is
-									// the same again -- the shim's lock is reentrant.
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithMutex);
-									break dispatch;
-								case LispNames.WIT_EXPORT_QUALIFIED:
-									result = singleValue(evalWitExport(cons));
-									break frame;
-								case LispNames.WIT_IMPORT_QUALIFIED:
-									result = singleValue(evalWitImport(cons));
-									break frame;
-								case LispNames.TORCH_NO_GRAD_QUALIFIED:
-									// The expansion let-binds torch::*grad-enabled*, so
-									// the library's defparameter must have declared it
-									// special BEFORE the let binds.
-									ensureTorchLoaded();
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad);
-									break dispatch;
-								case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED:
-									next = builtinMacroExpansion(cons,
-											LispMacroExpander::expandObjcWithAutoreleasePool);
-									break dispatch;
-								case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
-									next = builtinMacroExpansion(cons,
-											LispMacroExpander::expandUsocketWithClientSocket);
-									break dispatch;
-								case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
-								case LispNames.USOCKET_WITH_SERVER_SOCKET_QUALIFIED:
-									next = builtinMacroExpansion(cons,
-											LispMacroExpander::expandUsocketWithConnectedSocket);
-									break dispatch;
-								case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
-									next = builtinMacroExpansion(cons,
-											LispMacroExpander::expandUsocketWithSocketListener);
-									break dispatch;
-								case LispNames.USOCKET_GUARD_QUALIFIED:
-									next = builtinMacroExpansion(cons,
-											c -> LispMacroExpander.expandUsocketGuard(c, true));
 									break dispatch;
 								case LispNames.WITH_INPUT_FROM_STRING:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithInputFromString);
 									break dispatch;
 								case LispNames.PUSHNEW:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandPushnew);
-									break dispatch;
-								case LispNames.DEFTYPE:
-									result = singleValue(evalDeftype(cons));
-									break frame;
-								case LispNames.DEFINE_CONDITION: {
-									// A condition type is an ordinary CLOS-subset class;
-									// the :report form is registered for the
-									// error/signal/warn message building.
-									LispVal defined = evalDefclass((LispCons) LispMacroExpander
-										.defineConditionToDefclass(cons, this.closRegistry), env);
-									// The report renderer partitions the registry, so a
-									// new condition class makes the loaded one stale;
-									// rebuilding here keeps it in step.
-									ensureConditionReportRuntimeLoaded();
-									result = singleValue(defined);
-									break frame;
-								}
-								case LispNames.DEFINE_MODIFY_MACRO:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandDefineModifyMacro);
-									break dispatch;
-								case LispNames.DEFINE_SETF_EXPANDER:
-									result = singleValue(registerSetfExpander(cons));
-									break frame;
-								case LispNames.DEFSETF:
-									result = singleValue(registerDefsetf(cons));
-									break frame;
-								case LispNames.DEFINE_COMPILER_MACRO:
-									result = singleValue(evalDefineCompilerMacro(cons, env));
-									break frame;
-								case LispNames.RESTART_CASE:
-									ensureRestartRuntimeLoaded();
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase);
-									break dispatch;
-								case LispNames.MACROLET:
-									result = evalMacrolet(cons, env);
-									break frame;
-								case LispNames.MAKE_CONDITION:
-									ensureConditionReportRuntimeLoaded();
-									next = LispMacroExpander.expandMakeCondition(cons, this.closRegistry);
-									break dispatch;
-								case LispNames.DOCUMENTATION:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
-									break dispatch;
-								case LispNames.COPY_READTABLE:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandCopyReadtable);
-									break dispatch;
-								case LispNames.SET_DISPATCH_MACRO_CHARACTER:
-									next = builtinMacroExpansion(cons,
-											LispMacroExpander::expandSetDispatchMacroCharacter);
-									break dispatch;
-								case LispNames.READTABLE_CASE:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandReadtableCase);
 									break dispatch;
 								case LispNames.OBJ_REF:
 								case LispNames.OBJ_SET: {
@@ -7115,7 +6898,7 @@ public final class LispEvaluator {
 							if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
 								break dispatch;
 							}
-							LispVal expansion = rareOperatorExpansion(cons, sym.name());
+							LispVal expansion = rareOperatorExpansion(cons, env, sym.name());
 							if (expansion != null) {
 								next = expansion;
 								break dispatch;
@@ -7435,12 +7218,119 @@ public final class LispEvaluator {
 	 * form ends the frame, an expansion continues it, and the loop must know which. Keep
 	 * both halves clear of HotSpot's 8000-bytecode HugeMethodLimit;
 	 * {@code LispEvaluatorHotMethodSizeTest} fails the build if either crosses it.
+	 * {@link #evalCons}'s own switch keeps the arms a loop or method body plausibly runs;
+	 * a definer, a top-level directive or a rarely looped macro belongs here or in
+	 * {@link #evalConsRareOperator}, at the cost of one more switch miss. A form reaches
+	 * both after {@link #wrongCountCall}, so an arm need not judge the argument count
+	 * again.
 	 * @param cons the form being evaluated
+	 * @param env the environment
 	 * @param name the operator name
 	 * @return the form to evaluate in its place, or null
 	 */
-	private @Nullable LispVal rareOperatorExpansion(LispCons cons, String name) {
+	private @Nullable LispVal rareOperatorExpansion(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.CHANGE_CLASS:
+				return LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env), this.closRegistry,
+						false);
+			case LispNames.ASYNC_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsync);
+			case LispNames.ASYNC_DEFUN_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsyncDefun);
+			case LispNames.ASYNC_LAMBDA_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsyncLambda);
+			case LispNames.CCASE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandCcase);
+			case LispNames.RESTART_BIND:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartBind);
+			case LispNames.WITH_SIMPLE_RESTART:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithSimpleRestart);
+			case LispNames.TIME:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTime);
+			case LispNames.FIFTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFifth);
+			case LispNames.SIXTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSixth);
+			case LispNames.SEVENTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSeventh);
+			case LispNames.EIGHTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandEighth);
+			case LispNames.NINTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNinth);
+			case LispNames.TENTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTenth);
+			case LispNames.REMF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRemf);
+			case LispNames.WITH_OPEN_FILE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithOpenFile);
+			case LispNames.PPRINT_LOGICAL_BLOCK:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPprintLogicalBlock);
+			case LispNames.WITH_ARENA_QUALIFIED:
+				// A reclamation boundary for --no-gc; a real GC
+				// already reclaims, so the interpreter runs the body
+				// as a plain progn.
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithArena);
+			case LispNames.WITH_MUTEX_QUALIFIED:
+			case LispNames.WITH_LOCK_HELD_QUALIFIED:
+			case LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
+				// Acquire / body / release-on-every-exit;
+				// bordeaux-threads' with-lock-held is the same shape
+				// over the same primitives, and its recursive twin is
+				// the same again -- the shim's lock is reentrant.
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithMutex);
+			case LispNames.TORCH_NO_GRAD_QUALIFIED:
+				// The expansion let-binds torch::*grad-enabled*, so
+				// the library's defparameter must have declared it
+				// special BEFORE the let binds.
+				ensureTorchLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad);
+			case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandObjcWithAutoreleasePool);
+			case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithClientSocket);
+			case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
+			case LispNames.USOCKET_WITH_SERVER_SOCKET_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithConnectedSocket);
+			case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithSocketListener);
+			case LispNames.USOCKET_GUARD_QUALIFIED:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandUsocketGuard(c, true));
+			case LispNames.DEFINE_MODIFY_MACRO:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDefineModifyMacro);
+			case LispNames.RESTART_CASE:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase);
+			case LispNames.MAKE_CONDITION:
+				ensureConditionReportRuntimeLoaded();
+				return LispMacroExpander.expandMakeCondition(cons, this.closRegistry);
+			case LispNames.DOCUMENTATION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
+			case LispNames.COPY_READTABLE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandCopyReadtable);
+			case LispNames.SET_DISPATCH_MACRO_CHARACTER:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSetDispatchMacroCharacter);
+			case LispNames.READTABLE_CASE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandReadtableCase);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
@@ -7775,11 +7665,11 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The value half of {@link #evalCons}'s second operator table: the special forms and
-	 * primitive calls that answer a VALUE (and so end the loop's frame), answering
-	 * {@link #UNHANDLED} for an operator it does not claim and for the handful of arms
-	 * that deliberately fall through to the ordinary function call (a one-argument
-	 * {@code floor}, a {@code coerce} to an ordinary sequence type).
+	 * The value half of {@link #evalCons}'s second operator table: the special forms,
+	 * definers and primitive calls that answer a VALUE (and so end the loop's frame),
+	 * answering {@link #UNHANDLED} for an operator it does not claim and for the handful
+	 * of arms that deliberately fall through to the ordinary function call (a
+	 * one-argument {@code floor}, a {@code coerce} to an ordinary sequence type).
 	 *
 	 * <p>
 	 * The table is split for one reason: {@code evalCons} is the interpreter's innermost
@@ -7800,6 +7690,64 @@ public final class LispEvaluator {
 	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name, @Nullable Environment owner,
 			@Nullable Environment deferTo) {
 		switch (name) {
+			case LispNames.PROGV:
+				return evalProgv(cons, env);
+			case LispNames.DEFUN:
+				return evalDefun(cons, env);
+			case LispNames.DEFMACRO:
+				return evalDefmacro(cons, env);
+			case LispNames.DEFSTRUCT:
+				return singleValue(evalDefstruct(cons, env));
+			case LispNames.DEFCLASS:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				return singleValue(evalDefclass(cons, env));
+			case LispNames.DEFGENERIC:
+				return singleValue(evalDefgeneric(cons, env));
+			case LispNames.DEFMETHOD:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				return singleValue(evalDefmethod(cons, env));
+			case LispNames.DEFVAR:
+				return evalDefvar(cons, env, false);
+			case LispNames.DEFPARAMETER:
+				return evalDefvar(cons, env, true);
+			case LispNames.DEFCONSTANT:
+				return evalDefconstant(cons, env);
+			case LispNames.ASDF_DEFSYSTEM:
+				// A special form: the system options are plain data,
+				// not evaluated.
+				return singleValue(evalDefsystem(cons));
+			case LispNames.SIGNAL_COND_INTERNAL:
+				return singleValue(evalSignalCond(cons, env));
+			case LispNames.WIT_EXPORT_QUALIFIED:
+				return singleValue(evalWitExport(cons));
+			case LispNames.WIT_IMPORT_QUALIFIED:
+				return singleValue(evalWitImport(cons));
+			case LispNames.DEFTYPE:
+				return singleValue(evalDeftype(cons));
+			case LispNames.DEFINE_CONDITION: {
+				// A condition type is an ordinary CLOS-subset class;
+				// the :report form is registered for the
+				// error/signal/warn message building.
+				LispVal defined = evalDefclass(
+						(LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry), env);
+				// The report renderer partitions the registry, so a
+				// new condition class makes the loaded one stale;
+				// rebuilding here keeps it in step.
+				ensureConditionReportRuntimeLoaded();
+				return singleValue(defined);
+			}
+			case LispNames.DEFINE_SETF_EXPANDER:
+				return singleValue(registerSetfExpander(cons));
+			case LispNames.DEFSETF:
+				return singleValue(registerDefsetf(cons));
+			case LispNames.DEFINE_COMPILER_MACRO:
+				return singleValue(evalDefineCompilerMacro(cons, env));
+			case LispNames.MACROLET:
+				return evalMacrolet(cons, env);
 			case LispNames.JAVA_NEW_QUALIFIED:
 			case LispNames.JAVA_CALL_QUALIFIED:
 			case LispNames.JAVA_STATIC_QUALIFIED:
@@ -7955,23 +7903,6 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The expansion of a built-in macro form through {@link #builtinMacroExpansions}:
-	 * computed once per call site and re-evaluated thereafter, like a {@code defmacro}
-	 * call ({@link #expandUserMacro}) and like the compile backends. Callers may only
-	 * pass an expander that is a pure function of the form -- see the memo field's
-	 * contract and {@code .kb/interpreter-expansion-memo.md}. The expander runs outside
-	 * the monitor (an expansion may recurse into the reader or another expansion); two
-	 * threads racing on one call site both expand and the last write wins, a wasted
-	 * expansion rather than a wrong answer. The EVALUATION -- the expansion replaces the
-	 * form in {@link #evalCons}'s loop -- is outside it too, on the hit path as much as
-	 * the miss path: the expansion is a whole program, and a program can hand over to
-	 * another thread (the macOS main thread, a socket read) that then needs the monitor
-	 * for a memo of its own -- holding it across the eval parks both halves.
-	 * @param cons the macro call form
-	 * @param expander the pure syntactic expansion of one built-in macro
-	 * @return the (memoized) expansion
-	 */
-	/**
 	 * The form a DIRECT call of a wrapped built-in evaluates in place of the call when
 	 * its argument count is one the operator's shape rules out: the arguments, then the
 	 * {@code program-error} every backend reports ({@link BuiltinCallArity}). A name the
@@ -7990,6 +7921,23 @@ public final class LispEvaluator {
 		return BuiltinCallArity.wrongCountSignal(cons);
 	}
 
+	/**
+	 * The expansion of a built-in macro form through {@link #builtinMacroExpansions}:
+	 * computed once per call site and re-evaluated thereafter, like a {@code defmacro}
+	 * call ({@link #expandUserMacro}) and like the compile backends. Callers may only
+	 * pass an expander that is a pure function of the form -- see the memo field's
+	 * contract and {@code .kb/interpreter-expansion-memo.md}. The expander runs outside
+	 * the monitor (an expansion may recurse into the reader or another expansion); two
+	 * threads racing on one call site both expand and the last write wins, a wasted
+	 * expansion rather than a wrong answer. The EVALUATION -- the expansion replaces the
+	 * form in {@link #evalCons}'s loop -- is outside it too, on the hit path as much as
+	 * the miss path: the expansion is a whole program, and a program can hand over to
+	 * another thread (the macOS main thread, a socket read) that then needs the monitor
+	 * for a memo of its own -- holding it across the eval parks both halves.
+	 * @param cons the macro call form
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @return the (memoized) expansion
+	 */
 	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
 		LispVal cached;
 		synchronized (this.builtinMacroExpansions) {

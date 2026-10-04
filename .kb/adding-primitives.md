@@ -74,7 +74,10 @@ Macros expand into existing primitives at the AST level; `LispMacroExpander` is 
 evaluator and both compilers, so no per-compiler class is needed.
 
 1. `LispMacroExpander.expand<Name>(LispCons)`, plus `LispNames` / `PackageRegistry.CL_SYMBOLS`.
-2. `LispEvaluator.evalCons()` case -> `eval(LispMacroExpander.expand<Name>(cons), env)`.
+2. `LispEvaluator` case answering the expansion (`builtinMacroExpansion(cons,
+   LispMacroExpander::expand<Name>)`): in `rareOperatorExpansion`, or in `evalCons`'s own
+   switch only when a loop body plausibly runs it (`.kb/interpreter-tail-calls.md`, "The
+   operator table is three methods").
 3. `Jvm`/`WasmExprCompiler` case -> `compileExpr(LispMacroExpander.expand<Name>(cons), ...)`.
 4. To pass it to `map`/`reduce`/`funcall`: register as a `LispFunction` in `Environment` AND
    add a `BuiltinFunctionWrappers` entry. Both -- omitting `Environment` causes
@@ -82,6 +85,7 @@ evaluator and both compilers, so no per-compiler class is needed.
 
 ## Adding a Special Form
 
-`LispEvaluator.evalCons()` case (arguments arrive unevaluated), plus
+`LispEvaluator.evalConsRareOperator()` case (arguments arrive unevaluated; `evalCons` only for
+a hot or tail-transparent form), plus
 `Jvm/Wasm<Form>Compiler` wired into `Jvm/WasmExprCompiler.compileCons()`.
 

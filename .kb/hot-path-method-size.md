@@ -13,7 +13,9 @@ with how much the program loads (the cliff comes from adding a LIBRARY, not edit
 into `evalCons` + `evalConsRareOperator`, the latter answering a private `UNHANDLED` sentinel for
 operators it does not claim (also the deliberate fall-throughs `read`, the `floor` family with a
 divisor, `reduce`, `sort`). Both halves near 4 KB then; `evalCons` grew back to 7,788 by
-2026-10-04 (the tail-call loop, `.kb/interpreter-tail-calls.md`), 212 bytes under the cliff.
+2026-10-04 (the tail-call loop, `.kb/interpreter-tail-calls.md`), 212 bytes under the cliff, and
+the same day the arms no loop body runs moved out: 5,269 (`.kb/interpreter-tail-calls.md`, "The
+operator table is three methods").
 
 ## Dispatch tables (`_invoke_<arity>`, `_lookup`)
 - `JvmRuntimeBuilder.buildDispatchMethods` emits one dispatcher per call arity; a variadic
