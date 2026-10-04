@@ -214,12 +214,24 @@ final class JvmLambdaCompiler {
 			}
 		}
 		ctx.declaredDoubles = bodyDeclaredDoubles;
+		// The body runs in place and its last form's value is the call's, so when the
+		// call is the method's tail that form is too (JvmSelfTailCall, JvmTailBounce),
+		// and every body form is on the exit chain when the call is. A parameter named
+		// like a special is bound by a let around the whole body (LambdaLists.toNative),
+		// which hands neither mark on.
+		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
+		boolean exits = JvmReturnCompiler.onExitChain(call, ctx);
 		for (int i = 0; i < bodyExprs.size(); i++) {
 			if (i > 0) {
 				ctx.body.pop();
 			}
+			ctx.tailMark = savedMark == call && i == bodyExprs.size() - 1 ? bodyExprs.get(i) : null;
+			ctx.exitMark = exits ? bodyExprs.get(i) : null;
 			JvmExprCompiler.compileExpr(bodyExprs.get(i), ctx, className);
 		}
+		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
 		ctx.locals = savedLocals;
 		ctx.boxedVars = savedBoxedVars;
 		ctx.rawLocals = savedRawLocals;

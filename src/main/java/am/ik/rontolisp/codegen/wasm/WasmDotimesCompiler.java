@@ -61,8 +61,15 @@ final class WasmDotimesCompiler {
 	 */
 	private static final long MAX_COUNT = (1L << 30) - 1;
 
-	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (!compileCounted(cons, ctx)) {
+	/**
+	 * Compiles the form. Its {@code %block} ends it, so when the form is in tail position
+	 * the block is too: a {@code return} out of the body hands its value on as the
+	 * function's ({@code BlockMarker.tail}), and so does the result form.
+	 * @param tail whether the form is in tail position
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
+		if (!compileCounted(cons, ctx, tail)) {
+			ctx.tailPosition = tail;
 			WasmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx);
 		}
 	}
@@ -71,7 +78,7 @@ final class WasmDotimesCompiler {
 	 * Emits the counted loop, or returns false having emitted NOTHING when the form does
 	 * not qualify.
 	 */
-	private static boolean compileCounted(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	private static boolean compileCounted(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		if (ctx.asyncResume != null || ctx.dynamic) {
 			// An async body's locals belong to the spill machinery, and --dynamic
 			// resolves variables through the environment. A top-level counter is fine:
@@ -143,7 +150,7 @@ final class WasmDotimesCompiler {
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
-		ctx.blockMarkers.push(new WasmLispCompiler.BlockMarker(ctx.wasmCtrlDepth, null, true, false));
+		ctx.blockMarkers.push(new WasmLispCompiler.BlockMarker(ctx.wasmCtrlDepth, null, true, false, tail));
 
 		ctx.writer.write(Instruction.I64_CONST);
 		ctx.writer.writeSignedLeb128(0);
@@ -180,6 +187,7 @@ final class WasmDotimesCompiler {
 		// The result form runs with the counter holding the count, like the let/while
 		// expansion's post-loop value.
 		if (specParts.size() == 3) {
+			ctx.tailPosition = tail;
 			WasmExprCompiler.compileExpr(specParts.get(2), ctx);
 		}
 		else {

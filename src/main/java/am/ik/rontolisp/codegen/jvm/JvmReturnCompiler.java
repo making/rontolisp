@@ -39,7 +39,34 @@ final class JvmReturnCompiler {
 			throw new IllegalStateException("Cannot compile return outside of a loop block");
 		}
 		List<LispVal> parts = cons.toList();
-		emitExit(parts.size() > 1 ? parts.get(1) : null, ctx, className, targetDepth, ctx.tailMark == cons);
+		emitExit(parts.size() > 1 ? parts.get(1) : null, ctx, className, targetDepth,
+				isTailExit(cons, ctx, targetDepth));
+	}
+
+	/**
+	 * {@return whether the exit {@code cons} to the block at {@code targetDepth} hands
+	 * its value form on as the method's result} It carries the tail mark itself, or it
+	 * sits on the exit chain ({@code Ctx.exitMark}: nothing between it and its blocks
+	 * opens a dynamic extent) and its target block is in tail position -- the value of a
+	 * {@code return} out of a loop body whose block ends the method.
+	 * @param cons the exit form
+	 * @param ctx the method being emitted
+	 * @param targetDepth the target block's 1-based depth
+	 */
+	static boolean isTailExit(LispCons cons, JvmLispCompiler.Ctx ctx, int targetDepth) {
+		return ctx.tailMark == cons || ctx.exitMark == cons && targetAt(ctx, targetDepth).tail()
+				&& ctx.unwindScopes.isEmpty() && ctx.spillScopes.isEmpty();
+	}
+
+	/**
+	 * {@return whether {@code cons}, the form being compiled, is on the exit chain} It
+	 * carries the tail mark or the exit mark, so an emitter that opens no dynamic extent
+	 * lays the exit mark on each sub-form it compiles in place ({@code Ctx.exitMark}).
+	 * @param cons the form being compiled
+	 * @param ctx the method being emitted
+	 */
+	static boolean onExitChain(LispCons cons, JvmLispCompiler.Ctx ctx) {
+		return ctx.tailMark == cons || ctx.exitMark == cons;
 	}
 
 	/**

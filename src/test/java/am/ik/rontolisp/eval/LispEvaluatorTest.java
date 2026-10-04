@@ -13070,10 +13070,11 @@ class LispEvaluatorTest {
 		for (String statement : List.of("(go b)", "(if nil 1 (go b))", "(progn 1 (go b))",
 				"(let ((x t)) (if x (go b)))", "(let* ((x t) (y x)) (when y (go b)))", "(unless nil (go b))",
 				"(cond (nil 1) (t (go b)))")) {
-			assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString(statement), env, labels)).as(statement)
+			assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString(statement), env, labels, null))
+				.as(statement)
 				.isEqualTo(2);
 		}
-		assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString("(if nil (go a))"), env, labels))
+		assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString("(if nil (go a))"), env, labels, null))
 			.isEqualTo(LispEvaluator.NO_JUMP);
 	}
 
@@ -13187,6 +13188,64 @@ class LispEvaluatorTest {
 				(list (exit-from 100000) (exit-nil 100000) (exit-bare 100000) (in-labels 100000) (in-flet 100000)
 				      (multiple-value-list (block b (return-from b (values 1 2)))))
 				""").print()).isEqualTo("(:DONE :D NIL :LABELS :FLET (1 2))");
+	}
+
+	@Test
+	void theValueOfAReturnOutOfALoopBodyOrATagbodyStatementIsATailOfTheBlocksFrame() {
+		// 100,000 deep: a loop body and a tagbody statement run in frames of their own,
+		// but nothing between them and the block's frame has a dynamic extent, so the
+		// exit's value form runs in that frame instead of below the loop. The other
+		// expansions and the lambda head are pinned beside them.
+		assertThat(evalMulti(
+				"""
+						(defun via-dolist (n) (dolist (x (list 1)) (return (if (= n 0) :dolist (via-dolist (- n 1))))))
+						(defun via-dotimes (n) (dotimes (i 1) (return (if (= n 0) :dotimes (via-dotimes (- n 1))))))
+						(defun via-loop (n) (loop for x in (list 1) do (return-from via-loop (if (= n 0) :loop (via-loop (- n 1))))))
+						(defun via-tagbody (n) (block nil (tagbody (return (if (= n 0) :tagbody (via-tagbody (- n 1)))))))
+						(defun via-prog (n) (prog ((m n)) (return (if (= m 0) :prog (via-prog (- m 1))))))
+						(defun via-mvb (n) (multiple-value-bind (a b) (values n 1) (if (= a 0) :mvb (via-mvb (- a b)))))
+						(defun via-db (n) (destructuring-bind (a b) (list n 1) (if (= a 0) :db (via-db (- a b)))))
+						(defun via-sm (n) (symbol-macrolet ((m (- n 1))) (if (= n 0) :sm (via-sm m))))
+						(defun via-mvc (n) (if (= n 0) :mvc (multiple-value-call #'via-mvc (- n 1))))
+						(defun via-head (n) (if (= n 0) :head ((lambda (k) (via-head k)) (- n 1))))
+						(list (via-dolist 100000) (via-dotimes 100000) (via-loop 100000) (via-tagbody 100000)
+						      (via-prog 100000) (via-mvb 100000) (via-db 100000) (via-sm 100000) (via-mvc 100000)
+						      (via-head 100000))
+						""")
+			.print()).isEqualTo("(:DOLIST :DOTIMES :LOOP :TAGBODY :PROG :MVB :DB :SM :MVC :HEAD)");
+	}
+
+	@Test
+	void aReturnOutOfALoopBodyThroughADynamicExtentRunsItsValueFormInsideIt() {
+		// SBCL prints the same: the value form of an exit sees the loop's bindings and
+		// runs inside every special binding, unwind-protect, handler-case and catch
+		// between it and the loop body, so only an exit with none of them in between
+		// runs its value form in the block's frame.
+		assertThat(evalMulti("""
+				(defvar *s* :outer)
+				(defvar *log* nil)
+				(list (dolist (x '(1 2 3)) (when (= x 2) (return (* x 10))))
+				      (multiple-value-list (dolist (x '(1)) (return (values 1 2))))
+				      (funcall (dolist (x '(7)) (return (lambda () x))))
+				      (dolist (x '(1)) (let ((*s* :inner)) (return *s*)))
+				      (dolist (x '(1)) (unwind-protect (return (progn (push :value *log*) :up)) (push :cleanup *log*)))
+				      *log*
+				      (dolist (x '(1)) (handler-case (return (error "e")) (error () (return :caught))))
+				      (block nil (dolist (x '(1)) (catch 'k (return (throw 'k :thrown)))) :after)
+				      (block outer (dolist (x '(1)) (block inner (return-from outer (list x :outer))))))
+				""").print()).isEqualTo("(20 (1 2) 7 :INNER :UP (:CLEANUP :VALUE) :CAUGHT :AFTER (1 :OUTER))");
+	}
+
+	@Test
+	void aMultipleValueCallOfALiteralNameResolvesItAfterTheArguments() {
+		// SBCL prints the same: the call names its function, which is looked up when the
+		// call is made, after the arguments ran.
+		assertThat(evalMulti("""
+				(defun mvc-g (x) (list :old x))
+				(list (multiple-value-call #'mvc-g (progn (defun mvc-g (x) (list :new x)) 1))
+				      (multiple-value-call 'list 1 (values 2 3))
+				      (flet ((mvc-g (x) (list :local x))) (multiple-value-call #'mvc-g (values 4))))
+				""").print()).isEqualTo("((:NEW 1) (1 2 3) (:LOCAL 4))");
 	}
 
 	@Test

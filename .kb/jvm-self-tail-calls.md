@@ -32,10 +32,25 @@ tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounc
   unchanged and open no dynamic extent: `if`, `progn`, a `let` without a special binding, the
   three blocks (`JvmBlockCompiler`, last body form), the value of a `return`/`return-from`
   that is itself marked (every form between it and the method's result, its target block
-  among them, is on the marked chain), and the pass-through lowerings through
-  `JvmExprCompiler.compileExpansion` (`let*`, `locally`, `flet`, `labels`, `the`, `cond`,
-  `case`, `ecase`, `and`, `or`, `when`, `unless`, `typecase`, `etypecase`). The extended
-  relays reach the bounce too, so a trampolined class bounces in those positions as well.
+  among them, is on the marked chain), an inline lambda's last body form
+  (`JvmLambdaCompiler.compileCall`: the body runs in place), and the pass-through lowerings
+  through `JvmExprCompiler.compileExpansion` (`let*`, `locally`, `flet`, `labels`, `the`,
+  `cond`, `case`, `ecase`, `and`, `or`, `when`, `unless`, `typecase`, `etypecase`,
+  `multiple-value-bind`, `destructuring-bind`, `symbol-macrolet`, `with-slots`,
+  `with-accessors`, `multiple-value-call`, `dolist`, `dotimes`, `do`, `do*`, `loop`, `prog`,
+  `prog*`; since 2026-10-04 for the ones after `etypecase`). The extended relays reach the
+  bounce too, so a trampolined class bounces in those positions as well. Only an arm that
+  emits nothing after its expansion may relay.
+- **The exit chain** (`Ctx.exitMark`, 2026-10-04): the forms that relay the mark lay a second
+  one on EVERY sub-form they compile in place -- a `progn`'s, a plain `let`'s, a block's
+  statements, both `if` arms, a `while` body, the statements of a `tagbody`, an inline
+  lambda's body, an expansion -- when they carry either mark themselves. A block records
+  whether it is on the tail mark (`BlockTarget.tail`); an exit on the exit chain to such a
+  block, with no unwind or spill scope open, marks its value form
+  (`JvmReturnCompiler.isTailExit`). That is the value of a `return` out of a loop body whose
+  block ends the method: `(dolist (x l) (return (f ..)))`. Matched by identity like the mark,
+  so a `catch` (which opens no scope in statement position), a special `let`, an
+  `unwind-protect`, a `handler-case` -- none relays it -- break the chain by construction.
 - **A `labels` function is recognized by its variable**: the expansion's one assignment
   `(setq __LABELS<n>_<name> (lambda ...))` (`LispMacroExpander.isLabelsFunctionVariable`;
   the rewrite turns every other mention into a read) records the lambda form in
@@ -56,8 +71,12 @@ as a self tail call does. Landed 2026-10-03 (`.todo/c02`).
   `labels` arm (fresh per compile of the form, so its lambda conses name this instance's
   members, `Ctx.tailGroupMembers` -> `LambdaInfo.tailMember`). A walk of each body's tail
   positions that mirrors the mark (`if`, `progn`, a `let`/`let*` binding no special, the
-  blocks and a `return`/`return-from` reached through them, the pass-through lowerings; an
-  `flet`/`labels` body's names shadow defuns), then Tarjan: each strongly connected component
+  blocks and a `return`/`return-from` reached through them, the pass-through lowerings --
+  `multiple-value-bind`/`destructuring-bind` binding no special, `symbol-macrolet`,
+  `with-slots`, `with-accessors`, a `multiple-value-call` as the `funcall` it expands to --,
+  an inline lambda's body when no parameter is special; an `flet`/`labels` body's names
+  shadow defuns; NOT an exit out of a loop body, whose call stays a call in a group and
+  never bounces), then Tarjan: each strongly connected component
   of two members or more. A disagreement with the emitter only loses a group or keeps a member
   whose call is no jump -- only the mark makes a jump.
 - **Emitting**: each member compiles alone, exactly as without the group. A sibling call on
@@ -129,6 +148,11 @@ pair, Clojure's regex matcher, a multi-arity `defn`'s clause helper.
   call into a rooted method: one frame per entry, not per round.
 - A tail `apply` of itself (it bounces, [jvm-tail-bounce.md](jvm-tail-bounce.md)), and a nested
   `defun` (a global variable that may be reassigned).
+- A `multiple-value-call` of a computed function (a value in a temporary: it bounces).
+  `(multiple-value-call #'f ..)` keeps the literal in its `funcall`
+  (`LispMacroExpander.expandMultipleValueCall`, 2026-10-04), so it is a jump; the name is
+  then resolved after the producers, which is what SBCL prints for a producer that redefines
+  it (`(:NEW 1)`; the interpreter printed `(:OLD 1)` before).
 
 ## A Clojure deviation it creates
 
@@ -185,12 +209,30 @@ spliced code, +2,988 to +11,135 B (+0.21% to +0.39%); bench-report and size-repo
 byte-identical; the ci-spec program 7,618,685 -> 7,622,142 B, clojure-spec 3,692,871 ->
 3,700,216 B (Clojure's regex matcher: four functions, three rooted).
 
+**Loop exits, binding forms, lambda heads** (2026-10-04, wasmtime 49, the same box). Depth,
+1,000,000 rounds of `(defun f (n) <form>)`, `java Prog` and `java -Xint Prog`: the self call in
+the tail of `multiple-value-bind`, `destructuring-bind`, `symbol-macrolet`,
+`(multiple-value-call #'f ..)`, a lambda head (required or `&optional`), and the value of a
+`return` out of `dolist`/`dotimes`/`loop`/a `tagbody` statement: `StackOverflowError` (or, for
+`multiple-value-call` and `dolist`, a pass only when C2 inlined the call; a self call was left in
+the bytecode) -> answers, no self call left. Bytes, base jar vs this change: bench-report's ten
+programs and size-report `hello_world`/`pi_approx`/`zlib` identical as `.class`, and as `.wasm`
+and component (`--optimize`) but `zlib` +1 B; `clojure-spec` as one program 5,965,571 B `.class`
+/ 4,986,328 B `.wasm`, identical; 30 `examples/{console,ml,llm-from-scratch,deep-learning-from-scratch}`
+programs identical on both. The same change fixed the multiple-value settle of a result-less
+`dotimes` ([multiple-values.md](multiple-values.md)), which the tests here first hit.
+
 ## Tests
 
 `JvmLispCompilerTest#aSelfTailCallJumpsBackToTheMethodsFirstInstruction` (no self call left,
 one entry jump, a `labels` method looping, 1,000,000 deep),
 `#everyTailTransparentFormHandsTheJumpOnAndADynamicExtentKeepsItsCall` (the shapes above,
-semantics and bytecode), `#aSelfTailCallInASplitOffContinuationStaysACall`; clojure-spec
+semantics and bytecode), `#anExpansionALambdaHeadAndALoopExitInTailPositionHandTheJumpOn` (the
+binding forms, `multiple-value-call`, lambda heads, loop exits, a tail group and a bounce through
+them; a special binding and a `catch` keeping their call),
+`#aSelfTailCallInASplitOffContinuationStaysACall`; ci-spec
+`loop-exits-binding-forms-and-lambda-heads-in-tail-position-run-in-constant-stack` (all four
+backends, 100,000 deep); clojure-spec
 `deep-recur-answers-on-every-backend` (all four backends: `loop` 1,000,000, a `defn` and a
 multi-arity clause 300,000, `distinct`/`range` over 200,000).
 

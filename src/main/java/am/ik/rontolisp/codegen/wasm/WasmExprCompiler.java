@@ -1017,7 +1017,7 @@ final class WasmExprCompiler {
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
 				&& LispNames.LAMBDA.equals(headSym.name())) {
-			WasmLambdaCompiler.compileCall(headCons, cons, ctx);
+			WasmLambdaCompiler.compileCall(headCons, cons, ctx, tail);
 		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + cons.print());
@@ -2264,7 +2264,7 @@ final class WasmExprCompiler {
 			case LispNames.AND -> compileExpansion(LispMacroExpander.expandAnd(cons), ctx, tail);
 			case LispNames.OR -> compileExpansion(LispMacroExpander.expandOr(cons), ctx, tail);
 			case LispNames.WHEN -> compileExpansion(LispMacroExpander.expandWhen(cons), ctx, tail);
-			case LispNames.DOTIMES -> WasmDotimesCompiler.compile(cons, ctx);
+			case LispNames.DOTIMES -> WasmDotimesCompiler.compile(cons, ctx, tail);
 			case LispNames.PROG1 -> compileExpansion(LispMacroExpander.expandProg1(cons), ctx, tail);
 			case LispNames.TIME -> compileExpansion(LispMacroExpander.expandTime(cons), ctx, tail);
 			case LispNames.UNLESS -> compileExpansion(LispMacroExpander.expandUnless(cons), ctx, tail);

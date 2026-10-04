@@ -12,7 +12,8 @@ with how much the program loads (the cliff comes from adding a LIBRARY, not edit
 `LispEvaluator.evalCons`'s ~200-case `switch (sym.name())` hit 8209 bytecodes (worth 2.7x). Split
 into `evalCons` + `evalConsRareOperator`, the latter answering a private `UNHANDLED` sentinel for
 operators it does not claim (also the deliberate fall-throughs `read`, the `floor` family with a
-divisor, `reduce`, `sort`). Both halves near 4 KB.
+divisor, `reduce`, `sort`). Both halves near 4 KB then; `evalCons` grew back to 7,788 by
+2026-10-04 (the tail-call loop, `.kb/interpreter-tail-calls.md`), 212 bytes under the cliff.
 
 ## Dispatch tables (`_invoke_<arity>`, `_lookup`)
 - `JvmRuntimeBuilder.buildDispatchMethods` emits one dispatcher per call arity; a variadic

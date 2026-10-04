@@ -121,9 +121,14 @@ final class WasmLambdaCompiler {
 	}
 
 	/**
-	 * Compiles an inline lambda call: {@code ((lambda (params) body) args)}.
+	 * Compiles an inline lambda call: {@code ((lambda (params) body) args)}. The body
+	 * runs in place and its last form's value is the call's, so in tail position that
+	 * form is too ({@code Ctx.tailPosition}); a parameter named like a special is bound
+	 * by a let around the whole body ({@code LambdaLists.toNative}), which keeps the
+	 * frame for its restore.
+	 * @param tail whether the call is in tail position
 	 */
-	static void compileCall(LispCons lambda, LispCons call, WasmLispCompiler.Ctx ctx) {
+	static void compileCall(LispCons lambda, LispCons call, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> lambdaParts = lambda.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
 				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
@@ -232,6 +237,7 @@ final class WasmLambdaCompiler {
 			if (i > 0) {
 				ctx.writer.write(Instruction.DROP);
 			}
+			ctx.tailPosition = tail && i == bodyExprs.size() - 1;
 			WasmExprCompiler.compileExpr(bodyExprs.get(i), ctx);
 		}
 

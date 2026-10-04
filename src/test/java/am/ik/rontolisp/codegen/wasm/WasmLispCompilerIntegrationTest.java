@@ -28854,6 +28854,50 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anInlineLambdasBodyAndADotimesExitInTailPositionTailCallAndASpecialParameterKeepsItsFrame() throws Exception {
+		// ((lambda ...) args) compiles inline, so its body's last form is the form's
+		// tail: 300,000 deep through a required, an optional and a rest parameter, and
+		// a multiple-value-call of a literal #'name. So is the value of a return out of
+		// a dotimes in tail position -- the counted loop's and the expansion's -- and its
+		// result form. A parameter named like a special binds it around the body, whose
+		// call then keeps its frame and reads its own round's binding.
+		String program = """
+				(defun via-req (n) (if (= n 0) :req ((lambda (k) (via-req k)) (- n 1))))
+				(defun via-opt (n) (if (= n 0) :opt ((lambda (k &optional (d 1)) (via-opt (- k d))) n)))
+				(defun via-rest (n) (if (= n 0) :rest ((lambda (&rest r) (via-rest (- (car r) 1))) n)))
+				(defun via-mvc (n) (if (= n 0) :mvc (multiple-value-call #'via-mvc (- n 1))))
+				(defun via-counted (n) (dotimes (i 1) (return (if (= n 0) :counted (via-counted (- n 1))))))
+				(defun via-dotimes (n) (dotimes (i (+ n 1)) (return (if (= n 0) :dotimes (via-dotimes (- n 1))))))
+				(defun via-result (n) (dotimes (i 1 (if (= n 0) :result (via-result (- n 1))))))
+				(defvar *vd* 'outer)
+				(defun vshow () *vd*)
+				(defun via-spec (n) (if (= n 0) (vshow) ((lambda (*vd*) (via-spec (- *vd* 1))) n)))
+				(print (list (via-req 300000) (via-opt 300000) (via-rest 300000) (via-mvc 300000)
+				             (via-counted 300000) (via-dotimes 300000) (via-result 300000) (via-spec 3) *vd*))
+				""";
+		String expected = "(:REQ :OPT :REST :MVC :COUNTED :DOTIMES :RESULT 1 OUTER)";
+		assertThat(compileAndRun(program)).isEqualTo(expected);
+		assertThat(compileAndRunComponent(program)).isEqualTo(expected);
+	}
+
+	@Test
+	void aReturnOutOfADotimesWithNoResultFormAnswersItsValuesFromAFunctionsTail() throws Exception {
+		// SBCL prints the same: the dotimes's own nil block takes the return, so its
+		// value -- every value -- is the dotimes's, and the function's; only a normal
+		// exit is the one value nil. dtr-ret's count is a literal: the counted loop.
+		String program = """
+				(defun dtr-ret (n) (dotimes (i 3) (when (= i 1) (return (list :ret n)))))
+				(defun dtr-two (n) (dotimes (i 3) (when (= i 1) (return (values n 9)))))
+				(defun dtr-res (n) (dotimes (i 3 :done) (when (= i n) (return (values n 9)))))
+				(defun dtr-none () (dotimes (i 2) (floor 7 2)))
+				(print (list (dtr-ret 3) (multiple-value-list (dtr-two 4)) (multiple-value-list (dtr-res 1))
+				             (multiple-value-list (dtr-res 5)) (multiple-value-list (dtr-none))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("((:RET 3) (4 9) (1 9) (:DONE) (NIL))");
+		assertThat(compileAndRunComponent(program)).isEqualTo("((:RET 3) (4 9) (1 9) (:DONE) (NIL))");
+	}
+
+	@Test
 	void aLambdaInlinedIntoTheDispatcherStillTailCallsThroughIt() throws Exception {
 		// Each link of the chain is a lambda whose one call site is a dispatcher arm, so
 		// the inliner moves its body there (a return_call site): its own tail call back

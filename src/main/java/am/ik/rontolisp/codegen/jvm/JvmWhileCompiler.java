@@ -43,10 +43,16 @@ final class JvmWhileCompiler {
 		}
 		MethodCode.Label exit = ctx.body.newLabel();
 		ctx.body.branch(exitBranchOpcode, exit);
-		// Body: every expression leaves a (boxed) reference, which is discarded.
+		// Body: every expression leaves a (boxed) reference, which is discarded. Each
+		// is on the exit chain when the loop is (Ctx.exitMark): a return out of the
+		// body to a block in tail position hands its value on as the method's result.
+		LispVal savedExit = ctx.exitMark;
+		boolean exits = JvmReturnCompiler.onExitChain(cons, ctx);
 		for (int i = 2; i < parts.size(); i++) {
+			ctx.exitMark = exits ? parts.get(i) : null;
 			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 		}
+		ctx.exitMark = savedExit;
 		// Jump back to re-evaluate the test.
 		ctx.body.goto_(loopStart);
 		// Loop exit: bind the exit branch here and push nil as the result.

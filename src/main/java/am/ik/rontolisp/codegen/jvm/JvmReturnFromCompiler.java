@@ -39,7 +39,8 @@ final class JvmReturnFromCompiler {
 			if (plainDepth == 0) {
 				throw new IllegalStateException("Cannot compile return outside of a loop block");
 			}
-			JvmReturnCompiler.emitExit(valueForm, ctx, className, plainDepth, ctx.tailMark == cons);
+			JvmReturnCompiler.emitExit(valueForm, ctx, className, plainDepth,
+					JvmReturnCompiler.isTailExit(cons, ctx, plainDepth));
 			return;
 		}
 		int targetDepth = findNamedTargetDepth(ctx, name);
@@ -47,7 +48,8 @@ final class JvmReturnFromCompiler {
 			throw new UnsupportedOperationException(LispNames.RETURN_FROM + " " + name
 					+ " has no lexically enclosing block: the compilers support return-from within the same function only");
 		}
-		JvmReturnCompiler.emitExit(valueForm, ctx, className, targetDepth, ctx.tailMark == cons);
+		JvmReturnCompiler.emitExit(valueForm, ctx, className, targetDepth,
+				JvmReturnCompiler.isTailExit(cons, ctx, targetDepth));
 	}
 
 	/**

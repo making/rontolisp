@@ -318,7 +318,12 @@ final class JvmLetCompiler {
 			return;
 		}
 		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
+		// With no restore after the body, every body form is on the exit chain when the
+		// let is (Ctx.exitMark).
+		boolean exits = region == null && restores == null && JvmReturnCompiler.onExitChain(cons, ctx);
 		for (int i = 2; i < parts.size(); i++) {
+			ctx.exitMark = exits ? parts.get(i) : null;
 			if (forEffect || i < parts.size() - 1) {
 				JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 			}
@@ -332,6 +337,7 @@ final class JvmLetCompiler {
 			}
 		}
 		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
 		if (!hasBody && !forEffect) {
 			// CLHS: a body-less let/let* returns nil (the loop above pushed nothing).
 			ctx.body.aconst_null();

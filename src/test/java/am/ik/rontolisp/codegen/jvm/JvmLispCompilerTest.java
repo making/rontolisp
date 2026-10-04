@@ -12984,6 +12984,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aReturnOutOfADotimesWithNoResultFormAnswersItsValuesFromAFunctionsTail() throws Exception {
+		// SBCL prints the same: the dotimes's own nil block takes the return, so its
+		// value -- every value -- is the dotimes's, and the function's; only a normal
+		// exit is the one value nil.
+		assertThat(compileAndRun("""
+				(defun dtr-ret (n) (dotimes (i 3) (when (= i 1) (return (list :ret n)))))
+				(defun dtr-two (n) (dotimes (i 3) (when (= i 1) (return (values n 9)))))
+				(defun dtr-res (n) (dotimes (i 3 :done) (when (= i n) (return (values n 9)))))
+				(defun dtr-none () (dotimes (i 2) (floor 7 2)))
+				(print (list (dtr-ret 3) (multiple-value-list (dtr-two 4)) (multiple-value-list (dtr-res 1))
+				             (multiple-value-list (dtr-res 5)) (multiple-value-list (dtr-none))))
+				""")).isEqualTo("((:RET 3) (4 9) (1 9) (:DONE) (NIL))");
+	}
+
+	@Test
 	void compileAndRunMultipleValueSetq() throws Exception {
 		assertThat(compileAndRun("(let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))"))
 			.isEqualTo("(1 2)");
@@ -23300,6 +23315,62 @@ class JvmLispCompilerTest {
 				(UP 3)
 				1
 				THROWN""");
+	}
+
+	@Test
+	void anExpansionALambdaHeadAndALoopExitInTailPositionHandTheJumpOn() throws Exception {
+		// multiple-value-bind, destructuring-bind, symbol-macrolet, a multiple-value-call
+		// of a literal #'name, an inline lambda's body and the value of a return out of
+		// a loop body all sit where the form's value is the method's result, so the self
+		// call there is a jump, a call to a sibling is a jump inside the tail group, and
+		// a call through a value bounces. A special bound by a multiple-value-bind or by
+		// a lambda head's parameter, and a catch inside the loop body, keep the call.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+				"""
+						(defun vmvb (n) (multiple-value-bind (a b) (values n 1) (if (= a 0) :mvb (vmvb (- a b)))))
+						(defun vdb (n) (destructuring-bind (a b) (list n 1) (if (= a 0) :db (vdb (- a b)))))
+						(defun vsm (n) (symbol-macrolet ((m (- n 1))) (if (= n 0) :sm (vsm m))))
+						(defun vmvc (n) (if (= n 0) :mvc (multiple-value-call #'vmvc (- n 1))))
+						(defun vhead (n) (if (= n 0) :head ((lambda (k &optional (d 1)) (vhead (- k d))) n)))
+						(defun vdolist (n) (dolist (x (list 1)) (return (if (= n 0) :dolist (vdolist (- n 1))))))
+						(defun vloop (n) (loop for x in (list 1) do (return-from vloop (if (= n 0) :loop (vloop (- n 1))))))
+						(defun vprog (n) (prog ((m n)) (return (if (= m 0) :prog (vprog (- m 1))))))
+						(defun vdotimes (n) (dotimes (i 1) (return (if (= n 0) :dotimes (vdotimes (- n 1))))))
+						(print (list (vmvb 1000000) (vdb 1000000) (vsm 1000000) (vmvc 1000000) (vhead 1000000)
+						             (vdolist 1000000) (vloop 1000000) (vprog 1000000) (vdotimes 1000000)))
+						(defun mev? (n) (multiple-value-bind (m) (values n) (if (= m 0) t ((lambda (k) (mod? k)) (- m 1)))))
+						(defun mod? (n) (destructuring-bind (m) (list n) (if (= m 0) nil (mev? (- m 1)))))
+						(print (list (mev? 1000000) (mod? 1000000)))
+						(defun vval (f n) (destructuring-bind (m) (list n) (if (= m 0) :val (funcall f f (- m 1)))))
+						(print (vval #'vval 1000000))
+						(defvar *vd* 'outer)
+						(defun vshow () *vd*)
+						(defun vspec (n) (multiple-value-bind (*vd*) (values n) (if (= n 0) (vshow) (vspec (- n 1)))))
+						(print (list (vspec 3) *vd*))
+						(defun vhspec (n) (if (= n 0) (vshow) ((lambda (*vd*) (vhspec (- *vd* 1))) n)))
+						(print (list (vhspec 3) *vd*))
+						(defun vcatch (n) (dolist (x (list 1)) (catch 'k (return (if (= n 0) (throw 'k :caught) (vcatch (- n 1)))))))
+						(print (vcatch 3))
+						"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String looping : List.of("VMVB", "VDB", "VSM", "VMVC", "VHEAD", "VDOLIST", "VLOOP", "VPROG", "VDOTIMES")) {
+			assertThat(jumpsToEntry(classBytes, looping)).as(looping).isEqualTo(1);
+			assertThat(ownCallsIn(classBytes, looping, looping)).as(looping).isZero();
+		}
+		assertThat(ownCallsIn(classBytes, "MEV?", "MOD?")).isZero();
+		assertThat(ownCallsIn(classBytes, "MOD?", "MEV?")).isZero();
+		assertThat(ownCallsIn(classBytes, "VVAL", "_invoke_2")).as("a bounce, not a dispatcher call").isZero();
+		for (String calling : List.of("VSPEC", "VHSPEC", "VCATCH")) {
+			assertThat(jumpsToEntry(classBytes, calling)).as(calling).isZero();
+			assertThat(ownCallsIn(classBytes, calling, calling)).as(calling).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(:MVB :DB :SM :MVC :HEAD :DOLIST :LOOP :PROG :DOTIMES)
+				(T NIL)
+				:VAL
+				(0 OUTER)
+				(1 OUTER)
+				NIL""");
 	}
 
 	@Test

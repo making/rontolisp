@@ -280,7 +280,9 @@ final class JvmExprCompiler {
 	/**
 	 * Compiles the expansion a pass-through lowering answers for {@code cons}, where the
 	 * form stood: the expansion's value is the form's, so when the form is the method's
-	 * tail, the expansion is ({@link JvmSelfTailCall}, {@link JvmTailBounce}).
+	 * tail, the expansion is ({@link JvmSelfTailCall}, {@link JvmTailBounce}), and when
+	 * the form is on the exit chain, so is the expansion ({@code Ctx.exitMark}). Only an
+	 * arm that emits nothing after the expansion may call this.
 	 * @param cons the form
 	 * @param expansion what it lowers to
 	 * @param ctx the compilation context
@@ -288,11 +290,16 @@ final class JvmExprCompiler {
 	 */
 	static void compileExpansion(LispCons cons, LispVal expansion, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
+		if (JvmReturnCompiler.onExitChain(cons, ctx)) {
+			ctx.exitMark = expansion;
+		}
 		if (savedMark == cons) {
 			ctx.tailMark = expansion;
 		}
 		compileExpr(expansion, ctx, className);
 		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
 	}
 
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
@@ -1528,10 +1535,9 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandDoSymbols(cons, false), ctx, className);
 			case LispNames.DO_ALL_SYMBOLS ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandDoAllSymbols(cons), ctx, className);
-			case LispNames.PROG ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, false), ctx, className);
+			case LispNames.PROG -> compileExpansion(cons, LispMacroExpander.expandProg(cons, false), ctx, className);
 			case LispNames.PROG_STAR ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandProg(cons, true), ctx, className);
 			case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
 			case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
 			case LispNames.DEFUN -> compileNestedDefun(cons, ctx, className);
@@ -1547,14 +1553,14 @@ final class JvmExprCompiler {
 			case LispNames.SLOT_VALUE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
 			case LispNames.WITH_SLOTS ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandWithSlots(cons), ctx, className);
 			case LispNames.SYMBOL_MACROLET ->
 				// No user-macro hook: UserMacroExpander has already expanded every
 				// user
 				// macro on the compile path.
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandSymbolMacrolet(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandSymbolMacrolet(cons), ctx, className);
 			case LispNames.WITH_ACCESSORS ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandWithAccessors(cons), ctx, className);
 			case LispNames.CHANGE_CLASS -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx, className);
 			case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
@@ -1578,10 +1584,12 @@ final class JvmExprCompiler {
 				ctx.tailBody = tail;
 				compileExpansion(cons, LispMacroExpander.expandLetStar(cons), ctx, className);
 			}
-			case LispNames.DOLIST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx, className);
-			case LispNames.DO -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx, className);
-			case LispNames.DO_STAR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx, className);
-			case LispNames.LOOP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx, className);
+			// The loops: their block ends the expansion, so a return out of the body to
+			// it is the form's value (JvmReturnCompiler.isTailExit).
+			case LispNames.DOLIST -> compileExpansion(cons, LispMacroExpander.expandDolist(cons), ctx, className);
+			case LispNames.DO -> compileExpansion(cons, LispMacroExpander.expandDo(cons), ctx, className);
+			case LispNames.DO_STAR -> compileExpansion(cons, LispMacroExpander.expandDoStar(cons), ctx, className);
+			case LispNames.LOOP -> compileExpansion(cons, LispMacroExpander.expandLoop(cons), ctx, className);
 			case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
 			case LispNames.BLOCK -> JvmBlockCompiler.compileNamed(cons, ctx, className);
 			case LispNames.FN_BLOCK_INTERNAL -> JvmBlockCompiler.compileFnBlock(cons, ctx, className);
@@ -2056,7 +2064,7 @@ final class JvmExprCompiler {
 				// (JvmEmitHelper.inLoopScope).
 				JvmEmitHelper.inLoopScope(ctx, () -> {
 					if (!JvmTypedLoopCompiler.tryCompile(cons, ctx, className)) {
-						JvmExprCompiler.compileExpr(LispMacroExpander.expandDotimes(cons), ctx, className);
+						compileExpansion(cons, LispMacroExpander.expandDotimes(cons), ctx, className);
 					}
 				});
 			}
@@ -2260,11 +2268,11 @@ final class JvmExprCompiler {
 			}
 			case LispNames.VALUES -> JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_BIND ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueBind(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandMultipleValueBind(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_LIST ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueList(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_CALL ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueCall(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandMultipleValueCall(cons), ctx, className);
 			case LispNames.NTH_VALUE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx, className);
 			case LispNames.MULTIPLE_VALUE_SETQ ->
@@ -2296,7 +2304,7 @@ final class JvmExprCompiler {
 			case LispNames.MAKE_SEQUENCE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx, className);
 			case LispNames.DESTRUCTURING_BIND ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandDestructuringBind(cons), ctx, className);
+				compileExpansion(cons, LispMacroExpander.expandDestructuringBind(cons), ctx, className);
 			case LispNames.FIRST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
 			case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);
 			case LispNames.NTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx, className);

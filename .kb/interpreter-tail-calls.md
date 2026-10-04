@@ -27,10 +27,24 @@ Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`).
   FORM of such an exit a tail of the frame: a `return-from`/`return` whose block resolves to
   `owner` (`exitsOwnedBlock`) continues the frame with its value form instead of evaluating
   it and throwing, so `(return-from f (f (- n 1)))` runs in constant stack (it overflowed
-  near 35,000 until 2026-10-03). An exit to any other block, and one with no value form,
-  still throws. A `return` out of a `dolist` body is not reached that way (the body runs
-  as a tagbody statement, a frame of its own whose owner is not the block): its value form
-  still costs a frame per call, measured 2026-10-03 at 1,000,000 deep.
+  near 35,000 until 2026-10-03). An exit with no value form still throws.
+- `deferTo` (the `exitTo` parameter) -- the owner of the frame a STATEMENT runs under: a
+  loop body (`evalWhile`), a `tagbody` statement, a non-last body form (`evalAllButLast`)
+  run in a frame of its own (`evalStatement`), with nothing in between that opens a dynamic
+  extent. An exit to one of that frame's blocks (`exitsToFrame`) throws `BlockTailExit` with
+  its value form UNEVALUATED; the owning frame catches it (around `dispatch`, inside the
+  loop) and continues with the form as its tail. So the value of a `return` out of a
+  `dolist`/`dotimes`/`loop`/`do` body or a `tagbody` statement runs in constant stack (it
+  cost a frame per call until 2026-10-04: 1,000,000 deep overflowed). The frame hands its
+  own `owner`, or `deferTo` while it has none, to the statements it runs itself
+  (`evalAllButLast`, `evalWhile`, `evalConsRareOperator`'s `tagbody`); every other method
+  evaluates through `eval`, which passes none, so a special `let`, `unwind-protect`,
+  `handler-case`, `catch`, `progv`, a `multiple-value-prog1` first form keep the value form
+  inside their extent BY CONSTRUCTION. Entering a function body drops `deferTo`: an exit
+  there evaluates its value form inside the call (its `funcallSeam`, its
+  `functionBodyDepth`). An exit to a block of a frame further out than the innermost owner
+  still evaluates and throws. Not a `BlockReturnSignal`, whose other catchers
+  (`runBlockIn`, `apply`) take its value as is.
 - `inBody` -- whether the frame entered a function body: `functionBodyDepth` (what tells a
   macro expansion whether its call site is top level, `expandUserMacro`) is raised once per
   frame however many bodies tail calls replace, and lowered in the frame's `finally` -- so
@@ -76,8 +90,11 @@ kind because the loop must know which; `evalConsRareOperator` used to hold both,
 `eval` on its expansions, which cost a frame per `multiple-value-bind`/`flet`/`the` in a
 tail. An ordinary call falls through all three switches (three misses, was two), which the
 timings below do not resolve. `LispEvaluatorHotMethodSizeTest` keeps each under HotSpot's
-8000-bytecode `HugeMethodLimit` (`.kb/hot-path-method-size.md`): `evalCons` is 6,812
-bytecodes (was 5,516), `rareOperatorExpansion` 4,446, `evalConsRareOperator` under 2,500.
+8000-bytecode `HugeMethodLimit` (`.kb/hot-path-method-size.md`): `evalCons` was 6,812
+bytecodes (from 5,516) when the loop landed, 7,717 by 2026-10-04 and 7,788 with `deferTo`
+(its catch, the `exitsToFrame` calls; `tagbody` stayed in `evalConsRareOperator`, which takes
+the owners), `rareOperatorExpansion` 4,446, `evalConsRareOperator` under 2,500. 212 bytes of
+headroom: the next arm that grows it should move something out.
 `javac` duplicates a `finally` at every `return` inside its `try`, which is why the loop's
 arms assign `result` and `break frame` to ONE exit instead of returning: ~150 returns
 times a 14-byte `finally` copy would have crossed the cliff by itself.
@@ -129,7 +146,11 @@ defuns, `apply`, a lambda head, `labels`, `return-from`, and `progn`/`let`/`let*
 prints the same),
 `#aReturnFromReachesTheActivationWhoseBlockTheClosureCaptured` (SBCL prints the same),
 `#aFuncallInTailPositionKeepsTheBuiltInsHandlerBindSeam`,
-`#aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody`, and the
+`#aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody`,
+`#theValueOfAReturnOutOfALoopBodyOrATagbodyStatementIsATailOfTheBlocksFrame` (100,000 deep
+through `dolist`/`dotimes`/`loop`/`tagbody`/`prog`, the binding forms, `multiple-value-call`,
+a lambda head), `#aReturnOutOfALoopBodyThroughADynamicExtentRunsItsValueFormInsideIt` (SBCL
+prints the same), and the
 `.todo/901` trio; `RontoLispCliStreamsTest.aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter`
 (a session and a file, 300,000 deep); `LispEvaluatorHotMethodSizeTest`. The REPL's
 recovery after an overflow stays pinned by
