@@ -126,12 +126,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   like the oracle);
   an `Object` method catches past the search but ahead of the default. A throwable or
   stream class stores under its name as a keyword (the one `class` answers), and the search
-  follows its superclass chain like the oracle's Java inheritance, without interfaces
-  (`java.io.Serializable`, `java.io.Closeable`) or `Object`; `isa?`, `derive` and
-  `underive` read a class spelling as the same keyword, so `(isa? (class "a") String)` is
-  `true`, but `parents`/`ancestors` of a class answer only what `derive` recorded (the
-  oracle adds the Java supers). Since the keyword is the class here, a keyword spelled
-  `:java.lang.Exception` is that class too.
+  follows its Java supers like the oracle's inheritance, interfaces (`java.io.Serializable`,
+  `java.io.Closeable`) and `Object` included; `isa?`, `derive`, `underive`, `parents`,
+  `ancestors` and `descendants` read a class spelling as the same keyword, so
+  `(isa? (class "a") String)` is `true` and `parents`/`ancestors` of a class add its Java
+  supers like the oracle. A core kind (`:string`, `:number`, ...), a record or a deftype
+  stands for host classes that are no one value here: it `isa?` `Object` and its
+  `ancestors` add `Object`, but its host class's other supers are not modeled. A program
+  that spells no class in those positions reads only the hierarchy, so
+  `(ancestors (class e))` there answers what `derive` recorded. Since the keyword is the
+  class here, a keyword spelled `:java.lang.Exception` is that class too.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.

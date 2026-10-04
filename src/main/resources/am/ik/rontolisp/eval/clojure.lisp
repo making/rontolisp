@@ -981,6 +981,37 @@
       (list (rontolisp::%clojure-host-chain (java:call x "getClass"))
             (java:call x "getMessage") (java:call x "getCause"))))
 
+(defun rontolisp::%clojure-host-class-rows (name)
+  "The class rows (name base ...) of the host Throwable class NAME and of each
+   of its supers, NIL when NAME names none: the rows of the class of a host
+   Throwable no construction names, which the lowering could not resolve. A
+   host arm like %clojure-host-class: a program with no java: operator gets a
+   body answering NIL, since no host object exists there."
+  (if (position #\. name)
+      (handler-case (let ((class
+                           (java:static "java.lang.Class" "forName" name)))
+                      (if (java:call (java:static "java.lang.Class" "forName"
+                                                  "java.lang.Throwable")
+                                     "isAssignableFrom" class)
+                          (rontolisp::%clojure-host-rows class nil)))
+        (error () nil))))
+
+(defun rontolisp::%clojure-host-rows (class rows)
+  "ROWS plus the class rows of the host class CLASS and of each of its supers
+   that ROWS lack."
+  (let ((name (java:call class "getName")))
+    (if (rontolisp::%clojure-class-row name rows)
+        rows
+        (let* ((super (java:call class "getSuperclass"))
+               (bases
+                (append (if super (list super))
+                        (java:call class "getInterfaces")))
+               (names nil))
+          (dolist (b bases) (setq names (cons (java:call b "getName") names)))
+          (setq rows (cons (cons name (reverse names)) rows))
+          (dolist (b bases) (setq rows (rontolisp::%clojure-host-rows b rows)))
+          rows))))
+
 (defun rontolisp::%clojure-exception-of (x)
   "X as an exception: a condition itself, a host Throwable a new exception
    carrying its class, message and cause, anything else NIL."
@@ -1287,6 +1318,96 @@
   (if (typep x 'condition)
       (vector)
       (rontolisp::%clojure-host-method x "getStackTrace")))
+
+;;;; Class chains: what isa?, parents and ancestors read off a class keyword.
+;;
+;; A class keyword (the one class answers, or a class spelling lowered to it)
+;; names a class when the program's class rows ROWS (c%h-supers, read off
+;; clojure/ClojureClassBases) hold a row (name base ...) for its name: the
+;; oracle's bases, the superclass first, then the interfaces. A row (name . t)
+;; is a class whose host classes are no one value here (a core kind, a record):
+;; its supers are java.lang.Object alone, its bases unknown. Any other keyword
+;; is no class, but for the class of a host Throwable no construction names,
+;; whose rows the host answers.
+
+(defun rontolisp::%clojure-class-rows (k rows)
+  "ROWS when they hold the row of the class keyword K, the host's rows of K's
+   Throwable class ahead of them when they do not, NIL when K names no class."
+  (if (and (consp k) (eq (car k) :c%keyword))
+      (let ((name (car (cdr k))))
+        (if (rontolisp::%clojure-class-row name rows)
+            rows
+            (let ((host (rontolisp::%clojure-host-class-rows name)))
+              (if host (append host rows)))))))
+
+(defun rontolisp::%clojure-class-row (name rows)
+  "The row of the class NAME among ROWS, NIL when they hold none."
+  (if rows
+      (if (equal (car (car rows)) name)
+          (car rows)
+          (rontolisp::%clojure-class-row name (cdr rows)))))
+
+(defun rontolisp::%clojure-class-keywords (names)
+  "The class keywords of the class names NAMES, in order."
+  (if names
+      (cons (list :c%keyword (car names))
+            (rontolisp::%clojure-class-keywords (cdr names)))))
+
+(defun rontolisp::%clojure-class-bases (k rows object)
+  "The bases of the class keyword K as keywords, ROWS holding its row; a class
+   whose bases are unknown answers java.lang.Object when OBJECT, else none."
+  (let ((bases (cdr (rontolisp::%clojure-class-row (car (cdr k)) rows))))
+    (rontolisp::%clojure-class-keywords
+     (if (eq bases t) (if object '("java.lang.Object")) bases))))
+
+(defun rontolisp::%clojure-class-isa (h child parent rows)
+  "isa? of CHILD on PARENT past the hierarchy H's own walk: a class keyword
+   CHILD isa java.lang.Object (the oracle's isAssignableFrom takes every class,
+   an interface too) and whatever one of its bases isa."
+  (let ((rows (rontolisp::%clojure-class-rows child rows)) (found nil))
+    (if rows
+        (if (equal parent '(:c%keyword "java.lang.Object"))
+            t
+            (progn
+              (dolist (base (rontolisp::%clojure-class-bases child rows t))
+                (if (and (not found) (c%h-isa? h base parent)) (setq found t)))
+              found)))))
+
+(defun rontolisp::%clojure-class-parents (k rows)
+  "What parents adds for the class keyword K: its bases, none for a class
+   whose bases are unknown or a value of no class."
+  (let ((rows (rontolisp::%clojure-class-rows k rows)))
+    (if rows (rontolisp::%clojure-class-bases k rows nil))))
+
+(defun rontolisp::%clojure-class-supers (k rows acc)
+  "ACC plus the supers of the class keyword K (the oracle's supers: every
+   base and its supers), ROWS holding their rows."
+  (dolist (base (rontolisp::%clojure-class-bases k rows t))
+    (if (not (c%h-mem? base acc))
+        (setq acc
+              (rontolisp::%clojure-class-supers base rows (cons base acc)))))
+  acc)
+
+(defun rontolisp::%clojure-class-ancestors (h k rows)
+  "What ancestors adds for the class keyword K in the hierarchy H: its supers
+   and each one's ancestors in H, none for a value of no class."
+  (let ((rows (rontolisp::%clojure-class-rows k rows)) (out nil))
+    (if rows
+        (let ((supers (rontolisp::%clojure-class-supers k rows nil)))
+          (dolist (s supers)
+            (setq out
+                  (append (c%h-set-list
+                           (c%h-get-set (gethash '(:c%keyword "ancestors") h)
+                                        s)) out)))
+          (append supers out)))))
+
+(defun rontolisp::%clojure-class-descendants-refusal ()
+  "descendants of a class keyword: the oracle's refusal."
+  (error
+   (c%e-new '("java.lang.UnsupportedOperationException"
+              "java.lang.RuntimeException" "java.lang.Exception"
+              "java.lang.Throwable") "Can't get descendants of classes" nil
+            nil)))
 
 ;;;; Equality: the = family over every value shape.
 

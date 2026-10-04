@@ -1,10 +1,17 @@
 package am.ik.rontolisp.clojure;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.ClojureMacroTime;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceSession;
+import am.ik.rontolisp.reader.Features;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +75,21 @@ class ClojureSessionTest {
 		assertThat(forms(session.read("(assert false)"))).containsExactly(input("NIL"));
 		session.read("(set! *assert* true)");
 		assertThat(forms(session.read("(assert false)"))).anyMatch(form -> form.contains("Assert failed: false"));
+	}
+
+	/** What the interpreter prints running the buffers through one session. */
+	private static String runSession(String... buffers) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		SourceSession session = new SourceSession(SourceLanguage.CLOJURE);
+		for (String buffer : buffers) {
+			for (SourceSession.Step step : session.read(buffer, Features.INTERPRETER)) {
+				for (LispVal form : step.forms()) {
+					evaluator.eval(form);
+				}
+			}
+		}
+		return out.toString(StandardCharsets.UTF_8);
 	}
 
 	private static List<String> forms(List<ClojureTopLevel> tops) {
@@ -207,22 +229,41 @@ class ClojureSessionTest {
 
 	@Test
 	void aBufferSpellingAThrowableOrStreamClassJoinsTheClassChainWalkOnce() {
-		// a hierarchy runtime without a class spelling carries no class-chain walk; the
-		// buffer that first dispatches on a throwable class adds the walk and the edges
-		// resolved so far, a later one only the edges it adds
+		// a hierarchy runtime without a class spelling carries no class rows; the buffer
+		// that first dispatches on a throwable class adds the class rows' isa? and
+		// readers and the rows resolved so far, a later one only the rows it adds
 		ClojureSession session = new ClojureSession();
 		List<String> plain = forms(session.read("(defmulti f class) (defmethod f :default [x] :d)"));
 		assertThat(plain).anyMatch(form -> form.startsWith("(DEFUN C%H-ISA? "))
-			.noneMatch(form -> form.contains("C%H-CLASS-ISA?"));
+			.noneMatch(form -> form.contains("%CLOJURE-CLASS-"));
 		List<String> chained = forms(session.read("(defmethod f IllegalStateException [e] :ise)"));
-		assertThat(chained).anyMatch(form -> form.startsWith("(DEFUN C%H-CLASS-ISA? "))
-			.anyMatch(form -> form.startsWith("(DEFUN C%H-ISA? ") && form.contains("(C%H-CLASS-ISA? "))
+		assertThat(chained)
+			.anyMatch(form -> form.startsWith("(DEFUN C%H-ISA? ") && form.contains("(RONTOLISP::%CLOJURE-CLASS-ISA "))
+			.anyMatch(form -> form.startsWith("(DEFUN C%H-ANCESTORS ")
+					&& form.contains("(RONTOLISP::%CLOJURE-CLASS-ANCESTORS "))
 			.anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS ")
-					&& form.contains("(\"java.lang.IllegalStateException\" . \"java.lang.RuntimeException\")"));
+					&& form.contains("(\"java.lang.IllegalStateException\" \"java.lang.RuntimeException\")")
+					&& form.contains("(\"java.lang.Throwable\" \"java.lang.Object\" \"java.io.Serializable\")"));
 		List<String> streams = forms(session.read("(defmethod f java.io.Writer [w] :w)"));
 		assertThat(streams).noneMatch(form -> form.contains("DEFUN"))
 			.anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS (APPEND ")
-					&& form.contains("(\"java.io.StringWriter\" . \"java.io.Writer\")"));
+					&& form.contains("(\"java.io.StringWriter\" \"java.io.Writer\")")
+					&& !form.contains("\"java.lang.Throwable\" \"java.lang.Object\""));
+		// a reader in a later buffer brings every class class answers, the core kinds too
+		List<String> read = forms(session.read("(ancestors (class 1))"));
+		assertThat(read).anyMatch(form -> form.startsWith("(SETQ C%H-SUPERS (APPEND ")
+				&& form.contains("(\"number\" . T)") && form.contains("\"java.lang.ArithmeticException\""));
+	}
+
+	@Test
+	void aSessionReadsAClassKeywordsSupersInALaterBuffer() {
+		// the hierarchy runtime of a first buffer without a class takes the class rows'
+		// readers when a later one spells a class, and a later record joins the rows
+		assertThat(runSession("(derive :s/a :s/b) (println (parents :s/a) (ancestors :s/none))",
+				"(println (parents NumberFormatException) (isa? (class \"a\") Object))",
+				"(defrecord SR [x]) (println (ancestors SR) (ancestors (class (->SR 1))))"))
+			.isEqualTo("#{:s/b} nil\n#{:java.lang.IllegalArgumentException} true\n"
+					+ "#{:java.lang.Object} #{:java.lang.Object}\n");
 	}
 
 	@Test

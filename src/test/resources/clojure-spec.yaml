@@ -2012,6 +2012,38 @@ cases:
       true false true
       true true false
       :java.lang.Exception :java.lang.ClassCastException
+  - name: parents-and-ancestors-of-a-class-add-its-java-supers
+    # Oracle-identical (clj 1.12.6) but for the colon a class keyword prints with (the
+    # oracle prints a class object): parents of a class adds its bases, ancestors its
+    # supers and their hierarchy ancestors, interfaces and Object included, and isa?
+    # follows them; Object takes every class, an interface's supers stop short of it.
+    # Empty answers are nil, and descendants of a class is the oracle's refusal. A core
+    # kind or a record isa Object (its host classes' interfaces are not modeled). The
+    # earlier case's (derive Exception ::xdh-failure) shows through Exception's subclasses.
+    source: |
+      (defn pa-names [s] (sort (map #(apply str (remove #{\:} (pr-str %))) s)))
+      (println (parents NumberFormatException) (parents java.io.Closeable) (parents Object) (ancestors java.lang.AutoCloseable))
+      (println (pa-names (ancestors IllegalArgumentException)))
+      (derive Exception :pa/f)
+      (println (pa-names (ancestors Exception)) (pa-names (parents Exception)) (descendants :pa/f))
+      (println (pa-names (ancestors java.io.StringWriter)))
+      (println (isa? NumberFormatException java.io.Serializable) (isa? (class (java.io.StringWriter.)) java.io.Closeable) (isa? (class "a") Object) (isa? java.io.Closeable Object) (isa? :pa/k Object) (isa? java.io.Closeable :pa/f) (isa? (class (ex-info "m" {})) clojure.lang.IExceptionInfo))
+      (println (parents :pa/none) (ancestors :pa/none) (descendants :pa/none) (parents (make-hierarchy) Exception))
+      (println (try (descendants Exception) (catch UnsupportedOperationException e (ex-message e))))
+      (println (pa-names (ancestors (class (try (/ 1 0) (catch ArithmeticException e e))))))
+      (derive Object :pa/o)
+      (defrecord PaR [a])
+      (println (isa? (class 1) :pa/o) (isa? java.io.Closeable :pa/o) (contains? (ancestors String) :pa/o) (contains? (ancestors (class "a")) :pa/o) (isa? (class (->PaR 1)) :pa/o) (isa? PaR Object))
+    expected: |
+      #{:java.lang.IllegalArgumentException} #{:java.lang.AutoCloseable} nil nil
+      (auto/xdh-failure java.io.Serializable java.lang.Exception java.lang.Object java.lang.RuntimeException java.lang.Throwable)
+      (auto/xdh-failure java.io.Serializable java.lang.Object java.lang.Throwable pa/f) (auto/xdh-failure java.lang.Throwable pa/f) #{:java.lang.Exception}
+      (java.io.Closeable java.io.Flushable java.io.Writer java.lang.Appendable java.lang.AutoCloseable java.lang.Object)
+      true true true true false false true
+      nil nil nil #{:java.lang.Throwable}
+      Can't get descendants of classes
+      (auto/xdh-failure java.io.Serializable java.lang.Exception java.lang.Object java.lang.RuntimeException java.lang.Throwable pa/f)
+      true false true true true true
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance

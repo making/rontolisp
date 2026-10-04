@@ -8,10 +8,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import am.ik.rontolisp.LispChar;
-import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
@@ -272,20 +270,20 @@ final class ClojureHierarchyLowering {
 								hfn("IF", hfn("C%H-ISA?", h, hfn("AREF", c, i), hfn("AREF", p, i)),
 										hfn("C%H-VEC-ISA?", h, c, p, hfn("+", i, new LispInteger(1)), n, m),
 										ClojureLowering.NIL_CONST)))));
+		// (defun c%h-not-empty (setv) ...): the oracle's not-empty over a reader's set
+		runtime.add(hdefun("C%H-NOT-EMPTY", List.of(setv),
+				hfn("IF", hfn("EQL", hfn("HASH-TABLE-COUNT", hfn("CADR", setv)), new LispInteger(0)),
+						ClojureLowering.NIL_CONST, setv)));
+		// isa? and the parents/ancestors/descendants reads, the class rows' versions
+		// where a class is spelled
 		if (ctx.usedClassChains) {
 			runtime.addAll(classChainRuntime());
-			runtime.add(supersForm(ctx.classSupers, false));
+			runtime.add(supersForm(ctx.pendingClassRows(), false));
 		}
 		else {
 			runtime.add(isaDefun(false));
+			runtime.addAll(readerDefuns(false));
 		}
-		// parents/ancestors/descendants reads, and the empty hierarchy value
-		runtime.add(hdefun("C%H-PARENTS", List.of(h, child),
-				hfn("C%H-GET-SET", hfn("GETHASH", hkey("parents"), h), child)));
-		runtime.add(hdefun("C%H-ANCESTORS", List.of(h, child),
-				hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child)));
-		runtime.add(hdefun("C%H-DESCENDANTS", List.of(h, child),
-				hfn("C%H-GET-SET", hfn("GETHASH", hkey("descendants"), h), child)));
 		runtime.add(hdefun("C%H-EMPTY", List.of(),
 				ClojureCollectionLowering.tableFromPlist(hfn("LIST", hkey("parents"),
 						ClojureCollectionLowering.makeTable(), hkey("ancestors"), ClojureCollectionLowering.makeTable(),
@@ -356,14 +354,15 @@ final class ClojureHierarchyLowering {
 	}
 
 	/**
-	 * The superclass edges of the class keywords: an alist of class name to superclass.
+	 * The class rows: an alist of class name to its bases ({@link ClojureClassBases}),
+	 * {@code t} for a class whose bases are unknown ({@link ClojureClassBases#KINDS}).
 	 */
 	static final String CLASS_SUPERS = "C%H-SUPERS";
 
 	/**
 	 * {@code (defun c%h-isa? (h child parent) ...)}: equal, vector-wise, or an ancestor
-	 * walk -- and, with {@code classes}, a class keyword's superclass walk
-	 * ({@link #classChainRuntime}).
+	 * walk -- and, with {@code classes}, the class rows' walk ({@code clojure.lisp},
+	 * {@code %clojure-class-isa}).
 	 */
 	static LispVal isaDefun(boolean classes) {
 		LispSymbol h = new LispSymbol("h");
@@ -378,56 +377,52 @@ final class ClojureHierarchyLowering {
 								hfn("C%H-MEM?", parent,
 										hfn("C%H-SET-LIST",
 												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
-								ClojureLowering.TRUE_CONST,
-								classes ? hfn("C%H-CLASS-ISA?", h, child, parent) : ClojureLowering.NIL_CONST))));
+								ClojureLowering.TRUE_CONST, classes ? hfn("RONTOLISP::%CLOJURE-CLASS-ISA", h, child,
+										parent, new LispSymbol(CLASS_SUPERS)) : ClojureLowering.NIL_CONST))));
 	}
 
 	/**
-	 * The class-chain walk of {@code isa?}: a class keyword (the one {@code class}
-	 * answers, or a class spelling lowered to it) whose name has an edge in
-	 * {@link #CLASS_SUPERS} is a child of whatever its superclass is, so the oracle's
-	 * {@code isAssignableFrom} and its {@code supers} search of the hierarchy both hold
-	 * ({@code (derive Exception ::e)} reaches every subclass). The edges are the ones the
-	 * lowering resolved ({@link #supersForm}); a class keyword with none ends the walk.
-	 * The redefined {@code c%h-isa?} rides along, so a session's earlier hierarchy
-	 * runtime takes the walk too.
+	 * The {@code parents}/{@code ancestors}/{@code descendants} reads: the hierarchy's
+	 * sets, nil when empty like the oracle's {@code not-empty}. With {@code classes} a
+	 * class keyword adds what its rows say ({@code clojure.lisp}, "Class chains"):
+	 * {@code parents} its bases, {@code ancestors} its supers and their ancestors, and
+	 * {@code descendants} of one is the oracle's refusal.
 	 */
-	static List<LispVal> classChainRuntime() {
+	static List<LispVal> readerDefuns(boolean classes) {
 		LispSymbol h = new LispSymbol("h");
 		LispSymbol child = new LispSymbol("child");
-		LispSymbol parent = new LispSymbol("parent");
-		LispSymbol p = new LispSymbol("p");
-		LispSymbol name = new LispSymbol("name");
-		LispSymbol zuper = new LispSymbol("super");
-		// (defun c%h-super (child) ...): the superclass keyword of a class keyword, or
-		// nil
-		LispVal walk = hfnDef("WALK", List.of(p),
-				hfn("IF", hfn("NULL", p), ClojureLowering.NIL_CONST,
-						hfn("IF", hfn("EQUAL", hfn("CAR", hfn("CAR", p)), name),
-								hfn("LIST", ClojureCollectionLowering.KEYWORD_TAG, hfn("CDR", hfn("CAR", p))),
-								hfn("WALK", hfn("CDR", p)))));
-		LispVal superDefun = hdefun("C%H-SUPER", List.of(child),
-				hfn("IF", ClojureFilterLowering.keywordTest(child),
-						hlet(List.of(ClojureLowerUtil.list(name, hfn("CAR", hfn("CDR", child)))),
-								hlabels(List.of(walk), hfn("WALK", new LispSymbol(CLASS_SUPERS)))),
-						ClojureLowering.NIL_CONST));
-		// (defun c%h-class-isa? (h child parent) ...): the superclass isa the parent
-		LispVal classIsa = hdefun("C%H-CLASS-ISA?", List.of(h, child, parent),
-				hlet(List.of(ClojureLowerUtil.list(zuper, hfn("C%H-SUPER", child))),
-						hfn("IF", zuper, hfn("C%H-ISA?", h, zuper, parent), ClojureLowering.NIL_CONST)));
-		return List.of(superDefun, classIsa, isaDefun(true));
+		LispSymbol rows = new LispSymbol(CLASS_SUPERS);
+		LispVal parents = hfn("C%H-GET-SET", hfn("GETHASH", hkey("parents"), h), child);
+		LispVal ancestors = hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child);
+		LispVal descendants = hfn("C%H-NOT-EMPTY", hfn("C%H-GET-SET", hfn("GETHASH", hkey("descendants"), h), child));
+		if (classes) {
+			parents = hfn("C%H-ADD-ALL", parents, hfn("RONTOLISP::%CLOJURE-CLASS-PARENTS", child, rows));
+			ancestors = hfn("C%H-ADD-ALL", ancestors, hfn("RONTOLISP::%CLOJURE-CLASS-ANCESTORS", h, child, rows));
+			descendants = hfn("IF", hfn("RONTOLISP::%CLOJURE-CLASS-ROWS", child, rows),
+					hfn("RONTOLISP::%CLOJURE-CLASS-DESCENDANTS-REFUSAL"), descendants);
+		}
+		return List.of(hdefun("C%H-PARENTS", List.of(h, child), hfn("C%H-NOT-EMPTY", parents)),
+				hdefun("C%H-ANCESTORS", List.of(h, child), hfn("C%H-NOT-EMPTY", ancestors)),
+				hdefun("C%H-DESCENDANTS", List.of(h, child), descendants));
 	}
 
 	/**
-	 * The edges as {@code (setq c%h-supers '((class . super) ...))}, or with
+	 * The class rows' versions of {@code c%h-isa?} and the readers, which a session's
+	 * earlier hierarchy runtime takes on when a later buffer first spells a class.
+	 */
+	static List<LispVal> classChainRuntime() {
+		List<LispVal> runtime = new ArrayList<>();
+		runtime.add(isaDefun(true));
+		runtime.addAll(readerDefuns(true));
+		return runtime;
+	}
+
+	/**
+	 * The rows as {@code (setq c%h-supers '((name base ...) ...))}, or with
 	 * {@code append} added in front of the ones a session's earlier buffer set.
 	 */
-	static LispVal supersForm(Map<String, String> edges, boolean append) {
-		List<LispVal> pairs = new ArrayList<>();
-		for (Map.Entry<String, String> edge : edges.entrySet()) {
-			pairs.add(new LispCons(LispString.literal(edge.getKey()), LispString.literal(edge.getValue())));
-		}
-		LispVal quoted = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(pairs));
+	static LispVal supersForm(List<LispVal> rows, boolean append) {
+		LispVal quoted = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(rows));
 		LispSymbol global = new LispSymbol(CLASS_SUPERS);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), global,
 				append ? hfn("APPEND", quoted, global) : quoted);
@@ -479,7 +474,11 @@ final class ClojureHierarchyLowering {
 			case "parents", "ancestors", "descendants" -> {
 				ClojureLowerUtil.isTrue(n == 1 || n == 2, name + " takes a child, or a hierarchy and a child");
 				LispVal hier = n == 2 ? ctx.lower(items.get(1)) : hierarchyGlobal();
-				LispVal child = ctx.lower(items.get(n == 2 ? 2 : 1));
+				LispVal child = ClojureDispatchLowering.hierarchyArg(ctx, items.get(n == 2 ? 2 : 1));
+				// a class keyword may reach the read: every class class answers has its
+				// row
+				ctx.allClassRows = true;
+				ctx.readsDescendants |= name.equals("descendants");
 				yield ClojureLowerUtil.list(new LispSymbol("C%H-" + name.toUpperCase(java.util.Locale.ROOT)), hier,
 						child);
 			}

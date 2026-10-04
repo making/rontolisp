@@ -823,30 +823,45 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `instance?` takes core classes, record/deftype names and throwable classes ("Catching"),
   else refuses; it has no value.
 - **Class chains** (oracle-checked clj 1.12.6, 2026-10-04). A dispatch value
-  (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive` (`hierarchyArg`: a
-  class spelling no local or var shadows, `Object` aside) lower a class spelling through
-  `classKey` to the keyword `class` answers for its values: a core class its kind, a record
-  its tag, a throwable or stream class (`chainedClassKey`) its own name. The oracle's
+  (`dispatchClassKey`) and an argument of `isa?`/`derive`/`underive`/`parents`/`ancestors`/
+  `descendants` (`hierarchyArg`: a class spelling no local or var shadows) lower a class
+  spelling through `classKey` to the keyword `class` answers for its values: a core class its
+  kind, a record its tag, a throwable, a stream class, an interface among their supers or
+  `Object` (`chainedClassKey`, `ClojureClassBases.isChained`) its own name. The oracle's
   `isa?` follows Java inheritance (`isAssignableFrom`, then each of `supers` through the
-  hierarchy); here `C%H-ISA?`'s last arm is `C%H-CLASS-ISA?`: a class keyword whose name
-  has an edge in `C%H-SUPERS` (an alist of name to superclass) is a child of whatever its
-  superclass is, so `(derive Exception ::e)` reaches every subclass and the most-specific
-  search ranks `IllegalArgumentException` over `Exception`. The edges are the chains the
-  lowering resolved (`ClojureLowering.recordChain`: constructions, including throwables
-  that stay host objects, catches, `instance?`, the spellings) plus, once a throwable is
-  spelled, the classes a runtime error or `ex-info` may have (`RUNTIME_THROWABLES`), and
-  once a stream class is, the `STREAM_SUPERS` table. Interfaces and `Object` are in no
-  chain. Everything rides on `usedClassChains`: a hierarchy runtime of a program spelling
-  no such class is byte-identical (a session adds the walk, a redefined `C%H-ISA?` and the
-  edges ahead of the first buffer spelling one, then `append`s later buffers' edges,
-  `ClojureSessionTest#aBufferSpellingAThrowableOrStreamClassJoinsTheClassChainWalkOnce`).
-  Gaps: the class of a host throwable no construction names (one a host method returned)
-  has no edges, so it `isa?` only itself; `parents`/`ancestors`/`descendants` of a class
-  answer only what `derive` recorded (the oracle adds bases/supers, interfaces included;
-  `.todo/c73`).
+  hierarchy), `parents` adds `bases`, `ancestors` adds `supers` and their hierarchy
+  ancestors, `descendants` of a class refuses (`UnsupportedOperationException`), and all
+  three answer nil for nothing (`not-empty`). Here `C%H-SUPERS` holds class ROWS
+  `(name base ...)`, the oracle's bases (superclass, then interfaces) from
+  `ClojureClassBases` (tables pinned to reflection by `ClojureClassBasesTest`, reflection for
+  any other throwable); `C%H-ISA?`'s last arm and the readers ask `clojure.lisp`'s "Class
+  chains" (`%clojure-class-isa`/`-parents`/`-ancestors`/`-rows`). Every class row `isa?`
+  `Object` (an interface too, like `isAssignableFrom`), while an interface's supers stop
+  short of it. A core kind, a record, a deftype or `reify` is a row `(name . t)`: its host
+  classes are no one value here (`:number` is `Long`, `Double`, `Ratio`...), so its supers
+  are `Object` alone and `parents` adds nothing -- the documented deviation.
+  Rows: `ClojureLowering.recordClass` records a class and its supers' rows (constructions,
+  catches, `instance?`, spellings); a spelled class also records each class a value may have
+  unnamed (`ClojureClassBases.implicitClasses`: the runtime errors', the streams') whose
+  supers hold it; `Object` spelled or a reader lowered (`allClassRows`) records all of them
+  plus the kinds and the program's types. Everything rides on `usedClassChains`: a hierarchy
+  runtime of a program spelling no class in those positions reads only the hierarchy (a
+  session redefines `C%H-ISA?` and the readers and sets the rows ahead of the first buffer
+  spelling one, then `append`s later buffers' rows, `ClojureSessionTest#aBufferSpelling*`,
+  `#aSessionReadsAClassKeywordsSupersInALaterBuffer`). A class keyword with no row asks the
+  host arm `%clojure-host-class-rows` (stand-in NIL without `java:`): a host Throwable class
+  reflects its rows, so the class of a host throwable no construction names (one a host
+  method returned, then thrown) walks too on the interpreter and the JVM
+  (`ClojureInteropTest#theClassOfAHostThrowableNoConstructionNamesTakesItsSupersFromTheHost`);
+  it reflects on every miss, uncached -- only a dotted name of a `java:` program pays it.
+  `descendants` of a class keyword is a `C%E-NEW` exception, so `readsDescendants` with
+  chains turns on the exception runtime.
+  Gaps: `(ancestors (class x))` in a program spelling no class answers only the hierarchy; a
+  host class OBJECT (`class` of a host non-throwable on the interpreter/JVM) is no class
+  keyword, so it `isa?` nothing (`.todo/c79`).
   Rejected: registering the chain at run time where `class` reads a condition -- every
-  program calling `class` on one would carry the table and the write, where the edges are
-  known at lowering time for every class a value can have but that host-returned one.
+  program calling `class` on one would carry the table and the write, where the rows are
+  known at lowering time for every class a value can have but a host-returned throwable's.
 - `.getClass` of a receiver of unknown class (or a plain-throwable / stream class) is
   `getClassForm`: an EXCEPTION arm answering `%clojure-exception-class` and a STREAM arm
   answering the stream's class keyword ahead of the host call, so both shed where no
@@ -860,8 +875,19 @@ constructor and consumer, and a regex `replace` with a function replacement.
   185,329 / 150,413 / 189,138 / 157,603; `(defmethod f java.io.Writer ...)` over `*out*`
   against `:java.io.Writer` 88,031 / 73,414 / 89,378 / 96,502 -> 88,747 / 74,019 / 90,122 /
   97,655; `(.getClass e)` of a caught error 63,530 (a refusal) -> 63,547.
+- Size after the class rows, measured 2026-10-04 (same four outputs, against the tree before
+  them): the `String` method, `.getClass` of a parameter, a catch reading `class`, a `class`
+  multimethod over a caught error, a keyword `derive`/`isa?` multimethod and
+  `examples/clojure/demo.clj` byte-identical; `(defmethod f Exception ...)` 186,955 /
+  152,087 / 190,768 / 157,618 -> 187,548 / 152,601 / 191,372 / 158,796; `(defmethod f
+  java.io.Writer ...)` 88,751 / 74,023 / 90,126 / 97,656 -> 89,142 / 74,374 / 90,530 /
+  98,789. A keyword `parents`/`ancestors`/`descendants` program pays the `not-empty` fix:
+  49,148 / 39,227 / 50,375 / 84,440 -> 49,274 / 39,320 / 50,501 / 84,712. A first draft
+  with `assoc`/`member` `:test #'equal` and `nreverse` in the library cost the stream
+  program 5,743 bytes of wasm; the hand-written walks cost 391.
 - Pins: clojure-spec `a-multimethod-dispatches-on-an-exception-class-by-inheritance`,
-  `a-multimethod-dispatches-on-a-stream-class-by-inheritance`.
+  `a-multimethod-dispatches-on-a-stream-class-by-inheritance`,
+  `parents-and-ancestors-of-a-class-add-its-java-supers`.
 
 ## Java interop
 
@@ -1520,7 +1546,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
 - `clojure-spec.yaml` via `ClojureSpecE2eTest`: one case per table row or builtin group,
   concatenated into one program and sliced back per case, on all four backends.
 - `ClojureLoweringTest` (lowered shapes and refusals; `aLiteralScalarKeySkipsTheStructuralKeyRuntime`,
-  `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureReaderTest`,
+  `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
   backends; `MemoryClojureFiles` for the unit tests).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,

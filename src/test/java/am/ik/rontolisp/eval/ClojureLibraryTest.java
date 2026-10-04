@@ -195,9 +195,12 @@ class ClojureLibraryTest {
 				builders.add(name);
 			}
 		});
-		// class answers a class name as a keyword, and a class name has no slash; ns-name
-		// a namespace's name as a symbol, which has none either
-		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-NS-NAME");
+		// class answers a class name as a keyword, and a class name has no slash (the
+		// class
+		// rows' bases neither); ns-name a namespace's name as a symbol, which has none
+		// either
+		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
+				"RONTOLISP::%CLOJURE-NS-NAME");
 		builders.removeAll(slashless);
 		boolean grew = true;
 		while (grew) {

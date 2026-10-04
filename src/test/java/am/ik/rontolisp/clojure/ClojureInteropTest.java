@@ -148,6 +148,18 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void theClassOfAHostThrowableNoConstructionNamesTakesItsSupersFromTheHost() throws Exception {
+		// measured against clj 1.12.6: the program names no ZipException, so no row of
+		// the lowering holds it; the host answers its supers
+		assertBothEqual("(def z (try (throw (.newInstance (Class/forName \"java.util.zip.ZipException\")))"
+				+ " (catch Exception e e)))"
+				+ " (println (isa? (class z) java.io.IOException) (isa? (class z) Exception) (isa? (class z) Object))"
+				+ " (println (sort (map #(apply str (remove #{\\:} (pr-str %))) (ancestors (class z)))))",
+				"true true true\n"
+						+ "(java.io.IOException java.io.Serializable java.lang.Exception java.lang.Object java.lang.Throwable)\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
