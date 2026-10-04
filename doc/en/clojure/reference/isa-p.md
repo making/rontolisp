@@ -13,6 +13,9 @@ A class spelling as `child` or `parent` is the keyword `class` answers for its v
 `defmethod`: `String` is `:string`, a record its tag, a throwable or stream class its name. A
 throwable or stream class keyword `isa?` each of its Java supers, interfaces included, and
 whatever they derive from, like the oracle's Java inheritance; every class `isa?` `Object`.
+On the interpreter and the JVM, `class` of a host object answers its class object, which `isa?`
+each class it extends or implements, and whatever they derive from, under any spelling of them:
+`(isa? (class (java.util.ArrayList.)) java.util.List)` is `true`.
 
 ```clojure
 (derive :c :p)

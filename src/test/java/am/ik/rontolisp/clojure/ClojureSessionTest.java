@@ -267,6 +267,16 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aSessionWalksAHostClassObjectOnceABufferNamesTheHost() {
+		// the hierarchy runtime of a buffer without the host takes the host class walk
+		// when a later buffer builds a host object; a buffer after that reads it
+		assertThat(runSession("(derive :s/a :s/b) (println (parents :s/a))", "(def l (java.util.ArrayList.))",
+				"(println (count (parents (class l))) (isa? (class l) (class l)) (isa? :s/a :s/b))",
+				"(println (isa? (class l) java.util.List))"))
+			.isEqualTo("#{:s/b}\n5 true true\ntrue\n");
+	}
+
+	@Test
 	void theTestRuntimeStartsOnceAheadOfTheFirstTestBuffer() {
 		// clojure.test in a session: the runtime start travels ahead of the
 		// buffer that first uses it, the test registers under the session's

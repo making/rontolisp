@@ -127,9 +127,13 @@
  Java のスーパータイプを加えます。コアの種類（`:string`、`:number` など）、record、deftype は
  ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
  `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。これらの
- 位置にクラス名を書かないプログラムは階層だけを読むので、そこでの `(ancestors (class e))` は
- `derive` が記録したものを返します。ここではキーワードがクラスそのものなので、
- `:java.lang.Exception` と綴ったキーワードもそのクラスです。プロトコルの
+ 位置にクラス名を書かずホスト相互運用も使わないプログラムは階層だけを読むので、そこでの
+ `(ancestors (class e))` は `derive` が記録したものを返します。ここではキーワードがクラス
+ そのものなので、`:java.lang.Exception` と綴ったキーワードもそのクラスです。ホストの
+ クラスオブジェクト（ホストオブジェクトの `class`、インタプリタと JVM）はその名前の
+ キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
+ `(isa? (class (java.util.ArrayList.)) java.util.List)` は `true` です。同じく `:list` と
+ 綴る `clojure.lang.IPersistentList` にも `isa?` で、オラクルは `false` を返します。プロトコルの
  ディスパッチは階層を読まず（タグの
  完全一致と `Object` 既定）、`Long`・`Double` を `:number` にまとめます（オラクルは
  区別します）。

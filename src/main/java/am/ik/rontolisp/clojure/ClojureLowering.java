@@ -726,6 +726,36 @@ public final class ClojureLowering {
 	/** Whether the session already emitted the class-chain walk. */
 	boolean classChainsEmitted;
 
+	/**
+	 * Whether a hierarchy may meet a host class object: the program uses a hierarchy and
+	 * names a {@code java:} operator ({@link ClojureHierarchyLowering#namesHost}), so its
+	 * class-chain walk asks the host for a class object's supers. Sets
+	 * {@link #usedClassChains}.
+	 */
+	boolean hostClassWalk;
+
+	/**
+	 * Whether the forms lowered so far (a session's buffers) named a {@code java:}
+	 * operator.
+	 */
+	boolean namedHost;
+
+	/** Whether the session's emitted class-chain walk is the host class one. */
+	boolean hostClassWalkEmitted;
+
+	/**
+	 * Turns on {@link #hostClassWalk} once the program uses a hierarchy and the forms
+	 * lowered so far name the host.
+	 * @param lowered forms just lowered
+	 */
+	void noteHost(List<LispVal> lowered) {
+		this.namedHost = this.namedHost || ClojureHierarchyLowering.namesHost(lowered);
+		if (this.usedHierarchy && this.namedHost) {
+			this.hostClassWalk = true;
+			this.usedClassChains = true;
+		}
+	}
+
 	/** The class rows the session already emitted, by name. */
 	final Set<String> emittedSupers = new HashSet<>();
 
@@ -1094,6 +1124,8 @@ public final class ClojureLowering {
 			// the macro runtime travels with the program, like the false value
 			lowering.forms.addAll(1, ClojureMacroLowering.macroRuntime(lowering));
 		}
+		// a hierarchy meets a host class object only where the program names the host
+		lowering.noteHost(lowering.forms);
 		// descendants of a class keyword is an exception of the program's runtime
 		lowering.usedExInfo |= lowering.usedClassChains && lowering.readsDescendants;
 		if (lowering.usedHierarchy) {
@@ -1181,6 +1213,8 @@ public final class ClojureLowering {
 			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
 			this.falseBound = true;
 		}
+		// a hierarchy meets a host class object once any buffer named the host
+		noteHost(out.stream().flatMap(top -> top.forms().stream()).toList());
 		// descendants of a class keyword is an exception of the program's runtime
 		this.usedExInfo |= this.usedClassChains && this.readsDescendants;
 		if (this.usedHierarchy && !this.hierarchyEmitted) {
@@ -1189,13 +1223,18 @@ public final class ClojureLowering {
 			out.add(0, new ClojureTopLevel(ClojureHierarchyLowering.hierarchyRuntime(this), false));
 			this.hierarchyEmitted = true;
 			this.classChainsEmitted = this.usedClassChains;
+			this.hostClassWalkEmitted = this.hostClassWalk;
 		}
 		else if (this.usedClassChains) {
-			// The class-chain readers join an earlier buffer's hierarchy runtime, and the
-			// rows this buffer resolved first join the ones before them.
+			// The class-chain readers join an earlier buffer's hierarchy runtime (their
+			// host class versions once a buffer names the host), and the rows this
+			// buffer resolved first join the ones before them.
 			List<LispVal> forms = new ArrayList<>();
+			if (!this.classChainsEmitted || this.hostClassWalk != this.hostClassWalkEmitted) {
+				forms.addAll(ClojureHierarchyLowering.classChainRuntime(this));
+				this.hostClassWalkEmitted = this.hostClassWalk;
+			}
 			if (!this.classChainsEmitted) {
-				forms.addAll(ClojureHierarchyLowering.classChainRuntime());
 				forms.add(ClojureHierarchyLowering.supersForm(pendingClassRows(), false));
 				this.classChainsEmitted = true;
 			}

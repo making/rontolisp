@@ -1409,6 +1409,108 @@
               "java.lang.Throwable") "Can't get descendants of classes" nil
             nil)))
 
+;;;; Host classes: isa?, parents and ancestors of a host class object.
+;;
+;; class of a host object that is no throwable answers its host class object
+;; (%clojure-host-class). A hierarchy position spells a class as its class
+;; keyword when the class is chained, as a core kind's keyword when its simple
+;; name is one (java.util.List is :list), else as the class object itself, so a
+;; host class is one class under each of these keys: the host answers its bases,
+;; the hierarchy what each key derives from, and KINDS ((simple-name . kind)
+;; ...) the kind. Only a program naming a java: operator can hold a class
+;; object, so only its hierarchy runtime calls these
+;; (clojure/ClojureHierarchyLowering).
+
+(defun rontolisp::%clojure-host-class-keys (c kinds)
+  "The keys the host class object C stands under in a hierarchy: C, its class
+   keyword, and the keyword of the core kind KINDS gives its simple name."
+  (let* ((name (java:call c "getName"))
+         (dot (position #\. name :from-end t))
+         (simple (if dot (subseq name (+ dot 1)) name))
+         (keys (list c (list :c%keyword name))))
+    (dolist (entry kinds)
+      (if (equal (car entry) simple)
+          (setq keys (append keys (list (list :c%keyword (cdr entry)))))))
+    keys))
+
+(defun rontolisp::%clojure-host-class-supers (c acc)
+  "ACC plus the supers of the host class object C (the oracle's supers: every
+   base, superclass then interfaces, and its supers), each a class object."
+  (let ((super (java:call c "getSuperclass")))
+    (dolist (base
+             (append (if super (list super)) (java:call c "getInterfaces")))
+      (if (not (c%h-mem? base acc))
+          (setq acc
+                (rontolisp::%clojure-host-class-supers base (cons base acc))))))
+  acc)
+
+(defun rontolisp::%clojure-host-class-derived (table classes kinds)
+  "What the hierarchy TABLE (parents or ancestors) holds under any key of the
+   host class objects CLASSES, as a list."
+  (let ((out nil))
+    (dolist (c classes)
+      (dolist (k (rontolisp::%clojure-host-class-keys c kinds))
+        (setq out (append (c%h-set-list (c%h-get-set table k)) out))))
+    out))
+
+(defun rontolisp::%clojure-host-class-isa (h child parent rows kinds)
+  "isa? of CHILD on PARENT past the hierarchy H's own walk, in a program that
+   can hold a host class object: a host class CHILD isa java.lang.Object (the
+   oracle's isAssignableFrom: unless primitive) and whatever it or one of its
+   supers is or derives from under any of its keys; a CHILD of any other class
+   isa a host class PARENT when it isa one of PARENT's keywords; anything else
+   walks the class rows ROWS (%clojure-class-isa)."
+  (cond ((rontolisp::%clojure-host-class-name child)
+         (if (equal parent '(:c%keyword "java.lang.Object"))
+             (not (java:call child "isPrimitive"))
+             (let ((classes
+                    (cons child
+                          (rontolisp::%clojure-host-class-supers child nil)))
+                   (found nil))
+               (dolist (c classes)
+                 (dolist (k (rontolisp::%clojure-host-class-keys c kinds))
+                   (if (equal k parent) (setq found t))))
+               (or found
+                   (c%h-mem? parent
+                             (rontolisp::%clojure-host-class-derived
+                              (gethash '(:c%keyword "ancestors") h) classes
+                              kinds))))))
+        ((rontolisp::%clojure-host-class-name parent)
+         (let ((found nil))
+           (dolist (k (cdr (rontolisp::%clojure-host-class-keys parent kinds)))
+             (if (and (not found) (c%h-isa? h child k)) (setq found t)))
+           found))
+        (t (rontolisp::%clojure-class-isa h child parent rows))))
+
+(defun rontolisp::%clojure-host-class-parents (h k rows kinds)
+  "What parents adds for K in a program that can hold a host class object: a
+   host class's bases (the oracle's bases) and what any of its keys derives
+   from in the hierarchy H; anything else %clojure-class-parents."
+  (if (rontolisp::%clojure-host-class-name k)
+      (let ((super (java:call k "getSuperclass")))
+        (append (if super (list super)) (java:call k "getInterfaces")
+                (rontolisp::%clojure-host-class-derived
+                 (gethash '(:c%keyword "parents") h) (list k) kinds)))
+      (rontolisp::%clojure-class-parents k rows)))
+
+(defun rontolisp::%clojure-host-class-ancestors (h k rows kinds)
+  "What ancestors adds for K in a program that can hold a host class object: a
+   host class's supers and what any key of it or of one of them derives from in
+   the hierarchy H; anything else %clojure-class-ancestors."
+  (if (rontolisp::%clojure-host-class-name k)
+      (let ((supers (rontolisp::%clojure-host-class-supers k nil)))
+        (append supers
+                (rontolisp::%clojure-host-class-derived
+                 (gethash '(:c%keyword "ancestors") h) (cons k supers) kinds)))
+      (rontolisp::%clojure-class-ancestors h k rows)))
+
+(defun rontolisp::%clojure-host-names-class-p (k rows)
+  "Whether K names a class, in a program that can hold a host class object: a
+   host class object, or a class keyword ROWS resolve (descendants of either
+   is the oracle's refusal)."
+  (or (rontolisp::%clojure-host-class-name k)
+      (rontolisp::%clojure-class-rows k rows)))
+
 ;;;; Equality: the = family over every value shape.
 
 (defun rontolisp::%clojure-sequential-p (x)

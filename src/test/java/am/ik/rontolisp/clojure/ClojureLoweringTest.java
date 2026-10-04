@@ -876,6 +876,28 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void theClassWalkTakesTheDescendantsRefusalAndTheHostOnlyWhereTheProgramNeedsThem() {
+		// descendants' refusal is an exception of the exception runtime, so it is in
+		// the walk only where descendants is read (before, a program reading none
+		// compiled C%E-NEW as an undefined call); the host class walk and its kinds
+		// only where a java: operator can make a class object
+		String spelled = lowered("(isa? (class '(1)) java.util.List)");
+		assertThat(spelled).contains("(RONTOLISP::%CLOJURE-CLASS-ISA ")
+			.doesNotContain("DESCENDANTS-REFUSAL")
+			.doesNotContain("%CLOJURE-HOST-CLASS-")
+			.doesNotContain("C%H-KINDS");
+		assertThat(lowered("(descendants java.util.List)")).contains("(RONTOLISP::%CLOJURE-CLASS-DESCENDANTS-REFUSAL)");
+		String host = lowered("(derive :a :b) (println (java.util.ArrayList.))");
+		assertThat(host).contains("(RONTOLISP::%CLOJURE-HOST-CLASS-ISA ")
+			.contains("(RONTOLISP::%CLOJURE-HOST-CLASS-ANCESTORS ")
+			.contains("(SETQ C%H-KINDS '((\"Atom\" . \"atom\")")
+			.doesNotContain("DESCENDANTS-REFUSAL");
+		assertThat(lowered("(derive :a :b) (descendants (class (java.util.ArrayList.)))"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-NAMES-CLASS-P ");
+		assertThat(lowered("(println (java.util.ArrayList.))")).doesNotContain("C%H-");
+	}
+
+	@Test
 	void protocolsRecordsAndTypesLowerToTables() {
 		// a protocol is a method-table global plus one dispatcher defun per method,
 		// over the shared tag reader (the multimethod shape without the hierarchy

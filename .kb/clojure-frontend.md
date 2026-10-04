@@ -208,7 +208,8 @@ Each is a real work item unless the reason says otherwise.
   class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
   tag; `class` answers a kind keyword (host classes exist on no wasm backend), an exception
-  its class name as a keyword, a host object its host class (interpreter and JVM).
+  its class name as a keyword, a host object its host class (interpreter and JVM), which a
+  hierarchy also reads as its simple name's kind (`ArrayList` `isa?` `IPersistentList`).
 - Metadata: a derived value (`assoc`, `conj`, ...) starts without metadata; a symbol takes
   none; the side table keeps every object for the program's lifetime.
 - The oracle-refused leniencies kept: an unquoted vector libspec in a bare `require`; an
@@ -855,10 +856,43 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (`ClojureInteropTest#theClassOfAHostThrowableNoConstructionNamesTakesItsSupersFromTheHost`);
   it reflects on every miss, uncached -- only a dotted name of a `java:` program pays it.
   `descendants` of a class keyword is a `C%E-NEW` exception, so `readsDescendants` with
-  chains turns on the exception runtime.
-  Gaps: `(ancestors (class x))` in a program spelling no class answers only the hierarchy; a
-  host class OBJECT (`class` of a host non-throwable on the interpreter/JVM) is no class
-  keyword, so it `isa?` nothing (`.todo/c79`).
+  chains turns on the exception runtime; the walk carries the refusal arm only where
+  `descendants` is read (or in a session), since 2026-10-04 -- before, every chain program
+  reading none compiled `C%E-NEW` as an undefined call, with a warning.
+  Gap: `(ancestors (class x))` in a program spelling no class and naming no `java:`
+  operator answers only the hierarchy.
+- **Host classes** (oracle-checked clj 1.12.6, 2026-10-04). `class` of a host non-throwable
+  (interpreter, JVM) is its host class OBJECT. A program using a hierarchy and naming a
+  `java:` operator (`ClojureHierarchyLowering.namesHost`, the library's host-arm criterion;
+  a session cumulatively, `ClojureLowering.noteHost`) sets `hostClassWalk`, which implies
+  `usedClassChains` and swaps the walk's arms for `clojure.lisp`'s "Host classes"
+  (`%clojure-host-class-isa`/`-parents`/`-ancestors`, `%clojure-host-names-class-p`) plus
+  `(setq C%H-KINDS '((simple-name . kind) ...))` from `DISPATCH_CLASS_KEYWORDS`. A class
+  object stands under three keys: itself, `(:c%keyword name)`, and the kind keyword of its
+  simple name (`java.util.List` spells `:list` in a hierarchy position, so `ArrayList`
+  reaches it -- and `clojure.lang.IPersistentList`, also `:list`: the documented
+  deviation). `isa?` of a class object: `Object` unless primitive, else any key of it or of
+  one of its supers (`getSuperclass`/`getInterfaces`, recursively) equal to the parent or
+  holding it among its hierarchy ancestors; a class object PARENT of any other child is
+  asked through its keywords. `parents`/`ancestors` answer class objects (the oracle's
+  printing) plus what any key derives from; `descendants` of one refuses. Non-chained
+  spellings (`java.util.AbstractList`) keep lowering to `Class.forName`, a class object.
+  Rejected: lowering every class spelling to a keyword and a class object to its keyword --
+  `parents` would print `:java.util.AbstractList` and `(= (first (parents c))
+  java.util.AbstractList)` would be false, where class objects match the oracle.
+  Size, measured 2026-10-04 (wasm P1 / `--optimize=size` / component / JVM class, before
+  -> after): no-`java:` programs -- `(defmethod f Exception ...)` over a caught error
+  187,552 / 152,605 / 191,376 / 158,802 -> 187,548 / 152,601 / 191,371 / 158,802;
+  `(defmethod f java.io.Writer ...)` 89,146 / 74,378 / 90,534 / 98,795 -> 89,149 / 74,381 /
+  90,534 / 98,795 (the dropped refusal leaves a hole in the string pool -- `#C(` -- that
+  splits a data segment: +3 B of segment header); `(parents java.io.IOException)` with an
+  ex-info `ancestors` 138,568 -> 138,564 (class 150,512 both); a keyword
+  `derive`/`isa?`/readers multimethod, `(isa? (class '(1)) java.util.List)`,
+  `(descendants Exception)` and `examples/clojure/demo.clj` byte-identical. `java:`
+  programs: `(isa? (class (java.util.ArrayList.)) java.util.List)` + its `parents`
+  13,064 / 12,994 / 14,478 / 118,831 -> 14,030 / 13,960 / 15,445 / 123,386 (wasm refuses
+  `java:` either way); a keyword `derive` + interop 74,762 / 63,371 / 76,351 / 113,480 ->
+  77,540 / 65,765 / 79,096 / 126,013.
   Rejected: registering the chain at run time where `class` reads a condition -- every
   program calling `class` on one would carry the table and the write, where the rows are
   known at lowering time for every class a value can have but a host-returned throwable's.
@@ -887,7 +921,10 @@ constructor and consumer, and a regex `replace` with a function replacement.
   program 5,743 bytes of wasm; the hand-written walks cost 391.
 - Pins: clojure-spec `a-multimethod-dispatches-on-an-exception-class-by-inheritance`,
   `a-multimethod-dispatches-on-a-stream-class-by-inheritance`,
-  `parents-and-ancestors-of-a-class-add-its-java-supers`.
+  `parents-and-ancestors-of-a-class-add-its-java-supers`;
+  `ClojureInteropTest#aHostClassObjectWalksJavaInheritanceInAHierarchy`,
+  `ClojureSessionTest#aSessionWalksAHostClassObjectOnceABufferNamesTheHost`,
+  `ClojureLoweringTest#theClassWalkTakesTheDescendantsRefusalAndTheHostOnlyWhereTheProgramNeedsThem`.
 
 ## Java interop
 

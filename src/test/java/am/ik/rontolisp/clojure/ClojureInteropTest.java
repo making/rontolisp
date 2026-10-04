@@ -160,6 +160,46 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aHostClassObjectWalksJavaInheritanceInAHierarchy() throws Exception {
+		// measured against clj 1.12.6: class of a host object is its class object, which
+		// isa? the classes it extends and implements, Object among them; java.util.List
+		// lowers to :list in a hierarchy position, which the host class still reaches
+		assertBothEqual("(println (isa? (class (java.io.File. \"x\")) Object)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.List)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
+				+ " (isa? (class (java.util.ArrayList.)) Exception)"
+				+ " (isa? (class (java.io.File. \"x\")) java.io.Serializable)"
+				+ " (isa? (class (StringBuilder.)) CharSequence))", "true true false false true true\n");
+		// a class object parent: the class's own spelling, or one of a value's class
+		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.AbstractList)"
+				+ " (isa? (class \"x\") (class (StringBuilder.)))"
+				+ " (isa? [(class (java.util.ArrayList.))] [java.util.List])))", "true true false true\n");
+		// parents and ancestors answer class objects, a program spelling no class too
+		assertBothEqual(
+				"(println (sort (map str (parents (class (java.util.ArrayList.))))))"
+						+ " (println (sort (map str (ancestors (class (java.io.File. \"x\"))))))"
+						+ " (println (parents (class (Object.))) (ancestors (class (Object.))))",
+				"(class java.util.AbstractList interface java.io.Serializable interface java.lang.Cloneable"
+						+ " interface java.util.List interface java.util.RandomAccess)\n"
+						+ "(class java.lang.Object interface java.io.Serializable interface java.lang.Comparable)\n"
+						+ "nil nil\n");
+		// what a super derives from, under any spelling of it, and descendants' refusal
+		assertBothEqual(
+				"(derive java.util.List ::seqy) (derive java.util.AbstractList ::abs)"
+						+ " (def c (class (java.util.ArrayList.)))"
+						+ " (println (isa? c ::seqy) (isa? c ::abs) (contains? (ancestors c) ::seqy)"
+						+ " (contains? (ancestors c) ::abs))"
+						+ " (println (try (descendants c) (catch UnsupportedOperationException e (ex-message e))))",
+				"true true true true\nCan't get descendants of classes\n");
+		// a class multimethod dispatches a host object through its interfaces
+		assertBothEqual("(defmulti f class) (defmethod f java.util.List [x] :list) (defmethod f java.util.Map [x] :map)"
+				+ " (defmethod f :default [x] :default)"
+				+ " (println (f (java.util.ArrayList.)) (f (java.util.HashMap.)) (f (java.io.File. \"x\")) (f '(1)))",
+				":list :map :default :list\n");
+	}
+
+	@Test
 	void hostObjectsChainThroughCalls() throws Exception {
 		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");

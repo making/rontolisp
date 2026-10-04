@@ -133,9 +133,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   supers like the oracle. A core kind (`:string`, `:number`, ...), a record or a deftype
   stands for host classes that are no one value here: it `isa?` `Object` and its
   `ancestors` add `Object`, but its host class's other supers are not modeled. A program
-  that spells no class in those positions reads only the hierarchy, so
-  `(ancestors (class e))` there answers what `derive` recorded. Since the keyword is the
-  class here, a keyword spelled `:java.lang.Exception` is that class too.
+  that spells no class in those positions and uses no host interop reads only the
+  hierarchy, so `(ancestors (class e))` there answers what `derive` recorded. Since the
+  keyword is the class here, a keyword spelled `:java.lang.Exception` is that class too.
+  A host class object (`class` of a host object, interpreter and JVM) is the same class as
+  its name's keyword and, by its simple name, a core kind's, so
+  `(isa? (class (java.util.ArrayList.)) java.util.List)` is `true` -- and so is its `isa?`
+  of `clojure.lang.IPersistentList`, which also spells `:list`, where the oracle answers
+  `false`.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.

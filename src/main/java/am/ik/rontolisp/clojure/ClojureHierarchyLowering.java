@@ -9,7 +9,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeMap;
+
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
@@ -277,12 +281,12 @@ final class ClojureHierarchyLowering {
 		// isa? and the parents/ancestors/descendants reads, the class rows' versions
 		// where a class is spelled
 		if (ctx.usedClassChains) {
-			runtime.addAll(classChainRuntime());
+			runtime.addAll(classChainRuntime(ctx));
 			runtime.add(supersForm(ctx.pendingClassRows(), false));
 		}
 		else {
-			runtime.add(isaDefun(false));
-			runtime.addAll(readerDefuns(false));
+			runtime.add(isaDefun(false, false));
+			runtime.addAll(readerDefuns(false, false, false));
 		}
 		runtime.add(hdefun("C%H-EMPTY", List.of(),
 				ClojureCollectionLowering.tableFromPlist(hfn("LIST", hkey("parents"),
@@ -360,14 +364,27 @@ final class ClojureHierarchyLowering {
 	static final String CLASS_SUPERS = "C%H-SUPERS";
 
 	/**
+	 * The core kinds a class's simple name stands for in a hierarchy position
+	 * ({@link ClojureDispatchLowering#DISPATCH_CLASS_KEYWORDS}) as
+	 * {@code ((simple-name . kind) ...)}, which a host class object's walk reads
+	 * ({@code clojure.lisp}, "Host classes").
+	 */
+	static final String CLASS_KINDS = "C%H-KINDS";
+
+	/**
 	 * {@code (defun c%h-isa? (h child parent) ...)}: equal, vector-wise, or an ancestor
 	 * walk -- and, with {@code classes}, the class rows' walk ({@code clojure.lisp},
-	 * {@code %clojure-class-isa}).
+	 * {@code %clojure-class-isa}), with {@code host} a host class object's too
+	 * ({@code %clojure-host-class-isa}).
 	 */
-	static LispVal isaDefun(boolean classes) {
+	static LispVal isaDefun(boolean classes, boolean host) {
 		LispSymbol h = new LispSymbol("h");
 		LispSymbol child = new LispSymbol("child");
 		LispSymbol parent = new LispSymbol("parent");
+		LispSymbol rows = new LispSymbol(CLASS_SUPERS);
+		LispVal classArm = host
+				? hfn("RONTOLISP::%CLOJURE-HOST-CLASS-ISA", h, child, parent, rows, new LispSymbol(CLASS_KINDS))
+				: hfn("RONTOLISP::%CLOJURE-CLASS-ISA", h, child, parent, rows);
 		return hdefun("C%H-ISA?", List.of(h, child, parent), hfn("IF", hfn("EQUAL", child, parent),
 				ClojureLowering.TRUE_CONST,
 				hfn("IF", hfn("AND", hfn("VECTORP", child), hfn("VECTORP", parent)),
@@ -377,8 +394,7 @@ final class ClojureHierarchyLowering {
 								hfn("C%H-MEM?", parent,
 										hfn("C%H-SET-LIST",
 												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
-								ClojureLowering.TRUE_CONST, classes ? hfn("RONTOLISP::%CLOJURE-CLASS-ISA", h, child,
-										parent, new LispSymbol(CLASS_SUPERS)) : ClojureLowering.NIL_CONST))));
+								ClojureLowering.TRUE_CONST, classes ? classArm : ClojureLowering.NIL_CONST))));
 	}
 
 	/**
@@ -386,20 +402,35 @@ final class ClojureHierarchyLowering {
 	 * sets, nil when empty like the oracle's {@code not-empty}. With {@code classes} a
 	 * class keyword adds what its rows say ({@code clojure.lisp}, "Class chains"):
 	 * {@code parents} its bases, {@code ancestors} its supers and their ancestors, and
-	 * {@code descendants} of one is the oracle's refusal.
+	 * {@code descendants} of one is the oracle's refusal where {@code refuses} (the
+	 * program reads {@code descendants}: the refusal is an exception of its exception
+	 * runtime, which a program reading none need not carry). With {@code host} a host
+	 * class object is one too ({@code clojure.lisp}, "Host classes").
 	 */
-	static List<LispVal> readerDefuns(boolean classes) {
+	static List<LispVal> readerDefuns(boolean classes, boolean host, boolean refuses) {
 		LispSymbol h = new LispSymbol("h");
 		LispSymbol child = new LispSymbol("child");
 		LispSymbol rows = new LispSymbol(CLASS_SUPERS);
 		LispVal parents = hfn("C%H-GET-SET", hfn("GETHASH", hkey("parents"), h), child);
 		LispVal ancestors = hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child);
 		LispVal descendants = hfn("C%H-NOT-EMPTY", hfn("C%H-GET-SET", hfn("GETHASH", hkey("descendants"), h), child));
-		if (classes) {
+		if (host) {
+			LispSymbol kinds = new LispSymbol(CLASS_KINDS);
+			parents = hfn("C%H-ADD-ALL", parents, hfn("RONTOLISP::%CLOJURE-HOST-CLASS-PARENTS", h, child, rows, kinds));
+			ancestors = hfn("C%H-ADD-ALL", ancestors,
+					hfn("RONTOLISP::%CLOJURE-HOST-CLASS-ANCESTORS", h, child, rows, kinds));
+			if (refuses) {
+				descendants = hfn("IF", hfn("RONTOLISP::%CLOJURE-HOST-NAMES-CLASS-P", child, rows),
+						hfn("RONTOLISP::%CLOJURE-CLASS-DESCENDANTS-REFUSAL"), descendants);
+			}
+		}
+		else if (classes) {
 			parents = hfn("C%H-ADD-ALL", parents, hfn("RONTOLISP::%CLOJURE-CLASS-PARENTS", child, rows));
 			ancestors = hfn("C%H-ADD-ALL", ancestors, hfn("RONTOLISP::%CLOJURE-CLASS-ANCESTORS", h, child, rows));
-			descendants = hfn("IF", hfn("RONTOLISP::%CLOJURE-CLASS-ROWS", child, rows),
-					hfn("RONTOLISP::%CLOJURE-CLASS-DESCENDANTS-REFUSAL"), descendants);
+			if (refuses) {
+				descendants = hfn("IF", hfn("RONTOLISP::%CLOJURE-CLASS-ROWS", child, rows),
+						hfn("RONTOLISP::%CLOJURE-CLASS-DESCENDANTS-REFUSAL"), descendants);
+			}
 		}
 		return List.of(hdefun("C%H-PARENTS", List.of(h, child), hfn("C%H-NOT-EMPTY", parents)),
 				hdefun("C%H-ANCESTORS", List.of(h, child), hfn("C%H-NOT-EMPTY", ancestors)),
@@ -408,13 +439,49 @@ final class ClojureHierarchyLowering {
 
 	/**
 	 * The class rows' versions of {@code c%h-isa?} and the readers, which a session's
-	 * earlier hierarchy runtime takes on when a later buffer first spells a class.
+	 * earlier hierarchy runtime takes on when a later buffer first spells a class; with
+	 * {@code host} the versions that walk a host class object too, and the kinds they
+	 * read, which it takes on when a later buffer first names the host. A session's
+	 * {@code descendants} refuses a class whether or not a buffer read it yet.
 	 */
-	static List<LispVal> classChainRuntime() {
+	static List<LispVal> classChainRuntime(ClojureLowering ctx) {
+		boolean host = ctx.hostClassWalk;
 		List<LispVal> runtime = new ArrayList<>();
-		runtime.add(isaDefun(true));
-		runtime.addAll(readerDefuns(true));
+		runtime.add(isaDefun(true, host));
+		runtime.addAll(readerDefuns(true, host, ctx.readsDescendants || ctx.session));
+		if (host) {
+			List<LispVal> kinds = new ArrayList<>();
+			new TreeMap<>(ClojureDispatchLowering.DISPATCH_CLASS_KEYWORDS).forEach(
+					(simple, kind) -> kinds.add(new LispCons(LispString.literal(simple), LispString.literal(kind))));
+			runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), new LispSymbol(CLASS_KINDS),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(kinds))));
+		}
 		return runtime;
+	}
+
+	/**
+	 * Whether the forms name a {@code java:} operator, the only way a host object -- a
+	 * host class object among them -- comes to exist (the criterion the library's host
+	 * arms are spliced by).
+	 */
+	static boolean namesHost(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesHost(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesHost(LispVal form) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			if (namesHost(cons.car())) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return rest instanceof LispSymbol symbol && LispNames.JAVA_OPERATORS_QUALIFIED.contains(symbol.name());
 	}
 
 	/**
