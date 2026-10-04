@@ -4495,7 +4495,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
 			.filePosition(usesFilePosition)
-			.bidirectionalStreams(usesBidirectionalOpen)
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
@@ -4626,8 +4625,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				ByteArrayOutputStream protoBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				Ctx protoCtx = ctxBuilder.writer(new WasmWriter(protoBuf)).bodyStream(protoBuf).build();
 				WasmAsyncEmit.Resume resume = WasmAsyncEmit.compileResume(protoCtx, defun.paramNames, defun.bodyExprs,
-						List.of(), false, false, injectedBody ? null : WasmUncaughtLocations
-							.asyncBodySpec(uncaughtLocations, defun.name, defunForms.get(defun), defun.bodyExprs));
+						List.of(), false, injectedBody ? null : WasmUncaughtLocations.asyncBodySpec(uncaughtLocations,
+								defun.name, defunForms.get(defun), defun.bodyExprs));
 				userFunctionBodies.add(WasmAsyncEmit.buildEntryBody(protoCtx, defun.paramNames.size(), false, resume));
 				continue;
 			}
@@ -4831,7 +4830,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// top-level await's re-signal) escapes to the catch-all prologue -- the
 			// same trap an uncaught error produces today.
 			WasmAsyncEmit.Resume topResume = WasmAsyncEmit.compileResume(ctx, List.of(), topLevelExprs, List.of(), true,
-					usesEval, WasmUncaughtLocations.topLevelSpec(uncaughtLocations));
+					WasmUncaughtLocations.topLevelSpec(uncaughtLocations));
 			WasmAsyncEmit.emitStartEntry(ctx, topResume);
 		}
 		else {
@@ -10330,14 +10329,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean filePosition = false;
 
 		/**
-		 * Whether the program can open a BIDIRECTIONAL ({@code :direction :io}) or
-		 * {@code :if-exists :overwrite} stream, so {@code _open} asks {@code path_open}
-		 * for both rights and the right {@code oflags}, and so such a stream's
-		 * {@code file-position} is real whatever its element type.
-		 */
-		boolean bidirectionalStreams = false;
-
-		/**
 		 * True under {@code --no-wasi} (Preview 1 reactor or reactor component): the WASI
 		 * import slots are internal stubs. Read by the reject sites whose "requires
 		 * --component" messages would otherwise mislead a reactor build.
@@ -11093,7 +11084,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.optimize = builder.optimize;
 			this.component = builder.component;
 			this.filePosition = builder.filePosition;
-			this.bidirectionalStreams = builder.bidirectionalStreams;
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
@@ -11179,6 +11169,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			return new Builder();
 		}
 
+		/**
+		 * A builder seeded with everything {@code proto} was built from: the module-wide
+		 * state every context of one compilation shares. A context built from it differs
+		 * from {@code proto} only in what the caller then sets -- its writer and body
+		 * stream -- and in the per-body state no builder carries ({@link #locals},
+		 * {@link #topLevel}, {@link #boxedVars}, ...), which starts fresh. This is what a
+		 * context compiling code OUTSIDE {@code proto}'s body is made from (a top-level
+		 * chunk, an async resume body): a field added to {@link Builder} reaches it
+		 * without being listed anywhere else, so a form cannot compile differently there
+		 * than in a defun because one list forgot the field. {@code CtxBuilderSeedTest}
+		 * pins that the copy below misses no field.
+		 * @param proto the context to seed from
+		 * @return the seeded builder, its writer and body stream still unset
+		 */
+		static Builder builder(Ctx proto) {
+			return new Builder(proto);
+		}
+
 		static final class Builder {
 
 			private @Nullable WasmWriter writer;
@@ -11222,8 +11230,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private boolean filePosition = false;
-
-			private boolean bidirectionalStreams = false;
 
 			private boolean noWasi = false;
 
@@ -11379,6 +11385,108 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<String> callbackExports = Set.of();
 
+			Builder() {
+			}
+
+			private Builder(Ctx proto) {
+				this.stringTable = proto.stringTable;
+				this.functions = proto.functions;
+				this.lambdaDecls = proto.lambdaDecls;
+				this.indirectCallArities = proto.indirectCallArities;
+				this.fdlibmUsed = proto.fdlibmUsed;
+				this.runtimeDesignatorDispatch = proto.runtimeDesignatorDispatch;
+				this.injectedRuntimeBody = proto.injectedRuntimeBody;
+				this.injectedRuntimeLambdas = proto.injectedRuntimeLambdas;
+				this.valueFuncIds = proto.valueFuncIds;
+				this.spelledLiterals = proto.spelledLiterals;
+				this.userSpelledLiterals = proto.userSpelledLiterals;
+				this.warnedClRedefinitions = proto.warnedClRedefinitions;
+				this.nextFuncId = proto.nextFuncId;
+				this.dynamic = proto.dynamic;
+				this.optimize = proto.optimize;
+				this.component = proto.component;
+				this.filePosition = proto.filePosition;
+				this.noWasi = proto.noWasi;
+				this.reactorComponent = proto.reactorComponent;
+				this.hostRandom = proto.hostRandom;
+				this.hostFetch = proto.hostFetch;
+				this.serve = proto.serve;
+				this.ehMode = proto.ehMode;
+				this.blockExitTag = proto.blockExitTag;
+				this.restartMode = proto.restartMode;
+				this.signalClauseMatch = proto.signalClauseMatch;
+				this.hasLandingPad = proto.hasLandingPad;
+				this.printControls = proto.printControls;
+				this.printControlVariables = proto.printControlVariables;
+				this.usesSynonymStreams = proto.usesSynonymStreams;
+				this.asksStreamDirection = proto.asksStreamDirection;
+				this.usesEqualpHashTables = proto.usesEqualpHashTables;
+				this.usesIdentityHashTables = proto.usesIdentityHashTables;
+				this.usesStreamValues = proto.usesStreamValues;
+				this.typedArrayCodes = proto.typedArrayCodes;
+				this.usesSeqString = proto.usesSeqString;
+				this.mutableStringProducers = proto.mutableStringProducers;
+				this.charvecPossible = proto.charvecPossible;
+				this.injectedRuntimeDefunNames = proto.injectedRuntimeDefunNames;
+				this.ehDepthGlobalIndex = proto.ehDepthGlobalIndex;
+				this.operandOpGlobalIndex = proto.operandOpGlobalIndex;
+				this.operandOperators = proto.operandOperators;
+				this.uncaughtLocations = proto.uncaughtLocations;
+				this.rawSentinelGlobalIndex = proto.rawSentinelGlobalIndex;
+				this.simd = proto.simd;
+				this.userFuncBase = proto.userFuncBase;
+				this.callArityCeiling = proto.callArityCeiling;
+				this.extraDispatchFuncBase = proto.extraDispatchFuncBase;
+				this.arityChkFuncIndex = proto.arityChkFuncIndex;
+				this.namesArityOperators = proto.namesArityOperators;
+				this.arityNamedCallees = proto.arityNamedCallees;
+				this.litStageFuncIndex = proto.litStageFuncIndex;
+				this.litStageBytes = proto.litStageBytes;
+				this.importDecls = proto.importDecls;
+				this.numDefuns = proto.numDefuns;
+				this.userDefunNames = proto.userDefunNames;
+				this.builtinShapedDefuns = proto.builtinShapedDefuns;
+				this.usesFmakunbound = proto.usesFmakunbound;
+				this.usesRuntimePackages = proto.usesRuntimePackages;
+				this.usesProgv = proto.usesProgv;
+				this.usesEval = proto.usesEval;
+				this.packageTable = proto.packageTable;
+				this.packageUseTable = proto.packageUseTable;
+				this.symbolPrintTable = proto.symbolPrintTable;
+				this.structAccessors = proto.structAccessors;
+				this.closRegistry = proto.closRegistry;
+				this.captureMemo = proto.captureMemo;
+				this.regionMemo = proto.regionMemo;
+				this.globals = proto.globals;
+				this.nestedDefunNames = proto.nestedDefunNames;
+				this.specialVars = proto.specialVars;
+				this.globalIndices = proto.globalIndices;
+				this.quoteGlobals = proto.quoteGlobals;
+				this.futureTypeIndex = proto.futureTypeIndex;
+				this.frameTypeIndex = proto.frameTypeIndex;
+				this.wasiStreamTypeIndex = proto.wasiStreamTypeIndex;
+				this.p1StreamTypeIndex = proto.p1StreamTypeIndex;
+				this.p1StreamFuncBase = proto.p1StreamFuncBase;
+				this.instanceTypeIndex = proto.instanceTypeIndex;
+				this.layoutAddresses = proto.layoutAddresses;
+				this.asyncFuncBase = proto.asyncFuncBase;
+				this.asyncDefunNames = proto.asyncDefunNames;
+				this.p1Futures = proto.p1Futures;
+				this.currentTaskGlobalIndex = proto.currentTaskGlobalIndex;
+				this.serveInitGlobalIndex = proto.serveInitGlobalIndex;
+				this.reentryGuardGlobalIndex = proto.reentryGuardGlobalIndex;
+				this.reentrant = proto.reentrant;
+				this.dynSlots = proto.dynSlots;
+				this.reentrantTaskGlobalIndex = proto.reentrantTaskGlobalIndex;
+				this.parkAllocFuncIndex = proto.parkAllocFuncIndex;
+				this.parkFreeFuncIndex = proto.parkFreeFuncIndex;
+				this.hostRefTypeIndex = proto.hostRefTypeIndex;
+				this.parkStrResultFuncIndex = proto.parkStrResultFuncIndex;
+				this.callbackExports = proto.callbackExports;
+				this.inlinableDefuns = proto.inlinableDefuns;
+				this.duplicatedDefunNames = proto.duplicatedDefunNames;
+			}
+
 			Builder writer(WasmWriter writer) {
 				this.writer = writer;
 				return this;
@@ -11481,11 +11589,6 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder filePosition(boolean filePosition) {
 				this.filePosition = filePosition;
-				return this;
-			}
-
-			Builder bidirectionalStreams(boolean bidirectionalStreams) {
-				this.bidirectionalStreams = bidirectionalStreams;
 				return this;
 			}
 

@@ -104,6 +104,43 @@ class WasmReentrantE2eTest {
 		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
 	}
 
+	// A binding the LOAD PATH makes is the load path's own, exactly like one an export
+	// call makes: an export the host enters from inside it reads the default. The top
+	// level compiles in contexts of its own, which bound the shared module global
+	// instead.
+	private static final String TOP_LEVEL_MODULE = """
+			(rontolisp:wasm-import 'pause :from "env" :as "pause" :params '(:int) :returns :int :async t)
+			(rontolisp:wasm-import 'call-peek :from "env" :as "callPeek" :params '() :returns :int)
+			(defvar *ctx* 0)
+			(defun peek () *ctx*)
+			(rontolisp:wasm-export 'peek :params '() :returns :int)
+			(rontolisp:async-defun work (n) (let ((*ctx* n)) (rontolisp:await (pause n)) *ctx*))
+			(rontolisp:wasm-export 'work :params '(:int) :returns :int)
+			(defun in-defun () (let ((*ctx* 7)) (call-peek)))
+			(rontolisp:wasm-export 'in-defun :as "inDefun" :params '() :returns :int)
+			(defvar *at-top* (let ((*ctx* 7)) (call-peek)))
+			(defun at-top () *at-top*)
+			(rontolisp:wasm-export 'at-top :as "atTop" :params '() :returns :int)
+			""";
+
+	private static final String TOP_LEVEL_DRIVER = """
+			const fs = require('fs');
+			let inst;
+			const env = {
+			  pause: new WebAssembly.Suspending((n) => Promise.resolve(n)),
+			  callPeek: () => inst.exports.peek(),
+			};
+			inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+			inst.exports._initialize();
+			console.log(inst.exports.inDefun(), inst.exports.atTop(), inst.exports.peek());
+			""";
+
+	@Test
+	void aTopLevelBindingIsTheLoadPathsOwn() throws Exception {
+		Path wasm = compile("top-level.wasm", TOP_LEVEL_MODULE);
+		assertThat(runNode(driver(TOP_LEVEL_DRIVER), wasm)).isEqualTo("0 0 0");
+	}
+
 	private static final String PARK_MODULE = """
 			(rontolisp:wasm-import 'fetch-word :from "env" :as "fetchWord" :params '(:string) :returns :string :async t)
 			(rontolisp:async-defun greet (name)

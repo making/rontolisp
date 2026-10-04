@@ -52,8 +52,8 @@ dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
   sees `apply`. The injected designator is a VARIABLE, caught by its computed-designator arm.
 - The ceiling must be known before Pass 2 (`userFuncBase()`-relative indices) -- hence the AST
   pre-scan; a `funcall` synthesized DURING Pass 2 is invisible to it.
-- `WasmAsyncEmit.freshCtx` rebuilds `Ctx` field by field and also builds the SYNCHRONOUS top
-  level, so it must carry the ceiling (same trap as `instanceTypeIndex`/`layoutAddresses`).
+- `WasmAsyncEmit.freshCtx` also builds the SYNCHRONOUS top level, so it must carry the ceiling;
+  it inherits every `Ctx.Builder` field since 2026-10-04 (before, a field-by-field copy).
 
 ## Tests
 - `WasmLispCompilerIntegrationTest`: `compileFuncallWiderThanTheCallableLimitGoesThroughApply`,

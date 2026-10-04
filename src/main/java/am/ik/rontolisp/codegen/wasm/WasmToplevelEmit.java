@@ -199,12 +199,12 @@ final class WasmToplevelEmit {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(body);
 		WasmLispCompiler.Ctx ctx = WasmAsyncEmit.freshCtx(start, writer, body);
-		// topLevel/usesEval carry over so eval-global mirroring keeps working inside a
-		// chunk. On the synchronous path boxedVars stays at its default, which is what
-		// _start itself uses, so a chunk's body is byte-identical to the run it was cut
-		// from; the async path passes its run's set for the same reason.
+		// topLevel carries over (usesEval is inherited) so eval-global mirroring keeps
+		// working inside a chunk. On the synchronous path boxedVars stays at its
+		// default, which is what _start itself uses, so a chunk's body is byte-identical
+		// to the run it was cut from; the async path passes its run's set for the same
+		// reason.
 		ctx.topLevel = true;
-		ctx.usesEval = start.usesEval;
 		ctx.closureEnvSlot = 0;
 		ctx.nextLocal = 1;
 		if (boxedVars != null) {

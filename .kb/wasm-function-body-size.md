@@ -79,6 +79,43 @@ Why cuts are safe:
 - Chunks are registered during Pass 2b: Pass 2c picks up entries appended while it runs;
   the function section (built later) will not.
 
+## A chunk context inherits every module-wide field by construction
+**Every top-level form compiles in a context `WasmAsyncEmit.freshCtx` builds** (so does every
+async resume body), and that context is `Ctx.builder(proto)`: a builder seeded from the
+prototype with EVERY `Ctx.Builder` field, the writer and body stream excepted. Pinned
+reflectively by `CtxBuilderSeedTest` (a new `Builder` field is checked without editing it).
+Until 2026-10-04 `freshCtx` copied fields by hand, and each forgotten one made a top-level
+form answer differently than in a defun -- fixed one at a time nine times, then the last 20 at
+once. What those 20 were (classified 2026-10-04, `.todo/c77`):
+
+- Wrong at the top level (each pinned by a test that failed first): `usesProgv` (a top-level
+  `(let ((*x* 5)) (symbol-value '*x*))` read the default; ci-spec
+  `top-level-forms-answer-like-defun-bodies`), `duplicatedDefunNames` (a top-level call of a
+  REDEFINED struct accessor trusted the slot `:type` and trapped; same case),
+  `reentrant`/`dynSlots`/`reentrantTaskGlobalIndex` (a top-level special binding under
+  `--reentrant` bound the shared global, so an export entered from inside it read the load
+  path's binding; `WasmReentrantE2eTest`), `litStageBytes` (a private holder: the widest
+  top-level literal `:string` site was not reserved, so it overran into the runtime intern
+  table; `WasmStringParamBoundaryE2eTest`), `reactorComponent` (a top-level clock read named
+  a hook the reactor component lacks; `WasmExportCompilerTest`), `warnedClRedefinitions` (a
+  `cl` redefinition warned once per context; `ClRedefinitionWarningsTest`).
+- `usesEval` was overridden rather than missed: `compileResume` set it false for every
+  async-defun/async-lambda body, so on the component a global such a body assigned never
+  reached `eval` (ci-spec case above). The parameter is gone; it is inherited.
+- Inherited with no observable change today: `inlinableDefuns` (top-level fused sites;
+  no corpus program has one), `injectedRuntimeDefunNames` (the charvec gate's compile-time
+  guard now covers the top level), `injectedRuntimeBody` (a resume body is the same body),
+  `p1Futures` (a top-level `%async-run` needs the internal spelling), and
+  `hostRefTypeIndex`/`park*FuncIndex`/`serveInitGlobalIndex`/`reentryGuardGlobalIndex`
+  (read by import/export wrappers only, still -1 when `_start` is built).
+- `bidirectionalStreams` was dead (nothing read the `Ctx` field) and is deleted.
+
+Size (2026-10-04, raw bytes, base ade639e75): every size-report row, every bench program
+(Preview 1 and component), every example's Preview 1, reactor and non-async component build
+is byte-identical. The only movers are async (`asyncMode`) components that use `eval` and
+assign a global inside an async body -- the `usesEval` mirror a plain defun already pays:
++634 (clack/ningle/tiny-routes) to +818 (dog-fetcher) raw, +52 to +244 gzip, 27 artifacts.
+
 ## Keeping the dispatch ladder bounded
 The SPREAD dispatcher (`WasmRuntimeBuilder.buildDispatch(..., spread = true, ...)`, what
 `_apply` calls) is a `br_table` over EVERY callable, ~110 bytes per case, ~410 at its

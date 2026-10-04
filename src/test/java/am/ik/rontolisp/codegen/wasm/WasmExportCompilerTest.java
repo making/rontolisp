@@ -552,6 +552,25 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void aTopLevelClockReadOnTheReactorComponentNamesNoHook() {
+		// The top level compiles in contexts of its own; a clock read there must refuse
+		// with the reactor component's text, as one inside a defun does, not point at a
+		// hook the shape does not have.
+		String source = """
+				(defvar *t0* (or (ignore-errors (get-universal-time)) 0))
+				(defun t0 () *t0*)
+				(rontolisp:wasm-export 't0 :returns :s64)
+				""";
+		byte[] reactor = WasmLispCompiler.builder()
+			.component(true)
+			.noWasi(true)
+			.build()
+			.compile(LispReader.readAllFromString(source));
+		assertThat(containsAscii(reactor, "reactor component imports nothing")).isTrue();
+		assertThat(containsAscii(reactor, "hands to the exported __ronto_set_time hook")).isFalse();
+	}
+
+	@Test
 	void hostRandomForwardsTheRandomGetSlotAndRetiresTheSeedHook() {
 		// --host-random is the ONE opt-in out of the zero-import contract, and it opts
 		// out of exactly one slot: random_get stops being the module's own SplitMix64

@@ -7,9 +7,11 @@ import java.util.function.Consumer;
 
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -71,6 +73,43 @@ class ClRedefinitionWarningsTest {
 			assertThat(warnings.lines().filter(line -> line.contains("redefines the COMMON-LISP")).count())
 				.as("one warning per name, not per call site")
 				.isEqualTo(1);
+		}
+	}
+
+	@Test
+	void aDefunSiteAndATopLevelSiteStillWarnOnce() {
+		// The wasm top level compiles in contexts of its own; the names already reported
+		// are the compilation's, not a context's. Read as the program's own file, so the
+		// two sites' lines differ by position and cannot collapse into one.
+		String source = """
+				(defun random (&rest args) (declare (ignore args)) 42)
+				(defun roll () (random 1000))
+				(print (roll))
+				(print (random 1000))
+				""";
+		String jvm = compileProgramFileCapturingErr(program -> new JvmLispCompiler("Test").compile(program),
+				Features.JVM, source);
+		String wasm = compileProgramFileCapturingErr(program -> new WasmLispCompiler().compile(program), Features.WASM,
+				source);
+		for (String warnings : List.of(jvm, wasm)) {
+			assertThat(warnings.lines().filter(line -> line.contains("redefines the COMMON-LISP")).count())
+				.as("one warning per name: %s", warnings)
+				.isEqualTo(1);
+			assertThat(warnings).contains("p.lisp:2:");
+		}
+	}
+
+	// compileCapturingErr over the read the source-language seam makes of a program file
+	// p.lisp, with the positions a warning is placed at recorded.
+	private static String compileProgramFileCapturingErr(Consumer<List<LispVal>> compile, Features features,
+			String source) {
+		SourceProvenance.startRecording();
+		try {
+			return compileCapturingErr(ignored -> compile.accept(SourceProvenance
+				.readingProgramSource(() -> LispReader.readAllFromString(source, features, "p.lisp"))), source);
+		}
+		finally {
+			SourceProvenance.stopRecording();
 		}
 	}
 

@@ -440,8 +440,8 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   (`%file-stream-direction-register` around the leaf's stream value, `OpenModes.direction`) and
   every close forgets (`forgettingClose` with both registries' forgetters, element types first).
   **Three gates, each measured**: the inline test only in a program that NAMES a predicate
-  (`Ctx.asksStreamDirection`, which `WasmAsyncEmit.freshCtx` must copy: until 2026-10-04 it did
-  not, so on both wasm backends a TOP-LEVEL predicate fell back to `streamp` and answered t for
+  (`Ctx.asksStreamDirection`, which `WasmAsyncEmit.freshCtx` must carry -- inherited by
+  construction since; until 2026-10-04 it was not copied, so on both wasm backends a TOP-LEVEL predicate fell back to `streamp` and answered t for
   either direction; ci-spec `error-output-identity-and-top-level-stream-direction`) -- the dead `#'input-stream-p` wrapper every WASM module compiles
   and drops interned the kind keywords and moved every later string of every string-stream
   program by up to 8 bytes (`drain-by-hand` 5,972 -> 5,979 wasm) until the gate; gating the two

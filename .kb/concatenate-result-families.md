@@ -130,7 +130,7 @@ Gate: `needsSeqString(program)` -- true when the PROGRAM ITSELF writes a
 `(concatenate 'string ...)` with a non-literal-string argument, OR a `concatenate` /
 `coerce` whose result type asks for `(vector character)` (which always needs the helper,
 literal arguments included -- see "CHARACTER vector results build a STRING" above); the
-flag rides `Ctx.usesSeqString` (must be copied by `WasmAsyncEmit.freshCtx`). Correctness, not
+flag rides `Ctx.usesSeqString` (which `WasmAsyncEmit.freshCtx` inherits). Correctness, not
 optimization: `LispMacroExpander` emits `(concatenate 'string ...)` during CODEGEN long after
 the scan, and wrapping those would call a helper the gate did not inject.
 
