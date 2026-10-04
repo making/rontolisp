@@ -41,8 +41,12 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
   `%block`/named/`%fn-block` shapes are plain wasm blocks), and -- through
   `BlockMarker.tail` -- `WasmReturnCompiler`/`WasmReturnFromCompiler` for the exit value
   when the target block is in tail position and the exit crosses no `UnwindScope` (an
-  inlined cleanup would run after the value). `WasmDotimesCompiler`'s own marker says
-  false.
+  inlined cleanup would run after the value). `WasmDotimesCompiler`'s counted loop marks
+  its block with the form's own flag, and re-arms it for the result form (it said false until
+  2026-10-04, so a `return` out of a `(dotimes (i 1) ..)` body was a plain call).
+- **An inline lambda** `((lambda (k) ..) x)` (`WasmLambdaCompiler.compileCall`, 2026-10-04):
+  its body runs in place, so the consumed flag is re-armed for the last body form. A
+  parameter named like a special is bound by a `let` around the body, which keeps the frame.
 - **Built-in macro expansions** (`WasmExprCompiler.compileExpansion`, 2026-10-03): an arm
   that compiles what a built-in macro or lowering turned the form into -- `cond`, `case`,
   `when`/`unless`, `and`/`or`, `typecase`, `multiple-value-bind`, `destructuring-bind`,
@@ -68,9 +72,9 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
   site -- decided at compile time for a direct callee, at run time for one through a function value
   (`_uc_frame_p` over the closure's funcId). Into a frame it stays a `return_call`, so the depths
   below hold with the option on; an async body's frame never tail-calls out.
-- The general indirect call `((lambda ..) ..)` and `multiple-value-call` are ordinary
-  calls (conservative, not a bug). An `error` in tail position is a `return_call` like any
-  other direct call.
+- `multiple-value-call` is its expansion's `funcall`: through the dispatcher for a computed
+  function, a direct `return_call` for a literal `#'name` (kept in the call since
+  2026-10-04). An `error` in tail position is a `return_call` like any other direct call.
 
 ## The runtime side
 
@@ -180,8 +184,10 @@ size, component; `--optimize=off` 0) but gzip -9 +85/+47/+35 B; bench-report all
 byte-identical; `examples/scheme` 0 to -10 B (`streams` -10), `examples/clojure/demo.clj`
 0 B with gzip +5 to +12 B. `return_call`s in the optimized modules: `demo` 195 -> 213,
 `evaluator` 207 -> 217, `zlib` 185 -> 182 (moved bodies). Time: evaluator and demo within
-noise. Still a plain call in tail position: a lambda head `((lambda (k) ..) x)` (the
-general indirect call above).
+noise. Still a plain call in tail position then: a lambda head `((lambda (k) ..) x)` and a
+`return` out of a counted `dotimes` -- both 300,000 deep on wasm and the component since
+2026-10-04 (`call stack exhausted` at 1,000,000 before), bytes unchanged on bench-report and
+size-report but `zlib` +1 B.
 
 ## Tests
 
@@ -192,8 +198,10 @@ general indirect call above).
 `#aBuiltInMacroInTailPositionHandsTheTailOnToItsExpansion` (`cond`/`case`/`typecase`/
 `multiple-value-bind`/`destructuring-bind`/`symbol-macrolet`/`flet`/`labels`/`dolist`
 `return`/a value call from a `cond` clause, 300,000 deep),
+`#anInlineLambdasBodyAndADotimesExitInTailPositionTailCallAndASpecialParameterKeepsItsFrame`
+(both packagings),
 `#aLambdaInlinedIntoTheDispatcherStillTailCallsThroughIt` (the continuation chain, both
 packagings), the five `WasmInlinerTest` cases above; across all four backends
-`ci-spec.yaml`'s `exits-expansions-and-moved-lambdas-in-tail-position-run-in-constant-stack`
-and `clojure-spec.yaml`'s `deep-recur-answers-on-every-backend`. The Scheme side lowers to the same `funcall`
+`ci-spec.yaml`'s `exits-expansions-and-moved-lambdas-in-tail-position-run-in-constant-stack`,
+`loop-exits-binding-forms-and-lambda-heads-in-tail-position-run-in-constant-stack` and `clojure-spec.yaml`'s `deep-recur-answers-on-every-backend`. The Scheme side lowers to the same `funcall`
 (`.kb/scheme-frontend.md`, "Tail-call groups").

@@ -95,7 +95,10 @@ requires, and so does a class whose top level runs when it is initialized (one w
 
 A function that calls itself in tail position -- a `defun` by name or through `#'name`, a
 `labels` function, Clojure's `recur` -- jumps back to its own start instead of calling, so a
-loop written as tail recursion runs at any depth, whatever its lambda list. Functions that
+loop written as tail recursion runs at any depth, whatever its lambda list. Tail position
+reaches through `if`, `let`, `cond` and the other built-in macros, the body of an inline
+`((lambda ...) ...)`, and the value of a `return`/`return-from` that leaves the function,
+from a loop body too. Functions that
 call each other in tail position -- `defun`s, or the functions of one `labels` form (a
 Clojure `letfn`) -- jump to each other the same way: the method a call enters holds the code
 of the functions the cycle runs through. A cycle whose code would pass the 8,000 bytes of

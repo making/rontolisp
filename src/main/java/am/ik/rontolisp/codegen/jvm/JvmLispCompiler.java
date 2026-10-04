@@ -5684,10 +5684,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code catchesPlain} marks the targets a plain {@code return} exits ({@code %block}
 	 * and {@code (block nil ...)}); {@code functionBoundary} marks the {@code %fn-block}
 	 * wrap -- the fallback target for a {@code return-from} whose name matches no
-	 * enclosing block.
+	 * enclosing block. {@code tail} marks a block whose value is the method's result
+	 * ({@code Ctx.tailMark}), so an exit to it from the {@code Ctx.exitMark} chain hands
+	 * its value form on as the method's tail.
 	 */
 	record BlockTarget(int rvSlot, MethodCode.Label exit, List<OperandStack.Slot> entryStack, @Nullable String name,
-			boolean catchesPlain, boolean functionBoundary) {
+			boolean catchesPlain, boolean functionBoundary, boolean tail) {
 	}
 
 	/**
@@ -6525,12 +6527,27 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * spine item and re-laid, on the arm or body form whose value flows on unchanged,
 		 * by the emitters of the forms that open no dynamic extent: {@code if},
 		 * {@code progn}, a plain {@code let}, the blocks, a tail
-		 * {@code return}/{@code return-from}'s value, and the pass-through lowerings
-		 * ({@link JvmExprCompiler#compileExpansion}). Matched by identity in the call
-		 * emitters, so a form compiled anywhere but the true tail sees no mark and emits
-		 * exactly as before.
+		 * {@code return}/{@code return-from}'s value -- or the value of an exit on the
+		 * {@link #exitMark} chain to a block in tail position -- an inline lambda's body,
+		 * and the pass-through lowerings ({@link JvmExprCompiler#compileExpansion}).
+		 * Matched by identity in the call emitters, so a form compiled anywhere but the
+		 * true tail sees no mark and emits exactly as before.
 		 */
 		@Nullable LispVal tailMark;
+
+		/**
+		 * The form being compiled where nothing between it and the enclosing blocks opens
+		 * a dynamic extent, so an exit from it to a block in tail position
+		 * ({@link BlockTarget#tail}) hands its value form on as the method's result: the
+		 * value of a {@code return} out of a loop body is then marked like the block's
+		 * own last form ({@link JvmReturnCompiler}). Laid with {@link #tailMark}, by the
+		 * same emitters, on EVERY sub-form they compile in place -- a {@code progn}'s, a
+		 * plain {@code let}'s or a block's statements, the arms of an {@code if}, the
+		 * body of a {@code while}, the statements of a {@code tagbody}, an inline
+		 * lambda's body, a pass-through lowering's expansion -- and matched by identity,
+		 * so a form any other emitter compiles sees no mark.
+		 */
+		@Nullable LispVal exitMark;
 
 		/**
 		 * Whether this method may bounce its true tail at all ({@link JvmTailBounce}): a

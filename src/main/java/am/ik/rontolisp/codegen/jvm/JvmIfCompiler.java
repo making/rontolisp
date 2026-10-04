@@ -40,20 +40,25 @@ final class JvmIfCompiler {
 		// the mark when the if itself does, so a value tail in the arm still bounces
 		// (JvmTailBounce); restored afterwards for the enclosing walk.
 		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
 		boolean tail = savedMark == cons;
+		boolean exits = JvmReturnCompiler.onExitChain(cons, ctx);
 		ctx.body.branch(falseBranchOpcode, elseStart);
 		ctx.tailMark = tail ? parts.get(2) : null;
+		ctx.exitMark = exits ? parts.get(2) : null;
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 		ctx.body.goto_(end);
 		ctx.body.labelBinding(elseStart);
 		if (parts.size() > 3) {
 			ctx.tailMark = tail ? parts.get(3) : null;
+			ctx.exitMark = exits ? parts.get(3) : null;
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		}
 		else {
 			ctx.body.aconst_null();
 		}
 		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
 		ctx.body.labelBinding(end);
 	}
 

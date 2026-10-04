@@ -72,8 +72,10 @@ final class JvmBlockCompiler {
 			String className, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
 		int savedNextLocal = ctx.nextLocal;
 		int rvSlot = ctx.allocTemp();
+		boolean tail = ctx.tailMark == cons;
+		boolean exits = JvmReturnCompiler.onExitChain(cons, ctx);
 		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, ctx.body.newLabel(), ctx.stack.snapshot(), name,
-				catchesPlain, functionBoundary));
+				catchesPlain, functionBoundary, tail));
 		// Body forms run as a progn, leaving the last value on the stack.
 		if (parts.size() <= bodyStart) {
 			ctx.body.aconst_null();
@@ -81,16 +83,20 @@ final class JvmBlockCompiler {
 		else {
 			// The last body form's value is the block's (an exit's is too, through the
 			// slot): when the block is the method's tail, so is that form
-			// (JvmSelfTailCall, JvmTailBounce).
+			// (JvmSelfTailCall, JvmTailBounce). Every body form is on the exit chain
+			// when the block is.
 			LispVal savedMark = ctx.tailMark;
+			LispVal savedExit = ctx.exitMark;
 			for (int i = bodyStart; i < parts.size(); i++) {
 				if (i > bodyStart) {
 					ctx.body.pop();
 				}
-				ctx.tailMark = savedMark == cons && i == parts.size() - 1 ? parts.get(i) : null;
+				ctx.tailMark = tail && i == parts.size() - 1 ? parts.get(i) : null;
+				ctx.exitMark = exits ? parts.get(i) : null;
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
 			ctx.tailMark = savedMark;
+			ctx.exitMark = savedExit;
 		}
 		// Normal completion: store the body value into the block's slot.
 		ctx.body.astore(rvSlot);

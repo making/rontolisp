@@ -60,7 +60,8 @@ The interpreter recurses on the host's stack: every Lisp call that still has wor
 to do after the callee returns holds interpreter frames, so a deeply recursive
 program can exhaust it. A call in tail position -- the last thing a function does,
 including a call through a function value, `apply`, a function calling another
-that calls it back, or the value of a `return-from`/`return` that leaves the function --
+that calls it back, or the value of a `return-from`/`return` that leaves the function,
+from a loop body too --
 holds none, so a loop written as tail recursion runs at any
 depth. rontolisp runs the program on a thread of its own with a **16 MiB** stack,
 so the depth a program reaches is the same number on every platform and every

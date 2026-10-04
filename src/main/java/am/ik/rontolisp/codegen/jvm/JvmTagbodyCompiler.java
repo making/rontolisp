@@ -69,6 +69,9 @@ final class JvmTagbodyCompiler {
 				ctx.spillScopes.size(), labels);
 		Set<String> bound = new HashSet<>();
 		ctx.tagbodyScopes.push(scope);
+		// Each statement is on the exit chain when the tagbody is (Ctx.exitMark).
+		LispVal savedExit = ctx.exitMark;
+		boolean exits = JvmReturnCompiler.onExitChain(cons, ctx);
 		for (int i = 1; i < parts.size(); i++) {
 			LispVal part = parts.get(i);
 			String label = labelName(part);
@@ -83,9 +86,11 @@ final class JvmTagbodyCompiler {
 				ctx.body.labelBinding(target);
 			}
 			else {
+				ctx.exitMark = exits ? part : null;
 				JvmExprCompiler.compileForEffect(part, ctx, className);
 			}
 		}
+		ctx.exitMark = savedExit;
 		ctx.tagbodyScopes.pop();
 		JvmEmitHelper.leaveLoopScope(ctx, spill);
 		ctx.body.aconst_null();

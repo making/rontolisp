@@ -12673,6 +12673,38 @@ cases:
                    (funcall (ctp-chain (lambda (v) v) 100000) :chain)))
     expected: |
       (:FROM :NIL :LABELS :FLET :COND :VALUE :CHAIN)
+  - name: loop-exits-binding-forms-and-lambda-heads-in-tail-position-run-in-constant-stack
+    source: |
+      ;; 100,000 deep, past what a frame per call held on some backend: a call in the
+      ;; body of multiple-value-bind, destructuring-bind and symbol-macrolet, a
+      ;; multiple-value-call of a literal #'name, the body of an inline lambda, and
+      ;; the value of a return out of a dolist, a dotimes, a loop and a tagbody
+      ;; statement.
+      (defun ctq-mvb (n) (multiple-value-bind (a b) (values n 1) (if (= a 0) :mvb (ctq-mvb (- a b)))))
+      (defun ctq-db (n) (destructuring-bind (a b) (list n 1) (if (= a 0) :db (ctq-db (- a b)))))
+      (defun ctq-sm (n) (symbol-macrolet ((m (- n 1))) (if (= n 0) :sm (ctq-sm m))))
+      (defun ctq-mvc (n) (if (= n 0) :mvc (multiple-value-call #'ctq-mvc (- n 1))))
+      (defun ctq-head (n) (if (= n 0) :head ((lambda (k) (ctq-head k)) (- n 1))))
+      (defun ctq-dolist (n) (dolist (x (list 1)) (return (if (= n 0) :dolist (ctq-dolist (- n 1))))))
+      (defun ctq-dotimes (n) (dotimes (i 1) (return (if (= n 0) :dotimes (ctq-dotimes (- n 1))))))
+      (defun ctq-loop (n) (loop for x in (list 1) do (return-from ctq-loop (if (= n 0) :loop (ctq-loop (- n 1))))))
+      (defun ctq-tagbody (n) (block nil (tagbody (return (if (= n 0) :tagbody (ctq-tagbody (- n 1)))))))
+      (print (list (ctq-mvb 100000) (ctq-db 100000) (ctq-sm 100000) (ctq-mvc 100000) (ctq-head 100000)
+                   (ctq-dolist 100000) (ctq-dotimes 100000) (ctq-loop 100000) (ctq-tagbody 100000)))
+    expected: |
+      (:MVB :DB :SM :MVC :HEAD :DOLIST :DOTIMES :LOOP :TAGBODY)
+  - name: a-return-out-of-a-dotimes-answers-its-values-from-a-function-tail
+    source: |
+      ;; SBCL prints the same: the dotimes's own nil block takes the return, so its
+      ;; values are the function's; only a normal exit is the one value nil.
+      (defun dtr-ret (n) (dotimes (i 3) (when (= i 1) (return (list :ret n)))))
+      (defun dtr-two (n) (dotimes (i 3) (when (= i 1) (return (values n 9)))))
+      (defun dtr-res (n) (dotimes (i 3 :done) (when (= i n) (return (values n 9)))))
+      (defun dtr-none () (dotimes (i 2) (floor 7 2)))
+      (print (list (dtr-ret 3) (multiple-value-list (dtr-two 4)) (multiple-value-list (dtr-res 1))
+                   (multiple-value-list (dtr-res 5)) (multiple-value-list (dtr-none))))
+    expected: |
+      ((:RET 3) (4 9) (1 9) (:DONE) (NIL))
   - name: assoc-utils-features
     source: |
       ;; mapl: apply to successive tails for effect, return the original list

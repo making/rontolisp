@@ -54,7 +54,9 @@ the compiler can name are jumps instead ([jvm-self-tail-calls.md](jvm-self-tail-
   included, [dynamic-special-variables.md](dynamic-special-variables.md)), `unwind-protect`,
   `handler-case`, `catch`, ... -- the callee runs inside it.
 - A call the Lisp-2 rewrite makes through a fresh cons (a nested `defun`'s global variable),
-  the body of an inline `((lambda ...) args)`, and a self call in a split-off `_k$N`.
+  and a self call in a split-off `_k$N`. The body of an inline `((lambda ...) args)` hands the
+  mark on since 2026-10-04 ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)); a value call
+  there bounces.
 
 ## Measurements (2026-10-03, x86-64 Linux, Xeon E5-2697A v4, Oracle GraalVM 25.0.4, `java Prog`)
 

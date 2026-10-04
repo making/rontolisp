@@ -38924,28 +38924,72 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * A {@code dotimes} answers its result form on the normal exit (nil without one); the
-	 * result form is settled where it stands, a missing one becomes a clear behind the
-	 * whole loop, and the loop itself keeps its shape either way (the backends compile it
-	 * natively).
+	 * A {@code dotimes} answers its result form on the normal exit (nil without one) and
+	 * a {@code return}'s values through its own nil block, so like a block it is never
+	 * single-valued for sure. The result form is settled where it stands; a missing one
+	 * becomes a clear behind the whole loop when no {@code return} can leave the body,
+	 * and a clearing nil in the result's place -- inside the block, so the clear never
+	 * runs after a {@code return} -- when one can. The loop itself keeps its shape either
+	 * way (the backends compile it natively, a typed loop only with a trivial result).
 	 */
 	private static SettledTail settleDotimes(LispCons original, List<LispVal> parts, TailMode mode) {
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList()) {
 			return new SettledTail(original, false);
 		}
 		List<LispVal> specParts = spec.toList();
-		if (specParts.size() < 3) {
-			return new SettledTail(mode.clears() ? clearAfterStatement(original) : original, true);
+		if (specParts.size() < 2) {
+			return new SettledTail(original, false);
 		}
-		SettledTail result = settleTail(specParts.get(2), mode);
-		if (result.form() == specParts.get(2)) {
-			return new SettledTail(original, result.single());
+		boolean returns = false;
+		for (int i = 2; i < parts.size() && !returns; i++) {
+			returns = mentionsNilBlockExit(parts.get(i));
 		}
 		List<LispVal> newSpec = new java.util.ArrayList<>(specParts);
-		newSpec.set(2, result.form());
+		boolean single;
+		if (specParts.size() < 3) {
+			if (!returns) {
+				return new SettledTail(mode.clears() ? clearAfterStatement(original) : original, true);
+			}
+			if (!mode.clears()) {
+				return new SettledTail(original, false);
+			}
+			newSpec.add(clearedNil());
+			single = false;
+		}
+		else {
+			SettledTail result = settleTail(specParts.get(2), mode);
+			single = result.single() && !returns;
+			if (result.form() == specParts.get(2)) {
+				return new SettledTail(original, single);
+			}
+			newSpec.set(2, result.form());
+		}
 		List<LispVal> out = new java.util.ArrayList<>(parts);
 		out.set(1, rebuilt(spec, newSpec));
-		return new SettledTail(rebuilt(original, out), result.single());
+		return new SettledTail(rebuilt(original, out), single);
+	}
+
+	// A (return ...) or (return-from nil ...) anywhere in the form: an exit a dotimes's
+	// own nil block may take (one aimed at a nested nil block counts too).
+	private static boolean mentionsNilBlockExit(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			if (LispNames.RETURN.equals(op.name()) || LispNames.RETURN_FROM.equals(op.name())
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispNil) {
+				return true;
+			}
+		}
+		for (LispVal node = form; node instanceof LispCons cell; node = cell.cdr()) {
+			if (mentionsNilBlockExit(cell.car())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -44073,12 +44117,15 @@ public final class LispMacroExpander {
 	 * Expands (multiple-value-call function values-form...) into a direct {@code funcall}
 	 * whose arguments are every producer's values: the function and the producers' temps
 	 * bind in nested lets (left-to-right evaluation), so the value count is static -- no
-	 * runtime spreading.
+	 * runtime spreading. A literal function name ({@code #'name}, {@code 'name}) stays in
+	 * the call itself, so the call names its target: a backend calls it directly, and in
+	 * tail position as its own tail call (a jump back to a defun's start on the JVM). The
+	 * name is then resolved after the arguments, as SBCL resolves it.
 	 *
 	 * <pre>
 	 * (multiple-value-call #'list 1 (values 2 3))
-	 * -> (let ((__mv0_fn #'list)) (let ((__mv0_0_0 1)) (let ((__mv0_1_0 2)) (let ((__mv0_1_1 3))
-	 *      (funcall __mv0_fn __mv0_0_0 __mv0_1_0 __mv0_1_1)))))
+	 * -> (let ((__mv0_0_0 1)) (let ((__mv0_1_0 2)) (let ((__mv0_1_1 3))
+	 *      (funcall #'list __mv0_0_0 __mv0_1_0 __mv0_1_1))))
 	 * </pre>
 	 * @param cons the multiple-value-call expression
 	 * @return the expanded expression
@@ -44091,8 +44138,12 @@ public final class LispMacroExpander {
 		}
 		String prefix = "__mv" + MV_COUNTER.getAndIncrement();
 		List<MvBinding> bindings = new java.util.ArrayList<>();
-		LispSymbol fn = new LispSymbol(prefix + "_fn");
-		bindings.add(new MvBinding(fn, parts.get(1)));
+		LispVal fn = parts.get(1);
+		if (!isLiteralFunctionName(fn)) {
+			LispSymbol temp = new LispSymbol(prefix + "_fn");
+			bindings.add(new MvBinding(temp, fn));
+			fn = temp;
+		}
 		List<MvProducer> producers = new java.util.ArrayList<>();
 		boolean anySpill = false;
 		for (int i = 2; i < parts.size(); i++) {
@@ -44129,6 +44180,14 @@ public final class LispMacroExpander {
 			callParts.addAll(producer.values());
 		}
 		return nestMvBindings(bindings, listToCons(callParts));
+	}
+
+	// #'name or 'name: evaluating it has no effect, so it may move past the arguments.
+	private static boolean isLiteralFunctionName(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol sym && !sym.isKeyword()
+				&& rest.cdr() instanceof LispNil;
 	}
 
 	/**

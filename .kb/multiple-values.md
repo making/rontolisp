@@ -246,8 +246,15 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   nil) __mvN_v)` (`clearAfter`: an argument or a callback -- `sort`'s predicate, a `print-object`
   method -- may have published), or `clearBefore` when the operator is one of the pure
   primitives in `QUIET_OPERATORS` and every argument is quiet; `while`, `tagbody` and a
-  result-less `dotimes` get `(progn form (setq %mv-spill nil) nil)` (`clearAfterStatement`:
-  a `return`/`go`/`throw` out of them skips the clear and keeps its own values).
+  result-less `dotimes` whose body names no `return`/`(return-from nil ..)` get `(progn form
+  (setq %mv-spill nil) nil)` (`clearAfterStatement`: a `return`/`go`/`throw` out of them skips
+  the clear and keeps its own values). A `dotimes` whose body may `return` gets a cleared nil
+  as its result form instead and is never single for sure: its own nil block takes the
+  `return`, so a clear behind the whole loop threw the returned value away -- `(defun f ()
+  (dotimes (i 3) (when (= i 1) (return :x))))` answered NIL on the JVM, wasm and the component
+  in any program with a multiple-value consumer, until 2026-10-04 (pinned by ci-spec
+  `a-return-out-of-a-dotimes-answers-its-values-from-a-function-tail`). The test is a lexical
+  scan (`mentionsNilBlockExit`), so a typed loop with no `return` keeps its trivial result.
 - **Tails of their own, settled each**: `progn`/`let`/`let*`/`flet`/`labels`/`block`/
   `catch`/`progv`/`multiple-value-bind`/`destructuring-bind`/`with-*` bodies -- a `block`
   (`%block`, `%fn-block`) or `catch` is never single for sure, its value may come through a

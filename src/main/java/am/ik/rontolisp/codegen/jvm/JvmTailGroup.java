@@ -320,13 +320,13 @@ final class JvmTailGroup {
 	 * Visits each call in tail position of a form whose value is a function's result:
 	 * where the emitter's tail mark reaches it -- through {@code if}, {@code progn}, a
 	 * {@code let}/{@code let*} that binds no special, the blocks and a
-	 * {@code return}/{@code return-from} reached through them, and the pass-through
-	 * lowerings ({@link JvmExprCompiler#compileExpansion}) -- a call with a computed head
-	 * included. A form it does not know ends the walk, so a disagreement with the emitter
-	 * only loses a group, keeps a member whose call is not a jump, or keeps a tail
-	 * through a value a call in a defun that then bounces nowhere
-	 * ({@link JvmTailBounce#bouncingDefuns}); it can never make a call a jump or a
-	 * bounce, which only the mark does.
+	 * {@code return}/{@code return-from} reached through them, an inline lambda's body,
+	 * and the pass-through lowerings ({@link JvmExprCompiler#compileExpansion}) -- a call
+	 * with a computed head included. An exit out of a loop body is not followed. A form
+	 * it does not know ends the walk, so a disagreement with the emitter only loses a
+	 * group, keeps a member whose call is not a jump, or keeps a tail through a value a
+	 * call in a defun that then bounces nowhere ({@link JvmTailBounce#bouncingDefuns});
+	 * it can never make a call a jump or a bounce, which only the mark does.
 	 * @param form the form
 	 * @param specials the special variables
 	 * @param locals the local function names in scope, which a call head means instead of
@@ -339,6 +339,16 @@ final class JvmTailGroup {
 			return;
 		}
 		if (!(cons.car() instanceof LispSymbol op)) {
+			if (cons.car() instanceof LispCons head && head.car() instanceof LispSymbol lambda
+					&& LispNames.LAMBDA.equals(lambda.name()) && head.isProperList()) {
+				// An inline lambda: its body runs in place (JvmLambdaCompiler), unless
+				// a parameter binds a special around it.
+				List<LispVal> lambdaParts = head.toList();
+				if (lambdaParts.size() > 1 && !mentionsSpecial(lambdaParts.get(1), specials)) {
+					last(lambdaParts, 2, specials, locals, visit);
+				}
+				return;
+			}
 			// A computed head: a call too.
 			visit.accept(cons, locals);
 			return;
@@ -370,6 +380,20 @@ final class JvmTailGroup {
 			case LispNames.RETURN_FROM, LispNames.THE -> {
 				if (parts.size() == 3) {
 					tailCalls(parts.get(2), specials, locals, visit);
+				}
+			}
+			case LispNames.MULTIPLE_VALUE_BIND, LispNames.DESTRUCTURING_BIND -> {
+				if (parts.size() > 2 && !mentionsSpecial(parts.get(1), specials)) {
+					last(parts, 3, specials, locals, visit);
+				}
+			}
+			case LispNames.SYMBOL_MACROLET -> last(parts, 2, specials, locals, visit);
+			case LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS -> last(parts, 3, specials, locals, visit);
+			case LispNames.MULTIPLE_VALUE_CALL -> {
+				// The expansion's call: a literal designator stays in it, any other is
+				// a value in a temporary (LispMacroExpander.expandMultipleValueCall).
+				if (parts.size() > 1) {
+					visit.accept(new LispCons(new LispSymbol(LispNames.FUNCALL), cons.cdr()), locals);
 				}
 			}
 			case LispNames.COND -> clauses(parts, 1, specials, locals, visit);
@@ -414,6 +438,24 @@ final class JvmTailGroup {
 	private static boolean bindsSpecialParameter(LispVal lambdaList, Set<String> specials) {
 		for (LispVal node = lambdaList; node instanceof LispCons cell; node = cell.cdr()) {
 			if (cell.car() instanceof LispSymbol sym && specials.contains(sym.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// A lambda list or a destructuring pattern, at any depth: a symbol named like a
+	// special binds it dynamically around the body (an init form's mention is a
+	// conservative stop).
+	private static boolean mentionsSpecial(LispVal tree, Set<String> specials) {
+		if (tree instanceof LispSymbol sym) {
+			return specials.contains(sym.name());
+		}
+		for (LispVal node = tree; node instanceof LispCons cell; node = cell.cdr()) {
+			if (mentionsSpecial(cell.car(), specials)) {
+				return true;
+			}
+			if (cell.cdr() instanceof LispSymbol dotted && specials.contains(dotted.name())) {
 				return true;
 			}
 		}
