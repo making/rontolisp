@@ -23650,6 +23650,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSpecialReadByNameAnswersTheActiveBinding() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: symbol-value and eval read the module global (the active
+		// binding, under shallow binding), never the GLOBAL_ENV mirror.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.SpecialReadByNameFixture.SOURCE, am.ik.rontolisp.SpecialReadByNameFixture.EXPECTED },
+				{ am.ik.rontolisp.SpecialReadByNameFixture.SET_SOURCE,
+						am.ik.rontolisp.SpecialReadByNameFixture.SET_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void setWritesTheActiveDynamicBinding() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: the module global IS the active binding (shallow binding), and

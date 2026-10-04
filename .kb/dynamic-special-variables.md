@@ -126,28 +126,27 @@ native `evalProgv`).
   `%progv-genv`/`%progv-genv-set`. Mirror maintenance is included only when the eval runtime
   exists (`Ctx.evalStoreRef != null` / `Ctx.usesEval` -- progv does NOT force it); both flags are
   carried by EVERY compile context, not just the top-level one.
-- `symbol-value` is DYNAMIC-FIRST in a program that uses progv or `set`
-  (`LispMacroExpander.dynamicFirstSymbolValue`, gated on `Ctx.symbolValueDynamicFirst`:
-  progv spelled, or `programUsesSet` -- a `set` call or a `symbol-value` place a `setf` or
-  modify macro writes; `set` since 2026-10-04, `.todo/c86`), falling back to
-  `%symbol-value-raw`. This is what makes cl-json's `(progv vars (mapcar #'symbol-value vars)
-  ...)` see values its decoder `setq`s in the enclosing extent, and `symbol-value` answer the
-  binding a `set` wrote (`.kb/symbol-runtime-api.md`). Other programs keep the raw emission
-  byte-identically. `#'symbol-value` has a REFERENCE-GATED
-  `BuiltinFunctionWrappers` entry. No site pays for the special set (2026-10-04, `.todo/c78`):
+- `symbol-value` of a special reads the VARIABLE in every program with specials
+  (`LispMacroExpander.dynamicFirstSymbolValue`; until 2026-10-04 only where progv or `set` was
+  spelled, `.todo/c89` -- the one-home rule below), falling back to `%symbol-value-raw` for any
+  other name. This is what makes cl-json's `(progv vars (mapcar #'symbol-value vars) ...)` see
+  values its decoder `setq`s in the enclosing extent, and `symbol-value` answer the binding a
+  `set` wrote (`.kb/symbol-runtime-api.md`). A program without specials keeps the raw emission.
+  `#'symbol-value` has a REFERENCE-GATED `BuiltinFunctionWrappers` entry. No site pays for the
+  special set (2026-10-04, `.todo/c78`):
   - a LITERAL name folds: a special -> the variable read, any other quoted datum ->
     `%symbol-value-raw`;
-  - a computed name calls `%symbol-value-dynamic`, the dispatch defined ONCE
-    (`symbolValueDynamicRuntime`), cut into segments of `NAME_DISPATCH_SEGMENT_ARMS` (128) arms
-    (`segmentedNameDispatch`, shared with progv and `set`), each miss tail-calling the next
-    segment (`%symbol-value-dynamic-1`, ...), the last falling to `%symbol-value-raw`. ~22 B of
-    JVM bytecode an arm (~32 B with the `equal` test, below), so a segment is ~2.8 KB: under the
-    64 KB limit for any special count and under HotSpot's 8,000-byte `HugeMethodLimit`, so the
-    JIT compiles it. Injected by both backends after the special set is final (JVM: after the
-    thread-forced stream specials join), when the program, the injected runtime or a condition
-    report can reach a computed site (`programUsesComputedSymbolValue`: any `SYMBOL-VALUE` but
-    `(symbol-value 'x)`). A site whose program lacks it (a user defun took the name, or a site
-    no scan saw) spells the old inline chain: correct, at the old size.
+  - a computed name calls `%symbol-value-dynamic` (`symbolValueDynamicRuntime`), the read half of
+    the one shared accessor `%global-access` (below) with a fresh cons as its default, which
+    falls to `%symbol-value-raw`. The accessor is cut into segments of
+    `NAME_DISPATCH_SEGMENT_ARMS` (128) arms (`segmentedNameDispatch`, shared with progv), each miss
+    tail-calling the next segment (`%global-access-1`, ...). ~22 B of JVM bytecode a read arm, so
+    a segment is under the 64 KB limit for any special count and under HotSpot's 8,000-byte
+    `HugeMethodLimit`, so the JIT compiles it. Injected by both backends after the global set is
+    final, when the program, the injected runtime or a condition report can reach a computed site
+    (`programUsesComputedSymbolValue`: any `SYMBOL-VALUE` but `(symbol-value 'x)`). A site whose
+    program lacks it (a user defun took a name, or a site no scan saw) spells the old inline
+    chain: correct, at the old size.
   - Before: every site, literal or computed, inlined the whole chain -- ~12 KB a site at
     ci-spec's ~359 specials, so a defun or top-level form with a few sites overflowed 64 KB
     (ci-spec's `top-level-forms-answer-like-defun-bodies` was cut to one site a form;
@@ -228,14 +227,55 @@ native `evalProgv`).
    restores its own on the way out), which is why no catch-site save stack was needed: the
    `.todo/192` sketch's objection -- the slots live in the thrower's dead frames -- holds only
    for a CATCHER doing the restore.
-2. `symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding, on the compile
-   path -- EXCEPT `symbol-value` in a program that uses progv or `set`. They read the
-   `_genv`/`GLOBAL_ENV` mirror, which the shallow save/restore does not update. Direct
-   reads/`setq` are correct. The two stores do NOT always agree again after the `let`: a
-   store from a frame that does not hold the binding's lexical slot (a callee's `setq`, any
-   `set`) writes the mirror too, and nothing restores it, so after the extent the mirror holds
-   the binding's value (`.todo/c89`). The mirror does carry the global default for the
-   three standard stream variables (`.kb/symbol-runtime-api.md`).
+2. `boundp` of a special with no global value answers nil inside a binding of it (SBCL: t),
+   and t after a callee's `setq` inside a binding gave the mirror an entry the extent does not
+   remove. Its answer is the `_genv`/`GLOBAL_ENV` mirror's entry, a witness of "a global store
+   happened", because neither variable representation has an unbound state (`nil` is Java
+   `null` / a null ref). VALUES are right since 2026-10-04: `symbol-value` and `eval` read a
+   special through its variable (the one-home rule below). Until then they read the mirror,
+   which the shallow save/restore never updates: the global default inside a binding, and after
+   a store from a frame not holding the binding's lexical slot (a callee's `setq`, any `set`)
+   the binding's value long after the extent. `.todo/c95`.
+
+## One home for a special's value by name (all four backends, 2026-10-04)
+
+**Invariant: a read of a special BY NAME -- `symbol-value`, `eval` -- answers its variable (the
+active dynamic binding, else the global), never the eval mirror; an `eval`'d assignment of any
+compiled global stores where a compiled `setq` does.** Landed with `.todo/c89`. Before, after
+`(let ((*dw* 2)) (f))` where `f` does `(setq *dw* 3)`, `(symbol-value '*dw*)` and `(eval '*dw*)`
+answered 3 on the JVM and both WASM (the interpreter and SBCL: 1), and `(eval '(setq g 2))`
+wrote the mirror only, so compiled code kept reading 1.
+
+- One shared accessor, `(%global-access name default store value)`
+  (`LispMacroExpander.globalAccessRuntime`), a segmented dispatch over the globals. Read
+  (`store` nil): a special's arm answers the variable, every other name `default`. Store: the
+  global's arm is `%global-store-set` (a non-lexical `setq`'s store: `_dset` / the module global
+  / the task record). One chain serves `symbol-value`, `set` (`%set-global` = `%set-mirror` +
+  the store half) and the eval runtime, so a program pays for the global set once. Its arms are
+  the globals when something stores (a `set` site, or a program that runs forms through eval:
+  `programUsesEval` / `load` / `--dynamic`), the specials alone when only `symbol-value` reads.
+- The eval runtime (`Jvm/WasmEvalRuntimeBuilder`) reads a variable no eval'd binding holds
+  through the accessor first, with a fresh object nothing else can hold as `default` (JVM
+  `new Object[0]`, wasm a fresh cons), the mirror after (and the JVM's case-flipped retry the
+  same way); its `setq`/`setf`/`push`/`pop` of such a variable call the store half, then `_store`
+  as before. Only where the program runs forms through eval: the runtime is also switched on by
+  `boundp`, `symbol-value`, `fboundp` and, on the JVM, the Java, Objective-C and FFI bridges --
+  those modules stay byte-identical. The compiled mirror (`mirrorGlobal`) still writes every
+  store: it is the value of every non-special global and the `boundp` witness of every name.
+- Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
+  `--optimize=size`, component and JVM, except the Cloudflare Worker rows, whose libraries run
+  `eval`: hello-clack 697,130 -> 698,493 (+1,363; gzip 185,160 -> 185,513), tiny-routes +1,518 to
+  +2,993, hello-ningle / httpbin-ningle +16.4 KB (+0.7%; gzip +4.7 KB). examples: byte-identical
+  except the eval / `symbol-value` programs: calc +474 B JVM / +246 wasm, cffi-sqlite +3,269
+  JVM, the clack / tiny-routes / ningle programs +0.8 to +21 KB (ningle's accessor is ~200 arms,
+  9 KB of wasm, plus the names it needs in the string table). ci-spec program: JVM 7,334,695 ->
+  7,336,257, wasm 6,647,482 -> 6,641,111, component 6,857,938 -> 6,851,479, `--optimize=size`
+  5,480,695 -> 5,474,319 (one accessor where `%symbol-value-dynamic` and `%set-global-store` were
+  two chains). A wasm arm is ~44 B (`ref.test` + cast + offset compare per arm, `.todo/c94`).
+- Run time: 2M computed `symbol-value` over 300 specials JVM 1.22 -> 1.19 s, wasm 1.39 -> 1.46 s
+  (the default cons and the wrapper call). An eval'd variable access walks the accessor before
+  the mirror: 200k `(eval '(setq *ex* (+ *ex* *e99*)))` over 101 specials, the names last in
+  declaration order, JVM 125 -> 370 ms, wasm 43 -> 170 ms (the mirror found both at its head).
 
 ## Parameters named like a special (all four backends, 2026-10-03)
 
@@ -354,6 +394,11 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 `WasmReentrantCompilerTest`, `ClJsonE2eTest`, `ClPpcreE2eTest`, ci-spec
 `special-variable-dynamic-binding`, `progv-compiles-on-every-backend`,
 `special-let-restores-on-every-exit`, `top-level-forms-answer-like-defun-bodies`.
+
+By-name reads and eval'd assignments: `SpecialReadByNameFixture` (a program without `set` or
+`progv`, one with both; SBCL's answers) on `aSpecialReadByNameAnswersTheActiveBinding`
+(`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` -- Preview 1 and
+component), ci-spec `eval-and-symbol-value-read-the-binding`.
 
 set inside an active binding: `SetInDynamicBindingFixture` on
 `setWritesTheActiveDynamicBinding` (`LispEvaluatorTest`, `JvmLispCompilerTest`,

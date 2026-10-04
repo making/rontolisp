@@ -19806,6 +19806,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aSpecialReadByNameAnswersTheActiveBinding() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): symbol-value and eval resolve
+		// a special through its variable -- this thread's active _d$ cell, else _g$ --
+		// never through the eval runtime's _genv mirror, which no binding restores; an
+		// eval'd setq stores where setq does.
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialReadByNameFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialReadByNameFixture.SET_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.SET_EXPECTED);
+	}
+
+	@Test
 	void setWritesTheActiveDynamicBinding() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a set arm writes the
 		// thread's active _d$ cell when one exists and falls to the _g$ default
@@ -20641,16 +20653,18 @@ class JvmLispCompilerTest {
 
 	@Test
 	void symbolValueSitesDoNotEachPayForTheSpecialSet() throws Exception {
-		// A progv-using program reads symbol-value dynamic-first: a literal name folds to
-		// the variable read, a computed one calls one shared dispatch over the special
-		// set, cut into segments the JIT still compiles. Each site used to spell the
+		// symbol-value reads a special through its variable: a literal name folds to the
+		// variable read, a computed one calls one shared runtime over the global
+		// accessor, cut into segments the JIT still compiles. Each site used to spell the
 		// 300-arm dispatch inline, ~10 KB, so the eight-site defun and top-level form
 		// overflowed the 64 KB method limit (.kb/dynamic-special-variables.md).
 		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE)));
-		String dispatch = "$pctSYMBOL-VALUE-DYNAMIC";
+		String entry = "$pctSYMBOL-VALUE-DYNAMIC";
+		String dispatch = "$pctGLOBAL-ACCESS";
 		assertThat(codeLengthOf(classBytes, "SVS-EIGHT")).isLessThan(500);
-		assertThat(ownCallsIn(classBytes, "SVS-EIGHT", dispatch)).isEqualTo(8);
+		assertThat(ownCallsIn(classBytes, "SVS-EIGHT", entry)).isEqualTo(8);
+		assertThat(ownCallsIn(classBytes, "SVS-LITERAL", entry)).isZero();
 		assertThat(ownCallsIn(classBytes, "SVS-LITERAL", dispatch)).isZero();
 		List<String> segments = declaredMethodNames(classBytes).stream().filter(m -> m.startsWith(dispatch)).toList();
 		assertThat(segments).hasSizeGreaterThan(1);
@@ -20674,7 +20688,7 @@ class JvmLispCompilerTest {
 		assertThat(ownCallsIn(classBytes, "PVS-FOUR", "$pctPROGV-BIND")).isEqualTo(4);
 		assertThat(codeLengthOf(classBytes, "PVS-SET-FOUR")).isLessThan(300);
 		assertThat(ownCallsIn(classBytes, "PVS-SET-FOUR", "$pctSET-GLOBAL")).isEqualTo(4);
-		for (String runtime : List.of("$pctPROGV-BIND-NAME", "$pctPROGV-UNBIND-NAME", "$pctSET-GLOBAL-STORE")) {
+		for (String runtime : List.of("$pctPROGV-BIND-NAME", "$pctPROGV-UNBIND-NAME", "$pctGLOBAL-ACCESS")) {
 			List<String> segments = declaredMethodNames(classBytes).stream()
 				.filter(m -> m.equals(runtime) || m.startsWith(runtime + "-"))
 				.toList();
@@ -20706,6 +20720,7 @@ class JvmLispCompilerTest {
 			.toList();
 		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "ND-G")).sum()).isPositive();
 		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctSET-GLOBAL")).sum()).isZero();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctGLOBAL-ACCESS")).sum()).isZero();
 		assertThat(compileAndRun(source)).isEqualTo("5");
 	}
 

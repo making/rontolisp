@@ -1826,17 +1826,41 @@ class WasmLispCompilerTest {
 		// no eval'd form can name a top-level let/loop variable -- nor the temporaries
 		// the macro expanders generate, which are symbols in no package at all. Each
 		// mirror costs a linear walk of the eval global alist, per assignment, per
-		// iteration. The mirror spells the name it stores under as a string literal, so
-		// the module's string table is the witness for both halves.
-		byte[] module = compile("""
+		// iteration. The witness is the mirror's own instruction, a call of _store:
+		// more assignments of the lexicals add none, one more of the global adds one.
+		// (The name alone no longer witnesses it: the eval runtime's store dispatch
+		// spells every global with a backing store, a scope-blind collection.)
+		String base = """
 				(setq mirrored-global 0)
 				(let ((probe-lexical 0)) (setq probe-lexical 1) (print probe-lexical))
 				(print (loop for probe-counter from 1 to 3 sum probe-counter))
 				(eval '(print mirrored-global))
-				""");
-		assertThat(occurrences(module, "MIRRORED-GLOBAL")).isEqualTo(1);
-		assertThat(occurrences(module, "PROBE-LEXICAL")).isZero();
-		assertThat(occurrences(module, "PROBE-COUNTER")).isZero();
+				""";
+		String moreLexical = base.replace("(setq probe-lexical 1)",
+				"(setq probe-lexical 1) (setq probe-lexical 2) (setq probe-lexical 3)");
+		String moreGlobal = base + "(setq mirrored-global 2)\n";
+		int stores = storeCalls(base);
+		assertThat(storeCalls(moreLexical)).isEqualTo(stores);
+		assertThat(storeCalls(moreGlobal)).isEqualTo(stores + 1);
+		assertThat(occurrences(compile(base), "PROBE-COUNTER")).isZero();
+	}
+
+	// How many call instructions of _store an unoptimized module spells (no shake, so
+	// the fixed index stays the index).
+	private static int storeCalls(String source) {
+		byte[] module = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(source));
+		ByteArrayOutputStream call = new ByteArrayOutputStream();
+		call.write(Instruction.CALL);
+		for (int v = WasmLispCompiler.FUNC_STORE;; v >>>= 7) {
+			call.write((v >>> 7) == 0 ? v & 0x7f : (v & 0x7f) | 0x80);
+			if ((v >>> 7) == 0) {
+				break;
+			}
+		}
+		return count(module, call.toByteArray());
 	}
 
 	@Test
@@ -1854,8 +1878,8 @@ class WasmLispCompilerTest {
 
 	@Test
 	void aSymbolValueSiteDoesNotPayForTheSpecialSet() {
-		// A progv-using program reads symbol-value dynamic-first, a computed name through
-		// one shared dispatch over the special set: eight more computed sites cost their
+		// symbol-value reads a special through its variable, a computed name through one
+		// shared dispatch over the special set: eight more computed sites cost their
 		// calls, not eight copies of the 300-arm dispatch (~6 KB each when every site
 		// spelled it inline). The run half is WasmLispCompilerIntegrationTest's.
 		String more = """
@@ -1911,7 +1935,7 @@ class WasmLispCompilerTest {
 		// (defun probe (s) (symbol-value s))
 		program.add(cons(sym("DEFUN"), cons(sym("PROBE"), cons(cons(sym("S"), LispNil.INSTANCE),
 				cons(cons(sym("SYMBOL-VALUE"), cons(sym("S"), LispNil.INSTANCE)), LispNil.INSTANCE)))));
-		// (progv '(*ps-0*) '(1) (symbol-value '*ps-0*)): arms symbolValueDynamicFirst.
+		// (progv '(*ps-0*) '(1) (symbol-value '*ps-0*)): the progv's inline chains.
 		program.add(cons(sym("PROGV"), cons(quoted(cons(sym("*PS-0*"), LispNil.INSTANCE)), cons(
 				quoted(cons(new am.ik.rontolisp.LispInteger(1), LispNil.INSTANCE)),
 				cons(cons(sym("SYMBOL-VALUE"), cons(quoted(sym("*PS-0*")), LispNil.INSTANCE)), LispNil.INSTANCE)))));

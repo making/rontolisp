@@ -132,17 +132,16 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
-	 * symbol-value. In a program that uses {@code progv} or {@code set} the emission is
-	 * DYNAMIC-FIRST ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal
-	 * special reads the variable (the module-global / per-task read), a computed name
-	 * calls the shared dispatch over the special set, so an active
-	 * {@code progv}/{@code let} binding -- and a {@code setq} inside its extent -- is
-	 * answered instead of the {@code GLOBAL_ENV} mirror's global default (cl-json's
-	 * {@code (mapcar #'symbol-value scope-variables)} snapshot), as is a binding a
-	 * {@code set} wrote. Other programs keep the raw emission unchanged.
+	 * symbol-value. A special is read through its variable
+	 * ({@link LispMacroExpander#dynamicFirstSymbolValue}): a literal special reads the
+	 * variable (the module-global / per-task read), a computed name calls the shared
+	 * dispatch over the special set, so an active {@code progv}/{@code let} binding --
+	 * and a {@code setq} or {@code set} inside its extent -- is answered, never the
+	 * {@code GLOBAL_ENV} mirror, which no binding's restore touches. Every other name,
+	 * and every name in a program without specials, reads the mirror.
 	 */
 	static void compileSymbolValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (ctx.symbolValueDynamicFirst && !ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
+		if (!ctx.specialVars.isEmpty() && cons.toList().size() == 2) {
 			WasmExprCompiler.compileExpr(LispMacroExpander.dynamicFirstSymbolValue(cons, ctx.specialVars,
 					ctx.functions.containsKey(LispNames.SYMBOL_VALUE_DYNAMIC)), ctx);
 			return;

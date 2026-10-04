@@ -17349,6 +17349,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aSpecialReadByNameAnswersTheActiveBinding() {
+		// The reference answer the compiled backends' twins of this name are measured
+		// against: symbol-value and eval read the current dynamic binding inside it and
+		// the global after it, whatever a callee's setq, a set or an eval'd setq wrote
+		// in between.
+		assertThat(printedLines(am.ik.rontolisp.SpecialReadByNameFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.SpecialReadByNameFixture.SET_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.SET_EXPECTED);
+	}
+
+	@Test
 	void setWritesTheActiveDynamicBinding() {
 		// The reference answer the compiled backends' twins of this name are measured
 		// against: set assigns the current dynamic binding, as setq does, whether a let,

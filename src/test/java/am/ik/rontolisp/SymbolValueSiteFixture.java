@@ -6,7 +6,7 @@ import java.util.stream.IntStream;
 /**
  * A program with {@value #SPECIALS} specials, a {@code progv}, and functions and
  * top-level forms holding several {@code symbol-value} sites each, literal and computed.
- * In a progv-using program {@code symbol-value} reads dynamic-first on the compile paths
+ * {@code symbol-value} reads a special through its variable on the compile paths
  * ({@code LispMacroExpander.dynamicFirstSymbolValue}); until 2026-10-04 every site
  * spelled the dispatch over the WHOLE special set inline, ~10 KB of JVM bytecode a site
  * here, so {@code svs-eight} and the eight-site top-level form overflowed the JVM's 64 KB

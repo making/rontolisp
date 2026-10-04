@@ -69,20 +69,33 @@ public final class LispNames {
 
 	/**
 	 * Internal (compile-path only): the raw runtime {@code symbol-value} emission (the
-	 * eval-mirror probe). {@code (symbol-value x)} in a program that uses {@code progv}
-	 * compiles to a dynamic-first dispatch over the special set whose fallback is this
-	 * operator, so the dispatch can delegate without recursing into itself.
+	 * eval-mirror probe). {@code (symbol-value x)} of a program with specials compiles to
+	 * a dispatch over the special set whose fallback is this operator, so the dispatch
+	 * can delegate without recursing into itself.
 	 */
 	public static final String SYMBOL_VALUE_RAW = "%SYMBOL-VALUE-RAW";
 
 	/**
-	 * Internal (compile-path only): the shared dynamic-first {@code symbol-value} runtime
-	 * a computed name calls in a program that uses {@code progv} --
-	 * {@code (%symbol-value-dynamic name)}, the dispatch over the special set defined
-	 * ONCE instead of at every site. Its later segments are this name suffixed
-	 * {@code -1}, {@code -2}, ...
+	 * Internal (compile-path only): the shared {@code symbol-value} runtime a computed
+	 * name calls in a program with specials -- {@code (%symbol-value-dynamic name)}: the
+	 * read half of {@link #GLOBAL_ACCESS_RUNTIME}, falling to {@link #SYMBOL_VALUE_RAW}
+	 * for a name no special has.
 	 */
 	public static final String SYMBOL_VALUE_DYNAMIC = "%SYMBOL-VALUE-DYNAMIC";
+
+	/**
+	 * Internal (compile-path only): {@code (%global-access name default store value)},
+	 * the one dispatch of a runtime name over the program's globals. With {@code store}
+	 * nil it reads: a special answers its variable -- the active dynamic binding, else
+	 * the global -- and any other name {@code default}. With {@code store} non-nil it
+	 * writes {@code value} to the global the name names as a non-lexical {@code setq}
+	 * does ({@link #GLOBAL_STORE_SET}). Called by {@link #SYMBOL_VALUE_DYNAMIC},
+	 * {@link #SET_GLOBAL_RUNTIME} and the eval runtime's variable lookup and assignment,
+	 * so a special has one home for every access by name. A program that reads only
+	 * carries the arms of its specials. Later segments are this name suffixed {@code -1},
+	 * {@code -2}, ...
+	 */
+	public static final String GLOBAL_ACCESS_RUNTIME = "%GLOBAL-ACCESS";
 
 	/**
 	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
@@ -114,9 +127,8 @@ public final class LispNames {
 
 	/**
 	 * Internal (compile-path only): {@code (%set-global name value)}, the shared runtime
-	 * a computed {@code set} site calls: {@link #SET_MIRROR}, then the dispatch of the
-	 * name over the program's globals onto {@link #GLOBAL_STORE_SET} -- this name
-	 * suffixed {@code -STORE}, segmented like {@link #PROGV_BIND_NAME}.
+	 * a computed {@code set} site calls: {@link #SET_MIRROR}, then the store half of
+	 * {@link #GLOBAL_ACCESS_RUNTIME}.
 	 */
 	public static final String SET_GLOBAL_RUNTIME = "%SET-GLOBAL";
 

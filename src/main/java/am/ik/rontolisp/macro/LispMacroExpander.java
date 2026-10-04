@@ -4778,8 +4778,8 @@ public final class LispMacroExpander {
 	 * {@code (%progv-bind symbols values)} binds each name and answers the save list,
 	 * {@code (%progv-unbind saved)} restores it, innermost first. Each dispatches a name
 	 * through {@code %progv-bind-name}/{@code %progv-unbind-name}, an arm per special,
-	 * cut into segments like {@link #symbolValueDynamicRuntime}, so no body grows with
-	 * the special set.
+	 * cut into segments like {@link #globalAccessRuntime}, so no body grows with the
+	 * special set.
 	 * @param specials the program's special-variable names, in declaration order
 	 * @param mirror whether the eval runtime's global env mirror exists in this program
 	 * @return the definitions, wrapper-shaped
@@ -4962,22 +4962,19 @@ public final class LispMacroExpander {
 
 	/**
 	 * The shared runtime a {@code set} site calls ({@link #expandSetForCompile}):
-	 * {@code (%set-global name value)} checks the name and writes the mirror, then
-	 * dispatches it over the globals through {@code %set-global-store}, an arm per
-	 * global, segmented like {@link #symbolValueDynamicRuntime}; answers the value.
-	 * @param globals the program's globals with a backing store, in declaration order
-	 * @return the definitions, wrapper-shaped, the entry first
+	 * {@code (%set-global name value)} checks the name and writes the mirror, then stores
+	 * through {@link #globalAccessRuntime}; answers the value. The program carries the
+	 * accessor, with its store half, whenever it carries this.
+	 * @param globals the program's globals with a backing store
+	 * @return the definition, wrapper-shaped
 	 */
-	public static List<LispVal> setGlobalRuntime(java.util.Collection<String> globals) {
+	public static LispVal setGlobalRuntime(java.util.Collection<String> globals) {
 		LispSymbol n = new LispSymbol(freshName("%SG-NAME", globals));
 		LispSymbol v = new LispSymbol(freshName("%SG-VALUE", globals));
-		String store = LispNames.SET_GLOBAL_RUNTIME + "-STORE";
-		List<LispVal> out = new ArrayList<>();
-		out.add(runtimeDefinition(LispNames.SET_GLOBAL_RUNTIME, List.of(n, v), listToCons(
-				List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.SET_MIRROR, n, v), callOf(store, n, v), v))));
-		out.addAll(segmentedNameDispatch(store, List.of(n, v), new ArrayList<>(globals),
-				s -> listToCons(List.of(new LispSymbol(LispNames.GLOBAL_STORE_SET), s, v)), LispNil.INSTANCE));
-		return out;
+		return runtimeDefinition(LispNames.SET_GLOBAL_RUNTIME, List.of(n, v),
+				listToCons(List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.SET_MIRROR, n, v), listToCons(List
+					.of(new LispSymbol(LispNames.GLOBAL_ACCESS_RUNTIME), n, LispNil.INSTANCE, LispTrue.INSTANCE, v)),
+						v)));
 	}
 
 	/**
@@ -4985,13 +4982,10 @@ public final class LispMacroExpander {
 	 * (quoted data skipped; a {@code #'set} value calls it from its wrapper, an injected
 	 * form), or a {@code symbol-value} place a {@code setf} or a modify macro writes,
 	 * which lowers to one per expression -- i.e. whether {@link #setGlobalRuntime} could
-	 * have a caller, and whether {@code symbol-value} must read dynamic-first
-	 * ({@link #dynamicFirstSymbolValue}) to answer what such a store wrote. A variable
-	 * merely NAMED {@code set} (cl-ppcre's charset code has dozens) does not count: a
-	 * {@code let} binding or a lambda-list entry of it is no call. Over-predicting costs
-	 * a program the shared dispatch over its specials at every computed
-	 * {@code symbol-value}; under-predicting costs a {@code set} site its sharing and
-	 * leaves {@code symbol-value} reading the eval mirror.
+	 * have a caller. A variable merely NAMED {@code set} (cl-ppcre's charset code has
+	 * dozens) does not count: a {@code let} binding or a lambda-list entry of it is no
+	 * call. Over-predicting costs a program the runtime no site calls; under-predicting
+	 * costs a {@code set} site its sharing.
 	 * @param forms the program's (or the injected runtime's) top-level forms
 	 * @return true when a {@code set} site can occur
 	 */
@@ -5100,12 +5094,14 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Dynamic-first {@code symbol-value} for a program that uses {@code progv} or
-	 * {@code set}, so an active {@code progv}/{@code let} binding (and a {@code setq} or
-	 * {@code set} inside its extent) is answered instead of the eval mirror's global
-	 * default -- what makes cl-json's {@code (mapcar #'symbol-value scope-variables)}
-	 * snapshot see the values its decoder {@code setq}s inside the enclosing scope
-	 * extent. No site pays for the special set:
+	 * {@code symbol-value} of a program with specials: a special is read through its
+	 * variable, never through the eval mirror -- which no binding's restore touches, so
+	 * it answered the global default inside a binding, and after a store from a frame not
+	 * holding the binding (a callee's {@code setq}, a {@code set}) the binding's value
+	 * long after the extent ended. So an active {@code progv}/{@code let} binding (and a
+	 * {@code setq} or {@code set} inside its extent) is answered -- what makes cl-json's
+	 * {@code (mapcar #'symbol-value scope-variables)} snapshot see the values its decoder
+	 * {@code setq}s inside the enclosing scope extent. No site pays for the special set:
 	 * <ul>
 	 * <li>a LITERAL name folds: a special reads the VARIABLE (the dynamic-first read the
 	 * compilers emit for one), any other quoted datum takes the raw mirror probe
@@ -5149,18 +5145,65 @@ public final class LispMacroExpander {
 	static final int NAME_DISPATCH_SEGMENT_ARMS = 128;
 
 	/**
-	 * The shared dynamic-first {@code symbol-value} runtime a computed name calls
-	 * ({@link #dynamicFirstSymbolValue}): {@code (%symbol-value-dynamic name)} dispatches
-	 * the name over the special set, a match reading the variable, the miss falling to
-	 * the raw mirror probe. Segmented ({@link #segmentedNameDispatch}), so no body grows
-	 * with the special set.
-	 * @param specials the program's special-variable names, in declaration order
+	 * The shared {@code symbol-value} runtime a computed name calls
+	 * ({@link #dynamicFirstSymbolValue}): {@code (%symbol-value-dynamic name)} reads the
+	 * name through {@link #globalAccessRuntime}, whose read of a name no special has
+	 * answers its default -- here a fresh cons nothing else can hold -- and falls to the
+	 * raw mirror probe. The program carries the accessor whenever it carries this.
+	 * @param specials the program's special-variable names
+	 * @return the definition, wrapper-shaped
+	 */
+	public static LispVal symbolValueDynamicRuntime(java.util.Collection<String> specials) {
+		LispSymbol n = new LispSymbol(freshName("%SVD-NAME", specials));
+		LispSymbol miss = new LispSymbol(freshName("%SVD-MISS", specials));
+		LispSymbol v = new LispSymbol(freshName("%SVD-VALUE", specials));
+		LispVal read = listToCons(
+				List.of(new LispSymbol(LispNames.GLOBAL_ACCESS_RUNTIME), n, miss, LispNil.INSTANCE, LispNil.INSTANCE));
+		return runtimeDefinition(LispNames.SYMBOL_VALUE_DYNAMIC, List.of(n),
+				listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+						listToCons(List.of(listToCons(List.of(miss, cons2(LispNil.INSTANCE, LispNil.INSTANCE))),
+								listToCons(List.of(v, read)))),
+						listToCons(List.of(new LispSymbol(LispNames.IF), callOf(LispNames.EQ_GENERAL, v, miss),
+								callOf(LispNames.SYMBOL_VALUE_RAW, n), v)))));
+	}
+
+	/**
+	 * The one dispatch every access of a global BY NAME goes through on the compile paths
+	 * -- {@code symbol-value} ({@link #symbolValueDynamicRuntime}), {@code set}
+	 * ({@link #setGlobalRuntime}) and the eval runtime's variable lookup and assignment:
+	 * {@code (%global-access name default store value)} dispatches the name over the
+	 * globals. Reading ({@code store} nil), a special answers its variable -- the active
+	 * dynamic binding, else the global -- and any other name {@code default}: a special
+	 * has ONE home for a read by name, the variable, whatever the eval mirror holds,
+	 * while every other global's mirror is written by every store and stays its value.
+	 * Storing ({@code store} non-nil), the global the name names takes {@code value} as a
+	 * non-lexical {@code setq} gives it ({@code %global-store-set}: the active binding of
+	 * a special, else the global); the answer is unspecified. One chain serves both, so a
+	 * program pays for the global set once however many of the four reach it. A program
+	 * that only reads ({@code stores} false) gets the arms of its specials alone.
+	 * Segmented ({@link #segmentedNameDispatch}), so no body grows with the global set.
+	 * @param specials the program's special-variable names
+	 * @param globals the program's globals with a backing store, in declaration order
+	 * (the specials among them)
+	 * @param stores whether anything stores through the accessor (a {@code set}, the eval
+	 * runtime)
 	 * @return the segments' definitions, wrapper-shaped, the entry first
 	 */
-	public static List<LispVal> symbolValueDynamicRuntime(java.util.Collection<String> specials) {
-		LispSymbol n = new LispSymbol(freshName("%SVD-NAME", specials));
-		return segmentedNameDispatch(LispNames.SYMBOL_VALUE_DYNAMIC, List.of(n), new ArrayList<>(specials), s -> s,
-				callOf(LispNames.SYMBOL_VALUE_RAW, n));
+	public static List<LispVal> globalAccessRuntime(java.util.Collection<String> specials,
+			java.util.Collection<String> globals, boolean stores) {
+		LispSymbol n = new LispSymbol(freshName("%GA-NAME", globals));
+		LispSymbol d = new LispSymbol(freshName("%GA-DEFAULT", globals));
+		LispSymbol st = new LispSymbol(freshName("%GA-STORE", globals));
+		LispSymbol v = new LispSymbol(freshName("%GA-VALUE", globals));
+		List<String> names = new ArrayList<>(stores ? globals : specials);
+		return segmentedNameDispatch(LispNames.GLOBAL_ACCESS_RUNTIME, List.of(n, d, st, v), names, s -> {
+			LispVal read = specials.contains(s.name()) ? s : d;
+			if (!stores) {
+				return read;
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.IF), st,
+					listToCons(List.of(new LispSymbol(LispNames.GLOBAL_STORE_SET), s, v)), read));
+		}, d);
 	}
 
 	/**
@@ -5209,8 +5252,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether a program's user definitions take a name one of the shared runtimes
-	 * ({@link #symbolValueDynamicRuntime}, {@link #progvRuntime},
-	 * {@link #setGlobalRuntime}) would define.
+	 * ({@link #globalAccessRuntime}, {@link #symbolValueDynamicRuntime},
+	 * {@link #progvRuntime}, {@link #setGlobalRuntime}) would define.
 	 * @param userDefinedNames the program's defun names
 	 * @param base the runtime's entry name (its segments extend it)
 	 * @return true when the runtime cannot be injected

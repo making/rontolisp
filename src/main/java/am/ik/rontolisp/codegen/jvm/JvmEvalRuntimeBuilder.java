@@ -108,6 +108,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final @Nullable MethodRefEntry arityChkRef;
 
+		private final @Nullable MethodRefEntry globalAccessRef;
+
 		private final JvmArityOperators arityOperators;
 
 		private final ClassEntry thisClass;
@@ -142,6 +144,7 @@ final class JvmEvalRuntimeBuilder {
 			this.complexValues = b.complexValues;
 			this.hasComplexField = b.hasComplexField;
 			this.arityChkRef = b.arityChkRef;
+			this.globalAccessRef = b.globalAccessRef;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
 			this.thisClass = Objects.requireNonNull(b.thisClass);
 		}
@@ -269,6 +272,16 @@ final class JvmEvalRuntimeBuilder {
 		}
 
 		/**
+		 * The shared accessor ({@code (%global-access name default store value)}) the
+		 * runtime reads a special and assigns a global through, or null when the program
+		 * runs no form through eval or does not carry it: a variable then lives in the
+		 * {@code _genv} mirror alone, as it always did.
+		 */
+		@Nullable MethodRefEntry globalAccessRef() {
+			return this.globalAccessRef;
+		}
+
+		/**
 		 * The compile's arity-operator registry, still open while the runtime is built.
 		 */
 		JvmArityOperators arityOperators() {
@@ -345,6 +358,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable FieldRefEntry hasComplexField;
 
 			private @Nullable MethodRefEntry arityChkRef;
+
+			private @Nullable MethodRefEntry globalAccessRef;
 
 			private @Nullable JvmArityOperators arityOperators;
 
@@ -493,6 +508,11 @@ final class JvmEvalRuntimeBuilder {
 				return this;
 			}
 
+			Builder globalAccessRef(@Nullable MethodRefEntry globalAccessRef) {
+				this.globalAccessRef = globalAccessRef;
+				return this;
+			}
+
 			Builder arityOperators(JvmArityOperators arityOperators) {
 				this.arityOperators = arityOperators;
 				return this;
@@ -515,6 +535,76 @@ final class JvmEvalRuntimeBuilder {
 
 	private JvmEvalRuntimeBuilder(EvalConstants constants) {
 		this.k = constants;
+	}
+
+	/**
+	 * Emits {@code result = %global-access(name, sentinel, nil, nil); if (result !=
+	 * sentinel) return result;} -- a special's value comes from its variable (the active
+	 * dynamic binding, else the global), never from the {@code _genv} mirror, which no
+	 * binding's restore touches. {@code sentinelSlot} holds an object nothing else can
+	 * hold.
+	 */
+	private void specialValueReturn(MethodCode a, MethodRefEntry access, int nameSlot, int sentinelSlot,
+			int resultSlot) {
+		MethodCode.Label miss = a.newLabel();
+		a.aload(nameSlot);
+		a.aload(sentinelSlot);
+		a.aconst_null();
+		a.aconst_null();
+		a.invokestatic(access);
+		a.astore(resultSlot);
+		a.aload(resultSlot);
+		a.aload(sentinelSlot);
+		a.if_acmpeq(miss);
+		a.aload(resultSlot);
+		a.areturn();
+		a.labelBinding(miss);
+	}
+
+	/**
+	 * {@link #globalVariableStore} for the place and value on the operand stack, which it
+	 * leaves there: they pass through {@code placeSlot} and {@code valueSlot}. Nothing
+	 * when the program carries no accessor.
+	 */
+	private void globalVariableStoreOfPair(MethodCode a, int placeSlot, int valueSlot, int envSlot) {
+		if (this.k.globalAccessRef() == null) {
+			return;
+		}
+		a.astore(valueSlot);
+		a.astore(placeSlot);
+		globalVariableStore(a, placeSlot, valueSlot, envSlot);
+		a.aload(placeSlot);
+		a.aload(valueSlot);
+	}
+
+	/**
+	 * Emits {@code if (place instanceof String && _envLookup(place, env) == null)
+	 * %global-access(place, nil, place, value);} -- the assignment of a variable no
+	 * binding of the eval'd code holds reaches the compiled global the name names, as a
+	 * compiled {@code setq} does (the active dynamic binding of a special, else the
+	 * global); the {@code _store} that follows keeps the mirror. The place itself is the
+	 * non-nil store flag. Nothing when the program carries no accessor.
+	 */
+	private void globalVariableStore(MethodCode a, int placeSlot, int valueSlot, int envSlot) {
+		MethodRefEntry access = this.k.globalAccessRef();
+		if (access == null) {
+			return;
+		}
+		MethodCode.Label skip = a.newLabel();
+		a.aload(placeSlot);
+		a.instanceOf(this.k.stringClass());
+		a.ifeq(skip);
+		a.aload(placeSlot);
+		a.aload(envSlot);
+		a.invokestatic(this.k.envLookupRef());
+		a.ifnonnull(skip);
+		a.aload(placeSlot);
+		a.aconst_null();
+		a.aload(placeSlot);
+		a.aload(valueSlot);
+		a.invokestatic(access);
+		a.pop();
+		a.labelBinding(skip);
 	}
 
 	private void ldcStr(MethodCode a, String value) {
@@ -1671,10 +1761,18 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.labelBinding(global);
 		// global lookup; Lisp-2: a bare symbol resolves the variable namespace only,
-		// never the function registry. An unbound symbol retries the case-flipped
-		// spelling once (compiled references read upcased while runtime-read
-		// definitions are case-preserved, and vice versa), then evaluates to ITSELF
-		// under its original spelling.
+		// never the function registry. A special answers its variable first, the
+		// mirror after (OP holds the miss sentinel). An unbound symbol retries the
+		// case-flipped spelling once (compiled references read upcased while
+		// runtime-read definitions are case-preserved, and vice versa), then
+		// evaluates to ITSELF under its original spelling.
+		MethodRefEntry access = this.k.globalAccessRef();
+		if (access != null) {
+			a.loadConstant(0);
+			a.anewarray(this.k.objectClass());
+			a.astore(OP);
+			specialValueReturn(a, access, VAL, OP, TMP);
+		}
 		MethodRefEntry varToLowerCase = stringCaseRef("toLowerCase");
 		MethodRefEntry varToUpperCase = stringCaseRef("toUpperCase");
 		MethodCode.Label self = a.newLabel();
@@ -1709,6 +1807,9 @@ final class JvmEvalRuntimeBuilder {
 		a.invokevirtual(this.k.objectEquals());
 		a.ifne(self);
 		a.labelBinding(varFlipped);
+		if (access != null) {
+			specialValueReturn(a, access, TMP, OP, REST);
+		}
 		a.aload(TMP);
 		a.getstatic(this.k.genvField());
 		a.invokestatic(this.k.envLookupRef());
@@ -2181,6 +2282,7 @@ final class JvmEvalRuntimeBuilder {
 		cdr(a, BINDCUR);
 		a.astore(NEWCELL); // (value ...)
 		evalCar(a, NEWCELL, ENV); // value
+		globalVariableStoreOfPair(a, BODY, ELEM, ENV);
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
 		a.astore(ACC);
@@ -2200,6 +2302,7 @@ final class JvmEvalRuntimeBuilder {
 		cdr(a, REST);
 		a.astore(NEWCELL);
 		evalCar(a, NEWCELL, ENV); // value
+		globalVariableStoreOfPair(a, BODY, ELEM, ENV);
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
 		a.areturn();
@@ -2225,6 +2328,7 @@ final class JvmEvalRuntimeBuilder {
 		evalCar(a, REST, ENV);
 		a.aastore();
 		a.astore(ACC);
+		globalVariableStore(a, BODY, ACC, ENV);
 		a.aload(BODY);
 		a.aload(ACC);
 		a.aload(ENV);
@@ -2254,6 +2358,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aconst_null();
 		a.astore(TMP);
 		a.labelBinding(popAfter);
+		globalVariableStore(a, BODY, TMP, ENV);
 		a.aload(BODY);
 		a.aload(TMP);
 		a.aload(ENV);

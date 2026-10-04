@@ -140,9 +140,10 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
 backend.
 
 **JVM** (`JvmSymbolApiCompiler`): symbol-name = the princ-to-string emission; intern/make-symbol
-= quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp/symbol-value read the `_genv`
-mirror via `_envLookup` (binding pair `Object[2]`, value = index 1; unbound throws
-`The variable X is unbound`); computed fboundp probes `_fenv` then `_lookup`. All three are in
+= quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp, and symbol-value of a name no
+special has, read the `_genv` mirror via `_envLookup` (binding pair `Object[2]`, value = index 1;
+unbound throws `The variable X is unbound`) -- a special's value comes from its variable
+(`.kb/dynamic-special-variables.md`, "One home"); computed fboundp probes `_fenv` then `_lookup`. All three are in
 the `usesEval` force list, which also turns on the top-level `_store` mirroring.
 
 **WASM** (`WasmSymbolApiCompiler` + `WasmSymbolApiRuntimeBuilder`): five always-present unary
@@ -253,8 +254,8 @@ side, answering the value -- so only `set` needs the per-backend work.
   **Compilers** (`LispMacroExpander.expandSetForCompile`, 2026-10-04 `.todo/c81`): a site is
   one call to the shared `%set-global` (`setGlobalRuntime`): `%set-mirror` validates and
   writes the `_store` / `FUNC_STORE` mirror (which creates the binding when the name has
-  none), then `%set-global-store` dispatches the name over the globals onto
-  `%global-store-set` -- the store a non-lexical `setq` of the name makes: JVM
+  none), then the store half of the shared accessor `%global-access` dispatches the name over
+  the globals onto `%global-store-set` -- the store a non-lexical `setq` of the name makes: JVM
   `JvmSetqCompiler.emitGlobalStore` (`_dset` into the thread's active cell of a
   dynamically-bound special, falling to `putstatic _g$`), wasm `global.set` (the binding
   under shallow binding; `--reentrant`: `WasmDynVars.emitWrite`, the task record's cell
@@ -264,9 +265,9 @@ side, answering the value -- so only `set` needs the per-backend work.
   field is unobservable: no global is a constant or a non-symbol. Injected when a form calls
   `set` with two arguments or writes a `symbol-value` place through `setf` or a modify macro
   (`push`/`pushnew`/`pop`/`incf`/`decf`/`remf`/`psetf`/`rotatef`/`shiftf`) --
-  `programUsesSet`, which also turns `symbol-value` dynamic-first
-  (`.kb/dynamic-special-variables.md`, "progv on the compile paths"), so it answers the
-  binding a `set` wrote, not the mirror. A variable NAMED `set` does not count: a `let`
+  `programUsesSet`. `symbol-value` reads a special through its variable in every program
+  (`.kb/dynamic-special-variables.md`, "One home"), so it answers the binding a `set` wrote,
+  not the mirror. A variable NAMED `set` does not count: a `let`
   binding or lambda-list entry of it is walked for its init forms only (`callsSet`). Until
   2026-10-04 one did (the walk took any list headed by `SET` for a call): the "dead `set`
   site" `.todo/c81` measured in the ningle examples was one. Without it the same `let` + checks + chain is spelled at the site
@@ -295,9 +296,10 @@ side, answering the value -- so only `set` needs the per-backend work.
   4M computed `set`s of a bound special over 300 specials: JVM 4.2-4.7 s, wasm 3.1-3.5 s,
   before and after alike (the mirror's `_store` walk dominates).
 - **The mirror is still written inside an active binding** (`%set-mirror` runs first,
-  as a callee's `setq` mirrors), so after the extent `eval`/`boundp` -- and a raw
-  `symbol-value` in a program with neither `set` nor `progv` -- answer the binding's value:
-  `.todo/c89`.
+  as a callee's `setq` mirrors). Since `.todo/c89` no read takes a special's VALUE from it
+  (`symbol-value` and `eval` read the variable); `boundp` still takes its entry as the
+  "bound" witness, so after a `set` inside a binding of a special with no global value it
+  answers t (`.todo/c95`).
 - Tests: `LispEvaluatorTest#set*`, `JvmLispCompilerTest#compileAndRunSet*`,
   `WasmLispCompilerIntegrationTest#set*`, `CompileTimeBoundpTest`
   (the gate arm), `BuiltinFunctionWrapperCatalogTest` (the `#'set` value), ci-spec
@@ -381,8 +383,8 @@ the `t` designator, `*error-output*` -> the reserved handle `2`).
   counting quoted data) — for byte-identity, and because it is the SAME scan the `--component`
   stderr narrowing uses (`.kb/standard-output-redirect.md`), so the mirror seed cannot
   materialize handle 2 in a component whose `wasi:cli/stderr` was pruned. **Limit**: a name the
-  source never spells is still unbound. The dynamic-scope divergence is UNCHANGED —
-  `symbol-value` reads the global default, not an active `let` binding.
+  source never spells is still unbound. `symbol-value` and `eval` of one of them read its
+  variable, an active `let` binding included (`.kb/dynamic-special-variables.md`, "One home").
 - **Latent JVM bug this exposed**: `_writeString`'s socket probe indexes `_streams` from the raw
   handle BEFORE delegating to `_writeStr` where the stderr branch lives, and `_streams` was
   lazily created. `<clinit>` now allocates it with the reserved slots empty whenever
