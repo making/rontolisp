@@ -4237,10 +4237,35 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the shake keeps can bounce, and answers its argument otherwise -- _tramp, then
 		// reached from nothing, is shaken away with everything only it reached.
 		MethodCode unwCode = new MethodCode();
+		// A tail call through a value calls _vtc<n> (_vtcv for an apply): a real call
+		// while the owner thread's value-tail frames stay under the limit, a bounce
+		// otherwise. _tramp holds the owner's count at the limit while it drives a chain.
+		// Only the value tails' bodies reach these, so the shake drops them -- and the
+		// count's fields -- with _tramp.
+		boolean valueTails = !mainCtx.valueTailArities.isEmpty() || mainCtx.spreadBounces[0];
 		definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainCtx.trampName(), mainCtx.trampDesc(),
-				JvmTailBounce.trampBody(indirectCallArities, mainCtx.spreadBounces[0], cp, thisClass));
+				JvmTailBounce.trampBody(indirectCallArities, mainCtx.spreadBounces[0], valueTails, cp, thisClass));
 		definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.UNW_NAME),
 				cp.utf8Entry(JvmTailBounce.UNW_DESC), unwCode);
+		for (int arity : mainCtx.valueTailArities) {
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmTailBounce.valueTailName(arity)), cp.utf8Entry(JvmTailBounce.valueTailDesc(arity)),
+					JvmTailBounce.valueTailBody(arity, false, cp, thisClass));
+		}
+		if (mainCtx.spreadBounces[0]) {
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmTailBounce.VALUE_TAIL_SPREAD_NAME), cp.utf8Entry(JvmTailBounce.valueTailDesc(1)),
+					JvmTailBounce.valueTailBody(1, true, cp, thisClass));
+		}
+		if (valueTails) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.OWNER_FIELD),
+					cp.utf8Entry(JvmTailBounce.OWNER_DESC));
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.DEPTH_FIELD),
+					cp.utf8Entry("I"));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					cp.utf8Entry(JvmTailBounce.CLAIM_NAME), cp.utf8Entry("()V"),
+					JvmTailBounce.claimBody(cp, thisClass));
+		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
 				|| dynVarRuntime != null || unboundMarker != null || initsClinit
@@ -6723,11 +6748,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<MethodCode> bouncingBodies;
 
 		/**
-		 * Whether a tail {@code apply} through a value bounced anywhere, its argument
-		 * list unspread ({@link JvmTailBounce#emitSpreadBounce}): {@code _tramp} then
-		 * re-enters the raw apply too. One cell shared by every {@code Ctx}.
+		 * Whether a tail {@code apply} through a value was emitted anywhere
+		 * ({@link JvmTailBounce#emitSpreadValueTail}): the class then carries
+		 * {@code _vtcv}, and {@code _tramp} re-enters the raw apply for its bounce, the
+		 * argument list unspread. One cell shared by every {@code Ctx}.
 		 */
 		boolean[] spreadBounces;
+
+		/**
+		 * The argument counts a tail call through a value was emitted with, one
+		 * {@code _vtc<n>} each ({@link JvmTailBounce#emitValueTail}). One set shared by
+		 * every {@code Ctx}, like {@link #indirectCallArities}.
+		 */
+		Set<Integer> valueTailArities;
 
 		/**
 		 * Every literal spelling Pass 2 emitted as a runtime VALUE the program can hold
@@ -7640,6 +7673,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.valueFuncIds = builder.valueFuncIds;
 			this.bouncingBodies = builder.bouncingBodies;
 			this.spreadBounces = builder.spreadBounces;
+			this.valueTailArities = builder.valueTailArities;
 			this.arityGuardShapes = builder.arityGuardShapes;
 			this.arityOperators = builder.arityOperators;
 			this.spelledLiterals = builder.spelledLiterals;
@@ -8015,6 +8049,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * {@link Ctx#spreadBounces}.
 			 */
 			private final boolean[] spreadBounces = new boolean[1];
+
+			/**
+			 * One set for every {@code Ctx} this builder makes: see
+			 * {@link Ctx#valueTailArities}.
+			 */
+			private final Set<Integer> valueTailArities = new java.util.TreeSet<>();
 
 			private Set<Integer> arityGuardShapes = new HashSet<>();
 

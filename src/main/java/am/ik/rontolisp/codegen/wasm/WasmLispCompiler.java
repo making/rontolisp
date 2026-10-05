@@ -4487,6 +4487,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.valueFuncIds). Filled while the bodies are emitted, read below to size the
 		// dispatch ladders.
 		Set<Integer> valueFuncIds = new HashSet<>();
+		// The function each of them is made in, credited per Pass 2 unit below (see
+		// WasmValueMakers): what lets a ladder case go with the body that made it.
+		WasmValueMakers valueMakers = new WasmValueMakers();
 		// The built-in callees a guarded literal apply baked its funcId in for (see
 		// Ctx.arityNamedCallees), read below by the report.
 		Set<Integer> arityNamedCallees = new HashSet<>();
@@ -4600,6 +4603,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.runtimeDesignatorDispatch(runtimeDesignatorDispatch)
 			.injectedRuntimeLambdas(injectedRuntimeLambdas)
 			.valueFuncIds(valueFuncIds)
+			.valueMakers(valueMakers)
 			.arityNamedCallees(arityNamedCallees)
 			.spelledLiterals(spelledLiterals)
 			.userSpelledLiterals(userSpelledLiterals)
@@ -4717,6 +4721,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program every fdlibm body, since the catalog wraps every transcendental.
 		Map<String, Set<WasmFdlibmRuntimeBuilder.Fn>> injectedFdlibmUses = new HashMap<>();
 		for (DefunDecl defun : defuns) {
+			// The function this body becomes: the one every value it makes is credited
+			// to.
+			valueMakers.open(userFuncBase() + userFunctionBodies.size());
 			// See Ctx.injectedRuntimeBody: a wrapper catalog body is not the user's
 			// designator use, so its dispatches do not arm the name registry.
 			boolean injectedBody = injectedRuntimeDefuns.contains(defun.name);
@@ -4814,6 +4821,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			userFunctionBodies.add(buildLocalsAndPatch(funcCtx, defun.paramNames.size() + 1, funcBody));
 		}
 
+		valueMakers.close();
+
 		// Every defun body exists now, so this is where a REAL size exists to check (a
 		// body's bytes per AST node vary by an order of magnitude, because the surface
 		// macros expand during this pass). Only a defun is reported: a lambda's
@@ -4849,6 +4858,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 		ctx.topLevel = true;
+		// The top-level chunks are called from _start alone, so _start makes their
+		// values too.
+		valueMakers.open(FUNC_START);
 
 		// The heap pointer (HEAP_PTR_ADDR) is seeded by an active data segment at
 		// instantiation (see writeDataSection below), not here: its value depends on
@@ -4984,6 +4996,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		startWriter.write(Instruction.END);
 
 		byte[] finalStartBytes = buildLocalsAndPatch(ctx, 0, startBody);
+		valueMakers.close();
 
 		// Pass 2c: Compile lambda bodies iteratively
 		List<byte[]> lambdaFunctionBodies = new ArrayList<>();
@@ -5001,6 +5014,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ MAX_CALLABLE_ARITY + " parameters, got " + lambda.paramNames().size()
 						+ " (bundle the extra arguments into a list)");
 			}
+			valueMakers.open(lambda.funcIndex());
 			ByteArrayOutputStream lambdaBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
 			// A lambda an injected wrapper body built is injected runtime too (see
@@ -5070,6 +5084,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			lambdaWriter.write(Instruction.END);
 
 			lambdaFunctionBodies.add(buildLocalsAndPatch(lambdaCtx, lambda.paramNames.size() + 1, lambdaBody));
+			valueMakers.close();
 			lambdaIdx++;
 		}
 		WasmUncaughtLocations.finishFramePredicate(uncaughtLocations, lambdaFunctionBodies, functions);
@@ -5787,13 +5802,29 @@ public final class WasmLispCompiler implements LispCompiler {
 						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
 						: null,
 				this.usesIdentityHashTables) : null;
+		// One dispatcher over a funcId set. Built here over every dispatchable funcId
+		// and,
+		// once the module is assembled, rebuilt over the ones a kept function makes
+		// (narrowLadders).
+		final int ladderUserFuncBase = userFuncBase();
+		final WasmRuntimeBuilder.@Nullable ArityReport ladderArityReport = arityReport;
+		final WasmRuntimeBuilder.@Nullable NotFunctionReport ladderNotFunction = notFunctionReport;
+		final int ladderArityChkIndex = arityChkIndex;
+		final int ladderNumDefuns = numDefuns;
+		final boolean ladderUsesEval = usesEval;
+		final int ladderRawSentinel = rawSentinelGlobalIndex;
+		LadderBuilder ladderBuilder = (ladder, dispatchable) -> WasmRuntimeBuilder.buildDispatch(ladder.arity(), defuns,
+				lambdaDecls, ladderNumDefuns, stringTable, ladderUsesEval, ladderUserFuncBase, ladder.spread(),
+				dispatchable, ladder.pageBase(), ladderArityReport, ladderArityChkIndex,
+				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables,
+				ladderRawSentinel);
+		List<Ladder> ladders = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
-				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
-						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
-						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
-						rawSentinelGlobalIndex);
+				Ladder ladder = new Ladder(FUNC_DISPATCH_BASE + arity, arity, false,
+						dispatchPageFuncBase + dispatchPageBodies.size(), 0);
+				WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, dispatchableFuncIds);
+				ladders.add(ladder.withPages(built.pages().size()));
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -5814,11 +5845,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// built exactly when _apply is (the apply runtime, with or without the _eval
 		// interpreter); otherwise its body is unreachable like an unused arity's.
 		if (usesApplyRuntime) {
-			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
-					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
-					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
-					rawSentinelGlobalIndex);
+			Ladder ladder = new Ladder(FUNC_DISPATCH_SPREAD, 0, true, dispatchPageFuncBase + dispatchPageBodies.size(),
+					0);
+			WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, dispatchableFuncIds);
+			ladders.add(ladder.withPages(built.pages().size()));
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -5844,11 +5874,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<byte[]> extraDispatchBodies = new ArrayList<>();
 		for (int arity = MAX_CALLABLE_ARITY + 1; arity <= callArityCeiling(); arity++) {
 			if (indirectCallArities.contains(arity)) {
-				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
-						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
-						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
-						rawSentinelGlobalIndex);
+				Ladder ladder = new Ladder(extraDispatchFuncBase() + (arity - MAX_CALLABLE_ARITY - 1), arity, false,
+						dispatchPageFuncBase + dispatchPageBodies.size(), 0);
+				WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, dispatchableFuncIds);
+				ladders.add(ladder.withPages(built.pages().size()));
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -8634,6 +8663,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				data.addActiveData(0, alnumOffset, alnumBytes);
 			});
 		byte[] coreModule = out.toByteArray();
+		// Before the injection below, whose renumbering a rebuilt ladder body would miss.
+		if (this.optimize.eliminatesDeadCode() && !this.rawCoreForTest) {
+			coreModule = narrowLadders(coreModule, ladders, ladderBuilder, dispatchableFuncIds, valueFuncIds,
+					valueMakers, registryLive, defuns, lambdaDecls, stringTable);
+		}
 		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
 		// renumber every function reference (incl. the placeholder call indices). Must
 		// run before the tree shaker -- the module is not valid until then.
@@ -8774,6 +8808,126 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return coreModule;
 	}
+
+	/**
+	 * One dispatcher as {@code compile} built it: the function every call site names, its
+	 * shape, and the page slots it was given.
+	 *
+	 * @param funcIndex the dispatcher's module function index (before host-import
+	 * injection)
+	 * @param arity the argument count (0 for the spread dispatcher)
+	 * @param spread whether it is the spread dispatcher
+	 * @param pageBase the module function index of its first page slot
+	 * @param pages how many page slots it holds
+	 */
+	private record Ladder(int funcIndex, int arity, boolean spread, int pageBase, int pages) {
+
+		Ladder withPages(int count) {
+			return new Ladder(this.funcIndex, this.arity, this.spread, this.pageBase, count);
+		}
+
+	}
+
+	/** Builds one {@link Ladder} over a funcId set. */
+	@FunctionalInterface
+	private interface LadderBuilder {
+
+		WasmRuntimeBuilder.DispatchFunctions build(Ladder ladder, Set<Integer> dispatchable);
+
+	}
+
+	/**
+	 * Rebuilds the dispatch ladders over the funcIds a KEPT function makes. A funcId
+	 * joins {@code valueFuncIds} wherever its {@code (lambda ...)} / {@code #'name} is
+	 * compiled -- in a body the shake then drops too -- and its arm's {@code call} would
+	 * keep the callee, and all it reaches, for a value nothing can make. The tree shaker
+	 * answers which values the module makes when an arm is followed only once a reached
+	 * function makes its value ({@code WasmTreeShaker.madeValues}); the makers are
+	 * {@link WasmValueMakers}' credits, plus {@code _lookup} for every name-registry row
+	 * (a name the registry answers is a value it makes), plus every dispatchable defun no
+	 * compiled body and no row makes. The {@code _lookup} rows and the {@code _fun_name}
+	 * table keep the full set, as on the JVM.
+	 *
+	 * <p>
+	 * A rebuilt ladder takes the page slots it was given and never needs more (fewer
+	 * cases, never more leaves); a slot it leaves over gets an {@code unreachable} body,
+	 * which the shake drops. Every other index, type and section is untouched.
+	 * @return the module, the ladders swapped when some dispatchable funcId is never made
+	 */
+	private byte[] narrowLadders(byte[] coreModule, List<Ladder> ladders, LadderBuilder ladderBuilder,
+			Set<Integer> dispatchable, Set<Integer> valueFuncIds, WasmValueMakers valueMakers, boolean registryLive,
+			List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls, StringTable stringTable) {
+		if (ladders.isEmpty()) {
+			return coreModule;
+		}
+		Set<Integer> dispatchers = new HashSet<>();
+		for (Ladder ladder : ladders) {
+			dispatchers.add(ladder.funcIndex());
+			for (int page = 0; page < ladder.pages(); page++) {
+				dispatchers.add(ladder.pageBase() + page);
+			}
+		}
+		Map<Integer, Integer> targetValues = new HashMap<>();
+		Map<Integer, Set<Integer>> makers = new HashMap<>();
+		Set<Integer> alwaysMade = new HashSet<>();
+		int userBase = userFuncBase();
+		for (int funcId : dispatchable) {
+			if (funcId < defuns.size()) {
+				targetValues.put(userBase + funcId, funcId);
+				if (registryLive) {
+					makers.computeIfAbsent(FUNC_LOOKUP, k -> new HashSet<>()).add(funcId);
+				}
+				else if (!valueFuncIds.contains(funcId)) {
+					alwaysMade.add(funcId);
+				}
+			}
+		}
+		for (LambdaInfo lambda : lambdaDecls) {
+			if (dispatchable.contains(lambda.funcId())) {
+				targetValues.put(lambda.funcIndex(), lambda.funcId());
+			}
+		}
+		for (Map.Entry<Integer, Set<Integer>> made : valueMakers.makers().entrySet()) {
+			for (int unit : made.getValue()) {
+				if (unit == WasmValueMakers.UNATTRIBUTED) {
+					alwaysMade.add(made.getKey());
+				}
+				else {
+					makers.computeIfAbsent(unit, k -> new HashSet<>()).add(made.getKey());
+				}
+			}
+		}
+		Set<Integer> madeValues = am.ik.wasm.WasmTreeShaker.madeValues(coreModule,
+				new am.ik.wasm.WasmTreeShaker.ValueCalls(dispatchers, targetValues, makers, alwaysMade));
+		Set<Integer> live = new HashSet<>(dispatchable);
+		live.retainAll(madeValues);
+		if (live.size() == dispatchable.size()) {
+			return coreModule;
+		}
+		Map<Integer, byte[]> rebuilt = new HashMap<>();
+		int interned = stringTable.entries().size();
+		for (Ladder ladder : ladders) {
+			WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, live);
+			if (built.pages().size() > ladder.pages()) {
+				// Fewer cases never need more pages; keep the ladder as it was if one
+				// did.
+				continue;
+			}
+			rebuilt.put(ladder.funcIndex(), built.body());
+			for (int page = 0; page < ladder.pages(); page++) {
+				rebuilt.put(ladder.pageBase() + page,
+						page < built.pages().size() ? built.pages().get(page) : UNREACHABLE_BODY);
+			}
+		}
+		if (stringTable.entries().size() != interned) {
+			// The data section is written: a string new here would have no bytes.
+			throw new IllegalStateException("a narrowed dispatch ladder interned a string the full one did not");
+		}
+		return am.ik.wasm.WasmSections.replaceBodies(coreModule, rebuilt);
+	}
+
+	/** A body that only traps: valid under every function type. */
+	private static final byte[] UNREACHABLE_BODY = { 0, Instruction.UNREACHABLE, Instruction.END };
 
 	// The import-slot ordinal of a $sched builtin field.
 	private static int schedOrdinal(Map<String, Integer> importSlotIndex, String field) {
@@ -10449,6 +10603,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> valueFuncIds;
 
 		/**
+		 * The function each of {@link #valueFuncIds} is made in (one holder shared by
+		 * every {@code Ctx}, like {@link #valueFuncIds}); see {@link #noteFunctionValue}.
+		 */
+		WasmValueMakers valueMakers;
+
+		/**
 		 * Every literal spelling Pass 2 emitted as a runtime VALUE the program can hold
 		 * -- a quoted/self-evaluating symbol's name, a string literal's framed form, a
 		 * keyword -- recorded where the value is built
@@ -11280,6 +11440,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.injectedRuntimeBody = builder.injectedRuntimeBody;
 			this.injectedRuntimeLambdas = builder.injectedRuntimeLambdas;
 			this.valueFuncIds = builder.valueFuncIds;
+			this.valueMakers = builder.valueMakers;
 			this.spelledLiterals = builder.spelledLiterals;
 			this.userSpelledLiterals = builder.userSpelledLiterals;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
@@ -11419,6 +11580,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<Integer> injectedRuntimeLambdas = new HashSet<>();
 
 			private Set<Integer> valueFuncIds = new HashSet<>();
+
+			private WasmValueMakers valueMakers = new WasmValueMakers();
 
 			private Set<String> spelledLiterals = new HashSet<>();
 
@@ -11605,6 +11768,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.injectedRuntimeBody = proto.injectedRuntimeBody;
 				this.injectedRuntimeLambdas = proto.injectedRuntimeLambdas;
 				this.valueFuncIds = proto.valueFuncIds;
+				this.valueMakers = proto.valueMakers;
 				this.spelledLiterals = proto.spelledLiterals;
 				this.userSpelledLiterals = proto.userSpelledLiterals;
 				this.warnedClRedefinitions = proto.warnedClRedefinitions;
@@ -11757,6 +11921,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder valueFuncIds(Set<Integer> valueFuncIds) {
 				this.valueFuncIds = valueFuncIds;
+				return this;
+			}
+
+			Builder valueMakers(WasmValueMakers valueMakers) {
+				this.valueMakers = valueMakers;
 				return this;
 			}
 
@@ -12200,6 +12369,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			int slot = this.nextLocal++;
 			this.locals.put(name, slot);
 			return slot;
+		}
+
+		/**
+		 * Records that the body being compiled materializes {@code funcId} as a callable
+		 * VALUE: the funcId joins {@link #valueFuncIds}, so the dispatch ladders carry a
+		 * case for it, and {@link #valueMakers} credits the function the body belongs to,
+		 * so the case lives only while that function does.
+		 * @param funcId the funcId the emitted {@code i32.const} names
+		 */
+		void noteFunctionValue(int funcId) {
+			this.valueFuncIds.add(funcId);
+			this.valueMakers.note(funcId);
 		}
 
 		int allocTemp() {

@@ -819,7 +819,8 @@ body lowers). `loop` inits are sequential and destructure.
   ([jvm-self-tail-calls.md](jvm-self-tail-calls.md); before them, a JVM `loop` overflowed
   near 150,000 rounds, a `defn` near 200,000, a `letfn` pair near 150,000). A call through
   a value in tail position -- `%clojure-call`'s `apply`, a call site's `funcall` of a real
-  function -- bounces through the JVM's trampoline ([jvm-tail-bounce.md](jvm-tail-bounce.md)): a `fn`
+  function -- is a JVM value tail, a real call while shallow and a bounce through the
+  trampoline past 64 ([jvm-tail-bounce.md](jvm-tail-bounce.md)): a `fn`
   in an atom calling itself runs 1,000,000 deep on every backend (wasm and the component
   since 2026-10-03: `%clojure-call`'s `apply` sits in a `cond` clause, which wasm compiled as
   no tail before, `.kb/wasm-tail-calls.md`). The spec's

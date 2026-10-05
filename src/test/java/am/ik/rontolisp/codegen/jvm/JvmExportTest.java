@@ -112,6 +112,70 @@ class JvmExportTest {
 	}
 
 	@Test
+	void aChainThroughValuesRunsOnASmallStackOnEveryThreadAndOnlyTheFirstOwnsTheCount() throws Exception {
+		// The first thread to make a value tail owns the count (JvmTailBounce): its value
+		// tails are real calls up to the limit, so its frames stay bounded and a
+		// 1,000,000-deep chain runs on a 256 KB stack. Every other thread bounces every
+		// value tail, so threads calling in while the owner runs neither share the count
+		// nor make it drift: each answers on the same small stack, and the count is zero
+		// once they are done.
+		Class<?> clazz = compileToClass("""
+				(defun chain (n)
+				  (let ((f nil))
+				    (setq f (lambda (k acc) (if (= k 0) acc (funcall f (- k 1) (+ acc 1)))))
+				    (funcall f n 0)))
+				(rontolisp:jvm-export 'chain :params '(:s64) :returns :s64)
+				""", true);
+		Method chain = clazz.getMethod("chain", long.class);
+		int callers = 4;
+		Object[] answers = new Object[callers + 1];
+		java.util.concurrent.CountDownLatch claimed = new java.util.concurrent.CountDownLatch(1);
+		Thread owner = new Thread(null, () -> {
+			answers[0] = invokeOrThrowable(chain, 10L);
+			claimed.countDown();
+			answers[0] = List.of(answers[0], invokeOrThrowable(chain, 1_000_000L));
+		}, "value-tail-owner", 256 * 1024);
+		List<Thread> others = new java.util.ArrayList<>();
+		for (int i = 1; i <= callers; i++) {
+			int slot = i;
+			others.add(new Thread(null, () -> {
+				try {
+					claimed.await();
+				}
+				catch (InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				answers[slot] = invokeOrThrowable(chain, 1_000_000L);
+			}, "value-tail-caller-" + i, 256 * 1024));
+		}
+		owner.start();
+		others.forEach(Thread::start);
+		owner.join();
+		for (Thread other : others) {
+			other.join();
+		}
+		assertThat(answers[0]).isEqualTo(List.of(10L, 1_000_000L));
+		assertThat(Arrays.copyOfRange(answers, 1, answers.length)).containsOnly(1_000_000L);
+		assertThat(staticField(clazz, JvmTailBounce.OWNER_FIELD)).isSameAs(owner);
+		assertThat(staticField(clazz, JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
+	}
+
+	private static Object invokeOrThrowable(Method method, Object argument) {
+		try {
+			return method.invoke(null, argument);
+		}
+		catch (ReflectiveOperationException ex) {
+			return ex.getCause() != null ? ex.getCause() : ex;
+		}
+	}
+
+	private static Object staticField(Class<?> clazz, String name) throws ReflectiveOperationException {
+		java.lang.reflect.Field field = clazz.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(null);
+	}
+
+	@Test
 	void aResultTheDeclaredTypeCannotStateThrowsInsteadOfWrapping() throws Exception {
 		Class<?> clazz = compileToClass("""
 				(defun big (x) (+ x 1000))

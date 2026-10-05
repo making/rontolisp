@@ -106,7 +106,11 @@ bytecode HotSpot compiles in one method keeps a frame per call instead. A tail c
 function value -- from a `defun`, a `lambda`, an `flet` or `labels` function, an `apply` --
 runs in constant stack too: a closure calling itself through the variable that holds it,
 closures in a table calling each other, a continuation handed to a function that calls it.
-A call inside a special binding is not in tail position, so it keeps a frame.
+Such a call stays an ordinary call, which the JIT can inline, until 64 of them are on the
+stack -- an adapter closure or a composed function never gets that deep -- and past that the
+chain continues through the class's trampoline. Only the first thread that makes such a call
+counts them; on every other thread each one goes through the trampoline. A call inside a
+special binding is not in tail position, so it keeps a frame.
 
 ## Optimize (Dead-Code Elimination)
 

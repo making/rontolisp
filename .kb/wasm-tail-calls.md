@@ -5,7 +5,8 @@ core module. The JVM has three narrower counterparts -- a self tail call is a ju
 method's start, a tail call within a tail group of mutually tail-calling defuns or `labels`
 functions a jump inside the method a call names
 ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)), a tail through a value -- a defun's, a
-lambda's, an `apply`'s -- a trampoline bounce ([jvm-tail-bounce.md](jvm-tail-bounce.md)) -- and
+lambda's, an `apply`'s -- a real call while shallow and a trampoline bounce past 64
+([jvm-tail-bounce.md](jvm-tail-bounce.md)) -- and
 the interpreter its own mechanism, the
 loop in `eval` (`.kb/interpreter-tail-calls.md`); their depths are recorded below and are
 not this file's invariant. `--no-gc` is untouched (its own

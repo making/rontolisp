@@ -211,8 +211,10 @@ table, and a function listed there counts as reachable whether or not anything
 ever calls it that way. So a function is listed only when your program can
 actually obtain it as a value — `#'name`, a quoted `'name` designator, a
 `lambda` — and everything else becomes ordinary dead code the shaker
-removes. On a program that loads `md5` and calls one function, that is the
-difference between about 1.1 MB and 582 KB.
+removes. A `lambda` counts only while code that survives the shake makes it: a
+closure made only inside a function nothing calls goes with that function. On a
+program that loads `md5` and calls one function, that is the difference between
+about 1.1 MB and 582 KB.
 
 A program that holds a symbol **builder** — `intern`, `find-symbol`,
 `make-symbol`, `uiop:symbol-call` — keeps the listing, and instead widens it: a

@@ -79,7 +79,7 @@ final class WasmLambdaCompiler {
 		// The other place a funcId becomes a callable VALUE (see Ctx.valueFuncIds): a
 		// lambda is only ever reached through a dispatcher, so its case must stay --
 		// but only when some emitted body actually builds the closure.
-		ctx.valueFuncIds.add(funcId);
+		ctx.noteFunctionValue(funcId);
 		// funcId
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(funcId);

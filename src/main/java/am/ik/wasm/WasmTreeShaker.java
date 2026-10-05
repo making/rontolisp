@@ -5,8 +5,12 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import am.ik.wasm.WasmSections.ImportEntry;
 import am.ik.wasm.WasmSections.IntList;
@@ -1152,6 +1156,102 @@ public final class WasmTreeShaker {
 			}
 		}
 		return Arrays.copyOfRange(reachable, numImportedFuncs, totalFuncs);
+	}
+
+	/**
+	 * The calls a module makes through a function VALUE, and who makes the values -- the
+	 * edge a plain call graph cannot see. A dispatcher's {@code call} to a valued target
+	 * is followed only once a reachable function makes that value: a closure created only
+	 * in a function nothing reaches can never arrive at the dispatcher, so its arm keeps
+	 * nothing alive.
+	 *
+	 * @param dispatchers the functions whose calls to a target in {@code targetValues}
+	 * are calls through a value; every other call in them is an ordinary edge
+	 * @param targetValues module function index to the value a dispatcher call of it
+	 * serves
+	 * @param makers module function index to the values its body makes
+	 * @param alwaysMade the values made whatever the module keeps
+	 */
+	public record ValueCalls(Set<Integer> dispatchers, Map<Integer, Integer> targetValues,
+			Map<Integer, Set<Integer>> makers, Set<Integer> alwaysMade) {
+	}
+
+	/**
+	 * The values a module can make: those of {@link ValueCalls#alwaysMade()} and every
+	 * value a function makes that the roots reach (exports and the start function, as
+	 * {@link #shake} roots them), where a dispatcher's call through a value is followed
+	 * only once that value is made. A dispatcher arm whose value is absent from the
+	 * answer can never be taken; the caller rebuilds the dispatchers without it, since a
+	 * {@code call} left in a body would keep its target whatever this says.
+	 * @param module a core WASM module
+	 * @param calls the value edges and their makers
+	 * @return the made values
+	 */
+	public static Set<Integer> madeValues(byte[] module, ValueCalls calls) {
+		List<Section> sections = WasmSections.parseSections(module);
+		@Nullable Section importSec = WasmSections.find(sections, SEC_IMPORT);
+		int numImportedFuncs = 0;
+		if (importSec != null) {
+			for (ImportEntry e : WasmSections.parseImports(importSec.payload())) {
+				if (e.kind() == WasmSections.KIND_FUNC) {
+					numImportedFuncs++;
+				}
+			}
+		}
+		@Nullable Section codeSec = WasmSections.find(sections, SEC_CODE);
+		List<byte[]> bodies = codeSec == null ? List.of() : WasmSections.parseCodeEntries(codeSec.payload());
+		int totalFuncs = numImportedFuncs + bodies.size();
+		Set<Integer> made = new HashSet<>(calls.alwaysMade());
+		// value -> the targets a reached dispatcher calls through it, waiting for it.
+		Map<Integer, List<Integer>> waiting = new HashMap<>();
+		boolean[] reachable = new boolean[totalFuncs];
+		Deque<Integer> work = new ArrayDeque<>();
+		List<Integer> roots = new ArrayList<>();
+		for (int root : exportFuncRoots(WasmSections.find(sections, SEC_EXPORT))) {
+			roots.add(root);
+		}
+		@Nullable Section startSec = WasmSections.find(sections, SEC_START);
+		if (startSec != null) {
+			roots.add(WasmSections.readU(startSec.payload(), new int[] { 0 }));
+		}
+		for (int root : roots) {
+			reach(root, reachable, work);
+		}
+		while (!work.isEmpty()) {
+			int fn = work.pop();
+			for (int value : calls.makers().getOrDefault(fn, Set.of())) {
+				if (made.add(value)) {
+					for (int target : waiting.getOrDefault(value, List.of())) {
+						reach(target, reachable, work);
+					}
+				}
+			}
+			int defIndex = fn - numImportedFuncs;
+			if (defIndex < 0) {
+				continue;
+			}
+			boolean dispatcher = calls.dispatchers().contains(fn);
+			for (Ref r : WasmSections.scanBody(bodies.get(defIndex))) {
+				if (r.kind() != RefKind.FUNC) {
+					continue;
+				}
+				@Nullable Integer value = dispatcher ? calls.targetValues().get(r.index()) : null;
+				if (value != null && !made.contains(value)) {
+					waiting.computeIfAbsent(value, k -> new ArrayList<>()).add(r.index());
+				}
+				else {
+					reach(r.index(), reachable, work);
+				}
+			}
+		}
+		return made;
+	}
+
+	private static void reach(int fn, boolean[] reachable, Deque<Integer> work) {
+		if (fn >= 0 && fn < reachable.length && !reachable[fn]) {
+			reachable[fn] = true;
+			work.push(fn);
+		}
 	}
 
 	// --- Export / start sections ---
