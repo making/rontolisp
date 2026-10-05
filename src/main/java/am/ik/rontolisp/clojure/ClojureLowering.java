@@ -3560,7 +3560,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqAllForm(this, lower(items.get(1))));
 			case "second":
 				ClojureLowerUtil.isTrue(n == 1, "second takes one collection");
-				return ClojureSeqLowering.nthForm(this, lower(items.get(1)), new LispInteger(1), NIL_CONST);
+				return ClojureSeqLowering.secondForm(lower(items.get(1)));
 			default:
 				return builtinFunctions(name, items, n);
 		}

@@ -5,7 +5,11 @@
 Answers whether `k` is present: a key of the map, a member of the set, or a valid index
 of the vector or string (a bounds check). `nil` contains nothing. A Java `Map` or `Set`
 looks `k` up itself, as `get` does; any other Java object signals, like the oracle.
-Anything else answers `false`.
+Anything else (a list, a seq, a keyword, a number, `false`) signals
+`IllegalArgumentException`, like the oracle.
+
+Deviation: a string answers `false` for a key that is no integer index, where the oracle
+truncates a number and signals for any other key.
 
 As a value a two-argument lambda.
 

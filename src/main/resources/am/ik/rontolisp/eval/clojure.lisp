@@ -2558,50 +2558,38 @@
   "A lazy seq over the zero-argument closure THUNK, unrealized."
   (list :C%LAZY (cons thunk nil)))
 
+;; A plain list passes through past one test: a cons headed by a CL keyword
+;; is a tagged wrapper (no user list holds one), seqed when it is a set, a
+;; record or a sorted collection and refused like any other value that is no
+;; collection (a keyword, a var, a reduced value, a namespace, an atom, a
+;; pattern, a deftype, false, a number ...).
 (defun rontolisp::%clojure-strict-seq (coll)
   "The strict list view of COLL: the original cond, now shared by every backend
    through this one defun instead of inline in the lowering."
   (cond ((null coll) nil)
-        ((rontolisp::%clojure-set-p coll)
-         (let ((acc nil))
-           (maphash (lambda (k v)
-                      (declare (ignore v))
-                      (setq acc (cons k acc))) (car (cdr coll)))
-           acc))
-        ((rontolisp::%clojure-record-p coll)
-         (let ((acc nil))
-           (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
-                    (car (cdr (cdr (cdr coll)))))
-           acc))
-        ((rontolisp::%clojure-typed-opaque-p coll)
-         (rontolisp::%clojure-illegal-argument-exception
-          "seq needs a collection"))
-        ((or (rontolisp::%clojure-re-pattern-p coll)
-             (rontolisp::%clojure-re-matcher-p coll))
-         (rontolisp::%clojure-illegal-argument-exception
-          "seq needs a collection"))
-        ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-        ;; too, so the oracle signals instead of seqing (the conj-guard
-        ;; precedent)
-        ((rontolisp::%clojure-atom-p coll)
-         (rontolisp::%clojure-illegal-argument-exception
-          "seq needs a collection"))
-        ;; a sorted collection is a cons wrapper: its arm costs no other kind a test
-        ((consp coll)
-         (if (rontolisp::%clojure-sorted-p coll)
-             (rontolisp::%clojure-sorted-seq coll)
-             coll))
-        ((vectorp coll) (coerce coll 'list))
-        ((stringp coll) (coerce coll 'list))
-        ((hash-table-p coll)
-         (let ((acc nil))
-           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
-           acc))
-        ((eq coll rontolisp::%clojure-false) nil)
-        ((rontolisp::%clojure-host-seqable-p coll)
-         (rontolisp::%clojure-host-seq coll))
-        (t (rontolisp::%clojure-illegal-argument-exception
-            "seq needs a collection"))))
+   ((and (consp coll) (not (keywordp (car coll)))) coll)
+   ((vectorp coll) (coerce coll 'list))
+   ((stringp coll) (coerce coll 'list))
+   ((hash-table-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
+      acc))
+   ((rontolisp::%clojure-set-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v)
+                 (declare (ignore v))
+                 (setq acc (cons k acc))) (car (cdr coll)))
+      acc))
+   ((rontolisp::%clojure-record-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
+               (car (cdr (cdr (cdr coll)))))
+      acc))
+   ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-seq coll))
+   ((rontolisp::%clojure-host-seqable-p coll)
+    (rontolisp::%clojure-host-seq coll))
+   (t
+    (rontolisp::%clojure-illegal-argument-exception "seq needs a collection"))))
 
 (defun rontolisp::%clojure-realize (x)
   "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.
@@ -2667,17 +2655,41 @@
         ((or (not (consp p)) (rontolisp::%clojure-lazy-p (cdr p)))
          (if (consp p) (rontolisp::%clojure-realize-all s) s)))))
 
+;; The member of COLL at index I, or DFLT past either end: a vector or string
+;; indexes directly, a list, a lazy seq or a host object steps through its seq
+;; one realized level at a time, so an infinite input still answers. A map, a
+;; set, a record and every other wrapper or scalar are refused like the
+;; oracle's nth. second, a seq verb, steps through any seq view with
+;; %clojure-seq-nth instead; each carries its own loop, so a program calling
+;; one carries one function.
 (defun rontolisp::%clojure-nth (coll i dflt)
-  "The member of COLL at index I, or DFLT past either end: a vector or string
-   indexes directly, anything else steps through its seq one realized level at
-   a time, so an infinite input still answers."
-  (cond ((< i 0) dflt)
-        ((vectorp coll) (if (< i (length coll)) (aref coll i) dflt))
-        (t (let ((s (rontolisp::%clojure-seq coll)) (left i))
-             (do ()
-                 ((or (null s) (<= left 0)) (if (null s) dflt (car s)))
-               (setq s (rontolisp::%clojure-seq-rest s))
-               (setq left (- left 1)))))))
+  (cond
+   ((vectorp coll) (if (and (<= 0 i) (< i (length coll))) (aref coll i) dflt))
+   ((or (null coll)
+        (and (consp coll)
+             (or (not (keywordp (car coll))) (rontolisp::%clojure-lazy-p coll)))
+        (rontolisp::%clojure-host-seqable-p coll))
+    (if (< i 0)
+        dflt
+        (let ((s (rontolisp::%clojure-seq coll)) (left i))
+          (do ()
+              ((or (null s) (<= left 0)) (if (null s) dflt (car s)))
+            (setq s (rontolisp::%clojure-seq-rest s))
+            (setq left (- left 1))))))
+   (t (rontolisp::%clojure-unsupported-operation-exception
+       "nth not supported on this type"))))
+
+;; The member at the index I (not negative) of COLL's seq view, or DFLT past
+;; its end: a vector or string indexes directly, anything else steps one
+;; realized level at a time.
+(defun rontolisp::%clojure-seq-nth (coll i dflt)
+  (if (vectorp coll)
+      (if (< i (length coll)) (aref coll i) dflt)
+      (let ((s (rontolisp::%clojure-seq coll)) (left i))
+        (do ()
+            ((or (null s) (<= left 0)) (if (null s) dflt (car s)))
+          (setq s (rontolisp::%clojure-seq-rest s))
+          (setq left (- left 1))))))
 
 (defun rontolisp::%clojure-take (n coll)
   "The first N of COLL as a strict list, stepping through one wrapper at a
@@ -5242,6 +5254,17 @@
    ((vectorp coll) (length coll))
    ((rontolisp::%clojure-sorted-p coll) (rontolisp::%clojure-sorted-count coll))
    (t (length (rontolisp::%clojure-seq-all coll)))))
+
+;; contains? of KEY in COLL past every arm holding it (the lowering's last
+;; clause): nil and a vector hold nothing else; a string under a non-integer
+;; real is the oracle's index test over its truncation (the integer arm took
+;; an integer), under anything else refused like a list, a seq, a number, a
+;; keyword or any other value that is no collection.
+(defun rontolisp::%clojure-contains-past (coll key)
+  (if (or (null coll) (vectorp coll))
+      rontolisp::%clojure-false
+      (rontolisp::%clojure-illegal-argument-exception
+       "contains? not supported on this collection")))
 
 (defun rontolisp::%clojure-set-has (coll x)
   "contains? as the set algorithms read it: a set by member, a map or record by

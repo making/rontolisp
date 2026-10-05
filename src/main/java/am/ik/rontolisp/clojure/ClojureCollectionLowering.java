@@ -594,7 +594,9 @@ final class ClojureCollectionLowering {
 	/**
 	 * The presence test over an already-lowered collection and key: a sentinel
 	 * {@code gethash} for maps, records and sets, a bounds check for vectors and strings,
-	 * answering {@code T}-or-false.
+	 * answering {@code T}-or-false. What none of them holds goes to the spliced
+	 * {@code %clojure-contains-past}: false of nil, a vector or a string, refused for
+	 * anything else like the oracle's.
 	 */
 	static LispVal containsForm(ClojureLowering ctx, LispVal coll, LispVal key) {
 		boolean scalar = isScalarKeyForm(key);
@@ -630,7 +632,8 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(bound),
 				ctx.booleanAnswer(ClojureSortedLowering.runtime("sorted-contains", bound, at))));
 		branches.add(hostArm(bound, ctx.booleanAnswer(hostCall("CONTAINS-P", bound, at))));
-		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ctx.falseVariable));
+		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONTAINS-PAST"), bound, at)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
 	}
@@ -1207,41 +1210,42 @@ final class ClojureCollectionLowering {
 		return countForm(ctx, ctx.lower(items.get(1)));
 	}
 
-	/** The count of an already-lowered collection: tables by entries, else length. */
+	/** The tag heading a lazy seq: {@code (LIST :C%LAZY cell)}. */
+	private static final LispSymbol LAZY_TAG = new LispSymbol(":C%LAZY");
+
+	/**
+	 * The count of an already-lowered collection: tables by entries, else length. A cons
+	 * headed by a CL keyword is a tagged wrapper (no user list holds one): a set or a
+	 * record counts its entries, a sorted collection or a lazy seq its members, and any
+	 * other (a keyword, a var, an atom, a pattern, a deftype ...) is refused like the
+	 * oracle's count, so a list or a vector reaches its arm past one test. Anything else
+	 * takes {@code length}, whose type error is the oracle's refusal of a number,
+	 * {@code false} or a character.
+	 */
 	static LispVal countForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol coll = ctx.freshTemp();
+		LispVal tagged = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll), SET_TAG),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(coll))),
+				ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll),
+								ClojureProtocolLowering.RECORD_TAG),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"),
+								ClojureProtocolLowering.typedTableOf(coll))),
+				ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
+						ClojureSortedLowering.runtime("sorted-count", coll)),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll), LAZY_TAG),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"),
+								ClojureSeqLowering.seqAllForm(ctx, coll))),
+				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, ClojureRefusals
+					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(isSetForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(coll))));
-		// a record counts its entries, like a map; anything opaque signals, like the
-		// oracle (a bare length would silently answer the wrapper's size)
-		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(coll), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("hash-table-count"), ClojureProtocolLowering.typedTableOf(coll))));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureProtocolLowering.isDeftypeForm(coll),
-						ClojureProtocolLowering.isReifyForm(coll)),
-				ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
-						LispString.literal("count needs a collection"))));
-		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll), ClojureRefusals
-			.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
-		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-		// too, so the oracle signals instead of counting (the conj-guard
-		// precedent)
-		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll), ClojureRefusals
-			.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal("count needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("if"), ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"), tagOf(coll)),
+					tagged,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll)))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), coll)));
-		// the false object counts as empty, like the oracle; a seq counts its
-		// whole-collection view (a lazy one realizes -- its own cells are no
-		// members); anything else takes length
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), coll, ctx.falseVariable),
-				new LispInteger(0)));
-		// a sorted collection is a cons wrapper: its arm (one a program building none
-		// sheds) costs no other kind a test
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(coll),
-					ClojureSortedLowering.runtime("sorted-count", coll),
-					ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), ClojureSeqLowering.seqAllForm(ctx, coll)))));
 		branches.add(hostArm(coll, hostCall("COUNT", coll)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll)));
@@ -1255,27 +1259,35 @@ final class ClojureCollectionLowering {
 		return emptyForm(ctx, ctx.lower(items.get(1)));
 	}
 
-	/** Whether an already-lowered collection is empty, answering raw. */
+	/**
+	 * Whether an already-lowered collection is empty, answering raw. A plain list is not;
+	 * a set, a record or a sorted collection reads its count; a table, a vector or a
+	 * string its size; anything else takes its seq view, so a lazy seq realizes one level
+	 * and a value that is no collection (a keyword, {@code false}, a number ...) is
+	 * refused as {@code seq} refuses it, like the oracle's {@code (not (seq coll))}.
+	 */
 	static LispVal emptyForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol coll = ctx.freshTemp();
+		LispVal tagged = ClojureLowerUtil.list(ClojureLowerUtil.sym("cond"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll), SET_TAG),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(coll)))),
+				ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), tagOf(coll),
+								ClojureProtocolLowering.RECORD_TAG),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"),
+										ClojureProtocolLowering.typedTableOf(coll)))),
+				ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
+								ClojureSortedLowering.runtime("sorted-count", coll))),
+				ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(ClojureLowerUtil.list(isSetForm(coll), ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), setInner(coll)))));
-		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), ClojureLowerUtil
-					.list(ClojureLowerUtil.sym("hash-table-count"), ClojureProtocolLowering.typedTableOf(coll)))));
-		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureProtocolLowering.isDeftypeForm(coll),
-						ClojureProtocolLowering.isReifyForm(coll)),
-				ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
-						LispString.literal("empty? needs a collection"))));
-		branches.add(ClojureLowerUtil.list(ClojureStringLowering.isRegexForm(coll), ClojureRefusals
-			.refusal(ClojureRefusals.ILLEGAL_ARGUMENT, LispString.literal("empty? needs a collection"))));
-		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
-		// too, so the oracle signals instead of answering false (the
-		// conj-guard precedent)
-		branches.add(ClojureLowerUtil.list(ClojureStateLowering.isAtomForm(coll), ClojureRefusals
-			.refusal(ClojureRefusals.ILLEGAL_ARGUMENT, LispString.literal("empty? needs a collection"))));
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), coll),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"), tagOf(coll)), tagged,
+						ClojureLowering.NIL_CONST)));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-count"), coll))));
@@ -1285,17 +1297,17 @@ final class ClojureCollectionLowering {
 		branches
 			.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), coll), ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("zerop"), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), coll))));
-		// a lazy seq is empty when it realizes to nothing: one level answers
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LAZY-P"), coll),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
-		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(coll), ClojureLowerUtil
-			.list(ClojureLowerUtil.sym("zerop"), ClojureSortedLowering.runtime("sorted-count", coll))));
 		branches.add(hostArm(coll, hostCall("EMPTY-P", coll)));
 		branches.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), coll)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), ClojureSeqLowering.seqForm(ctx, coll))));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(coll, lowered))),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), branches));
+	}
+
+	/** The tag a wrapper is headed by: {@code (CAR form)}. */
+	private static LispVal tagOf(LispVal form) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), form);
 	}
 
 	/** {@code count} as a value: the table-aware count. */

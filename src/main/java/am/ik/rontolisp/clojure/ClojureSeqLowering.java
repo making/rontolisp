@@ -344,13 +344,24 @@ final class ClojureSeqLowering {
 
 	/**
 	 * {@code nth} over any collection: the spliced {@code %clojure-nth} -- a vector or
-	 * string indexed directly, anything else stepped through one realized level at a
-	 * time, so an infinite input answers -- past either end the default (nil without one)
-	 * instead of the oracle's throw. The collection, the index and the default run once
-	 * each, in order.
+	 * string indexed directly, a list, lazy seq or host object stepped through one
+	 * realized level at a time, so an infinite input answers, anything else refused like
+	 * the oracle's -- past either end the default (nil without one) instead of the
+	 * oracle's throw. The collection, the index and the default run once each, in order.
 	 */
 	static LispVal nthForm(ClojureLowering ctx, LispVal coll, LispVal index, LispVal dflt) {
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NTH"), coll, index, dflt);
+	}
+
+	/**
+	 * {@code second} over an already-lowered collection: the spliced
+	 * {@code %clojure-seq-nth} at index 1, stepping through the seq view as
+	 * {@link #nthForm} does but over every seqable collection (a map or a set too, which
+	 * {@code nth} refuses) and refusing the rest as {@code seq} does.
+	 */
+	static LispVal secondForm(LispVal coll) {
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-NTH"), coll, new LispInteger(1),
+				ClojureLowering.NIL_CONST);
 	}
 
 	static LispVal nthOf(ClojureLowering ctx, List<LispVal> items) {

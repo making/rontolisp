@@ -612,7 +612,7 @@ final class ClojureFilterLowering {
 	static LispVal secondValue(ClojureLowering ctx) {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("second-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
-				ClojureSeqLowering.nthForm(ctx, coll, new LispInteger(1), ClojureLowering.NIL_CONST));
+				ClojureSeqLowering.secondForm(coll));
 	}
 
 	// Core convenience fns: strict vectors, head pairs, names, randomness

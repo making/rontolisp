@@ -1852,9 +1852,26 @@ class ClojureLoweringTest {
 				"(drop-while odd? [1])", "(zipmap [1] [2])")) {
 			assertThat(lowered(form)).as(form).contains(step).doesNotContain(all);
 		}
-		assertThat(lowered("(second [1 2])")).isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-NTH (VECTOR 1 2) 1 NIL)");
+		assertThat(lowered("(second [1 2])"))
+			.isEqualTo(FALSE_BINDING + "(RONTOLISP::%CLOJURE-SEQ-NTH (VECTOR 1 2) 1 NIL)");
 		// a lazy seq is empty when it realizes to nothing
-		assertThat(lowered("(def x [1]) (empty? x)")).contains("(RONTOLISP::%CLOJURE-LAZY-P ");
+		assertThat(lowered("(def x [1]) (empty? x)")).contains("(NULL (RONTOLISP::%CLOJURE-SEQ ");
+	}
+
+	@Test
+	void countAndEmptyPartAListFromEveryWrapperByOneTestOfItsHead() {
+		// a cons headed by a CL keyword is a tagged wrapper (no user list holds one): a
+		// plain list reaches its arm past one test, the per-kind tests run only behind
+		// it,
+		// and a wrapper no arm takes is refused, so false and the scalars are not empty
+		for (String form : List.of("(count x)", "(empty? x)")) {
+			String lowered = lowered("(def x [1]) " + form).substring(FALSE_BINDING.length());
+			assertThat(lowered).as(form)
+				.contains("(IF (KEYWORDP (CAR ")
+				.doesNotContain("%CLOJURE-RE-PATTERN-P")
+				.doesNotContainPattern("\\(EQ \\S+ RONTOLISP::%CLOJURE-FALSE\\)");
+		}
+		assertThat(lowered("(def x [1]) (count x)")).contains("count needs a collection");
 	}
 
 	@Test

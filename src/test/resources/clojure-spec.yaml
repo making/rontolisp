@@ -1096,8 +1096,9 @@ cases:
       (println (count #{1 2 3}))
       (println (count {}))
       (println (count #{}))
-      (println (count false))
-      (println (list (empty? {}) (empty? #{}) (empty? {:a 1}) (empty? []) (empty? [1]) (empty? false)))
+      (println (try (count false) (catch Exception e :refused)))
+      (println (list (empty? {}) (empty? #{}) (empty? {:a 1}) (empty? []) (empty? [1])))
+      (println (try (empty? false) (catch Exception e :refused)))
       (println (try (count (atom nil)) (catch Exception e :refused)))
       (println (try (empty? (atom nil)) (catch Exception e :refused)))
     expected: |
@@ -1105,8 +1106,9 @@ cases:
       3
       0
       0
-      0
-      (true true false true false false)
+      :refused
+      (true true false true false)
+      :refused
       :refused
       :refused
   - name: equality-reaches-maps-and-sets
@@ -1142,15 +1144,15 @@ cases:
       2
       1
   - name: sequential-destructuring-binds-positionally
-    # A vector pattern binds through the seq view (past the end is nil, a map
-    # contributes entry vectors); & takes the rest as a seq, :as the whole.
+    # A vector pattern binds through nth (past the end is nil; a map is refused,
+    # like the oracle's nth); & takes the rest as a seq, :as the whole.
     source: |
       (println (let [[a b] [1 2]] [a b]))
       (println (let [[a & r] [1 2 3]] [a r]))
       (println (let [[a :as v] [1 2]] [a v]))
       (println (let [[[x y] z] [[1 2] 3]] [x y z]))
       (println (let [[a b] [1]] [a b]))
-      (println (let [[e] {:a 1}] e))
+      (println (try (let [[e] {:a 1}] e) (catch UnsupportedOperationException e :refused)))
       (println (loop [[a b] [3 4]] (+ a b)))
     expected: |
       [1 2]
@@ -1158,7 +1160,7 @@ cases:
       [1 [1 2]]
       [1 2 3]
       [1 nil]
-      [:a 1]
+      :refused
       7
   - name: map-destructuring-reads-through-get
     # :keys/:syms/:strs, explicit locals, :as and :or defaults; a nested map
@@ -1980,6 +1982,34 @@ cases:
       [:ok :ok :ok :ok :ok :ok]
       [:ok :ok :ok :ok :ok]
       [:java.lang.IllegalArgumentException true false seq needs a collection]
+  - name: seq-verbs-refuse-a-wrapper-or-a-scalar-with-the-oracles-class
+    # Oracle-identical (clj 1.12.6, 2026-10-05): a keyword, var, reduced value,
+    # namespace, unbound root, atom, deftype or scalar (false among them) is no
+    # collection, so the seq verbs and empty? refuse it as the oracle's seq does
+    # (IllegalArgumentException), count and nth as its count and nth do
+    # (UnsupportedOperationException; nth of a map, set or record too, and a
+    # vector pattern destructures through nth), contains? anything but nil, a map,
+    # a record, a set, a vector or a string (the oracle also refuses a string under
+    # a key that is no number). The last line is what each verb still answers.
+    source: |
+      (defmacro swr [cls form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch ~cls e# :ok)) (catch Throwable e# (class e#))))
+      (def swr-a (atom 1))
+      (declare swr-unbound)
+      (deftype SwrT [x])
+      (defrecord SwrR [x])
+      (println [(swr IllegalArgumentException (first :a)) (swr IllegalArgumentException (seq :a)) (swr IllegalArgumentException (rest :a)) (swr IllegalArgumentException (next :a)) (swr IllegalArgumentException (doall (map inc :a))) (swr IllegalArgumentException (into [] (reduced 1))) (swr IllegalArgumentException (first #'swr-a)) (swr IllegalArgumentException (first *ns*)) (swr IllegalArgumentException (first swr-unbound)) (swr IllegalArgumentException (first false)) (swr IllegalArgumentException (second :a)) (swr IllegalArgumentException (second 5))])
+      (println [(swr IllegalArgumentException (empty? :a)) (swr IllegalArgumentException (empty? 5)) (swr IllegalArgumentException (empty? false)) (swr IllegalArgumentException (empty? 'a)) (swr IllegalArgumentException (empty? \a)) (swr IllegalArgumentException (empty? inc)) (swr IllegalArgumentException (empty? #'swr-a)) (swr IllegalArgumentException (empty? (SwrT. 1)))])
+      (println [(swr UnsupportedOperationException (count :a)) (swr UnsupportedOperationException (count #'swr-a)) (swr UnsupportedOperationException (count (reduced 1))) (swr UnsupportedOperationException (count *ns*)) (swr UnsupportedOperationException (count swr-unbound)) (swr UnsupportedOperationException (count false)) (swr UnsupportedOperationException (count swr-a)) (swr UnsupportedOperationException (count (SwrT. 1)))])
+      (println [(swr UnsupportedOperationException (nth :a 0)) (swr UnsupportedOperationException (nth 5 0)) (swr UnsupportedOperationException (nth #'swr-a 0 :d)) (swr UnsupportedOperationException (nth {:a 1} 0)) (swr UnsupportedOperationException (nth #{1} 0)) (swr UnsupportedOperationException (nth (SwrR. 1) 0)) (swr UnsupportedOperationException (nth swr-a 0)) (swr UnsupportedOperationException (let [[x] {:a 1}] x))])
+      (println [(swr IllegalArgumentException (contains? :a 1)) (swr IllegalArgumentException (contains? 5 1)) (swr IllegalArgumentException (contains? false 1)) (swr IllegalArgumentException (contains? '(1 2) 1)) (swr IllegalArgumentException (contains? (map inc [1]) 0)) (swr IllegalArgumentException (contains? 'a 1)) (swr IllegalArgumentException (contains? swr-a 1)) (swr IllegalArgumentException (contains? (reduced 1) 1))])
+      (println [(count (SwrR. 1)) (empty? (SwrR. 1)) (contains? (SwrR. 1) :x) (contains? nil 1) (contains? [1 2] :a) (contains? "ab" 5) (contains? "ab" 1) (nth nil 0 :d) (nth "abc" 1) (nth (map inc [1 2]) 1) (second (sorted-map 1 2 3 4)) (second #{7}) (count (sorted-set 1 2)) (empty? (lazy-seq nil))])
+    expected: |
+      [:ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok :ok :ok :ok :ok]
+      [1 false true false false false true :d b 3 [3 4] nil 2 true]
   - name: class-instance-and-stack-traces-of-an-exception
     # class of an exception, a runtime error or a refusal answers its class as a
     # keyword, the shape class answers for every kind (the oracle answers the host
@@ -3848,8 +3878,8 @@ cases:
       3
   - name: reify-values-dispatch-and-deftypes-stay-opaque
     # each reify is a distinct dispatch value (= is identity); a deftype is
-    # opaque to the map verbs (reads miss, writers and seq/count/empty? signal,
-    # caught here) while instance?/class still see its tag.
+    # opaque to the map verbs (reads miss; contains?, writers and seq/count/empty?
+    # signal, caught here) while instance?/class still see its tag.
     source: |
       (defprotocol Greet (hello [g]))
       (def ga (reify Greet (hello [_] :a)))
@@ -3864,7 +3894,7 @@ cases:
       (println (= box box))
       (println (= box (Box. 1)))
       (println (get box :v))
-      (println (contains? box :v))
+      (println (try (contains? box :v) (catch Exception e :threw)))
       (println (try (keys box) (catch Exception e :threw)))
       (println (try (count box) (catch Exception e :threw)))
       (println (try (seq box) (catch Exception e :threw)))
@@ -3885,7 +3915,7 @@ cases:
       true
       false
       nil
-      false
+      :threw
       :threw
       :threw
       :threw

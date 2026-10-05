@@ -262,8 +262,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
   interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
 - A sorted map or set orders, prints and finds keys like the oracle's, but every verb
-  copies it (an association costs the collection's size, like a hash map's); `nth` steps
-  through one where the oracle refuses; `class` answers `:map`/`:set`; a `subseq` or
+  copies it (an association costs the collection's size, like a hash map's); `class`
+  answers `:map`/`:set`; a `subseq` or
   `rsubseq` walking from the first member that finds nothing answers `nil` (the oracle
   `()`); a test passed to `subseq` as a value is recognized by how it answers `(1 0)`,
   `(0 0)` and `(-1 0)`, where the oracle compares it with the core functions. `compare`
