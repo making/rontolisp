@@ -20557,6 +20557,70 @@ cases:
 # compile the program instead of running it, with `refusal` the text their
 # report must carry -- the shape a case takes when its subject exists on the
 # JVM family only.
+  # find-symbol / intern of a name a defpackage package reaches through :use,
+  # :import-from or a re-export: the providing package's symbol with CL's status, for
+  # literal and computed names and designators (SBCL's output). The unit suites run the
+  # same program alone through InheritedFindSymbolFixture.
+  - name: find-symbol-of-an-inherited-name
+    source: |
+      (defpackage :ci-fsi-u1 (:use) (:export #:b1 #:b2))
+      (defpackage :ci-fsi-u2 (:use) (:export #:c1 #:d1))
+      (defpackage :ci-fsi-all (:use :ci-fsi-u1 :ci-fsi-u2) (:shadow #:c1))
+      (defpackage :ci-fsi-cl (:use :cl :ci-fsi-u1))
+      (defpackage :ci-fsi-imp (:use) (:import-from :ci-fsi-u1 #:b1))
+      (defpackage :ci-fsi-rex (:use :ci-fsi-u1) (:export #:b1))
+      (print (multiple-value-list (find-symbol "B1" :ci-fsi-all)))
+      (print (multiple-value-list (find-symbol "D1" "CI-FSI-ALL")))
+      (print (multiple-value-list (find-symbol "C1" :ci-fsi-all)))
+      (print (multiple-value-list (find-symbol "B2" :ci-fsi-cl)))
+      (print (multiple-value-list (find-symbol "CAR" :ci-fsi-cl)))
+      (print (multiple-value-list (find-symbol "B1" :ci-fsi-imp)))
+      (print (multiple-value-list (find-symbol "B1" :ci-fsi-rex)))
+      (print (multiple-value-list (intern "B1" :ci-fsi-all)))
+      (print (package-name (symbol-package (find-symbol "B1" :ci-fsi-all))))
+      (print (eq (find-symbol "B1" :ci-fsi-all) 'ci-fsi-u1:b1))
+      (defun ci-fsi-show (n p) (print (multiple-value-list (find-symbol n p))))
+      (defun ci-fsi-intern (n p) (print (multiple-value-list (intern n p))))
+      (dolist (p (list :ci-fsi-all "CI-FSI-CL" (find-package :ci-fsi-imp) 'ci-fsi-rex))
+        (ci-fsi-show "B1" p)
+        (ci-fsi-intern (string-upcase "b1") p))
+      (ci-fsi-show "C1" :ci-fsi-all)
+      (ci-fsi-show "D1" :ci-fsi-all)
+      (let ((n (string-upcase "b2")))
+        (print (multiple-value-list (find-symbol n :ci-fsi-all)))
+        (print (multiple-value-list (intern n :ci-fsi-cl)))
+        (print (eq (find-symbol n :ci-fsi-cl) 'ci-fsi-u1:b2))
+        (print (package-name (symbol-package (find-symbol n "CI-FSI-CL")))))
+      (let ((f #'find-symbol) (g #'intern))
+        (print (multiple-value-list (funcall f (string-upcase "d1") :ci-fsi-all)))
+        (print (multiple-value-list (funcall g "B1" "CI-FSI-IMP"))))
+    expected: |
+      (CI-FSI-U1:B1 :INHERITED)
+      (CI-FSI-U2:D1 :INHERITED)
+      (CI-FSI-ALL::C1 :INTERNAL)
+      (CI-FSI-U1:B2 :INHERITED)
+      (CAR :INHERITED)
+      (CI-FSI-U1:B1 :INTERNAL)
+      (CI-FSI-U1:B1 :EXTERNAL)
+      (CI-FSI-U1:B1 :INHERITED)
+      "CI-FSI-U1"
+      T
+      (CI-FSI-U1:B1 :INHERITED)
+      (CI-FSI-U1:B1 :INHERITED)
+      (CI-FSI-U1:B1 :INHERITED)
+      (CI-FSI-U1:B1 :INHERITED)
+      (CI-FSI-U1:B1 :INTERNAL)
+      (CI-FSI-U1:B1 :INTERNAL)
+      (CI-FSI-U1:B1 :EXTERNAL)
+      (CI-FSI-U1:B1 :EXTERNAL)
+      (CI-FSI-ALL::C1 :INTERNAL)
+      (CI-FSI-U2:D1 :INHERITED)
+      (CI-FSI-U1:B2 :INHERITED)
+      (CI-FSI-U1:B2 :INHERITED)
+      T
+      "CI-FSI-U1"
+      (CI-FSI-U2:D1 :INHERITED)
+      (CI-FSI-U1:B1 :INTERNAL)
 standalone:
   - name: uncaught-condition-report
     source: |

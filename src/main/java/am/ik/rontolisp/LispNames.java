@@ -2871,6 +2871,34 @@ public final class LispNames {
 	public static final String SYMBOL_IN_PACKAGE_INTERNAL = "%SYMBOL-IN-PACKAGE";
 
 	/**
+	 * The {@code (%baked-access package name)} helper a compiled {@code find-symbol} /
+	 * {@code intern} it cannot fold calls: the symbol a read/compile-time package reaches
+	 * under the name through an import, a re-export or a use, consed onto its status, or
+	 * nil when the {@code %baked-access%} rows do not answer
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String BAKED_ACCESS_INTERNAL = "%BAKED-ACCESS";
+
+	/** The {@code %baked-access%} rows {@link #BAKED_ACCESS_INTERNAL} reads. */
+	public static final String BAKED_ACCESS_TABLE_INTERNAL = "%BAKED-ACCESS%";
+
+	/**
+	 * The designator index {@link #BAKED_ACCESS_INTERNAL} builds on first use, holding
+	 * each row's lookup table once it is decoded.
+	 */
+	public static final String BAKED_ACCESS_INDEX_INTERNAL = "%BAKED-ACCESS-INDEX%";
+
+	/** The row loader behind {@link #BAKED_ACCESS_INTERNAL}. */
+	public static final String BAKED_ACCESS_FILL_INTERNAL = "%BAKED-ACCESS-FILL";
+
+	/**
+	 * The {@code (%baked-access-status package name)} helper: the status half of a
+	 * {@code find-symbol} / {@code intern} with a computed package designator, which
+	 * reads a package value (a keyword) without a second {@code find-package}.
+	 */
+	public static final String BAKED_ACCESS_STATUS_INTERNAL = "%BAKED-ACCESS-STATUS";
+
+	/**
 	 * The {@code (%find-package designator)} helper a compiled {@code find-package} with
 	 * a COMPUTED designator calls: the lookup in the package table baked from the
 	 * resolver's final registry (plus the runtime table when the program can create

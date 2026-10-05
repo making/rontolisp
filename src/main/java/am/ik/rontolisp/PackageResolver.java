@@ -2788,6 +2788,148 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * What {@code (find-symbol name pkg)} answers on the read/compile-time registry --
+	 * {@link #accessible} without an image probe -- or null when the package does not
+	 * provide the name or does not exist. The compiled backends' literal
+	 * {@code find-symbol} / {@code intern} fold.
+	 * @param pkgDesignator the package name as given (any case, nickname allowed)
+	 * @param member the verbatim symbol name
+	 * @return the accessible symbol and its status, or null
+	 */
+	public @Nullable Accessible bakedAccessible(String pkgDesignator, String member) {
+		String pkg = findPackageName(pkgDesignator);
+		return pkg == null ? null : accessibleIn(pkg, member, s -> false);
+	}
+
+	/**
+	 * One package's row of {@link #bakedAccessRows}.
+	 *
+	 * @param name the upcased canonical package name (the name of the keyword
+	 * {@code find-package} answers)
+	 * @param builtin whether the package is one the registry seeds
+	 * @param present the names the package answers ITSELF, as {@code (name spelling
+	 * status)} triples: the ones whose answer is neither the inherited one its uses give
+	 * nor the spelling a compiled lookup builds when nothing answers
+	 * @param uses the upcased used packages whose exports it inherits, in use order
+	 * ({@code cl} left out)
+	 * @param exports what the package's users inherit from it, as {@code (name spelling)}
+	 * pairs ({@code cl} symbols left out)
+	 */
+	public record AccessRow(String name, boolean builtin, List<List<String>> present, List<String> uses,
+			List<List<String>> exports) {
+	}
+
+	/**
+	 * The rows a compiled program consults when a {@code find-symbol} / {@code intern} it
+	 * cannot fold -- a computed name or package designator -- asks a read/compile-time
+	 * package for a name the package does not own: every symbol it reaches through an
+	 * import, a re-export or a {@code :use} of a package other than {@code cl}, plus
+	 * every present symbol that answers differently from the {@code PKG:NAME} spelling
+	 * such a lookup builds when nothing answers (a shadowing or internal member). The
+	 * lookup is {@link #accessible}'s, split so the runtime can run it: a row's
+	 * {@code present} triples first, then the {@code exports} of each of its {@code uses}
+	 * in order. A symbol homed in {@code cl} is left out on both sides -- the compiled
+	 * backends carry no table of the standard names -- so such a lookup keeps building
+	 * the permissive spelling for it. Packages with nothing to answer have no row. Read
+	 * AFTER {@link #resolveProgram}.
+	 * @return the rows by upcased package name, in name order
+	 */
+	public Map<String, AccessRow> bakedAccessRows() {
+		Map<String, Map<String, String>> exportRows = new HashMap<>();
+		Map<String, AccessRow> rows = new java.util.TreeMap<>();
+		Set<String> exporters = new java.util.TreeSet<>();
+		for (String canonical : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
+			if (LispNames.CL_PKG.equals(canonical) || "keyword".equals(canonical)
+					|| !this.registry.contains(canonical)) {
+				continue;
+			}
+			LispPackage p = this.registry.get(canonical);
+			List<String> uses = new ArrayList<>();
+			List<Map<String, String>> inherited = new ArrayList<>();
+			for (String used : p.useList()) {
+				if (!LispNames.CL_PKG.equals(used) && this.registry.contains(used)) {
+					Map<String, String> exports = exportRows.computeIfAbsent(used, this::exportRow);
+					if (!exports.isEmpty()) {
+						uses.add(used);
+						inherited.add(exports);
+					}
+				}
+			}
+			Set<String> names = new java.util.TreeSet<>(p.imports().keySet());
+			names.addAll(p.symbols());
+			for (Map<String, String> exports : inherited) {
+				names.addAll(exports.keySet());
+			}
+			String upper = canonical.toUpperCase(java.util.Locale.ROOT);
+			List<List<String>> present = new ArrayList<>();
+			for (String name : names) {
+				Accessible answer = accessibleIn(canonical, name, s -> false);
+				if (answer == null) {
+					continue;
+				}
+				String viaUses = null;
+				for (Map<String, String> exports : inherited) {
+					viaUses = exports.get(name);
+					if (viaUses != null) {
+						break;
+					}
+				}
+				if (viaUses != null
+						? answer.spelling().equals(viaUses) && LispNames.STATUS_INHERITED.equals(answer.status())
+						: answer.spelling().equals(name) && PackageRegistry.isClMemberName(name)
+								|| answer.equals(permissiveAnswer(canonical, upper, name))) {
+					continue;
+				}
+				present.add(List.of(name, answer.spelling(), answer.status()));
+			}
+			if (!present.isEmpty() || !uses.isEmpty()) {
+				rows.put(upper,
+						new AccessRow(upper, PackageRegistry.isBuiltinPackageName(canonical), List.copyOf(present),
+								uses.stream().map(used -> used.toUpperCase(java.util.Locale.ROOT)).toList(),
+								List.of()));
+				exporters.addAll(uses);
+			}
+		}
+		for (String used : exporters) {
+			String upper = used.toUpperCase(java.util.Locale.ROOT);
+			List<List<String>> exports = new ArrayList<>();
+			exportRows.getOrDefault(used, Map.of()).forEach((name, spelling) -> exports.add(List.of(name, spelling)));
+			AccessRow row = rows.get(upper);
+			rows.put(upper,
+					row == null
+							? new AccessRow(upper, PackageRegistry.isBuiltinPackageName(used), List.of(), List.of(),
+									List.copyOf(exports))
+							: new AccessRow(upper, row.builtin(), row.present(), row.uses(), List.copyOf(exports)));
+		}
+		return rows;
+	}
+
+	/**
+	 * What a package exports to its users, name to spelling at the true home, in name
+	 * order -- {@link #inheritedFrom}'s answers, without the symbols homed in {@code cl}.
+	 */
+	private Map<String, String> exportRow(String used) {
+		Map<String, String> out = new java.util.LinkedHashMap<>();
+		for (String name : new java.util.TreeSet<>(this.registry.get(used).externals())) {
+			LispSymbol spelling = usedExport(used, name);
+			if (spelling != null && !(spelling.name().equals(name) && PackageRegistry.isClMemberName(name))) {
+				out.put(name, spelling.name());
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The answer a compiled {@code find-symbol} builds when no table row answers: the
+	 * bare internal name in {@code cl-user}, the single-colon external spelling
+	 * elsewhere.
+	 */
+	private static Accessible permissiveAnswer(String canonical, String upper, String name) {
+		return LispNames.CL_USER_PKG.equals(canonical) ? new Accessible(name, LispNames.STATUS_INTERNAL)
+				: new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL);
+	}
+
+	/**
 	 * {@link #internSpelling(String)} against an EXPLICIT package instead of the current
 	 * one, backing the two-argument {@code (intern name package)}. The {@code keyword}
 	 * pseudo-package answers with the {@code :}-prefixed spelling directly, since it has

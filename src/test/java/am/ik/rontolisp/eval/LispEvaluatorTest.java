@@ -16745,6 +16745,16 @@ class LispEvaluatorTest {
 			.forEach((program, expected) -> assertThat(printedLines(program)).as(program).isEqualTo(expected));
 	}
 
+	// find-symbol / intern of a name a package reaches through :use, :import-from or a
+	// re-export answers the providing package's symbol. The twins are
+	// JvmLispCompilerTest#compileAndRunFindSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol
+	// and WasmLispCompilerIntegrationTest#findSymbolOfAnInheritedName.
+	@Test
+	void findSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol() {
+		assertThat(printedLines(am.ik.rontolisp.InheritedFindSymbolFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
+	}
+
 	// A string constant past one JVM CONSTANT_Utf8 (65,535 bytes): a long literal and
 	// package universes packing past it. The twins are
 	// JvmLispCompilerTest#compileAndRunALongStringConstant and

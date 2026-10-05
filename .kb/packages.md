@@ -515,12 +515,56 @@ made table-aware. The model:
   table rows converting the home with `string` at each).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
-  permissive `PKG:NAME` spelling on the compiled backends (the unknown-name
-  deviation's sibling; a runtime package answers from its member table instead); a
+  permissive `PKG:NAME` spelling on the compiled backends for a name the registry does
+  not know the package to reach (the unknown-name deviation's sibling; a runtime
+  package answers from its member table instead, and a reached name from the
+  `%baked-access` rows, below); a
   computed package designator naming nothing signals a `package-error`;
   `symbol-package` on the compiled backends reads the qualifier off the spelling, so
   an uninterned symbol keeps its old home there; `unintern`'s name-conflict check
   runs on the interpreter only; `--no-gc` refuses the whole tier (no conses).
+
+### Compiled lookups answer through the registry
+
+A 2-argument `find-symbol` / `intern` into a read/compile-time package used to BUILD
+`PKG:NAME` on the compiled backends whatever the package reached, so a name inherited through
+`:use`, imported or re-exported came back as a symbol homed in the asking package (`UALL:B1
+:EXTERNAL` for SBCL's `U1:B1 :INHERITED`). The registry knows the answer; two paths carry it:
+
+- **Literal name and package**: folded at compile time to `PackageResolver.bakedAccessible`
+  (`accessible` without an image probe) whenever its spelling differs from the build -- an
+  import, a re-export, an inherited symbol, a recorded own member (`:shadow`, `:intern`),
+  `cl` symbols included -- status too (`expandFindSymbolStatus`).
+- **Computed name or designator**: `LispMacroExpander.injectBakedAccess` prepends the
+  `%baked-access%` rows (`PackageResolver.bakedAccessRows`) and `%baked-access` /
+  `%baked-access-status`, and rewrites the spliced `%symbol-in-package` to read them before
+  building. A row is a package's present entries that answer differently from the build,
+  its non-`cl` uses, and -- for a used package -- its exports at their true home; the
+  runtime decodes a row into an `equal` hash table on its first lookup, so a hit is one
+  `gethash` and a package with no row one `eq` scan of the index. A literal-designator site
+  ships only its package's row; a computed designator (or `uiop:symbol-call`) ships every
+  program package's -- any can be designated at run time (`read`, a built name) -- but NOT
+  a pre-seeded shim's own row (uiop alone re-exports hundreds of names): a computed lookup
+  in uiop / bordeaux-threads / closer-common-lisp keeps the shim spelling. The package-walk
+  normalizer's own site is exempt (it looks a symbol up in its own home). The status half
+  takes a keyword designator as is (nickname keywords are in the table) -- a second
+  `find-package` there cost a program that consumes multiple values ~1.7 us per call.
+- **Not carried: `cl` symbols under a computed lookup.** The standard names would be a
+  13.7 KB table (978 names, packed); such a lookup keeps building `PKG:NAME`, and
+  `symbol-package` of a standard symbol answers `:CL-USER` there for the same reason.
+  Re-evaluate when a consumer needs it (`.todo/d16`).
+
+Cost (2026-10-05). A program with no served row is byte-identical (the `examples.yaml`
+sweep: every example and `size-report` program on JVM / P1 / component, except the ones
+below). Served programs pay the table plus ~3 KB of helpers: a one-site toy +6.0 KB JVM /
++6.8 KB WASM; clack examples +9.8 KB (~1%), tiny-routes +15.5 KB, ningle +25.6 KB (0.7%),
+`ql:quickload "sxql"` +16.6 KB -- the table is most of it (ningle: 16 KB, 3.6 KB of it
+alexandria's exports). Time per call, 1M calls, min of 4: a hit costs what the build did;
+a computed lookup into a package WITHOUT a row, in a program that has rows, +0.3 us JVM
+(0.85 -> 1.16) / +8% WASM; a literal row package with a computed name 0.3 -> 0.4-0.5 us
+JVM, 0.8 -> 1.4-1.7 us WASM. `apropos-list` / `do-symbols` walks unchanged. Pinned by
+`InheritedFindSymbolFixture` (four suites), ci-spec `find-symbol-of-an-inherited-name`,
+`LispMacroExpanderTest#{injectBakedAccessLeavesAProgramNoRowServesUnchanged,injectBakedAccessServesAComputedLookupInAPackageThatUsesAnother,thePackageWalkNormalizerAloneCarriesNoRows}`.
 
 ### The member table (`.todo/917`)
 

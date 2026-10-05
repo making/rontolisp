@@ -148,7 +148,7 @@ final class JvmSymbolApiCompiler {
 			// find-symbol (an unknown package is a call-time signal, or -- when the
 			// program can create packages -- a runtime-table lookup first).
 			JvmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable,
-					ctx.usesRuntimePackages, ctx.functions::containsKey), ctx, className);
+					ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess), ctx, className);
 			return;
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.INTERN);
@@ -200,7 +200,7 @@ final class JvmSymbolApiCompiler {
 	static void compileFindSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		if (cons.toList().size() == 3) {
 			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons, ctx.packageTable,
-					ctx.usesRuntimePackages, ctx.functions::containsKey);
+					ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess);
 			if (inPackage == null) {
 				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
 						+ " needs a literal package designator in compiled mode: " + cons.print());
@@ -230,7 +230,7 @@ final class JvmSymbolApiCompiler {
 	static void compileFindSymbolStatus(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// The answer is a keyword or nil, both self-evaluating: no quote needed.
 		JvmExprCompiler.compileExpr(LispMacroExpander.expandFindSymbolStatus(cons, ctx.packageTable, ctx.userDefunNames,
-				ctx.usesRuntimePackages), ctx, className);
+				ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess), ctx, className);
 	}
 
 	/**

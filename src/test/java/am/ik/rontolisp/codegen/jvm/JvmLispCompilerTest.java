@@ -15436,6 +15436,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFindSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol() throws Exception {
+		// A name a defpackage package reaches through :use / :import-from / a re-export
+		// answers the symbol homed where it is provided, not one homed in the asking
+		// package -- literal and computed names and designators alike. The twins are
+		// LispEvaluatorTest#findSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol
+		// and WasmLispCompilerIntegrationTest#findSymbolOfAnInheritedName.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.InheritedFindSymbolFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunALongStringConstant() throws Exception {
 		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
 		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and

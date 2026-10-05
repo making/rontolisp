@@ -3364,6 +3364,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
 		program = LispMacroExpander.injectBakedPackageTable(program, packageResolver);
+		// The rows a find-symbol / intern the lowerings cannot fold reads what a package
+		// reaches through an import, a re-export or a use from (injectBakedAccess).
+		// Before the find-package helper: the rows' status helper calls find-package.
+		am.ik.rontolisp.macro.BakedSymbolAccess symbolAccess = am.ik.rontolisp.macro.BakedSymbolAccess
+			.of(packageResolver);
+		program = LispMacroExpander.injectBakedAccess(program, symbolAccess);
 		// The computed find-package lookup, once per program: its sites call it instead
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
 		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
@@ -4613,6 +4619,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.usesEval(usesEval)
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
+			.bakedSymbolAccess(symbolAccess)
 			.symbolPrintTable(symbolPrintTable)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
@@ -10874,6 +10881,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, java.util.List<String>> packageUseTable = Map.of();
 
 		/**
+		 * The registry's answer to which symbol a read/compile-time package reaches under
+		 * a name -- what the {@code find-symbol} / {@code intern} lowerings fold a
+		 * literal lookup against and route a computed one through {@code %baked-access}
+		 * by.
+		 */
+		am.ik.rontolisp.macro.BakedSymbolAccess bakedSymbolAccess = am.ik.rontolisp.macro.BakedSymbolAccess.NONE;
+
+		/**
 		 * The table the printer drops an accessible symbol's package qualifier from
 		 * ({@link LispMacroExpander#expandSymbolPrintBareP}), baked from the resolver's
 		 * final registry when the program can print under a package other than
@@ -11269,6 +11284,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.usesEval = builder.usesEval;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
+			this.bakedSymbolAccess = builder.bakedSymbolAccess;
 			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry != null ? builder.closRegistry : new ClosRegistry();
@@ -11461,6 +11477,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Map<String, java.util.List<String>> packageUseTable = Map.of();
 
+			private am.ik.rontolisp.macro.BakedSymbolAccess bakedSymbolAccess = am.ik.rontolisp.macro.BakedSymbolAccess.NONE;
+
 			private am.ik.rontolisp.@Nullable SymbolPrintTable symbolPrintTable;
 
 			private Map<String, Integer> structAccessors = Map.of();
@@ -11591,6 +11609,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.usesEval = proto.usesEval;
 				this.packageTable = proto.packageTable;
 				this.packageUseTable = proto.packageUseTable;
+				this.bakedSymbolAccess = proto.bakedSymbolAccess;
 				this.symbolPrintTable = proto.symbolPrintTable;
 				this.structAccessors = proto.structAccessors;
 				this.closRegistry = proto.closRegistry;
@@ -11954,6 +11973,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder packageUseTable(Map<String, java.util.List<String>> packageUseTable) {
 				this.packageUseTable = packageUseTable;
+				return this;
+			}
+
+			Builder bakedSymbolAccess(am.ik.rontolisp.macro.BakedSymbolAccess bakedSymbolAccess) {
+				this.bakedSymbolAccess = bakedSymbolAccess;
 				return this;
 			}
 
