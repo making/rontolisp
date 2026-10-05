@@ -2136,6 +2136,31 @@ cases:
       [:sioobe :sioobe :sioobe :sioobe abc :sioobe :sioobe]
       [:sioobe :sioobe :sioobe :sioobe]
       [abc a ]
+  - name: subs-and-substring-refuse-a-non-number-bound-with-the-oracles-class
+    # Oracle-identical (clj 1.12.6): nil is a NullPointerException; any other
+    # non-number is a ClassCastException from subs, and from .substring / .charAt
+    # of a receiver the compiler types (a literal), but an
+    # IllegalArgumentException (no matching method) of one it does not. An end
+    # of nil is refused too. (A hinted receiver is typed in the oracle only: a
+    # ClassCastException there; and a double past the int range is
+    # StringIndexOutOfBoundsException here, not the oracle's ArithmeticException:
+    # neither is pinned.)
+    source: |
+      (defmacro nbd [form] `(try (try ~form (catch InterruptedException e# :decoy) (catch NullPointerException e# :npe) (catch ClassCastException e# :cce) (catch IllegalArgumentException e# :iae)) (catch Throwable e# (class e#))))
+      (def nbd-built (apply str ["ab" "c"]))
+      (println [(nbd (subs nbd-built nil)) (nbd (subs nbd-built "a")) (nbd (subs nbd-built \a)) (nbd (subs nbd-built :a)) (nbd (subs nbd-built 1 nil)) (nbd (subs nbd-built 1 "a"))])
+      (println [(nbd (.substring nbd-built nil)) (nbd (.substring nbd-built "a")) (nbd (.substring nbd-built \a)) (nbd (.substring nbd-built 1 nil)) (nbd (.substring nbd-built 1 "a"))])
+      (println [(nbd (.charAt nbd-built nil)) (nbd (.charAt nbd-built "a")) (nbd (.charAt nbd-built :a))])
+      (println [(nbd (subs "abc" nil)) (nbd (.substring "abc" "a")) (nbd (.substring "abc" 1 nil)) (nbd (.charAt "abc" nil)) (nbd (.charAt "abc" :a))])
+      (println [(nbd (apply subs nbd-built [nil])) (nbd (apply subs nbd-built [1 :a])) (nbd (doall (map #(subs nbd-built %) [nil])))])
+      (println [(subs nbd-built 1) (subs nbd-built 1 2) (.substring nbd-built 1 2) (.charAt nbd-built 1)])
+    expected: |
+      [:npe :cce :cce :cce :npe :cce]
+      [:npe :iae :iae :npe :iae]
+      [:npe :iae :iae]
+      [:npe :cce :npe :npe :cce]
+      [:npe :cce :npe]
+      [bc b b b]
   - name: class-instance-and-stack-traces-of-an-exception
     # class of an exception, a runtime error or a refusal answers its class as a
     # keyword, the shape class answers for every kind (the oracle answers the host

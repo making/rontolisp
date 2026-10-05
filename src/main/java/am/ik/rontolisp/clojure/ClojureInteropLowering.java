@@ -1431,7 +1431,7 @@ final class ClojureInteropLowering {
 		if (method.equals("getClass") && args.isEmpty()) {
 			call = ClojureDispatchLowering.getClassForm(ctx, recv, cls, call);
 		}
-		LispVal mapped = stringMethod(ctx, method, recv, args);
+		LispVal mapped = stringMethod(ctx, method, recv, args, cls != null || receiver instanceof LispString);
 		if (mapped == null && cls == null && instanceBooleanAtArity("java.lang.String", method, args.size())) {
 			// An unmapped String predicate (matches, regionMatches, ...) on a string
 			// answers T-or-false, as on a receiver known to be a String.
@@ -1737,7 +1737,8 @@ final class ClojureInteropLowering {
 	 * {@code -1}, like the oracle, not the {@code nil} {@code clojure.string} favors).
 	 * Null when the method maps to nothing, so the call goes to {@code java:call}.
 	 */
-	static @Nullable LispVal stringMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args) {
+	static @Nullable LispVal stringMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args,
+			boolean typed) {
 		return switch (method) {
 			case "toUpperCase" ->
 				args.isEmpty() ? ClojureLowerUtil.list(ClojureLowerUtil.sym("string-upcase"), recv) : null;
@@ -1759,13 +1760,16 @@ final class ClojureInteropLowering {
 				args.isEmpty() ? ClojureLowerUtil.cons(JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
 						LispString.literal("forName"), LispString.literal("java.lang.String"))) : null;
 			case "substring" -> switch (args.size()) {
-				case 1 -> ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), recv,
+				case 1 -> ClojureLowerUtil.list(
+						new LispSymbol(typed ? ClojureRefusals.SUBS : ClojureRefusals.SUBS_BY_REFLECTION), recv,
 						ClojureStringLowering.bound(args.get(0)));
-				case 2 -> ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), recv,
+				case 2 -> ClojureLowerUtil.list(
+						new LispSymbol(typed ? ClojureRefusals.SUBS : ClojureRefusals.SUBS_BY_REFLECTION), recv,
 						ClojureStringLowering.bound(args.get(0)), ClojureStringLowering.bound(args.get(1)));
 				default -> null;
 			};
-			case "charAt" -> args.size() == 1 ? ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.CHAR_AT), recv,
+			case "charAt" -> args.size() == 1 ? ClojureLowerUtil.list(
+					new LispSymbol(typed ? ClojureRefusals.CHAR_AT : ClojureRefusals.CHAR_AT_BY_REFLECTION), recv,
 					ClojureStringLowering.bound(args.get(0))) : null;
 			case "equals" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), recv, args.get(0)))

@@ -215,7 +215,8 @@ class ClojureArmsTest {
 				+ " (rontolisp::%clojure-index-out-of-bounds-exception (format nil \"Index ~D of ~D\" i (length v)))"
 				+ " (rontolisp::%clojure-arity-exception (concatenate 'string \"a\" b))"
 				+ " (rontolisp::%clojure-map-entry-refusal \"conj needs a map entry\" (car item))"
-				+ " (rontolisp::%clojure-subs s 1 e) (rontolisp::%clojure-char-at s i) (if (rontolisp::%clojure-refusal-p c) (%obj-ref c 2) nil)");
+				+ " (rontolisp::%clojure-subs s 1 e) (rontolisp::%clojure-char-at s i)"
+				+ " (rontolisp::%clojure-subs-by-reflection s 1 e) (rontolisp::%clojure-char-at-by-reflection s i) (if (rontolisp::%clojure-refusal-p c) (%obj-ref c 2) nil)");
 		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.REFUSAL);
 		assertThat(scan.builds()).isFalse();
 		assertThat(scan.strips()).isTrue();
@@ -223,7 +224,7 @@ class ClojureArmsTest {
 				"(F (ERROR \"seq needs a collection\"))", "(ERROR \"name needs a name\")",
 				"(ERROR \"Assert failed: (= x \\\"~~a\\\")\")", "(ERROR \"Index ~D of ~D\" I (LENGTH V))",
 				"(ERROR \"~A\" (CONCATENATE 'STRING \"a\" B))", "(ERROR \"conj needs a map entry\")", "(SUBSEQ S 1 E)",
-				"(CHAR S I)", "NIL");
+				"(CHAR S I)", "(SUBSEQ S 1 E)", "(CHAR S I)", "NIL");
 		// the condition class goes with them
 		List<LispVal> condition = read(
 				"(define-condition rontolisp::%clojure-refusal (simple-error) ((c :initarg :chain))) (f)");
