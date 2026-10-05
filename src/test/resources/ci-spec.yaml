@@ -20720,6 +20720,19 @@ standalone:
     stderr: |
       Unhandled condition: PT-X: The value 42 is not of type PT
     fails: true
+  - name: uncaught-struct-accessor-report-prints-the-datum-as-written
+    source: |
+      ;; The catch puts the wasm module in EH mode, and nothing names a condition, so
+      ;; nothing routes the report: every backend prints the signal's message, the
+      ;; rendered text and not its text control (which doubles each tilde).
+      (defstruct pt x y)
+      (print (catch 'k (throw 'k 1)))
+      (pt-x "a~b")
+    stdout: |
+      1
+    stderr: |
+      Unhandled condition: PT-X: The value "a~b" is not of type PT
+    fails: true
   - name: uncaught-non-function-report
     source: |
       ;; The handler-case puts the wasm module in EH mode, where the dispatcher's

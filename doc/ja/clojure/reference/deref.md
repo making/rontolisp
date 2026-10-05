@@ -2,7 +2,9 @@
 
 `(deref ref)`
 
-アトムか volatile、[`reduced`](reduced.md) の中身、または [var](var.md) のルートを読みます。リーダー形式 `@x` は同じ操作です。関数値として動くため、`map`/`reduce` に裸のまま渡せます。
+アトムか volatile、[`reduced`](reduced.md) の中身、または [var](var.md) のルートを読みます。リーダー形式 `@x` は同じ操作です。関数値として動くため、`map`/`reduce` に裸のまま渡せます（その場合の引数は 1 つです）。
+
+インタプリタと JVM では、interop で得た Java の `java.util.concurrent.Future` を `get` で読みます。失敗した Future は `ExecutionException`、取り消された Future は `CancellationException` を投げます。`(deref f ms timeout-val)` は `ms` ミリ秒以内の `get` で、`TimeoutException` のとき `timeout-val` を返します。`Future` でない値に対しては `ClassCastException`（`nil` は `NullPointerException`）を投げます。オラクルの `IBlockingDeref` へのキャストと同じです。
 
 ```clojure
 (def a (atom 1))

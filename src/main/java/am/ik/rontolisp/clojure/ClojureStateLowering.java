@@ -199,14 +199,44 @@ final class ClojureStateLowering {
 	}
 
 	static LispVal derefOf(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() == 2, "deref takes one argument");
+		ClojureLowerUtil.isTrue(items.size() == 2 || items.size() == 4, "deref takes one or three arguments");
+		if (items.size() == 4) {
+			return timedDerefForm(ctx, ctx.lower(items.get(1)), ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+		}
 		return derefForm(ctx, ctx.lower(items.get(1)));
 	}
 
 	/**
+	 * The three-argument {@code deref}: only a host {@code Future} is an
+	 * {@code IBlockingDeref} here, so every other value, once the timeout and the timeout
+	 * value have run like the oracle's arguments, is its {@code ClassCastException} (nil
+	 * a {@code NullPointerException}). A program that can make no host object folds the
+	 * host arm away ({@link ClojureArms.Family#HOST}), leaving the refusal.
+	 */
+	private static LispVal timedDerefForm(ClojureLowering ctx, LispVal future, LispVal timeout, LispVal timeoutValue) {
+		LispSymbol cell = ctx.freshTemp();
+		LispSymbol ms = ctx.freshTemp();
+		LispSymbol dflt = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, future), ClojureLowerUtil.list(ms, timeout),
+						ClojureLowerUtil.list(dflt, timeoutValue))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), cell,
+								LispString.literal(HOST_FUTURE)),
+						ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-FUTURE-GET-WITHIN"), cell, ms,
+								dflt),
+						ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+								LispString.literal("deref with a timeout needs a future"), cell)));
+	}
+
+	/** The host class {@code deref} reads through its {@code get}. */
+	static final String HOST_FUTURE = "java.util.concurrent.Future";
+
+	/**
 	 * The value inside the lowered atom; anything else goes to the spliced
 	 * {@code rontolisp::%clojure-deref-other}, which answers a reduced value's content
-	 * (the oracle's {@code Reduced} is an {@code IDeref}) and signals otherwise.
+	 * (the oracle's {@code Reduced} is an {@code IDeref}), a var's root or a host
+	 * {@code Future}'s result, and signals otherwise.
 	 */
 	static LispVal derefForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol cell = ctx.freshTemp();

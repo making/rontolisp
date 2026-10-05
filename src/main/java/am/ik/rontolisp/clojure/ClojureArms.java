@@ -203,14 +203,23 @@ public final class ClojureArms {
 		 * the lowering refuses ({@link Family#refusals}): only a program reading a
 		 * condition's class -- a catch by class, {@code class} or {@code instance?} of
 		 * one -- can tell it from the plain error reporting its message, so those readers
-		 * are the family's producers. Ahead of it {@link #EXCEPTION} folds the
-		 * {@code class} arm of a program that can hold no condition.
+		 * are the family's producers. {@code vec}'s argument check, which refuses a
+		 * non-collection as the oracle's {@code RuntimeException}, is its one view. Ahead
+		 * of it {@link #EXCEPTION} folds the {@code class} arm of a program that can hold
+		 * no condition.
 		 */
-		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(),
-				Map.of(ClojureRefusals.SUBS, "SUBSEQ"),
+		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(ClojureRefusals.VEC_ARG),
+				Map.of(ClojureRefusals.SUBS, "SUBSEQ", ClojureRefusals.CHAR_AT, "CHAR"),
 				Set.of("RONTOLISP::%CLOJURE-CATCHES", ClojureDispatchLowering.EXCEPTION_CLASS,
 						ClojureDispatchLowering.INSTANCE_OF),
 				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),
+
+		/**
+		 * A regular-expression matcher, which {@code nth} reads the groups of: only
+		 * {@code re-matcher} (and its value) makes one.
+		 */
+		MATCHER("matcher", Set.of("RONTOLISP::%CLOJURE-MATCHER-VALUE-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
 
 		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
@@ -229,14 +238,16 @@ public final class ClojureArms {
 		 * {@code merge-with} walks) and the printer writes readably as its Clojure kind:
 		 * only a {@code java:} operator hands one to the program. The aliases are
 		 * {@code instance?} of a class a core kind's value is and a host object may be
-		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
+		 * ({@code Number}, {@code CharSequence}), each to the kind's own test, and
+		 * {@code future?}'s call {@code (host-future-p value false)}, which stands for
+		 * {@code (progn value false)}.
 		 */
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",
 						ClojureCollectionLowering.HOST_SEQABLE_P),
 				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE),
 				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
-						"STRINGP"),
+						"STRINGP", ClojurePredicateLowering.HOST_FUTURE_P, "PROGN"),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of()),
 
 		/**

@@ -59,6 +59,34 @@ class ClojureLibraryTest {
 	}
 
 	@Test
+	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
+		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
+		// any other compiles nth as before matchers were read
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-NTH"))
+			.contains("(RONTOLISP::%CLOJURE-MATCHER-VALUE-P COLL)");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(println (nth [1 2] 1) (re-find #\"a\" \"a\"))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("MATCHER");
+		List<LispVal> matcher = ClojureLibrary
+			.process(Clojure.read("(println (nth (re-matcher #\"(a)\" \"a\") 1))", null));
+		assertThat(defun(matcher, "RONTOLISP::%CLOJURE-NTH")).contains("(RONTOLISP::%CLOJURE-MATCHER-VALUE-P COLL)");
+	}
+
+	@Test
+	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
+		// the oracle's vec casts to an array before it seqs: the argument check is the
+		// refusal family's view, so a program reading no class compiles the bare coercion
+		List<LispVal> plain = Clojure.read("(println (vec 5))", null);
+		assertThat(plain.get(plain.size() - 1).print()).contains("%CLOJURE-VEC-ARG");
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(processed.get(processed.size() - 1).print()).doesNotContain("%CLOJURE-VEC-ARG")
+			.contains("%CLOJURE-REALIZE-ALL");
+		List<LispVal> reading = ClojureLibrary
+			.process(Clojure.read("(println (try (vec 5) (catch IllegalArgumentException e :x)))", null));
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-VEC-ARG")).contains("(RONTOLISP::%CLOJURE-RUNTIME-EXCEPTION");
+	}
+
+	@Test
 	void aProgramMakingNoUnboundRootSplicesTheLibraryWithoutItsUnboundArms() {
 		// the unbound-root arms (the printer's, IFn's) go like the sorted ones: only a
 		// program storing an unbound root (a declare, a value-less def) keeps them

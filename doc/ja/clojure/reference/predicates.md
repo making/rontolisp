@@ -3,7 +3,7 @@
 値の種類を調べる述語です。どれも `true` か `false` を返し、`extends?` 以外は同じ引数をとる関数としても使えます。
 答えは値の表現に従います（[仕様との差異](../deviations.md)）。`nil` は空リストであり、strict な入力に対して
 操作が返す seq はリストであり、decimal と `N` のリテラルは通常の有理数として読まれます。ここに
-値が存在しない種類の述語（`delay?`・`future?`・`decimal?` など）は `false` を返します。ソート済みの
+値が存在しない種類の述語（`delay?`・`decimal?` など）は `false` を返します。ソート済みの
 マップとセットはどの述語にもマップとセットとして扱われ、`sorted?` と `reversible?` も成り立ちます。
 `coll?` などの述語は[数値と述語](numbers.md)にあります。
 
@@ -58,6 +58,8 @@
 | `volatile?` | `(volatile? (atom 1))` | `false` |
 | `delay?` | `(delay? 1)` | `false` |
 | `future?` | `(future? 1)` | `false` |
+| `future-done?` | `(future-done? 1)` | `ClassCastException` |
+| `future-cancelled?` | `(future-cancelled? 1)` | `ClassCastException` |
 | `realized?` | `(realized? (lazy-seq nil))` | `false` |
 | `bound?` | `(bound?)` | `true` |
 | `thread-bound?` | `(thread-bound? #'x)` | `x` の `binding` の外では `false` |

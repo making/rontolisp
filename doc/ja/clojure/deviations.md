@@ -106,8 +106,9 @@
   `clojure.lang.ExceptionInfo` 以外のどのクラスの catch でも最初のものが捕捉します。
   下位の関数が先に拒否する誤用は、その関数のクラスになります。`(shuffle 5)` は `seq` の
   `IllegalArgumentException` で、オラクルは `java.util.Collection` へのキャストで失敗します。範囲外の添字は `IndexOutOfBoundsException` で、
-  そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException`、
-  `.charAt` は `StringIndexOutOfBoundsException` を投げます）。catch が名指すクラスはこの
+  そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException` を
+  投げます）。文字列の範囲を超える `subs`、`.substring`、`.charAt` は
+  `StringIndexOutOfBoundsException` を投げます。catch が名指すクラスはこの
   ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable）。オラクルの
   クラスパスにしかないクラスは拒否します。
 - 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは

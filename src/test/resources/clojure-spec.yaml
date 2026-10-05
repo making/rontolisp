@@ -1424,6 +1424,20 @@ cases:
       5
       (1 2)
       42
+  - name: deref-with-a-timeout-refuses-a-value-that-is-no-future
+    # Oracle-identical (clj 1.12.6): the three-argument deref needs an
+    # IBlockingDeref, which only a host Future is here, so an atom, a volatile, a
+    # var, a number, a string and a collection are a ClassCastException (nil a
+    # NullPointerException), after the timeout and the timeout value ran. The
+    # host Future's own answers are pinned by ClojureInteropTest.
+    source: |
+      (defn dtk [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (def dtk-n (atom 0))
+      (println [(dtk #(deref (atom 1) 10 :t)) (dtk #(deref (volatile! 1) 10 :t)) (dtk #(deref #'dtk 10 :t)) (dtk #(deref 1 10 :t)) (dtk #(deref "s" 10 :t)) (dtk #(deref [1] 10 :t)) (dtk #(deref nil 10 :t))])
+      (println (dtk #(deref (atom 5) (do (swap! dtk-n inc) 10) (do (swap! dtk-n inc) :t))) @dtk-n @(atom 3))
+    expected: |
+      [:cce :cce :cce :cce :cce :cce :npe]
+      :cce 2 3
   - name: multimethods-dispatch-over-a-table
     # defmulti is a method table plus a dispatcher defun; defmethod stores,
     # remove-method drops, get-method reads, and a miss falls back to the
@@ -2010,6 +2024,77 @@ cases:
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [1 false true false false false true :d b 3 [3 4] nil 2 true]
+  - name: vec-of-a-non-collection-refuses-with-the-runtime-exception-the-oracle-throws
+    # Oracle-identical (clj 1.12.6, 2026-10-05): vec casts a non-collection to an
+    # array before it seqs, so a number, keyword, symbol, boolean, character,
+    # function, atom, var, reduced value or matcher is the oracle's RuntimeException
+    # ("Unable to convert: class ... to Object[]"), which an IllegalArgumentException
+    # catch does not take (each probe catches that class first). A lazy seq whose
+    # thunk answers a non-collection stays seq's IllegalArgumentException. The last
+    # line is what vec still answers.
+    source: |
+      (defmacro vnc [form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch IllegalArgumentException e# :iae) (catch RuntimeException e# :ok)) (catch Throwable e# (class e#))))
+      (def vnc-a (atom 1))
+      (println [(vnc (vec 5)) (vnc (vec 1.5)) (vnc (vec :a)) (vnc (vec 'a)) (vnc (vec false)) (vnc (vec true)) (vnc (vec \a)) (vnc (vec inc)) (vnc (vec vnc-a)) (vnc (vec #'vnc-a)) (vnc (vec (reduced 1))) (vnc (vec (re-matcher #"a" "a")))])
+      (println [(vnc (apply vec [5])) (vnc (mapv vec [5])) (vnc (vec (lazy-seq 5))) (vnc (vec (cons 1 (lazy-seq 5)))) (vnc (into [] 5))])
+      (println [(vec nil) (vec "ab") (vec {:a 1}) (vec #{1}) (vec '(1 2)) (vec [1 2]) (vec (map inc [1 2])) (vec (range 3)) (vec (sorted-map 1 2)) (vec (lazy-seq nil))])
+    expected: |
+      [:ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :iae :iae :iae]
+      [[] [a b] [[:a 1]] [1] [1 2] [1 2] [2 3] [0 1 2] [[1 2]] []]
+  - name: nth-of-a-matcher-reads-its-group
+    # Oracle-identical (clj 1.12.6, 2026-10-05): nth of a matcher reads
+    # Matcher.group(n): an IllegalStateException before a match and after a failed
+    # find (even with a default, for an index the pattern has), an unmatched group
+    # nil, an index past the pattern's groups or below zero the default. Deviations:
+    # past the groups without a default the answer is nil, where the oracle throws
+    # IndexOutOfBoundsException (nth past the end answers nil, "Deviations"); and a
+    # pattern without groups reads group 0 whatever the call, where the oracle's
+    # three-argument nth answers the default (its rule is groupCount > 0 && n <=
+    # groupCount; a non-nil default is the one call shape that tells them apart here).
+    # second, first and count of a matcher are the seq verbs' and count's refusals.
+    source: |
+      (defmacro nmc [form] `(try ~form (catch InterruptedException e# :decoy) (catch IllegalStateException e# :ise) (catch IllegalArgumentException e# :iae) (catch UnsupportedOperationException e# :uoe) (catch Throwable e# (class e#))))
+      (def nmc-m (re-matcher #"(a)(b)?" "ac"))
+      (println [(nmc (nth nmc-m 0)) (nmc (nth nmc-m 1 :d)) (nmc (nth nmc-m 4 :d)) (nmc (nth nmc-m -1 :d))])
+      (re-find nmc-m)
+      (println [(nth nmc-m 0) (nth nmc-m 1) (nth nmc-m 2) (nth nmc-m 1 :d) (nth nmc-m 2 :d) (nth nmc-m 3 :d) (nth nmc-m 5 :d) (nth nmc-m -1 :d)])
+      (println (let [[w g1 g2 g3] nmc-m] [w g1 g2 g3]) (map #(nth nmc-m %) [0 1 2]) ((fn [c] (nth c 1)) nmc-m))
+      (println [(nmc (second nmc-m)) (nmc (first nmc-m)) (nmc (count nmc-m))])
+      (re-find nmc-m)
+      (println [(nmc (nth nmc-m 0)) (nmc (nth nmc-m 1 :d)) (nmc (nth nmc-m 3 :d)) (nmc (nth nmc-m -1 :d))])
+      (def nmc-w (re-matcher #"ab" "xab"))
+      (re-find nmc-w)
+      (println (nth nmc-w 0))
+    expected: |
+      [:ise :ise :d :d]
+      [a a nil a nil :d :d :d]
+      [a a nil nil] (a a nil) a
+      [:iae :iae :uoe]
+      [:ise :ise :d :d]
+      ab
+  - name: a-string-substring-and-charat-refuse-with-the-oracles-class
+    # Oracle-identical (clj 1.12.6): .substring and .charAt of a
+    # string past its bounds (a literal, a built string and an empty one) throw
+    # StringIndexOutOfBoundsException (every probe answers :ok there, a class
+    # that is none printing itself), which an IndexOutOfBoundsException catch
+    # takes too; an in-range call answers. The message is the runtime's own, and
+    # class answers a keyword (the oracle prints the host class without the colon).
+    source: |
+      (defmacro sbc [form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch StringIndexOutOfBoundsException e# :ok)) (catch Throwable e# (class e#))))
+      (def sbc-built (apply str ["ab" "c"]))
+      (def sbc-empty (apply str []))
+      (println [(sbc (.substring "abc" 5)) (sbc (.substring sbc-built 5)) (sbc (.substring sbc-built -1)) (sbc (.substring sbc-built 1 5)) (sbc (.substring sbc-built 2 1)) (sbc (.substring sbc-empty 1))])
+      (println [(sbc (.charAt "abc" 5)) (sbc (.charAt sbc-built 3)) (sbc (.charAt sbc-built -1)) (sbc (.charAt sbc-empty 0))])
+      (println (try (.charAt sbc-built 9) (catch Exception e (class e))) (try (.substring sbc-built 9) (catch Exception e (class e))))
+      (println [(try (.charAt sbc-built 9) (catch IndexOutOfBoundsException e :ioobe)) (try (.substring sbc-built 9) (catch IndexOutOfBoundsException e :ioobe))])
+      (println [(.substring sbc-built 1) (.substring sbc-built 0 3) (.substring sbc-built 3) (.charAt sbc-built 0) (.charAt sbc-built 2) (.substring sbc-empty 0)])
+    expected: |
+      [:ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok]
+      :java.lang.StringIndexOutOfBoundsException :java.lang.StringIndexOutOfBoundsException
+      [:ioobe :ioobe]
+      [bc abc  a c ]
   - name: class-instance-and-stack-traces-of-an-exception
     # class of an exception, a runtime error or a refusal answers its class as a
     # keyword, the shape class answers for every kind (the oracle answers the host
@@ -6714,6 +6799,18 @@ cases:
     expected: |
       false false false false false false false false false false false false false false false
       (false false) (false) (false) (false) (false) (false) (false)
+  - name: future-verbs-refuse-a-value-that-is-no-future
+    # Oracle-identical (clj 1.12.6): future-done?, future-cancelled? and future-cancel
+    # cast their argument to java.util.concurrent.Future, which only a host object can be
+    # here, so every other value is a ClassCastException (nil a NullPointerException);
+    # the host Future's own answers are pinned by ClojureInteropTest.
+    source: |
+      (defn fvk [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (println [(fvk #(future-done? 1)) (fvk #(future-done? nil)) (fvk #(future-done? (atom 1))) (fvk #(future-cancelled? "s")) (fvk #(future-cancelled? nil)) (fvk #(future-cancel [1])) (fvk #(future-cancel nil)) (fvk #(realized? 1))])
+      (println (fvk #(apply future-done? [1])) (fvk #(first (map future-cancel [nil]))) (map future? [1 nil]))
+    expected: |
+      [:cce :npe :cce :cce :npe :cce :npe :cce]
+      :cce :npe (false false)
   - name: special-symbol-names-the-special-forms
     # Oracle-identical (clj 1.12.6).
     source: |

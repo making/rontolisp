@@ -208,14 +208,14 @@ class ClojureArmsTest {
 		// a program reading no condition's class signals what it signalled before
 		// refusals carried one: a literal (each ~ doubled, so the report stays the
 		// text), a format over its control, anything else through ~A; the culprit,
-		// which only picks the class, goes; subs is subseq again
+		// which only picks the class, goes; subs is subseq again, .charAt char
 		List<LispVal> forms = read("(f (rontolisp::%clojure-illegal-argument-exception \"seq needs a collection\"))"
 				+ " (rontolisp::%clojure-class-cast-exception-of \"name needs a name\" x)"
 				+ " (rontolisp::%clojure-assertion-error \"Assert failed: (= x \\\"~a\\\")\")"
 				+ " (rontolisp::%clojure-index-out-of-bounds-exception (format nil \"Index ~D of ~D\" i (length v)))"
 				+ " (rontolisp::%clojure-arity-exception (concatenate 'string \"a\" b))"
 				+ " (rontolisp::%clojure-map-entry-refusal \"conj needs a map entry\" (car item))"
-				+ " (rontolisp::%clojure-subs s 1 e) (if (rontolisp::%clojure-refusal-p c) (%obj-ref c 2) nil)");
+				+ " (rontolisp::%clojure-subs s 1 e) (rontolisp::%clojure-char-at s i) (if (rontolisp::%clojure-refusal-p c) (%obj-ref c 2) nil)");
 		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.REFUSAL);
 		assertThat(scan.builds()).isFalse();
 		assertThat(scan.strips()).isTrue();
@@ -223,7 +223,7 @@ class ClojureArmsTest {
 				"(F (ERROR \"seq needs a collection\"))", "(ERROR \"name needs a name\")",
 				"(ERROR \"Assert failed: (= x \\\"~~a\\\")\")", "(ERROR \"Index ~D of ~D\" I (LENGTH V))",
 				"(ERROR \"~A\" (CONCATENATE 'STRING \"a\" B))", "(ERROR \"conj needs a map entry\")", "(SUBSEQ S 1 E)",
-				"NIL");
+				"(CHAR S I)", "NIL");
 		// the condition class goes with them
 		List<LispVal> condition = read(
 				"(define-condition rontolisp::%clojure-refusal (simple-error) ((c :initarg :chain))) (f)");
@@ -248,6 +248,30 @@ class ClojureArmsTest {
 		}
 		assertThat(ClojureArms.scan(read("(handler-case " + refusal + " (error (e) e))"), ClojureArms.Family.REFUSAL)
 			.strips()).isTrue();
+	}
+
+	@Test
+	void theMatcherFamilyIsMadeByReMatcherAndFoldsNthsGroupArm() {
+		// only re-matcher makes a matcher: nth's arm goes from a program naming none
+		List<LispVal> forms = read("(cond ((rontolisp::%clojure-matcher-value-p coll) (rontolisp::%clojure-matcher-nth"
+				+ " coll i dflt)) (t (f)))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.MATCHER);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.MATCHER).stream().map(LispVal::print))
+			.containsExactly("(COND (T (F)))");
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-matcher p s)"), ClojureArms.Family.MATCHER).builds())
+			.isTrue();
+	}
+
+	@Test
+	void theRefusalFamilyFoldsVecsArgumentCheckToTheArgument() {
+		// vec's RuntimeException for a non-collection is read only where a class is
+		List<LispVal> forms = read(
+				"(coerce (rontolisp::%clojure-realize-all (rontolisp::%clojure-vec-arg (f x)))" + " 'vector)");
+		assertThat(ClojureArms.scan(forms, ClojureArms.Family.REFUSAL).strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.REFUSAL).stream().map(LispVal::print))
+			.containsExactly("(COERCE (RONTOLISP::%CLOJURE-REALIZE-ALL (F X)) 'VECTOR)");
 	}
 
 	@Test

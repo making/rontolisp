@@ -7,7 +7,9 @@ seq steps through it one element at a time, so a lazy input realizes only up to 
 an infinite one answers. Past either end the 3-arity answers `default` and the 2-arity
 `nil`. A map, a set, a record and anything that is no collection signal
 `UnsupportedOperationException`, like the oracle; a vector pattern destructures through
-`nth`, so it refuses them too.
+`nth`, so it refuses them too. A matcher ([`re-matcher`](re-matcher.md)) answers the group
+of its last match, as the oracle's `Matcher.group`: `nil` for a group that took no part,
+`IllegalStateException` before a match, the default for an index past its groups.
 
 Deviation: `nth` past the end answers the default (nil without one), where the oracle
 throws. As a VALUE `nth` is a `(collection index)` lambda -- the Clojure order -- since a

@@ -1759,12 +1759,12 @@ final class ClojureInteropLowering {
 				args.isEmpty() ? ClojureLowerUtil.cons(JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
 						LispString.literal("forName"), LispString.literal("java.lang.String"))) : null;
 			case "substring" -> switch (args.size()) {
-				case 1 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), recv, args.get(0));
-				case 2 -> ClojureLowerUtil.list(ClojureLowerUtil.sym("subseq"), recv, args.get(0), args.get(1));
+				case 1 -> ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), recv, args.get(0));
+				case 2 -> ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), recv, args.get(0), args.get(1));
 				default -> null;
 			};
-			case "charAt" ->
-				args.size() == 1 ? ClojureLowerUtil.list(ClojureLowerUtil.sym("char"), recv, args.get(0)) : null;
+			case "charAt" -> args.size() == 1
+					? ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.CHAR_AT), recv, args.get(0)) : null;
 			case "equals" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), recv, args.get(0)))
 					: null;

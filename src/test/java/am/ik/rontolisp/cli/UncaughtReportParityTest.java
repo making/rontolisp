@@ -139,6 +139,15 @@ class UncaughtReportParityTest {
 				""");
 		assertSameReport(store, "Unhandled condition: (SETF POINT-Y): The value (1 2) is not of type POINT",
 				"  at " + store + ":3");
+		// Nothing routes the report, so the JVM throws the signal's message: the
+		// rendered text, not its text control, whose every tilde is doubled.
+		Path tilde = write("struct-tilde.lisp", """
+				(defstruct point x y)
+
+				(point-x "a~b")
+				""");
+		assertSameReport(tilde, "Unhandled condition: POINT-X: The value \"a~b\" is not of type POINT",
+				"  at " + tilde + ":3");
 	}
 
 	@Test

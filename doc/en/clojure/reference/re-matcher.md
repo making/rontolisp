@@ -4,7 +4,7 @@
 
 Answers a matcher of `pattern` over `s`: each `re-find` of it advances past
 the last match (an empty match advancing one character, like the oracle), and
-`re-groups` reads the last match back. A pattern only -- a string signals,
+`re-groups` reads the last match back, and `nth` reads one group of it. A pattern only -- a string signals,
 like the oracle. Works as a function value too.
 
 ```clojure

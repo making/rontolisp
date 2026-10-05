@@ -395,10 +395,10 @@ fails. What decides the gate is whether program code can ever HOLD that instance
   :format-control (%text-control v) ...)` over a variable `v`, of a class reporting through its
   `format-control` (no `:report` along its precedence list) and with no `:format-arguments`,
   reports exactly `v`, so the broad gate does not count it, and its unrouted message is `v` itself
-  (`textControlVariable`); a held instance still counts where it is held. Only the Clojure
-  refusals spell it (`%clojure-refuse`); `%struct-type-error`'s control is a rendered expression,
-  not a variable, and keeps its answer. Measured 2026-10-04: every example, size-report and
-  bench program byte-identical (the version string of a fetch program aside).
+  (`textControlVariable`); a held instance still counts where it is held. The Clojure refusals
+  (`%clojure-refuse`) and `%struct-type-error` ([defstruct.md](defstruct.md)) spell it. Measured
+  2026-10-04: every example, size-report and bench program byte-identical (the version string of a
+  fetch program aside).
 - **A clause HEAD is not a call, and that skip is shared.** `evaluatedClauseForms` is the one helper
   answering "which sub-forms of this clause-bearing operator are EVALUATED", used by this scan and by
   `needsRuntimeErrorDispatch`. **A new scan that walks a program as code goes through it** -- the

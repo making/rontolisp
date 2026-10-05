@@ -4,7 +4,7 @@ The predicates over a value's kind. Each answers `true` or `false`, and every on
 `extends?` is also a function value of the same arguments. The answers follow the representation
 ([Deviations](../deviations.md)): `nil` is the empty list, a seq a verb answers over a strict
 input is a list, and decimal and `N` literals read as plain rationals. A predicate over a
-kind no value here has (`delay?`, `future?`, `decimal?`, ...) answers `false`. A sorted map
+kind no value here has (`delay?`, `decimal?`, ...) answers `false`. A sorted map
 or set is a map or set to every predicate, and `sorted?` and `reversible?` hold for it.
 `coll?` and the other predicates are on [Numbers and predicates](numbers.md).
 
@@ -59,6 +59,8 @@ or set is a map or set to every predicate, and `sorted?` and `reversible?` hold 
 | `volatile?` | `(volatile? (atom 1))` | `false` |
 | `delay?` | `(delay? 1)` | `false` |
 | `future?` | `(future? 1)` | `false` |
+| `future-done?` | `(future-done? 1)` | `ClassCastException` |
+| `future-cancelled?` | `(future-cancelled? 1)` | `ClassCastException` |
 | `realized?` | `(realized? (lazy-seq nil))` | `false` |
 | `bound?` | `(bound?)` | `true` |
 | `thread-bound?` | `(thread-bound? #'x)` | `false` outside a `binding` of `x` |

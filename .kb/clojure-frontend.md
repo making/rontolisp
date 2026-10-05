@@ -108,7 +108,7 @@ answered `2 5 3` before).
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
 | `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
@@ -125,7 +125,7 @@ answered `2 5 3` before).
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
-| `subs` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
+| `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
@@ -133,9 +133,9 @@ answered `2 5 3` before).
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
 | `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; its function is a real one ("The IFn dispatcher stays at the call site") |
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil is empty, anything else signals ("Seq verbs over a wrapper"); `cons` onto a lazy collection answers a wrapper |
-| `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped (`nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
+| `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped, a matcher answering its group (`%clojure-matcher-nth`, "Regex"; `nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
-| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
+| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `vec` refuses a non-collection as the oracle's `RuntimeException` ("Refusals"); `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
@@ -151,7 +151,7 @@ answered `2 5 3` before).
 | `comp` `partial` `complement` `constantly` `identity` `memoize` `trampoline` | closures | `(comp)` is `identity`; `memoize` keys the argument list by `=` (`%clojure-memo-key`) |
 | `=` / `not=` | the spliced `%clojure-equal` per neighbouring pair | maps structurally (nested), records by tag plus entries, deftype/reify by identity, sequentials (lists, vectors, lazy seqs, nil) element by element across kinds, two floats by CL `=` (-0.0 = 0.0, NaN not = NaN), else `equal` (a host object on the left asks its `equals`, handed a number, string, character, `true`, nil or host object -- never `false`, a keyword, a symbol or a collection: [eq-numbers.md](eq-numbers.md) "Host objects", `ClojureInteropTest#equalsOfAHostObjectAndAValueAsksTheLeftOperand`); a host `List`/`Map`/`Set` and a Clojure collection of its kind through the host-object family's arm `%clojure-host-equal-p`, either side first ([eq-numbers.md](eq-numbers.md) "Clojure `=` of a host collection"). One shared callee, not a `labels` per site: ten sites measured 87,050 -> 34,004 B of wasm |
 | `<` `>` `<=` `>=` `==` `nil?` `false?` `true?` `boolean?` `boolean` `string?` `symbol?` `vector?` `fn?` | the CL test answering `T`-or-false | `==` is CL `=` (numeric across categories: `(== 1 1.0)`, `(== 0.0 -0.0)`; a non-number signals, `(==)` is refused at lower time); `<` `>` `<=` `>=` `==` as values are `&rest` lambdas over the CL function answering `T`-or-false (`(map < [1 2] [2 1])` is `(true false)`, not `(true nil)`). `fn?` is false for keywords, sets and maps |
-| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `future?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future-done?`/`future-cancelled?` are refused with `future`. Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
+| the type predicates (`coll?` `seq?` `sequential?` `map?` `set?` `list?` `record?` `seqable?` `associative?` `counted?` `indexed?` `reversible?` `ifn?`, `number?` `integer?` `int?` `double?` `float?` `ratio?` `rational?` `nat-int?` `pos-int?` `neg-int?` `infinite?` `NaN?`, `keyword?` `ident?` and the `simple-`/`qualified-` six, `char?` `var?` `volatile?` `realized?` `special-symbol?`, `inst?` `uuid?` `uri?` `class?`) | `ClojurePredicateLowering`: `(if TEST T false)` over one CL type predicate or one spliced `%clojure-is-NAME` helper (CL boolean); as a value a one-argument lambda over the same test | a wrapper is a cons whose car is a CL keyword, so every list test excludes keywords/atoms/vars/records/patterns (`coll?` answered true for them before). The host four go through `%clojure-host-instance-p` (a host arm, `isInstance` of the named class; NIL stand-in without `java:`). `sorted?` is `%clojure-is-sorted`; `set?` and `reversible?` name the sorted-aware `%clojure-is-set`/`%clojure-is-reversible`, which a program building no sorted collection calls as `%clojure-set-p`/`%clojure-is-vector` ("Sorted collections"). `chunked-seq?` `decimal?` `bytes?` `delay?` `reader-conditional?` `tagged-literal?` are `(progn x false)`: no value of that kind exists, which is the oracle's answer for every value a program here builds (not a refusal: `(if (future? x) @x x)` runs); `any?` is `(progn x T)`. `not-any?`/`not-every?` negate the inline `some`/`every?` loops; `identical?` is `eql` plus keyword spelling (keywords are fresh lists), so a host object is identical only to itself (`ClojureInteropTest.identicalOnHostObjectsIsIdentity`, [eq-numbers.md](eq-numbers.md) "Host objects"); `distinct?` goes through `%clojure-distinct-new-p`; `bound?` is false at the first var whose root is the unbound root ("Vars and metadata"; a var whose metadata says `:macro` is bound without taking its root, the oracle's own mark); `extends?` reads the protocol's tables at the type's `extendKeyForm` tag (literal names, no value form). `future?`, `future-done?`, `future-cancelled?` and `future-cancel` read a host `Future` ("A host `Future` under `deref`"). Arity refusals in the oracle's words. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `collection-predicates-*`, `number-predicates-*`, `name-predicates-*`, `any-not-any-*`, `var-volatile-*`, `predicates-of-kinds-*`, `special-symbol-*`, `extends-*`, `coll-is-false-for-the-tagged-wrappers`; the representation deviations by `the-seq-predicates-follow-the-list-representation`, `decimal-and-bigint-literals-are-plain-rationals`, `identical-compares-numbers-and-symbols-by-value`; the host four by `ClojureInteropTest.hostKindPredicatesTestTheHostClass` |
 | `int` `long` `char` `quot` | `truncate` (`char-code` for a char) / `code-char` / `truncate` | a non-number signals |
 | `double` `float` `byte` `short` `num` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time); `byte`/`short` through `%clojure-cast-bounded` (a character's code, a ratio or double truncated, a double compared BEFORE truncating so `(byte 127.9)` refuses, NaN refuses; the refusal spells the value with `princ-to-string`), `double`/`float` widen to a double, `float` refusing past `3.4028234663852886e38`, `num` is the number itself or nil | a non-number signals; `float` holds a double (`(float 1/3)` prints `0.3333333333333333`, the oracle `0.33333334`); `vector-of :double`/`:float` call the same workers, `:byte`/`:short` keep the longCast path (the oracle's `(vector-of :byte 127.9)` is `[127]`); pinned by clojure-spec `primitive-casts-double-float-byte-short-and-num` |
 | `bigint` `biginteger` `bigdec` `rationalize` `numerator` `denominator` `unchecked-int` `-long` `-short` `-byte` `-char` `-double` `-float` | one call to `rontolisp::%clojure-NAME` (`-v` as a value, arity checked at run time) | integers and ratios are plain Lisp rationals (the `N`/`M` literal rule), so `bigint`/`biginteger` truncate to an integer (a decimal string through `parse-integer` after a first/last character check, since `parse-integer` skips surrounding whitespace and `BigInteger` refuses it; `bigdec` of a string was already strict, both pinned by clojure-spec `bigint-and-bigdec-strings-refuse-surrounding-whitespace`) and `bigdec` answers a rational: an integer, a ratio only when its denominator is `2^a 5^b` (the oracle's `Non-terminating decimal expansion`), a string through `%clojure-parse-decimal`. `rationalize` and `bigdec` of a double read the SHORTEST decimal it prints as (`princ-to-string` parsed back: `(rationalize 0.1)` is `1/10`, the oracle's `BigDecimal.valueOf`; the Lisp `rationalize` answers the simplest rational within half an ulp, `0.3333333333333333` is `1/3` there, not `3333333333333333/10000000000000000`). `numerator`/`denominator` signal on an integer (the oracle's `ClassCastException` on a `Long`). The `unchecked-` casts follow the oracle's Java casts: an integer or ratio wraps two's-complement to the width (`%clojure-wrap-bits`), a double saturates first (int range for `int`/`short`/`byte`, long range for `long`/`char`; NaN 0) so `(unchecked-byte 1e20)` is `-1`, a character is accepted by `unchecked-int`/`-char` only; `unchecked-float` answers a double, the infinity past the float range; `-double` is `double`. Pinned oracle-identical (clj 1.12.6, 2026-10-03) by clojure-spec `number-conversions-bigint-bigdec-rationalize-and-the-unchecked-casts` (a bigint printed through `str`, a bigdec through `double`: the representation deviates) |
@@ -309,7 +309,7 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `type-error` `ClassCastException`, `NullPointerException` for a nil datum,
   `IndexOutOfBoundsException` for an `(INTEGER 0 (D))` expected type,
   `UnsupportedOperationException` for `SEQUENCE` (`count` of a number), none for a nil expected
-  type (the JVM pad's type-error synthesized from a raw host failure: a compiled `.charAt` past
+  type (the JVM pad's type-error synthesized from a raw host failure: a compiled `char` past
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
   subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
@@ -409,8 +409,30 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   and the `define-condition`'s unreferenced keyword constructor builds nothing. Without either,
   every class-reading program carried the renderer and the printer hook (+10.5 KB wasm,
   +9.5 KB JVM class on a one-`try` program).
-- `subs` is `%clojure-subs`, the family's alias of `subseq`: a bound outside a string is the
-  oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words.
+- `vec` is `(coerce (%clojure-realize-all (%clojure-vec-arg x)) 'vector)`: the oracle's `vec` casts a
+  non-collection to an array before it seqs it, so a number, keyword, symbol, boolean, character,
+  function, atom, var, reduced value or matcher is `RuntimeException` ("Unable to convert: class ...
+  to Object[]"), which an `IllegalArgumentException` catch does not take, where `seq` and the other
+  verbs refuse it as IAE. `%clojure-vec-arg` is the family's one VIEW (`ClojureArms.Family.REFUSAL`,
+  `ClojureRefusals.VEC_ARG`): its test list is `%clojure-strict-seq`'s, in its order, and a program
+  reading no class folds it to its argument, so such a program compiles the bare coercion
+  (`--dump-ir` of 458 doc examples + `demo.clj` + probes, 465 programs: 463 identical, the two that
+  differ are a `vec` under a catch by class and a matcher read by `nth`). A lazy seq whose thunk
+  answers a non-collection stays `seq`'s IAE, as in the oracle (only the argument is cast). Cost in a
+  class-reading program, wasm P1 / component / JVM class: `(try (vec 5) (catch ...))` 51,620 / 53,270 /
+  73,075 -> 51,892 / 53,532 / 73,685 (2026-10-05). Pin: clojure-spec
+  `vec-of-a-non-collection-refuses-with-the-runtime-exception-the-oracle-throws`,
+  `ClojureArmsTest#theRefusalFamilyFoldsVecsArgumentCheckToTheArgument`,
+  `ClojureLibraryTest#vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead`.
+- `subs` and `.substring` are `%clojure-subs`, the family's alias of `subseq`: a bound outside
+  a string is the oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words. `.charAt` is
+  `%clojure-char-at`, the alias of `char`: an index outside a string is the same class, in
+  `char`'s words (`CHAR: The value 5 is not of type (INTEGER 0 (3))`), so a stripped program
+  reports what the interpreter's `char` reports (the compiled `char` of such a program stays
+  unchecked). Where a class is read both check before the verb runs, so a built string's
+  out-of-range bound is refused alike on every backend, where the unchecked compiled
+  `subseq` / `char` read garbage or trap. A non-integer bound (`(.substring "abc" 1.0)`) goes
+  to the verb unchecked.
 - Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
   `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
@@ -427,8 +449,12 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   IllegalArgumentException e 1))` 260 -> 305 ms wasm, 335 -> 381 ms JVM); `subs` in a
   class-reading program checks its bounds before `subseq` does (a 2M-call loop 1.30 ->
   1.52 s wasm, the JVM unchanged).
+- `.charAt` / `.substring` in a class-reading program (`(try (.charAt (str "ab" "c") 1) (catch
+  Exception e :x))`): wasm P1 55,286 -> 55,663 B, component 56,897 -> 57,282, JVM class
+  118,359 -> 119,356; a program reading no class, or calling neither verb
+  (`examples/clojure/demo.clj` among them), is byte-identical on all three.
 - Pins: clojure-spec `a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws`,
-  `refusals-of-the-runtime-carry-the-oracles-classes` (each probe first passes a catch of a
+  `a-string-substring-and-charat-refuse-with-the-oracles-class`, `refusals-of-the-runtime-carry-the-oracles-classes` (each probe first passes a catch of a
   class no refusal is, so a refusal naming no class fails it), `class-instance-and-stack-traces-of-an-exception`;
   `ClojureArmsTest#theRefusalFamily*`,
   `ClojureLibraryTest#aProgramReadingNoConditionsClassSplicesEveryRefusalAsThePlainError`,
@@ -457,9 +483,9 @@ keyword, var, reduced value or namespace read as its list (`(first :a)` was `:C%
 - `contains?`: what no arm holds goes to `%clojure-contains-past` (false of nil, a vector,
   a string; else IAE). A string under a key that is no integer answers false (deviation:
   the oracle truncates a number, refuses anything else); the exact arm cost +340 B wasm.
-- `nth` (`%clojure-nth`) steps a list, lazy seq or host object and refuses a map, set,
-  record, sorted collection or non-collection (UOE), so a vector pattern over a map is
-  refused like the oracle's; `second` is `%clojure-seq-nth` (any seq view, a vector
+- `nth` (`%clojure-nth`) steps a list, lazy seq or host object, reads a matcher's group
+  ("Regex") and refuses a map, set, record, sorted collection or non-collection (UOE), so a
+  vector pattern over a map is refused like the oracle's; `second` is `%clojure-seq-nth` (any seq view, a vector
   indexed, `seq`'s refusal). Each carries its own loop: a shared one was +280 B of class
   on an `nth` program.
 - Size, wasm P1 / component / JVM class, 458 doc examples + `demo.clj` + two probes: 446 /
@@ -608,7 +634,7 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's,
+  `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `UNBOUND` is the unbound root's,
   `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
@@ -1352,6 +1378,42 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   map), `find`/`reduce-kv` within noise.
   Pins: `ClojureInteropTest#aHostMapIsAMapToTheMapVerbs` (oracle-identical),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms`.
+- A host `Future` under `deref` (oracle clj 1.12.6): `@f` is its `get` (a failure surfaces as
+  `ExecutionException`, a cancelled one as `CancellationException`), and the three-argument
+  `deref` is `get(ms, MILLISECONDS)` answering the third argument on `TimeoutException` (the
+  timeout truncated to a long, a non-number a `ClassCastException`); every other value, after
+  both extra arguments ran, is a `ClassCastException` (nil an NPE), so a program naming no
+  `java:` operator compiles the three-argument form to that refusal on all four backends
+  (clojure-spec `deref-with-a-timeout-refuses-a-value-that-is-no-future`). The one-argument arm is
+  a clause of `%clojure-deref-other` headed by `%clojure-host-object-p` of
+  `java.util.concurrent.Future` (the HOST family test, so the strip folds it); the timed form is
+  the lowered `if` on the same test around `%clojure-host-future-get-within`, whose handler
+  matches the cause's class by `%clojure-host-is-a` and re-signals anything else. `deref` as a
+  function value stays one argument: a variadic lambda would change the bytes of every program
+  naming it. Cost: a program naming no `java:` operator is byte-identical (wasm P1,
+  `--optimize=size`, component, JVM class with its runtime classes: `demo.clj` and an atom,
+  var and reduced `deref` program); a `java:` program that reads an atom grows by the arm's
+  closure (JVM `.toUpperCase` + `@a`: class 103,872 -> 105,633 B; wasm +66 B). Pin:
+  `ClojureInteropTest#derefOfAHostFutureIsItsGetWithAnOptionalTimeout` (oracle-identical,
+  interpreter and JVM).
+- A host `Future` under the future verbs (oracle clj 1.12.6): `future?` is true of a host
+  `java.util.concurrent.Future` (a `CompletableFuture`, a `FutureTask`); `future-done?`,
+  `future-cancelled?` and `future-cancel` are its `isDone`, `isCancelled` and `cancel(true)`,
+  each cast to `Future` first, so every other value is a `ClassCastException` (nil an NPE) on
+  all four backends (clojure-spec `future-verbs-refuse-a-value-that-is-no-future`; wasm has no
+  host object, so the host arm folds). `realized?` of a host `Future` is the `ClassCastException`
+  it always was (`%clojure-is-realized`). The verbs are `ClojurePredicateLowering` calls: a
+  `let` over the value, `%clojure-host-object-p` of `java.util.concurrent.Future` (the HOST
+  family test) around the library function and the `ClassCastException` refusal. `future?` is
+  `(%clojure-host-future-p x false)`, a HOST alias of `progn`, so the strip leaves
+  `(progn x false)` and every program naming no `java:` operator is byte-identical (wasm P1,
+  `--optimize=size`, component, JVM class with its runtime classes: `demo.clj` and programs
+  calling `future?` as a call and as a value); a `let*` over a temporary instead, the first
+  try, changed the bytes of every program calling `future?` and shifted the temp names. A
+  `java:` program calling `future?` grows by the arm (JVM class 99,607 -> 99,862 B around one
+  `CompletableFuture/completedFuture`); one that does not call it is byte-identical.
+  Pin: `ClojureInteropTest#theFuturePredicatesReadAHostFuture` (oracle-identical, interpreter
+  and JVM).
 - Host collections under the printer (decided 2026-10-04, oracle clj 1.12.6): `print-method`
   under `*print-readably*` writes a `RandomAccess` as a vector, another `List` as a list, a
   `Map` as a map and a `Set` as a set, members readably, under `*print-length*`/`*print-level*`,
@@ -1507,6 +1569,26 @@ nothing otherwise. Greedy, reluctant and possessive quantifiers and backreferenc
 lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` signal `unsupported
 regex` at construction. Patterns print `#"..."`, matchers `#<Matcher source>`; `class`
 answers `:pattern`/`:matcher`.
+
+**`nth` of a matcher reads `Matcher.group(n)`** (oracle-checked clj 1.12.6, 2026-10-05): the
+last match's group `n`, `nil` for a group that took no part, `IllegalStateException` ("No match
+found") before a match or after a failed `find` (even with a default, for an index the pattern
+has), so destructuring a matcher binds its groups. `%clojure-matcher-nth` is the arm behind
+`%clojure-nth`'s refusal clause, whose test `%clojure-matcher-value-p` (an alias of
+`%clojure-re-matcher-p`, which is also used outside arm positions) is the test of
+`ClojureArms.Family.MATCHER`, produced by `%clojure-re-matcher` alone: a program naming no
+`re-matcher` has the arm folded and compiles `nth` as before (the 465 programs of "Refusals":
+`--dump-ir` identical but the matcher probe). Cost of the arm in a program reading a matcher by
+`nth`, wasm P1 / component / JVM class: 68,384 / 69,664 / 115,873 -> 68,722 / 70,002 / 116,433.
+Deviations: an index below zero or past the groups answers the default (nil without one) where
+the oracle's two-argument `nth` throws `IndexOutOfBoundsException` ("No group n"; `nth` past the
+end answers the default, "Deviations"); and the oracle's three-argument `nth` reads no group of a
+pattern without groups (`groupCount > 0 && n <= groupCount`) while its two-argument one reads
+group 0, and the call without a default shares one shape with a nil default, so a groupless
+pattern reads group 0 unless a non-nil default is given. `second`/`first`/`seq` of a matcher are
+`seq`'s IAE and `count` is the UOE, as in the oracle. Pin: clojure-spec
+`nth-of-a-matcher-reads-its-group`, `ClojureArmsTest#theMatcherFamilyIsMadeByReMatcherAndFoldsNthsGroupArm`,
+`ClojureLibraryTest#aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm`.
 
 ## Reading
 
@@ -1949,7 +2031,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureArmsTest` (the sorted-collection, unbound-root and refusal strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.
