@@ -57,8 +57,10 @@ final class JvmGensymCompiler {
 			return;
 		}
 		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "G";
-		// "#:prefix".concat(Integer.toString(++_gensymCtr))
-		JvmEmitHelper.compileStringLiteral("#:" + prefix, ctx);
+		// "#:prefix".concat(Integer.toString(++_gensymCtr)). The prefix is never a value
+		// the program holds -- only the concatenation is -- so it arms no designator
+		// probe, as on WASM (which passes it to FUNC_GENSYM as bytes).
+		JvmEmitHelper.compileUnspelledLiteral("#:" + prefix, ctx);
 		ctx.body.getstatic(ctr).iconst_1().iadd().dup().putstatic(ctr);
 		ctx.body.invokestatic(intToString).invokevirtual(concat);
 	}

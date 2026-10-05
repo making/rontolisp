@@ -209,8 +209,9 @@ closures -- `lambda`, `flet`, `labels`, `coerce`'s, and the interpreter's sentin
 reference for the SHAPE only.
 
 - **The two compiled tables ride DIFFERENT gates, and the difference is the measurement.** The
-  registry answers NAME to funcId for a computed call, so it needs every DISPATCHABLE name
-  (`dispatchableFuncIds`). The print table answers funcId to NAME for a value, so it needs only the
+  registry answers NAME to funcId for a computed call, so it needs every name a run-time
+  designator can carry (`registryFuncIds`; the dispatchers take those plus `valueFuncIds`, together
+  `dispatchableFuncIds`). The print table answers funcId to NAME for a value, so it needs only the
   funcIds that MATERIALIZE as a callable value (`valueFuncIds`) -- PLUS, when the program
   boxes a run-time resolution (`LispMacroExpander.usesRuntimeFunctionBox`, `.todo/750`
   fixed 2026-09-09), every dispatchable defun, since no compile-time gate can predict
@@ -220,7 +221,7 @@ reference for the SHAPE only.
   while a boxing program pays exactly the dispatchable rows. A computed
   designator that never becomes a VALUE (a bare `(funcall sym ...)` symbol arriving
   at the dispatcher) still needs no print row -- while
-  `dispatchableFuncIds`' other half, the name-spelled registry rows, is armed by the wrapper
+  the name-spelled registry rows (`registryFuncIds`) are armed by the wrapper
   catalog's OWN internal `(funcall #'eql ...)` / `(funcall #'identity ...)` expansions, which pin
   EQL and IDENTITY into a `(terpri)` program. `valueFuncIds` holds those two exactly when the
   expansion survives DCE, which is when a value of theirs really can be printed.
@@ -232,9 +233,9 @@ reference for the SHAPE only.
   may be a router over `_funName$k`); `_lispToString`/`_lispToDisplayString` emit
   `emitFuncValPrint` (slot-2 local, so both declare maxLocals 3). The method is OMITTED when the map is empty: a program with no
   nameable function value is byte-identical to a build that never knew the feature.
-- **JVM** keeps its table on `dispatchableFuncIds`: the registry already spells every one of those
-  names in the constant pool, so an extra row is a search branch over strings the class holds
-  anyway. A run-time name resolution boxes the resolved funcId as a function value
+- **JVM** keeps its table on `dispatchableFuncIds` -- every funcId a function object of the run can
+  carry: a value, or a registry row (whose name the pool already holds, so its print row is a
+  search branch over a string the class carries anyway). A run-time name resolution boxes the resolved funcId as a function value
   (`JvmFunctionFormCompiler.compileSymbolFunction`: `_fenv`, then `_lookup`), so the
   boxed value always finds its row there; `functionp`/`type-of` and the print tag
   follow automatically -- `type-of` answered `FUNCTION` for a boxed value before this

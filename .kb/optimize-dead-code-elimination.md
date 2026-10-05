@@ -896,14 +896,16 @@ running it ALONE says how much binaryen's writer costs as much as what the pass 
 1,090-byte module; the corpus said 19-33% of every module.
 
 ## The funcall-dispatch gate (what makes `--optimize` reach library code)
-**A function gets an arity-dispatch case, and a `_lookup` registry row, only when the program can
-actually reach it as a function VALUE.** Without this the shakers are nearly inert on any program
+**A function gets an arity-dispatch case only when the program can actually reach it as a function
+VALUE (source 1) or through a NAME a run-time designator can carry (source 2), and a `_lookup`
+registry row only in the second case.** Without this the shakers are nearly inert on any program
 that loads a library: the ladders `call` every registered function.
-`Wasm/JvmLispCompiler.dispatchableFuncIds` compute the set;
-`WasmRuntimeBuilder.buildDispatchBody` / `JvmRuntimeBuilder.buildDispatchMethods` filter their
-targets by it, and the registry (the WASM data blob / `JvmEvalRuntimeBuilder.lookupSegments`)
-filters its rows by the SAME set -- **computed together so they cannot drift**: a row whose funcId
-has no case would resolve and then fall through to the ladder's default arm.
+`Wasm/JvmLispCompiler.registryFuncIds` compute the rows; the dispatch set is `valueFuncIds` plus
+those rows. `WasmRuntimeBuilder.buildDispatchBody` / `JvmRuntimeBuilder.buildDispatchMethods` filter
+their targets by the dispatch set, and the registry (the WASM data blob /
+`JvmEvalRuntimeBuilder.lookupSegments`) filters its rows by `registryFuncIds` -- **computed together
+so they cannot drift**: a row whose funcId had no case would resolve and then fall through to the
+ladder's default arm.
 
 **Source 1, `Ctx.valueFuncIds`** -- the funcIds Pass 2 actually materialized as a closure
 (`Wasm/JvmFunctionFormCompiler` for `#'name`, `Wasm/JvmLambdaCompiler` for every `(lambda ...)`
@@ -915,7 +917,9 @@ trapped. It now inherits every `Ctx.Builder` field (`Ctx.builder(proto)`, pinned
 `CtxBuilderSeedTest`): [wasm-function-body-size.md](wasm-function-body-size.md), "A chunk context
 inherits every module-wide field by construction".
 
-**Source 2, the names a runtime SYMBOL designator can resolve** (on WASM live when the registry is:
+**Source 2, the names a runtime SYMBOL designator can resolve** -- the registry's rows, and nothing
+else is: a function VALUE carries its funcId to the ladder and never passes `_lookup` (section "A
+registry row is a name, not a value" below). On WASM live when the registry is:
 `usesEval || usesRuntimeDesignator || usesApplyRuntime`, `.kb/eval-runtime.md`). `_lookup` matches
 interned offsets (WASM) / string constants (JVM), so a row is reachable only when the program
 already put that exact name there for another reason. The probe set is **`Ctx.spelledLiterals`** --
@@ -938,6 +942,21 @@ arming rows for slot names, the printer prologue's `"-"`/`"/"` and the JVM layou
   symbol half of **no generated literal may spell a defun name exactly**. Consequence:
   `(funcall (cell-error-name e) ...)` / `(funcall (type-of x) ...)` stop resolving like any forged
   name, loudly; `--dynamic` restores them.
+- **A package walk's spellings count as spelled** (`RuntimeNameProducers.packageWalkSpellings`):
+  the baked package table carries each universe as one packed string that `%split-packed` decodes
+  and `intern`s at run time (`do-symbols`, `do-external-symbols`, `find-all-symbols`,
+  `apropos-list`, `with-package-iterator`, ...), so a program defining that decoder holds every
+  packed spelling, its member name (the walk recombines a member with its home --
+  `%baked-import-redirect`, `%package-spelling-normalize`) and the table's other strings. Before
+  2026-10-05 a walk symbol naming an exported defun nothing spelled answered `The function
+  PWD:PWD-CALL-ONLY is undefined` on the compiled backends while the interpreter called it.
+  `WasmLispCompiler`'s trig pre-scan (`mayReachTrig`) reads the same set, since the universes
+  carry `SIN`/`COS`/... and arm their wrappers. Pin: `PackageWalkDesignatorFixture` (interpreter,
+  JVM, P1, component).
+- **A gensym's prefix is no spelling**: the JVM's `gensym` lowering loaded `"#:G"` (the prefix
+  before the counter) through `compileStringLiteral`, so with a builder present the `#:member`
+  probe armed any defun named `G` (or the prefix); WASM hands the prefix to `FUNC_GENSYM` as bytes.
+  Both now leave it out.
 - **The four widened spellings apply only while the program contains a symbol BUILDER at all** --
   `RuntimeNameProducers.anySymbolBuilder`: `intern`, `find-symbol`, `make-symbol`,
   `uiop:symbol-call`. `make-symbol` is the safe over-approximation (its product can never match a
@@ -1062,14 +1081,14 @@ cut did, and every host-importing example failed in `WasmRefTypeFolder`), at eve
 the ladder roots and page slots as dispatchers, funcIndex -> funcId for every arm target, the
 makers, the always-made): reach from exports/start where a dispatcher's call to a valued target
 is followed only once a reached function makes that value. Makers beyond the credits:
-`FUNC_LOOKUP` makes every registry row's funcId (every dispatchable defun when `registryLive`;
-the blob's one reader); a dispatchable defun with neither a row nor a credit (`--dynamic` /
+`FUNC_LOOKUP` makes every registry row's funcId (`registryFuncIds` when `registryLive`; the blob's
+one reader); a dispatchable defun with neither a row nor a credit (`--dynamic` /
 `anyNameResolvable` without the registry) is always made. When some dispatchable funcId is
 not made, the ladders are rebuilt over the rest (`LadderBuilder`, the same
 `WasmRuntimeBuilder.buildDispatch` call over the same page slots; a slot a smaller ladder leaves
 gets an `unreachable` body the shake drops) and swapped in by `WasmSections.replaceBodies`.
-The rebuild may intern no string (the data section is written; checked). `_lookup` rows and
-`_fun_name` keep the full sets, as on the JVM.
+The rebuild may intern no string (the data section is written; checked). `_fun_name` keeps the
+full set, as on the JVM.
 
 Measured 2026-10-05 (raw / gzip -9n, base 167f74409): bench-report `list` 14,119 -> 12,139
 (-14.0%), `sort` 21,607 -> 20,820 (-3.6%), component and `size` alike, the other eight
@@ -1168,8 +1187,8 @@ after `_unw` is written**, so every caller of a dispatcher counts: when every ca
 value is a tail call, the value tails' `_vtc<n>` and the trampoline's re-entries are the only
 ones, and a closure made only behind them must keep its case or the call that lands on it
 answers NIL. The trampoline gate itself asks before, over the same value semantics, so the
-dead closures no longer hold `_tramp`. `_lookup` rows and `_funName` keep `dispatchableFuncIds`;
-`--optimize=off` writes every case. `-Drontolisp.debug.dispatchgate=true` prints how many
+dead closures no longer hold `_tramp`. `_funName` keeps `dispatchableFuncIds`; `--optimize=off`
+writes every case. `-Drontolisp.debug.dispatchgate=true` prints how many
 dispatchable funcIds no kept body makes.
 
 Measured (default `--optimize`, class bytes, `Prog*.class` summed): bench-report `clos` 28,858 ->
@@ -1188,14 +1207,48 @@ within noise.
 
 The WASM twin: "A ladder arm lives while a kept function makes its value" above.
 
-**Not narrowed: the registry's own rows** (on either backend). `_lookup` holds a row for every dispatchable funcId,
-`valueFuncIds` included, so a `#'name` compiled only in dead code still keeps its function
-whenever the registry is emitted -- i.e. whenever any dispatcher is. Dropping the registry's
-values (unsound, an upper bound) would take a further 5-7 KB off the gate-on deep-learning
-examples, 590 B off `string`, 999 B off `zlib`; narrowing the rows is a both-backends decision
-(the registries must answer the same names).
-
 Pins: `JvmClassSplitterTest#aCallThroughAValueKeepsItsTargetOnlyWhileAKeptBodyMakesTheValue`,
 `JvmDeadMethodEliminationTest#aClosureWhoseEveryCreatorIsShakenTakesItsDispatcherCaseAlong`,
 `#theRegistryKeepsTheCaseOfEveryNameItAnswers`, `#aClosureMadeOnlyBehindATrampolineBounceKeepsItsCase`,
 `#valuesThroughEveryDispatcherShapeAnswerAsUnoptimized`.
+
+### A registry row is a name, not a value
+Both backends. Every row is a maker of its funcId's value (JVM `makesValueOf`, WASM `FUNC_LOOKUP`
+in `madeValues`), so while the rows covered every dispatchable funcId, a `#'name` compiled only in
+dead code kept its function and dispatch case whenever any dispatcher (hence the registry) was
+emitted. The rows are now `registryFuncIds` -- the name-armed set alone (all non-call-only defuns
+under `--dynamic` / `anyNameResolvable`, unchanged) -- and a value-only funcId's case lives only
+while a kept body makes the value. `_funName` / `_fun_name` keep the dispatch set.
+
+**The soundness argument** (the question the item had to settle first): a symbol reaches `_lookup`
+only by a path the probes read. A quoted symbol or a string a builder interns is a spelled
+literal; a data evaluator turns the gate off; a name built from COMPUTED pieces is the existing
+carve-out. No operator turns a function object back into a symbol: `function-lambda-expression`
+answers a nil name, and the print table yields a string, which needs `read` (gate off) or a
+computed `intern` (carve-out). The one path the probes did NOT read was the package walk, and it
+was a hole for call-only defuns already -- closed in the same change (source 2's walk bullet), so
+a value-only funcId and a call-only one are in the same position. Consequence: `(funcall (intern
+<computed>))` naming a function the program also takes as `#'name` now signals undefined-function
+like any forged name (documented in `doc/*/compiling/{jvm,wasm}.md`); `--dynamic` restores it.
+
+Measured 2026-10-05 (base 4e794e73a, `--optimize` default; raw bytes, JVM `Prog*.class` summed).
+The upper bound the item recorded (dropping the registry's values altogether, unsound) was
+`ch03/activation-functions` 66,609 -> 60,652 B; the sound change takes 67,973 -> 61,723 (-9.2%),
+i.e. essentially the whole bound was value-only rows. The examples' compile legs: JVM 116 legs
+48,040,695 -> 47,949,532 (-0.19%, 84 shrink), P1 75 legs 22,569,919 -> 22,500,024 (-0.31%, 44
+shrink), component 64 legs 16,400,296 -> 16,329,113 (-0.43%, 45 shrink), none grows (six legs,
+five of them components, gain 13-76 B of gzip while shrinking raw); `--no-gc` identical. Largest:
+`llm-from-scratch/gpt/shapes` P1 290,228 -> 255,965 (-11.8%), JVM 285,861 -> 266,324;
+`activation-functions` P1 42,101 -> 37,690 (-10.5%); `ch07/visualize-filter` -5.7..-6.2%;
+`weight-init-activation-histogram` -6.4..-6.6%. bench-report: `string` JVM 36,076 -> 35,381, P1
+21,161 -> 21,136; `clos` / `list` / `sort` JVM -376 / -331 / -222 B; the rest identical.
+size-report `zlib` P1 128,297 -> 128,064, component 132,110 -> 131,877, JVM 177,253 -> 176,904;
+the other rows identical. Workers: `httpbin` 168,883 -> 168,630, its component core 166,745 ->
+166,508, the other twelve identical. ci-spec byte-identical on every leg (it uses `eval`);
+scheme-spec P1 956,201 -> 955,293, JVM 1,013,832 -> 1,011,954; clojure-spec P1 6,324,782 ->
+6,318,803, JVM 7,320,727 -> 7,310,284. Every changed program's run output is identical (timing
+lines aside); bench-report time and compile time within noise.
+
+Pins: `JvmDeadMethodEliminationTest#aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow` (also
+the gensym prefix), `#theRegistryKeepsTheCaseOfEveryNameItAnswers`, its
+`WasmTreeShakerTest` twin, `PackageWalkDesignatorFixture` on the four backends.

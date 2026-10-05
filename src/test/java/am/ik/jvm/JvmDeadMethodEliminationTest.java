@@ -317,20 +317,45 @@ class JvmDeadMethodEliminationTest {
 	void theRegistryKeepsTheCaseOfEveryNameItAnswers() throws Exception {
 		// A name the run-time registry (_lookup) resolves is a value the registry makes:
 		// H, reached only through its quoted name, keeps its dispatcher cases -- the
-		// per-arity one funcall takes and the spread one apply takes. G has a row only
-		// because NOBODY, which nothing calls, takes #'g; the computed name the program
-		// interns still resolves to it, so its case stays too.
+		// per-arity one funcall takes and the spread one apply takes -- and so does G,
+		// whose name the program interns from a string it spells.
+		String source = """
+				(defun h (x) x (* x 10))
+				(defun g (x) x (* x 100))
+				(print (funcall (car (list 'h)) 3))
+				(print (apply (car (list 'h)) '(4)))
+				(print (funcall (intern (car (list "G"))) 5))
+				""";
+		byte[] optimized = compile(source, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(optimized)).contains("H", "G");
+		assertThat(run(optimized)).isEqualTo("30\n40\n500");
+	}
+
+	@Test
+	void aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow() throws Exception {
+		// G is a value only inside NOBODY, which nothing calls, and nothing spells its
+		// name -- a gensym's "G" prefix is no spelling, only the symbol it builds is: the
+		// registry a live symbol funcall keeps has no row for it, so G shakes with its
+		// last maker. A name forged at run time does not resolve to it -- the
+		// undefined-function error a never-valued function gives -- at every level, the
+		// unshaken one included.
 		String source = """
 				(defun h (x) x (* x 10))
 				(defun g (x) x (* x 100))
 				(defun nobody () #'g)
 				(print (funcall (car (list 'h)) 3))
-				(print (apply (car (list 'h)) '(4)))
-				(print (funcall (intern (string-upcase "g")) 5))
+				(print (symbolp (gensym)))
+				(print (handler-case (funcall (intern (string-upcase (car (list "g")))) 5)
+				         (undefined-function () 'unresolved)))
 				""";
 		byte[] optimized = compile(source, OptimizeLevel.DEFAULT);
-		assertThat(declaredMethodNames(optimized)).contains("H", "G").doesNotContain("NOBODY");
-		assertThat(run(optimized)).isEqualTo("30\n40\n500");
+		assertThat(declaredMethodNames(optimized)).contains("H").doesNotContain("G", "NOBODY");
+		assertThat(run(optimized)).isEqualTo("30\nT\nUNRESOLVED");
+		assertThat(run(compile(source, OptimizeLevel.NONE))).isEqualTo("30\nT\nUNRESOLVED");
+		// Call NOBODY and the value is made: G comes back, its case with it.
+		byte[] made = compile(source + "(print (funcall (nobody) 6))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(made)).contains("G", "NOBODY");
+		assertThat(run(made)).isEqualTo("30\nT\nUNRESOLVED\n600");
 	}
 
 	@Test

@@ -18278,6 +18278,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSymbolAPackageWalkProducesCallsItsFunction() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunASymbolAPackageWalkProducesCallsItsFunction
+		// twin, on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.PackageWalkDesignatorFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms))
+			.isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void computedLookupOfAStandardName() throws Exception {
 		// The
 		// JvmLispCompilerTest#compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol

@@ -610,6 +610,25 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow() {
+		// H's quoted name keeps the name registry live. G is a value only inside NOBODY,
+		// which nothing calls, and nothing spells its name: the registry has no row for
+		// it (a row would make its value), so G's ladder arm goes and both defuns shake
+		// out, P1 and component alike. Call NOBODY and both come back.
+		String live = "(defun h (x) x (* x 10)) (print (funcall (car (list 'h)) 3)) ";
+		String defs = "(defun g (x) x (* x 100)) (defun nobody () #'g) ";
+		Module without = Module.parse(compile(live, false, OptimizeLevel.DEFAULT));
+		Module shaken = Module.parse(compile(defs + live, false, OptimizeLevel.DEFAULT));
+		Module made = Module.parse(compile(defs + live + "(print (funcall (nobody) 6))", false, OptimizeLevel.DEFAULT));
+		shaken.assertWellFormed();
+		made.assertWellFormed();
+		assertThat(shaken.definedFunctionCount()).isEqualTo(without.definedFunctionCount());
+		assertThat(made.definedFunctionCount()).isGreaterThan(shaken.definedFunctionCount());
+		assertThat(compileComponent(defs + live, OptimizeLevel.DEFAULT).length)
+			.isCloseTo(compileComponent(live, OptimizeLevel.DEFAULT).length, org.assertj.core.data.Offset.offset(8));
+	}
+
+	@Test
 	void aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue() {
 		// r calls the dispatcher d, whose arms call t (value 7) and u (value 8); m makes
 		// value 8 and t makes it too. Nothing reached makes either value, so neither arm

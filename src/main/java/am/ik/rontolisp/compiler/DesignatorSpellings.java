@@ -9,7 +9,7 @@ import org.jspecify.annotations.Nullable;
 /**
  * The literal spellings a compiled program can hold that still RESOLVE a function name at
  * run time -- the probe list behind both backends' funcall-dispatch gate
- * ({@code Jvm/WasmLispCompiler.dispatchableFuncIds},
+ * ({@code Jvm/WasmLispCompiler.registryFuncIds},
  * {@code .kb/optimize-dead-code-elimination.md}).
  *
  * <p>

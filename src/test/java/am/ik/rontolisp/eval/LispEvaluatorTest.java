@@ -16895,6 +16895,15 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
 	}
 
+	// A symbol a package walk produces calls the function it names. The twins are
+	// JvmLispCompilerTest#compileAndRunASymbolAPackageWalkProducesCallsItsFunction and
+	// WasmLispCompilerIntegrationTest#aSymbolAPackageWalkProducesCallsItsFunction.
+	@Test
+	void aSymbolAPackageWalkProducesCallsItsFunction() {
+		assertThat(printedLines(am.ik.rontolisp.PackageWalkDesignatorFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+	}
+
 	// find-symbol / intern / symbol-package of a standard name the compile paths cannot
 	// fold answer the cl symbol with CL's status. The twins are
 	// JvmLispCompilerTest#compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol

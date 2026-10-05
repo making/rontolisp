@@ -511,6 +511,10 @@ made table-aware. The model:
   anything for them. Keywords are never listed (no keyword table). A runtime entry
   enumerates its member table plus the externals of its uses (a baked row's packed
   externals, a runtime entry's `:external` members).
+  The walk interns names the program never spells, so the funcall-dispatch gate reads the
+  table's spellings as spelled whenever the program defines `%split-packed`
+  (`RuntimeNameProducers.packageWalkSpellings`, `.kb/optimize-dead-code-elimination.md`):
+  a symbol the walk hands back calls its function on every backend.
   **Both dedups are `equal` hash tables, never a scan** (2026-10-04): `%do-symbols-list`
   pushes its rows and keeps the last occurrence of each (`remove-duplicates`' answer) by
   table; `%package-symbols-where` normalizes each distinct row once and keeps the first

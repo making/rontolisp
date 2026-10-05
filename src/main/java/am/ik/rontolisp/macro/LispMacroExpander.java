@@ -25506,7 +25506,7 @@ public final class LispMacroExpander {
 		// The tail keeps the " on " separator rather than being the bare name, and that
 		// is load-bearing: a string literal that spells a function's name EXACTLY arms
 		// the dispatch gate's designator probe (JvmLispCompiler /
-		// WasmLispCompiler.dispatchableFuncIds, which reads a framed literal as something
+		// WasmLispCompiler.registryFuncIds, which reads a framed literal as something
 		// intern could hand to funcall), so every generic would get a ladder case and,
 		// through its call edge, keep its whole method tree alive -- measured at +11.5 KB
 		// on the hello-clack Worker. See .kb/optimize-dead-code-elimination.md.
