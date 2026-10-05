@@ -5456,6 +5456,71 @@ cases:
       T
       T
       T
+  # An explicit '+' sign is dropped when the rest of the token is a number -- digits OR a
+  # leading '.' and a digit -- and the token keeps its '+' when it is not one.
+  - name: runtime-read-explicit-plus-numbers
+    source: |
+      (print (read-from-string "+.5"))
+      (print (read-from-string "+.5e1"))
+      (print (floatp (read-from-string "+.5")))
+      (print (read-from-string "(a +.5 -.5 +5. +5 +1/2)"))
+      (print (read-from-string "+."))
+      (print (read-from-string "+"))
+      (print (symbol-name (read-from-string "+.e1")))
+      (print (symbol-name (read-from-string "+5x")))
+      (print (symbol-name (read-from-string "+.5x")))
+      (print (symbol-name (read-from-string "+1+")))
+      (print (symbol-name (read-from-string "++.5")))
+      (print (symbol-name (read-from-string "+1/2x")))
+    expected: |
+      0.5
+      5.0
+      T
+      (A 0.5 -0.5 5 5 1/2)
+      +.
+      +
+      "+.E1"
+      "+5X"
+      "+.5X"
+      "+1+"
+      "++.5"
+      "+1/2X"
+  # The same tokens in program source: a signed number-shaped token that is not a number is
+  # a symbol spelled with its sign.
+  - name: explicit-plus-number-shaped-symbols
+    source: |
+      (print (symbol-name '+5x))
+      (print (symbol-name '+.5x))
+      (print (symbol-name '+1+))
+      (print (symbol-name '+1/2x))
+      (print (list '+.5 '+5. '+5 '+1/2 '+.5e1))
+    expected: |
+      "+5X"
+      "+.5X"
+      "+1+"
+      "+1/2X"
+      (0.5 5 5 1/2 5.0)
+  # read-from-string answers the FIRST datum and never looks past it: a token ended by a
+  # ')' that closes nothing, and text after the datum that would not read, are not errors.
+  - name: runtime-read-stops-after-the-first-datum
+    source: |
+      (print (read-from-string "5.)"))
+      (print (read-from-string "5)"))
+      (print (read-from-string "abc)"))
+      (print (read-from-string "(1 2))"))
+      (print (read-from-string "+.5)"))
+      (print (read-from-string "1 (2"))
+      (print (read-from-string "x )"))
+      (print (read-from-string "1 #<"))
+    expected: |
+      5
+      5
+      ABC
+      (1 2)
+      0.5
+      1
+      X
+      1
   - name: read-from-string-upcase
     source: |
       (print (read-from-string "foo"))

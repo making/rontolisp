@@ -16845,6 +16845,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileReadFromStringExplicitPlusNumbers() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "+.5"))
+				(print (read-from-string "+.5e1"))
+				(print (floatp (read-from-string "+.5")))
+				(print (read-from-string "(a +.5 -.5 +5. +5 +1/2)"))
+				(print (read-from-string "+."))
+				(print (read-from-string "+"))
+				(print (symbol-name (read-from-string "+.e1")))
+				(print (symbol-name (read-from-string "+5x")))
+				(print (symbol-name (read-from-string "+.5x")))
+				(print (symbol-name (read-from-string "+1+")))
+				(print (symbol-name (read-from-string "++.5")))
+				(print (symbol-name (read-from-string "+1/2x")))
+				""")).isEqualTo(
+				"0.5\n5.0\nT\n(A 0.5 -0.5 5 5 1/2)\n+.\n+\n\"+.E1\"\n\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"++.5\"\n\"+1/2X\"");
+	}
+
+	@Test
+	void compileSourcePlusNumberShapedSymbol() throws Exception {
+		assertThat(compileAndRun("""
+				(print (symbol-name '+5x))
+				(print (symbol-name '+.5x))
+				(print (symbol-name '+1+))
+				(print (symbol-name '+1/2x))
+				(print (list '+.5 '+5. '+5 '+1/2 '+.5e1))
+				""")).isEqualTo("\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"+1/2X\"\n(0.5 5 5 1/2 5.0)");
+	}
+
+	@Test
+	void compileReadFromStringAnswersTheFirstDatum() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "5.)"))
+				(print (read-from-string "abc)"))
+				(print (read-from-string "(1 2))"))
+				(print (read-from-string "+.5)"))
+				(print (read-from-string "1 (2"))
+				(print (read-from-string "1 #<"))
+				""")).isEqualTo("5\nABC\n(1 2)\n0.5\n1\n1");
+	}
+
+	@Test
 	void compileParseIntegerAndReadFromStringAsValues() throws Exception {
 		assertThat(compileAndRun("(print (mapcar #'parse-integer (list \"1\" \"2\" \"3\")))")).isEqualTo("(1 2 3)");
 		assertThat(compileAndRun("(print (funcall #'read-from-string \"(a b c)\"))")).isEqualTo("(A B C)");

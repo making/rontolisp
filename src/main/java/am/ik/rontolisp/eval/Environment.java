@@ -88,6 +88,7 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.reader.LispLexer;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoCharFileReader;
 import am.ik.rontolisp.runtime.RontoCharFileWriter;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
@@ -7435,7 +7436,7 @@ public final class Environment implements Scope {
 		// everything #+/#- suppressed away) is end of file, like CL's read: the
 		// read is through readAll (whose first datum readFromString answers), so a
 		// literal nil still reads as nil and only a missing datum signals.
-		java.util.function.Function<String, LispVal> readRuntimeDatum = input -> {
+		java.util.function.Function<String, LispVal> readWholeText = input -> {
 			if (env.readTimeEvalResolver != null && input.contains("#.")) {
 				java.util.List<LispVal> exprs = LispReader.readAllWithReadEvalMarkers(input, env.currentReadFeatures());
 				if (exprs.isEmpty()) {
@@ -7448,6 +7449,34 @@ public final class Environment implements Scope {
 				throw endOfFile(errorStream(streams, nextStreamHandle, input));
 			}
 			return exprs.get(0);
+		};
+		// The datum is the FIRST one: text after it is never read, so a ')' that closes
+		// nothing or a malformed tail is not the caller's error (SBCL reads "5.)" as 5).
+		// The whole text is read first -- the common case, with every error as ever --
+		// and only when that fails is the text cut at the end of its first datum and the
+		// head read alone; a head that also fails reports the original error.
+		java.util.function.Function<String, LispVal> readRuntimeDatum = input -> {
+			try {
+				return readWholeText.apply(input);
+			}
+			catch (LispReadException ex) {
+				int end;
+				try {
+					end = LispLexer.datumEnd(input, env.currentReadFeatures());
+				}
+				catch (LispReadException ignored) {
+					throw ex;
+				}
+				if (end >= input.length()) {
+					throw ex;
+				}
+				try {
+					return readWholeText.apply(input.substring(0, end));
+				}
+				catch (LispReadException ignored) {
+					throw ex;
+				}
+			}
 		};
 		// read itself is NOT here: it is prelude rontolisp over read-char /
 		// unread-char / read-from-string (LispPreludeLibrary), so one definition

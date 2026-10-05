@@ -452,6 +452,48 @@ class WasmLispCompilerIntegrationTest {
 				"5\n-5\n5\n0\n7\n1073741824\n-4611686018427387905\n9223372036854775808\n123456789012345678901234567890\n-123456789012345678901234567890\n6\n(1 2 -3)\n(A . 5)\nT\nT\nT\nT\nT\nT\nT\nT\nT");
 	}
 
+	@Test
+	void compileAndRunRuntimeReadExplicitPlusNumbers() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "+.5"))
+				(print (read-from-string "+.5e1"))
+				(print (floatp (read-from-string "+.5")))
+				(print (read-from-string "(a +.5 -.5 +5. +5 +1/2)"))
+				(print (read-from-string "+."))
+				(print (read-from-string "+"))
+				(print (symbol-name (read-from-string "+.e1")))
+				(print (symbol-name (read-from-string "+5x")))
+				(print (symbol-name (read-from-string "+.5x")))
+				(print (symbol-name (read-from-string "+1+")))
+				(print (symbol-name (read-from-string "++.5")))
+				(print (symbol-name (read-from-string "+1/2x")))
+				""")).isEqualTo(
+				"0.5\n5.0\nT\n(A 0.5 -0.5 5 5 1/2)\n+.\n+\n\"+.E1\"\n\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"++.5\"\n\"+1/2X\"");
+	}
+
+	@Test
+	void compileAndRunSourcePlusNumberShapedSymbol() throws Exception {
+		assertThat(compileAndRun("""
+				(print (symbol-name '+5x))
+				(print (symbol-name '+.5x))
+				(print (symbol-name '+1+))
+				(print (symbol-name '+1/2x))
+				(print (list '+.5 '+5. '+5 '+1/2 '+.5e1))
+				""")).isEqualTo("\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"+1/2X\"\n(0.5 5 5 1/2 5.0)");
+	}
+
+	@Test
+	void compileAndRunRuntimeReadAnswersTheFirstDatum() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "5.)"))
+				(print (read-from-string "abc)"))
+				(print (read-from-string "(1 2))"))
+				(print (read-from-string "+.5)"))
+				(print (read-from-string "1 (2"))
+				(print (read-from-string "1 #<"))
+				""")).isEqualTo("5\nABC\n(1 2)\n0.5\n1\n1");
+	}
+
 	// A make-array whose :element-type is a RUNTIME value has to answer what the LITERAL
 	// spelling answers, on every code -- including the ones this backend refuses, where
 	// "the same answer" is the same refusal. The widths come FROM ArrayElementTypes

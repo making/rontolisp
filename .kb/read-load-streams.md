@@ -40,6 +40,17 @@ nesting `#|...|#`.
   2.3.1) on all four backends -- JVM `_classify` drops the dot and takes the integer path, WASM
   `emitTryInteger` accepts a `.` last in the token after a digit. `1.e5` and `.5` stay floats; `5.e`,
   `5.x`, `1.2.` stay symbols. Pinned by ci-spec `runtime-read-trailing-dot-integers`.
+- Explicit `+`: dropped when a digit, or `.` and a digit, follows (`+5`, `+.5`, `+.5e1`); JVM `_classify` keeps
+  the upcased original in a local, WASM `_read_expr` a STRIP flag, so a token the number attempts then
+  refuse (`+5x`, `+.5x`, `+1+`) is the symbol WITH its sign. The source lexer (`readNumber("+")`) does the same.
+  Reader cost of the dot case and the sign restore: +132 B JVM / +60 B P1 / +60 B component on a program that
+  reads one list; a program without a runtime reader is byte-identical.
+  Pinned by ci-spec `runtime-read-explicit-plus-numbers`, `explicit-plus-number-shaped-symbols`.
+- `read-from-string` reads the FIRST datum only. The compiled readers always did; the interpreter parses the
+  whole text first and, only when that signals, cuts it at `LispLexer.datumEnd` and reads the head, so
+  `"5.)"`, `"abc)"`, `"1 (2"` answer the first datum like SBCL and a stray `)` ALONE or an unfinished datum
+  still signals. The compiled readers still read a lone `)` or an unterminated list leniently (nil / the
+  list), the divergence listed above. Pinned by ci-spec `runtime-read-stops-after-the-first-datum`.
 - Dotted pairs: `.` is a dot token only when the next byte is a delimiter (whitespace `( ) ' " ;`) or
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`).
 

@@ -930,9 +930,11 @@ final class WasmReadRuntimeBuilder {
 		// EXPSGN=16, EXPDIGIT=17 ; f64 locals: FVAL=18, FPOW=19 ; ref local: ACC64=20
 		// (the decimal accumulator, a tier-aware exact integer stepped through
 		// _big_grow so a token past the i31 range reads as a boxed or limb integer like
-		// the frontend, and a float token's digits stay exact) ; i64 local: MV=21. The
+		// the frontend, and a float token's digits stay exact) ; i64 local: MV=21 ; i32
+		// local:
+		// STRIP=22 (a leading '+' was dropped from the token). The
 		// classifiers reuse the i32 slots freely between attempts.
-		w.write(5);
+		w.write(6);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(16);
@@ -943,9 +945,11 @@ final class WasmReadRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I64);
+		w.write(1);
+		w.write(Type.I32);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, C2 = 13, SAWE = 14, EXPVAL = 15, EXPSGN = 16, EXPDIGIT = 17, FVAL = 18,
-				FPOW = 19, ACC64 = 20, MV = 21;
+				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: return null
@@ -1036,9 +1040,11 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
 
-		// Leading '+': an explicitly positive number literal (+347, +2.5, +1/3) drops
-		// the sign when a digit follows, like the frontend tokenizer; any other '+'
-		// token stays a symbol.
+		// Leading '+': an explicitly positive number literal (+347, +2.5, +.5, +1/3)
+		// drops
+		// the sign when a digit, or a '.' and a digit, follows, like the frontend
+		// tokenizer; any other '+' token stays a symbol. STRIP remembers the drop so a
+		// token that then turns out not to be a number (+5x) is interned WITH its sign.
 		getLocal(w, LEN);
 		i32(w, 1);
 		w.write(Instruction.I32_GT_S);
@@ -1053,13 +1059,26 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		setLocal(w, BYTE);
+		emitByteIsDigit(w, BYTE);
+		setLocal(w, STRIP);
+		// "+." then a digit
 		getLocal(w, BYTE);
-		i32(w, '0');
-		w.write(Instruction.I32_GE_S);
-		getLocal(w, BYTE);
-		i32(w, '9');
-		w.write(Instruction.I32_LE_S);
+		i32(w, '.');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, LEN);
+		i32(w, 2);
+		w.write(Instruction.I32_GT_S);
 		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, START);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, BYTE);
+		emitByteIsDigit(w, BYTE);
+		setLocal(w, STRIP);
+		end(w);
+		getLocal(w, STRIP);
 		ifVoid(w);
 		getLocal(w, START);
 		i32(w, 1);
@@ -1085,7 +1104,19 @@ final class WasmReadRuntimeBuilder {
 		emitTryFloat(w, new FloatSlots(BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, SAWE, EXPVAL, EXPSGN, EXPDIGIT,
 				C2, HP, ACC, OFF, ACC64, CAR, CDR, MV, FVAL, FPOW));
 
-		// symbol: off = _intern(start, len)
+		// symbol: put back a '+' the number attempts skipped, then off = _intern(start,
+		// len)
+		getLocal(w, STRIP);
+		ifVoid(w);
+		getLocal(w, START);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, START);
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, LEN);
+		end(w);
 		getLocal(w, START);
 		getLocal(w, LEN);
 		w.write(Instruction.CALL);
@@ -1106,6 +1137,17 @@ final class WasmReadRuntimeBuilder {
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/** Pushes 1 when the byte in local {@code byteLocal} is an ASCII digit, else 0. */
+	private static void emitByteIsDigit(WasmWriter w, int byteLocal) {
+		getLocal(w, byteLocal);
+		i32(w, '0');
+		w.write(Instruction.I32_GE_S);
+		getLocal(w, byteLocal);
+		i32(w, '9');
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
 	}
 
 	/**

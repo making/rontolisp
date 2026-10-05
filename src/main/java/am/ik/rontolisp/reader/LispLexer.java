@@ -516,7 +516,7 @@ public final class LispLexer {
 					// ".4" is the float 0.4 (CLHS 2.3.1), not a symbol: a decimal point
 					// followed by a digit always starts a number, so "(a .5)" reads as
 					// (A 0.5) -- a dotted pair must spell the dot bare, "(a . 5)".
-					add(tokens, readNumber(), tokenStart);
+					add(tokens, readNumber(""), tokenStart);
 				}
 				else if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
 					// A run of dots with nothing else in the token is not a symbol
@@ -549,11 +549,11 @@ public final class LispLexer {
 				add(tokens, readString(), tokenStart);
 			}
 			else if (isDigit(c)) {
-				add(tokens, readNumber(), tokenStart);
+				add(tokens, readNumber(""), tokenStart);
 			}
 			else if (c == '-' && this.pos + 1 < this.input.length()
 					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
-				add(tokens, readNumber(), tokenStart);
+				add(tokens, readNumber(""), tokenStart);
 			}
 			else if (c == '+' && this.pos + 1 < this.input.length()
 					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
@@ -561,7 +561,7 @@ public final class LispLexer {
 				// the digits parse as usual. A '+' followed by anything else (a symbol
 				// like +limit+ or the function +) stays a symbol.
 				this.pos++;
-				add(tokens, readNumber(), tokenStart);
+				add(tokens, readNumber("+"), tokenStart);
 			}
 			else {
 				add(tokens, readSymbol(), tokenStart);
@@ -576,7 +576,9 @@ public final class LispLexer {
 		}
 	}
 
-	private Token readNumber() {
+	// sign is the explicit "+" the dispatcher already consumed, or "": a token that turns
+	// out not to be a number is a symbol spelled WITH it.
+	private Token readNumber(String sign) {
 		int start = this.pos;
 		if (this.input.charAt(this.pos) == '-') {
 			this.pos++;
@@ -633,7 +635,7 @@ public final class LispLexer {
 				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 					this.pos++;
 				}
-				return numberFallbackSymbol(this.input.substring(start, this.pos));
+				return numberFallbackSymbol(sign + this.input.substring(start, this.pos));
 			}
 			String numerator = stripGrouping(this.input.substring(start, slash));
 			String denominator = stripGrouping(this.input.substring(slash + 1, this.pos));
@@ -657,7 +659,7 @@ public final class LispLexer {
 			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
-			return numberFallbackSymbol(this.input.substring(start, this.pos));
+			return numberFallbackSymbol(sign + this.input.substring(start, this.pos));
 		}
 		if (isFloat) {
 			return new Token.DoubleToken(
