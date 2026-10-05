@@ -10,6 +10,7 @@ import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
@@ -65,7 +66,48 @@ final class JvmQuoteCompiler {
 	 * @param build emits the construction, leaving exactly one value on the stack
 	 */
 	private static void emitSharedConstant(LispVal datum, JvmLispCompiler.Ctx ctx, String className, Runnable build) {
-		int slot = ctx.quotePool.slot(datum);
+		emitSlot(ctx.quotePool.slot(datum), ctx, className, build);
+	}
+
+	/**
+	 * Emits a string constant whose modified UTF-8 form is too long for one
+	 * {@code CONSTANT_Utf8}: its pieces ({@link ConstantPool#utf8Pieces}) joined and
+	 * interned behind a slot of the quoted-datum table keyed by content, so the join runs
+	 * once and every evaluation of every site answers the object an {@code ldc} of the
+	 * whole would have -- the canonical instance of the content.
+	 * @param value the string (a framed string literal or a symbol name)
+	 * @param ctx the compilation context
+	 */
+	static void emitLongString(String value, JvmLispCompiler.Ctx ctx) {
+		ConstantPool cp = ctx.cp;
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		ClassEntry builderClass = cp.classEntry("java/lang/StringBuilder");
+		emitSlot(ctx.quotePool.slot(value), ctx, ctx.className, () -> {
+			// new StringBuilder(length) { .append(piece) } .toString().intern()
+			ctx.body.new_(builderClass).dup();
+			JvmEmitHelper.emitIntConst(ctx, value.length());
+			ctx.body.invokespecial(cp.methodRef(builderClass, "<init>", "(I)V"));
+			MethodRefEntry append = cp.methodRef(builderClass, "append",
+					"(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+			for (String piece : ConstantPool.utf8Pieces(value)) {
+				ctx.body.ldc(cp.stringEntry(piece)).invokevirtual(append);
+			}
+			ctx.body.invokevirtual(cp.methodRef(builderClass, "toString", "()Ljava/lang/String;"))
+				.invokevirtual(cp.methodRef(stringClass, "intern", "()Ljava/lang/String;"));
+		});
+		// The slot answers an Object; a literal's consumer may expect the String an ldc
+		// would have left.
+		ctx.body.checkcast(stringClass);
+	}
+
+	/**
+	 * Emits a build behind its lazy slot of the quoted-datum table.
+	 * @param slot the slot
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @param build emits the construction, leaving exactly one value on the stack
+	 */
+	private static void emitSlot(int slot, JvmLispCompiler.Ctx ctx, String className, Runnable build) {
 		JvmQuotePool.Refs refs = ctx.quotePool.refs(ctx.cp, className);
 		// <slot>; INVOKESTATIC _qd; DUP; IFNONNULL end; POP; <build>; <slot>;
 		// INVOKESTATIC _qdSet; end: -- one value on the stack on both paths.

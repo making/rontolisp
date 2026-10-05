@@ -4,7 +4,9 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -19,7 +21,9 @@ import am.ik.rontolisp.LispVal;
  * ({@code JvmQuoteCompiler.emitSharedConstant}), so every evaluation answers the SAME
  * object: the CL-conformant constant reading, and what the interpreter always did. Keyed
  * by the datum's IDENTITY, so a macro expansion splicing one template datum into several
- * sites shares one slot across them.
+ * sites shares one slot across them. A string constant too long for one
+ * {@code CONSTANT_Utf8} takes a slot too, keyed by its content
+ * ({@code JvmQuoteCompiler.emitLongString}).
  *
  * <p>
  * The slots are one {@code Object[]} in the static field {@code _qd}, read through
@@ -73,6 +77,8 @@ final class JvmQuotePool {
 
 	private final IdentityHashMap<LispVal, Integer> slotByDatum = new IdentityHashMap<>();
 
+	private final Map<String, Integer> slotByString = new HashMap<>();
+
 	private @Nullable Refs refs;
 
 	private @Nullable ConstantPool cp;
@@ -91,13 +97,34 @@ final class JvmQuotePool {
 		if (existing != null) {
 			return existing;
 		}
+		int created = this.newSlot();
+		this.slotByDatum.put(datum, created);
+		return created;
+	}
+
+	/**
+	 * The slot of a string constant too long for one {@code CONSTANT_Utf8}, interned on
+	 * first sight by CONTENT: every site of one such literal answers one object, as every
+	 * {@code ldc} of a shorter one does.
+	 * @param value the string
+	 * @return its slot index
+	 */
+	int slot(String value) {
+		Integer existing = this.slotByString.get(value);
+		if (existing != null) {
+			return existing;
+		}
+		int created = this.newSlot();
+		this.slotByString.put(value, created);
+		return created;
+	}
+
+	private int newSlot() {
 		if (this.frozen) {
 			throw new IllegalStateException("a quoted datum was first compiled after the class's methods were"
 					+ " assembled: its slot would lie past the table's size");
 		}
-		int created = this.slotByDatum.size();
-		this.slotByDatum.put(datum, created);
-		return created;
+		return this.slotByDatum.size() + this.slotByString.size();
 	}
 
 	/**
@@ -140,7 +167,7 @@ final class JvmQuotePool {
 	 * {@return the number of slots interned so far}
 	 */
 	int size() {
-		return this.slotByDatum.size();
+		return this.slotByDatum.size() + this.slotByString.size();
 	}
 
 	/**

@@ -18067,6 +18067,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void longStringConstant() throws Exception {
+		// The JvmLispCompilerTest#compileAndRunALongStringConstant twin, on Preview 1 and
+		// the component.
+		for (java.util.Map.Entry<String, String> program : am.ik.rontolisp.LongStringConstantFixture.PROGRAMS
+			.entrySet()) {
+			List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.getKey(),
+					am.ik.rontolisp.reader.Features.WASM, true, false);
+			String label = program.getKey().substring(0, 60);
+			assertThat(compileAndRunProgram(forms)).as(label).isEqualTo(program.getValue());
+			assertThat(compileComponentAndRunProgram(forms)).as(label).isEqualTo(program.getValue());
+		}
+	}
+
+	@Test
 	void runtimePackageMemberTable() throws Exception {
 		// The JvmLispCompilerTest.compileAndRunRuntimePackageMemberTable twin: the
 		// %runtime-packages% member table, answering exactly like the interpreter's

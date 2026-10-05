@@ -16745,6 +16745,16 @@ class LispEvaluatorTest {
 			.forEach((program, expected) -> assertThat(printedLines(program)).as(program).isEqualTo(expected));
 	}
 
+	// A string constant past one JVM CONSTANT_Utf8 (65,535 bytes): a long literal and
+	// package universes packing past it. The twins are
+	// JvmLispCompilerTest#compileAndRunALongStringConstant and
+	// WasmLispCompilerIntegrationTest#longStringConstant.
+	@Test
+	void longStringConstant() {
+		am.ik.rontolisp.LongStringConstantFixture.PROGRAMS.forEach((program,
+				expected) -> assertThat(printedLines(program)).as(program.substring(0, 60)).isEqualTo(expected));
+	}
+
 	@Test
 	void aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() {
 		// The interpreter leg of the compiled backends' ratio pin

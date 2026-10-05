@@ -15435,6 +15435,20 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	@Test
+	void compileAndRunALongStringConstant() throws Exception {
+		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
+		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and
+		// joined once: the compile used to refuse it. The interpreter twin is
+		// LispEvaluatorTest#longStringConstant.
+		for (Map.Entry<String, String> program : am.ik.rontolisp.LongStringConstantFixture.PROGRAMS.entrySet()) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.getKey(),
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.as(program.getKey().substring(0, 60))
+				.isEqualTo(program.getValue());
+		}
+	}
+
 	// Enumerating a package costs its universe, not the universe squared. The compiled
 	// backends walk through the prelude's %do-symbols-list and %package-symbols-where,
 	// which deduplicated with remove-duplicates over the whole universe and a member scan

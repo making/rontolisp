@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.jvm.ConstantPool;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
@@ -68,12 +69,6 @@ final class JvmSourceSites {
 
 	/** The largest line a site can carry: the table holds it in one {@code char}. */
 	private static final int MAX_LINE = 0xFFFF;
-
-	/**
-	 * The most bytes a {@code CONSTANT_Utf8} holds (JVMS 4.4.7); a table longer than one
-	 * constant travels as several, concatenated back by the report.
-	 */
-	private static final int MAX_CONSTANT_BYTES = 0xFFFF;
 
 	/** What separates the names in {@link #nameChunks}: no file or symbol name has it. */
 	static final char NAME_SEPARATOR = '\0';
@@ -171,7 +166,7 @@ final class JvmSourceSites {
 		for (Site site : this.sites) {
 			table.append((char) site.file()).append((char) site.line()).append((char) site.owner());
 		}
-		return chunks(table);
+		return ConstantPool.utf8Pieces(table);
 	}
 
 	/**
@@ -185,7 +180,7 @@ final class JvmSourceSites {
 		for (String name : this.names.keySet()) {
 			joined.append(NAME_SEPARATOR).append(name);
 		}
-		return chunks(joined);
+		return ConstantPool.utf8Pieces(joined);
 	}
 
 	private int nameIndex(String name) {
@@ -211,32 +206,6 @@ final class JvmSourceSites {
 		this.sites.add(site);
 		this.ids.put(site, this.sites.size());
 		return this.sites.size();
-	}
-
-	/**
-	 * Cuts a string into pieces whose modified UTF-8 encoding each fits one
-	 * {@code CONSTANT_Utf8}. Modified UTF-8 encodes every {@code char} on its own
-	 * ({@code U+0000} in two bytes, a surrogate in three), so any char boundary is a
-	 * legal cut.
-	 */
-	private static List<String> chunks(CharSequence text) {
-		List<String> chunks = new ArrayList<>();
-		int start = 0;
-		int bytes = 0;
-		for (int i = 0; i < text.length(); i++) {
-			char c = text.charAt(i);
-			int width = c != 0 && c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
-			if (bytes + width > MAX_CONSTANT_BYTES) {
-				chunks.add(text.subSequence(start, i).toString());
-				start = i;
-				bytes = 0;
-			}
-			bytes += width;
-		}
-		if (start < text.length() || chunks.isEmpty()) {
-			chunks.add(text.subSequence(start, text.length()).toString());
-		}
-		return chunks;
 	}
 
 }

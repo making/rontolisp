@@ -25,6 +25,14 @@ the write phase's time and every written class's size and pool count.
   literal costs TWO entries (boxed `long` = `CONSTANT_Long`); ~25,000 distinct numbers suffice.
   Not a program limit: past it the program is SPLIT (below). The limit is checked where a class
   is written, never where an entry is minted.
+- **65535 bytes of modified UTF-8 per `CONSTANT_Utf8`** (JVMS 4.4.7; U+0000 two bytes, a
+  supplementary character six). `ConstantPool.utf8Entry` refuses past it where the entry is
+  minted. Not a program limit for a string constant: `compileUnspelledLiteral` loads a longer
+  one (a literal, a symbol name, a packed baked-package universe) as `ConstantPool.utf8Pieces`
+  -- cut between code points -- appended and `intern`ed once behind a content-keyed slot of the
+  quoted-datum table (`JvmQuoteCompiler.emitLongString`, `.kb/quoted-data.md`), so every site
+  answers the object an `ldc` of the whole would have. A program with no such constant is
+  emitted byte for byte as before. `JvmSourceSites`' tables use the same cut.
 
 ## How a class is written
 The class is assembled as data, `am.ik.jvm.ClassDefinition` (header, fields, methods whose
