@@ -7,6 +7,7 @@ import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.GlobalVarCollector;
 
 /**
  * Compiles the {@code setq} special form.
@@ -250,7 +251,7 @@ final class JvmSetqCompiler {
 	 * @return {@code true} when the mirror emits
 	 */
 	static boolean mirrorsGlobal(String name, JvmLispCompiler.Ctx ctx) {
-		return ctx.evalStoreRef != null && ctx.globals.contains(name);
+		return ctx.evalStoreRef != null && ctx.globals.contains(name) && GlobalVarCollector.mirrorsIntoEval(name);
 	}
 
 }

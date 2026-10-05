@@ -146,7 +146,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		// Copy the string's bytes into linear scratch at HEAP_PTR (not advanced here).
 		// The
 		// bytes live on the GC heap, so _str_to_mem bridges them into the linear range
-		// _intern scans. off = HEAP_PTR ; len = _str_to_mem(str, off) - 2 (bare content).
+		// _intern reads. off = HEAP_PTR ; len = _str_to_mem(str, off) - 2 (bare content).
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		set(w, OFF);

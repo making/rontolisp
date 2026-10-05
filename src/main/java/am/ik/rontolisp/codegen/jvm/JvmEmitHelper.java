@@ -6,7 +6,6 @@ import java.lang.classfile.constantpool.DoubleEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.LongEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
-import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
@@ -242,12 +241,11 @@ final class JvmEmitHelper {
 	 * @param ctx the compilation context
 	 */
 	static void compileUnspelledLiteral(String value, JvmLispCompiler.Ctx ctx) {
-		StringEntry sc = ctx.cp.stringEntry(value);
-		if (sc.index() <= 255) {
-			ctx.body.ldc(sc);
+		if (ConstantPool.fitsUtf8(value)) {
+			ctx.body.ldc(ctx.cp.stringEntry(value));
 		}
 		else {
-			ctx.body.ldc(sc);
+			JvmQuoteCompiler.emitLongString(value, ctx);
 		}
 	}
 

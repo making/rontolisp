@@ -493,6 +493,26 @@ made table-aware. The model:
   anything for them. Keywords are never listed (no keyword table). A runtime entry
   enumerates its member table plus the externals of its uses (a baked row's packed
   externals, a runtime entry's `:external` members).
+  **Both dedups are `equal` hash tables, never a scan** (2026-10-04): `%do-symbols-list`
+  pushes its rows and keeps the last occurrence of each (`remove-duplicates`' answer) by
+  table; `%package-symbols-where` normalizes each distinct row once and keeps the first
+  answer by table. They were `remove-duplicates :test #'equal` and a `member` scan of the
+  answer: in the ci-spec corpus (66 packages, 16,245 rows, 2,436 distinct) one walk cost
+  4-25 s on JVM/WASM and `runtime-package-api` was 79-95% of every compiled leg. Pinned by
+  `JvmLispCompilerTest#compileAndRunAPackageWalkCostsItsUniverseNotItsSquare` (32,000
+  rows: do-symbols 3.9 s -> 0.1 s, apropos-list 18 s -> 0.7 s) and its WASM twin. Each
+  row's WASM `intern` was a linear scan of the symbol table (4.6 s per walk) until
+  `_intern` became a hash table (`.kb/symbol-runtime-api.md`). The ~0.7 ms per
+  `%package-spelling-normalize` left after that was NOT the package tables (2026-10-05,
+  premise of `.todo/d11` overturned): the corpus carries the eval runtime, and every
+  `%mv-spill` write inside the walk -- most function returns -- was mirrored into eval's
+  global alist (~450 entries), so every call cost the program's global count
+  (`.kb/eval-runtime.md`, "Global mirroring"; the channels are no longer mirrored). After
+  it, on the whole ci-spec program (41,955 rows, 2,459 distinct): a walk ~0.2 s on WASM,
+  0.1-0.3 s JVM once warm (its first walk runs cold, ~1.6 s), most of it splitting and
+  interning the rows (linear in the universe) and ~24 us per distinct row normalizing
+  it -- ~45 us before `%baked-import-redirect` became one `assoc` (it walked all ~90
+  table rows converting the home with `string` at each).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends (the unknown-name

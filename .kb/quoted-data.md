@@ -22,7 +22,9 @@ CONSTANT.
   datum fully built to a thread that reads the slot without synchronizing (JLS 17.5), so
   the read is a plain load. `_qdSet` is `synchronized`, creates the table on first use and
   answers the datum already in the slot if a racing thread stored first, so every
-  evaluation sees one object even under a race. See "The JVM table" below.
+  evaluation sees one object even under a race. See "The JVM table" below. A string
+  constant past one `CONSTANT_Utf8` (any string, not only a quoted one) takes a slot too,
+  keyed by CONTENT, built by joining its pieces (`.kb/jvm-method-size-limits.md`).
 - **WASM, Preview 1 and component** (`WasmQuoteCompiler` +
   `WasmLispCompiler.QuoteGlobals`): one `(mut (ref null eq)) = null` global per datum,
   appended AFTER every fixed-index global, filled lazily (~10 bytes). The allocator is
@@ -150,5 +152,6 @@ ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-back
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 AND component).
 JVM table: `JvmLispCompilerTest.aQuotedDatumCostsNoConstantPoolEntryOfItsOwn` (3 and 300
 datums, one pool size), `aRacingFirstBuildOfAQuotedDatumAnswersTheDatumThatWon`.
+Long strings: `LongStringConstantFixture` (interpreter, JVM, Preview 1 and component).
 Runs: `WasmLispCompilerTest.aLongQuotedListKeepsNoMoreThanOneRunOfCellsOnTheOperandStack`,
 `WasmLispCompilerIntegrationTest.aQuotedListLongerThanOneRunIsTheSameListAndStillOneConstant`.

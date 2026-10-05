@@ -550,11 +550,46 @@ final class WasmReadRuntimeBuilder {
 	// === _intern(off, len) -> canonical offset ===
 
 	/**
-	 * Returns the canonical offset for the token at {@code (off, len)}. First scans the
-	 * compile-time intern table (entries {@code (offset i32, length i32)}); on a miss
-	 * scans a growable runtime table so that symbols absent at compile time (e.g. lambda
-	 * parameters in loaded files) get a stable offset across occurrences. A first-seen
-	 * token is appended to the runtime table with its own offset as the canonical one.
+	 * The least slot count of the runtime intern hash table: what half the historical
+	 * {@code RT_INTERN_REGION_SIZE} reservation holds.
+	 */
+	private static final int INTERN_TABLE_MIN_SLOTS = 512;
+
+	/** FNV-1a 32-bit offset basis and prime. */
+	private static final int FNV_BASIS = 0x811c9dc5;
+
+	private static final int FNV_PRIME = 0x01000193;
+
+	/**
+	 * The initial slot count of the runtime intern hash table for a compile-time table of
+	 * {@code internCount} rows: the least power of two, at least
+	 * {@link #INTERN_TABLE_MIN_SLOTS}, above twice the rows -- a load under one half.
+	 * {@code _intern} recomputes the same rule from the row count at run time, so the two
+	 * must agree.
+	 * @param internCount the compile-time intern table's row count
+	 * @return the slot count
+	 */
+	static int internTableSlots(int internCount) {
+		return Math.max(INTERN_TABLE_MIN_SLOTS, Integer.highestOneBit(2 * internCount) << 1);
+	}
+
+	/**
+	 * Returns the canonical offset for the token at {@code (off, len)} through an
+	 * open-addressing hash table keyed by the token bytes (FNV-1a, linear probing, load
+	 * under one half). The table's address is the {@code RT_INTERN_BASE_ADDR} cell and
+	 * its slots are {@code (offset, length)} pairs, a zero offset marking an empty slot.
+	 * The {@code RT_INTERN_COUNT_ADDR} cell is 0 until the first call and one more than
+	 * the symbols added at run time after it; the slot count follows from it and the
+	 * compile-time row count ({@link #internTableSlots} over all the rows), so the table
+	 * needs no header. The initial table sits in the region reserved at the cell's seeded
+	 * address and is EMPTY until the first call, which fills it from the compile-time
+	 * rows (skipping the zeroed rows the tree shaker cut) -- a program that never interns
+	 * at run time pays nothing but the reservation. A miss copies the token into stable
+	 * heap storage, records it in the slot the probe stopped at and counts it; when the
+	 * rows reach half the slots, a table twice as large is carved permanently off the
+	 * heap and every slot rehashed into it. Every permanent heap advance therefore
+	 * happens with a count change, which is what the intern-count guards of the per-call
+	 * heap resets read.
 	 * @param internBase the compile-time intern table's base address
 	 * @param internCount the compile-time intern table's entry count
 	 * @param recordHighWater when true, also record the pool's new top in
@@ -565,168 +600,78 @@ final class WasmReadRuntimeBuilder {
 	static byte[] buildInternBody(int internBase, int internCount, boolean recordHighWater) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: off=0, len=1 ; locals: IDX=2, EOFF=3, ELEN=4, K=5, COUNT=6, POOL=7,
-		// CK=8
+		final int OFF = 0, LEN = 1, H = 2, T = 3, MASK = 4, SLOT = 5, EOFF = 6, ELEN = 7, K = 8, POOL = 9, SRC = 10,
+				N = 11;
 		w.write(1);
-		w.write(7);
+		w.write(10);
 		w.write(Type.I32);
-		final int OFF = 0, LEN = 1, IDX = 2, EOFF = 3, ELEN = 4, K = 5, COUNT = 6, POOL = 7, CK = 8;
-
-		// The runtime table's base is not a constant: it is seeded at instantiation
-		// (RT_INTERN_BASE_ADDR cell) from the program's actual static-data size, so the
-		// records can never overwrite the interned-string segment.
-		Runnable emitRtBase = () -> loadMem32(w, WasmLispCompiler.RT_INTERN_BASE_ADDR);
-		// 1. compile-time table (constant count)
-		i32(w, internCount);
-		setLocal(w, COUNT);
-		emitInternScan(w, () -> i32(w, internBase), OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
-		// 2. runtime table (count from memory)
+		int initialMask = internTableSlots(internCount) - 1;
+		loop(w); // retry: the first call fills the table, then looks the token up
+		loadMem32(w, WasmLispCompiler.RT_INTERN_BASE_ADDR);
+		setLocal(w, T);
 		loadMem32(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
-		setLocal(w, COUNT);
-		emitInternScan(w, emitRtBase, OFF, LEN, IDX, EOFF, ELEN, K, COUNT);
-		// 3. miss: copy the token into stable heap storage at HEAP_PTR (advanced
-		// PERMANENTLY -- an interned symbol's bytes legitimately persist across calls,
-		// unlike a transient string build which stack-pops HEAP_PTR). This makes the
-		// record and the returned canonical offset independent of the caller's source
-		// bytes (which for a runtime string / a reused reader input buffer no longer
-		// persist once the string heap is a stack). Append (poolOff, len), return
-		// poolOff.
-		// pool = HEAP_PTR
-		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		setLocal(w, POOL);
-		// Ensure [pool, pool+len) is within linear memory.
-		WasmEmitHelper.emitGrowHeapTo(w, () -> {
-			getLocal(w, POOL);
-			getLocal(w, LEN);
-			w.write(Instruction.I32_ADD);
-		});
-		// ck = 0 ; while (ck < len) { mem[pool+ck] = mem[off+ck]; ck++ }
-		i32(w, 0);
-		setLocal(w, CK);
-		block(w);
-		loop(w);
-		getLocal(w, CK);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_GE_S);
-		brIf(w, 1);
-		getLocal(w, POOL);
-		getLocal(w, CK);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, OFF);
-		getLocal(w, CK);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		getLocal(w, CK);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, CK);
-		br(w, 0);
-		end(w); // loop
-		end(w); // block
-		// HEAP_PTR = pool + len (permanent -- the pooled token is the symbol's stable id)
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		getLocal(w, POOL);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		if (recordHighWater) {
-			// RT_INTERN_HEAP = pool + len: the floor a host arena reset may not pop
-			// below.
-			i32(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
-			getLocal(w, POOL);
-			getLocal(w, LEN);
-			w.write(Instruction.I32_ADD);
-			w.write(Instruction.I32_STORE, 0x02, 0x00);
-		}
-		// mem[rtBase + count*8] = pool
-		emitRtBase.run();
-		getLocal(w, COUNT);
-		i32(w, 8);
-		w.write(Instruction.I32_MUL);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, POOL);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// mem[rtBase + count*8 + 4] = len
-		emitRtBase.run();
-		getLocal(w, COUNT);
-		i32(w, 8);
-		w.write(Instruction.I32_MUL);
-		w.write(Instruction.I32_ADD);
-		i32(w, 4);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// mem[RT_COUNT] = count + 1
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(N);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		// first call: count = 1 ; fill the initial table from the compile-time rows
 		i32(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
-		getLocal(w, COUNT);
 		i32(w, 1);
-		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		getLocal(w, POOL);
-		w.write(Instruction.END);
-		return body.toByteArray();
-	}
-
-	/**
-	 * Emits a scan of {@code COUNT} {@code (offset,length)} entries starting at the base
-	 * address pushed by {@code emitBase}; on the first byte-equal entry returns its
-	 * offset from the function.
-	 */
-	private static void emitInternScan(WasmWriter w, Runnable emitBase, int OFF, int LEN, int IDX, int EOFF, int ELEN,
-			int K, int COUNT) {
-		i32(w, 0);
-		setLocal(w, IDX);
-		block(w);
+		i32(w, initialMask);
+		setLocal(w, MASK);
+		i32(w, internBase);
+		setLocal(w, SRC);
+		i32(w, internCount);
+		setLocal(w, N);
+		w.write(Instruction.ELSE);
+		// MASK = max(initial, 0xFFFFFFFF >>> clz((count - 1 + rows) * 2)): the least
+		// power of two above twice the rows, minus one
+		i32(w, -1);
+		getLocal(w, N);
+		i32(w, internCount - 1);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_CLZ);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(MASK);
+		i32(w, initialMask);
+		getLocal(w, MASK);
+		i32(w, initialMask);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.SELECT);
+		setLocal(w, MASK);
+		// lookup: probe from hash(token) until a byte-equal row or an empty slot
+		emitInternHash(w, OFF, LEN, K, H);
+		block(w); // miss
 		loop(w);
-		// if IDX >= COUNT: break
-		getLocal(w, IDX);
-		getLocal(w, COUNT);
-		w.write(Instruction.I32_GE_S);
+		emitInternSlot(w, T, MASK, H, SLOT);
+		// EOFF = mem[SLOT] ; an empty slot ends the probe
+		getLocal(w, SLOT);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(EOFF);
+		w.write(Instruction.I32_EQZ);
 		brIf(w, 1);
-		// EOFF = mem[base + IDX*8]
-		emitBase.run();
-		getLocal(w, IDX);
-		i32(w, 8);
-		w.write(Instruction.I32_MUL);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		setLocal(w, EOFF);
-		// ELEN = mem[base + IDX*8 + 4]
-		emitBase.run();
-		getLocal(w, IDX);
-		i32(w, 8);
-		w.write(Instruction.I32_MUL);
-		w.write(Instruction.I32_ADD);
-		i32(w, 4);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		setLocal(w, ELEN);
-		// if ELEN == len AND EOFF != 0: compare bytes. No real entry sits at address 0
-		// (static entries start at the data base, runtime ones in the heap), so a zero
-		// EOFF is the hole a tree-shaken row reads as -- skipping it keeps a cut entry
-		// from matching a zero-length probe.
-		getLocal(w, ELEN);
+		// if mem[SLOT+4] == len: compare the bytes, returning EOFF on a full match
+		getLocal(w, SLOT);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
 		getLocal(w, LEN);
 		w.write(Instruction.I32_EQ);
-		getLocal(w, EOFF);
-		i32(w, 0);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_AND);
 		ifVoid(w);
 		i32(w, 0);
 		setLocal(w, K);
 		block(w);
 		loop(w);
-		// if K >= len: matched -> return EOFF
 		getLocal(w, K);
 		getLocal(w, LEN);
-		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.I32_GE_U);
 		ifVoid(w);
 		getLocal(w, EOFF);
 		w.write(Instruction.RETURN);
 		end(w);
-		// if mem[off+K] != mem[eOff+K]: break (not matched)
 		getLocal(w, OFF);
 		getLocal(w, K);
 		w.write(Instruction.I32_ADD);
@@ -737,7 +682,6 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.I32_NE);
 		brIf(w, 1);
-		// K++
 		getLocal(w, K);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -745,15 +689,235 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0);
 		end(w); // compare loop
 		end(w); // compare block
-		end(w); // if ELEN==len
-		// IDX++
-		getLocal(w, IDX);
+		end(w); // if lengths equal
+		// H++ (the next slot)
+		getLocal(w, H);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
-		setLocal(w, IDX);
+		setLocal(w, H);
 		br(w, 0);
-		end(w); // outer loop
-		end(w); // outer block
+		end(w); // probe loop
+		end(w); // miss block
+		// miss: copy the token into stable heap storage at HEAP_PTR (advanced
+		// PERMANENTLY -- an interned symbol's bytes legitimately persist across calls,
+		// unlike a transient string build which stack-pops HEAP_PTR). This makes the
+		// slot and the returned canonical offset independent of the caller's source
+		// bytes (which for a runtime string / a reused reader input buffer no longer
+		// persist once the string heap is a stack).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, POOL);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, POOL);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+		});
+		// memory.copy(pool, off, len): the source may BE the pool (a token staged at
+		// HEAP_PTR), which an overlapping copy handles
+		getLocal(w, POOL);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00);
+		w.write(0x00);
+		// HEAP_PTR = pool + len
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, POOL);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// mem[SLOT] = pool ; mem[SLOT+4] = len
+		getLocal(w, SLOT);
+		getLocal(w, POOL);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, SLOT);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		// mem[RT_COUNT] = N = count + 1
+		i32(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
+		getLocal(w, N);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(N);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// (N - 1 + rows) * 2 > MASK -> the rows reached half the slots: grow, rehashing
+		// the old slots; else N = 0 (nothing to refill)
+		getLocal(w, N);
+		i32(w, internCount - 1);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, MASK);
+		w.write(Instruction.I32_GT_U);
+		ifVoid(w);
+		// SRC = T ; N = MASK + 1 (the old slots) ; MASK = MASK * 2 + 1
+		getLocal(w, T);
+		setLocal(w, SRC);
+		getLocal(w, MASK);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, N);
+		getLocal(w, MASK);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		i32(w, 1);
+		w.write(Instruction.I32_OR);
+		setLocal(w, MASK);
+		// T = align8(HEAP_PTR) ; HEAP_PTR = K = T + (MASK + 1) * 8, grown into memory
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, T);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, T);
+		getLocal(w, MASK);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		i32(w, 3);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(K);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> getLocal(w, K));
+		// memory.fill(T, 0, K - T): the heap above HEAP_PTR holds stale staging bytes
+		getLocal(w, T);
+		i32(w, 0);
+		getLocal(w, K);
+		getLocal(w, T);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_FILL);
+		w.write(0x00);
+		// the cell points at the new table
+		i32(w, WasmLispCompiler.RT_INTERN_BASE_ADDR);
+		getLocal(w, T);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		setLocal(w, N);
+		end(w); // if grow
+		if (recordHighWater) {
+			// RT_INTERN_HEAP = HEAP_PTR: the floor a host arena reset may not pop below.
+			i32(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
+			loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
+		end(w); // if first call
+		// insert the N (offset, length) records at SRC (a zero offset is a cut row or an
+		// empty slot) into T: the contents are distinct, so each takes the first empty
+		// slot of its probe
+		block(w);
+		loop(w);
+		getLocal(w, N);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 1);
+		getLocal(w, SRC);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(EOFF);
+		ifVoid(w);
+		getLocal(w, SRC);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, ELEN);
+		emitInternHash(w, EOFF, ELEN, K, H);
+		block(w);
+		loop(w);
+		emitInternSlot(w, T, MASK, H, SLOT);
+		getLocal(w, SLOT);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 1);
+		getLocal(w, H);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, H);
+		br(w, 0);
+		end(w); // probe loop
+		end(w); // probe block
+		getLocal(w, SLOT);
+		getLocal(w, EOFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, SLOT);
+		getLocal(w, ELEN);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		end(w); // if a row
+		getLocal(w, SRC);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, SRC);
+		getLocal(w, N);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, N);
+		br(w, 0);
+		end(w); // insert loop
+		end(w); // insert block
+		// a miss answers its pooled copy; the first call looks the token up
+		getLocal(w, POOL);
+		ifVoid(w);
+		getLocal(w, POOL);
+		w.write(Instruction.RETURN);
+		end(w);
+		br(w, 0);
+		end(w); // retry loop
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Emits {@code h = fnv1a(mem[addr .. addr+len)) ^ (fnv1a >>> 15)}: the final shift
+	 * folds the high bits, which carry the earlier bytes, into the masked low ones.
+	 */
+	private static void emitInternHash(WasmWriter w, int addr, int len, int k, int h) {
+		i32(w, FNV_BASIS);
+		setLocal(w, h);
+		i32(w, 0);
+		setLocal(w, k);
+		block(w);
+		loop(w);
+		getLocal(w, k);
+		getLocal(w, len);
+		w.write(Instruction.I32_GE_U);
+		brIf(w, 1);
+		getLocal(w, h);
+		getLocal(w, addr);
+		getLocal(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_XOR);
+		i32(w, FNV_PRIME);
+		w.write(Instruction.I32_MUL);
+		setLocal(w, h);
+		getLocal(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, k);
+		br(w, 0);
+		end(w);
+		end(w);
+		getLocal(w, h);
+		getLocal(w, h);
+		i32(w, 15);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_XOR);
+		setLocal(w, h);
+	}
+
+	/** Emits {@code slot = t + (h & mask) * 8}. */
+	private static void emitInternSlot(WasmWriter w, int t, int mask, int h, int slot) {
+		getLocal(w, t);
+		getLocal(w, h);
+		getLocal(w, mask);
+		w.write(Instruction.I32_AND);
+		i32(w, 3);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, slot);
 	}
 
 	// === _read_expr() -> value ===

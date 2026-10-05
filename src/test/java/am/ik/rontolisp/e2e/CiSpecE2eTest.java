@@ -588,10 +588,12 @@ class CiSpecE2eTest {
 	}
 
 	/**
-	 * Timeout for a single child-process invocation. All four backends finish the full
-	 * ci-spec corpus in well under a minute locally; the ceiling here just needs to be
-	 * high enough that a healthy CI runner never trips it and low enough that a hang
-	 * surfaces as a clear failure long before the CI job's own time limit kicks in.
+	 * Timeout for a single child-process invocation. Every command of every leg finishes
+	 * in under 40 s on an idle machine ({@code .kb/running-backends.md}, "What a leg
+	 * costs", which also says how to find the case that owns a slow leg before raising
+	 * this); the ceiling here just needs to be high enough that a healthy CI runner never
+	 * trips it and low enough that a hang surfaces as a clear failure long before the CI
+	 * job's own time limit kicks in.
 	 */
 	private static final long EXEC_TIMEOUT_SECONDS = 300;
 

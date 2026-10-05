@@ -156,6 +156,25 @@ offset matches literals in the offset-based `_env_lookup`/`eq`**; a `usesIntern`
 (`usesRead || program uses intern`) emits the real `_intern` body + blob without the rest of the
 reader. Unbound symbol-value traps (`unreachable`, the `%error` convention).
 
+**`_intern` is a hash table, not a scan** (`WasmReadRuntimeBuilder.buildInternBody`):
+open addressing over `(offset, length)` slots keyed by the token bytes (FNV-1a, linear probing,
+load under 1/2). The `RT_INTERN_BASE_ADDR` cell holds the table's address; the
+`RT_INTERN_COUNT_ADDR` cell is 0 before the first call and 1 + the runtime-added symbols after,
+and the slot count is DERIVED from it and the compile-time row count (`internTableSlots`), so
+the table has no header. The first call fills the initial table -- reserved at the seeded
+base, `max(RT_INTERN_REGION_SIZE, slots * 8)` -- from the compile-time rows, skipping the
+zeroed rows the shaker cut; a miss pools the token, and at half load a doubled table is carved
+permanently off the heap and rehashed. Every permanent heap advance changes the count, which
+the per-call reset guards (`cabi_post_*`, the serve adapter) depend on. History: the scan cost
+O(table) per call, and the runtime records lived in a fixed 8 KB region, so the 1,025th fresh
+symbol overwrote the heap's first pooled token (out-of-bounds trap on P1 and component).
+Measured 2026-10-04 (jar): a 32,000-row `do-symbols` 8.0 s -> 0.1 s, `apropos-list` 26 s ->
+1.2 s; ci-spec `runtime-package-api` ~4.9 s -> ~2.5 s per WASM leg (-> ~0.8 s once the
+eval mirror stopped recording `%mv-spill`, `.kb/eval-runtime.md`). Size: a module without the real `_intern` is byte-identical; one with it +218 to
++222 B. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`,
+`#runtimeInternCostsTheSameWhereverItsSymbolSits` and
+`#aPackageWalkCostsItsUniverseNotItsSquare`.
+
 **Compile-path folds and limits**: `find-symbol` requires a literal string and matches its
 VERBATIM name against `isClMemberName` (every name cl exports, implemented or not -- `T`,
 `NIL`, `DEBUG` included, as the interpreter answers) + keyword + Pass-1 `userDefunNames`

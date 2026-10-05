@@ -9,6 +9,8 @@ import java.lang.classfile.constantpool.NameAndTypeEntry;
 import java.lang.classfile.constantpool.PoolEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * The constant pool a generator mints its entries in: one {@code java.lang.classfile}
@@ -92,18 +94,58 @@ public final class ConstantPool {
 	}
 
 	/**
+	 * @param value a string
+	 * @return whether its modified UTF-8 form fits one {@code CONSTANT_Utf8}
+	 */
+	public static boolean fitsUtf8(String value) {
+		// A char costs at most three bytes, so a short string needs no count.
+		return value.length() <= MAX_UTF8_BYTES / 3 || modifiedUtf8Length(value) <= MAX_UTF8_BYTES;
+	}
+
+	/**
+	 * Cuts a string into the fewest consecutive pieces whose modified UTF-8 forms each
+	 * fit one {@code CONSTANT_Utf8}, so a longer constant can be loaded piece by piece
+	 * and joined. A cut falls between code points, never inside a surrogate pair.
+	 * @param value a string
+	 * @return its pieces in order; one (possibly empty) piece when it fits whole
+	 */
+	public static List<String> utf8Pieces(CharSequence value) {
+		List<String> pieces = new ArrayList<>();
+		int start = 0;
+		int bytes = 0;
+		for (int i = 0; i < value.length();) {
+			int codePoint = Character.codePointAt(value, i);
+			int chars = Character.charCount(codePoint);
+			int width = chars == 2 ? 6 : utf8Width(value.charAt(i));
+			if (bytes + width > MAX_UTF8_BYTES) {
+				pieces.add(value.subSequence(start, i).toString());
+				start = i;
+				bytes = 0;
+			}
+			bytes += width;
+			i += chars;
+		}
+		if (start < value.length() || pieces.isEmpty()) {
+			pieces.add(value.subSequence(start, value.length()).toString());
+		}
+		return pieces;
+	}
+
+	/**
 	 * The length of a string's modified UTF-8 form: U+0000 is two bytes, a supplementary
 	 * character is its surrogate pair of three bytes each.
 	 */
 	private static int modifiedUtf8Length(String s) {
-		int length = s.length();
+		int length = 0;
 		for (int i = 0; i < s.length(); i++) {
-			char c = s.charAt(i);
-			if (c == 0 || c > 0x7F) {
-				length += c <= 0x7FF ? 1 : 2;
-			}
+			length += utf8Width(s.charAt(i));
 		}
 		return length;
+	}
+
+	/** The modified UTF-8 bytes of one {@code char} (a lone surrogate takes three). */
+	private static int utf8Width(char c) {
+		return c != 0 && c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
 	}
 
 	/**

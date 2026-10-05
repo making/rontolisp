@@ -40,6 +40,26 @@ The corpus runs on each backend TWICE -- default and `--simd`, so the leg is `<B
 because `--simd` changes the packed-array REPRESENTATION and a matrix counting only backends misses
 half of every accelerated primitive (`.kb/vec.md`, "The E2E `--simd` axis").
 
+### What a leg costs (per-command timeout 300 s)
+
+Measured 2026-10-04, native binary, load average ~5-15, scalar / `--simd` alike: interpreter
+27-36 s; JVM compile 8-10 s + run 19-22 s; P1 compile 10 s + run 12-13 s; component compile
+11 s + run 14-15 s. Under load ~170 a leg runs ~2.5-3x longer. Before that day P1 ran 158 s
+and the component 173 s idle / 426 s loaded (one timeout), and the time was not the corpus:
+`runtime-package-api` alone was 79-95% of every compiled leg (a quadratic dedup in the
+package walk, `.kb/packages.md` "The enumeration universe"), and
+`landing-pads-read-fresh-references-after-a-collection` 45% of the interpreter's (5M
+interpreted `cons` iterations; now the same cells by `make-list`, 250 per iteration).
+Later that day `_intern` became a hash table: on the jar, the program's own time in the P1
+and component legs went ~9.5 s -> ~6.9 s, `runtime-package-api` ~4.9 s -> ~2.5 s of it.
+The next day the eval mirror stopped recording `%mv-spill` (`.kb/eval-runtime.md`): P1
+6.6 s -> 2.4 s, component 7.1 s -> 2.5 s, JVM 21.2 s -> 19.1 s, `runtime-package-api`
+0.8 s on both WASM legs and 2.8 s on the JVM (its first walk runs cold).
+**Find the case that owns a leg before touching the timeout**: prepend
+`(cl:format cl:*error-output* "~&@@T ~A ~A~%" "<case>" (cl:get-internal-real-time))` to each
+case of the concatenated program, run the leg, and diff consecutive stamps. What owns the
+interpreter leg now is the constant-stack cases (1M / 100,000-deep tail calls, ~45%).
+
 ## Examples Suite
 
 `ExamplesE2eTest` runs every example in `examples/examples.yaml` on every backend it

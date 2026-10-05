@@ -595,6 +595,13 @@ public interface Instruction {
 	 */
 	int MEMORY_COPY = 0x0A;
 
+	/**
+	 * {@code MEMORY_FILL} (0xFC 0x0B): sets {@code n} bytes of linear memory to one
+	 * value, {@code (dst, value, n)} deepest-first on the stack. One zero memory index
+	 * follows the opcode.
+	 */
+	int MEMORY_FILL = 0x0B;
+
 	// Reference instructions (no prefix)
 	/** {@code REF_NULL} (0xD0). */
 	int REF_NULL = 0xD0;

@@ -15436,6 +15436,108 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunALongStringConstant() throws Exception {
+		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
+		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and
+		// joined once: the compile used to refuse it. The interpreter twin is
+		// LispEvaluatorTest#longStringConstant.
+		for (Map.Entry<String, String> program : am.ik.rontolisp.LongStringConstantFixture.PROGRAMS.entrySet()) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.getKey(),
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.as(program.getKey().substring(0, 60))
+				.isEqualTo(program.getValue());
+		}
+	}
+
+	// Enumerating a package costs its universe, not the universe squared. The compiled
+	// backends walk through the prelude's %do-symbols-list and %package-symbols-where,
+	// which deduplicated with remove-duplicates over the whole universe and a member scan
+	// of the answer: 3.9 s for do-symbols and 18 s for apropos-list over the 32,000 rows
+	// below, against 0.1 s and 0.7 s by table. In the ci-spec corpus that made one
+	// do-all-symbols cost 8-25 s on WASM. The bound is a ratio against the same rows
+	// walked as 64-row packages, so it does not depend on the machine. The WASM twin is
+	// WasmLispCompilerIntegrationTest#aPackageWalkCostsItsUniverseNotItsSquare.
+	@Test
+	void compileAndRunAPackageWalkCostsItsUniverseNotItsSquare() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder wideUses = new StringBuilder();
+		for (int p = 0; p < 8; p++) {
+			program.append("(defpackage :pw-").append(p).append(" (:use) (:export");
+			for (int i = 0; i < 4000; i++) {
+				program.append(" #:").append((char) ('A' + p)).append(i);
+			}
+			program.append("))\n");
+			wideUses.append(" :pw-").append(p);
+		}
+		program.append("(defpackage :pw-few (:use) (:export");
+		for (int i = 0; i < 64; i++) {
+			program.append(" #:F").append(i);
+		}
+		program.append("))\n");
+		program.append("(make-package :pw-wide :use '(").append(wideUses.toString().trim()).append("))\n");
+		program.append("""
+				(make-package :pw-small :use '(:pw-few))
+				(defun pw-walk (p) (let ((n 0)) (do-symbols (s p) (setq n (+ n 1))) n))
+				(defun pw-match (p) (length (apropos-list "" p)))
+				(defvar *pw-reps* (floor (pw-walk :pw-wide) (pw-walk :pw-small)))
+				(pw-match :pw-small)
+				(defvar *pw-t0* (get-internal-real-time))
+				(defvar *pw-whole* (pw-walk :pw-wide))
+				(defvar *pw-t1* (get-internal-real-time))
+				(defvar *pw-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-walk :pw-small)))) n))
+				(defvar *pw-t2* (get-internal-real-time))
+				(defvar *pw-found* (pw-match :pw-wide))
+				(defvar *pw-t3* (get-internal-real-time))
+				(defvar *pw-found-pieces* (let ((n 0)) (dotimes (k *pw-reps*) (setq n (+ n (pw-match :pw-small)))) n))
+				(defvar *pw-t4* (get-internal-real-time))
+				(princ (list *pw-whole* *pw-pieces* *pw-found* *pw-found-pieces*)) (terpri)
+				(princ (- *pw-t1* *pw-t0*)) (terpri)
+				(princ (- *pw-t2* *pw-t1*)) (terpri)
+				(princ (- *pw-t3* *pw-t2*)) (terpri)
+				(princ (- *pw-t4* *pw-t3*)) (terpri)
+				""");
+		String[] lines = compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.toString(),
+				am.ik.rontolisp.reader.Features.JVM, false, false))
+			.split("\n");
+		assertThat(lines[0].trim()).as("both halves must walk the same rows").isEqualTo("(32000 32000 32000 32000)");
+		long walkWhole = Long.parseLong(lines[1].trim());
+		long walkPieces = Long.parseLong(lines[2].trim());
+		long matchWhole = Long.parseLong(lines[3].trim());
+		long matchPieces = Long.parseLong(lines[4].trim());
+		assertThat(walkWhole)
+			.as("do-symbols over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", walkWhole,
+					walkPieces)
+			.isLessThanOrEqualTo(500 + 6 * walkPieces);
+		assertThat(matchWhole)
+			.as("apropos-list over 32,000 rows (%d ms) against the same rows in 64-row packages (%d ms)", matchWhole,
+					matchPieces)
+			.isLessThanOrEqualTo(500 + 6 * matchPieces);
+	}
+
+	// A package walk costs the same however many globals the eval runtime sees. In a
+	// program that carries the eval runtime every assignment of a global is mirrored
+	// into its global environment, a list holding every global the program assigned, and
+	// the multiple-value spill -- written by nearly every function return -- was one of
+	// them: each call paid a walk of that list. 4,000 globals made the probe below 300x
+	// slower (30 ms -> 9.6 s); in the ci-spec corpus it was ~85% of a package walk.
+	// The bound is a ratio between two probes of the same program, each the best of
+	// three, so it does not depend on the machine. The WASM twin is
+	// WasmLispCompilerIntegrationTest#aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees.
+	@Test
+	void compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() throws Exception {
+		String[] lines = compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE,
+						am.ik.rontolisp.reader.Features.JVM, false, false))
+			.split("\n");
+		assertThat(lines[2].trim()).as("the globals reach the eval runtime").isEqualTo("3999");
+		long few = Long.parseLong(lines[0].trim());
+		long many = Long.parseLong(lines[1].trim());
+		assertThat(many)
+			.as("three apropos-list walks with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
+			.isLessThanOrEqualTo(200 + 3 * few);
+	}
+
+	@Test
 	void compileAndRunRuntimePackageMemberTable() throws Exception {
 		// The runtime package MEMBER table on the JVM backend (.todo/917): the
 		// %runtime-packages% entry records what intern / export / shadowing-import /

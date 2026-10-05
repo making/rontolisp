@@ -74,6 +74,27 @@ class ConstantPoolTest {
 			.withMessageContaining("65538");
 	}
 
+	// A string past one CONSTANT_Utf8 is cut into the fewest pieces that each fit,
+	// between
+	// code points: the supplementary character whose six bytes cross the limit starts the
+	// next piece whole.
+	@Test
+	void cutsALongStringIntoPiecesThatEachFit() {
+		ConstantPool cp = new ConstantPool();
+		String bomb = "💣";
+		String value = "a".repeat(65_532) + bomb + "\u0000".repeat(40_000) + "b";
+		assertThat(ConstantPool.fitsUtf8(value)).isFalse();
+		assertThat(ConstantPool.utf8Pieces(value)).containsExactly("a".repeat(65_532), bomb + "\u0000".repeat(32_764),
+				"\u0000".repeat(7_236) + "b");
+		for (String piece : ConstantPool.utf8Pieces(value)) {
+			assertThat(ConstantPool.fitsUtf8(piece)).isTrue();
+			assertThat(cp.utf8Entry(piece).stringValue()).isEqualTo(piece);
+		}
+		assertThat(ConstantPool.fitsUtf8("\u0000".repeat(32_767) + "a")).isTrue();
+		assertThat(ConstantPool.utf8Pieces("")).containsExactly("");
+		assertThat(ConstantPool.utf8Pieces("short")).containsExactly("short");
+	}
+
 	// The facades mint one entry per content, in the one pool: from names or from Utf8
 	// entries, a class, a string, a field and an interface method alike.
 	@Test

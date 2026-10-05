@@ -33,6 +33,30 @@ public final class GlobalVarCollector {
 	}
 
 	/**
+	 * The globals the compilers write for their own bookkeeping on nearly every call: the
+	 * multiple-value spill and the handler / restart cluster stacks. No eval'd form reads
+	 * them -- the eval runtime has no {@code values}, {@code handler-bind} or
+	 * {@code restart-case} of its own, and calls into compiled code, which reads the
+	 * globals directly.
+	 */
+	private static final Set<String> COMPILER_CHANNELS = Set.of(LispNames.MV_SPILL, LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR);
+
+	/**
+	 * Whether an assignment of the global {@code name} is mirrored into the eval
+	 * runtime's global environment ({@code .kb/eval-runtime.md}, "Global mirroring")
+	 * where the program carries one: every global but the compiler's own channels. A
+	 * mirror write walks that environment, which holds every global the program assigns,
+	 * so mirroring a channel written on every call made every call cost the size of the
+	 * program.
+	 * @param name the global's name
+	 * @return {@code true} when its assignments reach the eval runtime
+	 */
+	public static boolean mirrorsIntoEval(String name) {
+		return !COMPILER_CHANNELS.contains(name);
+	}
+
+	/**
 	 * Returns the ordered set of top-level global variable names declared by the given
 	 * top-level forms. Order is deterministic (declaration order) so backing-store
 	 * indices are stable.
