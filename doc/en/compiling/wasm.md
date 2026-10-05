@@ -162,12 +162,13 @@ Print a computed value and both come back, as they must.
 
 A value the compiler can work out for itself is not a computed value, though. A
 call to a **pure built-in whose every argument is a literal** — `(* 6 7)`,
-`(length "Hello World!")`, `(concatenate 'string "Hello" " " "World!")`,
+`(/ 1 3)`, `(length "Hello World!")`, `(concatenate 'string "Hello" " " "World!")`,
 `(string-upcase "hi")` — is evaluated at compile time and the call is deleted, on
 every backend that compiles (the interpreter still evaluates it at run time, which
 is the same answer). That happens before the printer fold above, so
 `(princ (* 6 7))` reaches the very same floor as `(princ 42)` and
-`(format t "~a~%" (length "abc"))` the same as `(format t "~a~%" 3)`. Redefine one
+`(format t "~a~%" (length "abc"))` the same as `(format t "~a~%" 3)`; a ratio
+folds like an integer, so `(print (/ 1 3))` is `(print 1/3)`. Redefine one
 of those names — a `defun`, a `defmethod`, an `flet` — and your definition wins:
 the compiler stops folding that name anywhere in the program. `--dynamic` turns
 the whole thing off, since every name there resolves at run time.

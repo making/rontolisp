@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -177,6 +178,9 @@ public final class PureBuiltinFolder {
 			case LispBigInteger ignored -> {
 				return form;
 			}
+			case LispRatio ignored -> {
+				return form;
+			}
 			case LispChar ignored -> {
 				return form;
 			}
@@ -204,8 +208,9 @@ public final class PureBuiltinFolder {
 			case LispDouble ignored -> {
 				// A float literal is self-evaluating, and its printed text
 				// is identical on every backend (FloatText), so the print-family
-				// entries may fold it; every arithmetic entry still declines a float
-				// itself (the integer guards), keeping the contagion / zero-divisor /
+				// entries may fold it, and rational answers the exact value it is;
+				// every arithmetic entry still declines a float itself (the integer
+				// and rational guards), keeping the contagion / zero-divisor /
 				// overflow semantics out of the fold until they are pinned.
 				return form;
 			}
@@ -270,9 +275,9 @@ public final class PureBuiltinFolder {
 	 * a float is out for the reasons in {@code .kb/pure-builtin-fold.md}.
 	 */
 	private static boolean isFoldableResult(LispVal value) {
-		return value instanceof LispInteger || value instanceof LispBigInteger || value instanceof LispChar
-				|| value instanceof LispString || value instanceof LispNil || value instanceof LispTrue
-				|| value instanceof LispSymbol || value instanceof LispIntVector;
+		return value instanceof LispInteger || value instanceof LispBigInteger || value instanceof LispRatio
+				|| value instanceof LispChar || value instanceof LispString || value instanceof LispNil
+				|| value instanceof LispTrue || value instanceof LispSymbol || value instanceof LispIntVector;
 	}
 
 	/**
@@ -772,11 +777,14 @@ public final class PureBuiltinFolder {
 	 * <p>
 	 * The groups, and why each is byte-identical to what the four backends compute:
 	 * <ul>
-	 * <li><b>Exact integer arithmetic</b> -- every backend implements the full integer
-	 * tower exactly at any magnitude ({@code .kb/wasm-bignum.md}), and Java's
-	 * {@link BigInteger} is the same mathematics. {@code /} folds only when the quotient
-	 * is an exact integer: a RATIO result declines ({@code .kb/pure-builtin-fold.md},
-	 * "Deliberately OUT").</li>
+	 * <li><b>Exact rational arithmetic</b> -- every backend implements the full integer
+	 * tower exactly at any magnitude, and a ratio as a normalized pair of such integers
+	 * ({@code .kb/wasm-bignum.md}, "Ratios"), so {@link BigInteger} arithmetic over
+	 * numerator/denominator pairs is the same mathematics. A ratio is an argument and a
+	 * result alike: {@code (/ 7 2)} folds to {@code 7/2}, which every backend compiles as
+	 * a constant and {@code WasmLiteralPrint} prints as static text. {@code rational} of
+	 * a float is the exact value the double IS ({@link LispRatio#ofDouble}), which every
+	 * backend computes from the raw bits.</li>
 	 * <li><b>Bitwise</b> -- two's complement of an unbounded integer, which is what
 	 * {@link BigInteger} and {@code .kb/integer-bitwise-fast-paths.md} both
 	 * implement.</li>
@@ -795,78 +803,88 @@ public final class PureBuiltinFolder {
 	 * backends, exactly as the call it replaces was. {@code princ-to-string} /
 	 * {@code prin1-to-string} render only the types whose emitted renderer reproduces
 	 * {@code LispVal.print()} / {@code display()} exactly -- the same list
-	 * {@code WasmLiteralPrint} folds, FLOAT excluded for the same reason.</li>
+	 * {@code WasmLiteralPrint} folds, ratio and float included.</li>
 	 * </ul>
 	 */
 	private static final Map<String, Fold> TABLE = table();
 
 	private static Map<String, Fold> table() {
 		Map<String, Fold> t = new LinkedHashMap<>();
-		// -- exact integer arithmetic ------------------------------------------
-		t.put(LispNames.ADD, args -> reduceIntegers(args, BigInteger.ZERO, BigInteger::add));
-		t.put(LispNames.MUL, args -> reduceIntegers(args, BigInteger.ONE, BigInteger::multiply));
+		// -- exact rational arithmetic -----------------------------------------
+		t.put(LispNames.ADD, args -> reduceRationals(args, Rational.ZERO, Rational::add));
+		t.put(LispNames.MUL, args -> reduceRationals(args, Rational.ONE, Rational::multiply));
 		t.put(LispNames.SUB, args -> {
-			List<BigInteger> ns = integers(args);
-			if (ns == null || ns.isEmpty()) {
+			List<Rational> qs = rationals(args);
+			if (qs == null || qs.isEmpty()) {
 				return null;
 			}
-			if (ns.size() == 1) {
-				return integerLiteral(ns.get(0).negate());
+			Rational result = qs.size() == 1 ? qs.get(0).negate() : qs.get(0);
+			for (int i = 1; i < qs.size(); i++) {
+				result = result.subtract(qs.get(i));
 			}
-			BigInteger result = ns.get(0);
-			for (int i = 1; i < ns.size(); i++) {
-				result = result.subtract(ns.get(i));
-			}
-			return integerLiteral(result);
+			return rationalLiteral(result);
 		});
 		t.put(LispNames.DIV, args -> {
-			List<BigInteger> ns = integers(args);
-			if (ns == null || ns.size() < 2) {
-				// The one-argument reciprocal is a ratio except for +-1, and a ratio
-				// result is out of the table (see the class comment).
+			List<Rational> qs = rationals(args);
+			if (qs == null || qs.isEmpty()) {
 				return null;
 			}
-			BigInteger result = ns.get(0);
-			for (int i = 1; i < ns.size(); i++) {
-				BigInteger divisor = ns.get(i);
-				if (divisor.signum() == 0) {
+			// The one-argument call is the reciprocal; a zero divisor would signal.
+			Rational result = qs.size() == 1 ? Rational.ONE : qs.get(0);
+			for (int i = qs.size() == 1 ? 0 : 1; i < qs.size(); i++) {
+				if (qs.get(i).isZero()) {
 					return null;
 				}
-				BigInteger[] divRem = result.divideAndRemainder(divisor);
-				if (divRem[1].signum() != 0) {
-					return null;
-				}
-				result = divRem[0];
+				result = result.divide(qs.get(i));
 			}
-			return integerLiteral(result);
+			return rationalLiteral(result);
 		});
-		t.put(LispNames.ONE_PLUS, args -> unaryInteger(args, n -> n.add(BigInteger.ONE)));
-		t.put(LispNames.ONE_MINUS, args -> unaryInteger(args, n -> n.subtract(BigInteger.ONE)));
-		t.put(LispNames.ABS, args -> unaryInteger(args, BigInteger::abs));
-		t.put(LispNames.SIGNUM, args -> unaryInteger(args, n -> BigInteger.valueOf(n.signum())));
+		t.put(LispNames.ONE_PLUS, args -> unaryRational(args, q -> q.add(Rational.ONE)));
+		t.put(LispNames.ONE_MINUS, args -> unaryRational(args, q -> q.subtract(Rational.ONE)));
+		t.put(LispNames.ABS, args -> unaryRational(args, q -> q.signum() < 0 ? q.negate() : q));
+		t.put(LispNames.SIGNUM, args -> unaryRational(args, q -> Rational.of(BigInteger.valueOf(q.signum()))));
 		t.put(LispNames.ISQRT, args -> unaryInteger(args, n -> n.signum() < 0 ? null : n.sqrt()));
-		t.put(LispNames.MIN, args -> extremumInteger(args, true));
-		t.put(LispNames.MAX, args -> extremumInteger(args, false));
+		t.put(LispNames.MIN, args -> extremumRational(args, true));
+		t.put(LispNames.MAX, args -> extremumRational(args, false));
 		t.put(LispNames.GCD, args -> reduceIntegers(args, BigInteger.ZERO, BigInteger::gcd));
 		t.put(LispNames.LCM, args -> reduceIntegers(args, BigInteger.ONE, PureBuiltinFolder::lcm));
-		t.put(LispNames.MOD, args -> binaryInteger(args, (n, d) -> {
-			if (d.signum() == 0) {
+		// CL's mod is the FLOOR remainder (its sign follows the divisor), rem the
+		// TRUNCATE remainder (its sign follows the dividend); both are n - d * q.
+		t.put(LispNames.MOD, args -> binaryRational(args, (n, d) -> d.isZero() ? null : n.remainder(d, true)));
+		t.put(LispNames.REM, args -> binaryRational(args, (n, d) -> d.isZero() ? null : n.remainder(d, false)));
+		t.put(LispNames.EXPT, args -> {
+			List<Rational> qs = rationals(args);
+			if (qs == null || qs.size() != 2 || !qs.get(1).isInteger()) {
+				// A ratio power is irrational in general: a float result, out.
 				return null;
 			}
-			// CL's mod is the FLOOR remainder: its sign follows the divisor.
-			BigInteger rem = n.remainder(d);
-			return rem.signum() != 0 && rem.signum() != d.signum() ? rem.add(d) : rem;
-		}));
-		t.put(LispNames.REM, args -> binaryInteger(args, (n, d) -> d.signum() == 0 ? null : n.remainder(d)));
-		t.put(LispNames.EXPT, args -> binaryInteger(args, (base, power) -> {
-			// A negative power is a ratio unless the base is +-1, and an exponent that
-			// does not fit an int is beyond the size ceiling anyway.
-			if (power.signum() < 0 || power.bitLength() > 31) {
+			Rational base = qs.get(0);
+			BigInteger power = qs.get(1).num();
+			// An exponent that does not fit an int is beyond the size ceiling anyway,
+			// and zero to a negative power would signal.
+			if (power.abs().bitLength() > 31 || (power.signum() < 0 && base.isZero())) {
 				return null;
 			}
-			long bits = (long) Math.max(1, base.abs().bitLength()) * power.intValue();
-			return bits > MAX_FOLDED_BITS ? null : base.pow(power.intValue());
-		}));
+			int exponent = Math.abs(power.intValue());
+			long bits = (long) Math.max(1, Math.max(base.num().abs().bitLength(), base.den().bitLength())) * exponent;
+			if (bits > MAX_FOLDED_BITS) {
+				return null;
+			}
+			Rational raised = new Rational(base.num().pow(exponent), base.den().pow(exponent));
+			return rationalLiteral(power.signum() < 0 ? Rational.ONE.divide(raised) : raised);
+		});
+		t.put(LispNames.NUMERATOR, args -> unaryRational(args, q -> Rational.of(q.num())));
+		t.put(LispNames.DENOMINATOR, args -> unaryRational(args, q -> Rational.of(q.den())));
+		t.put(LispNames.RATIONAL, args -> {
+			if (args.size() != 1) {
+				return null;
+			}
+			if (args.get(0) instanceof LispDouble d) {
+				// A literal is finite, but a NaN or an infinity has no exact rational.
+				return Double.isFinite(d.value()) ? LispRatio.ofDouble(d.value()) : null;
+			}
+			return unaryRational(args, q -> q);
+		});
 		// -- bitwise ------------------------------------------------------------
 		t.put(LispNames.LOGAND, args -> reduceIntegers(args, BigInteger.ONE.negate(), BigInteger::and));
 		t.put(LispNames.LOGIOR, args -> reduceIntegers(args, BigInteger.ZERO, BigInteger::or));
@@ -888,29 +906,30 @@ public final class PureBuiltinFolder {
 			return bool(ns.get(1).testBit(ns.get(0).intValue()));
 		});
 		// -- numeric comparison and predicates ----------------------------------
-		t.put(LispNames.EQ, args -> compareIntegers(args, c -> c == 0));
-		t.put(LispNames.LT, args -> compareIntegers(args, c -> c < 0));
-		t.put(LispNames.GT, args -> compareIntegers(args, c -> c > 0));
-		t.put(LispNames.LE, args -> compareIntegers(args, c -> c <= 0));
-		t.put(LispNames.GE, args -> compareIntegers(args, c -> c >= 0));
+		t.put(LispNames.EQ, args -> compareRationals(args, c -> c == 0));
+		t.put(LispNames.LT, args -> compareRationals(args, c -> c < 0));
+		t.put(LispNames.GT, args -> compareRationals(args, c -> c > 0));
+		t.put(LispNames.LE, args -> compareRationals(args, c -> c <= 0));
+		t.put(LispNames.GE, args -> compareRationals(args, c -> c >= 0));
 		t.put(LispNames.NE, args -> {
-			List<BigInteger> ns = integers(args);
-			if (ns == null || ns.isEmpty()) {
+			List<Rational> qs = rationals(args);
+			if (qs == null || qs.isEmpty()) {
 				return null;
 			}
-			// /= is PAIRWISE distinct, not merely adjacent-distinct.
-			for (int i = 0; i < ns.size(); i++) {
-				for (int j = i + 1; j < ns.size(); j++) {
-					if (ns.get(i).equals(ns.get(j))) {
+			// /= is PAIRWISE distinct, not merely adjacent-distinct. Both sides are
+			// normalized, so equal rationals are equal pairs.
+			for (int i = 0; i < qs.size(); i++) {
+				for (int j = i + 1; j < qs.size(); j++) {
+					if (qs.get(i).equals(qs.get(j))) {
 						return LispNil.INSTANCE;
 					}
 				}
 			}
 			return LispTrue.INSTANCE;
 		});
-		t.put(LispNames.ZEROP, args -> unaryIntegerTest(args, n -> n.signum() == 0));
-		t.put(LispNames.PLUSP, args -> unaryIntegerTest(args, n -> n.signum() > 0));
-		t.put(LispNames.MINUSP, args -> unaryIntegerTest(args, n -> n.signum() < 0));
+		t.put(LispNames.ZEROP, args -> unaryRationalTest(args, q -> q.signum() == 0));
+		t.put(LispNames.PLUSP, args -> unaryRationalTest(args, q -> q.signum() > 0));
+		t.put(LispNames.MINUSP, args -> unaryRationalTest(args, q -> q.signum() < 0));
 		t.put(LispNames.EVENP, args -> unaryIntegerTest(args, n -> !n.testBit(0)));
 		t.put(LispNames.ODDP, args -> unaryIntegerTest(args, n -> n.testBit(0)));
 		// -- characters ---------------------------------------------------------
@@ -1246,19 +1265,193 @@ public final class PureBuiltinFolder {
 		return ns == null || ns.size() != 1 ? null : bool(test.test(ns.get(0)));
 	}
 
-	private static @Nullable LispVal extremumInteger(List<LispVal> args, boolean minimum) {
-		List<BigInteger> ns = integers(args);
-		if (ns == null || ns.isEmpty()) {
-			return null;
-		}
-		BigInteger result = ns.get(0);
-		for (BigInteger n : ns) {
-			int cmp = n.compareTo(result);
-			if (minimum ? cmp < 0 : cmp > 0) {
-				result = n;
+	// ------------------------------------------------------- rational helpers
+
+	/**
+	 * An exact rational as the backends hold one: a numerator carrying the sign over a
+	 * positive denominator, reduced to lowest terms -- an integer is the same thing over
+	 * one. Normalized at construction, so two equal rationals are equal records.
+	 *
+	 * @param num the numerator
+	 * @param den the denominator, positive
+	 */
+	private record Rational(BigInteger num, BigInteger den) {
+
+		static final Rational ZERO = of(BigInteger.ZERO);
+
+		static final Rational ONE = of(BigInteger.ONE);
+
+		Rational {
+			if (den.signum() < 0) {
+				num = num.negate();
+				den = den.negate();
+			}
+			BigInteger gcd = num.gcd(den);
+			if (gcd.signum() != 0 && !gcd.equals(BigInteger.ONE)) {
+				num = num.divide(gcd);
+				den = den.divide(gcd);
 			}
 		}
-		return integerLiteral(result);
+
+		static Rational of(BigInteger integer) {
+			return new Rational(integer, BigInteger.ONE);
+		}
+
+		boolean isZero() {
+			return this.num.signum() == 0;
+		}
+
+		boolean isInteger() {
+			return this.den.equals(BigInteger.ONE);
+		}
+
+		int signum() {
+			return this.num.signum();
+		}
+
+		Rational negate() {
+			return new Rational(this.num.negate(), this.den);
+		}
+
+		Rational add(Rational other) {
+			return new Rational(this.num.multiply(other.den).add(other.num.multiply(this.den)),
+					this.den.multiply(other.den));
+		}
+
+		Rational subtract(Rational other) {
+			return add(other.negate());
+		}
+
+		Rational multiply(Rational other) {
+			return new Rational(this.num.multiply(other.num), this.den.multiply(other.den));
+		}
+
+		/** The quotient; the caller rules out a zero divisor. */
+		Rational divide(Rational other) {
+			return new Rational(this.num.multiply(other.den), this.den.multiply(other.num));
+		}
+
+		int compareTo(Rational other) {
+			return this.num.multiply(other.den).compareTo(other.num.multiply(this.den));
+		}
+
+		/**
+		 * {@code this - divisor * q}, q the quotient rounded toward negative infinity
+		 * ({@code mod}) or toward zero ({@code rem}); the caller rules out a zero
+		 * divisor.
+		 */
+		Rational remainder(Rational divisor, boolean floor) {
+			BigInteger n = this.num.multiply(divisor.den);
+			BigInteger d = this.den.multiply(divisor.num);
+			BigInteger[] qr = n.divideAndRemainder(d);
+			BigInteger q = (floor && qr[1].signum() != 0 && qr[1].signum() != d.signum())
+					? qr[0].subtract(BigInteger.ONE) : qr[0];
+			return subtract(divisor.multiply(of(q)));
+		}
+
+		boolean exceeds(int bits) {
+			return this.num.bitLength() > bits || this.den.bitLength() > bits;
+		}
+
+	}
+
+	/**
+	 * The arguments as rationals, or {@code null} when one is not an integer or a ratio.
+	 */
+	private static @Nullable List<Rational> rationals(List<LispVal> args) {
+		List<Rational> out = new ArrayList<>(args.size());
+		for (LispVal arg : args) {
+			Rational q = switch (arg) {
+				case LispInteger i -> Rational.of(BigInteger.valueOf(i.value()));
+				case LispBigInteger b -> Rational.of(b.value());
+				case LispRatio r -> new Rational(r.numerator(), r.denominator());
+				default -> null;
+			};
+			if (q == null) {
+				return null;
+			}
+			out.add(q);
+		}
+		return out;
+	}
+
+	/**
+	 * The literal a rational folds to -- an integer when the denominator is one -- or
+	 * {@code null} past the size ceiling, which bounds each component.
+	 */
+	private static @Nullable LispVal rationalLiteral(@Nullable Rational value) {
+		if (value == null || value.exceeds(MAX_FOLDED_BITS)) {
+			return null;
+		}
+		return value.isInteger() ? integerLiteral(value.num()) : new LispRatio(value.num(), value.den());
+	}
+
+	/** {@link #reduceIntegers} over rationals: the zero-argument call declines too. */
+	private static @Nullable LispVal reduceRationals(List<LispVal> args, Rational identity,
+			java.util.function.BinaryOperator<Rational> op) {
+		List<Rational> qs = rationals(args);
+		if (qs == null || qs.isEmpty()) {
+			return null;
+		}
+		Rational result = identity;
+		for (Rational q : qs) {
+			result = op.apply(result, q);
+			if (result.exceeds(MAX_FOLDED_BITS)) {
+				return null;
+			}
+		}
+		return rationalLiteral(result);
+	}
+
+	private static @Nullable LispVal unaryRational(List<LispVal> args, java.util.function.UnaryOperator<Rational> op) {
+		List<Rational> qs = rationals(args);
+		return qs == null || qs.size() != 1 ? null : rationalLiteral(op.apply(qs.get(0)));
+	}
+
+	private static @Nullable LispVal binaryRational(List<LispVal> args, BinaryRationalOp op) {
+		List<Rational> qs = rationals(args);
+		return qs == null || qs.size() != 2 ? null : rationalLiteral(op.apply(qs.get(0), qs.get(1)));
+	}
+
+	@FunctionalInterface
+	private interface BinaryRationalOp {
+
+		@Nullable Rational apply(Rational left, Rational right);
+
+	}
+
+	private static @Nullable LispVal unaryRationalTest(List<LispVal> args,
+			java.util.function.Predicate<Rational> test) {
+		List<Rational> qs = rationals(args);
+		return qs == null || qs.size() != 1 ? null : bool(test.test(qs.get(0)));
+	}
+
+	private static @Nullable LispVal extremumRational(List<LispVal> args, boolean minimum) {
+		List<Rational> qs = rationals(args);
+		if (qs == null || qs.isEmpty()) {
+			return null;
+		}
+		Rational result = qs.get(0);
+		for (Rational q : qs) {
+			int cmp = q.compareTo(result);
+			if (minimum ? cmp < 0 : cmp > 0) {
+				result = q;
+			}
+		}
+		return rationalLiteral(result);
+	}
+
+	private static @Nullable LispVal compareRationals(List<LispVal> args, java.util.function.IntPredicate holds) {
+		List<Rational> qs = rationals(args);
+		if (qs == null || qs.isEmpty()) {
+			return null;
+		}
+		for (int i = 0; i + 1 < qs.size(); i++) {
+			if (!holds.test(qs.get(i).compareTo(qs.get(i + 1)))) {
+				return LispNil.INSTANCE;
+			}
+		}
+		return LispTrue.INSTANCE;
 	}
 
 	private static BigInteger lcm(BigInteger a, BigInteger b) {
@@ -1266,19 +1459,6 @@ public final class PureBuiltinFolder {
 			return BigInteger.ZERO;
 		}
 		return a.divide(a.gcd(b)).multiply(b).abs();
-	}
-
-	private static @Nullable LispVal compareIntegers(List<LispVal> args, java.util.function.IntPredicate holds) {
-		List<BigInteger> ns = integers(args);
-		if (ns == null || ns.isEmpty()) {
-			return null;
-		}
-		for (int i = 0; i + 1 < ns.size(); i++) {
-			if (!holds.test(ns.get(i).compareTo(ns.get(i + 1)))) {
-				return LispNil.INSTANCE;
-			}
-		}
-		return LispTrue.INSTANCE;
 	}
 
 	private static @Nullable LispVal compareChars(List<LispVal> args, java.util.function.IntPredicate holds) {
@@ -1398,6 +1578,7 @@ public final class PureBuiltinFolder {
 			case LispString s -> readably ? s.print() : s.value();
 			case LispInteger i -> i.print();
 			case LispBigInteger b -> b.print();
+			case LispRatio r -> r.print();
 			case LispDouble d -> d.print();
 			case LispChar c -> readably ? c.print() : c.display();
 			case LispNil nil -> nil.print();

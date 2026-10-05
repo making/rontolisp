@@ -2373,6 +2373,34 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun(EXACT_QUOTIENT_PROGRAM)).isEqualTo(EXACT_QUOTIENT_EXPECTED);
 	}
 
+	// A ratio literal -- what (op (/ a b)) over two literals folds to -- rounds through
+	// _big_fdiv over its two known components, both signs, every mode, past the i64
+	// range.
+	private static final String RATIO_LITERAL_ROUNDING_PROGRAM = """
+			(print (list (floor 7/2) (ceiling 7/2) (truncate 7/2) (round 7/2) (round 5/2)))
+			(print (list (floor -7/2) (ceiling -7/2) (truncate -7/2) (round -7/2) (round -5/2)))
+			(print (list (floor (/ 7 2)) (round (/ 1 3)) (ffloor (/ 7 2))))
+			(print (floor 340282366920938463463374607431768211457/18446744073709551616))
+			(print (ceiling -1/36893488147419103232))
+			""";
+
+	private static final String RATIO_LITERAL_ROUNDING_EXPECTED = """
+			(3 4 3 4 2)
+			(-4 -3 -3 -4 -2)
+			(3 0 3.0)
+			18446744073709551616
+			0""";
+
+	@Test
+	void aRatioLiteralRoundsToItsExactQuotient() throws Exception {
+		assertThat(compileAndRun(RATIO_LITERAL_ROUNDING_PROGRAM)).isEqualTo(RATIO_LITERAL_ROUNDING_EXPECTED);
+	}
+
+	@Test
+	void aRatioLiteralRoundsToItsExactQuotientOnTheComponentPath() throws Exception {
+		assertThat(compileComponentAndRun(RATIO_LITERAL_ROUNDING_PROGRAM)).isEqualTo(RATIO_LITERAL_ROUNDING_EXPECTED);
+	}
+
 	@Test
 	void theFloorFamilyMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
 		// Both values of all four operators over pairs that cross 2^53 and 2^63 in both

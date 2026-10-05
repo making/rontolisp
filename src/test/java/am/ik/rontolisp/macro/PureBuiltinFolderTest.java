@@ -1,13 +1,16 @@
 package am.ik.rontolisp.macro;
 
+import java.math.BigInteger;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
@@ -188,20 +191,36 @@ class PureBuiltinFolderTest {
 		// A cold branch may hold a call that errors; the fold must leave it for the
 		// runtime rather than fail the compile.
 		for (String source : List.of("(length 5)", "(mod 1 0)", "(rem 1 0)", "(char \"ab\" 9)", "(char-code 5)",
-				"(code-char -1)", "(car 'foo)", "(subseq \"ab\" 1 9)", "(+ 1 \"x\")", "(expt 2 -1)")) {
+				"(code-char -1)", "(car 'foo)", "(subseq \"ab\" 1 9)", "(+ 1 \"x\")", "(/ 1 0)", "(/ 0)", "(/ 1/2 0)",
+				"(expt 0 -1)", "(mod 1/2 0)", "(gcd 1/2 2)", "(evenp 1/2)", "(isqrt 1/4)", "(numerator 0.5)",
+				"(rational \"x\")")) {
 			assertThat(folded(source).print()).as("declines: %s", source).startsWith("(");
 		}
 	}
 
 	@Test
 	void whatIsOutOfTheTableStaysOutOfIt() {
-		// A ratio or float result, a value with identity, and a multiple-value producer
-		// are each excluded for their own reason (.kb/pure-builtin-fold.md).
-		for (String source : List.of("(/ 7 2)", "(+ 1.5 2.5)", "(list 1 2)", "(cdr '(1 2 3))", "(floor 7 2)",
-				"(make-array 3)", "(vector 1 2)", "(nth 0 '((1) (2)))", "(char-equal #\\a #\\A)",
-				"(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)")) {
+		// A float result, a value with identity, and a multiple-value producer are each
+		// excluded for their own reason (.kb/pure-builtin-fold.md).
+		for (String source : List.of("(+ 1.5 2.5)", "(* 1/2 0.5)", "(float 1/2)", "(floor 7/2)", "(list 1 2)",
+				"(cdr '(1 2 3))", "(floor 7 2)", "(make-array 3)", "(vector 1 2)", "(nth 0 '((1) (2)))",
+				"(char-equal #\\a #\\A)", "(string-equal \"a\" \"A\")", "(alpha-char-p #\\a)")) {
 			assertThat(folded(source).print()).as("not folded: %s", source).startsWith("(");
 		}
+	}
+
+	@Test
+	void aRatioIsAnArgumentAndAResult() {
+		// Exact rational arithmetic folds like integer arithmetic: the result is
+		// normalized, and one whose denominator reduces to one is an integer.
+		assertThat(folded("(/ 7 2)")).isEqualTo(new LispRatio(BigInteger.valueOf(7), BigInteger.TWO));
+		assertThat(folded("(/ 6 -4)")).isEqualTo(new LispRatio(BigInteger.valueOf(-3), BigInteger.TWO));
+		assertThat(folded("(+ 1/2 1/2)")).isEqualTo(new LispInteger(1));
+		assertThat(folded("(numerator (/ 6 4))")).isEqualTo(new LispInteger(3));
+		assertThat(folded("(< (/ 1 3) 1/2)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(folded("(rational 0.5)")).isEqualTo(new LispRatio(BigInteger.ONE, BigInteger.TWO));
+		assertThat(folded("(/ 1 (expt 2 70))").print()).isEqualTo("1/1180591620717411303424");
+		assertThat(folded("(princ (/ 1 3))").print()).isEqualTo("(PRINC 1/3)");
 	}
 
 	@Test
@@ -210,6 +229,10 @@ class PureBuiltinFolderTest {
 		// of digits into the output.
 		assertThat(folded("(expt 2 1000000)").print()).startsWith("(");
 		assertThat(folded("(ash 1 1000000)").print()).startsWith("(");
+		// A ratio is bounded per component: 3^3000 is past the ceiling as a denominator.
+		assertThat(folded("(expt 2/3 3000)").print()).startsWith("(");
+		assertThat(folded("(/ 1 (expt 3 2000))")).isInstanceOf(LispRatio.class);
+		assertThat(folded("(* (/ 1 (expt 3 2000)) (/ 1 (expt 3 2000)))").print()).startsWith("(");
 		// Just inside the ceiling still folds.
 		assertThat(folded("(expt 2 100)")).isEqualTo(LispReader.readFromString("1267650600228229401496703205376"));
 	}

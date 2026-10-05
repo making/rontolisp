@@ -417,8 +417,10 @@ class WasmTreeShakerTest {
 
 	@Test
 	void keepsTransitivelyReachableRuntime() {
-		// Ratio arithmetic reaches the rational runtime helpers; they must survive.
-		byte[] optimized = compile("(print (+ 1/3 1/6))", false, OptimizeLevel.DEFAULT);
+		// Ratio arithmetic reaches the rational runtime helpers; they must survive. The
+		// operand is a parameter: over two literals the sum folds to a constant.
+		byte[] optimized = compile("(defun plus-sixth (x) (+ x 1/6)) (print (plus-sixth 1/3))", false,
+				OptimizeLevel.DEFAULT);
 		Module m = Module.parse(optimized);
 		m.assertWellFormed();
 		assertThat(m.exportedFunctionNames()).contains("_start");
@@ -686,6 +688,23 @@ class WasmTreeShakerTest {
 			.isEqualTo(compile("(princ \"HELLO\")", false, OptimizeLevel.DEFAULT));
 		assertThat(compile("(format t \"~a~%\" (* 6 7))", false, OptimizeLevel.DEFAULT))
 			.isEqualTo(compile("(format t \"~a~%\" 42)", false, OptimizeLevel.DEFAULT));
+		// A ratio result folds like an integer, so the rational runtime goes too.
+		assertThat(compile("(princ (/ 1 3))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 1/3)", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(format t \"~a~%\" (+ 1/2 1/3))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(format t \"~a~%\" 5/6)", false, OptimizeLevel.DEFAULT));
+	}
+
+	@Test
+	void aRatioLiteralRoundsWithoutTheGenericConversion() {
+		// (floor (/ 7 2)) folds to (floor 7/2). The literal's two components are known
+		// exact integers, so the conversion is the _big_fdiv call the two-argument
+		// (floor 7 2) makes over them, not the ratio-or-integer-or-float dispatch a value
+		// of unknown type needs.
+		assertThat(compile("(princ (floor 7/2))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ (floor 7 2))", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(princ (round -7/2))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ (round -7 2))", false, OptimizeLevel.DEFAULT));
 	}
 
 	@Test
