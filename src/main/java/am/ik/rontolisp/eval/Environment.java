@@ -4583,10 +4583,12 @@ public final class Environment implements Scope {
 				endArg = args.get(i + 1);
 			}
 		}
-		int start = startArg == null ? 0 : requireIndex(name, startArg);
-		int end = endArg == null || endArg instanceof LispNil ? cpLen : requireIndex(name, endArg);
+		LispVal startBound = startArg == null ? new LispInteger(0) : startArg;
+		LispVal endBound = endArg == null || endArg instanceof LispNil ? null : endArg;
+		int start = subseqBound(startBound);
+		int end = endBound == null ? cpLen : subseqBound(endBound);
 		if (start < 0 || start > end || end > cpLen) {
-			throw subseqBoundsError("string", start, end, cpLen);
+			throw subseqBoundsError("string", startBound, endBound, cpLen);
 		}
 		int from = full.offsetByCodePoints(0, start);
 		int to = full.offsetByCodePoints(0, end);
@@ -4594,17 +4596,39 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * {@code subseq}'s refusal of a bad range: a {@code type-error} reporting
-	 * {@code SUBSEQ: invalid bounds S, E for KIND of length N}, whose datum is the
-	 * refused bound and whose expected type is its range
-	 * ({@link OperandTypes#subseqStartRefused}).
+	 * A {@code subseq} bound as the int the bounds check compares: a fixnum's value when
+	 * it fits an int, else -1, which lies outside every range -- so a bound that is no
+	 * integer (a string, a float, a nil start) or one past the int range is refused as
+	 * any out-of-range bound is, and {@link #subseqBoundsError} reports the bound as
+	 * given.
+	 * @param bound the bound as given
+	 * @return the index, or -1
 	 */
-	private static OperandTypeException subseqBoundsError(String kind, int start, int end, int length) {
-		boolean startRefused = OperandTypes.subseqStartRefused(start, length);
-		return OperandTypeException.reported(
-				LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end + " for " + kind + " of length " + length,
-				LispNames.SUBSEQ, new LispInteger(startRefused ? start : end),
-				OperandTypes.integerRange(startRefused ? 0 : start, length));
+	private static int subseqBound(LispVal bound) {
+		return bound instanceof LispInteger i && i.value() == (int) i.value() ? (int) i.value() : -1;
+	}
+
+	/**
+	 * {@code subseq}'s refusal of a bad range: a {@code type-error} reporting
+	 * {@code SUBSEQ: invalid bounds S, E for KIND of length N} (each bound printed as
+	 * given, an omitted end as the length), whose datum is the refused bound and whose
+	 * expected type is its range ({@link OperandTypes#subseqStartRefused}).
+	 * @param kind the sequence kind the report names
+	 * @param start the start as given
+	 * @param end the end as given, or null when omitted (nil)
+	 * @param length the sequence's length
+	 * @return the exception to throw
+	 */
+	private static OperandTypeException subseqBoundsError(String kind, LispVal start, @Nullable LispVal end,
+			int length) {
+		int startIndex = subseqBound(start);
+		// An omitted end resolves to the length, inside its range whenever the start is
+		// inside its own: the start is the refused bound then.
+		boolean startRefused = end == null || OperandTypes.subseqStartRefused(startIndex, length);
+		LispVal refused = startRefused ? start : java.util.Objects.requireNonNull(end);
+		return OperandTypeException.reported(LispNames.SUBSEQ + ": invalid bounds " + start.print() + ", "
+				+ (end == null ? String.valueOf(length) : end.print()) + " for " + kind + " of length " + length,
+				LispNames.SUBSEQ, refused, OperandTypes.integerRange(startRefused ? 0 : startIndex, length));
 	}
 
 	private static void registerStringOps(Environment env) {
@@ -4622,8 +4646,9 @@ public final class Environment implements Scope {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.SUBSEQ + " expects 2 or 3 arguments, got " + args.size());
 			}
+			LispVal startArg = args.get(1);
 			LispVal endArg = (args.size() == 3 && !(args.get(2) instanceof LispNil)) ? args.get(2) : null;
-			int start = requireIndex(LispNames.SUBSEQ, args.get(1));
+			int start = subseqBound(startArg);
 			if (args.get(0) instanceof LispString str) {
 				// Bounds are CHARACTER positions (code points), not UTF-16 code units, so
 				// a non-BMP glyph still counts as one index step. The slice is copied
@@ -4632,9 +4657,9 @@ public final class Environment implements Scope {
 				// made a left-to-right parse that cuts one piece per token out of a long
 				// document quadratic (.kb/string-index-cost.md).
 				int cpLen = str.length();
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : cpLen;
+				int end = (endArg != null) ? subseqBound(endArg) : cpLen;
 				if (start < 0 || end > cpLen || start > end) {
-					throw subseqBoundsError("string", start, end, cpLen);
+					throw subseqBoundsError("string", startArg, endArg, cpLen);
 				}
 				return str.subsequence(start, end);
 			}
@@ -4645,9 +4670,9 @@ public final class Environment implements Scope {
 					elements.add(cell.car());
 					cur = cell.cdr();
 				}
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : elements.size();
+				int end = (endArg != null) ? subseqBound(endArg) : elements.size();
 				if (start < 0 || end > elements.size() || start > end) {
-					throw subseqBoundsError("list", start, end, elements.size());
+					throw subseqBoundsError("list", startArg, endArg, elements.size());
 				}
 				LispVal result = LispNil.INSTANCE;
 				for (int i = end - 1; i >= start; i--) {
@@ -4667,9 +4692,9 @@ public final class Environment implements Scope {
 				// adjustable case must match rather than silently degrading to a
 				// simple-vector (.todo/698).
 				int len = arr.effectiveLength();
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
+				int end = (endArg != null) ? subseqBound(endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw subseqBoundsError("vector", start, end, len);
+					throw subseqBoundsError("vector", startArg, endArg, len);
 				}
 				LispVal[] copy = new LispVal[end - start];
 				for (int i = start; i < end; i++) {
@@ -4691,9 +4716,9 @@ public final class Environment implements Scope {
 				// Type-preserving: a subsequence of a packed integer vector stays packed
 				// at the same width (ironclad's pbkdf1 subseqs its byte-vector key).
 				int len = iv.length();
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
+				int end = (endArg != null) ? subseqBound(endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw subseqBoundsError("vector", start, end, len);
+					throw subseqBoundsError("vector", startArg, endArg, len);
 				}
 				return iv.copyOfRange(start, end);
 			}
@@ -4705,9 +4730,9 @@ public final class Environment implements Scope {
 				// float subseq did before .todo/698 (crashing on the interpreter; the
 				// compile paths silently degraded to a general boxed vector instead).
 				int len = fa.totalSize();
-				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
+				int end = (endArg != null) ? subseqBound(endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw subseqBoundsError("vector", start, end, len);
+					throw subseqBoundsError("vector", startArg, endArg, len);
 				}
 				List<LispVal> elements = new ArrayList<>(end - start);
 				for (int i = start; i < end; i++) {
@@ -5418,6 +5443,9 @@ public final class Environment implements Scope {
 					break;
 				}
 			}
+			// The bounds as given; an omitted (or nil) end is null.
+			LispVal startBound = new LispInteger(0);
+			LispVal endBound = null;
 			boolean sawStart = false;
 			boolean sawEnd = false;
 			for (; i + 1 < args.size(); i += 2) {
@@ -5425,13 +5453,13 @@ public final class Environment implements Scope {
 					switch (kw.name()) {
 						case ":START" -> {
 							if (!sawStart) {
-								start = (int) asLong(args.get(i + 1));
+								startBound = args.get(i + 1);
 								sawStart = true;
 							}
 						}
 						case ":END" -> {
 							if (!sawEnd) {
-								end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
+								endBound = args.get(i + 1) instanceof LispNil ? null : args.get(i + 1);
 								sawEnd = true;
 							}
 						}
@@ -5446,8 +5474,10 @@ public final class Environment implements Scope {
 					}
 				}
 			}
+			start = subseqBound(startBound);
+			end = endBound == null ? cpLen : subseqBound(endBound);
 			if (start < 0 || end > cpLen || start > end) {
-				throw subseqBoundsError("string", start, end, cpLen);
+				throw subseqBoundsError("string", startBound, endBound, cpLen);
 			}
 			int startCU = full.offsetByCodePoints(0, start);
 			int endCU = full.offsetByCodePoints(0, end);
@@ -6368,6 +6398,9 @@ public final class Environment implements Scope {
 				if (problem != null) {
 					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, problem);
 				}
+				// The bounds as given; an omitted (or nil) end is null.
+				LispVal startBound = new LispInteger(0);
+				LispVal endBound = null;
 				boolean sawStart = false;
 				boolean sawEnd = false;
 				for (; i + 1 < args.size(); i += 2) {
@@ -6375,13 +6408,13 @@ public final class Environment implements Scope {
 						switch (kw.name()) {
 							case ":START" -> {
 								if (!sawStart) {
-									start = (int) asLong(args.get(i + 1));
+									startBound = args.get(i + 1);
 									sawStart = true;
 								}
 							}
 							case ":END" -> {
 								if (!sawEnd) {
-									end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
+									endBound = args.get(i + 1) instanceof LispNil ? null : args.get(i + 1);
 									sawEnd = true;
 								}
 							}
@@ -6390,8 +6423,10 @@ public final class Environment implements Scope {
 						}
 					}
 				}
+				start = subseqBound(startBound);
+				end = endBound == null ? cpLen : subseqBound(endBound);
 				if (start < 0 || end > cpLen || start > end) {
-					throw subseqBoundsError("string", start, end, cpLen);
+					throw subseqBoundsError("string", startBound, endBound, cpLen);
 				}
 				if (start != 0 || end != cpLen) {
 					text = full.substring(full.offsetByCodePoints(0, start), full.offsetByCodePoints(0, end));

@@ -2298,8 +2298,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmOperandTypeRuntime.Wrappers operandTypeWrappers = new JvmOperandTypeRuntime.Wrappers(cp, thisClass,
 				numericRuntime.methods());
 		// subseq's refusal is recorded as a type-error only where a pad can catch it.
-		final JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords = teTlField != null
-				? new JvmOperandTypeRuntime.SubseqRecords(cp, thisClass, teTlField, numericRuntime.methods()) : null;
+		final JvmOperandTypeRuntime.SubseqRuntime subseqRuntime = new JvmOperandTypeRuntime.SubseqRuntime(cp, thisClass,
+				teTlField, numericRuntime.methods());
 		final JvmComplexRuntimeBuilder.@Nullable ComplexRuntime complexRuntime = usesComplex
 				? JvmComplexRuntimeBuilder.build(cp, thisClass) : null;
 
@@ -2429,7 +2429,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.cp(cp)
 			.numOps(numericRuntime.ops())
 			.operandTypeWrappers(operandTypeWrappers)
-			.subseqRecords(subseqRecords)
+			.subseqRuntime(subseqRuntime)
 			.mathOps(mathOps)
 			.systemOps(systemOps)
 			.systemOut(systemOut)
@@ -3259,7 +3259,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
-					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRecords));
+					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
@@ -6565,11 +6565,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
 		/**
-		 * The class's {@code _subseqRec} builder, or null when it has no landing pad (or
-		 * outside a full compilation): a {@code subseq} refusal records its slots through
-		 * it ({@link JvmSubseqCompiler#emitBoundsError}).
+		 * The class's {@code subseq} bounds runtime, or null outside a full compilation:
+		 * the lanes convert their bounds and refuse a range through it
+		 * ({@link JvmSubseqCompiler#emitBoundsError}).
 		 */
-		JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords;
+		JvmOperandTypeRuntime.@Nullable SubseqRuntime subseqRuntime;
 
 		/**
 		 * This method body's operand stack, tracked as it is emitted: it says what is
@@ -7559,7 +7559,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathOps = builder.mathOps;
 			this.systemOps = builder.systemOps;
 			this.operandTypeWrappers = builder.operandTypeWrappers;
-			this.subseqRecords = builder.subseqRecords;
+			this.subseqRuntime = builder.subseqRuntime;
 			this.sites = builder.sites;
 			this.lambdaReportNames = builder.lambdaReportNames;
 			this.asyncBodyHeads = builder.asyncBodyHeads;
@@ -8048,7 +8048,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
-			private JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords;
+			private JvmOperandTypeRuntime.@Nullable SubseqRuntime subseqRuntime;
 
 			private Map<String, MethodRefEntry> mathOps = Map.of();
 
@@ -8669,8 +8669,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder subseqRecords(JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords) {
-				this.subseqRecords = subseqRecords;
+			Builder subseqRuntime(JvmOperandTypeRuntime.@Nullable SubseqRuntime subseqRuntime) {
+				this.subseqRuntime = subseqRuntime;
 				return this;
 			}
 

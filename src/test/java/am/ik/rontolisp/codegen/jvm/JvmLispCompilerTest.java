@@ -8989,7 +8989,9 @@ class JvmLispCompilerTest {
 	void compileAndRunSubseqWithoutTheArrayRuntimeChecksItsBounds() throws Exception {
 		// A program naming no array operator compiles subseq's string and list lanes
 		// without the array runtime (no _subseqCv); they refuse a bad range too, rather
-		// than answering a truncated list or raising String#substring's exception.
+		// than answering a truncated list or raising String#substring's exception. A
+		// negative end is refused, not read as an omitted one, and a bound that is no
+		// integer is refused like one outside the range.
 		assertThat(compileAndRun("""
 				(defun f (s i j) (%subseq-core s i j))
 				(print (f "abcd" 1 3))
@@ -9000,8 +9002,13 @@ class JvmLispCompilerTest {
 				(print (g (list 1 2 3) 1 5))
 				(print (g (list 1 2 3) 4 nil))
 				(print (g (list 1 2 3) -1 nil))
+				(print (g "abc" 0 -1))
+				(print (g (list 1 2 3) 0 -1))
+				(print (g "abc" "a" nil))
+				(print (g (list 1 2 3) 1 1.5))
 				"""))
-			.isEqualTo("\"bc\"\n(2 3)\n(1 (INTEGER 2 3))\n(5 (INTEGER 1 3))\n(4 (INTEGER 0 3))\n(-1 (INTEGER 0 3))");
+			.isEqualTo("\"bc\"\n(2 3)\n(1 (INTEGER 2 3))\n(5 (INTEGER 1 3))\n(4 (INTEGER 0 3))\n(-1 (INTEGER 0 3))"
+					+ "\n(-1 (INTEGER 0 3))\n(-1 (INTEGER 0 3))\n(\"a\" (INTEGER 0 3))\n(1.5 (INTEGER 1 3))");
 	}
 
 	@Test

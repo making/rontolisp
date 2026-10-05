@@ -8,7 +8,7 @@
 (string-downcase "ABC") ; => "abc"
 ```
 
-`:start` / `:end` は変換する範囲を指定します。範囲外の文字はそのまま残り、`:end` が nil なら文字列の末尾までです。文字列の範囲外 (`:start` が 0 未満、`:end` が長さを超える、`:start` が `:end` より後) は、どのバックエンドでも [`subseq`](subseq.md) と同じ `type-error` です。
+`:start` / `:end` は変換する範囲を指定します。範囲外の文字はそのまま残り、`:end` が nil なら文字列の末尾までです。文字列の範囲外 (`:start` が 0 未満、`:end` が長さを超える、`:start` が `:end` より後) と、`nil` 以外の整数でない境界は、どのバックエンドでも [`subseq`](subseq.md) と同じ `type-error` です。
 
 ```lisp
 (string-downcase "HELLO" :end 2) ; => "heLLO"

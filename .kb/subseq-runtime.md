@@ -76,10 +76,32 @@ through to a general vector on the two compilers until 2026-09-06 (`.todo/719`),
 **Invariant: `0 <= start <= end <= (length seq)` is checked before anything is copied or
 allocated, whatever representation `seq` is in, on every backend, with the interpreter's text
 `"SUBSEQ: invalid bounds S, E for KIND of length N"`** (`KIND` = `string` / `list` /
-`vector`; `E` is the resolved end; a fill-pointer vector's length is its fill pointer), **as
-a `type-error`** (CLHS 17.1.1; SBCL signals one too): datum the first bound outside its
-range -- `start` outside `[0, N]`, else `end` outside `[start, N]`
-(`OperandTypes.subseqStartRefused`) -- expected type that range, the list `(INTEGER low N)`.
+`vector`; `S` and `E` are the bounds as given, printed by `prin1`, an omitted end printed as
+`N`; a fill-pointer vector's length is its fill pointer), **as a `type-error`** (CLHS 17.1.1;
+SBCL signals one too): datum the first bound outside its range -- `start` outside `[0, N]`,
+else `end` outside `[start, N]` (`OperandTypes.subseqStartRefused`) -- expected type that
+range, the list `(INTEGER low N)`.
+
+**A bound that is no integer -- a string, a float, a nil start -- or an integer past the int
+range is outside its range like any other**, not a separate operand check: every lane compares
+the bounds as int INDICES, and a bound's index is its value when it is a fixnum that fits an
+int, else -1, which lies outside every range. The report and the slots read the bounds as
+given, so `(subseq "abc" "a")` reports `SUBSEQ: invalid bounds "a", 3 for string of length 3`,
+datum `"a"`, expected type `(INTEGER 0 3)`, and `(subseq s 0 (expt 2 32))` reports
+`4294967296`, not the `0` its low 32 bits read as. SBCL's class and datum for a non-integer
+bound match (its expected type is its own `(MOD 4611686018427387901)`, the array index type);
+for a bignum bound it reports through `bounding-indices-bad-error` with the cons datum, the
+same divergence as an out-of-range fixnum. One deviation from SBCL's order: SBCL checks both
+bounds' TYPES before either range, so `(subseq "abc" 5 "a")` is its end's type-error and the
+start's range error here. Before, a non-integer bound was the interpreter's
+`SUBSEQ expects an integer index` `simple-error`, a slot-less `type-error` on the JVM (a
+`ClassCastException` in the unbox) and an uncatchable cast trap on wasm; a bound past the int
+range wrapped (`l2i`, `(int)`) on the interpreter and the JVM and trapped on wasm (a bignum
+past i31).
+- Interpreter: `Environment.subseqBound`. JVM: `_subseqIdx(Object) -> int`, one per class
+  (`JvmOperandTypeRuntime.SubseqRuntime`, built on first use; a call per bound rather than the
+  test inline at up to six sites). wasm: `WasmEmitHelper.emitBoundIndex` inline (`ref.test
+  i31`, else -1: a bignum is past any length a module can hold).
 SBCL's own slots differ (`(start . end)` against `(CONS (INTEGER 0 N) (INTEGER start N))`,
 its `bounding-indices-bad-error`); the class is what a portable program reads, and it is
 pinned against SBCL. Until 2026-10-05 the refusal was condition-less and landed as a
@@ -87,6 +109,20 @@ pinned against SBCL. Until 2026-10-05 the refusal was condition-less and landed 
 until d13 a list truncated (`(subseq '(1 2 3) 1 5)` -> `(2 3)`), a vector reported through
 `AREF` or trapped `allocation size too large`, and a built string threw a JVM
 `ClassCastException` / trapped on wasm -- Clojure `.substring` inherited it.
+
+**An omitted `end` is the end argument's nil, read as nil -- never an int sentinel.** The
+JVM helpers take `end` as an `Object` (`_subseqCore`, `_subseqCv`, `_subseqEnd`; the
+resolve is `JvmSubseqCompiler.emitResolveEnd`), wasm `_subseq` tests its param 2 with
+`ref.is_null` (`_subseq_str` and `%subseq-end` always did). Nil used to travel as the int
+`-1`, so a GIVEN `-1` read as omitted: `(subseq s 0 -1)` answered the whole sequence on
+the JVM for every representation and on wasm for a literal string or a list, and
+`write-string :end -1` wrote it all. `Integer.MIN_VALUE` would not have been safe either:
+a bound's index can be any int. Cost: wasm modules with a
+subseq lane -8 B (the per-cell list test is `ref.is_null` instead of an `i32` compare),
+JVM classes -14 B with `_subseqCore`, +5 B with `_subseqCv` alone (`sieve`); programs
+without a lane byte-identical (`hello_world`, `pi_approx`, `dom_reactor`, `string`,
+`list`, `fib`, ... at the default and `size` levels; `--optimize=off` carries the lane:
+-5/-14 B JVM, -8 B wasm).
 
 Where each lane checks:
 - **Interpreter**: every representation's arm throws `Environment.subseqBoundsError`, an
@@ -104,13 +140,22 @@ Where each lane checks:
   `JvmSubseqCompiler.emitResolveEnd` + `emitBoundsTest` and jump to ONE
   `emitBoundsError` block (a plain `RuntimeException` built from chained
   `String.valueOf(int)` + `concat`).
-- **JVM, the class**: under a landing pad `emitBoundsError` hands the exception to
-  `_subseqRec(e, start, end, len)` (`JvmOperandTypeRuntime.SubseqRecords`, built on first
-  use into the numeric runtime's methods), which records `{datum, (INTEGER low len)}` in
-  `_teTl`; the pad's type-error arm recognizes a recorded exception by identity and reads
-  the slots through `_teSlot`, as for a wrong-type operand. Without a pad nothing records
-  and the class keeps its bytes. Cost: +245-250 B on a class with a pad that refuses a
-  range (measured on the `SubseqBoundsFixture` program and one-site programs).
+- **JVM, ONE refusal per class**: every lane's `emitBoundsError` is
+  `throw _subseqBad(start, end, len, " for KIND of length ")`, the bounds as given
+  (`JvmOperandTypeRuntime.SubseqRuntime`, built on first use into the numeric runtime's
+  methods). It renders the report through `_lispToString` and, under a landing pad, records
+  `{datum, (INTEGER low len)}` in `_teTl`; the pad's type-error arm recognizes a recorded
+  exception by identity and reads the slots through `_teSlot`, as for a wrong-type operand.
+  Without a pad nothing records. Cost of the non-integer change (bound conversion through
+  `_subseqIdx`, the report printing the bounds as given, the per-site report blocks folded
+  into `_subseqBad`): bytecode shrinks (a class with the three lanes 774 -> 725 bytes of code),
+  the two methods' metadata does not -- +197 B on zlib's class, +221 at `--optimize=size`,
+  +264 on `sieve` (`_subseqCv` and `_subseqCore` only); a class with a pad that refuses a
+  range +84..108 B (the per-site recording calls and `_subseqRec` are gone). Programs without
+  a lane byte-identical (`hello_world`, `pi_approx`, `dom_reactor`, `string`, `fib`, `list`,
+  `bignum`, `clos`, `hash`, `mandelbrot`, `matmul`, default and `size` levels). A loop of
+  string / literal-string / list / vector `subseq`s ran the same before and after (JDK 25,
+  within run-to-run noise).
 - **JVM `%subseq-core` lane** (string without the array runtime, and the list): ONE
   per-class helper `_subseqCore(seq, start, end)` built on first use
   (`JvmEmitHelper.emitSharedCall`); a site is a call. It used to inline the whole walk at
@@ -124,13 +169,16 @@ Where each lane checks:
   that compiles no site carries neither, at every optimize level.
 - **wasm string**: `_subseq`'s string branch (immutable) and `_subseq_str`'s
   character-vector arm, through `WasmStringRuntimeBuilder.emitSubseqBoundsCheck` (ONE
-  `if`; a42 had three copies of the report). The length is `FUNC_SEQ_LEN`.
+  `if`; a42 had three copies of the report). The length is `FUNC_SEQ_LEN`. The report reads
+  each lane function's params 1 and 2, the bounds as given.
 - **wasm list**: `_subseq`'s list branch, the JVM list lane's shape: the walk `br`s out to
   a block around it (no per-cell flag), and only that block counts the list for the report.
-- EH mode: every site pushes the three bounds as i31s and its `" for KIND of length "`
-  piece and calls ONE landing, `_subseq_bad` (`FUNC_SUBSEQ_BAD`,
-  `WasmStringRuntimeBuilder.buildSubseqBadBody`), which renders each int through
-  `FUNC_PRIN1_TO_STR` (the `WasmOperandTypes.pushBound` trick), concatenates the pieces and
+- EH mode: every site pushes the start and end as given (the end nil when omitted), the
+  length as an i31 and its `" for KIND of length "` piece and calls ONE landing,
+  `_subseq_bad` (`FUNC_SUBSEQ_BAD`, `WasmStringRuntimeBuilder.buildSubseqBadBody`), which
+  renders each bound through `FUNC_PRIN1_TO_STR` (the `WasmOperandTypes.pushBound` trick; an
+  omitted end as the length), decides the refused bound over the start's index,
+  concatenates the pieces and
   throws a `type-error` instance where the module baked the class (a handler landing pad:
   `operandTypeErrorShape`, the `_type_err` gate; `INTEGER` is `Texts.compoundNames`' entry,
   so the expected type's car is `eq` to the program's `'integer`), the instance-less
@@ -141,7 +189,11 @@ Where each lane checks:
   became calls): zlib P1 130,289 -> 130,204, component 134,108 -> 134,017, size level
   100,085 -> 100,000; non-EH modules and `hello_world`, `pi_approx`, `dom_reactor`,
   `string`, `list` byte-identical at every shaking level (`--optimize=off` carries the
-  unshaken landing: +5 B non-EH, +50 B EH).
+  unshaken landing: +5 B non-EH, +50 B EH). The non-integer change (the index test at each
+  bound, the landing reading the bounds as given): +18 B on a non-EH module with a lane, +41
+  on the fixture-shaped EH program with a pad, +72 on zlib (EH, no pad) at both levels, +75 on
+  `sort`; P1 and component alike; the same `subseq` loop as the JVM's ran the same (wasmtime,
+  within noise).
 - **The literal pieces MUST be interned before `stringTable.toByteArray()`**: interned
   lazily inside a runtime body builder, the offsets are recorded but the bytes never reach
   the data segment -- the message comes back with the numbers in place and blanks where the
@@ -162,7 +214,7 @@ Where each lane checks:
 - The `--no-gc` scalar wasm backend (`NoGcWasmCompiler`, outside `CiSpecE2eTest`'s four)
   is untouched: `.kb/no-gc-scalar-wasm.md` names its `subseq` as unchecked.
 - Pins: `SubseqBoundsFixture` (every representation, the full text, the type-error's
-  datum and expected type;
+  datum and expected type, a non-integer bound's row;
   `LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend`,
   `JvmLispCompilerTest#compileAndRunSubseqSignalsInvalidBounds`,
   `WasmLispCompilerIntegrationTest#subseqSignalsInvalidBounds` -- P1 and component),
@@ -170,7 +222,8 @@ Where each lane checks:
   `_subseqCore` lane's slots),
   `ClojureInteropTest#aSubstringOfABuiltStringRefusesARangeOutsideIt`, ci-spec
   `subseq-refuses-a-bad-range-in-every-representation` (SBCL's answers, the class by a
-  `type-error` clause).
+  `type-error` clause), `subseq-refuses-a-non-integer-bound` (SBCL's class and datum, the
+  bounded string operators included).
 
 ## Bounded string operators -- the SAME refusal, named `SUBSEQ`
 `write-string` / `write-line` / `string-upcase` / `-downcase` / `-capitalize` with a
@@ -199,10 +252,11 @@ signals a `type-error` for all five and its text names no operator either.
 - Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest` -- P1 and component), ci-spec
   `bounded-string-operators-refuse-a-bad-range` (SBCL's class).
-- Known gaps, NOT these operators': a NEGATIVE `end` given to a compiled `subseq` is read
-  as "omitted" on the JVM (the sentinel is -1) and on the wasm literal-string lane; a
-  non-integer bound is a `simple-error` in the interpreter, a bare type-error on the JVM
-  and a cast trap on wasm.
+- A non-integer bound is refused like `subseq`'s ("Bounds check" above). Known gap: a nil
+  `:start` is refused by the interpreter (and SBCL) but read as 0 on the compiled paths by
+  `write-string` / `write-line` (`lowerWriteStringBounds` binds `(or start 0)`) and by every
+  first-class wrapper of the five (`BuiltinFunctionWrappers`' `getf` default cannot tell an
+  absent `:start` from a nil one); a call-position case conversion refuses it.
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

@@ -3,16 +3,20 @@ package am.ik.rontolisp;
 /**
  * {@code subseq}'s bounds check, shared by the backend suites: a
  * {@code start}/{@code end} pair with {@code start &lt; 0}, {@code end} past the
- * sequence's length, or {@code start &gt; end} is an error with the SAME text on every
- * backend, whatever representation the sequence is in -- a literal string, a built
- * (mutable) string, a list, a general vector, a packed integer vector, a fill-pointer
- * vector (its length is the fill pointer). The error is a {@code type-error} (CLHS
- * 17.1.1) whose datum is the first bound outside its range -- {@code start} outside
- * {@code [0, length]}, else {@code end} outside {@code [start, length]} -- and whose
- * expected type is that range, {@code (INTEGER LO HI)}. The bounds are computed at run
- * time so no backend can fold them; before the check reached every representation, the
- * compile paths answered a truncated list, a raw {@code AREF} report, a
- * {@code ClassCastException} or a wasm trap.
+ * sequence's length, or {@code start &gt; end} (a negative {@code end} among them) is an
+ * error with the SAME text on every backend, whatever representation the sequence is in
+ * -- a literal string, a built (mutable) string, a list, a general vector, a packed
+ * integer vector, a fill-pointer vector (its length is the fill pointer). The error is a
+ * {@code type-error} (CLHS 17.1.1) whose datum is the first bound outside its range --
+ * {@code start} outside {@code [0, length]}, else {@code end} outside
+ * {@code [start, length]} -- and whose expected type is that range,
+ * {@code (INTEGER LO HI)}. A bound that is no integer ({@code "a"}, {@code 1.5}, a nil
+ * start) is outside its range like any other: the same report, printing the bound as
+ * given, the same {@code type-error}. The bounds are computed at run time so no backend
+ * can fold them; before the check reached every representation, the compile paths
+ * answered a truncated list, a raw {@code AREF} report, a {@code ClassCastException} or a
+ * wasm trap, and a non-integer bound was a {@code simple-error}, a slot-less
+ * {@code type-error} or a wasm cast trap.
  */
 public final class SubseqBoundsFixture {
 
@@ -30,7 +34,7 @@ public final class SubseqBoundsFixture {
 			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
 			                 *probe-fp*))
 			  (print (list (subseq-probe s -1) (subseq-probe s 1 5) (subseq-probe s 2 1) (subseq-probe s 4)
-			               (subseq-probe s 1 2) (subseq-probe s 2))))
+			               (subseq-probe s 0 -1) (subseq-probe s 1 2) (subseq-probe s 2))))
 			(defun subseq-type-probe (s i &optional e)
 			  (handler-case (if e (subseq s i e) (subseq s i))
 			    (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))
@@ -39,27 +43,49 @@ public final class SubseqBoundsFixture {
 			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
 			                 *probe-fp*))
 			  (print (list (subseq-type-probe s -1) (subseq-type-probe s 1 5) (subseq-type-probe s 2 1)
-			               (subseq-type-probe s 4))))
+			               (subseq-type-probe s 4) (subseq-type-probe s 0 -1))))
+			(defun subseq-bound-probe (s i &optional e)
+			  (handler-case (if e (subseq s i e) (subseq s i))
+			    (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))
+			    (error (c) (list :not-a-type-error (type-of c)))))
+			(dolist (s (list "abc" (list 1 2 3) (vector 1 2 3) (concatenate 'string "ab" "c")
+			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
+			                 *probe-fp*))
+			  (print (list (subseq-bound-probe s "a") (subseq-bound-probe s 1 "a") (subseq-bound-probe s 1.5 2)
+			               (subseq-bound-probe s nil))))
 			""";
 
 	/** What {@link #PROGRAM} prints, one value per line. */
 	public static final String EXPECTED = String.join("\n", "\"SUBSEQ: invalid bounds 2, 1 for string of length 3\"",
 			"\"SUBSEQ: invalid bounds 0, 5 for string of length 3\"", row("list", 3, "(2)", "(3)"),
 			row("vector", 3, "#(2)", "#(3)"), row("string", 3, "\"b\"", "\"c\""), row("vector", 3, "#(2)", "#(3)"),
-			row("vector", 2, "#(2)", "#()"), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(2));
+			row("vector", 2, "#(2)", "#()"), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(2),
+			boundRow("string", 3), boundRow("list", 3), boundRow("vector", 3), boundRow("string", 3),
+			boundRow("vector", 3), boundRow("vector", 2));
 
-	// One printed row: the four refused ranges (-1 / 1 5 / 2 1 / 4) and the two answers.
+	// One printed row: the five refused ranges (-1 / 1 5 / 2 1 / 4 / 0 -1) and the two
+	// answers.
 	private static String row(String kind, int length, String oneToTwo, String fromTwo) {
 		String tail = " for " + kind + " of length " + length + "\"";
 		return "(\"SUBSEQ: invalid bounds -1, " + length + tail + " \"SUBSEQ: invalid bounds 1, 5" + tail
-				+ " \"SUBSEQ: invalid bounds 2, 1" + tail + " \"SUBSEQ: invalid bounds 4, " + length + tail + " "
-				+ oneToTwo + " " + fromTwo + ")";
+				+ " \"SUBSEQ: invalid bounds 2, 1" + tail + " \"SUBSEQ: invalid bounds 4, " + length + tail
+				+ " \"SUBSEQ: invalid bounds 0, -1" + tail + " " + oneToTwo + " " + fromTwo + ")";
 	}
 
 	// One printed type-error row: each refused range's datum and expected type.
 	private static String typeRow(int length) {
 		return "((-1 (INTEGER 0 " + length + ")) (5 (INTEGER 1 " + length + ")) (1 (INTEGER 2 " + length
-				+ ")) (4 (INTEGER 0 " + length + ")))";
+				+ ")) (4 (INTEGER 0 " + length + ")) (-1 (INTEGER 0 " + length + ")))";
+	}
+
+	// One printed non-integer row: a string start, a string end, a float start, a nil
+	// start -- each cell the datum, the expected type and the report.
+	private static String boundRow(String kind, int length) {
+		String tail = " for " + kind + " of length " + length + "\"";
+		return "((\"a\" (INTEGER 0 " + length + ") \"SUBSEQ: invalid bounds \\\"a\\\", " + length + tail
+				+ ") (\"a\" (INTEGER 1 " + length + ") \"SUBSEQ: invalid bounds 1, \\\"a\\\"" + tail
+				+ ") (1.5 (INTEGER 0 " + length + ") \"SUBSEQ: invalid bounds 1.5, 2" + tail + ") (NIL (INTEGER 0 "
+				+ length + ") \"SUBSEQ: invalid bounds NIL, " + length + tail + "))";
 	}
 
 }

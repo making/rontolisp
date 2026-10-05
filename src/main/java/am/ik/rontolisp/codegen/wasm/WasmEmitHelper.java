@@ -258,6 +258,30 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Pushes the {@code subseq} bound in {@code local} (a {@code (ref null eq)}) as the
+	 * {@code i32} index the bounds check compares: a fixnum answers its value, anything
+	 * else -- no integer (a string, a float, a nil start), or a bignum, which is past any
+	 * length a module can hold -- answers -1, outside every range, so the check refuses
+	 * it and the report prints the bound as given. A bare cast would trap.
+	 * @param w the body being written
+	 * @param local the local holding the bound
+	 */
+	static void emitBoundIndex(WasmWriter w, int local) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, Type.I32);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(local);
+		castI31GetS(w);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Consumes a stream DESIGNATOR on the stack and leaves the {@code i32} the fd-taking
 	 * read runtimes ({@code _read_line}, {@code _read}) want: an i31 handle is unboxed (a
 	 * WASI fd, or the negative handle of a string input stream), and anything else -- nil

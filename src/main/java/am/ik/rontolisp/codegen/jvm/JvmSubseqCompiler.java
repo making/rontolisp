@@ -1,18 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
-import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
@@ -30,8 +27,10 @@ import org.jspecify.annotations.Nullable;
  * quotes), the content at {@code [start, end)} is {@code s.substring(1 + start, 1 + end)}
  * re-wrapped in quotes. For a list (an {@code Object[2]} cons chain, nil = null), the
  * elements from index {@code start} up to {@code end} are copied into a fresh cons chain.
- * When {@code end} is omitted (passed as the sentinel int {@code -1}) it defaults to the
- * sequence length.
+ * An omitted {@code end} is nil and defaults to the sequence length; the lanes test the
+ * nil itself, never an int sentinel, so a GIVEN negative {@code end} reaches the bounds
+ * check (an int sentinel such as {@code -1} read {@code (subseq s 0 -1)} as the whole
+ * sequence).
  *
  * <p>
  * The lane is ONE per-class helper, {@code _subseqCore(seq, start, end)}
@@ -40,7 +39,10 @@ import org.jspecify.annotations.Nullable;
  * renders through several), which used to inline the whole walk at each. Both lanes check
  * {@code 0 <= start <= end <= length} and refuse a bad range with the interpreter's text
  * ({@link #emitBoundsCheck}); the list lane finds a short list during the walk it already
- * does, so a valid range costs no length walk.
+ * does, so a valid range costs no length walk. A bound is compared as an int index
+ * ({@code _subseqIdx}, {@link JvmOperandTypeRuntime.SubseqRuntime}): one that is no
+ * fixnum in the int range is -1, outside every range, and the report prints every bound
+ * as given.
  */
 final class JvmSubseqCompiler {
 
@@ -88,38 +90,37 @@ final class JvmSubseqCompiler {
 		}
 		JvmEmitHelper.emitSharedCall(ctx, className, END, 3, helper -> {
 			int startSlot = helper.allocTemp();
-			int endSlot = helper.allocTemp();
 			int lenSlot = helper.allocTemp();
 			int realEndSlot = helper.allocTemp();
-			unboxIndex(helper, 0, startSlot);
-			unboxEnd(helper, 1, endSlot);
-			unboxIndex(helper, 2, lenSlot);
-			emitResolveEnd(helper.body, endSlot, lenSlot, realEndSlot);
-			emitBoundsCheck(helper.body, helper.cp, helper.subseqRecords, startSlot, realEndSlot, lenSlot, "vector");
+			runtime(helper).emitIndex(helper.body, 0);
+			helper.body.istore(startSlot);
+			helper.body.aload(2);
+			JvmEmitHelper.unboxLong(helper);
+			helper.body.l2i().istore(lenSlot);
+			emitResolveEnd(helper.body, runtime(helper), 1, lenSlot, realEndSlot);
+			emitBoundsCheck(helper.body, runtime(helper), startSlot, realEndSlot, new Bounds(0, 1, lenSlot, "vector"));
 			helper.body.iload(realEndSlot).i2l();
 			JvmEmitHelper.boxLong(helper);
 		});
 	}
 
-	// slot = (int) the fixnum in Object parameter `param`
-	private static void unboxIndex(JvmLispCompiler.Ctx ctx, int param, int slot) {
-		ctx.body.aload(param);
-		JvmEmitHelper.unboxLong(ctx);
-		ctx.body.l2i().istore(slot);
+	// The class's subseq bounds runtime, which every full compilation sets.
+	private static JvmOperandTypeRuntime.SubseqRuntime runtime(JvmLispCompiler.Ctx ctx) {
+		return java.util.Objects.requireNonNull(ctx.subseqRuntime, "subseqRuntime");
 	}
 
-	// slot = (int) the fixnum in Object parameter `param`, or -1 ("to the end") for nil
+	// slot = the bound index (_subseqIdx) of Object parameter `param`, or 0 for nil.
+	// The 0 is a placeholder, not a sentinel: whether end was omitted is read from the
+	// parameter itself, since a caller can give any int.
 	private static void unboxEnd(JvmLispCompiler.Ctx ctx, int param, int slot) {
 		MethodCode.Label nil = ctx.body.newLabel();
 		MethodCode.Label done = ctx.body.newLabel();
 		ctx.body.aload(param);
 		ctx.body.ifnull(nil);
-		ctx.body.aload(param);
-		JvmEmitHelper.unboxLong(ctx);
-		ctx.body.l2i();
+		runtime(ctx).emitIndex(ctx.body, param);
 		ctx.body.goto_(done);
 		ctx.body.labelBinding(nil);
-		ctx.body.iconst_m1();
+		ctx.body.iconst_0();
 		ctx.body.labelBinding(done);
 		ctx.body.istore(slot);
 	}
@@ -152,8 +153,14 @@ final class JvmSubseqCompiler {
 		int resultSlot = ctx.allocTemp();
 		int lenSlot = ctx.allocTemp();
 		int realEndSlot = ctx.allocTemp();
-		unboxIndex(ctx, 1, startSlot);
-		unboxEnd(ctx, 2, endSlot);
+		runtime(ctx).emitIndex(ctx.body, 1);
+		ctx.body.istore(startSlot);
+		if (!ctx.usesArrays) {
+			// Both arms read a given end; with the array runtime the string arm is
+			// _subseqCv's, which reads it from the parameter, and only the list arm
+			// unboxes it.
+			unboxEnd(ctx, 2, endSlot);
+		}
 
 		MethodCode asm = ctx.body;
 		MethodCode.Label listLabel = asm.newLabel();
@@ -176,8 +183,8 @@ final class JvmSubseqCompiler {
 			asm.ifeq(listLabel);
 			asm.labelBinding(cvLabel);
 			asm.aload(seqSlot);
-			asm.iload(startSlot);
-			asm.iload(endSlot);
+			asm.aload(1);
+			asm.aload(2);
 			asm.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmArrayRuntimeBuilder.SUBSEQ_CV,
 					JvmArrayRuntimeBuilder.SUBSEQ_CV_DESC));
 			asm.astore(resultSlot);
@@ -203,19 +210,19 @@ final class JvmSubseqCompiler {
 			asm.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.COUNT_METHOD,
 					JvmStringIndexRuntimeBuilder.COUNT_DESC));
 			asm.istore(lenSlot);
-			emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
-			emitBoundsCheck(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "string");
+			emitResolveEnd(asm, 2, endSlot, lenSlot, realEndSlot);
+			emitBoundsCheck(asm, runtime(ctx), startSlot, realEndSlot, new Bounds(1, 2, lenSlot, "string"));
 			// a = _cpoff(s, start) -- the offset of character `start` past the leading
 			// quote.
 			asm.aload(sSlot);
 			asm.iload(startSlot);
 			asm.invokestatic(cpOffset);
 			asm.istore(aSlot);
-			// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
+			// b = (end == nil) ? s.length() - 1 : _cpoff(s, end)
 			MethodCode.Label haveEnd = asm.newLabel();
 			MethodCode.Label gotB = asm.newLabel();
-			asm.iload(endSlot);
-			asm.ifge(haveEnd);
+			asm.aload(2);
+			asm.ifnonnull(haveEnd);
 			asm.aload(sSlot);
 			asm.invokevirtual(length);
 			asm.loadConstant(1);
@@ -224,7 +231,7 @@ final class JvmSubseqCompiler {
 			asm.goto_(gotB);
 			asm.labelBinding(haveEnd);
 			asm.aload(sSlot);
-			asm.iload(endSlot);
+			asm.iload(realEndSlot);
 			asm.invokestatic(cpOffset);
 			asm.istore(bSlot);
 			asm.labelBinding(gotB);
@@ -264,13 +271,16 @@ final class JvmSubseqCompiler {
 			asm.athrow();
 			asm.labelBinding(isList);
 		}
+		if (ctx.usesArrays) {
+			unboxEnd(ctx, 2, endSlot);
+		}
 		// A negative start, or a start past a given end, is refused before the walk.
 		MethodCode.Label listBad = asm.newLabel();
 		MethodCode.Label noEndCheck = asm.newLabel();
 		asm.iload(startSlot);
 		asm.iflt(listBad);
-		asm.iload(endSlot);
-		asm.iflt(noEndCheck);
+		asm.aload(2);
+		asm.ifnull(noEndCheck);
 		asm.iload(startSlot);
 		asm.iload(endSlot);
 		asm.if_icmpgt(listBad);
@@ -310,10 +320,10 @@ final class JvmSubseqCompiler {
 		MethodCode.Label doBody = asm.newLabel();
 		MethodCode.Label toEnd = asm.newLabel();
 		asm.labelBinding(buildLoop);
-		// to the end (end < 0): stop at the last cell; up to end: stop at end, and a
+		// to the end (end nil): stop at the last cell; up to end: stop at end, and a
 		// list that runs out first is shorter than end
-		asm.iload(endSlot);
-		asm.iflt(toEnd);
+		asm.aload(2);
+		asm.ifnull(toEnd);
 		asm.iload(iSlot);
 		asm.iload(endSlot);
 		asm.if_icmpge(buildDone);
@@ -388,19 +398,44 @@ final class JvmSubseqCompiler {
 		asm.iinc(lenSlot, 1);
 		asm.goto_(countLoop);
 		asm.labelBinding(countDone);
-		emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
-		emitBoundsError(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "list");
+		emitBoundsError(asm, runtime(ctx), new Bounds(1, 2, lenSlot, "list"));
 
 		asm.labelBinding(doneLabel);
 		asm.aload(resultSlot);
 	}
 
-	// realEnd = end < 0 (omitted) ? len : end
-	static void emitResolveEnd(MethodCode m, int endSlot, int lenSlot, int realEndSlot) {
+	/**
+	 * {@code realEnd = (end == nil) ? len : the end's index} ({@code _subseqIdx}).
+	 * Whether {@code end} was omitted is read from the parameter's nil, never from an int
+	 * sentinel: a caller can give any int, and the {@code -1} the lanes used to pass for
+	 * nil read {@code (subseq s 0 -1)} as the whole sequence instead of refusing it.
+	 * @param m the method being emitted
+	 * @param runtime the class's {@code subseq} bounds runtime
+	 * @param endParam the {@code Object} parameter holding {@code end}, nil when omitted
+	 * @param lenSlot the int length of the sequence
+	 * @param realEndSlot the int local to store
+	 */
+	static void emitResolveEnd(MethodCode m, JvmOperandTypeRuntime.SubseqRuntime runtime, int endParam, int lenSlot,
+			int realEndSlot) {
 		MethodCode.Label given = m.newLabel();
 		MethodCode.Label resolved = m.newLabel();
-		m.iload(endSlot);
-		m.ifge(given);
+		m.aload(endParam);
+		m.ifnonnull(given);
+		m.iload(lenSlot);
+		m.goto_(resolved);
+		m.labelBinding(given);
+		runtime.emitIndex(m, endParam);
+		m.labelBinding(resolved);
+		m.istore(realEndSlot);
+	}
+
+	// realEnd = (end == nil) ? len : end, the end already unboxed into endSlot
+	// (unboxEnd)
+	private static void emitResolveEnd(MethodCode m, int endParam, int endSlot, int lenSlot, int realEndSlot) {
+		MethodCode.Label given = m.newLabel();
+		MethodCode.Label resolved = m.newLabel();
+		m.aload(endParam);
+		m.ifnonnull(given);
 		m.iload(lenSlot);
 		m.goto_(resolved);
 		m.labelBinding(given);
@@ -410,26 +445,34 @@ final class JvmSubseqCompiler {
 	}
 
 	/**
-	 * Falls through when {@code 0 <= start <= end <= len}; throws the interpreter's
-	 * {@code "SUBSEQ: invalid bounds S, E for KIND of length N"} otherwise.
-	 * @param m the method being emitted
-	 * @param cp its constant pool
-	 * @param records the class's {@code _subseqRec} builder, or null when it has no
-	 * landing pad
-	 * @param startSlot the int start
-	 * @param endSlot the int end, already resolved (never the omitted sentinel)
+	 * What a bounds report reads: the bounds as given and the sequence's length.
+	 *
+	 * @param startParam the {@code Object} local holding the start as given
+	 * @param endParam the {@code Object} local holding the end as given, nil when omitted
 	 * @param lenSlot the int length of the sequence
 	 * @param kind the report's sequence kind ({@code string}, {@code list},
 	 * {@code vector})
 	 */
-	static void emitBoundsCheck(MethodCode m, ConstantPool cp, JvmOperandTypeRuntime.@Nullable SubseqRecords records,
-			int startSlot, int endSlot, int lenSlot, String kind) {
+	record Bounds(int startParam, int endParam, int lenSlot, String kind) {
+	}
+
+	/**
+	 * Falls through when {@code 0 <= start <= end <= len}; throws the interpreter's
+	 * {@code "SUBSEQ: invalid bounds S, E for KIND of length N"} otherwise.
+	 * @param m the method being emitted
+	 * @param runtime the class's {@code subseq} bounds runtime
+	 * @param startSlot the int start index ({@code _subseqIdx})
+	 * @param endSlot the int end index, already resolved (never the omitted nil)
+	 * @param bounds what the report reads
+	 */
+	static void emitBoundsCheck(MethodCode m, JvmOperandTypeRuntime.SubseqRuntime runtime, int startSlot, int endSlot,
+			Bounds bounds) {
 		MethodCode.Label ok = m.newLabel();
 		MethodCode.Label bad = m.newLabel();
-		emitBoundsTest(m, startSlot, endSlot, lenSlot, bad);
+		emitBoundsTest(m, startSlot, endSlot, bounds.lenSlot(), bad);
 		m.goto_(ok);
 		m.labelBinding(bad);
-		emitBoundsError(m, cp, records, startSlot, endSlot, lenSlot, kind);
+		emitBoundsError(m, runtime, bounds);
 		m.labelBinding(ok);
 	}
 
@@ -447,48 +490,16 @@ final class JvmSubseqCompiler {
 	}
 
 	/**
-	 * Throws the bounds report, a {@code RuntimeException}: under a landing pad
-	 * ({@code records} non-null) recorded by {@code _subseqRec}, so the pad catches it as
-	 * the interpreter's {@code type-error} naming the refused bound; without one nothing
-	 * can observe the class and the exception is thrown bare. Never falls through.
+	 * Throws the bounds report: {@code throw _subseqBad(start, end, len, " for KIND of
+	 * length ")}, the class's one refusal ({@link JvmOperandTypeRuntime.SubseqRuntime}).
+	 * Never falls through.
 	 * @param m the method being emitted
-	 * @param cp its constant pool
-	 * @param records the class's {@code _subseqRec} builder, or null when it has no
-	 * landing pad
-	 * @param startSlot the int start
-	 * @param endSlot the int end, already resolved
-	 * @param lenSlot the int length of the sequence
-	 * @param kind the report's sequence kind
+	 * @param runtime the class's {@code subseq} bounds runtime
+	 * @param bounds what the report reads
 	 */
-	static void emitBoundsError(MethodCode m, ConstantPool cp, JvmOperandTypeRuntime.@Nullable SubseqRecords records,
-			int startSlot, int endSlot, int lenSlot, String kind) {
-		ClassEntry rtEx = cp.classEntry("java/lang/RuntimeException");
-		MethodRefEntry concat = cp.methodRef("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		MethodRefEntry intToStr = cp.methodRef("java/lang/String", "valueOf", "(I)Ljava/lang/String;");
-		m.new_(rtEx);
-		m.dup();
-		m.ldc(cp.stringEntry(LispNames.SUBSEQ + ": invalid bounds "));
-		m.iload(startSlot);
-		m.invokestatic(intToStr);
-		m.invokevirtual(concat);
-		m.ldc(cp.stringEntry(", "));
-		m.invokevirtual(concat);
-		m.iload(endSlot);
-		m.invokestatic(intToStr);
-		m.invokevirtual(concat);
-		m.ldc(cp.stringEntry(" for " + kind + " of length "));
-		m.invokevirtual(concat);
-		m.iload(lenSlot);
-		m.invokestatic(intToStr);
-		m.invokevirtual(concat);
-		m.invokespecial(cp.methodRef(rtEx, "<init>", "(Ljava/lang/String;)V"));
-		if (records != null) {
-			m.iload(startSlot);
-			m.iload(endSlot);
-			m.iload(lenSlot);
-			m.invokestatic(records.ref());
-		}
-		m.athrow();
+	static void emitBoundsError(MethodCode m, JvmOperandTypeRuntime.SubseqRuntime runtime, Bounds bounds) {
+		runtime.emitRefusal(m, bounds.startParam(), bounds.endParam(), bounds.lenSlot(),
+				" for " + bounds.kind() + " of length ");
 	}
 
 }
