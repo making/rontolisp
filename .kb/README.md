@@ -87,7 +87,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [sort.md](sort.md) -- one merge sort shared by every backend and by `stable-sort`
 - [copy-list-runtime.md](copy-list-runtime.md) -- `copy-list` keeps a dotted tail; `map 'string` / `coerce` to string reject a non-character
 - [length-runtime.md](length-runtime.md) -- generic `length` dispatch as a shared callee
-- [subseq-runtime.md](subseq-runtime.md) -- `subseq` and general-array element access as shared callees
+- [subseq-runtime.md](subseq-runtime.md) -- `subseq` and general-array element access as shared callees; the bounds check every representation takes, one text
 - [seq-conversion-runtime.md](seq-conversion-runtime.md) -- the literal sequence conversions (`coerce` to `'list`/`'string`/`'vector`)
 - [seq-coerce-runtime.md](seq-coerce-runtime.md) -- the interpreter converts a sequence in Java, not through an interpreted `map`
 - [sequence-op-runtimes.md](sequence-op-runtimes.md) -- `replace`/`fill`/`map-into` as shared callees

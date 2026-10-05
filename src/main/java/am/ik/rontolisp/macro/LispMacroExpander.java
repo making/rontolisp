@@ -16561,7 +16561,11 @@ public final class LispMacroExpander {
 		LispSymbol nVar = new LispSymbol("__ss_n");
 		LispSymbol outVar = new LispSymbol("__ss_out");
 		LispSymbol iVar = new LispSymbol("__ss_i");
-		LispVal effectiveEnd = makeIf(endVar, endVar, callOf(LispNames.LENGTH, seqVar));
+		// The resolved end, checked: 0 <= start <= end <= (length seq) before anything
+		// is allocated, or the interpreter's "SUBSEQ: invalid bounds" report
+		// (.kb/subseq-runtime.md, "Bounds check").
+		LispVal effectiveEnd = listToCons(
+				List.of(new LispSymbol(LispNames.SUBSEQ_END), startVar, endVar, callOf(LispNames.LENGTH, seqVar)));
 		LispVal length = listToCons(List.of(new LispSymbol(LispNames.SUB), lenVar, startVar));
 		// %array-alike, not make-array: the output keeps the input's representation, so
 		// a subsequence of a packed integer vector stays packed at the same width.
@@ -16576,8 +16580,8 @@ public final class LispMacroExpander {
 		// vector moves with one engine-level copy (wasm's array.copy) instead of an aref
 		// and a %aset dispatch per element -- which was most of a fetched body's drain on
 		// wasm, where every chunk is (subseq receive-buffer 0 n). A decline (a general
-		// vector, an out-of-range end, a backend with no bulk path) copied nothing, and
-		// the loop keeps owning the answer and the error shape.
+		// vector, a backend with no bulk path) copied nothing, and the loop keeps owning
+		// the answer; the bounds were checked before either runs.
 		LispVal bulk = listToCons(
 				List.of(new LispSymbol(LispNames.REPLACE_BULK), outVar, seqVar, new LispInteger(0), startVar, nVar));
 		LispVal vectorBody = listToCons(List.of(

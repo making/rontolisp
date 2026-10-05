@@ -520,6 +520,19 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aSubstringOfABuiltStringRefusesARangeOutsideIt() throws Exception {
+		// .substring lowers to subseq; a string built at run time is the mutable
+		// representation, whose lane used to crash on the JVM instead of refusing.
+		assertBothEqual("""
+				(defn f [s i j] (try (.substring s i j) (catch Exception e :refused)))
+				(println (f (str "ab" "c") 1 2))
+				(println (f (str "ab" "c") 2 1))
+				(println (f (str "ab" "c") -1 2))
+				(println (f (str "ab" "c") 1 5))
+				""", "b\n:refused\n:refused\n:refused\n");
+	}
+
+	@Test
 	void qualifiedInstanceMethodsTakeTheTargetFirst() throws Exception {
 		// Clojure 1.12 Class/.method, answers measured against clj 1.12.6
 		assertBothEqual("(println (String/.toUpperCase \"abc\"))", "ABC\n");

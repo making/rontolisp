@@ -21,7 +21,88 @@ import am.ik.wasm.Type;
  */
 final class WasmSubseqCompiler {
 
+	/**
+	 * The bounds report's pieces, interned up front in EH mode
+	 * ({@code WasmLispCompiler.compile}): {@code "SUBSEQ: invalid bounds "}, {@code ", "}
+	 * and the string report's {@code " for string of length "}, whose {@code " for "} and
+	 * {@code " of length "} the list and vector reports cut out of it
+	 * ({@code WasmStringRuntimeBuilder.emitKindOfLength}).
+	 */
+	static final String BOUNDS_PREFIX = "\"" + LispNames.SUBSEQ + ": invalid bounds \"";
+
+	static final String BOUNDS_COMMA = "\", \"";
+
+	static final String STRING_LENGTH = "\" for string of length \"";
+
 	private WasmSubseqCompiler() {
+	}
+
+	/**
+	 * Compiles {@code (%subseq-end start end length)}: the resolved end, or the
+	 * {@code vector} bounds report (see {@link LispNames#SUBSEQ_END}) -- thrown on
+	 * {@code $lisp-cond} in EH mode, a bare {@code unreachable} outside it.
+	 */
+	static void compileEnd(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		int start = ctx.allocTemp();
+		int end = ctx.allocTemp();
+		int len = ctx.allocTemp();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		set(ctx, start);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		set(ctx, end);
+		WasmExprCompiler.compileExpr(args.get(3), ctx);
+		set(ctx, len);
+		// end = (end == nil) ? len : end
+		get(ctx, end);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		get(ctx, len);
+		set(ctx, end);
+		ctx.writer.write(Instruction.END);
+		// start < 0 | end > len | start > end
+		getInt(ctx, start);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		getInt(ctx, end);
+		getInt(ctx, len);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.I32_OR);
+		getInt(ctx, start);
+		getInt(ctx, end);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (ctx.ehMode) {
+			WasmLispCompiler.StringTable table = ctx.stringTable;
+			WasmLispCompiler.StringTable.StringEntry forString = table.addBodyString(STRING_LENGTH);
+			WasmStringRuntimeBuilder.emitSubseqBoundsThrow(ctx.writer, ctx.usesIdentityHashTables,
+					table.addBodyString(BOUNDS_PREFIX), table.addBodyString(BOUNDS_COMMA),
+					() -> WasmStringRuntimeBuilder.emitKindOfLength(ctx.writer, forString, "vector"),
+					() -> get(ctx, start), () -> get(ctx, end), () -> get(ctx, len));
+		}
+		else {
+			ctx.writer.write(Instruction.UNREACHABLE);
+		}
+		ctx.writer.write(Instruction.END);
+		get(ctx, end);
+	}
+
+	private static void get(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	private static void set(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	// The fixnum in a (ref null eq) slot, as an i32.
+	private static void getInt(WasmLispCompiler.Ctx ctx, int slot) {
+		get(ctx, slot);
+		WasmEmitHelper.castI31GetS(ctx);
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {

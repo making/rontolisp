@@ -1453,6 +1453,7 @@ final class JvmExprCompiler {
 				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
+			case LispNames.SUBSEQ_END -> JvmSubseqCompiler.compileEnd(cons, ctx, className);
 			case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
 			case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
 			case LispNames.CHAR_INT -> JvmCharCompiler.compileCharInt(cons, ctx, className);

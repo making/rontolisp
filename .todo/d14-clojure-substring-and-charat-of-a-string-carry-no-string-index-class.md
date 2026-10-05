@@ -13,5 +13,4 @@ where `subs` already carries the oracle's (measured 2026-10-05 against clj 1.12.
 
 Route `.substring` through the refusal family's `subseq` alias `subs` uses, and `.charAt`
 through a checked read carrying the class, so all four backends agree. The wasm `.charAt` row
-is the unchecked string index of `.todo/186`; a negative `.substring` start on a built string
-crashes through `.todo/d13`. Pin in clojure-spec.
+is the unchecked string index of `.todo/186`. Pin in clojure-spec.

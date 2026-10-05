@@ -1741,6 +1741,7 @@ final class WasmExprCompiler {
 				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> WasmSubseqCompiler.compile(cons, ctx);
+			case LispNames.SUBSEQ_END -> WasmSubseqCompiler.compileEnd(cons, ctx);
 			case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
 			case LispNames.CHAR_CODE -> WasmCharCompiler.compileCharCode(cons, ctx);
 			case LispNames.CHAR_INT -> WasmCharCompiler.compileCharInt(cons, ctx);

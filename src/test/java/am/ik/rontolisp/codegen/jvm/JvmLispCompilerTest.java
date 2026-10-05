@@ -8972,8 +8972,25 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunSubseqSignalsInvalidBounds() throws Exception {
 		// The JVM twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: a
-		// raw StringIndexOutOfBoundsException used to escape instead (todo a42).
+		// raw StringIndexOutOfBoundsException, a ClassCastException, a truncated list or
+		// an AREF report used to answer instead.
 		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSubseqWithoutTheArrayRuntimeChecksItsBounds() throws Exception {
+		// A program naming no array operator compiles subseq's string and list lanes
+		// without the array runtime (no _subseqCv); they refuse a bad range too, rather
+		// than answering a truncated list or raising String#substring's exception.
+		assertThat(compileAndRun("""
+				(defun f (s i j) (%subseq-core s i j))
+				(print (f "abcd" 1 3))
+				(print (f (list 1 2 3) 1 nil))
+				(print (handler-case (f "abc" 2 1) (simple-error () :refused)))
+				(print (handler-case (f (list 1 2 3) 1 5) (simple-error () :refused)))
+				(print (handler-case (f (list 1 2 3) 4 nil) (simple-error () :refused)))
+				(print (handler-case (f (list 1 2 3) -1 nil) (simple-error () :refused)))
+				""")).isEqualTo("\"bc\"\n(2 3)\n:REFUSED\n:REFUSED\n:REFUSED\n:REFUSED");
 	}
 
 	@Test

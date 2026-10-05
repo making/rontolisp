@@ -400,6 +400,29 @@ cases:
       ((SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2)) #(2 3))
       ((SIMPLE-VECTOR 2) #(7 7))
       "ABC"
+  - name: subseq-refuses-a-bad-range-in-every-representation
+    # 0 <= start <= end <= (length seq) is checked whatever the sequence is: a literal
+    # string, a list, a general vector, a built (mutable) string, a packed vector, a
+    # fill-pointer vector (whose length is the fill pointer) and a displaced view. The
+    # bounds reach subseq as arguments, so no backend sees them at compile time
+    # (.kb/subseq-runtime.md, "Bounds check"). Output matches SBCL.
+    source: |
+      (defun ssb-probe (s i &optional e)
+        (handler-case (if e (subseq s i e) (subseq s i)) (error () :error)))
+      (defvar *ssb-fp* (make-array 4 :fill-pointer 2 :initial-contents '(1 2 3 4)))
+      (dolist (s (list "abc" (list 1 2 3) (vector 1 2 3) (concatenate 'string "ab" "c")
+                       (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
+                       *ssb-fp* (make-array 3 :displaced-to (vector 0 1 2 3) :displaced-index-offset 1)))
+        (print (list (ssb-probe s -1) (ssb-probe s 1 5) (ssb-probe s 2 1) (ssb-probe s 4)
+                     (ssb-probe s 1 2) (ssb-probe s 2) (ssb-probe s 3 3))))
+    expected: |
+      (:ERROR :ERROR :ERROR :ERROR "b" "c" "")
+      (:ERROR :ERROR :ERROR :ERROR (2) (3) NIL)
+      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
+      (:ERROR :ERROR :ERROR :ERROR "b" "c" "")
+      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
+      (:ERROR :ERROR :ERROR :ERROR #(2) #() :ERROR)
+      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
   - name: make-array-element-type-deftype-alias
     source: |
       (deftype mae-octet () '(unsigned-byte 8))

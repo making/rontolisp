@@ -1992,9 +1992,8 @@ class LispEvaluatorTest {
 
 	@Test
 	void subseqSignalsInvalidBoundsOnEveryBackend() {
-		// A start < 0, an end past the string's length, or start > end are all one
-		// report -- the JVM twin used to raise a raw StringIndexOutOfBoundsException and
-		// wasm silently truncated instead of signalling (todo a42).
+		// A start < 0, an end past the sequence's length, or start > end are all one
+		// report per representation; the compile-path twins pin the same text.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		for (LispVal expr : LispReader.readAllFromString(SubseqBoundsFixture.PROGRAM)) {

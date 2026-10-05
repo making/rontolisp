@@ -1,6 +1,7 @@
 # `subseq` and general-array element access are shared callees, not per-site code
 
-**Invariant: no `subseq` site emits the array copy loop inline, and no `aref` / `%aset` /
+**Invariant: no `subseq` site emits the array copy loop inline, no `%subseq-core` site emits
+the string/list walk inline (wasm `_subseq_str`, JVM `_subseqCore`), and no `aref` / `%aset` /
 `row-major-aref` / `%row-major-aset` site emits the displacement-chain walk inline. The program
 carries each once.** Same lesson as `.kb/string-write-runtime.md`, `.kb/wasm-shared-coercion.md`.
 The STRING lane answers a MUTABLE CHARACTER VECTOR (`_subseqCv` JVM, `_subseq_str` /
@@ -71,51 +72,77 @@ through to a general vector on the two compilers until 2026-09-06 (`.todo/719`),
   Appended, so existing `FUNC_*`/`TYPE_*` values are unchanged.
 - If these become hot, add a fast path at the SITE, not a return to inlining the walk.
 
-## Bounds check -- the STRING lane only (todo a42)
-**Invariant: `0 <= start <= end <= (length seq)` for the string lane, checked before any
-byte/element copy, on every backend, with the SAME text.** Before a42 only the
-interpreter (`Environment`'s `SUBSEQ` arm) checked this and raised
-`"SUBSEQ: invalid bounds S, E for string of length N"`; the JVM's `_subseqCv` (the
-`scStr`/immutable-string arm `JvmArrayRuntimeBuilder` builds) let a bad range fall
-straight into `String#substring`, surfacing a raw `StringIndexOutOfBoundsException`
-instead, and wasm's `_subseq` (`WasmStringRuntimeBuilder.buildSubseqBody`'s STRING branch)
-had no check at all -- an unsigned loop bound (`I32_GE_U`) meant `start > end` silently
-answered `""` and an over-large `end` walked past the content into whatever bytes
-followed.
-- JVM: `_subseqCv`'s `scStr` arm calls `_scount(s)` (`JvmStringIndexRuntimeBuilder`, always
-  emitted) for the character length, resolves the omitted-`end` sentinel, and on a
-  violation builds `new RuntimeException(...)` from chained `String.valueOf(int)` +
-  `concat` (the `_oob`/`emitRankCheckAndReturn` idiom, `.kb/error-handling.md`) --
-  a plain, condition-less `RuntimeException` is exactly what the interpreter's
-  condition-less `LispEvalException` synthesizes too: both land as `simple-error` under
-  `handler-case`.
-- wasm: `_subseq`'s STRING branch calls `FUNC_SEQ_LEN` (the shared `length` dispatch,
-  `.kb/length-runtime.md`) for the character length, before translating the character
-  indices to byte offsets. In EH mode a violation boxes each of `start`/`end`/`len` as an
-  i31 and renders it through `FUNC_PRIN1_TO_STR` (the `WasmOperandTypes.pushBound` trick,
-  no itoa duplicated), concatenates around three literal pieces interned as
-  `WasmLispCompiler.StringTable.StringEntry`s, and throws `(nil . message)` on
-  `$lisp-cond` like `WasmErrorCompiler.emitThrowPayload`. Outside EH mode: a bare
-  `unreachable`, like every other unchecked failure that backend takes when no tag exists
-  to throw on.
-- **The three literal pieces MUST be interned before `WasmLispCompiler.compile` calls
-  `stringTable.toByteArray()`** (same requirement as `WasmOperandTypes.Texts`, both
-  interned right next to each other) -- interning them lazily inside
-  `buildSubseqBody` (called later, in the `.addFunction(...)` chain that assembles the
-  fixed runtime bodies) records the right offset/length bookkeeping but the bytes
-  never make it into the data segment: the printed message comes back with the right
-  SHAPE (numbers in the right positions) and blank ASCII spaces where the literal text
-  should be -- the heap starts right where those bytes should have lived and overwrites
-  them. Caught by actually running the compiled test, not by reading the bytecode.
-- The list lane is UNCHECKED on both compilers still -- an over-large `end` silently
-  truncates, matching pre-a42 behavior; not part of this fix (the interpreter's own list
-  arm is unaffected, since it was already correct). The `--no-gc` scalar wasm backend
-  (`NoGcWasmCompiler`, a fourth variant outside `CiSpecE2eTest`'s four) is untouched too --
-  `.kb/no-gc-scalar-wasm.md` already names its `subseq` as unchecked, and that measurement
-  stands.
-- Pins: `SubseqBoundsFixture` (`LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend`,
+## Bounds check -- every representation, one text
+**Invariant: `0 <= start <= end <= (length seq)` is checked before anything is copied or
+allocated, whatever representation `seq` is in, on every backend, with the interpreter's text
+`"SUBSEQ: invalid bounds S, E for KIND of length N"`** (`KIND` = `string` / `list` /
+`vector`; `E` is the resolved end; a fill-pointer vector's length is its fill pointer). A
+condition-less error on the compile paths, a condition-less `LispEvalException` in the
+interpreter: both land as `simple-error` under `handler-case` (SBCL's is a `type-error`;
+only error-ness is pinned against it). History: a42 checked the literal-string lane only;
+until d13 a list truncated (`(subseq '(1 2 3) 1 5)` -> `(2 3)`), a vector reported through
+`AREF` or trapped `allocation size too large`, and a built string threw a JVM
+`ClassCastException` / trapped on wasm -- Clojure `.substring` inherited it.
+
+Where each lane checks:
+- **General / packed / fill-pointer / displaced vector**: the shared Lisp dispatch
+  (`LispMacroExpander.subseqDispatch`, both compile paths) resolves its end through
+  `(%subseq-end start end (length seq))` (`LispNames.SUBSEQ_END`, compile-path only:
+  `JvmSubseqCompiler.compileEnd` / `WasmSubseqCompiler.compileEnd`), before `%array-alike`.
+  Not a Lisp `(error "..." ...)`: that lowering (generic `<`/`<=` calls, a concatenation
+  per piece) took the JVM `%subseq-runtime` from 659 to 1,234 bytes of bytecode; the
+  primitive is int compares and one report block. The vector lane now always reads
+  `(length seq)`, which it skipped when `end` was given.
+- **JVM string, both representations**: `_subseqCv`'s two arms test through
+  `JvmSubseqCompiler.emitResolveEnd` + `emitBoundsTest` and jump to ONE
+  `emitBoundsError` block (a plain `RuntimeException` built from chained
+  `String.valueOf(int)` + `concat`).
+- **JVM `%subseq-core` lane** (string without the array runtime, and the list): ONE
+  per-class helper `_subseqCore(seq, start, end)` built on first use
+  (`JvmEmitHelper.emitSharedCall`); a site is a call. It used to inline the whole walk at
+  every site -- a program without arrays reaches it from each `subseq` a lowering
+  introduced after the array gate was decided (a `format` directive renders through
+  several), and with the check inline too `format-directive-exponential`'s class grew
+  60,688 -> 65,660 bytes; as a helper it is 32,598. The list arm refuses a negative start
+  or start > end before the walk; a list that runs out before `start` or a given `end` is
+  found BY the copy walk, and only then is the list counted for the report -- a valid range
+  costs no length walk. `%subseq-end` is the same kind of helper, `_subseqEnd`. A program
+  that compiles no site carries neither, at every optimize level.
+- **wasm string**: `_subseq`'s string branch (immutable) and `_subseq_str`'s
+  character-vector arm, through `WasmStringRuntimeBuilder.emitSubseqBoundsCheck` (ONE
+  `if`, one report; a42 had three copies of the report). The length is `FUNC_SEQ_LEN`.
+- **wasm list**: `_subseq`'s list branch, the JVM list lane's shape: the walk `br`s out to
+  a block around it (no per-cell flag), and only that block counts the list for the report.
+- EH mode: the report boxes each int as an i31, renders it through `FUNC_PRIN1_TO_STR`
+  (the `WasmOperandTypes.pushBound` trick), concatenates the literal pieces and throws
+  `(nil . message)` on `$lisp-cond`. Outside EH mode: a bare `unreachable`, like every
+  other failure that backend takes when no tag exists to throw on.
+- **The literal pieces MUST be interned before `stringTable.toByteArray()`**: interned
+  lazily inside a runtime body builder, the offsets are recorded but the bytes never reach
+  the data segment -- the message comes back with the numbers in place and blanks where the
+  text should be. The three pieces (`WasmSubseqCompiler.BOUNDS_PREFIX`, `BOUNDS_COMMA`,
+  `STRING_LENGTH`) are interned up front in EH mode, droppable, so a module without a
+  report loses their bytes but not their ADDRESS SPACE: the shaker cuts a dead range and
+  keeps every address.
+- **So the list and vector reports add NO data entry.** Any new entry -- eager, or lazy at
+  the first site -- moves every later address of nearly every EH-mode module: even
+  `(print (handler-case (car 1) (error () 2)))` compiles subseq sites (in bodies the shake
+  then removes) with the charvec gate open, so a site-gated piece still shifted it by the
+  pieces' 46 bytes. Instead `WasmStringRuntimeBuilder.emitKindOfLength` CUTS
+  `" for "` and `" of length "` out of `" for string of length "` (`_str_build` over bytes
+  `[0, 7)` and `[11, 24)`: a string's first and last bytes are its frame, and
+  `_string_concat` copies only what lies between) and builds the kind word from constants
+  (`array.new_fixed`, id 0 -- a transient, concatenated at once). The cost is code, which
+  dies with its body.
+- The `--no-gc` scalar wasm backend (`NoGcWasmCompiler`, outside `CiSpecE2eTest`'s four)
+  is untouched: `.kb/no-gc-scalar-wasm.md` names its `subseq` as unchecked.
+- Pins: `SubseqBoundsFixture` (every representation, the full text;
+  `LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend`,
   `JvmLispCompilerTest#compileAndRunSubseqSignalsInvalidBounds`,
-  `WasmLispCompilerIntegrationTest#subseqSignalsInvalidBounds`).
+  `WasmLispCompilerIntegrationTest#subseqSignalsInvalidBounds` -- P1 and component),
+  `JvmLispCompilerTest#compileAndRunSubseqWithoutTheArrayRuntimeChecksItsBounds`,
+  `ClojureInteropTest#aSubstringOfABuiltStringRefusesARangeOutsideIt`, ci-spec
+  `subseq-refuses-a-bad-range-in-every-representation` (SBCL's answers).
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

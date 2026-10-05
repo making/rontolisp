@@ -2575,22 +2575,18 @@ final class JvmArrayRuntimeBuilder {
 		// through _rmGet (never rendering the source, so chained slicing stays linear);
 		// an immutable String slices by code point and converts once through
 		// _strToCharVec, then clears the fill-pointer slot that promotion path sets so
-		// the result is a SIMPLE string like the other backends'. Locals: 0 = o,
-		// 1 = start, 2 = end, 3 = header, 4 = len, 5 = n, 6 = out, 7 = i, 8 = s,
-		// 9 = a, 10 = b.
+		// the result is a SIMPLE string like the other backends'. Both arms refuse a
+		// range outside the string with the interpreter's report, from one shared
+		// block. Locals: 0 = o, 1 = start, 2 = end, 3 = header, 5 = n, 6 = out,
+		// 7 = i, 8 = s, 9 = a, 10 = b, 11 = the character count, 12 = the resolved
+		// end.
 		MethodRefEntry scStrToCharVec = cp.methodRef(selfClass, STR_TO_CHAR_VEC, STR_TO_CHAR_VEC_DESC);
 		MethodRefEntry strLength = cp.methodRef(strClass, "length", "()I");
 		MethodRefEntry strConcat = cp.methodRef(strClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		// The scStr bounds check's message pieces (LispNames.SUBSEQ's exact interpreter
-		// text, todo a42): "SUBSEQ: invalid bounds " + start + ", " + end + " for string
-		// of length " + cpLen.
-		MethodRefEntry intToStr = cp.methodRef(strClass, "valueOf", "(I)Ljava/lang/String;");
-		StringEntry subseqBoundsPrefix = cp.stringEntry(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ");
-		StringEntry subseqBoundsComma = cp.stringEntry(", ");
-		StringEntry subseqBoundsForStringOfLength = cp.stringEntry(" for string of length ");
 		MethodCode sc = new MethodCode();
 		MethodCode.Label scStr = sc.newLabel();
 		MethodCode.Label scCv = sc.newLabel();
+		MethodCode.Label scBad = sc.newLabel();
 		sc.aload(0);
 		sc.instanceOf(arrayListClass);
 		sc.ifeq(scStr);
@@ -2631,25 +2627,16 @@ final class JvmArrayRuntimeBuilder {
 		sc.aaload();
 		sc.checkcast(longClass);
 		sc.invokevirtual(longIntValue);
-		sc.istore(4);
+		sc.istore(11);
 		sc.goto_(scHaveLen);
 		sc.labelBinding(scUseDim);
 		emitLoadDim0(sc, longClass, objectArrayClass, longIntValue, 3);
-		sc.istore(4);
+		sc.istore(11);
 		sc.labelBinding(scHaveLen);
-		// n = (end < 0 ? len : end) - start
-		MethodCode.Label scUseEnd = sc.newLabel();
-		MethodCode.Label scHaveN = sc.newLabel();
-		sc.iload(2);
-		sc.ifge(scUseEnd);
-		sc.iload(4);
-		sc.istore(5);
-		sc.goto_(scHaveN);
-		sc.labelBinding(scUseEnd);
-		sc.iload(2);
-		sc.istore(5);
-		sc.labelBinding(scHaveN);
-		sc.iload(5);
+		// realEnd = (end < 0 ? len : end), checked against len; n = realEnd - start
+		JvmSubseqCompiler.emitResolveEnd(sc, 2, 11, 12);
+		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
+		sc.iload(12);
 		sc.iload(1);
 		sc.isub();
 		sc.istore(5);
@@ -2703,55 +2690,14 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(0);
 		sc.checkcast(strClass);
 		sc.astore(8);
-		// Bounds check BEFORE any code-unit offset math: start < 0, end > the character
-		// count, or start > end each raise the interpreter's exact "SUBSEQ: invalid
-		// bounds" text (todo a42) instead of falling through to a raw
-		// StringIndexOutOfBoundsException from String#substring.
+		// Bounds check BEFORE any code-unit offset math, in characters, so a bad range
+		// is the interpreter's report rather than String#substring's
+		// StringIndexOutOfBoundsException.
 		sc.aload(8);
 		sc.invokestatic(strCount);
 		sc.istore(11);
-		MethodCode.Label scHaveEndCk = sc.newLabel();
-		MethodCode.Label scGotEndCk = sc.newLabel();
-		sc.iload(2);
-		sc.ifge(scHaveEndCk);
-		sc.iload(11);
-		sc.istore(12);
-		sc.goto_(scGotEndCk);
-		sc.labelBinding(scHaveEndCk);
-		sc.iload(2);
-		sc.istore(12);
-		sc.labelBinding(scGotEndCk);
-		MethodCode.Label scBoundsOk = sc.newLabel();
-		MethodCode.Label scBoundsBad = sc.newLabel();
-		sc.iload(1);
-		sc.iflt(scBoundsBad);
-		sc.iload(12);
-		sc.iload(11);
-		sc.if_icmpgt(scBoundsBad);
-		sc.iload(1);
-		sc.iload(12);
-		sc.if_icmpgt(scBoundsBad);
-		sc.goto_(scBoundsOk);
-		sc.labelBinding(scBoundsBad);
-		sc.new_(rtExClass);
-		sc.dup();
-		sc.ldc(subseqBoundsPrefix);
-		sc.iload(1);
-		sc.invokestatic(intToStr);
-		sc.invokevirtual(strConcat);
-		sc.ldc(subseqBoundsComma);
-		sc.invokevirtual(strConcat);
-		sc.iload(12);
-		sc.invokestatic(intToStr);
-		sc.invokevirtual(strConcat);
-		sc.ldc(subseqBoundsForStringOfLength);
-		sc.invokevirtual(strConcat);
-		sc.iload(11);
-		sc.invokestatic(intToStr);
-		sc.invokevirtual(strConcat);
-		sc.invokespecial(rtExInit);
-		sc.athrow();
-		sc.labelBinding(scBoundsOk);
+		JvmSubseqCompiler.emitResolveEnd(sc, 2, 11, 12);
+		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
 		sc.aload(8);
 		sc.iload(1);
 		sc.invokestatic(strCpOffset);
@@ -2794,6 +2740,9 @@ final class JvmArrayRuntimeBuilder {
 		sc.aastore();
 		sc.aload(6);
 		sc.areturn();
+		// Both arms' refusal.
+		sc.labelBinding(scBad);
+		JvmSubseqCompiler.emitBoundsError(sc, cp, 1, 12, 11, "string");
 		methods.add(new ArrayMethod(cp.utf8Entry(SUBSEQ_CV), cp.utf8Entry(SUBSEQ_CV_DESC), sc));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED
