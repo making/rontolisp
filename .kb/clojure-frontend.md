@@ -125,7 +125,7 @@ answered `2 5 3` before).
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
-| `subs` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
+| `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
@@ -309,7 +309,7 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `type-error` `ClassCastException`, `NullPointerException` for a nil datum,
   `IndexOutOfBoundsException` for an `(INTEGER 0 (D))` expected type,
   `UnsupportedOperationException` for `SEQUENCE` (`count` of a number), none for a nil expected
-  type (the JVM pad's type-error synthesized from a raw host failure: a compiled `.charAt` past
+  type (the JVM pad's type-error synthesized from a raw host failure: a compiled `char` past
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
   subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
@@ -409,8 +409,15 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   and the `define-condition`'s unreferenced keyword constructor builds nothing. Without either,
   every class-reading program carried the renderer and the printer hook (+10.5 KB wasm,
   +9.5 KB JVM class on a one-`try` program).
-- `subs` is `%clojure-subs`, the family's alias of `subseq`: a bound outside a string is the
-  oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words.
+- `subs` and `.substring` are `%clojure-subs`, the family's alias of `subseq`: a bound outside
+  a string is the oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words. `.charAt` is
+  `%clojure-char-at`, the alias of `char`: an index outside a string is the same class, in
+  `char`'s words (`CHAR: The value 5 is not of type (INTEGER 0 (3))`), so a stripped program
+  reports what the interpreter's `char` reports (the compiled `char` of such a program stays
+  unchecked). Where a class is read both check before the verb runs, so a built string's
+  out-of-range bound is refused alike on every backend, where the unchecked compiled
+  `subseq` / `char` read garbage or trap. A non-integer bound (`(.substring "abc" 1.0)`) goes
+  to the verb unchecked.
 - Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
   `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
@@ -427,8 +434,12 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   IllegalArgumentException e 1))` 260 -> 305 ms wasm, 335 -> 381 ms JVM); `subs` in a
   class-reading program checks its bounds before `subseq` does (a 2M-call loop 1.30 ->
   1.52 s wasm, the JVM unchanged).
+- `.charAt` / `.substring` in a class-reading program (`(try (.charAt (str "ab" "c") 1) (catch
+  Exception e :x))`): wasm P1 55,286 -> 55,663 B, component 56,897 -> 57,282, JVM class
+  118,359 -> 119,356; a program reading no class, or calling neither verb
+  (`examples/clojure/demo.clj` among them), is byte-identical on all three.
 - Pins: clojure-spec `a-refusal-of-the-runtime-is-caught-by-the-class-the-oracle-throws`,
-  `refusals-of-the-runtime-carry-the-oracles-classes` (each probe first passes a catch of a
+  `a-string-substring-and-charat-refuse-with-the-oracles-class`, `refusals-of-the-runtime-carry-the-oracles-classes` (each probe first passes a catch of a
   class no refusal is, so a refusal naming no class fails it), `class-instance-and-stack-traces-of-an-exception`;
   `ClojureArmsTest#theRefusalFamily*`,
   `ClojureLibraryTest#aProgramReadingNoConditionsClassSplicesEveryRefusalAsThePlainError`,

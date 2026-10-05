@@ -109,8 +109,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `(shuffle 5)` is the `IllegalArgumentException` of `seq`, where the oracle casts to
   `java.util.Collection`. An index past its bound is an
   `IndexOutOfBoundsException` that a catch of any of its subclasses takes too (the oracle's
-  `aget` throws `ArrayIndexOutOfBoundsException`, `.charAt` a
-  `StringIndexOutOfBoundsException`). A catch must name a class that resolves on this host
+  `aget` throws `ArrayIndexOutOfBoundsException`); `subs`, `.substring` and `.charAt` past a
+  string's bounds throw its `StringIndexOutOfBoundsException`. A catch must name a class that resolves on this host
   (`java.*`, `clojure.lang`'s throwables); one the oracle finds on its class path only is
   refused.
 - An exception is a condition carrying its class, a message, data and a cause. A runtime

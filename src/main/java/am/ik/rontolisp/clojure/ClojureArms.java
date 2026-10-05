@@ -207,7 +207,7 @@ public final class ClojureArms {
 		 * {@code class} arm of a program that can hold no condition.
 		 */
 		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(),
-				Map.of(ClojureRefusals.SUBS, "SUBSEQ"),
+				Map.of(ClojureRefusals.SUBS, "SUBSEQ", ClojureRefusals.CHAR_AT, "CHAR"),
 				Set.of("RONTOLISP::%CLOJURE-CATCHES", ClojureDispatchLowering.EXCEPTION_CLASS,
 						ClojureDispatchLowering.INSTANCE_OF),
 				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),

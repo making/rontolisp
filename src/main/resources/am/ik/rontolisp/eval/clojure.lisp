@@ -1153,6 +1153,17 @@
                  start (if end end n) n))
         (subseq s start end))))
 
+(defun rontolisp::%clojure-char-at (s i)
+  "(.charAt S I): char, whose refusal of an index outside a string is the
+   oracle's StringIndexOutOfBoundsException here, in char's own words. The
+   refusal family's alias of char: a program that reads no condition's class
+   calls char itself."
+  (let ((n (if (stringp s) (length s) 0)))
+    (if (and (stringp s) (integerp i) (not (and (<= 0 i) (< i n))))
+        (rontolisp::%clojure-string-index-out-of-bounds-exception
+         (format nil "CHAR: The value ~D is not of type (INTEGER 0 (~D))" i n))
+        (char s i))))
+
 ;;;; Exceptions: what a program throws, catches and reads.
 ;;
 ;; An exception is a condition on every backend. A runtime error is the Common

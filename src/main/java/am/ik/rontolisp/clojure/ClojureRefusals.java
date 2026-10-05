@@ -101,6 +101,13 @@ final class ClojureRefusals {
 	 */
 	static final String SUBS = "RONTOLISP::%CLOJURE-SUBS";
 
+	/**
+	 * {@code .charAt}: {@code char} refusing an index outside a string as the oracle's
+	 * {@code StringIndexOutOfBoundsException}, in {@code char}'s words; the plain
+	 * {@code char} where no class is read (the family's alias).
+	 */
+	static final String CHAR_AT = "RONTOLISP::%CLOJURE-CHAR-AT";
+
 	/** Each carrier of one class, to the class whose chain it signals. */
 	static final Map<String, String> CLASSES = Map.ofEntries(
 			Map.entry(ILLEGAL_ARGUMENT, "java.lang.IllegalArgumentException"),

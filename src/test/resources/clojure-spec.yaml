@@ -2010,6 +2010,28 @@ cases:
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [1 false true false false false true :d b 3 [3 4] nil 2 true]
+  - name: a-string-substring-and-charat-refuse-with-the-oracles-class
+    # Oracle-identical (clj 1.12.6): .substring and .charAt of a
+    # string past its bounds (a literal, a built string and an empty one) throw
+    # StringIndexOutOfBoundsException (every probe answers :ok there, a class
+    # that is none printing itself), which an IndexOutOfBoundsException catch
+    # takes too; an in-range call answers. The message is the runtime's own, and
+    # class answers a keyword (the oracle prints the host class without the colon).
+    source: |
+      (defmacro sbc [form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch StringIndexOutOfBoundsException e# :ok)) (catch Throwable e# (class e#))))
+      (def sbc-built (apply str ["ab" "c"]))
+      (def sbc-empty (apply str []))
+      (println [(sbc (.substring "abc" 5)) (sbc (.substring sbc-built 5)) (sbc (.substring sbc-built -1)) (sbc (.substring sbc-built 1 5)) (sbc (.substring sbc-built 2 1)) (sbc (.substring sbc-empty 1))])
+      (println [(sbc (.charAt "abc" 5)) (sbc (.charAt sbc-built 3)) (sbc (.charAt sbc-built -1)) (sbc (.charAt sbc-empty 0))])
+      (println (try (.charAt sbc-built 9) (catch Exception e (class e))) (try (.substring sbc-built 9) (catch Exception e (class e))))
+      (println [(try (.charAt sbc-built 9) (catch IndexOutOfBoundsException e :ioobe)) (try (.substring sbc-built 9) (catch IndexOutOfBoundsException e :ioobe))])
+      (println [(.substring sbc-built 1) (.substring sbc-built 0 3) (.substring sbc-built 3) (.charAt sbc-built 0) (.charAt sbc-built 2) (.substring sbc-empty 0)])
+    expected: |
+      [:ok :ok :ok :ok :ok :ok]
+      [:ok :ok :ok :ok]
+      :java.lang.StringIndexOutOfBoundsException :java.lang.StringIndexOutOfBoundsException
+      [:ioobe :ioobe]
+      [bc abc  a c ]
   - name: class-instance-and-stack-traces-of-an-exception
     # class of an exception, a runtime error or a refusal answers its class as a
     # keyword, the shape class answers for every kind (the oracle answers the host
