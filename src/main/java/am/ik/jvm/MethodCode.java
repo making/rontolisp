@@ -41,6 +41,12 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * A body over a compile context feeds the context's {@link OperandStack} every
  * instruction, and reconciles the model where a forward branch's label is bound.
+ * <p>
+ * Two facts the shake reads and the writer does not: the methods the body makes a
+ * function VALUE of ({@link #makesValueOf}, no instruction), and the calls that reach
+ * their target only through such a value ({@link #invokestaticThroughValue}, a plain
+ * {@code invokestatic} as written). {@link JvmClassSplitter} keeps a call of the second
+ * kind only while a kept body makes a value of its target.
  */
 public final class MethodCode {
 
@@ -55,6 +61,12 @@ public final class MethodCode {
 	}
 
 	private static final int INITIAL_CAPACITY = 16;
+
+	/**
+	 * The operand of an {@code invokestatic} that reaches its target only through a
+	 * function value ({@link #invokestaticThroughValue}); every other call's is 0.
+	 */
+	private static final int THROUGH_VALUE = 1;
 
 	/** Per instruction, its opcode: a local's load or store in its explicit-slot form. */
 	private byte[] ops = new byte[INITIAL_CAPACITY];
@@ -75,6 +87,12 @@ public final class MethodCode {
 	private final @Nullable OperandStack stack;
 
 	private final List<Handler> handlers = new ArrayList<>();
+
+	/**
+	 * The class's own methods the body makes a function value of, in order
+	 * ({@link #makesValueOf}).
+	 */
+	private final List<OwnCallGraph.Member> values = new ArrayList<>();
 
 	/** Branches emitted to a label not bound yet. */
 	private int unbound;
@@ -249,6 +267,7 @@ public final class MethodCode {
 		}
 		this.count = base + block.count;
 		this.size += block.size;
+		this.values.addAll(block.values);
 		for (Handler h : block.handlers) {
 			this.handlers.add(new Handler(h.start() + base, h.end() + base, h.handler() + base, h.catchType()));
 		}
@@ -320,6 +339,21 @@ public final class MethodCode {
 	 */
 	@Nullable PoolEntry entry(int i) {
 		return this.refs[i] instanceof PoolEntry entry ? entry : null;
+	}
+
+	/**
+	 * @param i an instruction's position
+	 * @return whether it is a call that reaches its target only through a function value
+	 */
+	boolean throughValue(int i) {
+		return (this.ops[i] & 0xFF) == Opcode.INVOKESTATIC.bytecode() && this.args[i] == THROUGH_VALUE;
+	}
+
+	/**
+	 * @return the class's own methods the body makes a function value of
+	 */
+	List<OwnCallGraph.Member> values() {
+		return this.values;
 	}
 
 	/**
@@ -1050,6 +1084,32 @@ public final class MethodCode {
 	 */
 	public MethodCode invokestatic(MemberRefEntry method) {
 		return this.emit(Opcode.INVOKESTATIC, 0, method);
+	}
+
+	/**
+	 * {@code invokestatic} of a method this call reaches only through a function value: a
+	 * dispatcher's case, which runs only for a value some body made
+	 * ({@link #makesValueOf}). Written as a plain {@code invokestatic}; the shake keeps
+	 * the target for this call only while a kept body makes a value of it.
+	 * @param method the method
+	 * @return this
+	 */
+	public MethodCode invokestaticThroughValue(MemberRefEntry method) {
+		return this.emit(Opcode.INVOKESTATIC, THROUGH_VALUE, method);
+	}
+
+	/**
+	 * Records that this body makes a function value through which a method of the class's
+	 * own can be called later ({@link #invokestaticThroughValue}). Not an instruction:
+	 * nothing is written and no pool entry is minted; the shake reads it, and it moves
+	 * with the body when the body is {@linkplain #append appended}.
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return this
+	 */
+	public MethodCode makesValueOf(String name, String descriptor) {
+		this.values.add(new OwnCallGraph.Member(name, descriptor));
+		return this;
 	}
 
 	public MethodCode invokevirtual(MethodRefEntry method) {

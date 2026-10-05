@@ -42,15 +42,22 @@ public final class ClassDefinition {
 	private final List<Method> methods;
 
 	private ClassDefinition(Builder builder) {
-		this.cp = builder.cp;
-		this.accessFlags = builder.accessFlags;
-		this.thisClass = builder.thisClass;
-		this.superClass = builder.superClass;
-		this.codeName = builder.codeName;
-		this.lineNumberTableName = builder.lineNumberTableName;
-		this.interfaces = List.copyOf(builder.interfaces);
-		this.fields = List.copyOf(builder.fields);
-		this.methods = List.copyOf(builder.methods);
+		this(builder.cp, builder.accessFlags, builder.thisClass, builder.superClass, builder.codeName,
+				builder.lineNumberTableName, builder.interfaces, builder.fields, builder.methods);
+	}
+
+	private ClassDefinition(ConstantPool cp, int accessFlags, ClassEntry thisClass, ClassEntry superClass,
+			Utf8Entry codeName, @Nullable Utf8Entry lineNumberTableName, List<ClassEntry> interfaces,
+			List<Field> fields, List<Method> methods) {
+		this.cp = cp;
+		this.accessFlags = accessFlags;
+		this.thisClass = thisClass;
+		this.superClass = superClass;
+		this.codeName = codeName;
+		this.lineNumberTableName = lineNumberTableName;
+		this.interfaces = List.copyOf(interfaces);
+		this.fields = List.copyOf(fields);
+		this.methods = List.copyOf(methods);
 		if (this.lineNumberTableName == null) {
 			for (Method method : this.methods) {
 				if (!method.lineNumbers().isEmpty()) {
@@ -137,6 +144,21 @@ public final class ClassDefinition {
 	 */
 	public List<Method> methods() {
 		return this.methods;
+	}
+
+	/**
+	 * The same class with other methods: a generator that decides some bodies by what the
+	 * rest reach ({@link JvmClassSplitter#reach}) swaps them in once it has asked.
+	 * @param methods the methods, in declaration order, their every label bound
+	 * @return the definition
+	 * @throws IllegalStateException when a branch in a body waits for its label
+	 */
+	public ClassDefinition withMethods(List<Method> methods) {
+		for (Method method : methods) {
+			method.body().checkComplete();
+		}
+		return new ClassDefinition(this.cp, this.accessFlags, this.thisClass, this.superClass, this.codeName,
+				this.lineNumberTableName, this.interfaces, this.fields, methods);
 	}
 
 	/**

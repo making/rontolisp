@@ -120,6 +120,9 @@ final class JvmFunctionFormCompiler {
 			// One of the two places a funcId becomes a callable VALUE, so it is where
 			// the _invoke_N dispatchers learn they must carry a case for it.
 			ctx.valueFuncIds.add(fi.funcId());
+			// ... and the edge the shake keeps that case by: the case is live while this
+			// body is (JvmClassSplitter).
+			ctx.body.makesValueOf(fi.nameUtf8().stringValue(), fi.descUtf8().stringValue());
 			ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
 			ctx.body.invokestatic(ctx.integerValueOf).aastore();

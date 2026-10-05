@@ -54,11 +54,13 @@ import org.jspecify.annotations.Nullable;
  * The same walk answers {@link #unresolvedSelfMethods} and, when asked, tree-shakes the
  * definition before placing anything, by its own-call graph ({@code OwnCallGraph}): a
  * method unreachable from the roots, and a field no surviving method references, are not
- * written at all. Dynamically-reached methods stay alive the way they do on WASM:
- * first-class calls go through dispatch methods whose bodies contain real
- * {@code invokestatic}s to every registered function. The one edge invisible to the code
- * is a call by name (reflection, an interface the JVM dispatches through); the caller
- * lists such methods as extra roots.
+ * written at all. Dynamically-reached methods stay alive through the dispatch methods
+ * first-class calls go through, whose cases are calls through a value
+ * ({@link MethodCode#invokestaticThroughValue}): such a case keeps its target only while
+ * a kept body makes a value of it ({@link MethodCode#makesValueOf}), so a closure whose
+ * every creator is shaken away goes with them. The one edge invisible to the code is a
+ * call by name (reflection, an interface the JVM dispatches through); the caller lists
+ * such methods as extra roots.
  */
 public final class JvmClassSplitter {
 
@@ -153,7 +155,32 @@ public final class JvmClassSplitter {
 	 * @return per method of {@link ClassDefinition#methods()}, whether it is kept
 	 */
 	public static boolean[] reachable(ClassDefinition definition, Set<String> roots) {
-		return new Scan(definition).graph.reachable(roots);
+		return reach(definition, roots).kept();
+	}
+
+	/**
+	 * What a shake from {@code roots} keeps, and which methods a kept body makes a
+	 * function value of -- the targets a dispatcher still needs a case for: a generator
+	 * rebuilds its dispatchers over those before the class is written.
+	 *
+	 * @param kept per method of {@link ClassDefinition#methods()}, whether it is kept
+	 * @param valued per method, whether a kept body makes a function value of it
+	 * ({@link MethodCode#makesValueOf})
+	 */
+	public record Reach(boolean[] kept, boolean[] valued) {
+	}
+
+	/**
+	 * The methods a shake from {@code roots} keeps, and the ones kept bodies make values
+	 * of.
+	 * @param definition the class
+	 * @param roots the entry points to tree-shake from (names, with
+	 * {@code <init>}/{@code <clinit>} always kept)
+	 * @return the reach
+	 */
+	public static Reach reach(ClassDefinition definition, Set<String> roots) {
+		OwnCallGraph.Reach reach = new Scan(definition).graph.reach(roots);
+		return new Reach(reach.kept(), reach.valued());
 	}
 
 	/**
@@ -180,7 +207,7 @@ public final class JvmClassSplitter {
 	public static Split write(ClassDefinition definition, @Nullable Set<String> shakeRoots,
 			Predicate<ClassDefinition.Method> pinned, int limit, Target target) {
 		Scan scan = new Scan(definition);
-		boolean[] keptMethod = scan.graph.reachable(shakeRoots);
+		boolean[] keptMethod = scan.graph.reach(shakeRoots).kept();
 		boolean[] keptField = scan.usedFields(keptMethod, shakeRoots != null);
 		if (scan.oneClassSize(keptMethod, keptField) <= limit) {
 			try {
@@ -418,21 +445,27 @@ public final class JvmClassSplitter {
 			this.fields = definition.fields();
 			this.thisName = definition.thisClass().asInternalName();
 			for (ClassDefinition.Method method : this.methods) {
-				PoolEntry[] entries = operands(method.body());
-				this.sites.add(entries);
+				MethodCode body = method.body();
+				this.sites.add(operands(body));
 				List<OwnCallGraph.Member> calls = new ArrayList<>();
+				List<OwnCallGraph.Member> valueCalls = new ArrayList<>();
 				List<OwnCallGraph.Member> fieldUses = new ArrayList<>();
-				for (PoolEntry entry : entries) {
+				for (int i = 0; i < body.count(); i++) {
+					PoolEntry entry = body.entry(i);
+					if (entry == null) {
+						continue;
+					}
 					OwnCallGraph.Member call = this.ownMethod(entry);
 					if (call != null) {
-						calls.add(call);
+						(body.throughValue(i) ? valueCalls : calls).add(call);
 					}
 					OwnCallGraph.Member field = this.ownField(entry);
 					if (field != null) {
 						fieldUses.add(field);
 					}
 				}
-				this.graph.method(member(method.name(), method.descriptor()), calls, fieldUses);
+				this.graph.method(member(method.name(), method.descriptor()), calls, valueCalls, body.values(),
+						fieldUses);
 			}
 			this.closures = new BitSet[this.methods.size()];
 		}

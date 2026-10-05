@@ -50,7 +50,7 @@ final class JvmLambdaCompiler {
 				ctx.globals, enclosingLexicals);
 		int funcId = ctx.nextFuncId[0]++;
 		// The other place a funcId becomes a callable VALUE (see Ctx.valueFuncIds): a
-		// lambda is only ever reached through a dispatcher, so its case must stay.
+		// lambda is only ever reached through a dispatcher, so it needs a case.
 		ctx.valueFuncIds.add(funcId);
 		String methodName = "_lambda_" + funcId;
 		// The lambda's code is written in this method's function -- unless it is an async
@@ -71,6 +71,9 @@ final class JvmLambdaCompiler {
 			tailMember.lambda = info;
 		}
 		ctx.lambdaDecls.add(info);
+		// The edge the shake keeps the lambda's dispatcher case by: the case is live
+		// while this body is (JvmClassSplitter).
+		ctx.body.makesValueOf(methodName, JvmLispCompiler.lambdaDescriptor(paramNames.size()));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();

@@ -1042,6 +1042,9 @@ final class JvmEvalRuntimeBuilder {
 				// }; a variadic function is encoded as a negative arity
 				// (-physicalParamCount) so the eval call path evaluates every argument
 				// instead of exactly arity
+				// The row makes a value of the function: what a name can reach keeps its
+				// dispatcher case while the registry is kept (JvmClassSplitter).
+				a.makesValueOf(fi.nameUtf8().stringValue(), fi.descUtf8().stringValue());
 				a.loadConstant(2);
 				a.anewarray(this.k.objectClass());
 				a.dup();

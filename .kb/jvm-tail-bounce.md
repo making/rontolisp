@@ -45,8 +45,12 @@ the compiler can name are jumps instead ([jvm-self-tail-calls.md](jvm-self-tail-
   says whether a method that bounces (`Ctx.bouncingBodies`, by identity; a tail group's
   layout joins it when a member's body does) is kept. If none is, `_unw` answers its argument
   and `_tramp` -- with every dispatcher arity it re-enters and the closures only those
-  reach -- is shaken away. A dead closure a live dispatcher still names keeps it
-  (`clos`/`sort`/`string` below: `reduce :from-end`'s argument-swapping lambdas).
+  reach -- is shaken away. A closure no kept body makes counts for nothing, its dispatcher
+  case included (`.kb/optimize-dead-code-elimination.md`, "A dispatcher case lives while a
+  kept body makes its value"): `reduce :from-end`'s argument-swapping lambdas in a wrapper
+  body nothing calls held `_tramp` in `clos`/`sort`/`string` (below) until they stopped
+  counting. The dispatchers are rebuilt over the values kept bodies make AFTER `_unw` is
+  written, so a closure made only on the trampoline's re-entry path keeps its case.
 
 ## What keeps a frame
 
