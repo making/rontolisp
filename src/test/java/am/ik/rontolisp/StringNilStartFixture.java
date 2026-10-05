@@ -1,15 +1,14 @@
 package am.ik.rontolisp;
 
 /**
- * A nil {@code :start} ({@code :start1}, {@code :start2}) to the string operators,
- * shared by the backend suites and mirrored by the
- * `string-operators-refuse-a-nil-start` ci-spec case: it is no bound, so
- * {@code string=} / {@code string-equal}, the {@code string<} family and
- * {@code nstring-upcase} / {@code -downcase} / {@code -capitalize} signal a
+ * A nil {@code :start} ({@code :start1}, {@code :start2}) to the string operators, shared
+ * by the backend suites and mirrored by the `string-operators-refuse-a-nil-start` ci-spec
+ * case: it is no bound, so {@code string=} / {@code string-equal}, the {@code string<}
+ * family and {@code nstring-upcase} / {@code -downcase} / {@code -capitalize} signal a
  * {@code type-error} whose datum is NIL -- in call position and first class, over empty
- * strings too -- while a nil {@code :end} still means the string's length. The last
- * rows are answers: the {@code nstring-*} window and a nil {@code :end} on each
- * surface. The bounds are read at run time so no backend can fold them.
+ * strings too -- while a nil {@code :end} still means the string's length. The last rows
+ * are answers: the {@code nstring-*} window and a nil {@code :end} on each surface. The
+ * bounds are read at run time so no backend can fold them.
  */
 public final class StringNilStartFixture {
 
