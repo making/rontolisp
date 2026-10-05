@@ -19360,11 +19360,10 @@ public final class LispMacroExpander {
 	 * shape of every wrong-type argument ({@code compiler/OperandTypes}), as a
 	 * {@code type-error} answering the value and the type. The report is rendered HERE
 	 * into a variable whose text control is the {@code :format-control}, never stored as
-	 * a control with arguments: a runtime control
-	 * drags the whole format renderer into every wasm-GC module that can report it (zlib:
-	 * +59 KB). The compile path emits the defun once per program that references it
-	 * ({@code expandTopLevelDefinitions}); the interpreter evaluates it on the first
-	 * resolution of the name.
+	 * a control with arguments: a runtime control drags the whole format renderer into
+	 * every wasm-GC module that can report it (zlib: +59 KB). The compile path emits the
+	 * defun once per program that references it ({@code expandTopLevelDefinitions}); the
+	 * interpreter evaluates it on the first resolution of the name.
 	 * @param rendered whether anything reads the report; without a reader (a wasm-GC
 	 * module outside exception-handling mode, which traps) the signal carries none, and
 	 * the printer stays out of the module
