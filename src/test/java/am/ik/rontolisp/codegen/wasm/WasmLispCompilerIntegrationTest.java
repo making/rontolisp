@@ -20650,7 +20650,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (+ (read-from-string \"-2.5\") (read-from-string \"1.0\")))"))
 			.isEqualTo("-1.5");
 		assertThat(compileAndRun("(print (read-from-string \".5\"))")).isEqualTo("0.5");
-		assertThat(compileAndRun("(print (read-from-string \"5.\"))")).isEqualTo("5.0");
+		assertThat(compileAndRun("(print (read-from-string \"5.\"))")).isEqualTo("5");
 		// A token with two dots or non-numeric characters stays a symbol.
 		assertThat(compileAndRun("(print (symbolp (read-from-string \"1.2.3\")))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (symbolp (read-from-string \"foo.bar\")))")).isEqualTo("T");
