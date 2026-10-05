@@ -203,14 +203,23 @@ public final class ClojureArms {
 		 * the lowering refuses ({@link Family#refusals}): only a program reading a
 		 * condition's class -- a catch by class, {@code class} or {@code instance?} of
 		 * one -- can tell it from the plain error reporting its message, so those readers
-		 * are the family's producers. Ahead of it {@link #EXCEPTION} folds the
-		 * {@code class} arm of a program that can hold no condition.
+		 * are the family's producers. {@code vec}'s argument check, which refuses a
+		 * non-collection as the oracle's {@code RuntimeException}, is its one view. Ahead
+		 * of it {@link #EXCEPTION} folds the {@code class} arm of a program that can hold
+		 * no condition.
 		 */
-		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(),
+		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(ClojureRefusals.VEC_ARG),
 				Map.of(ClojureRefusals.SUBS, "SUBSEQ", ClojureRefusals.CHAR_AT, "CHAR"),
 				Set.of("RONTOLISP::%CLOJURE-CATCHES", ClojureDispatchLowering.EXCEPTION_CLASS,
 						ClojureDispatchLowering.INSTANCE_OF),
 				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),
+
+		/**
+		 * A regular-expression matcher, which {@code nth} reads the groups of: only
+		 * {@code re-matcher} (and its value) makes one.
+		 */
+		MATCHER("matcher", Set.of("RONTOLISP::%CLOJURE-MATCHER-VALUE-P"), Set.of(), Map.of(),
+				Set.of("RONTOLISP::%CLOJURE-RE-MATCHER"), Set.of()),
 
 		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a

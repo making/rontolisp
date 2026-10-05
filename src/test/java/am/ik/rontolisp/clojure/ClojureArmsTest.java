@@ -251,6 +251,30 @@ class ClojureArmsTest {
 	}
 
 	@Test
+	void theMatcherFamilyIsMadeByReMatcherAndFoldsNthsGroupArm() {
+		// only re-matcher makes a matcher: nth's arm goes from a program naming none
+		List<LispVal> forms = read("(cond ((rontolisp::%clojure-matcher-value-p coll) (rontolisp::%clojure-matcher-nth"
+				+ " coll i dflt)) (t (f)))");
+		ClojureArms.Scan scan = ClojureArms.scan(forms, ClojureArms.Family.MATCHER);
+		assertThat(scan.builds()).isFalse();
+		assertThat(scan.strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.MATCHER).stream().map(LispVal::print))
+			.containsExactly("(COND (T (F)))");
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-matcher p s)"), ClojureArms.Family.MATCHER).builds())
+			.isTrue();
+	}
+
+	@Test
+	void theRefusalFamilyFoldsVecsArgumentCheckToTheArgument() {
+		// vec's RuntimeException for a non-collection is read only where a class is
+		List<LispVal> forms = read(
+				"(coerce (rontolisp::%clojure-realize-all (rontolisp::%clojure-vec-arg (f x)))" + " 'vector)");
+		assertThat(ClojureArms.scan(forms, ClojureArms.Family.REFUSAL).strips()).isTrue();
+		assertThat(ClojureArms.strip(forms, ClojureArms.Family.REFUSAL).stream().map(LispVal::print))
+			.containsExactly("(COERCE (RONTOLISP::%CLOJURE-REALIZE-ALL (F X)) 'VECTOR)");
+	}
+
+	@Test
 	void theHostFamilyFoldsInstanceOfAHostClassInAProgramNamingNoJavaOperator() {
 		// no host object exists without a java: operator: the host arm goes, and a core
 		// class a host object may be tests the kind alone, as before host objects counted

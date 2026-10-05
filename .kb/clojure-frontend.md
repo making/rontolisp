@@ -133,9 +133,9 @@ answered `2 5 3` before).
 | `map` `filter` `concat` | `rontolisp::%clojure-map`/`-filter`/`-concat` | any number of collections (`map` stops at the shortest); lazy when an input is lazy, strict otherwise ("Laziness"); a false object drops like nil |
 | `reduce` / `apply` | `%clojure-reduce`/`-reduce-init` / CL `apply` over the whole-collection view of the last argument | `reduce` walks the seq view and stops at `reduced`; its function is a real one ("The IFn dispatcher stays at the call site") |
 | `first` `rest` `next` `seq` `cons` | `car`/`cdr` over `%clojure-seq`, `%clojure-cons` | the seq view: lists pass through, vectors/strings coerce, a map gives one two-vector per entry and a set its members (table walk order), nil is empty, anything else signals ("Seq verbs over a wrapper"); `cons` onto a lazy collection answers a wrapper |
-| `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped (`nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
+| `nth` / `second` | `%clojure-nth` / `%clojure-seq-nth` | a vector or string indexed directly, a list, lazy seq or host object stepped, a matcher answering its group (`%clojure-matcher-nth`, "Regex"; `nth` refuses anything else, a map or set too, as the oracle's `UnsupportedOperationException`; `second` steps any seq view, refusing as `seq`); past either end the default (`nil` without one) |
 | `take` `drop` | `%clojure-take`/`-drop`, stepping | `(take n infinite)` terminates, realizing exactly what it answers |
-| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
+| `last` `butlast` `count` `empty?` `vec` `set` `sort` `sort-by` `reverse` `frequencies` `group-by` `select-keys` | strict, over the whole-collection view | `count` of a map/set/record is `hash-table-count`, of any other wrapper or a non-collection signals; `empty?` realizes one level and refuses a non-collection as `seq` does; `vec` refuses a non-collection as the oracle's `RuntimeException` ("Refusals"); `sort` without a comparator orders by `compare` (see "Sorted collections"), a comparator's answer is read like the oracle's `AFunction.compare` (`ClojureFilterLowering.comparatorBefore`: a number puts the first argument first when `(<= got -1)`, i.e. its integer part is negative -- `compare`, `(- a b)`; anything else when truthy -- `<`, `>`) |
 | `keep` `keep-indexed` `map-indexed` `remove` `distinct` `interpose` `partition` `interleave` | one call to the spliced `rontolisp::%clojure-NAME` (`-indexed` for the indexed pair, `partition-v` as a value) | lazy-or-strict ("Laziness"); `keep` keeps `false`; `partition` drops an incomplete tail, refuses a pad; `interleave` stops at the shortest |
 | `some` `every?` `take-while` `drop-while` `zipmap` | stepping, so an infinite input answers | `some` answers the predicate's value |
 | `mapv` `filterv` `mapcat` | the realized result as a vector / appended seqs | `mapcat` is nil-safe like `concat` |
@@ -409,6 +409,21 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   and the `define-condition`'s unreferenced keyword constructor builds nothing. Without either,
   every class-reading program carried the renderer and the printer hook (+10.5 KB wasm,
   +9.5 KB JVM class on a one-`try` program).
+- `vec` is `(coerce (%clojure-realize-all (%clojure-vec-arg x)) 'vector)`: the oracle's `vec` casts a
+  non-collection to an array before it seqs it, so a number, keyword, symbol, boolean, character,
+  function, atom, var, reduced value or matcher is `RuntimeException` ("Unable to convert: class ...
+  to Object[]"), which an `IllegalArgumentException` catch does not take, where `seq` and the other
+  verbs refuse it as IAE. `%clojure-vec-arg` is the family's one VIEW (`ClojureArms.Family.REFUSAL`,
+  `ClojureRefusals.VEC_ARG`): its test list is `%clojure-strict-seq`'s, in its order, and a program
+  reading no class folds it to its argument, so such a program compiles the bare coercion
+  (`--dump-ir` of 458 doc examples + `demo.clj` + probes, 465 programs: 463 identical, the two that
+  differ are a `vec` under a catch by class and a matcher read by `nth`). A lazy seq whose thunk
+  answers a non-collection stays `seq`'s IAE, as in the oracle (only the argument is cast). Cost in a
+  class-reading program, wasm P1 / component / JVM class: `(try (vec 5) (catch ...))` 51,620 / 53,270 /
+  73,075 -> 51,892 / 53,532 / 73,685 (2026-10-05). Pin: clojure-spec
+  `vec-of-a-non-collection-refuses-with-the-runtime-exception-the-oracle-throws`,
+  `ClojureArmsTest#theRefusalFamilyFoldsVecsArgumentCheckToTheArgument`,
+  `ClojureLibraryTest#vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead`.
 - `subs` and `.substring` are `%clojure-subs`, the family's alias of `subseq`: a bound outside
   a string is the oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words. `.charAt` is
   `%clojure-char-at`, the alias of `char`: an index outside a string is the same class, in
@@ -468,9 +483,9 @@ keyword, var, reduced value or namespace read as its list (`(first :a)` was `:C%
 - `contains?`: what no arm holds goes to `%clojure-contains-past` (false of nil, a vector,
   a string; else IAE). A string under a key that is no integer answers false (deviation:
   the oracle truncates a number, refuses anything else); the exact arm cost +340 B wasm.
-- `nth` (`%clojure-nth`) steps a list, lazy seq or host object and refuses a map, set,
-  record, sorted collection or non-collection (UOE), so a vector pattern over a map is
-  refused like the oracle's; `second` is `%clojure-seq-nth` (any seq view, a vector
+- `nth` (`%clojure-nth`) steps a list, lazy seq or host object, reads a matcher's group
+  ("Regex") and refuses a map, set, record, sorted collection or non-collection (UOE), so a
+  vector pattern over a map is refused like the oracle's; `second` is `%clojure-seq-nth` (any seq view, a vector
   indexed, `seq`'s refusal). Each carries its own loop: a shared one was +280 B of class
   on an `nth` program.
 - Size, wasm P1 / component / JVM class, 458 doc examples + `demo.clj` + two probes: 446 /
@@ -619,7 +634,7 @@ before the library splice.
   a VIEW (`%clojure-sorted-key`, `-items`, `-hashed`, `-shrunk`, `-rewrap`) answering its
   first argument for anything unsorted, its other arguments variables; an ALIAS
   (`%clojure-is-set` -> `%clojure-set-p`, `%clojure-is-reversible` -> `%clojure-is-vector`).
-  `clojure/ClojureArms` (family `SORTED`; `UNBOUND` is the unbound root's,
+  `clojure/ClojureArms` (family `SORTED`; `MATCHER` is the regex matcher's, `UNBOUND` is the unbound root's,
   `STREAM_DEPTH` the core specials' counters, "Vars and metadata", `PRINT_FLAGS`,
   `PRINT_META` and `NAMESPACE_MAP` the printer's, "State", and `STREAM` the stream printer's, "Streams as values") scans for a PRODUCER (`%clojure-sorted-make` and the four
   constructor `-v` values: no literal makes one) and, without one, strips: a test folds to
@@ -1538,6 +1553,26 @@ lookarounds, named groups, inline flags, POSIX classes, `&&`, `\G` signal `unsup
 regex` at construction. Patterns print `#"..."`, matchers `#<Matcher source>`; `class`
 answers `:pattern`/`:matcher`.
 
+**`nth` of a matcher reads `Matcher.group(n)`** (oracle-checked clj 1.12.6, 2026-10-05): the
+last match's group `n`, `nil` for a group that took no part, `IllegalStateException` ("No match
+found") before a match or after a failed `find` (even with a default, for an index the pattern
+has), so destructuring a matcher binds its groups. `%clojure-matcher-nth` is the arm behind
+`%clojure-nth`'s refusal clause, whose test `%clojure-matcher-value-p` (an alias of
+`%clojure-re-matcher-p`, which is also used outside arm positions) is the test of
+`ClojureArms.Family.MATCHER`, produced by `%clojure-re-matcher` alone: a program naming no
+`re-matcher` has the arm folded and compiles `nth` as before (the 465 programs of "Refusals":
+`--dump-ir` identical but the matcher probe). Cost of the arm in a program reading a matcher by
+`nth`, wasm P1 / component / JVM class: 68,384 / 69,664 / 115,873 -> 68,722 / 70,002 / 116,433.
+Deviations: an index below zero or past the groups answers the default (nil without one) where
+the oracle's two-argument `nth` throws `IndexOutOfBoundsException` ("No group n"; `nth` past the
+end answers the default, "Deviations"); and the oracle's three-argument `nth` reads no group of a
+pattern without groups (`groupCount > 0 && n <= groupCount`) while its two-argument one reads
+group 0, and the call without a default shares one shape with a nil default, so a groupless
+pattern reads group 0 unless a non-nil default is given. `second`/`first`/`seq` of a matcher are
+`seq`'s IAE and `count` is the UOE, as in the oracle. Pin: clojure-spec
+`nth-of-a-matcher-reads-its-group`, `ClojureArmsTest#theMatcherFamilyIsMadeByReMatcherAndFoldsNthsGroupArm`,
+`ClojureLibraryTest#aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm`.
+
 ## Reading
 
 **`##NaN`, `##Inf`, `##-Inf` read as doubles** in both readers (`readSymbolicValue`,
@@ -1979,7 +2014,7 @@ in-scope program needs `valid?`/`conform` (then `explain-data` stays refused).
   `ClojureInteropTest#readTakesBackWhatSpitWrote`, `ClojureWasmFileIoTest`.
 - Interop and host IO: `ClojureInteropTest` (interpreter and JVM),
   `ClojureWasmInteropRefusalTest`, `ClojureWasmFileIoTest`, `ClojureWasmFileRefusalTest`.
-- `ClojureArmsTest` (the sorted-collection, unbound-root and refusal strips).
+- `ClojureArmsTest` (the sorted-collection, unbound-root, matcher and refusal strips).
 - `ClojureLibraryTest` (the splice), `SourceLanguageTest`, `RontoLispCliTest` and
   `PlaygroundReplTest` (the `clojure>` transcript, `--no-gc`), `examples/clojure/demo.clj`
   through `ExamplesE2eTest`.

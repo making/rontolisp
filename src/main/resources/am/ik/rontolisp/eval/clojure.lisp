@@ -2602,6 +2602,25 @@
    (t
     (rontolisp::%clojure-illegal-argument-exception "seq needs a collection"))))
 
+;; vec's argument: the oracle casts a value to an array before it seqs it, so
+;; a value that is no collection (a number, keyword, symbol, boolean, function,
+;; atom, matcher ...) is a RuntimeException, where the seq verbs' refusal is an
+;; IllegalArgumentException. The tests are strict-seq's, in its order; the
+;; refusal view of clojure/ClojureArms, so a program reading no class compiles
+;; the call as its argument.
+(defun rontolisp::%clojure-vec-arg (x)
+  (cond ((null x) x)
+        ((and (consp x) (not (keywordp (car x)))) x)
+        ((vectorp x) x)
+        ((hash-table-p x) x)
+        ((rontolisp::%clojure-lazy-p x) x)
+        ((rontolisp::%clojure-set-p x) x)
+        ((rontolisp::%clojure-record-p x) x)
+        ((rontolisp::%clojure-sorted-p x) x)
+        ((rontolisp::%clojure-host-seqable-p x) x)
+        (t (rontolisp::%clojure-runtime-exception
+            "Unable to convert a non-collection to Object[]"))))
+
 (defun rontolisp::%clojure-realize (x)
   "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.
    A thunk answering another wrapper chains through it in a loop
@@ -2670,7 +2689,9 @@
 ;; indexes directly, a list, a lazy seq or a host object steps through its seq
 ;; one realized level at a time, so an infinite input still answers. A map, a
 ;; set, a record and every other wrapper or scalar are refused like the
-;; oracle's nth. second, a seq verb, steps through any seq view with
+;; oracle's nth; a matcher answers its group (%clojure-matcher-nth, an arm of
+;; the matcher family: a program making no matcher carries none). second, a seq
+;; verb, steps through any seq view with
 ;; %clojure-seq-nth instead; each carries its own loop, so a program calling
 ;; one carries one function.
 (defun rontolisp::%clojure-nth (coll i dflt)
@@ -2687,6 +2708,8 @@
               ((or (null s) (<= left 0)) (if (null s) dflt (car s)))
             (setq s (rontolisp::%clojure-seq-rest s))
             (setq left (- left 1))))))
+   ((rontolisp::%clojure-matcher-value-p coll)
+    (rontolisp::%clojure-matcher-nth coll i dflt))
    (t (rontolisp::%clojure-unsupported-operation-exception
        "nth not supported on this type"))))
 
@@ -4192,6 +4215,37 @@
                                           (rontolisp::%clojure-re-pat-ngroups
                                            (rontolisp::%clojure-re-match-pat
                                             m)))))))
+
+;; The matcher family's test (clojure/ClojureArms): the arm of a verb that must
+;; read a matcher asks it ahead of its fall-through, and a program naming no
+;; re-matcher, where no matcher exists, folds the arm away.
+(defun rontolisp::%clojure-matcher-value-p (x)
+  "Whether X is a matcher: the test of the matcher family's arms."
+  (rontolisp::%clojure-re-matcher-p x))
+
+;; (nth m i dflt) over a matcher M: Matcher.group(I) of its last match, nil for
+;; a group that took no part, an IllegalStateException past no match. An index
+;; the pattern has no group for (below zero or past its group count) answers
+;; DFLT, where the oracle throws IndexOutOfBoundsException unless it is given a
+;; default (nth answers its default past the end, "Deviations"). The oracle's
+;; three-argument nth reads no group at all of a pattern without groups, and the
+;; call without a default shares a shape with a nil default here, so only a
+;; non-nil default tells them apart.
+(defun rontolisp::%clojure-matcher-nth (m i dflt)
+  (let ((g
+         (rontolisp::%clojure-re-pat-ngroups
+          (rontolisp::%clojure-re-match-pat m))))
+    (if (or (< i 0) (> i g) (and (= g 0) dflt))
+        dflt
+        (let ((last (cdr (rontolisp::%clojure-re-match-cell m)))
+              (s (rontolisp::%clojure-re-match-input m)))
+          (cond ((null last)
+                 (rontolisp::%clojure-illegal-state-exception "No match found"))
+                ((= i 0) (subseq s (car last) (car (cdr last))))
+                (t
+                 (car
+                  (rontolisp::%clojure-re-group-strings s (car (cdr (cdr last)))
+                                                        i i))))))))
 
 (defun rontolisp::%clojure-re-fresh-matcher (p s)
   "A matcher of the pattern value P over S."

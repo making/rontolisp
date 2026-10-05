@@ -2024,6 +2024,55 @@ cases:
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [:ok :ok :ok :ok :ok :ok :ok :ok]
       [1 false true false false false true :d b 3 [3 4] nil 2 true]
+  - name: vec-of-a-non-collection-refuses-with-the-runtime-exception-the-oracle-throws
+    # Oracle-identical (clj 1.12.6, 2026-10-05): vec casts a non-collection to an
+    # array before it seqs, so a number, keyword, symbol, boolean, character,
+    # function, atom, var, reduced value or matcher is the oracle's RuntimeException
+    # ("Unable to convert: class ... to Object[]"), which an IllegalArgumentException
+    # catch does not take (each probe catches that class first). A lazy seq whose
+    # thunk answers a non-collection stays seq's IllegalArgumentException. The last
+    # line is what vec still answers.
+    source: |
+      (defmacro vnc [form] `(try (try ~form :none (catch InterruptedException e# :decoy) (catch IllegalArgumentException e# :iae) (catch RuntimeException e# :ok)) (catch Throwable e# (class e#))))
+      (def vnc-a (atom 1))
+      (println [(vnc (vec 5)) (vnc (vec 1.5)) (vnc (vec :a)) (vnc (vec 'a)) (vnc (vec false)) (vnc (vec true)) (vnc (vec \a)) (vnc (vec inc)) (vnc (vec vnc-a)) (vnc (vec #'vnc-a)) (vnc (vec (reduced 1))) (vnc (vec (re-matcher #"a" "a")))])
+      (println [(vnc (apply vec [5])) (vnc (mapv vec [5])) (vnc (vec (lazy-seq 5))) (vnc (vec (cons 1 (lazy-seq 5)))) (vnc (into [] 5))])
+      (println [(vec nil) (vec "ab") (vec {:a 1}) (vec #{1}) (vec '(1 2)) (vec [1 2]) (vec (map inc [1 2])) (vec (range 3)) (vec (sorted-map 1 2)) (vec (lazy-seq nil))])
+    expected: |
+      [:ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok :ok]
+      [:ok :ok :iae :iae :iae]
+      [[] [a b] [[:a 1]] [1] [1 2] [1 2] [2 3] [0 1 2] [[1 2]] []]
+  - name: nth-of-a-matcher-reads-its-group
+    # Oracle-identical (clj 1.12.6, 2026-10-05): nth of a matcher reads
+    # Matcher.group(n): an IllegalStateException before a match and after a failed
+    # find (even with a default, for an index the pattern has), an unmatched group
+    # nil, an index past the pattern's groups or below zero the default. Deviations:
+    # past the groups without a default the answer is nil, where the oracle throws
+    # IndexOutOfBoundsException (nth past the end answers nil, "Deviations"); and a
+    # pattern without groups reads group 0 whatever the call, where the oracle's
+    # three-argument nth answers the default (its rule is groupCount > 0 && n <=
+    # groupCount; a non-nil default is the one call shape that tells them apart here).
+    # second, first and count of a matcher are the seq verbs' and count's refusals.
+    source: |
+      (defmacro nmc [form] `(try ~form (catch InterruptedException e# :decoy) (catch IllegalStateException e# :ise) (catch IllegalArgumentException e# :iae) (catch UnsupportedOperationException e# :uoe) (catch Throwable e# (class e#))))
+      (def nmc-m (re-matcher #"(a)(b)?" "ac"))
+      (println [(nmc (nth nmc-m 0)) (nmc (nth nmc-m 1 :d)) (nmc (nth nmc-m 4 :d)) (nmc (nth nmc-m -1 :d))])
+      (re-find nmc-m)
+      (println [(nth nmc-m 0) (nth nmc-m 1) (nth nmc-m 2) (nth nmc-m 1 :d) (nth nmc-m 2 :d) (nth nmc-m 3 :d) (nth nmc-m 5 :d) (nth nmc-m -1 :d)])
+      (println (let [[w g1 g2 g3] nmc-m] [w g1 g2 g3]) (map #(nth nmc-m %) [0 1 2]) ((fn [c] (nth c 1)) nmc-m))
+      (println [(nmc (second nmc-m)) (nmc (first nmc-m)) (nmc (count nmc-m))])
+      (re-find nmc-m)
+      (println [(nmc (nth nmc-m 0)) (nmc (nth nmc-m 1 :d)) (nmc (nth nmc-m 3 :d)) (nmc (nth nmc-m -1 :d))])
+      (def nmc-w (re-matcher #"ab" "xab"))
+      (re-find nmc-w)
+      (println (nth nmc-w 0))
+    expected: |
+      [:ise :ise :d :d]
+      [a a nil a nil :d :d :d]
+      [a a nil nil] (a a nil) a
+      [:iae :iae :uoe]
+      [:ise :ise :d :d]
+      ab
   - name: a-string-substring-and-charat-refuse-with-the-oracles-class
     # Oracle-identical (clj 1.12.6): .substring and .charAt of a
     # string past its bounds (a literal, a built string and an empty one) throw

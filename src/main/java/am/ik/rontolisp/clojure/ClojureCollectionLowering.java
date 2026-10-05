@@ -1192,10 +1192,15 @@ final class ClojureCollectionLowering {
 		return vecForm(ctx, ctx.lower(items.get(1)));
 	}
 
-	/** {@code vec} over an already-lowered collection. */
+	/**
+	 * {@code vec} over an already-lowered collection. A value that is no collection is
+	 * the oracle's {@code RuntimeException} (it casts to an array before it seqs), a view
+	 * of the refusal family, so a program reading no class compiles the bare coercion.
+	 */
 	static LispVal vecForm(ClojureLowering ctx, LispVal lowered) {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
-				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), lowered),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.VEC_ARG), lowered)),
 				ClojureLowerUtil.quoted("vector"));
 	}
 
