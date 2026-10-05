@@ -49,6 +49,28 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aStringBoundIsTruncatedAtRunTimeUnlessItIsALiteralInteger() {
+		// subs, .substring and .charAt take a double or ratio bound as its truncation:
+		// a literal integer is the plain verb it was, any other bound goes through
+		// %clojure-string-bound
+		String bound = "(RONTOLISP::%CLOJURE-STRING-BOUND ";
+		assertThat(lowered("(subs \"hello\" 1 3) (.substring \"hello\" 1) (.charAt \"hello\" 0)"))
+			.doesNotContain("STRING-BOUND");
+		assertThat(lowered("(defn f [s i j] (subs s i j))"))
+			.contains("(RONTOLISP::%CLOJURE-SUBS |c%s| " + bound + "|c%i|) " + bound + "|c%j|))");
+		assertThat(lowered("(defn f [s i] (subs s 1 i))")).contains("|c%s| 1 " + bound + "|c%i|))");
+		// a literal number inside the int range is truncated at lower time
+		assertThat(lowered("(defn f [s] (subs s 1.5 -2.5))")).contains("(RONTOLISP::%CLOJURE-SUBS |c%s| 1 -2)")
+			.doesNotContain("STRING-BOUND");
+		assertThat(lowered("(defn f [s] (subs s 3/2))")).contains("(RONTOLISP::%CLOJURE-SUBS |c%s| 1)");
+		assertThat(lowered("(defn f [s] (subs s 1e20))")).contains(bound + "1.0E20)");
+		assertThat(lowered("(defn f [s i] (.substring s i))")).contains("(RONTOLISP::%CLOJURE-SUBS");
+		assertThat(lowered("(defn f [s i] (.charAt s i))")).contains("(RONTOLISP::%CLOJURE-CHAR-AT")
+			.contains(bound + "|c%i|)");
+		assertThat(lowered("(def g subs)")).contains(bound + "|c%subs-from|)");
+	}
+
+	@Test
 	void defLoneStringIsTheValueNotADocstring() {
 		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| \"hello\")\n|c%x|");
 		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");

@@ -2095,6 +2095,47 @@ cases:
       :java.lang.StringIndexOutOfBoundsException :java.lang.StringIndexOutOfBoundsException
       [:ioobe :ioobe]
       [bc abc  a c ]
+  - name: subs-and-substring-truncate-a-double-or-ratio-bound
+    # Oracle-identical (clj 1.12.6): subs, .substring and .charAt take a double
+    # or ratio bound as its truncation toward zero (a literal or a computed one, a
+    # built string or a literal one, a bound a lambda or apply hands over). No
+    # try, so the program reads no condition's class.
+    source: |
+      (def sb-built (apply str ["ab" "c"]))
+      (def sb-i 1.0)
+      (def sb-j 2.9)
+      (def sb-r 1/2)
+      (println [(subs "abc" 1.0) (.substring "abc" 1.0) (.substring "abc" 1 2.9) (subs sb-built 1.5) (subs sb-built 0 2.5)])
+      (println [(subs "abc" sb-i) (subs sb-built sb-i sb-j) (.substring sb-built sb-i) (.substring sb-built sb-i sb-j) (subs sb-built sb-r) (subs sb-built 0 (+ sb-r sb-r))])
+      (println [(subs "abc" -0.5) (subs "abc" 0 3.5) (subs "abc" 1.0 2.0) (subs "abc" 0 2N) (subs "abc" 1.5M) (subs "abc" (float 1.5)) (subs "abc" (/ 3 2))])
+      (println [(.charAt "abc" 1.5) (.charAt sb-built sb-i) (.charAt sb-built sb-j) (.charAt "abc" 1/2) (.charAt sb-built sb-r)])
+      (println (map #(subs sb-built %) [0.0 1.5 2.9 3.0]))
+      (println (map #(subs sb-built 1 %) [1.0 2.5 3.0]))
+      (println (apply subs sb-built [1.5 2.5]))
+    expected: |
+      [bc bc b bc ab]
+      [bc b bc b abc a]
+      [abc abc b ab bc bc bc]
+      [b b c a a]
+      (abc bc c )
+      ( b bc)
+      b
+  - name: subs-and-substring-refuse-a-truncated-bound-outside-the-string
+    # Oracle-identical (clj 1.12.6): a truncated bound outside the string is
+    # StringIndexOutOfBoundsException; NaN truncates to 0. (A double past the int
+    # range is that class here; the oracle's subs makes it an ArithmeticException
+    # or an IllegalArgumentException: not pinned.)
+    source: |
+      (defmacro sbd [form] `(try (try ~form (catch InterruptedException e# :decoy) (catch StringIndexOutOfBoundsException e# :sioobe) (catch ArithmeticException e# :arith) (catch IllegalArgumentException e# :iae)) (catch Throwable e# (class e#))))
+      (def sbd-built (apply str ["ab" "c"]))
+      (def sbd-nan (/ 0.0 0))
+      (println [(sbd (subs sbd-built 4.5)) (sbd (subs sbd-built 1 0.5)) (sbd (subs sbd-built 2 1.9)) (sbd (subs sbd-built -1.5)) (sbd (subs sbd-built 0 3.5)) (sbd (.charAt sbd-built 9.5)) (sbd (.charAt sbd-built -1.5))])
+      (println [(sbd (subs sbd-built 2147483647.5)) (sbd (subs sbd-built 0 2147483647.5)) (sbd (.charAt sbd-built 2147483647.5)) (sbd (.substring sbd-built -2147483648.5))])
+      (println [(subs sbd-built sbd-nan) (.charAt sbd-built sbd-nan) (.substring sbd-built 0 sbd-nan)])
+    expected: |
+      [:sioobe :sioobe :sioobe :sioobe abc :sioobe :sioobe]
+      [:sioobe :sioobe :sioobe :sioobe]
+      [abc a ]
   - name: class-instance-and-stack-traces-of-an-exception
     # class of an exception, a runtime error or a refusal answers its class as a
     # keyword, the shape class answers for every kind (the oracle answers the host

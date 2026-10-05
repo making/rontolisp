@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -17,6 +18,7 @@ import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -706,6 +708,33 @@ final class ClojureStringLowering {
 										ClojureLowerUtil.quoted("list")))));
 	}
 
+	/** The run-time truncation of a bound that is not statically an integer. */
+	static final String STRING_BOUND = "RONTOLISP::%CLOJURE-STRING-BOUND";
+
+	/**
+	 * The bound of {@code subs}, {@code .substring} or {@code .charAt}: the oracle
+	 * truncates a double or ratio one. A literal number inside the int range is truncated
+	 * here, and a {@code length} cannot be anything but an integer; both leave a site
+	 * that is the plain verb. Any other bound goes through {@link #STRING_BOUND}.
+	 */
+	static LispVal bound(LispVal form) {
+		if (form instanceof LispInteger) {
+			return form;
+		}
+		if (form instanceof LispDouble number && Math.abs(number.value()) < INT_EDGE) {
+			return new LispInteger((long) number.value());
+		}
+		if (form instanceof LispRatio ratio && ratio.truncate().abs().compareTo(BigInteger.valueOf(INT_EDGE)) < 0) {
+			return new LispInteger(ratio.truncate().longValue());
+		}
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("LENGTH")) {
+			return form;
+		}
+		return ClojureLowerUtil.list(new LispSymbol(STRING_BOUND), form);
+	}
+
+	private static final long INT_EDGE = 2147483647L;
+
 	/**
 	 * {@code subs}: the substring from the start, past the optional end, through
 	 * {@code subseq} -- by its refusal family's alias ({@link ClojureRefusals#SUBS}), so
@@ -717,9 +746,9 @@ final class ClojureStringLowering {
 		ClojureLowerUtil.isTrue(n == 2 || n == 3, "subs takes a string, a start and an optional end");
 		return n == 3
 				? ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)), ctx.lower(items.get(3)))
+						bound(ctx.lower(items.get(2))), bound(ctx.lower(items.get(3))))
 				: ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), ctx.lower(items.get(1)),
-						ctx.lower(items.get(2)));
+						bound(ctx.lower(items.get(2))));
 	}
 
 	/** {@code subs} as a value: a two- or three-argument lambda over the primitive. */
@@ -727,9 +756,9 @@ final class ClojureStringLowering {
 		LispSymbol str = new LispSymbol(ClojureLowering.mangle("subs-s"));
 		LispSymbol from = new LispSymbol(ClojureLowering.mangle("subs-from"));
 		LispSymbol args = new LispSymbol(ClojureLowering.mangle("subs-args"));
-		LispVal two = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, from);
-		LispVal three = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, from,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args));
+		LispVal two = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, bound(from));
+		LispVal three = ClojureLowerUtil.list(new LispSymbol(ClojureRefusals.SUBS), str, bound(from),
+				bound(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args)));
 		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ARITY,
 				LispString.literal("subs takes a string, a start and an optional end"));
 		LispVal body = ClojureLowerUtil
