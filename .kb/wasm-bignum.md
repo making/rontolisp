@@ -154,8 +154,8 @@ power of ten is built by squaring (`_big_mul`; one `* 10` per digit cost 90 us f
   bit-loop division.
 - Size: a module that reads +748 B (`(print (read-from-string "1.5"))` 29,578 -> 30,326; 362 the
   classifier, 386 the division it now reaches).
-- `5.` reads as a float here and on the JVM, as the integer 5 on the interpreter (CL's reading): a
-  grammar divergence this did not touch.
+- `5.` (digits and a final `.`) is the decimal integer on all four backends, at any magnitude, in
+  `emitTryInteger` before the float classifier is reached (`.kb/read-load-streams.md`).
 
 ## Deliberate limits
 - Float -> integer conversion is EXACT on all four backends (`eval/ExactRounding`, the JVM's

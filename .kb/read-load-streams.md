@@ -36,6 +36,10 @@ nesting `#|...|#`.
 - The reader forces the JVM array machinery (`usesFloatArray |= usesRead`). WASM integers are `i31`;
   decimal floats -> `TYPE_FLOAT` via `emitTryFloat`: the double nearest the token, as `parseDouble`
   reads it (digits in an i64, then exact; `.kb/wasm-bignum.md`, "The runtime reader's decimal floats").
+- Trailing dot: digits and a final `.` (`5.`, `-5.`, `+5.`, any magnitude) are the decimal INTEGER (CLHS
+  2.3.1) on all four backends -- JVM `_classify` drops the dot and takes the integer path, WASM
+  `emitTryInteger` accepts a `.` last in the token after a digit. `1.e5` and `.5` stay floats; `5.e`,
+  `5.x`, `1.2.` stay symbols. Pinned by ci-spec `runtime-read-trailing-dot-integers`.
 - Dotted pairs: `.` is a dot token only when the next byte is a delimiter (whitespace `( ) ' " ;`) or
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`).
 

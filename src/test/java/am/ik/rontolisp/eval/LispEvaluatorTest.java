@@ -1702,6 +1702,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readFromStringReadsATrailingDotTokenAsADecimalInteger() {
+		// CLHS 2.3.1: digits and a final '.' are an integer, at any magnitude; a '.'
+		// elsewhere
+		// or an exponent makes a float, the rest stay symbols.
+		assertThat(evalMulti("""
+				(list (read-from-string "5.") (read-from-string "-5.") (read-from-string "+5.")
+				      (read-from-string "123456789012345678901234567890.")
+				      (read-from-string "(1. -3.)") (floatp (read-from-string "1.e5"))
+				      (symbolp (read-from-string "5.e")) (symbolp (read-from-string "1.2.")))
+				""").print()).isEqualTo("(5 -5 5 123456789012345678901234567890 (1 -3) T T T)");
+	}
+
+	@Test
 	void evalConcatenateStrings() {
 		assertThat(eval("(concatenate 'string \"foo\" \"bar\" \"baz\")")).isEqualTo(new LispString("foobarbaz"));
 		assertThat(eval("(concatenate 'string)")).isEqualTo(new LispString(""));

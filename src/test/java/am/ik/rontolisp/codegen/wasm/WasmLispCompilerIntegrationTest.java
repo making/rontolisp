@@ -419,6 +419,39 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("T\n".repeat(17) + "T");
 	}
 
+	@Test
+	void compileAndRunRuntimeReadTrailingDotIntegers() throws Exception {
+		// A '.' after the digits and last in the token is a decimal INTEGER (CLHS 2.3.1)
+		// at
+		// any magnitude; a '.' elsewhere or an exponent makes a float, the rest stay
+		// symbols.
+		assertThat(compileAndRun("""
+				(print (read-from-string "5."))
+				(print (read-from-string "-5."))
+				(print (read-from-string "+5."))
+				(print (read-from-string "0."))
+				(print (read-from-string "007."))
+				(print (read-from-string "1073741824."))
+				(print (read-from-string "-4611686018427387905."))
+				(print (read-from-string "9223372036854775808."))
+				(print (read-from-string "123456789012345678901234567890."))
+				(print (read-from-string "-123456789012345678901234567890."))
+				(print (+ 1 (read-from-string "5.")))
+				(print (read-from-string "(1. 2. -3.)"))
+				(print (read-from-string "(a . 5.)"))
+				(print (floatp (read-from-string "1.e5")))
+				(print (= (read-from-string "1.e5") 100000.0))
+				(print (floatp (read-from-string "5.0")))
+				(print (floatp (read-from-string "-5.5")))
+				(print (symbolp (read-from-string "5.e")))
+				(print (symbolp (read-from-string "5.x")))
+				(print (symbolp (read-from-string "1.2.")))
+				(print (symbolp (read-from-string "-.")))
+				(print (symbolp (read-from-string "1/2.")))
+				""")).isEqualTo(
+				"5\n-5\n5\n0\n7\n1073741824\n-4611686018427387905\n9223372036854775808\n123456789012345678901234567890\n-123456789012345678901234567890\n6\n(1 2 -3)\n(A . 5)\nT\nT\nT\nT\nT\nT\nT\nT\nT");
+	}
+
 	// A make-array whose :element-type is a RUNTIME value has to answer what the LITERAL
 	// spelling answers, on every code -- including the ones this backend refuses, where
 	// "the same answer" is the same refusal. The widths come FROM ArrayElementTypes

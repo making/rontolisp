@@ -5395,6 +5395,55 @@ cases:
       T
       T
       T
+  # A '.' after the digits and last in the token is a decimal INTEGER (CLHS 2.3.1), at any
+  # magnitude; a '.' anywhere else, or an exponent, makes a float, and the rest stay symbols.
+  - name: runtime-read-trailing-dot-integers
+    source: |
+      (print (read-from-string "5."))
+      (print (read-from-string "-5."))
+      (print (read-from-string "+5."))
+      (print (read-from-string "0."))
+      (print (read-from-string "007."))
+      (print (read-from-string "1073741824."))
+      (print (read-from-string "-4611686018427387905."))
+      (print (read-from-string "9223372036854775808."))
+      (print (read-from-string "123456789012345678901234567890."))
+      (print (read-from-string "-123456789012345678901234567890."))
+      (print (+ 1 (read-from-string "5.")))
+      (print (read-from-string "(1. 2. -3.)"))
+      (print (read-from-string "(a . 5.)"))
+      (print (floatp (read-from-string "1.e5")))
+      (print (= (read-from-string "1.e5") 100000.0))
+      (print (floatp (read-from-string "5.0")))
+      (print (floatp (read-from-string "-5.5")))
+      (print (symbolp (read-from-string "5.e")))
+      (print (symbolp (read-from-string "5.x")))
+      (print (symbolp (read-from-string "1.2.")))
+      (print (symbolp (read-from-string "-.")))
+      (print (symbolp (read-from-string "1/2.")))
+    expected: |
+      5
+      -5
+      5
+      0
+      7
+      1073741824
+      -4611686018427387905
+      9223372036854775808
+      123456789012345678901234567890
+      -123456789012345678901234567890
+      6
+      (1 2 -3)
+      (A . 5)
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
   - name: read-from-string-upcase
     source: |
       (print (read-from-string "foo"))
