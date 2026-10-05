@@ -19359,7 +19359,8 @@ public final class LispMacroExpander {
 	 * {@link #checkedStructWrite}): {@code OP: The value X is not of type T}, the report
 	 * shape of every wrong-type argument ({@code compiler/OperandTypes}), as a
 	 * {@code type-error} answering the value and the type. The report is rendered HERE
-	 * into the text control, never stored as a control with arguments: a runtime control
+	 * into a variable whose text control is the {@code :format-control}, never stored as
+	 * a control with arguments: a runtime control
 	 * drags the whole format renderer into every wasm-GC module that can report it (zlib:
 	 * +59 KB). The compile path emits the defun once per program that references it
 	 * ({@code expandTopLevelDefinitions}); the interpreter evaluates it on the first
@@ -19379,14 +19380,20 @@ public final class LispMacroExpander {
 		LispVal body = listToCons(signal);
 		if (rendered) {
 			// (let ((__operator (if __store (%string-concat "(SETF " __operator ")")
-			// __operator))) (error ... :format-control <rendered>))
+			// __operator))) (let ((__report <rendered>)) (error ... :format-control
+			// (%text-control __report)))). The report held in a VARIABLE is the signal's
+			// message where nothing routes the report -- the text itself, not its text
+			// control, whose every tilde is doubled.
+			LispSymbol report = new LispSymbol("__report");
 			signal.add(new LispSymbol(":FORMAT-CONTROL"));
-			signal.add(textControlForm(
-					formatMessagePieces("~A: The value ~S is not of type ~A", List.of(operator, datum, type))));
+			signal.add(textControlForm(report));
 			LispVal setfName = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), listToCons(List
 				.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("(" + LispNames.SETF + " "), operator)),
 					new LispString(")")));
-			body = makeLet(operator.name(), makeIf(store, setfName, operator), listToCons(signal));
+			LispVal rendering = formatMessagePieces("~A: The value ~S is not of type ~A",
+					List.of(operator, datum, type));
+			body = makeLet(operator.name(), makeIf(store, setfName, operator),
+					makeLet(report.name(), rendering, listToCons(signal)));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.STRUCT_TYPE_ERROR_INTERNAL),
 				listToCons(List.of(datum, operator, type, store)), body));

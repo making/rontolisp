@@ -26932,6 +26932,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehAnUncaughtStructAccessorReportPrintsTheDatumsTildeOnce() throws Exception {
+		// The handler never names its condition, so nothing routes the report: the pad
+		// prints the signal's message, which is the rendered text, not its text
+		// control (every tilde doubled).
+		assertThat(compileAndRunEhExpectTrap("""
+				(defstruct point x y)
+				(print (handler-case (error "warm") (error (e) :ok)))
+				(print (point-x "a~b"))
+				""")).contains("Unhandled condition: POINT-X: The value \"a~b\" is not of type POINT\n");
+	}
+
+	@Test
 	void ehAnUncaughtNonNumberOperandReportsTheInterpreterLineBeforeTrapping() throws Exception {
 		assertThat(compileAndRunEhExpectTrap("""
 				(print (handler-case (error "warm") (error (e) :ok)))

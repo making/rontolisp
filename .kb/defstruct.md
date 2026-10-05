@@ -58,9 +58,15 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
 - **The store checks after the value** (`let`-bound unless the object is a symbol and the value an
   atom), CL's order: `(incf (point-x "s"))` reports the READ, `POINT-X`.
 - **`%struct-type-error` is one generated defun** (`structTypeErrorDefun`, injected when referenced;
-  the interpreter defines it on first resolution). The report is rendered into the TEXT CONTROL at
-  the signal (`formatMessagePieces` + `textControlForm`), never stored as a control with arguments:
-  a runtime control drags the format renderer in (zlib +59 KB). The operator travels as a string (a
+  the interpreter defines it on first resolution). The report is rendered at the signal
+  (`formatMessagePieces`) into a VARIABLE whose text control is the `:format-control`, never stored
+  as a control with arguments: a runtime control drags the format renderer in (zlib +59 KB). The
+  variable is what makes the unrouted message the text itself ([error-handling.md](error-handling.md),
+  `signalsItsTextControl`): with the text control of the rendered EXPRESSION, a compiled program
+  routing no report printed `The value "a~~b"` -- the control, every `~` doubled -- where the
+  interpreter printed `"a~b"` (standalone `uncaught-struct-accessor-report-prints-the-datum-as-written`).
+  Cost of the variable: +4/+7 B per JVM class, +2 B per wasm module carrying the defun; no
+  program lost the renderer, since the defun is injected after the routing answer. The operator travels as a string (a
   store builds `(SETF ...)` from the reader's), the type as `%unspelled-quote`. The owner a place
   needs is `ClosRegistry.structOfAccessor`, registered only by a checked expansion.
 - **Unchecked where nothing reads the report**: under `SignalMessages.LAZY` (wasm-GC outside EH
