@@ -32003,17 +32003,20 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (string-upcase x :start a :end b) ->
 	 * (let* ((__bcc_s (string x)) (__bcc_k0 a) (__bcc_k1 b)
-	 *        (__bcc_st __bcc_k0) (__bcc_en (or __bcc_k1 (length __bcc_s))))
+	 *        (__bcc_st __bcc_k0) (__bcc_en (or __bcc_k1 (length __bcc_s)))
+	 *        (__bcc_mid (subseq __bcc_s __bcc_st __bcc_en)))
 	 *   (%string-concat (%string-concat (subseq __bcc_s 0 __bcc_st)
-	 *                                   (string-upcase (subseq __bcc_s __bcc_st __bcc_en)))
+	 *                                   (string-upcase __bcc_mid))
 	 *                   (subseq __bcc_s __bcc_en)))
 	 * </pre>
 	 *
-	 * The keyword values are evaluated in the order written, after the string, and the
-	 * first occurrence of a keyword counts; a malformed tail is the {@code program-error}
-	 * every keyword operator reports. {@code %string-concat} rather than
-	 * {@code concatenate}: this runs inside the expression compilers, after the scans
-	 * that gate {@code concatenate}'s helpers.
+	 * The window is cut FIRST, so a bad range is refused as {@code subseq} refuses the
+	 * range as written (the interpreter's report), not as one of the two outer cuts
+	 * refuses a piece of it. The keyword values are evaluated in the order written, after
+	 * the string, and the first occurrence of a keyword counts; a malformed tail is the
+	 * {@code program-error} every keyword operator reports. {@code %string-concat} rather
+	 * than {@code concatenate}: this runs inside the expression compilers, after the
+	 * scans that gate {@code concatenate}'s helpers.
 	 * @param cons the conversion call
 	 * @return the lowered form, or {@code null} for a call without keywords
 	 */
@@ -32049,7 +32052,9 @@ public final class LispMacroExpander {
 		bindings.add(listToCons(List.of(st, start)));
 		bindings.add(listToCons(
 				List.of(en, end == null ? length : listToCons(List.of(new LispSymbol(LispNames.OR), end, length)))));
-		LispVal converted = callOf(op.name(), mvCall(LispNames.SUBSEQ, s, st, en));
+		LispSymbol mid = new LispSymbol("__bcc_mid");
+		bindings.add(listToCons(List.of(mid, mvCall(LispNames.SUBSEQ, s, st, en))));
+		LispVal converted = callOf(op.name(), mid);
 		LispVal body = mvCall(LispNames.STRING_CONCAT,
 				mvCall(LispNames.STRING_CONCAT, mvCall(LispNames.SUBSEQ, s, new LispInteger(0), st), converted),
 				mvCall(LispNames.SUBSEQ, s, en));

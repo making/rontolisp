@@ -4585,8 +4585,8 @@ public final class Environment implements Scope {
 		}
 		int start = startArg == null ? 0 : requireIndex(name, startArg);
 		int end = endArg == null || endArg instanceof LispNil ? cpLen : requireIndex(name, endArg);
-		if (start > end || end > cpLen) {
-			throw new LispEvalException(name + ": bad bounding indices " + start + ".." + end);
+		if (start < 0 || start > end || end > cpLen) {
+			throw subseqBoundsError("string", start, end, cpLen);
 		}
 		int from = full.offsetByCodePoints(0, start);
 		int to = full.offsetByCodePoints(0, end);
@@ -5447,7 +5447,7 @@ public final class Environment implements Scope {
 				}
 			}
 			if (start < 0 || end > cpLen || start > end) {
-				throw new LispEvalException(LispNames.WRITE_STRING + ": bad bounding indices " + start + ".." + end);
+				throw subseqBoundsError("string", start, end, cpLen);
 			}
 			int startCU = full.offsetByCodePoints(0, start);
 			int endCU = full.offsetByCodePoints(0, end);
@@ -6391,7 +6391,7 @@ public final class Environment implements Scope {
 					}
 				}
 				if (start < 0 || end > cpLen || start > end) {
-					throw new LispEvalException(LispNames.WRITE_LINE + ": bad bounding indices " + start + ".." + end);
+					throw subseqBoundsError("string", start, end, cpLen);
 				}
 				if (start != 0 || end != cpLen) {
 					text = full.substring(full.offsetByCodePoints(0, start), full.offsetByCodePoints(0, end));

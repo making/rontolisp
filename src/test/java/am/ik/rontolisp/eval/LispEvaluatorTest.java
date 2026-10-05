@@ -20,6 +20,7 @@ import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
+import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -2001,6 +2002,21 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SubseqBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void boundedStringOperatorsRefuseABadRangeAsATypeError() {
+		// write-string / write-line / the case conversions with a :start / :end outside
+		// the
+		// string refuse as subseq does, whatever the call spelling; the compile-path
+		// twins
+		// pin the same text and slots.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(BoundedStringBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
 	// There is no f32 SCALAR: a single-float array's element crosses a double on the way

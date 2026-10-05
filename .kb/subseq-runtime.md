@@ -172,6 +172,38 @@ Where each lane checks:
   `subseq-refuses-a-bad-range-in-every-representation` (SBCL's answers, the class by a
   `type-error` clause).
 
+## Bounded string operators -- the SAME refusal, named `SUBSEQ`
+`write-string` / `write-line` / `string-upcase` / `-downcase` / `-capitalize` with a
+`:start` / `:end` outside the string refuse as `subseq` refuses the range as written: the
+same `type-error`, text and slots, on every backend, through a direct call and through
+`funcall`. The compile paths lower them onto `subseq`
+(`LispMacroExpander.lowerWriteStringBounds`, `.expandBoundedCaseConversion`), so the text
+names `SUBSEQ`; the interpreter's builtins (`Environment.boundedCaseConversion` and the
+`write-string` / `write-line` arms) call `subseqBoundsError`, with `kind` `string`. SBCL
+signals a `type-error` for all five and its text names no operator either.
+- **Naming the operator was measured and not done.** The refusal is a shared landing --
+  wasm `_subseq_bad` bakes its `"SUBSEQ: invalid bounds "` prefix and sits at a fixed
+  function index (a parameter or a second landing moves every EH module's bytes), the JVM
+  lanes share one `emitBoundsError` -- and the one thing a portable program reads is the
+  class and the slots, which an operator word does not carry. The interpreter used to name
+  the operator (`STRING-UPCASE: bad bounding indices 3..1`, a `simple-error`; and
+  `WRITE-STRING` for `write-line`); that text is gone, not kept apart from the compiled one.
+- **The case conversions cut the window FIRST** (`__bcc_mid`): the lowering used to take
+  `(subseq s 0 start)` before the window, so `:start 9` on a length-5 string reported
+  `invalid bounds 0, 9` on the compiled paths and `9..5` in the interpreter. The window's
+  own `(subseq s start end)` is the range as written; the two outer cuts are then in range.
+  Cost: one more local per site -- wasm +4 B (a two-site program: P1 26,721 -> 26,725,
+  component 27,887 -> 27,891), the JVM class a few bytes (25,494 -> 25,508); programs with no
+  bounded conversion are byte-identical (`hello_world`, `pi_approx`, `zlib`, a
+  `write-string :start` program, on JVM / P1 / component).
+- Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+  `WasmLispCompilerIntegrationTest` -- P1 and component), ci-spec
+  `bounded-string-operators-refuse-a-bad-range` (SBCL's class).
+- Known gaps, NOT these operators': a NEGATIVE `end` given to a compiled `subseq` is read
+  as "omitted" on the JVM (the sentinel is -1) and on the wasm literal-string lane; a
+  non-integer bound is a `simple-error` in the interpreter, a bare type-error on the JVM
+  and a cast trap on wasm.
+
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,
   `.theSharedSubseqDispatchAnswersTheSameThingAsTheInlinedOne` (the helper must not call `subseq`
