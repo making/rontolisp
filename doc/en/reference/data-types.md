@@ -460,9 +460,11 @@ float and the rational it equals are one key (`1` and `1.0`, `1/2` and `0.5`),
 and a list of them folds element-wise. An array deliberately does not fold (a
 vector key is compared by identity, so a folded copy would never find itself),
 and on the compiled backends the `:test` has to be written literally, since
-`make-hash-table`'s arguments are not evaluated there. The folded key is also the
-one that is stored, so `maphash` over such a table hands back `"CS"` for an entry
-written under `"cs"` and `1/2` for one written under `0.5`.
+`make-hash-table`'s arguments are not evaluated there. The fold only places the
+key: `maphash` hands back each key as it was first stored, `"cs"` for an entry
+written under `"cs"` and then under `"CS"`, and `0.5` for one written under `0.5`.
+Storing under a key the table already has replaces the value and keeps the key, under
+every test.
 An `eql` or `eq` table keys aggregates (conses, vectors, strings, instances) by
 identity and every other value by value. Iteration order (`maphash`) is not guaranteed
 across backends, so portable code should not depend on it. A table itself prints

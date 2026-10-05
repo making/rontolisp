@@ -32,6 +32,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
@@ -17238,7 +17239,16 @@ class JvmLispCompilerTest {
 				  (setf (gethash #\\b h) 2)
 				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) h)
 				  (print (sort acc #'string<)))
-				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"B\" \"CS\")");
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"b\" \"cs\")");
+	}
+
+	@Test
+	void compileAndRunAHashTableHandsBackTheKeyAsFirstStored() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableHandsBackTheKeyAsFirstStored.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableKeyPrograms.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HashTableKeyPrograms.EXPECTED);
 	}
 
 	@Test

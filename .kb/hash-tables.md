@@ -101,8 +101,8 @@ it equals, read out of `mantissa * 2^exponent` (`1`, `1.0`, `2/2` are one key, a
 an ARRAY does not fold (`equal` on a vector is identity). The fraction fold waited on WASM
 `TYPE_RATIO`'s two i32 components, too narrow for a power-of-two denominator, until they became
 exact integers ([[wasm-bignum]], "Ratios").
-**The fold is also what is STORED**, so `maphash` hands back the representative (`1/2` for a key
-written as `0.5`; SBCL hands back the key as written).
+The fold only PLACES the key; the key as first stored is what every reader hands back ("The key
+read back" below).
 
 - interpreter `LispHashTable` via `LispEquality.equalpKey`; the float arm is `LispRatio.ofDouble`,
   the same decomposition `rational` answers.
@@ -134,6 +134,38 @@ stays the plain entry count. Pinned by the
 `WasmLispCompilerIntegrationTest`, ci-spec `equalp-hash-table-key-fold` and
 `hash-table-identity-test`, and
 `RontoHashTableEqualpKeyTest`.
+
+## The key read back
+SBCL's rule on all four backends: `maphash` (and `with-hash-table-iterator` and
+`loop ... being the hash-keys`, which both lower to it) hands back each key AS FIRST STORED --
+`"hello"`, `2.0`, `0.5`, `("ab" #\c)` from an `equalp` table, never the fold -- and a re-store
+under a key the table already has replaces only the value, under every test. A `remhash` then a
+store is a fresh entry with the new key. Until 2026-10-05 every backend handed back the fold, and
+the interpreter and JVM kept the NEWEST key object of an `equal` table where WASM and SBCL keep the
+first (observable by `eq`).
+
+- interpreter: the `LinkedHashMap`'s `Key` holds the fold, the `Entry` the key as first stored
+  (`put` merges, keeping the stored entry's key).
+- JVM: an `equalp` table's pair is `{fold, value, key}` when the fold differs from the key
+  (`_hashPut` compares the two by reference), else the two-slot `{key, value}`; in a program that
+  makes an `equalp` table `maphash` reads slot `(length - 2) * 2`, branch-free. `_hashPut` no longer
+  writes the key slot on a re-store.
+- WASM: an `equalp` table's entry is `(fold . (key . value))`; every other entry stays
+  `(key . value)`. The cons whose cdr is the value -- the entry, or the cell -- is the HOLDER
+  (`WasmHashTableCompiler.emitValueHolder`, an `(eqref -> eqref)` `if` on the tag), so `gethash`,
+  the re-store and `maphash` read one field path for both shapes; the resize and the bucket scan
+  only read the car and are unchanged.
+
+Measured 2026-10-05 (linux-x86-64): every module of a program with no `equalp` table is
+byte-identical on P1 and the component (bench-report, size-report and 30 examples/probes); a JVM
+class using any hash table is 5 B smaller (the dropped key write). In an `equalp` program WASM pays
+19 B per `gethash` site and 43 B per `puthash` site (a 6-store probe: 20,113 -> 20,359 B), the JVM
+nothing per site (helpers are shared) and +70-90 B per class. 200,000 string keys x 3 rounds of
+store, lookup and `maphash`, medians of 7: no difference above noise on any backend
+(P1 1,665 -> 1,720 ms, component 1,671 -> 1,749 ms, JVM 677 -> 586 ms). Pinned by
+`testsupport/HashTableKeyPrograms` (SBCL's output) through
+`LispEvaluatorTest.aHashTableHandsBackTheKeyAsFirstStored` and its JVM/P1/component twins, and ci-spec
+`hash-table-key-as-first-stored`.
 
 ## The two caps
 **Depth: `LispEquality.HASH_DEPTH_CAP` (64)**, folding a constant below it — what makes a cyclic
@@ -178,7 +210,7 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
 - `LispEquality.hash` / `.equal` sit in the ROOT package next to each other because they must
   agree; conses and instances are folded by `LispEquality` itself, not their own `hashCode`.
 - JVM: the `LinkedHashMap` is a BUCKET INDEX (boxed `Integer` hash -> `ArrayList` of `Object[2]`)
-  plus an insertion-order `ArrayList` under `#order`; re-storing mutates the pair in place. The
+  plus an insertion-order `ArrayList` under `#order`; re-storing mutates the pair's value in place. The
   shape is declared ONCE in `runtime/RontoHashTable` and read by `JvmHashRuntimeBuilder` and the
   hand-written runtimes (`RontoHttpClack`'s `:headers`) -- a plain `HashMap` fails at the first
   `gethash`. Buckets are `new ArrayList<>(1)`, not the default ten.

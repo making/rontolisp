@@ -43,6 +43,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import org.junit.jupiter.api.Test;
@@ -15000,19 +15001,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void anEqualpHashTableStoresTheFoldedKey() {
-		// A bucket decides by equal against the keys already in it, so the fold has to be
-		// the key that is THERE -- maphash therefore hands back the representative, on
-		// all four backends (.kb/hash-tables.md).
-		LispVal result = evalMulti("""
-				(defparameter *tm* (make-hash-table :test 'equalp))
-				(setf (gethash "cs" *tm*) 1)
-				(setf (gethash #\\b *tm*) 2)
-				(let ((acc nil))
-				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) *tm*)
-				  (sort acc #'string<))
-				""");
-		assertThat(result.print()).isEqualTo("(\"B\" \"CS\")");
+	void aHashTableHandsBackTheKeyAsFirstStored() {
+		// An equalp table places by the key's fold but hands back the key as it was
+		// first stored, through every reader; re-storing keeps the first key object
+		// under every test. The compiled twins are
+		// JvmLispCompilerTest#compileAndRunAHashTableHandsBackTheKeyAsFirstStored and
+		// WasmLispCompilerIntegrationTest's *HashTableHandsBackTheKeyAsFirstStored.
+		assertThat(printedOutput(HashTableKeyPrograms.PROGRAM)).isEqualTo(HashTableKeyPrograms.EXPECTED);
 	}
 
 	@Test
