@@ -31,6 +31,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
+import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
@@ -18278,6 +18279,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aSymbolAPackageWalkProducesCallsItsFunction() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunASymbolAPackageWalkProducesCallsItsFunction
+		// twin, on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.PackageWalkDesignatorFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms))
+			.isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void computedLookupOfAStandardName() throws Exception {
 		// The
 		// JvmLispCompilerTest#compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol
@@ -20965,7 +20979,21 @@ class WasmLispCompilerIntegrationTest {
 				  (setf (gethash "cs" h) 1)
 				  (maphash (lambda (k v) (setq acc (cons k acc))) h)
 				  (print acc))
-				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1 T)\n(2 1 EQUALP)\n(\"CS\")");
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1 T)\n(2 1 EQUALP)\n(\"cs\")");
+	}
+
+	@Test
+	void aHashTableHandsBackTheKeyAsFirstStoredOnPreview1() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableHandsBackTheKeyAsFirstStored.
+		assertThat(runFrontendProgramWithDir(HashTableKeyPrograms.PROGRAM, false))
+			.isEqualTo(HashTableKeyPrograms.EXPECTED);
+	}
+
+	@Test
+	void componentAHashTableHandsBackTheKeyAsFirstStored() throws Exception {
+		assertThat(runFrontendProgramWithDir(HashTableKeyPrograms.PROGRAM, true))
+			.isEqualTo(HashTableKeyPrograms.EXPECTED);
 	}
 
 	@Test

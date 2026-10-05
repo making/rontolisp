@@ -784,8 +784,9 @@ final class JvmHashRuntimeBuilder {
 
 	// _hashPut(key, table, value): replace the value of the equal key in the bucket, or
 	// append a fresh pair to the bucket AND to the insertion-order list. Re-storing an
-	// existing key mutates the pair in place, so the order list needs no maintenance and
-	// the entry keeps the position it was first stored at -- what maphash walks.
+	// existing key mutates the pair's value in place, so the order list needs no
+	// maintenance and the entry keeps the position and the key it was first stored
+	// with -- what maphash walks and hands back.
 	private static HashMethod buildPut(ConstantPool cp, ClassEntry mapClass, ClassEntry listClass,
 			ClassEntry objectClass, ClassEntry objectArrayClass, MethodRefEntry mapGet, MethodRefEntry mapPut,
 			MethodRefEntry listInit, MethodRefEntry listAdd, MethodRefEntry listGet, MethodRefEntry listSize,
@@ -794,6 +795,11 @@ final class JvmHashRuntimeBuilder {
 			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables,
 			MethodRefEntry maybeCompactRef, @Nullable MemberRefEntry hostTest) {
 		MethodCode a = new MethodCode();
+		if (keyRef != null) {
+			// The key as written, kept for a fresh pair before the fold replaces it.
+			a.aload(0);
+			a.astore(8);
+		}
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
 			a.aload(1);
@@ -841,12 +847,8 @@ final class JvmHashRuntimeBuilder {
 		a.astore(5);
 		emitTestCompare(a, 5, 7, equalMethod, eqvMethod, identityTables);
 		a.ifeq(next);
-		// The stored key becomes the key just handed in, matching the interpreter (its
-		// entry record is replaced), so maphash hands back the newest key object.
-		a.aload(5);
-		a.loadConstant(0);
-		a.aload(0);
-		a.aastore();
+		// Only the value is replaced: the pair keeps the key it was first stored under,
+		// which is what maphash hands back (SBCL's choice, and every backend's).
 		a.aload(5);
 		a.loadConstant(1);
 		a.aload(2);
@@ -857,9 +859,35 @@ final class JvmHashRuntimeBuilder {
 		a.iinc(4, 1);
 		a.goto_(top);
 		a.labelBinding(fresh);
-		a.loadConstant(2);
-		a.anewarray(objectClass);
-		a.astore(5);
+		if (keyRef == null) {
+			a.loadConstant(2);
+			a.anewarray(objectClass);
+			a.astore(5);
+		}
+		else {
+			// A key its fold changed gets a third slot holding the key as written --
+			// what maphash hands back (JvmHashTableCompiler.compileMaphash); a key that
+			// is its own fold, and every key of a table that does not fold, keeps the
+			// two-slot pair.
+			MethodCode.Label ownFold = a.newLabel();
+			MethodCode.Label allocated = a.newLabel();
+			a.aload(0);
+			a.aload(8);
+			a.if_acmpeq(ownFold);
+			a.loadConstant(3);
+			a.anewarray(objectClass);
+			a.astore(5);
+			a.aload(5);
+			a.loadConstant(2);
+			a.aload(8);
+			a.aastore();
+			a.goto_(allocated);
+			a.labelBinding(ownFold);
+			a.loadConstant(2);
+			a.anewarray(objectClass);
+			a.astore(5);
+			a.labelBinding(allocated);
+		}
 		a.aload(5);
 		a.loadConstant(0);
 		a.aload(0);

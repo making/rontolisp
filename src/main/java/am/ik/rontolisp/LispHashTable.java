@@ -31,11 +31,12 @@ import java.util.LinkedHashMap;
 public final class LispHashTable implements LispVal {
 
 	/**
-	 * One stored entry: the key as it was PLACED (so {@code maphash} can hand it back)
-	 * and its value. For an {@code equalp} table that is the folded key, not the spelling
-	 * the caller stored it under -- see {@link #placed}.
+	 * One stored entry: the key as it was FIRST stored (what {@code maphash} hands back)
+	 * and its value. For an {@code equalp} table that is the spelling the caller stored
+	 * it under, not the fold it is placed by -- the fold lives in the map's own key; see
+	 * {@link #placed}.
 	 *
-	 * @param key the placed key value
+	 * @param key the key as first stored
 	 * @param value the stored value
 	 */
 	public record Entry(LispVal key, LispVal value) {
@@ -217,12 +218,10 @@ public final class LispHashTable implements LispVal {
 
 	/**
 	 * The value this table PLACES {@code val} under: {@code val} itself, or its
-	 * {@code equalp} fold. The folded value is also what is STORED as the entry's key --
-	 * a bucket decides by {@code equal} against the keys already in it, so the fold has
-	 * to be what is there, and {@code maphash} therefore hands back the representative
-	 * rather than the spelling the caller stored it under. Every backend does the same;
-	 * keeping the original as well would cost a second slot in every entry of every table
-	 * ({@code .kb/hash-tables.md}).
+	 * {@code equalp} fold. The fold is the map's key -- a bucket decides by {@code equal}
+	 * against the keys already in it, so the fold has to be what is there -- while the
+	 * entry keeps the key as first stored, which is what {@code maphash} hands back, as
+	 * SBCL does ({@code .kb/hash-tables.md}).
 	 */
 	private LispVal placed(LispVal val) {
 		return this.testCode == TEST_EQUALP ? LispEquality.equalpKey(val) : val;
@@ -240,14 +239,15 @@ public final class LispHashTable implements LispVal {
 	}
 
 	/**
-	 * Stores {@code value} under {@code key}, replacing any existing entry.
+	 * Stores {@code value} under {@code key}, replacing the value of an existing entry.
+	 * An existing entry keeps the key it was first stored under, as SBCL's does.
 	 * @param key the key
 	 * @param value the value to store
 	 * @return the stored value
 	 */
 	public LispVal put(LispVal key, LispVal value) {
-		LispVal placed = placed(key);
-		this.map.put(Key.of(placed, this.testCode), new Entry(placed, value));
+		this.map.merge(Key.of(placed(key), this.testCode), new Entry(key, value),
+				(stored, fresh) -> new Entry(stored.key(), fresh.value()));
 		return value;
 	}
 

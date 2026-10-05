@@ -19,8 +19,10 @@ import am.ik.wasm.Type;
  * <em>header</em> {@code TYPE_CONS} of {@code (count . buckets)}: {@code count} is an i31
  * integer of live entries (so {@code hash-table-count} is O(1)) and {@code buckets} is a
  * {@code TYPE_HASH_BUCKETS} array (open-chaining hash table). Each bucket slot holds an
- * association list of {@code (key . value)} entries or nil. A key's bucket is
- * {@code (_hash(key) & 0x7fffffff) % capacity}; {@code _hash}
+ * association list of {@code (key . value)} entries or nil -- an {@code equalp} table's
+ * entry is {@code (fold . (key . value))}, placed and compared by the key's fold and
+ * keeping the key as first stored for {@code maphash} ({@link #foldingEntries}). A key's
+ * bucket is {@code (_hash(key) & 0x7fffffff) % capacity}; {@code _hash}
  * ({@link WasmLispCompiler#FUNC_HASH}) agrees with the structural {@code _equal} runtime
  * ({@link WasmLispCompiler#FUNC_EQUAL}) used to compare keys within a bucket, so equal
  * keys land in the same bucket. The table grows (doubling, via
@@ -145,7 +147,7 @@ final class WasmHashTableCompiler {
 		int dfltSlot = setTemp(ctx);
 		// header (count . buckets)
 		int headerSlot = headerSlot(args.get(2), ctx);
-		emitFoldKey(ctx, headerSlot, keySlot);
+		int foldTagSlot = emitFoldKey(ctx, headerSlot, keySlot);
 		// The tag hoisted out of the bucket walk: every entry is compared by it.
 		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
 		// cur = the bucket alist head for key
@@ -163,10 +165,11 @@ final class WasmHashTableCompiler {
 		// the table's own test on (key, car(car(cur)))?
 		emitKeyCompare(ctx, keySlot, curSlot, tagSlot);
 		ctx.writer.write(Instruction.IF, 0x40);
-		// match: push cdr(entry) and break to $result
+		// match: push cdr(holder) = value and break to $result
 		getLocal(ctx, curSlot);
 		castConsGet(ctx, 0); // entry
-		castConsGet(ctx, 1); // cdr(entry) = value
+		emitValueHolder(ctx, foldTagSlot);
+		castConsGet(ctx, 1); // value
 		// depth 3: $if(0) $loop(1) $notfound(2) $result(3)
 		ctx.writer.write(Instruction.BR, 3); // -> $result
 		ctx.writer.write(Instruction.END); // end if
@@ -188,7 +191,13 @@ final class WasmHashTableCompiler {
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
 		int valSlot = setTemp(ctx);
 		int headerSlot = headerSlot(args.get(2), ctx);
-		emitFoldKey(ctx, headerSlot, keySlot);
+		// The key as written, which a fresh entry of a folding table keeps.
+		int origSlot = -1;
+		if (foldingEntries(ctx)) {
+			getLocal(ctx, keySlot);
+			origSlot = setTemp(ctx);
+		}
+		int foldTagSlot = emitFoldKey(ctx, headerSlot, keySlot);
 		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
 		// idx = bucket index for key, boxed as i31 so it survives the find loop
 		pushBucketIndex(ctx, headerSlot, keySlot);
@@ -208,9 +217,11 @@ final class WasmHashTableCompiler {
 
 		emitKeyCompare(ctx, keySlot, curSlot, tagSlot);
 		ctx.writer.write(Instruction.IF, 0x40);
-		// match: rplacd(entry, value)
+		// match: rplacd(holder, value) -- the entry keeps the key it was first stored
+		// under
 		getLocal(ctx, curSlot);
 		castConsGet(ctx, 0); // entry
+		emitValueHolder(ctx, foldTagSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, valSlot);
@@ -228,9 +239,23 @@ final class WasmHashTableCompiler {
 		// not found: buckets[idx] = cons(cons(key, value), buckets[idx])
 		getHeaderArr(ctx, headerSlot); // array
 		getIndex(ctx, idxSlot); // index
-		// new entry = cons(key, value)
+		// new entry = cons(key, value), or cons(fold, cons(key, value)) in a folding
+		// table
 		getLocal(ctx, keySlot);
-		getLocal(ctx, valSlot);
+		if (foldingEntries(ctx)) {
+			pushIsFolding(ctx, foldTagSlot);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			getLocal(ctx, origSlot);
+			getLocal(ctx, valSlot);
+			WasmEmitHelper.emitNewCons(ctx);
+			ctx.writer.write(Instruction.ELSE);
+			getLocal(ctx, valSlot);
+			ctx.writer.write(Instruction.END);
+		}
+		else {
+			getLocal(ctx, valSlot);
+		}
 		WasmEmitHelper.emitNewCons(ctx);
 		// cons(newentry, oldhead)
 		getHeaderArr(ctx, headerSlot);
@@ -471,6 +496,8 @@ final class WasmHashTableCompiler {
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = setTemp(ctx);
 		int headerSlot = headerSlot(args.get(2), ctx);
+		// A folding table's entries are (fold . (key . value)): its tag, read once.
+		int foldTagSlot = foldingEntries(ctx) ? emitTestTag(ctx, headerSlot) : -1;
 		// i = 0 (boxed i31 bucket index)
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
@@ -496,13 +523,23 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.BLOCK, 0x40); // $inner
 		ctx.writer.write(Instruction.LOOP, 0x40); // $in
 		emitCursorIsConsElseBreak(ctx, curSlot, 1); // -> $inner
-		// dispatch_2(func, car(entry), cdr(entry))
+		// dispatch_2(func, car(holder), cdr(holder)): the holder is the entry itself,
+		// or a folding table's (key . value) cell, which keeps the key as first stored
 		getLocal(ctx, funcSlot);
 		getLocal(ctx, curSlot);
 		castConsGet(ctx, 0); // entry
-		castConsGet(ctx, 0); // key
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 0); // entry
+		if (foldingEntries(ctx)) {
+			emitValueHolder(ctx, foldTagSlot);
+			int holderSlot = setTemp(ctx);
+			getLocal(ctx, holderSlot);
+			castConsGet(ctx, 0); // key
+			getLocal(ctx, holderSlot);
+		}
+		else {
+			castConsGet(ctx, 0); // key
+			getLocal(ctx, curSlot);
+			castConsGet(ctx, 0); // entry
+		}
 		castConsGet(ctx, 1); // value
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
@@ -672,11 +709,12 @@ final class WasmHashTableCompiler {
 		castConsGet(ctx, 0); // car(entry) = key
 	}
 
-	// Replaces the key in keySlot with its equalp fold when the table folds (tag 1).
-	// Not one instruction in a module that tags no count.
-	private static void emitFoldKey(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
+	// Replaces the key in keySlot with its equalp fold when the table folds (tag 1),
+	// answering the temp holding the tag (-1 when there is none). Not one instruction in
+	// a module that tags no count.
+	private static int emitFoldKey(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
 		if (!tagged(ctx)) {
-			return;
+			return -1;
 		}
 		int tagSlot = emitTestTag(ctx, headerSlot);
 		getTag(ctx, tagSlot);
@@ -688,6 +726,48 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUALP_KEY);
 		setLocal(ctx, keySlot);
+		ctx.writer.write(Instruction.END);
+		return tagSlot;
+	}
+
+	/**
+	 * Whether this module's tables can hold FOLDING entries: an {@code equalp} table's
+	 * entry is {@code (fold . (key . value))} -- placed and compared by the fold in its
+	 * car, like every entry, while the cell in its cdr keeps the key as first stored,
+	 * which {@code maphash} hands back, and the value. Every other table's entry stays
+	 * {@code (key . value)}, so the cdr of the entry's HOLDER ({@link #emitValueHolder})
+	 * is the value in both shapes. A module that makes no {@code equalp} table emits not
+	 * one instruction for it.
+	 * @param ctx the compilation context
+	 * @return whether the program makes an {@code equalp} table
+	 */
+	private static boolean foldingEntries(WasmLispCompiler.Ctx ctx) {
+		return ctx.usesEqualpHashTables;
+	}
+
+	// Pushes the i32 "this table folds" off the tag in tagSlot -- the tag itself where
+	// it can only be 0 (equal) or 1 (equalp), a module with no identity table.
+	private static void pushIsFolding(WasmLispCompiler.Ctx ctx, int tagSlot) {
+		getTag(ctx, tagSlot);
+		if (ctx.usesIdentityHashTables) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQUALP);
+			ctx.writer.write(Instruction.I32_EQ);
+		}
+	}
+
+	// Replaces the entry on the stack with its value HOLDER, the cons whose cdr is the
+	// value: the entry itself, or a folding table's (key . value) cell. An
+	// (eqref -> eqref) if with no else, so the entry passes through untouched when the
+	// table does not fold. Not one instruction in a module with no folding table.
+	private static void emitValueHolder(WasmLispCompiler.Ctx ctx, int foldTagSlot) {
+		if (!foldingEntries(ctx)) {
+			return;
+		}
+		pushIsFolding(ctx, foldTagSlot);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		castConsGet(ctx, 1); // the (key . value) cell
 		ctx.writer.write(Instruction.END);
 	}
 

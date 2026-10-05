@@ -4100,7 +4100,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		// The shared name dispatches injected below are called only from the sites the
 		// compiler lowers onto them, never through a designator: no dispatcher case
-		// (dispatchableFuncIds), so a program whose names resolve at run time does not
+		// (registryFuncIds), so a program whose names resolve at run time does not
 		// keep one alive that no reachable site calls.
 		Set<String> callOnlyRuntimes = new HashSet<>();
 		boolean usesSet = LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms);
@@ -4414,15 +4414,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean mayReachTrig = this.simd || resolvesAnyName;
 		// With a symbol BUILDER in the program, a STRING literal spelling one of these
 		// names makes its wrapper dispatchable too (DesignatorSpellings.of's framed
-		// spellings, applied by dispatchableFuncIds after Pass 2) -- the baked package
+		// spellings, applied by registryFuncIds after Pass 2) -- the baked package
 		// table's import-redirect cells spell every cl name that way -- so the tables
 		// must be placed for that shape as well, or the wrapper body compiles against
 		// an unplaced blob.
 		boolean symbolBuildersForTrig = RuntimeNameProducers.anySymbolBuilder(program);
+		// A package walk arms every name the baked universes carry (registryFuncIds
+		// reads walkSpellings), the trig names among them.
+		Set<String> walkSpellings = RuntimeNameProducers.packageWalkSpellings(program);
 		for (String name : new String[] { LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.EXP, LispNames.EXPT,
 				LispNames.CIS, LispNames.SINH, LispNames.COSH, LispNames.TANH }) {
 			mayReachTrig |= programUsesSymbol(program, name)
-					|| (symbolBuildersForTrig && programSpellsStringLiteral(program, name));
+					|| (symbolBuildersForTrig && programSpellsStringLiteral(program, name))
+					|| walkSpellings.contains(name);
 		}
 		int fdlibmTablesBase = mayReachTrig ? stringTable.appendReaderOwnedBlob(WasmFdlibmRuntimeBuilder.tables()) : -1;
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
@@ -5691,6 +5695,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// blob is built, since building it interns every surviving name.
 		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
 		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
+		// A package walk interns the baked universes' spellings at run time: names the
+		// program holds without emitting them, which the probes read like its own.
+		spelledLiterals.addAll(walkSpellings);
+		userSpelledLiterals.addAll(walkSpellings);
 		// Whether a runtime SYMBOL designator can reach a call site. The source scan
 		// above reads funcall/apply SPELLINGS only, so every other operator that calls
 		// its function argument -- mapcar, sort, reduce, maphash, and the whole
@@ -5712,8 +5720,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean runtimeFunctionBox = LispMacroExpander.usesRuntimeFunctionBox(program);
 		boolean registryLive = usesEval || usesRuntimeDesignator || usesApplyRuntime || designatorSymbolArrives
 				|| runtimeFunctionBox;
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
+		// The registry's rows are the names a runtime designator can carry; the ladders
+		// take those plus every funcId materialized as a value. Computed together, so a
+		// row always has its case.
+		Set<Integer> registryFuncIds = registryFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
 				nameResolvable, symbolBuilders, callOnlyRuntimes);
+		Set<Integer> dispatchableFuncIds = new HashSet<>(valueFuncIds);
+		dispatchableFuncIds.addAll(registryFuncIds);
 		// An injected wrapper body's fdlibm calls count once the wrapper can be
 		// reached: materialized as a function value, hittable through the name
 		// registry, or named as #'op in the user's program (the apply-direct-call
@@ -5962,11 +5975,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
-				// Only the rows dispatchableFuncIds kept: a row whose name the program
-				// never spells cannot be hit (see Ctx.spelledLiterals), and a row
-				// whose funcId has no ladder case would resolve to a br_table default.
-				// The two sets are computed together so they cannot drift apart.
-				if (!dispatchableFuncIds.contains(i)) {
+				// Only the names a runtime designator can carry (registryFuncIds): a
+				// row whose name the program never spells cannot be hit (see
+				// Ctx.spelledLiterals), and a function VALUE carries its funcId to the
+				// ladder without one. Every row's funcId has a ladder case -- the two
+				// sets are computed together so they cannot drift apart.
+				if (!registryFuncIds.contains(i)) {
 					continue;
 				}
 				int nameOffset = stringTable.addString(defun.name).offset();
@@ -5998,7 +6012,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
-				if (!dispatchableFuncIds.contains(i)) {
+				if (!registryFuncIds.contains(i)) {
 					continue;
 				}
 				int q = defun.name.indexOf("::");
@@ -8671,7 +8685,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Before the injection below, whose renumbering a rebuilt ladder body would miss.
 		if (this.optimize.eliminatesDeadCode() && !this.rawCoreForTest) {
 			coreModule = narrowLadders(coreModule, ladders, ladderBuilder, dispatchableFuncIds, valueFuncIds,
-					valueMakers, registryLive, defuns, lambdaDecls, stringTable);
+					valueMakers, registryLive ? registryFuncIds : Set.of(), defuns, lambdaDecls, stringTable);
 		}
 		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
 		// renumber every function reference (incl. the placeholder call indices). Must
@@ -8851,7 +8865,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * {@link WasmValueMakers}' credits, plus {@code _lookup} for every name-registry row
 	 * (a name the registry answers is a value it makes), plus every dispatchable defun no
 	 * compiled body and no row makes. The {@code _lookup} rows and the {@code _fun_name}
-	 * table keep the full set, as on the JVM.
+	 * table are not narrowed, as on the JVM.
 	 *
 	 * <p>
 	 * A rebuilt ladder takes the page slots it was given and never needs more (fewer
@@ -8860,8 +8874,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the module, the ladders swapped when some dispatchable funcId is never made
 	 */
 	private byte[] narrowLadders(byte[] coreModule, List<Ladder> ladders, LadderBuilder ladderBuilder,
-			Set<Integer> dispatchable, Set<Integer> valueFuncIds, WasmValueMakers valueMakers, boolean registryLive,
-			List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls, StringTable stringTable) {
+			Set<Integer> dispatchable, Set<Integer> valueFuncIds, WasmValueMakers valueMakers,
+			Set<Integer> registryRows, List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls, StringTable stringTable) {
 		if (ladders.isEmpty()) {
 			return coreModule;
 		}
@@ -8879,7 +8893,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (int funcId : dispatchable) {
 			if (funcId < defuns.size()) {
 				targetValues.put(userBase + funcId, funcId);
-				if (registryLive) {
+				if (registryRows.contains(funcId)) {
 					makers.computeIfAbsent(FUNC_LOOKUP, k -> new HashSet<>()).add(funcId);
 				}
 				else if (!valueFuncIds.contains(funcId)) {
@@ -9242,58 +9256,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The funcIds the arity/spread dispatch ladders and the {@code _lookup} name registry
-	 * must be able to reach -- everything else in {@code defuns} is called only through a
-	 * direct {@code call}, so naming it in a ladder would do nothing except keep it alive
-	 * for {@code --optimize} ({@code .kb/optimize-dead-code-elimination.md}).
-	 *
-	 * <p>
-	 * Two sources, and both are EXACT rather than heuristic:
-	 * <ul>
-	 * <li>{@code valueFuncIds} -- what Pass 2 actually materialized as a closure. Every
-	 * body is emitted by the time this runs, so a {@code #'name} a macro synthesized
-	 * during Pass 2 is in it, which is precisely what a pre-scan of the source program
-	 * would have missed;</li>
-	 * <li>the names a runtime SYMBOL designator can resolve. {@code _lookup} matches
-	 * INTERNED OFFSETS, so a registry row is reachable only when the program interned
-	 * that name for some other reason -- a quoted symbol, a string literal, an
-	 * {@code intern} of a literal. A name nothing spells gets a runtime-interned offset
-	 * that matches no static row. The probe reads {@code Ctx.spelledLiterals} -- the
-	 * spellings Pass 2 emitted as VALUES -- not the whole string table: the table also
-	 * holds entries the compiler interned for its private structures (an instance
-	 * layout's slot names, the printer's {@code "-"}/{@code "/"} pieces, registry row
-	 * names), and no run-time path turns those bytes into a designator the program did
-	 * not spell itself, so letting them arm a row gave every same-named defun a ladder
-	 * case -- measured as one row + arm per chipz accessor whose slot name the layout
-	 * directory happened to intern. Which spellings count is the shared
-	 * {@link am.ik.rontolisp.compiler.DesignatorSpellings}, so the JVM twin cannot drift
-	 * from this one.</li>
-	 * </ul>
-	 *
-	 * <p>
-	 * The carve-out is {@link am.ik.rontolisp.eval.LibraryDefunPruner}'s, verbatim: a
-	 * program that FORGES a function name at run time out of computed strings loses it.
-	 * The pruner has already removed such a defun outright in that case (the error is the
-	 * ordinary undefined-function one); here the name simply stops resolving. Compile
-	 * with {@code --dynamic} -- which turns this gate off entirely, since late binding
-	 * resolves any name at run time -- to keep every function dispatchable.
-	 * @param defuns the program's defuns, index = funcId
-	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
-	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
-	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
-	 * @param symbolBuilders whether the program contains a symbol BUILDER
-	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
-	 * literal or keyword spelling become a designator, so only then are those probes
-	 * applied
-	 * @return the funcIds that need a ladder case (and a registry row)
-	 */
-	/**
 	 * Whether any defun's name is one a runtime designator could CARRY -- a spelling this
 	 * compile emits as a value, or one a symbol builder can assemble from those. The
 	 * registry answers names and nothing else, so a module holding no such spelling has
 	 * nothing for {@code _lookup} to find and needs neither it nor the blob, however many
-	 * designators Pass 2 dispatched. Uses the probe {@link #dispatchableFuncIds} uses for
-	 * the rows themselves, so the gate and the rows agree by construction.
+	 * designators Pass 2 dispatched. Uses the probe {@link #registryFuncIds} uses for the
+	 * rows themselves, so the gate and the rows agree by construction.
 	 * @param defuns the program's top-level functions
 	 * @param spelledLiterals every literal spelling Pass 2 emitted as a runtime value
 	 * @param symbolBuilders whether the program contains a symbol builder
@@ -9418,9 +9386,58 @@ public final class WasmLispCompiler implements LispCompiler {
 				: new WasmOperandTypes.TypeErrorShape(instance, datum, expectedType);
 	}
 
-	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
-			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders,
-			Set<String> callOnly) {
+	/**
+	 * The funcIds the {@code _lookup} name registry answers -- the names a runtime SYMBOL
+	 * designator can resolve. The dispatch ladders take these plus {@code valueFuncIds}
+	 * (what Pass 2 actually materialized as a closure); every other defun is called only
+	 * through a direct {@code call}, so naming it in a ladder would do nothing except
+	 * keep it alive for {@code --optimize}
+	 * ({@code .kb/optimize-dead-code-elimination.md}).
+	 *
+	 * <p>
+	 * A function VALUE never reaches the registry: it carries its funcId to the ladder.
+	 * So a defun materialized as a value has a row only when its name is reachable too:
+	 * {@code narrowLadders} counts {@code _lookup} as a maker, so a row for a
+	 * {@code #'name} compiled only in dead code would make a value no live function
+	 * makes.
+	 *
+	 * <p>
+	 * {@code _lookup} matches INTERNED OFFSETS, so a registry row is reachable only when
+	 * the program interned that name for some other reason -- a quoted symbol, a string
+	 * literal, an {@code intern} of a literal. A name nothing spells gets a
+	 * runtime-interned offset that matches no static row. The probe reads
+	 * {@code Ctx.spelledLiterals} -- the spellings Pass 2 emitted as VALUES -- not the
+	 * whole string table: the table also holds entries the compiler interned for its
+	 * private structures (an instance layout's slot names, the printer's
+	 * {@code "-"}/{@code "/"} pieces, registry row names), and no run-time path turns
+	 * those bytes into a designator the program did not spell itself, so letting them arm
+	 * a row gave every same-named defun a ladder case -- measured as one row + arm per
+	 * chipz accessor whose slot name the layout directory happened to intern. Which
+	 * spellings count is the shared {@link am.ik.rontolisp.compiler.DesignatorSpellings},
+	 * so the JVM twin cannot drift from this one.
+	 *
+	 * <p>
+	 * The carve-out is {@link am.ik.rontolisp.eval.LibraryDefunPruner}'s, verbatim: a
+	 * program that FORGES a function name at run time out of computed strings loses it.
+	 * The pruner has already removed such a defun outright in that case (the error is the
+	 * ordinary undefined-function one); here the name simply stops resolving. Compile
+	 * with {@code --dynamic} -- which turns this gate off entirely, since late binding
+	 * resolves any name at run time -- to keep every function dispatchable.
+	 * @param defuns the program's defuns, index = funcId
+	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
+	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
+	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @param anyNameResolvable whether a data evaluator can produce any name at run time
+	 * @param symbolBuilders whether the program contains a symbol BUILDER
+	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
+	 * literal or keyword spelling become a designator, so only then are those probes
+	 * applied
+	 * @param callOnly the compiler's shared name dispatches, called only from the sites
+	 * lowered onto them -- never a designator's target, however names resolve
+	 * @return the funcIds that get a registry row (and a ladder case)
+	 */
+	private Set<Integer> registryFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds, Set<String> spelledLiterals,
+			boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders, Set<String> callOnly) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time, so nothing is provably
@@ -9434,7 +9451,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			return all;
 		}
-		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
+		Set<Integer> rows = new HashSet<>();
 		if (registryLive) {
 			for (int i = 0; i < defuns.size(); i++) {
 				if (callOnly.contains(defuns.get(i).name)) {
@@ -9446,7 +9463,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// symbol spellings. The list is shared with the JVM twin
 				// (compiler.DesignatorSpellings) so the two cannot drift.
 				if (DesignatorSpellings.anySpelled(defuns.get(i).name, spelledLiterals, symbolBuilders)) {
-					dispatchable.add(i);
+					rows.add(i);
 				}
 			}
 		}
@@ -9454,26 +9471,32 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Sizing aid: how much of the program the ladders still name. A defun listed
 			// as neither VALUE nor INTERNED is one --optimize can now reach; a
 			// name-armed row names the literal spelling that holds it open.
-			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + defuns.size()
-					+ " defuns dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
+			int dispatchable = 0;
 			for (int i = 0; i < defuns.size(); i++) {
-				if (!dispatchable.contains(i)) {
-					System.err.println("[dispatch-gate] call-only\t" + defuns.get(i).name);
+				if (rows.contains(i) || valueFuncIds.contains(i)) {
+					dispatchable++;
 				}
-				else if (!valueFuncIds.contains(i)) {
-					String name = defuns.get(i).name;
+			}
+			System.err.println("[dispatch-gate] " + dispatchable + " of " + defuns.size() + " defuns dispatchable ("
+					+ valueFuncIds.size() + " funcIds materialized as values, " + rows.size() + " registry rows)");
+			for (int i = 0; i < defuns.size(); i++) {
+				String name = defuns.get(i).name;
+				if (rows.contains(i)) {
 					System.err.println("[dispatch-gate] name-armed\t" + name + "\tby\t"
 							+ DesignatorSpellings.matched(name, spelledLiterals, symbolBuilders));
 				}
+				else if (!valueFuncIds.contains(i)) {
+					System.err.println("[dispatch-gate] call-only\t" + name);
+				}
 			}
 		}
-		return dispatchable;
+		return rows;
 	}
 
 	/**
 	 * Whether the program can produce a function NAME this compile never sees spelled out
-	 * -- in which case {@link #dispatchableFuncIds} must keep every function
-	 * dispatchable, because {@code _lookup} may be asked for any of them.
+	 * -- in which case {@link #registryFuncIds} must keep every function dispatchable,
+	 * because {@code _lookup} may be asked for any of them.
 	 *
 	 * <p>
 	 * Only the DATA EVALUATORS answer yes -- {@code eval}, {@code read},
@@ -9481,13 +9504,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * function whose name exists only in the input, which no probe of the module's own
 	 * constants can cover. The symbol builders ({@code intern}, {@code find-symbol},
 	 * {@code uiop:symbol-call}, ...) no longer bail: whatever they can produce that
-	 * RESOLVES is a spelling the module holds, and {@link #dispatchableFuncIds} probes
-	 * every such spelling (symbol, framed string literal, keyword, alias, bare member). A
-	 * name forged out of computed pieces is {@code LibraryDefunPruner}'s documented
-	 * carve-out -- the ordinary undefined-function error, {@code --dynamic} to restore.
-	 * The trigger stays syntactic rather than dataflow-shaped on purpose: a dataflow
-	 * answer would have to prove no symbol out of {@code read} reaches a funcall, and
-	 * being wrong is a trap rather than a diagnosis.
+	 * RESOLVES is a spelling the module holds, and {@link #registryFuncIds} probes every
+	 * such spelling (symbol, framed string literal, keyword, alias, bare member). A name
+	 * forged out of computed pieces is {@code LibraryDefunPruner}'s documented carve-out
+	 * -- the ordinary undefined-function error, {@code --dynamic} to restore. The trigger
+	 * stays syntactic rather than dataflow-shaped on purpose: a dataflow answer would
+	 * have to prove no symbol out of {@code read} reaches a funcall, and being wrong is a
+	 * trap rather than a diagnosis.
 	 * @param program the program, after every AST pass
 	 * @param usesRead whether the reader runtime is emitted
 	 * @param usesLoad whether a runtime load survived the inliner
@@ -10609,7 +10632,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * value ({@link WasmLambdaCompiler#emitClosureValue}). Shared by every
 		 * {@code Ctx} (one mutable set, like {@link #indirectCallArities}) and read after
 		 * the last body is emitted to decide which targets need a
-		 * {@code buildDispatchBody} case -- see {@code dispatchableFuncIds} in
+		 * {@code buildDispatchBody} case -- see {@code registryFuncIds} in
 		 * {@code compile}. A funcId absent here is called only DIRECTLY, so the arity
 		 * dispatchers have no reason to name it and {@code --optimize} can shake it out.
 		 */
@@ -10628,11 +10651,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * ({@link WasmEmitHelper#compileStringLiteral} and the few emitters that build a
 		 * literal-derived value directly). Shared by every {@code Ctx} (one mutable set,
 		 * like {@link #valueFuncIds}) and read after the last body is emitted by
-		 * {@code dispatchableFuncIds}: a runtime symbol designator can only ever BE one
-		 * of these (or a builder's product from one), so the name-registry probes read
-		 * this set rather than the whole string table -- an entry the compiler interned
-		 * for a private table (an instance-layout slot name, a printer piece, a registry
-		 * row) is not a name the program spells, and must not arm a dispatch-ladder case.
+		 * {@code registryFuncIds}: a runtime symbol designator can only ever BE one of
+		 * these (or a builder's product from one), so the name-registry probes read this
+		 * set rather than the whole string table -- an entry the compiler interned for a
+		 * private table (an instance-layout slot name, a printer piece, a registry row)
+		 * is not a name the program spells, and must not arm a dispatch-ladder case.
 		 */
 		Set<String> spelledLiterals;
 
@@ -10643,8 +10666,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * {@code 'cons}, {@code 'string} and friends as type designators inside its own
 		 * bodies, which name wrapper defuns without any of them ever being a function
 		 * designator, and reading the full set therefore armed the registry for every
-		 * program ever compiled. {@code dispatchableFuncIds} still reads the full set:
-		 * once the registry is live, a row is cheap and a spelling anywhere can reach it.
+		 * program ever compiled. {@code registryFuncIds} still reads the full set: once
+		 * the registry is live, a row is cheap and a spelling anywhere can reach it.
 		 */
 		Set<String> userSpelledLiterals;
 

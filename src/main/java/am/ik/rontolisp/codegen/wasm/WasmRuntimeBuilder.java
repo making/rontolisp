@@ -2183,8 +2183,8 @@ final class WasmRuntimeBuilder {
 	 * @param dispatchable the funcIds this program can reach as a function VALUE, or
 	 * {@code null} for "every one of them". A funcId outside the set is called only
 	 * directly, so giving it a case would only pin it for {@code --optimize}
-	 * ({@code WasmLispCompiler.dispatchableFuncIds}); its {@code br_table} slot points at
-	 * the default arm, which is where an unresolvable designator already went.
+	 * ({@code WasmLispCompiler.registryFuncIds}); its {@code br_table} slot points at the
+	 * default arm, which is where an unresolvable designator already went.
 	 * @param pageFuncBase the module function index the first page would take, when this
 	 * dispatcher needs pages
 	 * @param notFunction what applying a non-function throws, or {@code null} outside EH

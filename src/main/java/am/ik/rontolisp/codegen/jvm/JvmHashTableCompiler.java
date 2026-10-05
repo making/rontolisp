@@ -283,9 +283,18 @@ final class JvmHashTableCompiler {
 		// pair = (Object[]) arr[i]
 		c.aload(arrSlot).iload(iSlot).aaload().checkcast(ctx.objectArrayClass).astore(pairSlot);
 
-		// _invoke_2(func, pair[0], pair[1]); pop
+		// _invoke_2(func, key, pair[1]); pop -- the key is pair[0], except that an
+		// equalp table's pair whose fold differs from its key keeps the key as first
+		// stored in a third slot (RontoHashTable): in a program that can make such a
+		// table the key is pair[(pair.length - 2) * 2], slot 0 or slot 2, read without
+		// a branch.
 		c.aload(funcSlot);
-		c.aload(pairSlot).iconst_0().aaload();
+		if (ctx.usesEqualpHashTables) {
+			c.aload(pairSlot).dup().arraylength().iconst_2().isub().iconst_1().ishl().aaload();
+		}
+		else {
+			c.aload(pairSlot).iconst_0().aaload();
+		}
 		c.aload(pairSlot).iconst_1().aaload();
 		JvmFunctionCallCompiler.emitDispatchCall(2, ctx, className);
 		c.pop();

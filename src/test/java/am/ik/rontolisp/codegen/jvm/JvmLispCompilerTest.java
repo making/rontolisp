@@ -32,6 +32,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
@@ -15517,6 +15518,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunASymbolAPackageWalkProducesCallsItsFunction() throws Exception {
+		// The name registry answers the names the baked package universes carry, so a
+		// symbol do-external-symbols or apropos-list hands back calls its function --
+		// one only ever called directly, one taken as a value, one taken as a value only
+		// in dead code. The twins are
+		// LispEvaluatorTest#aSymbolAPackageWalkProducesCallsItsFunction and
+		// WasmLispCompilerIntegrationTest#aSymbolAPackageWalkProducesCallsItsFunction.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.PackageWalkDesignatorFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol() throws Exception {
 		// A standard name reached through a computed name or package designator, or
 		// asked of symbol-package, answers the cl symbol -- the compiled runtime carries
@@ -17224,7 +17239,16 @@ class JvmLispCompilerTest {
 				  (setf (gethash #\\b h) 2)
 				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) h)
 				  (print (sort acc #'string<)))
-				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"B\" \"CS\")");
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"b\" \"cs\")");
+	}
+
+	@Test
+	void compileAndRunAHashTableHandsBackTheKeyAsFirstStored() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableHandsBackTheKeyAsFirstStored.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableKeyPrograms.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HashTableKeyPrograms.EXPECTED);
 	}
 
 	@Test

@@ -1875,7 +1875,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		globals.addAll(specialVars);
 		// The shared name dispatches injected below are called only from the sites the
 		// compiler lowers onto them, never through a designator: no dispatcher case
-		// (dispatchableFuncIds), so a program whose names resolve at run time does not
+		// (registryFuncIds), so a program whose names resolve at run time does not
 		// keep one alive that no reachable site calls.
 		Set<String> callOnlyRuntimes = new HashSet<>();
 		boolean usesSet = LispMacroExpander.programUsesSet(program) || LispMacroExpander.programUsesSet(injectedForms);
@@ -3076,8 +3076,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expansions that ran during Pass 2 included. Everything else is only ever
 		// called directly, and dropping its dispatcher case is what lets
 		// the writer's shake reach the library code an ASDF system splices.
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
+		// A package walk interns the baked universes' spellings at run time: names the
+		// program holds without emitting them, which the probes read like its own.
+		spelledLiterals.addAll(RuntimeNameProducers.packageWalkSpellings(program));
+		// The registry's rows are the names a runtime designator can carry; the
+		// dispatchers take those plus every funcId materialized as a value. Computed
+		// together, so a row always has its case.
+		Set<Integer> registryFuncIds = registryFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
 				nameResolvable, symbolBuilders, callOnlyRuntimes);
+		Set<Integer> dispatchableFuncIds = new HashSet<>(valueFuncIds);
+		dispatchableFuncIds.addAll(registryFuncIds);
 		if (needsLookup) {
 			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
 			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
@@ -3143,7 +3151,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				applyCode = JvmEvalRuntimeBuilder.buildApply(ec, usesEval);
 				applyEntryCode = JvmEvalRuntimeBuilder.buildApplyEntry(ec);
 			}
-			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds,
+			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, registryFuncIds,
 					this.dynamic || nameResolvable || symbolBuilders, spelledLiterals);
 			for (int g = 1; g < lookupSegments.size(); g++) {
 				lookupSegmentNames.add(cp.utf8Entry("_lookup$" + g));
@@ -3424,11 +3432,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A function value prints as the interpreter's #<function NAME>, or #<lambda>
 		// when the funcId has no name (anonymous lambdas, and the runtime sentinel).
 		// _funName is the funcId -> name table, carrying a row for exactly the funcIds
-		// dispatchableFuncIds can reach by name or materializes as a value -- the two
-		// directions of one gate, so a name is in the table exactly when the same run
-		// could have resolved that name to this funcId. A program that never lets a
-		// NAMED function become a value emits no table at all, and its closures print
-		// anonymous from a constant.
+		// the dispatchers take: a name the registry answers (registryFuncIds) or a
+		// function materialized as a value -- every funcId a function object of this
+		// run can carry. A program that never lets a NAMED function become a value
+		// emits no table at all, and its closures print anonymous from a constant.
 		TreeMap<Integer, StringEntry> funNameEntries = new TreeMap<>();
 		for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 			if (dispatchableFuncIds.contains(entry.getValue().funcId())) {
@@ -5071,33 +5078,35 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The funcIds the {@code _invoke_N}/{@code _invoke_v} dispatchers and the
-	 * {@code _lookup} name registry must be able to reach -- everything else in
+	 * The funcIds the {@code _lookup} name registry answers -- the names a runtime SYMBOL
+	 * designator can resolve. The {@code _invoke_N}/{@code _invoke_v} dispatchers take
+	 * these plus {@code valueFuncIds} (what Pass 2 actually materialized as a closure, so
+	 * a {@code #'name} a macro synthesized during Pass 2 counts); everything else in
 	 * {@code functions} is called only through a direct {@code invokestatic}, so naming
 	 * it in a dispatcher would do nothing except keep it alive for the writer's shake
 	 * ({@code .kb/optimize-dead-code-elimination.md}). The WASM twin is
-	 * {@code WasmLispCompiler.dispatchableFuncIds}, and the two must agree: a name that
-	 * stops resolving here has to stop resolving there too, or the backends disagree
-	 * about which forged designator still works.
+	 * {@code WasmLispCompiler.registryFuncIds}, and the two must agree: a name that stops
+	 * resolving here has to stop resolving there too, or the backends disagree about
+	 * which forged designator still works.
 	 *
 	 * <p>
-	 * Two sources, both EXACT rather than heuristic:
-	 * <ul>
-	 * <li>{@code valueFuncIds} -- what Pass 2 actually materialized as a closure, so a
-	 * {@code #'name} a macro synthesized during Pass 2 counts (a pre-scan of the source
-	 * program would have missed exactly those);</li>
-	 * <li>the names a runtime SYMBOL designator can resolve. {@code _lookup} compares the
-	 * designator against string CONSTANTS, so a registry row is reachable only when the
-	 * program already loads that name as a string VALUE -- a quoted symbol, a string
-	 * literal, an {@code intern} of a literal. The probe reads
+	 * A function VALUE never reaches the registry: it carries its funcId to the
+	 * dispatcher. So a function materialized as a value has a row only when its name is
+	 * reachable too -- every row makes its value ({@link MethodCode#makesValueOf}), and a
+	 * row for a {@code #'name} compiled only in dead code would keep the function alive
+	 * for a value no kept body makes.
+	 *
+	 * <p>
+	 * {@code _lookup} compares the designator against string CONSTANTS, so a registry row
+	 * is reachable only when the program already loads that name as a string VALUE -- a
+	 * quoted symbol, a string literal, an {@code intern} of a literal. The probe reads
 	 * {@code Ctx.spelledLiterals} -- the spellings Pass 2 emitted as values -- not the
 	 * whole constant pool: the pool also holds strings the compiler added for its own
 	 * machinery (layout tables, runtime error messages), and no run-time path turns those
 	 * into a designator the program did not spell itself. This is the constant-pool
 	 * counterpart of the WASM side's spelled-literal test, and the two must classify
 	 * alike -- which is why the spellings themselves come from the shared
-	 * {@link DesignatorSpellings} rather than from a list repeated on each side.</li>
-	 * </ul>
+	 * {@link DesignatorSpellings} rather than from a list repeated on each side.
 	 *
 	 * <p>
 	 * The carve-out is {@link am.ik.rontolisp.eval.LibraryDefunPruner}'s, verbatim: a
@@ -5108,15 +5117,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param valueFuncIds the funcIds Pass 2 materialized as function values
 	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @param anyNameResolvable whether a data evaluator can produce any name at run time
 	 * @param symbolBuilders whether the program contains a symbol BUILDER
 	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
 	 * literal or keyword spelling become a designator, so only then are those probes
 	 * applied
 	 * @param callOnly the compiler's shared name dispatches, called only from the sites
 	 * lowered onto them -- never a designator's target, however names resolve
-	 * @return the funcIds that need a dispatcher case (and a registry row)
+	 * @return the funcIds that get a registry row (and a dispatcher case)
 	 */
-	private Set<Integer> dispatchableFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
+	private Set<Integer> registryFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
 			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders,
 			Set<String> callOnly) {
 		if (this.dynamic || anyNameResolvable) {
@@ -5130,7 +5140,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			return all;
 		}
-		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
+		Set<Integer> rows = new HashSet<>();
 		if (registryLive) {
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 				if (callOnly.contains(entry.getKey())) {
@@ -5142,28 +5152,30 @@ public final class JvmLispCompiler implements LispCompiler {
 				// symbol spellings. The list is shared with the WASM twin
 				// (compiler.DesignatorSpellings) so the two cannot drift.
 				if (DesignatorSpellings.anySpelled(entry.getKey(), spelledLiterals, symbolBuilders)) {
-					dispatchable.add(entry.getValue().funcId());
+					rows.add(entry.getValue().funcId());
 				}
 			}
 		}
 		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
+			dispatchable.addAll(rows);
 			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + functions.size()
-					+ " functions dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
+					+ " functions dispatchable (" + valueFuncIds.size() + " funcIds materialized as values, "
+					+ rows.size() + " registry rows)");
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
-				if (dispatchable.contains(entry.getValue().funcId())
-						&& !valueFuncIds.contains(entry.getValue().funcId())) {
+				if (rows.contains(entry.getValue().funcId())) {
 					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey() + "\tby\t"
 							+ DesignatorSpellings.matched(entry.getKey(), spelledLiterals, symbolBuilders));
 				}
 			}
 		}
-		return dispatchable;
+		return rows;
 	}
 
 	/**
 	 * Whether the program can produce a function NAME this compile never sees spelled out
-	 * -- in which case {@link #dispatchableFuncIds} must keep every function
-	 * dispatchable. Only the data evaluators ({@code eval}/{@code read}/
+	 * -- in which case {@link #registryFuncIds} must keep every function dispatchable.
+	 * Only the data evaluators ({@code eval}/{@code read}/
 	 * {@code read-from-string}/{@code load}) answer yes; the symbol builders
 	 * ({@code intern}, {@code find-symbol}, ...) are covered by the probes instead -- see
 	 * the WASM twin {@code WasmLispCompiler.anyNameResolvable}, whose doc carries the
@@ -6772,12 +6784,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * -- a quoted/self-evaluating symbol's name, a string literal's framed form, a
 		 * keyword -- recorded where the value is loaded
 		 * ({@link JvmEmitHelper#compileStringLiteral}). One mutable set shared by every
-		 * {@code Ctx}, like {@link #valueFuncIds}, and read by
-		 * {@code dispatchableFuncIds}: a runtime symbol designator can only ever BE one
-		 * of these (or a builder's product from one), so the name-registry probes read
-		 * this set rather than the whole constant pool -- a string the compiler put in
-		 * the pool for its own machinery (a layout table, a runtime error message) is not
-		 * a name the program spells, and must not arm a dispatch case.
+		 * {@code Ctx}, like {@link #valueFuncIds}, and read by {@code registryFuncIds}: a
+		 * runtime symbol designator can only ever BE one of these (or a builder's product
+		 * from one), so the name-registry probes read this set rather than the whole
+		 * constant pool -- a string the compiler put in the pool for its own machinery (a
+		 * layout table, a runtime error message) is not a name the program spells, and
+		 * must not arm a dispatch case.
 		 */
 		Set<String> spelledLiterals;
 

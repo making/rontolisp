@@ -115,7 +115,8 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   `(intern s)` used to trip the exception (found 2026-09-20 when
   `package-shadowing-symbols` joined the table's users); the pre-scan now also places
   the tables for a trig name spelled as a string literal when a builder is present
-  (`programSpellsStringLiteral`).
+  (`programSpellsStringLiteral`), and for one a package walk can hand back
+  (`RuntimeNameProducers.packageWalkSpellings`, which arms the universes' names).
 - `Math.scalb` in `Pow`'s subnormal tail is `(z * 2^-1000) * 2^(n+1000)` in the source:
   exact steps and one rounding, the same double `scalb`'s stepped multiply lands on.
 

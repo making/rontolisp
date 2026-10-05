@@ -994,9 +994,10 @@ final class JvmEvalRuntimeBuilder {
 	private List<MethodCode> lookupSegments(ClassEntry thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
 			Set<String> spelledLiterals) {
-		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
-		// would resolve here and then fall through the dispatcher's search tree
-		// (JvmLispCompiler.dispatchableFuncIds decides both together). Every parameter
+		// Only the names a runtime designator can carry (registryFuncIds), each of
+		// which the dispatchers keep a case for -- a name whose funcId had no case
+		// would resolve here and then fall through the dispatcher's search tree, so
+		// JvmLispCompiler decides the two sets together. Every parameter
 		// count answers: a designator's call reaches the SPREAD dispatcher when it is
 		// wider than the per-arity ones, and a function of eight or more parameters left
 		// out here answered (eval '(f a1 ... a8)) and (funcall 'f ...) with nil or an

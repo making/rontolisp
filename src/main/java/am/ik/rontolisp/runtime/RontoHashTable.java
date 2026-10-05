@@ -15,15 +15,18 @@ import java.util.Objects;
  *
  * <p>
  * A table is a {@link #MAP_CLASS} used as a BUCKET INDEX: the boxed {@code Integer}
- * structural hash of a key maps to a {@link #LIST_CLASS} of {@code Object[2]} pairs
- * (original key, stored value), which the lookup scans with the recursive {@code _equal}.
- * Insertion order -- what {@code maphash} walks -- is a second {@link #LIST_CLASS} of the
- * same pairs, hanging off {@link #ORDER_KEY}; a String key can never collide with an
- * {@code Integer} bucket key, so the whole table stays ONE object that
- * {@code hash-table-p} and the printer recognise by its class alone. A removed pair is
- * NOT unlinked from that list (unlinking is O(n) per removal: scan plus memmove, which
- * made 50,000 removals take ~3 s -- `.todo/855`); its key slot is nulled instead and the
- * list compacts lazily, while the count of such tombstones hangs off {@link #DEAD_KEY}.
+ * structural hash of a key maps to a {@link #LIST_CLASS} of {@code Object[2]} pairs (key
+ * as first stored, stored value), which the lookup scans with the recursive
+ * {@code _equal}. An {@code equalp} table's pair holds the key's FOLD in slot 0, which is
+ * what the scan compares, and when the fold differs from the key a third slot holding the
+ * key as first stored, which is what {@code maphash} hands back. Insertion order -- what
+ * {@code maphash} walks -- is a second {@link #LIST_CLASS} of the same pairs, hanging off
+ * {@link #ORDER_KEY}; a String key can never collide with an {@code Integer} bucket key,
+ * so the whole table stays ONE object that {@code hash-table-p} and the printer recognise
+ * by its class alone. A removed pair is NOT unlinked from that list (unlinking is O(n)
+ * per removal: scan plus memmove, which made 50,000 removals take ~3 s -- `.todo/855`);
+ * its key slot is nulled instead and the list compacts lazily, while the count of such
+ * tombstones hangs off {@link #DEAD_KEY}.
  *
  * <p>
  * The class is exact, not merely map-shaped: the emitted helpers cast to it, so a plain

@@ -212,7 +212,12 @@ ever calls it that way. So a function is listed only when your program can
 actually obtain it as a value — `#'name`, a quoted `'name` designator, a
 `lambda` — and everything else becomes ordinary dead code the shaker
 removes. A `lambda` counts only while code that survives the shake makes it: a
-closure made only inside a function nothing calls goes with that function. On a
+closure made only inside a function nothing calls goes with that function. A
+`#'name` makes the function a value, not its name a designator: a symbol finds a
+function at run time only when the program spells that name as a constant, or a
+package walk (`do-symbols`, `apropos-list`, ...) hands the symbol back, so a
+function taken as a value only inside a function nothing calls goes with it as
+well. On a
 program that loads `md5` and calls one function, that is the difference between
 about 1.1 MB and 582 KB.
 
@@ -245,7 +250,8 @@ run time.
 One carve-out follows from that: a designator assembled at run time
 out of **computed** pieces — `(funcall (intern (concatenate 'string "gre"
 suffix)))` — is no constant the compiler can read, so the call signals the
-ordinary "undefined function" error. `--dynamic` is the way back, and
+ordinary "undefined function" error, whether or not the program also takes that
+function as a `#'name` value. `--dynamic` is the way back, and
 `--optimize=off` is not: the listing is not part of what the level switches, so
 declining the optimizer does not bring such a name back.
 
