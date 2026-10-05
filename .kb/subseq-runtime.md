@@ -214,7 +214,8 @@ Where each lane checks:
 - The `--no-gc` scalar wasm backend (`NoGcWasmCompiler`, outside `CiSpecE2eTest`'s four)
   is untouched: `.kb/no-gc-scalar-wasm.md` names its `subseq` as unchecked.
 - Pins: `SubseqBoundsFixture` (every representation, the full text, the type-error's
-  datum and expected type, a non-integer bound's row;
+  datum and expected type, a non-integer bound's row, a past-the-int-range row: 2^30,
+  2^32, 2^32 + 3, 2^62, 2^64;
   `LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend`,
   `JvmLispCompilerTest#compileAndRunSubseqSignalsInvalidBounds`,
   `WasmLispCompilerIntegrationTest#subseqSignalsInvalidBounds` -- P1 and component),
@@ -222,7 +223,9 @@ Where each lane checks:
   `_subseqCore` lane's slots),
   `ClojureInteropTest#aSubstringOfABuiltStringRefusesARangeOutsideIt`, ci-spec
   `subseq-refuses-a-bad-range-in-every-representation` (SBCL's answers, the class by a
-  `type-error` clause), `subseq-refuses-a-non-integer-bound` (SBCL's class and datum, the
+  `type-error` clause; a bound past the int range is a column of it, except a list's end of
+  2^30 / 2^32, which SBCL conses the list up to before refusing),
+  `subseq-refuses-a-non-integer-bound` (SBCL's class and datum, the
   bounded string operators included).
 
 ## Bounded string operators -- the SAME refusal, named `SUBSEQ`
@@ -251,7 +254,8 @@ signals a `type-error` for all five and its text names no operator either.
   `write-string :start` program, on JVM / P1 / component).
 - Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest` -- P1 and component), ci-spec
-  `bounded-string-operators-refuse-a-bad-range` (SBCL's class).
+  `bounded-string-operators-refuse-a-bad-range` (SBCL's class; a 2^32 end and a 2^62 start
+  included).
 - A non-integer bound is refused like `subseq`'s ("Bounds check" above). Known gap: a nil
   `:start` is refused by the interpreter (and SBCL) but read as 0 on the compiled paths by
   `write-string` / `write-line` (`lowerWriteStringBounds` binds `(or start 0)`) and by every

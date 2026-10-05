@@ -12,11 +12,12 @@ package am.ik.rontolisp;
  * {@code [start, length]} -- and whose expected type is that range,
  * {@code (INTEGER LO HI)}. A bound that is no integer ({@code "a"}, {@code 1.5}, a nil
  * start) is outside its range like any other: the same report, printing the bound as
- * given, the same {@code type-error}. The bounds are computed at run time so no backend
- * can fold them; before the check reached every representation, the compile paths
- * answered a truncated list, a raw {@code AREF} report, a {@code ClassCastException} or a
- * wasm trap, and a non-integer bound was a {@code simple-error}, a slot-less
- * {@code type-error} or a wasm cast trap.
+ * given, the same {@code type-error}; so is an integer past the int range ({@code 2^30},
+ * {@code 2^32}, {@code 2^62}, {@code 2^64}), which no lane may read as its low bits. The
+ * bounds are computed at run time so no backend can fold them; before the check reached
+ * every representation, the compile paths answered a truncated list, a raw {@code AREF}
+ * report, a {@code ClassCastException} or a wasm trap, and a non-integer bound was a
+ * {@code simple-error}, a slot-less {@code type-error} or a wasm cast trap.
  */
 public final class SubseqBoundsFixture {
 
@@ -53,6 +54,16 @@ public final class SubseqBoundsFixture {
 			                 *probe-fp*))
 			  (print (list (subseq-bound-probe s "a") (subseq-bound-probe s 1 "a") (subseq-bound-probe s 1.5 2)
 			               (subseq-bound-probe s nil))))
+			(defvar *probe-2-30* (expt 2 30))
+			(defvar *probe-2-32* (expt 2 32))
+			(defvar *probe-2-62* (expt 2 62))
+			(defvar *probe-2-64* (expt 2 64))
+			(dolist (s (list "abc" (list 1 2 3) (vector 1 2 3) (concatenate 'string "ab" "c")
+			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
+			                 *probe-fp*))
+			  (print (list (subseq-bound-probe s 0 *probe-2-30*) (subseq-bound-probe s 0 *probe-2-32*)
+			               (subseq-bound-probe s (+ *probe-2-32* 3)) (subseq-bound-probe s 1 *probe-2-62*)
+			               (subseq-bound-probe s *probe-2-64*))))
 			""";
 
 	/** What {@link #PROGRAM} prints, one value per line. */
@@ -61,7 +72,8 @@ public final class SubseqBoundsFixture {
 			row("vector", 3, "#(2)", "#(3)"), row("string", 3, "\"b\"", "\"c\""), row("vector", 3, "#(2)", "#(3)"),
 			row("vector", 2, "#(2)", "#()"), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(3), typeRow(2),
 			boundRow("string", 3), boundRow("list", 3), boundRow("vector", 3), boundRow("string", 3),
-			boundRow("vector", 3), boundRow("vector", 2));
+			boundRow("vector", 3), boundRow("vector", 2), bigRow("string", 3), bigRow("list", 3), bigRow("vector", 3),
+			bigRow("string", 3), bigRow("vector", 3), bigRow("vector", 2));
 
 	// One printed row: the five refused ranges (-1 / 1 5 / 2 1 / 4 / 0 -1) and the two
 	// answers.
@@ -76,6 +88,21 @@ public final class SubseqBoundsFixture {
 	private static String typeRow(int length) {
 		return "((-1 (INTEGER 0 " + length + ")) (5 (INTEGER 1 " + length + ")) (1 (INTEGER 2 " + length
 				+ ")) (4 (INTEGER 0 " + length + ")) (-1 (INTEGER 0 " + length + ")))";
+	}
+
+	// One printed past-the-int-range row: an end of 2^30, an end of 2^32, a start of 2^32
+	// + 3,
+	// an end of 2^62 after a start of 1, a start of 2^64 -- the bound as given, never its
+	// low
+	// bits.
+	private static String bigRow(String kind, int length) {
+		String tail = " for " + kind + " of length " + length + "\"";
+		String range = "(INTEGER 0 " + length + ")";
+		return "((1073741824 " + range + " \"SUBSEQ: invalid bounds 0, 1073741824" + tail + ") (4294967296 " + range
+				+ " \"SUBSEQ: invalid bounds 0, 4294967296" + tail + ") (4294967299 " + range
+				+ " \"SUBSEQ: invalid bounds 4294967299, " + length + tail + ") (4611686018427387904 (INTEGER 1 "
+				+ length + ") \"SUBSEQ: invalid bounds 1, 4611686018427387904" + tail + ") (18446744073709551616 "
+				+ range + " \"SUBSEQ: invalid bounds 18446744073709551616, " + length + tail + "))";
 	}
 
 	// One printed non-integer row: a string start, a string end, a float start, a nil
