@@ -17081,8 +17081,10 @@ public final class LispMacroExpander {
 		LispSymbol s = new LispSymbol(prefix + "_s");
 		LispSymbol st = new LispSymbol(prefix + "_b");
 		LispSymbol e = new LispSymbol(prefix + "_e");
-		LispVal startInit = startExpr == null ? new LispInteger(0)
-				: fmtCall(LispNames.OR, startExpr, new LispInteger(0));
+		// A given :start reaches subseq as written (a nil one is the bounds type-error,
+		// as in
+		// SBCL); only a nil :end means the string's length.
+		LispVal startInit = startExpr == null ? new LispInteger(0) : startExpr;
 		LispVal endInit = endExpr == null || endExpr instanceof LispNil ? fmtCall(LispNames.LENGTH, s)
 				: fmtCall(LispNames.OR, endExpr, fmtCall(LispNames.LENGTH, s));
 		List<LispVal> inner = new java.util.ArrayList<>();
