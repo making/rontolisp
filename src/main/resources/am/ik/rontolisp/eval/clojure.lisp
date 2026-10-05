@@ -7357,10 +7357,36 @@
 
 (defun rontolisp::%clojure-deref-other (x)
   "deref of anything but an atom cell: a reduced value's content (the oracle's
-   Reduced is an IDeref), a var's root, else the oracle's cast failure."
+   Reduced is an IDeref), a var's root, a host Future's get, else the oracle's
+   cast failure."
   (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
    ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
+   ((rontolisp::%clojure-host-object-p x "java.util.concurrent.Future")
+    (rontolisp::%clojure-host-future-get x))
    (t (rontolisp::%clojure-class-cast-exception-of "deref needs an atom" x))))
+
+;; deref's host arm: a host Future is read through its own get, a failure
+;; surfacing as the host's ExecutionException or CancellationException.
+(defun rontolisp::%clojure-host-future-get (f)
+  (java:call (the (java:object "java.util.concurrent.Future") f) "get"))
+
+;; The three-argument deref of the host Future F: get within MS milliseconds
+;; (truncated, as the oracle's long coercion), answering DEFAULT when the host
+;; reports a TimeoutException and letting any other failure through.
+(defun rontolisp::%clojure-host-future-get-within (f ms default)
+  (if (realp ms)
+      (handler-case (java:call
+                     (the (java:object "java.util.concurrent.Future") f) "get"
+                     (values (truncate ms))
+                     (java:field "java.util.concurrent.TimeUnit"
+                                 "MILLISECONDS"))
+        (java:java-exception (c)
+          (if (rontolisp::%clojure-host-is-a (java:java-exception-cause c)
+               "java.util.concurrent.TimeoutException")
+              default
+              (error c))))
+      (rontolisp::%clojure-class-cast-exception-of
+       "deref needs a number as its timeout" ms)))
 
 (defun rontolisp::%clojure-seq-rest (s)
   "The seq past the head of the realized seq S: its tail, realized one level

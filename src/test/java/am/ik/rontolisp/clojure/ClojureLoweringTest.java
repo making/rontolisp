@@ -1072,8 +1072,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def a (atom 1)) @a")).contains("AREF");
 		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("APPLY");
 		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("EQL");
-		assertThatThrownBy(() -> Clojure.read("(deref a 1 2)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("deref takes one argument");
+		assertThatThrownBy(() -> Clojure.read("(deref a 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("deref takes one or three arguments");
+		assertThatThrownBy(() -> Clojure.read("(deref a 1 2 3)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("deref takes one or three arguments");
 	}
 
 	@Test

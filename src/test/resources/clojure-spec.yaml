@@ -1424,6 +1424,20 @@ cases:
       5
       (1 2)
       42
+  - name: deref-with-a-timeout-refuses-a-value-that-is-no-future
+    # Oracle-identical (clj 1.12.6): the three-argument deref needs an
+    # IBlockingDeref, which only a host Future is here, so an atom, a volatile, a
+    # var, a number, a string and a collection are a ClassCastException (nil a
+    # NullPointerException), after the timeout and the timeout value ran. The
+    # host Future's own answers are pinned by ClojureInteropTest.
+    source: |
+      (defn dtk [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (def dtk-n (atom 0))
+      (println [(dtk #(deref (atom 1) 10 :t)) (dtk #(deref (volatile! 1) 10 :t)) (dtk #(deref #'dtk 10 :t)) (dtk #(deref 1 10 :t)) (dtk #(deref "s" 10 :t)) (dtk #(deref [1] 10 :t)) (dtk #(deref nil 10 :t))])
+      (println (dtk #(deref (atom 5) (do (swap! dtk-n inc) 10) (do (swap! dtk-n inc) :t))) @dtk-n @(atom 3))
+    expected: |
+      [:cce :cce :cce :cce :cce :cce :npe]
+      :cce 2 3
   - name: multimethods-dispatch-over-a-table
     # defmulti is a method table plus a dispatcher defun; defmethod stores,
     # remove-method drops, get-method reads, and a miss falls back to the

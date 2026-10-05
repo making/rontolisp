@@ -108,7 +108,7 @@ answered `2 5 3` before).
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
-| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
+| `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle; `deref` also reads a host `Future`, with or without a timeout ("A host `Future` under `deref`") |
 | `ref` `dosync` `alter` `commute` `ref-set` `ensure` | the cell under the spliced STM runtime | "State" |
 | `agent` `send` `send-off` `await` `shutdown-agents` | the cell as a synchronous agent | "State" |
 | `binding` / `set!` | `let*` of specials plus a depth counter | "State" |
@@ -1363,6 +1363,25 @@ The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm co
   map), `find`/`reduce-kv` within noise.
   Pins: `ClojureInteropTest#aHostMapIsAMapToTheMapVerbs` (oracle-identical),
   `ClojureLibraryTest#aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms`.
+- A host `Future` under `deref` (oracle clj 1.12.6): `@f` is its `get` (a failure surfaces as
+  `ExecutionException`, a cancelled one as `CancellationException`), and the three-argument
+  `deref` is `get(ms, MILLISECONDS)` answering the third argument on `TimeoutException` (the
+  timeout truncated to a long, a non-number a `ClassCastException`); every other value, after
+  both extra arguments ran, is a `ClassCastException` (nil an NPE), so a program naming no
+  `java:` operator compiles the three-argument form to that refusal on all four backends
+  (clojure-spec `deref-with-a-timeout-refuses-a-value-that-is-no-future`). The one-argument arm is
+  a clause of `%clojure-deref-other` headed by `%clojure-host-object-p` of
+  `java.util.concurrent.Future` (the HOST family test, so the strip folds it); the timed form is
+  the lowered `if` on the same test around `%clojure-host-future-get-within`, whose handler
+  matches the cause's class by `%clojure-host-is-a` and re-signals anything else. `deref` as a
+  function value stays one argument: a variadic lambda would change the bytes of every program
+  naming it. Cost: a program naming no `java:` operator is byte-identical (wasm P1,
+  `--optimize=size`, component, JVM class with its runtime classes: `demo.clj` and an atom,
+  var and reduced `deref` program); a `java:` program that reads an atom grows by the arm's
+  closure (JVM `.toUpperCase` + `@a`: class 103,872 -> 105,633 B; wasm +66 B). Pin:
+  `ClojureInteropTest#derefOfAHostFutureIsItsGetWithAnOptionalTimeout` (oracle-identical,
+  interpreter and JVM). `future?`, `future-done?` and `realized?` still treat a host `Future` as no
+  value of that kind.
 - Host collections under the printer (decided 2026-10-04, oracle clj 1.12.6): `print-method`
   under `*print-readably*` writes a `RandomAccess` as a vector, another `List` as a list, a
   `Map` as a map and a `Set` as a set, members readably, under `*print-length*`/`*print-level*`,
