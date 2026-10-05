@@ -105,7 +105,7 @@ under `prin1` with embedded `|`/`\` doubled; `princ` never escapes. Abbreviation
 - Non-constituent set (space, tab, newline, CR, form feed, `(`, `)`, `'`, `"`, `;`, `,`, `` ` ``,
   `|`, `\`) is enumerated identically in `LispSymbol.isBareConstituent`, `buildSymEscBody` and
   `SYM_ESC_FORBIDDEN` — change one, change all three.
-- **Trap:** `type-of`/`symbol-package` read a `%class-`/`%struct-` tag off
+- **Trap:** `type-of`/`%symbol-home` read a `%class-`/`%struct-` tag off
   `(prin1-to-string designator)` by substring match; an unqualified tag round-trips as
   `"|%struct-PT|"` and breaks it. Fixed by prelude `%unescaped-symbol-text`
   (`LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL`), peeling exactly one leading/trailing `|`;

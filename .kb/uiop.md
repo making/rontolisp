@@ -328,10 +328,11 @@ top-level call consumed at resolve time like the add, so it works on every
 backend). `define-package` was already a resolver-level macro;
 `add-package-local-nickname` was already Java.
 
-Three places the string model shows through, all pinned on all four backends.
-`standard-common-lisp-symbol-p` walks the cl externals comparing member names:
-a compiled `find-symbol` builds the spelling, so its status cannot
-discriminate, and a shadowed-in standard name still reads as standard.
+Where the string model shows through, pinned on all four backends.
+(`standard-common-lisp-symbol-p` was one: it walked the cl externals by
+member name, pulling the whole `%baked-packages%` table in, and read a
+shadowed-in standard name as standard. It is `(eq (symbol-package s) :cl)` now,
+answered by the table of the standard names, `.kb/packages.md`.)
 `package-definition-form` buckets the `do-symbols` enumeration by spelling
 (owned `PKG:`/`PKG::` into `:export`/`:intern`, anything else into
 `:import-from` under its true home) and skips whatever the use list already

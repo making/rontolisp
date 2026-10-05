@@ -18082,6 +18082,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void computedLookupOfAStandardName() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol
+		// twin, on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.StandardNameLookupFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
+	}
+
+	@Test
 	void longStringConstant() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunALongStringConstant twin, on Preview 1 and
 		// the component.

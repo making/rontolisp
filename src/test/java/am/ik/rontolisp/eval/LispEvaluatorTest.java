@@ -16755,6 +16755,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
 	}
 
+	// find-symbol / intern / symbol-package of a standard name the compile paths cannot
+	// fold answer the cl symbol with CL's status. The twins are
+	// JvmLispCompilerTest#compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol
+	// and WasmLispCompilerIntegrationTest#computedLookupOfAStandardName.
+	@Test
+	void aComputedLookupOfAStandardNameAnswersTheClSymbol() {
+		assertThat(printedLines(am.ik.rontolisp.StandardNameLookupFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
+	}
+
 	// A string constant past one JVM CONSTANT_Utf8 (65,535 bytes): a long literal and
 	// package universes packing past it. The twins are
 	// JvmLispCompilerTest#compileAndRunALongStringConstant and

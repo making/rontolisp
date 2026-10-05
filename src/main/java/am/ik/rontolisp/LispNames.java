@@ -2879,6 +2879,39 @@ public final class LispNames {
 	 */
 	public static final String BAKED_ACCESS_INTERNAL = "%BAKED-ACCESS";
 
+	/**
+	 * The {@code (%standard-name-p name)} helper: whether {@code cl} exports the name,
+	 * read from the table of the standard names the compiled runtime decodes on first
+	 * use. {@code symbol-package} asks it of a bare symbol, and the {@code %baked-access}
+	 * rows of a package that uses {@code cl}
+	 * ({@code LispMacroExpander.standardNameDefinition}).
+	 */
+	public static final String STANDARD_NAME_P_INTERNAL = "%STANDARD-NAME-P";
+
+	/**
+	 * The keywords of the packages a computed package designator can name that use
+	 * {@code cl} (every designator of each), so a lookup through one asks
+	 * {@link #STANDARD_NAME_P_INTERNAL} ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String CL_USERS_INTERNAL = "%CL-USERS%";
+
+	/**
+	 * The {@code (%standard-access-status package name)} helper: the status half of a
+	 * {@code find-symbol} / {@code intern} with a computed package designator when the
+	 * program carries the standard names -- the package's row, then a standard name
+	 * through {@code cl} ({@code :inherited}), then the build's {@code :external}.
+	 */
+	public static final String STANDARD_ACCESS_STATUS_INTERNAL = "%STANDARD-ACCESS-STATUS";
+
+	/**
+	 * The {@code (%symbol-home symbol)} helper: the package keyword a compiled symbol's
+	 * spelling names -- its qualifier, {@code :keyword}, nil for an uninterned symbol,
+	 * {@code :cl-user} for a bare one. {@code symbol-package} refines the bare case
+	 * through {@link #STANDARD_NAME_P_INTERNAL}; the package walks, which look a symbol
+	 * up in that home anyway, read it as is.
+	 */
+	public static final String SYMBOL_HOME_INTERNAL = "%SYMBOL-HOME";
+
 	/** The {@code %baked-access%} rows {@link #BAKED_ACCESS_INTERNAL} reads. */
 	public static final String BAKED_ACCESS_TABLE_INTERNAL = "%BAKED-ACCESS%";
 

@@ -91,22 +91,12 @@
   (let ((%spn-package (symbol-package %spn-symbol)))
     (and %spn-package (package-name %spn-package))))
 
-;; Upstream reads (find-symbol* symbol :common-lisp nil) and tests the status,
-;; but a compiled find-symbol builds the spelling -- every bare name answers a
-;; symbol with the spelling's own status, so the status cannot discriminate.
-;; This walks the cl externals instead and compares member names (a symbol IS
-;; its spelling here, so content equality is the whole test). One documented
-;; corner in each direction: a name shadowed into another package still reads
-;; as standard, and a string/keyword/uninterned designator answers nil where
-;; upstream's eq test would -- the member test only runs on plain symbols.
+;; Upstream reads (find-symbol* symbol :common-lisp nil) and tests the status;
+;; a symbol IS its spelling here, so the same question is whether its home is
+;; cl -- symbol-package answers it from the table of the standard names on the
+;; compiled backends, and a string, keyword or uninterned symbol answers nil.
 (defun uiop/package:standard-common-lisp-symbol-p (%sclsp-symbol)
-  (and (symbolp %sclsp-symbol) (not (keywordp %sclsp-symbol))
-       (not (null (symbol-package %sclsp-symbol)))
-       (let ((%sclsp-name (symbol-name %sclsp-symbol)) (%sclsp-found nil))
-         (do-external-symbols (%sclsp-s :cl)
-           (when (string= (symbol-name %sclsp-s) %sclsp-name)
-             (setq %sclsp-found t)))
-         %sclsp-found)))
+  (and (symbolp %sclsp-symbol) (eq (symbol-package %sclsp-symbol) :cl)))
 
 (defun uiop/package:package-names (%pn-package)
   (let ((%pn-found (uiop/package:find-package* %pn-package)))

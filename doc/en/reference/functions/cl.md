@@ -148,7 +148,7 @@ page.
 | `find-symbol` | `(find-symbol "car")` | `car` when the package makes the name accessible (a present member, an inherited export, a standard name, a keyword), else `nil`; a package that does not exist yields `nil` too (compilers: only a literal string can answer `nil` for a read/compile-time package; a `make-package` product's member table is consulted everywhere) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite: the upcased package name as a keyword (no package objects), `nil` when unknown (the compilers answer a computed designator from a table baked in at compile time) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- symbols read upcased like CL, so `(symbol-name 'car)` is `"CAR"` too |
-| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `t` and `nil` included, `:cl-user` otherwise, `nil` for `#:` symbols and for a symbol `unintern` removed from its home); the compilers answer `:cl-user` for both `cl` and `cl-user` |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `t` and `nil` included, `:cl-user` otherwise, `nil` for `#:` symbols and for a symbol `unintern` removed from its home) |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- the name string of a package designator, resolved through `find-package`; an unknown designator signals |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- the packages a package uses, as `find-package` keywords; an unknown designator signals |
 | `package-used-by-list` | `(package-used-by-list :cl)` | The inverse: every package whose use list names this one |

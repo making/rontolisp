@@ -592,13 +592,14 @@ public final class LispPreludeLibrary {
 				      s))
 				""");
 		// A "package" is the upcased canonical package name as a keyword (there are no
-		// package objects), so symbol-package reads the qualifier off the symbol's
-		// stored spelling: prin1-to-string keeps it, unlike symbol-name. The
-		// interpreter overrides this with the registry-backed version (which
-		// distinguishes cl from cl-user); the compiled backends have no registry at
-		// runtime, so every bare symbol answers CL-USER here.
-		SOURCES.put(LispNames.SYMBOL_PACKAGE, """
-				(defun symbol-package (symbol)
+		// package objects), so %symbol-home reads the qualifier off the symbol's stored
+		// spelling: prin1-to-string keeps it, unlike symbol-name. A bare symbol is a cl
+		// or a cl-user one, and symbol-package tells them apart by the table of the
+		// standard names; the package walks, which look the symbol up in that home
+		// anyway, take the spelling's answer and carry no table. The interpreter
+		// overrides symbol-package with the registry-backed version.
+		SOURCES.put(LispNames.SYMBOL_HOME_INTERNAL, """
+				(defun %symbol-home (symbol)
 				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
 				         (n (length s)))
 				    (cond ((= n 0) nil)
@@ -608,6 +609,15 @@ public final class LispPreludeLibrary {
 				               (if idx
 				                   (intern (subseq s 0 idx) :keyword)
 				                   :cl-user))))))
+				""");
+		SOURCES.put(LispNames.STANDARD_NAME_P_INTERNAL,
+				am.ik.rontolisp.macro.LispMacroExpander.standardNameDefinition());
+		SOURCES.put(LispNames.SYMBOL_PACKAGE, """
+				(defun symbol-package (symbol)
+				  (let ((home (%symbol-home symbol)))
+				    (if (and (eq home :cl-user) (%standard-name-p (symbol-name symbol)))
+				        :cl
+				        home)))
 				""");
 		// type-of over %class-designator (NOT class-of, which answers a metaobject
 		// since the migration): the designator is a struct/CLOS instance's TAG symbol
@@ -1923,9 +1933,9 @@ public final class LispPreludeLibrary {
 		// with-package-iterator, over the %do-symbols-list universe. A runtime entry's
 		// member table carries the status; a baked row answers :external from its
 		// external universe, :internal for a symbol homed in the package and
-		// :inherited otherwise (cl-user's standard names are inherited, whatever the
-		// compiled symbol-package says about a bare name). The interpreter binds a
-		// native over its live registry instead.
+		// :inherited otherwise (cl-user's standard names are inherited, though the
+		// spelling homes a bare name in cl-user). The interpreter binds a native over
+		// its live registry instead.
 		SOURCES.put(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
 				"""
 						(defun %package-iterator-entries (%pie-pkgs %pie-types)
@@ -1941,7 +1951,7 @@ public final class LispPreludeLibrary {
 						                               ((member %pie-s %pie-ext) :external)
 						                               ((and (string= (string %pie-k) "CL-USER") (find-symbol (symbol-name %pie-s) :cl))
 						                                :inherited)
-						                               ((string= (string (symbol-package %pie-s)) (string %pie-k)) :internal)
+						                               ((string= (string (%symbol-home %pie-s)) (string %pie-k)) :internal)
 						                               (t :inherited))))
 						            (when (member %pie-st %pie-types)
 						              (push (list %pie-s %pie-st %pie-k) %pie-acc))))))))
@@ -1958,7 +1968,7 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, """
 				(defun %package-spelling-normalize (%psn-s)
-				  (let ((%psn-home (if (symbolp %psn-s) (symbol-package %psn-s) nil)))
+				  (let ((%psn-home (if (symbolp %psn-s) (%symbol-home %psn-s) nil)))
 				    (if (or (null %psn-home) (search "::" (prin1-to-string %psn-s)))
 				        %psn-s
 				        (let ((%psn-name (symbol-name %psn-s)))

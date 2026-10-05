@@ -520,8 +520,9 @@ made table-aware. The model:
   package answers from its member table instead, and a reached name from the
   `%baked-access` rows, below); a
   computed package designator naming nothing signals a `package-error`;
-  `symbol-package` on the compiled backends reads the qualifier off the spelling, so
-  an uninterned symbol keeps its old home there; `unintern`'s name-conflict check
+  `symbol-package` on the compiled backends reads the home off the spelling
+  (`%symbol-home`, plus the table of the standard names for a bare one), so an
+  uninterned symbol keeps its old home there; `unintern`'s name-conflict check
   runs on the interpreter only; `--no-gc` refuses the whole tier (no conses).
 
 ### Compiled lookups answer through the registry
@@ -549,10 +550,7 @@ A 2-argument `find-symbol` / `intern` into a read/compile-time package used to B
   normalizer's own site is exempt (it looks a symbol up in its own home). The status half
   takes a keyword designator as is (nickname keywords are in the table) -- a second
   `find-package` there cost a program that consumes multiple values ~1.7 us per call.
-- **Not carried: `cl` symbols under a computed lookup.** The standard names would be a
-  13.7 KB table (978 names, packed); such a lookup keeps building `PKG:NAME`, and
-  `symbol-package` of a standard symbol answers `:CL-USER` there for the same reason.
-  Re-evaluate when a consumer needs it (`.todo/d16`).
+- **The standard names travel as their own layer, not as row entries** -- next section.
 
 Cost (2026-10-05). A program with no served row is byte-identical (the `examples.yaml`
 sweep: every example and `size-report` program on JVM / P1 / component, except the ones
@@ -565,6 +563,77 @@ a computed lookup into a package WITHOUT a row, in a program that has rows, +0.3
 JVM, 0.8 -> 1.4-1.7 us WASM. `apropos-list` / `do-symbols` walks unchanged. Pinned by
 `InheritedFindSymbolFixture` (four suites), ci-spec `find-symbol-of-an-inherited-name`,
 `LispMacroExpanderTest#{injectBakedAccessLeavesAProgramNoRowServesUnchanged,injectBakedAccessServesAComputedLookupInAPackageThatUsesAnother,thePackageWalkNormalizerAloneCarriesNoRows}`.
+
+### The standard names at run time
+
+A standard name a package reaches through `cl` (`car` in a package that uses `cl`,
+`cl-user` included) under a COMPUTED name or designator used to build `PKG:CAR :EXTERNAL`
+(`CAR :INTERNAL` in `cl-user`), and `symbol-package` of a bare standard symbol answered
+`:CL-USER`: the compiled runtime could not tell a standard name. The consumer that made it
+worth carrying: `(funcall (intern (string-upcase op) :my-pkg) ...)` dispatch over an
+operator name, which died with `The function MY-PKG:LIST is undefined`. One table serves
+`symbol-package`, the lookups and their status:
+
+- **`%standard-name-p`** (`LispMacroExpander.standardNameDefinition`, a prelude entry and
+  injected by `injectBakedAccess` when the prelude did not splice it): the names `cl`
+  exports (`PackageRegistry.standardNames`: `CL_EXTERNALS` plus the 28 car/cdr
+  compositions, 979 with `while`), sorted and front-coded into one ASCII string (one mark
+  character `(code-char (+ 96 K))` for the K characters shared with the name before, then
+  the rest: 7,427 characters against 13.7 K length-prefixed), decoded into an `equal`
+  hash table on the first call. The global holds the string so it is built once: a
+  literal in the body was a fresh string per call on WASM and its index cursor walked
+  from the start every time (`.kb/string-index-cost.md`).
+- **A walk instead of a table was measured and rejected (2026-10-05)**: a front-coded
+  walk with a first-character index allocates nothing, but reads ~500 characters per
+  lookup in the big blocks (M, S), ~30 ns each on WASM: ~15 us a lookup, against
+  ~1.1-1.6 us for the table. The table's decode costs once ~5 ms on WASM and ~25 ms on a
+  cold JVM (interpreted bytecode); the walk's code was no smaller either (JVM 1,398 B of
+  bytecode against ~410 B). Its one advantage, needing no hash-table or generic sequence
+  runtime, shows only in a toy that has neither (below).
+- **Gate**: `injectBakedAccess`'s site scan (`AccessSites`) sets the standard mode for a
+  site whose name can be a standard one (computed, or a constant spelling one -- a string,
+  `'sym`, `(string 'sym)`; `(string '#:run)` cannot) and whose package can use `cl`: a
+  literal package that does, a computed designator (`cl-user` is always reachable), the
+  operators as function objects, `uiop:symbol-call`, and a one-argument form that is the
+  direct producer of a multiple-value consumer (its status is the only difference there).
+  `symbol-package` carries it through the prelude edge. Any other program is
+  byte-identical.
+- **Layered after the rows**: in standard mode `bakedAccessRows(true)` keeps `cl` out of
+  the use lists but lists as a present entry every name whose answer differs from what
+  the runtime finds without it (a used package's export, else a standard name through
+  `cl`, else the build) -- a shadowing or exported-shadowing member of a standard name,
+  an import of one into a package without `cl`, a standard name a used package re-exports
+  to one without `cl`. A literal-package site reads the row (when it has entries), then
+  `(%standard-name-p n)` when the package uses `cl`, then the build; `cl-user`'s value
+  half skips the table (the build is the same bare symbol). A computed designator reads
+  `%cl-users%` (every designator, as a keyword, of a program package or `cl-user` that
+  uses `cl`; a pre-seeded shim keeps the build, as its rows do) in the rewritten
+  `%symbol-in-package` and in `%standard-access-status`. A package that uses only `cl`
+  needs no row, so the common program carries the table without the `%baked-access`
+  machinery.
+- **`symbol-package`** is `%symbol-home` (the spelling's qualifier, `:cl-user` for a bare
+  name) refined by the table; the package walks (`%package-spelling-normalize`,
+  `%package-iterator-entries`) call `%symbol-home` -- they look the symbol up in that home
+  anyway, and a walk program carries no table (its bytes change by the helper's name).
+- The interpreter had the compositions wrong: `inheritedFrom` asked `cl`'s external SET,
+  which holds no car/cdr composition, so `(find-symbol "CADR" :p)` was `NIL NIL` and the
+  literal fold built `P:CADR`. It asks `isExternal` now.
+
+Cost (2026-10-05, JVM / P1 / component). In an example that already does string work
+(`console/word-frequency.lisp` plus one lookup) +9.2 / +8.8 / +8.8 KB, the table ~7.4 KB
+of it; `console/contact-book.lisp` plus one lookup +12.6 / +14.9 / +14.8 KB. A toy that has
+no hash table and no `concatenate` pays their runtime too: `(find-symbol (string-upcase
+"car") :p)` alone 10.2 -> 40.9 / 6.7 -> 26.1 / 7.9 -> 27.3 KB (23 -> 110 JVM methods),
+`symbol-package` of a read symbol +11.5 / +15.5 / +15.5 KB. The `examples.yaml` +
+`size-report` sweep: byte-identical except the clack / tiny-routes / ningle examples
+(+10.6-12.3 KB, ~1% / 0.3%; their `lack` / `uiop` helpers look computed names up in
+computed packages) and `jvm/cffi-sqlite.lisp` (-8 B, the `%symbol-home` name). Time per
+call, 1M calls, min of 3 (JVM / P1): a computed name in a literal package, standard 0.27
+-> 0.36 / 1.09 -> 1.11 us, other 0.32 -> 0.44 / 1.21 -> 1.62 us; a computed designator,
+standard 1.08 -> 0.74 / 3.28 -> 2.60 us, other 1.12 -> 1.16 / 3.40 -> 4.06 us;
+`symbol-package` 0.07 -> 0.16 / 0.76 -> 1.34 us. Pinned by
+`StandardNameLookupFixture` (four suites), ci-spec `find-symbol-of-a-computed-standard-name`,
+`LispMacroExpanderTest#{theStandardNameTableAnswersExactlyTheNamesClExports,injectBakedAccessCarriesTheStandardNamesForAComputedNameInAPackageThatUsesCl,aComputedDesignatorWithAComputedNameCarriesTheClUsers,aOneArgumentLookupWhoseStatusIsReadCarriesTheStandardNames,injectBakedAccessLeavesAProgramNoRowServesUnchanged}`.
 
 ### The member table (`.todo/917`)
 
