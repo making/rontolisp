@@ -303,12 +303,22 @@ public final class LambdaLists {
 			return new Expanded(parsed.required(), parsed.rest(), body);
 		}
 		boolean bounded = parsed.rest() == null && !parsed.sawKey();
+		// The prologue moves the body under a let*, away from the head of the function
+		// body, where a special declaration names the required and rest parameters it
+		// makes special: it heads both, and the let*'s own head is where it names the
+		// prologue's variables (SpecialDeclarations.hoisted; nothing for a body that
+		// declares nothing special).
+		List<LispVal> hoisted = SpecialDeclarations.hoisted(body, true);
 		if (bounded && parsed.optionals().isEmpty()) {
 			// (a &aux x): FIXED arity -- the native shape checks the count, so an extra
 			// argument signals like any other wrong count.
 			List<LispVal> bindings = new ArrayList<>();
 			appendPrologueBindings(parsed, List.of(), new LispSymbol(REST_VAR), false, bindings);
-			return new Expanded(parsed.required(), null, List.of(letStar(bindings, body)));
+			List<LispVal> auxBody = new ArrayList<>(hoisted);
+			auxBody.addAll(body);
+			List<LispVal> expandedBody = new ArrayList<>(hoisted);
+			expandedBody.add(letStar(bindings, auxBody));
+			return new Expanded(parsed.required(), null, expandedBody);
 		}
 		// The optionals that travel as parameters: as many as the budget leaves beside
 		// the required parameters and the rest list, which a callee with an optional
@@ -332,7 +342,7 @@ public final class LambdaLists {
 			appendPhysicalOptionalBindings(parsed.optionals().get(i), param, bindings);
 		}
 		appendPrologueBindings(parsed, stepped, restVar, false, bindings);
-		List<LispVal> letBody = new ArrayList<>();
+		List<LispVal> letBody = new ArrayList<>(hoisted);
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			letBody.add(unknownKeyCheck(parsed.rest() != null ? parsed.rest() : restVar, parsed.keys()));
 		}
@@ -345,7 +355,9 @@ public final class LambdaLists {
 				testSuppliedPInPlace(suppliedP, optionals.get(i), bindings, letBody);
 			}
 		}
-		return new Expanded(parsed.required(), optionals, restVar, List.of(letStar(bindings, letBody)));
+		List<LispVal> expandedBody = new ArrayList<>(hoisted);
+		expandedBody.add(letStar(bindings, letBody));
+		return new Expanded(parsed.required(), optionals, restVar, expandedBody);
 	}
 
 	/**

@@ -12,15 +12,19 @@ not depend on `compiler` -- can use it): `defvar`/`defparameter`/`defconstant`,
 `(declaim (special ...))`, `(proclaim '(special ...))`. `LispNames.SPECIAL` is NOT registered as
 a cl symbol (registering it would perturb pinned introspection counts). Earmuffs are style.
 
-- Local `(declare (special x))` IS honored PESSIMISTICALLY: `collectForm` recurses into every
-  form (skipping `quote`) and a name declared special anywhere is special program-wide
-  (cl-ppcre's convert phase).
+- A local `(declare (special x))` is SCOPED (CLHS 3.3.4; "Local special declarations" below):
+  it makes the binding it names special and the references in its body, and an inner binding
+  of the name without its own declaration is lexical. `collectProclaimed` /
+  `collectLocallyDeclared` keep the two kinds apart; `collect` (the compile paths' set) still
+  unions them, because `compiler/SpecialDeclarationScoping` has renamed every other binding
+  of a locally declared name apart by then.
 - `declare`/`special` heads are matched package-insensitively (`splitQualified`) -- under
   `(in-package p)` the resolver spells them `p::declare`/`p::special`.
-- The interpreter collects at the top-level `eval(expr)` entry BEFORE evaluating.
-- Symbol reads consult the dynamic store BEFORE the lexical chain, so a lambda or macro parameter
-  whose name is special must ALSO bind dynamically (`LispEvaluator.apply` / `expandUserMacro`
-  push/pop `DynamicBindings`; the compile paths: "Parameters" below).
+- The interpreter collects proclamations at the top-level `eval(expr)` entry BEFORE evaluating.
+- A special is NEVER bound lexically, on any backend: a closure over one reads the binding
+  active when it runs (the global after the extent), as in SBCL. A lambda or macro parameter
+  whose name is special binds dynamically only (`LispEvaluator.bindParameter`; the compile
+  paths: "Parameters" below).
 - A parameter is a binding the collector sees: `collectBoundForm` reads a `lambda`/`defun`
   lambda list (every section, supplied-p variables, default forms walked in order), so
   `(defun f (*standard-output*) ...)` makes the stream special special, as a `let` of it does.
@@ -31,11 +35,22 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
 
 - `DynamicBindings` (`eval`): per-evaluator `ThreadLocal<Map<String, Deque<LispVal>>>`;
   `specialVars` = `ConcurrentHashMap.newKeySet()`.
-- `evalLet` is two-phase when `specialVars` is non-empty (all inits in the outer env, then push
-  specials / bind lexicals), `finally` pops; `let*` reuses it via `expandLetStar`. A fast
-  lexical-only path runs when `specialVars` is empty.
-- `evalSymbolRef`, `setq`, `symbol-value`, `boundp` consult `DynamicBindings` first, gated on
-  `!specialVars.isEmpty() || progvUsed`. `evalProgv` sets `progvUsed`; extra symbols -> nil;
+- `specialVars` holds the PROCLAIMED names (and the seeded standard ones); `localSpecials` the
+  names a local declaration has named so far, recorded as each binding form reads its
+  declarations (`declaredSpecials`, `SpecialDeclarations.leading`).
+- `evalLetIn` evaluates all inits in the outer env, then binds: dynamic when the name is
+  proclaimed or the body's head declares it (`DynamicBindings.push`, no lexical twin), else
+  lexical; `finally` pops. A declared name gets `Environment.SPECIAL` in the body's scope --
+  a free declaration too -- so a reference there reads the dynamic binding even where an outer
+  lexical binding of the name is visible, and an inner binding shadows the mark. `lexicalLet`
+  (the tail-transparent fast path) takes a body with only free declarations; `let*` reuses it
+  via `expandLetStar`, which keeps each declared variable's declaration on its own `let`.
+- `evalSymbolRef` / `assignVariable`: a proclaimed special reads `DynamicBindings` first, the
+  global behind it; any other name its innermost LEXICAL binding (`Environment.lookupLexical`,
+  never the root scope), and on a miss or a mark the dynamic store -- gated on
+  `progvUsed || localSpecials.contains(name)` -- then the global. So a lexical read never
+  touches the thread-local store. `symbol-value`, `boundp` stay dynamic-first by name.
+  `evalProgv` and a `make-thread` binding alist set `progvUsed`; extra symbols -> nil;
   progv-bound names need not be declared special. Restore fires on EVERY exit.
 
 ## JVM (`JvmLetCompiler`) -- thread-scoped, hybrid representation
@@ -50,12 +65,11 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   under-collection throws in `JvmLetCompiler` at compile time.
 - Helpers (`JvmDynVarRuntimeBuilder`): `_dget`, `_dbind`, `_dset` (answers 0 when no binding, so
   the call site falls through to `putstatic _g$*`). `Ctx.dynVars` carries the fields.
-- A special binding in `let` is a DUAL-BIND: `_dbind` the old cell into a temp AND store the
-  value into a lexical slot (boxed when captured). The lexical slot exists ONLY so a closure
-  built in the body can read the entry value after the extent ended (cl-ppcre's `end-string`).
-- Read rule is DYNAMIC-FIRST (`JvmExprCompiler.compileSpecialRead`) so a callee's rebinding is
-  visible; inside a closure the CAPTURE wins. `setq` of a dual-bound name writes BOTH
-  (`JvmSetqCompiler.emitGlobalStore`); with no active binding it lands in `_g$*`.
+- A special binding in `let` is `_dbind` of the old cell into a save slot, and nothing else:
+  no lexical slot, so the name is never in `Ctx.locals` and never captured.
+- Every read goes through `JvmExprCompiler.compileSpecialRead` (`_dget`: this thread's
+  binding, else `_g$*`) -- in the binding method, a callee and a closure alike. `setq` writes
+  the active binding (`JvmSetqCompiler.emitGlobalStore`); with none it lands in `_g$*`.
 - **The body is a PROTECTED REGION of the unwind-protect machinery**
   (`JvmUnwindProtectCompiler.Region`, opened by `JvmLetCompiler`) whose cleanups are the
   internal `(%dyn-restore tlField saveSlot)` forms (`LispNames.DYN_RESTORE_INTERNAL`), innermost
@@ -92,7 +106,9 @@ the wasm backends are concurrency-safe in general.
   the suspending host call. The JVM hybrid's rules carry over exactly. Every non-reentrant
   module is byte-identical.
 - Base shape otherwise mirrors the JVM's over module globals (`(mut (ref null eq))`):
-  `Ctx.specialVars`, dual-bind, dual `setq` (`WasmSetqCompiler`), and the same protected region
+  `Ctx.specialVars`, a binding that is the global's save/set alone (`Ctx.boundSpecials` names
+  the specials a `let` of the function being compiled holds, whose reads skip the UNBOUND
+  test), `setq` of the global (`WasmSetqCompiler`), and the same protected region
   (`WasmUnwindProtectCompiler.compileRegion` with `%dyn-restore` cleanups, one `UnwindScope`
   kind that exists outside EH mode too): in EH mode a `try_table` landing pad that restores and
   rethrows the payload on its tag, whose refresh keeps only the SAVE slots
@@ -207,11 +223,7 @@ native `evalProgv`).
   workers, postgres/postmodern/bbs-api) at +70 to +147 B wasm, +3 B JVM: same strings, a
   different string-table order (the runtime compiles where the shaken site did not).
 - The literal-`boundp` fold refuses progv programs (`CompileTimeBoundp.fold` gate).
-- Deliberate divergences: a non-symbol in the symbols list is not detected, and a closure that
-  CAPTURED a special reads its capture under a LITERAL `(symbol-value '*x*)` (it folds to the
-  variable read, as `*x*` itself reads); a computed name reads in the shared dispatch's own
-  frame, so it answers the dynamic binding, as the interpreter does (before 2026-10-04 both
-  read the capture).
+- Deliberate divergence: a non-symbol in the symbols list is not detected.
 
 ## Compile-path limitations (interpreter unaffected)
 
@@ -378,18 +390,82 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   wasm +5%; 20M `boundp`: JVM 304 -> ~20 ms, wasm 1.3 -> ~0.12 s (a variable read where the
   mirror probe walked an alist).
 
+## Local special declarations; a special is never captured (all four backends, 2026-10-05)
+
+**Invariant: a reference to a special reads the binding active WHEN IT RUNS -- never one a
+closure captured -- and a local `(declare (special x))` covers the binding it names and the
+references in its body only (CLHS 3.3.4): any other binding of `x` is lexical unless it is
+declared too, and an inner one shadows the declaration.** Every backend answers SBCL's
+(`SpecialBindingScopeFixture`).
+
+- Before: a local declaration made its name special PROGRAM-WIDE, and to keep cl-ppcre's
+  matcher closures working (they capture a LEXICAL `end-string` the program-wide reading made
+  special) every special binding was DUAL -- the dynamic store plus a lexical twin a closure
+  captured. The interpreter read dynamic-first everywhere and the twin only with no binding
+  active; the compilers' closures read the twin. The planned fix ("active binding first, else
+  the capture" on every backend, the interpreter's rule) was overturned by measurement: that
+  rule is not SBCL's even with a binding active.
+- Measured 2026-10-05 (SBCL 2.2.9 / interpreter / JVM, P1, component), the fixture's probes:
+  a `defvar`'d special captured in its binding and called after it `:TOP` / `:INNER` /
+  `:INNER`, inside another binding `:OUTER` / `:OUTER` / `:INNER`; a special parameter
+  captured `:TOP` / `:ARG` / `:ARG`; trivia's `assoc` pattern (a handler built in one binding
+  of its flag runs inside a second) `:INNER` / `:INNER` / `:OUTER`; a LEXICAL binding of a
+  locally declared name captured, called inside a special binding of it, `:CAPTURED` /
+  `:REBOUND` / `:CAPTURED`; CLHS's `declare-eg` `(T NIL)` / `(T T)` / `(T T)`; a `setq` through
+  a closure after the extent `:SET` / `:TOP` / `:SET`; a lexical binding inside a `progv` of
+  the name `:LEX` / `:DYN` / `:LEX`. The twin patched the program-wide reading; it was the root.
+- Interpreter: `specialVars` holds the proclaimed names only; `declaredSpecials` reads a binding
+  form's head declarations ("Interpreter" above). `LambdaLists.desugared` repeats a body's
+  special declaration over a `let*` prologue, `expandLetStar` keeps each declared variable's
+  declaration on its own `let`, and `do`/`do*`/`dotimes`/`dolist`'s result/`prog`/`prog*`/
+  `labels`' body hoist it onto their binding `let` (`SpecialDeclarations.hoisted`); `locally`
+  with one is a binding-less `let`. A body declaring nothing special expands as it always did.
+- Compile paths: `compiler/SpecialDeclarationScoping.scope`, run by both compilers right
+  before `LambdaLists.desugarProgram`, renames apart every binding of a name only local
+  declarations make special (`SpecialVarCollector.collectLocallyDeclaredOnly`) that no
+  declaration covers, with the references it scopes (`NAME%N`; a key parameter keeps its
+  keyword, spelled out). The core binding forms and the forms with unevaluated symbol
+  positions are walked as written; any other built-in macro naming a tracked name through its
+  expansion, which replaces it only where a binding was renamed. A program no local
+  declaration names a variable in is returned as the same list. Then every occurrence of a
+  name in `collect`'s set is special, so a special binding is the dynamic store's save/set
+  alone (JVM/WASM sections above) and a closure reads it like any other code.
+- Measured 2026-10-05 (base `447575529` -> this change), sizes: size-report and bench-report
+  byte-identical on P1, `--optimize=size`, component and JVM but zlib's JVM class (-29 B:
+  chipz binds a special). examples (232 programs x 4 outputs): 649 identical, 178 refused
+  identically by both, 101 smaller, none larger -- the cl-ppcre users (ningle, postgres,
+  postmodern, bbs-api, str-demo) JVM -15.4 to -16.2 KB (-0.4%), wasm -0.5 to -1.0 KB; the clack
+  ones JVM -144 B; the rest JVM -2 to -87 B. The ci-spec program without its new case: P1 +5 B,
+  `--optimize=size` -22, component +5, JVM -2,817. cl-ppcre's E2E exercise: JVM 739,549 ->
+  724,770 (-2.0%), P1 570,081 -> 569,138, `--optimize=size` 418,272 -> 417,378, component
+  574,631 -> 573,688.
+- Time (same day, load average 5-55, best of 7-9 in-process rounds, alternating builds):
+  interpreter unchanged within noise (fib 27, 1M reads of a special, 100k special bindings);
+  a closure built inside a binding and called in it, 6.4M times: wasm 161-186 -> 127-161 ms (no
+  cell to allocate), JVM 8-9 -> 39-74 ms -- its read is now `_dget`, a `ThreadLocal` lookup,
+  where the capture was a field load; a callee's read of the binding JVM 42-48 -> 39-69, wasm
+  95-114 -> 98-147 (noise). cl-ppcre, 3,000 scanner creations: JVM 129-225 -> 142-246 ms, wasm
+  329-362 -> 324-367 (no difference); 100,000 scans: JVM 455-775 -> 549-927 ms, wasm
+  1,674-1,911 -> 1,797-2,356. The JVM scan cost is the `labels` advance function the scanner
+  builds inside its `let*` of `*end-pos*` and friends: its five lambdas went from 0 to 9 `_dget`
+  reads (the whole class has 741 -> 718), a few `ThreadLocal` lookups a step of the scan.
+
 ## Parameters named like a special (all four backends, 2026-10-03)
 
-**Invariant: a parameter whose name is special -- any section of the lambda list, a supplied-p
-variable included, of a `defun`, a `lambda`, an `flet`/`labels` local or a built-in expansion's
-lambda (uiop's `with-*`, `async-lambda`) -- binds it dynamically, restored on every exit.**
+**Invariant: a parameter whose name is special -- proclaimed, or declared special at the head
+of the body; any section of the lambda list, a supplied-p variable included, of a `defun`, a
+`lambda`, an `flet`/`labels` local or a built-in expansion's lambda (uiop's `with-*`,
+`async-lambda`) -- binds it dynamically, restored on every exit.**
 Landed 2026-10-03 (`.todo/c06`). Before, the compilers bound a required or rest one lexically:
 `(defvar *x* 1) (defun show () *x*) (defun f (*x*) (show)) (f 2)` answered 1 on the JVM and
 both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the global.
 
-- Interpreter: `LispEvaluator.apply` dual-binds a special required/rest parameter
-  (`lexicalLambdaScope` declines the lambda, so the call keeps a Java frame); the `let*` prologue
-  binds the other sections.
+- Interpreter: `LispEvaluator.apply` binds a special required/rest parameter dynamically
+  (`bindParameter`; `lexicalLambdaScope` declines the lambda, so the call keeps a Java frame);
+  the `let*` prologue binds the other sections. A declaration naming a required or rest
+  parameter is read at the head of the body, through the `block` a `defun`/`defmethod` wraps it
+  in; `LambdaLists.desugared` repeats a body's special declaration over the prologue
+  (`SpecialDeclarations.hoisted`), which would otherwise move it off the head.
 - Compilers: `LambdaLists.toNative(..., specials)` renames a special required or physical rest
   parameter to `__ll_sp_<position>` and wraps the WHOLE body, `let*` prologue included (a default
   sees the binding), in `(let ((*x* __ll_sp_N)) ...)` -- this file's special `let`, so the
@@ -424,11 +500,8 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
   transparent only for a SELF call (a callee that does not rebind the name would see the outer
   value) and was not taken: CL promises nothing here, and no corpus function recurses through
   a special parameter (census below).
-- A closure capturing such a parameter reads the `let`'s capture: after the extent, with no
-  other binding active, every backend answers the argument (SBCL: the global value -- the dual
-  binding's deliberate departure); called inside ANOTHER binding of the name, the interpreter
-  answers that binding (dynamic first, as SBCL does) and the compilers the capture -- the
-  divergence a special `let` already had (`.todo/c14`).
+- A closure built in the body reads the binding active when it runs, as SBCL does: the global
+  after the extent, another binding inside one ("Local special declarations" below).
 - `--component`: a special parameter of an async function whose body awaits is
   `WasmLetCompiler`'s "dynamic binding around `rontolisp:await`" refusal.
 - wasm's `WasmArityBundler` binds a defun of more than 10 parameters through a `let` from its rest
@@ -437,9 +510,9 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
 - Census (2026-10-03, every lowered parameter printed during a JVM compile): ci-spec,
   clojure-spec, scheme-spec: none. Vendored libraries: cl-ppcre only (rove and uax-15 load it):
   `create-scanner-aux` (`starts-with`, `end-anchored-p`, `end-string-offset`, `reg-num`) and
-  `maybe-split-repetition` (`reg-seen`), special only through the program-wide reading of a local
-  `(declare (special ...))`, both called when a regex compiles, not when it matches (wasm lowers
-  the second only: the bundler took the first's twelve parameters).
+  `maybe-split-repetition` (`reg-seen`) -- special then only through a program-wide reading of
+  local `(declare (special ...))` that is gone: no declaration names them in those functions, so
+  they are lexical parameters again, renamed apart ("Local special declarations" below).
 - Cost: a program without a special parameter compiles byte-identically on the JVM, wasm and
   the component (ci-spec, its build-info strings aside, clojure-spec, scheme-spec and 13
   vendored libraries loaded alone), so it runs at the same speed. cl-ppcre: JVM 734,954 ->
@@ -543,3 +616,10 @@ program and one expected text (`SpecialParameterFixture`), and ci-spec
 (no jump, no group, values); `LambdaListsTest#aParameterNamedLikeASpecialIsBoundByALetAroundTheWholeBody`,
 `#aSpecialParametersLetGoesInsideTheFunctionBlock`, `#aSpecialSuppliedPKeepsItsBinding`;
 `SpecialVarCollectorTest#aParameterNamedLikeASpecialIsADynamicBinding`.
+
+Local declarations, no capture: `specialBindingsAreNeverCapturedAndLocalDeclarationsAreScoped`
+on `LispEvaluatorTest`, `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1
+and component), one program and SBCL's text (`SpecialBindingScopeFixture`), and ci-spec
+`special-bindings-are-dynamic-and-declarations-scoped`; `SpecialDeclarationScopingTest`;
+`SpecialVarCollectorTest#aLocalSpecialDeclarationIsNoProclamation`; the closure leg of
+`spawnedThreadDoesNotInheritTheSpawnersDynamicBindings` (`ThreadTest`, `JvmThreadTest`).

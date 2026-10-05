@@ -3480,6 +3480,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		// Read before the lambda lists lose their &optional bounds.
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
+		// A binding of a name that only local special declarations make special is
+		// lexical where no such declaration names it: renamed apart here, on the lambda
+		// lists as written, so every occurrence of a name in the special set collected
+		// below is special (compiler/SpecialDeclarationScoping).
+		program = am.ik.rontolisp.compiler.SpecialDeclarationScoping.scope(program);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape. The
 		// desugaring keeps the binding of a supplied-p variable named like a special, so
@@ -10525,6 +10530,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, Integer> captures = Map.of();
 
 		Set<String> boxedVars = Set.of();
+
+		/**
+		 * The specials a {@code let} of THIS function binds around the code being
+		 * compiled: their binding is active here, so a read skips the UNBOUND test
+		 * ({@code WasmExprCompiler.compileSymbolRef}). Per body -- a closure's body is a
+		 * function of its own, run whenever -- and scoped by {@link WasmLetCompiler}.
+		 */
+		Set<String> boundSpecials = Set.of();
 
 		int closureEnvSlot = -1;
 

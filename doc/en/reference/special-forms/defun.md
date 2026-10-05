@@ -85,7 +85,7 @@ at most its required plus optional count: a surplus argument signals the same ca
 
 ## Special parameters
 
-A parameter whose name is proclaimed special (by [`defvar`](defvar.md)/[`defparameter`](defparameter.md) or `(declaim (special ...))`) is bound **dynamically**, as a [`let`](let.md) of it would be: a function called during the body sees the argument, a default form sees the binding of a parameter to its left, and the previous value is restored when the call exits, however it exits. This holds for every section of the lambda list, supplied-p variables included, and for [`lambda`](lambda.md), `flet` and `labels` alike, on every backend. A call in the body of such a function is not a tail call -- the binding is undone after it returns -- so a function that recurses through one uses stack for each call.
+A parameter whose name is proclaimed special (by [`defvar`](defvar.md)/[`defparameter`](defparameter.md) or `(declaim (special ...))`), or which a `(declare (special ...))` at the head of the body names, is bound **dynamically**, as a [`let`](let.md) of it would be: a function called during the body sees the argument, a default form sees the binding of a parameter to its left, and the previous value is restored when the call exits, however it exits. A closure built in the body reads the binding in effect when it is called, as every reference to a special does. This holds for every section of the lambda list, supplied-p variables included, and for [`lambda`](lambda.md), `flet` and `labels` alike, on every backend. A call in the body of such a function is not a tail call -- the binding is undone after it returns -- so a function that recurses through one uses stack for each call.
 
 ```lisp
 (defvar *scale* 1)

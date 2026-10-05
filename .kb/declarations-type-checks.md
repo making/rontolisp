@@ -3,8 +3,10 @@
 Declarations are NOT pure no-ops: on wasm-GC a `(declare (type ...))` (or a `defstruct` slot
 `:type`) drives single-arm array-access EMISSION; on the JVM a `(declare (type double-float ...))`
 routes arithmetic onto the unboxed IEEE path
-([jvm-double-arithmetic.md](jvm-double-arithmetic.md)). Interpreter and `--no-gc` ignore every
-declaration.
+([jvm-double-arithmetic.md](jvm-double-arithmetic.md)). A `special` declaration is semantics on
+every backend but `--no-gc`, scoped as CLHS 3.3.4 scopes it
+([dynamic-special-variables.md](dynamic-special-variables.md)); the interpreter and `--no-gc`
+ignore every other declaration.
 
 ## The false-declaration policy (all backends)
 **A declaration may change EMISSION, never the RESULT of a correctly-declared program -- and where

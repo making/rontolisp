@@ -1044,6 +1044,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		// Read before the lambda lists lose their &optional bounds.
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
+		// A binding of a name that only local special declarations make special is
+		// lexical where no such declaration names it: renamed apart here, on the lambda
+		// lists as written, so every occurrence of a name in the special set collected
+		// below is special (compiler/SpecialDeclarationScoping).
+		program = am.ik.rontolisp.compiler.SpecialDeclarationScoping.scope(program);
 		// The lambda-list desugaring keeps the binding of a supplied-p variable named
 		// like a special, so it is handed the specials the program declares; a
 		// parameter named like one is bound dynamically where Pass 1 and Pass 2 extract

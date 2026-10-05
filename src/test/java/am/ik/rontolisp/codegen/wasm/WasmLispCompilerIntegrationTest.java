@@ -24503,6 +24503,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void specialBindingsAreNeverCapturedAndLocalDeclarationsAreScoped() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: a special binding is the module global's save/set/restore
+		// alone, so a closure reads the binding active when it runs
+		// (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.SpecialBindingScopeFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.SpecialBindingScopeFixture.EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir(am.ik.rontolisp.SpecialBindingScopeFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialBindingScopeFixture.EXPECTED);
+	}
+
+	@Test
 	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component, both through the whole front end: the name gets a module

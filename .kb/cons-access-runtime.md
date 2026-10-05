@@ -65,7 +65,7 @@ level alone, never by the program:
   pins the body shipping exactly once at `size` and not at all at `default`).
 - **The "read in place" licence is `WasmExprCompiler.plainLocalSlot`**: exactly the
   variables `compileSymbolRef` compiles to one bare `local.get` -- not a special (a
-  dual-bound special reads its global), not a `rawLocals` entry (a boxing read), not a
+  special reads its global), not a `rawLocals` entry (a boxing read), not a
   `boxedVars` cell (an unbox). Anything else goes through `compileExpr` and a temp, as
   before. A new kind of local read that is not a bare `local.get` must be excluded there
   or the fast path reads the wrong thing silently.

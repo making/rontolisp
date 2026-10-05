@@ -117,8 +117,8 @@ final class JvmSetqCompiler {
 		// promoted top-level global no lexical binding shadows here: the store funnels
 		// through the fused raw-store path, and the setq's value is re-read boxed. A raw
 		// LOCAL is never special, never captured, never in ctx.locals; a raw GLOBAL is
-		// never dynamically bound, so neither reaches the dual-bound special store below
-		// (and its eval mirror is off by construction -- JvmRawGlobals).
+		// never dynamically bound, so neither reaches the special store below (and its
+		// eval mirror is off by construction -- JvmRawGlobals).
 		// A declared-float local in a raw double slot (.kb/jvm-double-arithmetic.md):
 		// the value lands raw and the setq's value is re-boxed from the slot.
 		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
@@ -179,13 +179,6 @@ final class JvmSetqCompiler {
 				slot = ctx.allocLocal(name);
 			}
 			ctx.body.astore(slot);
-		}
-		// A special that is dual-bound here (a lexical slot/capture established by a
-		// special-named let, see JvmLetCompiler): the assignment must reach the DYNAMIC
-		// binding too, so a called function reading the special sees it.
-		if (ctx.specialVars.contains(name) && (ctx.locals.containsKey(name) || ctx.captures.containsKey(name))
-				&& ctx.globalFields.containsKey(name)) {
-			emitGlobalStore(name, ctx);
 		}
 	}
 

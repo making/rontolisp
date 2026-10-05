@@ -26,6 +26,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.SpecialDeclarations;
 import am.ik.rontolisp.StructLiteralFolder;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -731,10 +732,12 @@ public final class LispMacroExpander {
 		whileParts.addAll(body);
 		whileParts.add(step);
 		LispVal whileExpr = listToCons(whileParts);
-		// (let (bindings) while-expr result-form)
+		// (let (bindings) while-expr result-form); a special declaration of the body is
+		// the binding's (SpecialDeclarations.hoisted).
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET));
 		letParts.add(bindings);
+		letParts.addAll(SpecialDeclarations.hoisted(body, false));
 		letParts.add(whileExpr);
 		letParts.add(resultForm);
 		return makeBlock(listToCons(letParts));
@@ -897,10 +900,17 @@ public final class LispMacroExpander {
 		else {
 			resultExpr = makeProgn(resultForms);
 		}
-		// (do () ...) is legal: an empty binding list stays nil.
+		// (do () ...) is legal: an empty binding list stays nil. A special declaration of
+		// the body is the bindings' (SpecialDeclarations.hoisted), covering the steps,
+		// the end test and the results as well.
 		LispVal bindings = letBindings.isEmpty() ? LispNil.INSTANCE : listToCons(letBindings);
-		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr));
-		return makeBlock(letExpr);
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(bindings);
+		letParts.addAll(SpecialDeclarations.hoisted(body, false));
+		letParts.add(whileExpr);
+		letParts.add(resultExpr);
+		return makeBlock(listToCons(letParts));
 
 	}
 
@@ -966,8 +976,13 @@ public final class LispMacroExpander {
 			resultExpr = makeProgn(resultForms);
 		}
 		LispVal bindings = listToCons(letBindings);
-		LispVal letExpr = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, whileExpr, resultExpr));
-		return makeBlock(letExpr);
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET_STAR));
+		letParts.add(bindings);
+		letParts.addAll(SpecialDeclarations.hoisted(body, false));
+		letParts.add(whileExpr);
+		letParts.add(resultExpr);
+		return makeBlock(listToCons(letParts));
 	}
 
 	/**
@@ -4594,6 +4609,12 @@ public final class LispMacroExpander {
 	 * (let* () body...)                -> (let () body...)
 	 * (let* ((x 1) (y x)) body...)    -> (let ((x 1)) (let ((y x)) body...))
 	 * </pre>
+	 *
+	 * A special declaration at the head of the body names the binding it makes special
+	 * wherever that binding lands: an outer {@code let} of the nest gets
+	 * {@code (declare (special x))} for its own variable, the innermost one the body and
+	 * its declarations ({@link SpecialDeclarations}). A body declaring nothing special
+	 * expands as it always did.
 	 * @param cons the let* expression
 	 * @return the expanded expression
 	 */
@@ -4611,6 +4632,7 @@ public final class LispMacroExpander {
 			return listToCons(letParts);
 		}
 		List<LispVal> bindingList = bindingsCons.toList();
+		Set<String> declared = SpecialDeclarations.leading(body, false);
 		// Build from the innermost let outward
 		List<LispVal> innerParts = new java.util.ArrayList<>();
 		innerParts.add(new LispSymbol(LispNames.LET));
@@ -4618,8 +4640,15 @@ public final class LispMacroExpander {
 		innerParts.addAll(body);
 		LispVal result = listToCons(innerParts);
 		for (int i = bindingList.size() - 2; i >= 0; i--) {
-			result = listToCons(
-					List.of(new LispSymbol(LispNames.LET), new LispCons(bindingList.get(i), LispNil.INSTANCE), result));
+			LispVal binding = new LispCons(bindingList.get(i), LispNil.INSTANCE);
+			if (!declared.isEmpty() && bindingList.get(i) instanceof LispCons pair
+					&& pair.car() instanceof LispSymbol var && declared.contains(var.name())) {
+				result = listToCons(List.of(new LispSymbol(LispNames.LET), binding,
+						SpecialDeclarations.declaration(List.of(var.name())), result));
+			}
+			else {
+				result = listToCons(List.of(new LispSymbol(LispNames.LET), binding, result));
+			}
 		}
 		return result;
 	}
@@ -4671,9 +4700,14 @@ public final class LispMacroExpander {
 		}
 		whileParts.add(step);
 		LispVal whileExpr = listToCons(whileParts);
-		// (let ((var nil)) result) -- CL evaluates the result form with var bound to nil
-		LispVal resultExpr = listToCons(List.of(new LispSymbol(LispNames.LET),
-				new LispCons(listToCons(List.of(var, LispNil.INSTANCE)), LispNil.INSTANCE), resultForm));
+		// (let ((var nil)) result) -- CL evaluates the result form with var bound to nil,
+		// under the body's special declaration (the iteration let carries the body's own)
+		List<LispVal> resultParts = new java.util.ArrayList<>();
+		resultParts.add(new LispSymbol(LispNames.LET));
+		resultParts.add(new LispCons(listToCons(List.of(var, LispNil.INSTANCE)), LispNil.INSTANCE));
+		resultParts.addAll(SpecialDeclarations.hoisted(body, false));
+		resultParts.add(resultForm);
+		LispVal resultExpr = listToCons(resultParts);
 		// (let ((__dolist list)) while-expr (endp __dolist) result-expr), wrapped in a
 		// return boundary.
 		LispVal bindings = new LispCons(listToCons(List.of(cursor, listForm)), LispNil.INSTANCE);
@@ -38849,14 +38883,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (locally (declare ...) body...)} to {@code (progn body...)}:
-	 * declarations are parsed no-ops everywhere, so {@code locally} is {@code progn} with
-	 * its leading {@code declare} forms dropped.
+	 * Expands {@code (locally (declare ...) body...)} to {@code (progn body...)}: its
+	 * leading {@code declare} forms dropped, since a declaration changes nothing but
+	 * which references are special. A body whose declarations name a variable special
+	 * keeps them on a binding-less {@code let} instead, which is what makes the
+	 * references in it special ({@link SpecialDeclarations}).
 	 * @param cons the locally expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandLocally(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		List<LispVal> special = SpecialDeclarations.hoisted(parts.subList(1, parts.size()), false);
+		if (!special.isEmpty()) {
+			List<LispVal> let = new java.util.ArrayList<>();
+			let.add(new LispSymbol(LispNames.LET));
+			let.add(LispNil.INSTANCE);
+			let.addAll(parts.subList(1, parts.size()));
+			return listToCons(let);
+		}
 		int start = 1;
 		while (start < parts.size() && parts.get(start) instanceof LispCons declCons
 				&& declCons.car() instanceof LispSymbol op && LispNames.DECLARE.equals(op.name())) {
@@ -39137,6 +39181,11 @@ public final class LispMacroExpander {
 			}
 		}
 		letParts.add(keptBindings.isEmpty() ? LispNil.INSTANCE : listToCons(keptBindings));
+		// A special declaration heading the body covers it from the let's head: the
+		// labels assignments come first (SpecialDeclarations.hoisted).
+		if (!keptSetqs.isEmpty()) {
+			letParts.addAll(SpecialDeclarations.hoisted(rewrittenBody, false));
+		}
 		letParts.addAll(keptSetqs);
 		if (parts.size() == 2) {
 			letParts.add(LispNil.INSTANCE);
@@ -45503,6 +45552,8 @@ public final class LispMacroExpander {
 		List<LispVal> let = new java.util.ArrayList<>();
 		let.add(new LispSymbol(sequential ? LispNames.LET_STAR : LispNames.LET));
 		let.add(parts.get(1));
+		// A special declaration heading the body is the bindings'.
+		let.addAll(SpecialDeclarations.hoisted(parts.subList(2, parts.size()), false));
 		let.add(listToCons(tagbody));
 		return makeBlock(listToCons(let));
 	}

@@ -20985,6 +20985,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void specialBindingsAreNeverCapturedAndLocalDeclarationsAreScoped() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the front end: a
+		// special binding is the _d$ cell alone, so a closure reads the binding active
+		// when it runs, and a lexical binding of a name declared special elsewhere is
+		// renamed apart before the compile (SpecialDeclarationScoping), so its closure
+		// captures it (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.SpecialBindingScopeFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.SpecialBindingScopeFixture.EXPECTED);
+	}
+
+	@Test
 	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a name a function body assigns
 		// with no lexical binding in scope gets a static field like a top-level setq's,

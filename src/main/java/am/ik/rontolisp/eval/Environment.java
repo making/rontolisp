@@ -557,6 +557,68 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * What a scope binds a name to where a local {@code (declare (special name))} covers
+	 * it: references and assignments in the scope go to the dynamic binding (or the
+	 * global), never to a lexical binding of the name further out
+	 * ({@code am.ik.rontolisp.SpecialDeclarations}). A host object no Lisp value can be;
+	 * only {@link #lookupLexical} / {@link #setLexical} callers ever meet it.
+	 */
+	public static final LispVal SPECIAL = new am.ik.rontolisp.LispJavaObject(new Object());
+
+	/**
+	 * The innermost LEXICAL binding of a name: its value, {@link #SPECIAL} where a
+	 * special declaration is the innermost thing naming it, or {@code null} when no scope
+	 * below the global one binds it. The global (root) scope is never consulted: a name
+	 * it holds is a global, which an active dynamic binding takes precedence over.
+	 * @param name the variable name
+	 * @return the value, {@link #SPECIAL}, or {@code null}
+	 */
+	@Nullable LispVal lookupLexical(String name) {
+		for (Environment scope = this; scope.parent != null; scope = scope.parent) {
+			LispVal val = scope.bindings.get(name);
+			if (val != null) {
+				return val;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Assigns the innermost LEXICAL binding of a name, if one is visible here before any
+	 * special declaration of it.
+	 * @param name the variable name
+	 * @param value the new value
+	 * @return {@code true} when a lexical binding took the value; {@code false} when the
+	 * innermost thing naming it is a special declaration or no scope below the global one
+	 * binds it -- the dynamic binding or the global is the caller's to assign
+	 */
+	boolean setLexical(String name, LispVal value) {
+		for (Environment scope = this; scope.parent != null; scope = scope.parent) {
+			LispVal val = scope.bindings.get(name);
+			if (val != null) {
+				if (val == SPECIAL) {
+					return false;
+				}
+				scope.bindings.put(name, value);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The global (root) scope of this chain.
+	 * @return the scope with no parent
+	 */
+	Environment root() {
+		Environment scope = this;
+		while (scope.parent != null) {
+			scope = scope.parent;
+		}
+		return scope;
+	}
+
+	/**
 	 * Look up a name in the variable namespace, searching up the scope chain.
 	 * @param name the variable name
 	 * @return the value, or {@code null} if unbound

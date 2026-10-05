@@ -125,17 +125,17 @@ class ThreadTest {
 	@Test
 	void spawnedThreadDoesNotInheritTheSpawnersDynamicBindings() {
 		// Same rule as the JVM backend's plain ThreadLocal store: the new thread reads
-		// the global default until it binds for itself. The reader is a defun, not a
-		// lambda built inside the binding -- a closure would capture the entry value
-		// and the capture wins (the documented dual-bind rule,
-		// .kb/dynamic-special-variables.md).
+		// the global default until it binds for itself -- a closure built inside the
+		// binding too, since a special reference reads the binding active when it runs
+		// (.kb/dynamic-special-variables.md).
 		assertThat(evalAll(evaluator(), """
 				(defvar *who* 'global)
 				(defun who-reader () *who*)
 				(let ((*who* 'spawner))
 				  (list (who-reader)
-				        (rontolisp:join-thread (rontolisp:make-thread #'who-reader))))
-				""").print()).isEqualTo("(SPAWNER GLOBAL)");
+				        (rontolisp:join-thread (rontolisp:make-thread #'who-reader))
+				        (rontolisp:join-thread (rontolisp:make-thread (lambda () *who*)))))
+				""").print()).isEqualTo("(SPAWNER GLOBAL GLOBAL)");
 	}
 
 	@Test

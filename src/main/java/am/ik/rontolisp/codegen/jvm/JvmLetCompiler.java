@@ -99,14 +99,16 @@ final class JvmLetCompiler {
 		Set<String> declaredFloats = am.ik.rontolisp.compiler.DeclaredScalarTypes
 			.declaredDoubles(parts.subList(2, parts.size()), ctx.closRegistry);
 		boolean bodyDefinesFunction = definesNestedFunction(parts.subList(2, parts.size()));
-		// Every binding name takes part in capture analysis: a special-named binding is
-		// DUAL-BOUND (dynamic set + a lexical slot, mirroring the interpreter), so a
-		// closure built in the body captures the entry value and can read it after the
-		// dynamic extent ended (cl-ppcre's end-string).
+		// The lexical bindings take part in capture analysis. A special binding is the
+		// thread's dynamic cell alone, which a closure built in the body reads when it
+		// runs -- never a captured copy (.kb/dynamic-special-variables.md).
 		Set<String> letVarNames = new HashSet<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
-				letVarNames.add(((LispSymbol) ((LispCons) binding).toList().get(0)).name());
+				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
+				if (!ctx.specialVars.contains(name)) {
+					letVarNames.add(name);
+				}
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
@@ -122,13 +124,11 @@ final class JvmLetCompiler {
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
 				if (ctx.specialVars.contains(name)) {
-					// DUAL-BIND (interpreter parity): the thread's dynamic binding is
-					// pushed via _dbind (the binding a called function reads through
-					// _dget), AND the same value gets a lexical slot so a closure built
-					// in the body captures it -- the closure may run after this extent
-					// ended and restored the previous binding (cl-ppcre's end-string).
-					// Body reads resolve dynamic-first; a setq of the name writes BOTH
-					// (JvmSetqCompiler).
+					// The thread's dynamic binding, pushed via _dbind: the binding every
+					// read of the name resolves through _dget while it is active -- the
+					// body's, a called function's and a closure's alike -- and a setq
+					// writes (JvmSetqCompiler.emitGlobalStore). No lexical slot: a
+					// closure that runs after this extent reads the binding active then.
 					JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 					FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
 					if (dyn == null || tlField == null) {
@@ -140,7 +140,7 @@ final class JvmLetCompiler {
 										+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
 					}
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
-					ctx.body.dup().getstatic(tlField).swap();
+					ctx.body.getstatic(tlField).swap();
 					ctx.body.invokestatic(dyn.dbind());
 					int saveSlot = ctx.allocTemp();
 					ctx.body.astore(saveSlot);
@@ -148,22 +148,13 @@ final class JvmLetCompiler {
 						dynamicRestores = new ArrayList<>();
 					}
 					dynamicRestores.add(new int[] { tlField.index(), saveSlot });
-					if (capturedInLet.contains(name)) {
-						int tmpSlot = ctx.allocTemp();
-						ctx.body.astore(tmpSlot).iconst_1().anewarray(ctx.objectClass);
-						ctx.body.dup().iconst_0().aload(tmpSlot).aastore();
-					}
-					int lexSlot = ctx.allocLocal(name);
-					ctx.body.astore(lexSlot);
+					// A special is never a lexical: nothing of the name answers for the
+					// body but its dynamic binding.
+					ctx.locals.remove(name);
 					ctx.rawLocals.remove(name);
 					ctx.rawDoubleLocals.remove(name);
 					ctx.localIntLambdas.remove(name);
-					if (capturedInLet.contains(name)) {
-						ctx.boxedVars.add(name);
-					}
-					else {
-						ctx.boxedVars.remove(name);
-					}
+					ctx.boxedVars.remove(name);
 					continue;
 				}
 				// A declared-float binding kept in a raw double slot

@@ -80,13 +80,17 @@ final class WasmLetCompiler {
 		boolean async = ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(letForm) > 0;
 
 		// Pre-scan body for captured vars. Specials are globals reachable from any
-		// function,
-		// never captured lexicals, so they are excluded from the capture analysis.
+		// function, never captured lexicals, so they are excluded from the capture
+		// analysis: a closure built in the body reads the binding active when it runs
+		// (.kb/dynamic-special-variables.md).
 		List<LispVal> bodyExprs = parts.subList(2, parts.size());
 		Set<String> letVarNames = new HashSet<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
-				letVarNames.add(((LispSymbol) ((LispCons) binding).toList().get(0)).name());
+				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
+				if (!ctx.specialVars.contains(name)) {
+					letVarNames.add(name);
+				}
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(bodyExprs, letVarNames, ctx.functions.keySet(),
@@ -160,6 +164,7 @@ final class WasmLetCompiler {
 		// Restored
 		// (reverse order) after the body.
 		List<int[]> dynamicRestores = null;
+		Set<String> savedBoundSpecials = ctx.boundSpecials;
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
 				LispCons pair = (LispCons) binding;
@@ -175,25 +180,24 @@ final class WasmLetCompiler {
 					continue;
 				}
 				if (ctx.specialVars.contains(name)) {
-					// DUAL-BIND (interpreter parity, see JvmLetCompiler): the global is
-					// saved and overwritten with the init (the dynamic binding a called
-					// function reads), AND the same value gets a lexical slot so a
-					// closure built in the body captures it -- the closure may run
-					// after this extent ended and restored the global (cl-ppcre's
-					// end-string). A setq of the name writes BOTH (WasmSetqCompiler).
-					// --reentrant: the same save/set/restore discipline over the
-					// per-call task record's slot instead of the module global
-					// (WasmDynVars) -- the record is what keeps two overlapped call
-					// extents from reading each other's binding back.
+					// The global is saved and overwritten with the init: the binding
+					// every read of the name sees while it is active -- the body's, a
+					// called function's and a closure's alike -- and a setq writes
+					// (WasmSetqCompiler). No lexical slot: a closure that runs after this
+					// extent reads the binding active then, as in CL. --reentrant: the
+					// same save/set/restore discipline over the per-call task record's
+					// slot instead of the module global (WasmDynVars) -- the record is
+					// what keeps two overlapped call extents from reading each other's
+					// binding back.
 					int globalIndex = Objects.requireNonNull(ctx.globalIndices.get(name));
 					WasmExprCompiler.compileExpr(pairList.get(1), ctx);
-					int dupSlot = ctx.allocTemp();
 					int saveSlot;
 					int restoreKey;
 					if (WasmDynVars.handles(ctx, name)) {
+						int valueSlot = ctx.allocTemp();
 						ctx.writer.write(Instruction.SET_LOCAL);
-						ctx.writer.writeUnsignedLeb128(dupSlot);
-						saveSlot = WasmDynVars.emitBind(ctx, name, dupSlot);
+						ctx.writer.writeUnsignedLeb128(valueSlot);
+						saveSlot = WasmDynVars.emitBind(ctx, name, valueSlot);
 						restoreKey = Objects.requireNonNull(ctx.dynSlots.get(name));
 					}
 					else if (ctx.reentrant) {
@@ -205,8 +209,6 @@ final class WasmLetCompiler {
 										+ " (SpecialVarCollector.collectDynamicallyBound)");
 					}
 					else {
-						ctx.writer.write(Instruction.TEE_LOCAL);
-						ctx.writer.writeUnsignedLeb128(dupSlot);
 						ctx.writer.write(Instruction.GET_GLOBAL);
 						ctx.writer.writeUnsignedLeb128(globalIndex);
 						saveSlot = ctx.allocTemp();
@@ -220,14 +222,15 @@ final class WasmLetCompiler {
 						dynamicRestores = new ArrayList<>();
 					}
 					dynamicRestores.add(new int[] { restoreKey, saveSlot });
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(dupSlot);
-					if (capturedInLet.contains(name)) {
-						WasmEmitHelper.emitNewCell(ctx);
+					// A special is never a lexical: nothing of the name answers for the
+					// body but its binding, which is active here -- so a read in this
+					// function skips the UNBOUND test
+					// (WasmExprCompiler.compileSymbolRef).
+					ctx.locals.remove(name);
+					if (ctx.boundSpecials == savedBoundSpecials) {
+						ctx.boundSpecials = new HashSet<>(savedBoundSpecials);
 					}
-					int lexSlot = ctx.allocLocal(name);
-					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(lexSlot);
+					ctx.boundSpecials.add(name);
 					continue;
 				}
 				if (counted != null && counted.name().equals(name)) {
@@ -513,6 +516,7 @@ final class WasmLetCompiler {
 		ctx.declaredArrays = savedDeclaredArrays;
 		ctx.arrayLocals = savedArrayLocals;
 		ctx.nextI64Local = savedNextI64Local;
+		ctx.boundSpecials = savedBoundSpecials;
 	}
 
 	/**

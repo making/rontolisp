@@ -83,6 +83,28 @@ class SpecialVarCollectorTest {
 	}
 
 	/**
+	 * A local {@code (declare (special ...))} is no proclamation: {@code collectForm}
+	 * (the interpreter's special set) answers the proclaimed names alone, and
+	 * {@code collectLocallyDeclaredOnly} the names only local declarations name -- the
+	 * names whose other bindings are lexical, which the compile paths rename apart. A
+	 * proclaimed name and a {@code cl} symbol are never one. {@code collect}, the compile
+	 * paths' set after that renaming, still holds both kinds, in declaration order.
+	 */
+	@Test
+	void aLocalSpecialDeclarationIsNoProclamation() {
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defvar *p* 1)
+				(defun f (x) (declare (special x *p* *print-base*)) (let ((y 2)) (declare (special y)) (g)))
+				(defun h () '(declare (special quoted)))
+				""");
+		java.util.Set<String> proclaimed = new LinkedHashSet<>();
+		program.forEach(form -> SpecialVarCollector.collectForm(form, proclaimed));
+		assertThat(proclaimed).containsExactly("*P*");
+		assertThat(SpecialVarCollector.collectLocallyDeclaredOnly(program)).containsExactly("X", "Y");
+		assertThat(SpecialVarCollector.collect(program)).containsExactly("*P*", "X", "*PRINT-BASE*", "Y");
+	}
+
+	/**
 	 * A special the program actually let-binds still comes first, in walk order, ahead of
 	 * the ones the {@code progv} fallback sweeps up -- the fallback only tops the set up,
 	 * it does not reorder what the static walk already found.
