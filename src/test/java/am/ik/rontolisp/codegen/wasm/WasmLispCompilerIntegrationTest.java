@@ -23,6 +23,7 @@ import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
+import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -8106,6 +8107,17 @@ class WasmLispCompilerIntegrationTest {
 	void subseq() throws Exception {
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 6))")).isEqualTo("world");
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 0 5))")).isEqualTo("hello");
+	}
+
+	@Test
+	void boundedStringOperatorsRefuseABadRangeAsATypeError() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError,
+		// Preview 1 and the component.
+		assertThat(compileAndRunPrelude(BoundedStringBoundsFixture.PROGRAM))
+			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
+		assertThat(compileComponentAndRunPrelude(BoundedStringBoundsFixture.PROGRAM))
+			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
 	@Test

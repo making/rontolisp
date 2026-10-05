@@ -426,6 +426,33 @@ cases:
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #(3) #())
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #() :TYPE-ERROR)
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #(3) #())
+  - name: bounded-string-operators-refuse-a-bad-range
+    # write-string, write-line and the three case conversions take :start / :end over
+    # the string; a range outside it is a type-error like subseq's, whichever operator
+    # and backend (.kb/subseq-runtime.md, "Bounds check"). The bounds reach the
+    # operators as arguments, so no backend sees them at compile time. Output matches
+    # SBCL.
+    source: |
+      (defun bsr-probe (op s i e)
+        (handler-case (let ((r (funcall op s i e)))
+                        (if (stringp r) (substitute #\_ #\Newline r) r))
+          (type-error () :type-error)
+          (error () :error)))
+      (defvar *bsr-ops*
+        (list (lambda (s i e) (with-output-to-string (o) (write-string s o :start i :end e)))
+              (lambda (s i e) (with-output-to-string (o) (write-line s o :start i :end e)))
+              (lambda (s i e) (string-upcase s :start i :end e))
+              (lambda (s i e) (string-downcase s :start i :end e))
+              (lambda (s i e) (string-capitalize s :start i :end e))))
+      (dolist (op *bsr-ops*)
+        (print (list (bsr-probe op "hello" 3 1) (bsr-probe op "hello" 1 9) (bsr-probe op "hello" -1 nil)
+                     (bsr-probe op "hello" 9 nil) (bsr-probe op "hello" 1 3) (bsr-probe op "hello" 5 nil))))
+    expected: |
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "el" "")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "el_" "_")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "hELlo" "hello")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "hello" "hello")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "hEllo" "hello")
   - name: make-array-element-type-deftype-alias
     source: |
       (deftype mae-octet () '(unsigned-byte 8))

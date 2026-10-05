@@ -8,7 +8,7 @@ Returns a new string in which the first letter of each word is uppercased and th
 (string-capitalize "hello world") ; => "Hello World"
 ```
 
-`:start` / `:end` bound the part that is converted; the characters outside it are kept as they are, and a nil `:end` means the end of the string. A word starts at `:start` whatever precedes it.
+`:start` / `:end` bound the part that is converted; the characters outside it are kept as they are, and a nil `:end` means the end of the string. A word starts at `:start` whatever precedes it. A range outside the string (`:start` below 0, `:end` past the length, or `:start` after `:end`) is the same `type-error` as [`subseq`](subseq.md)'s, on every backend.
 
 ```lisp
 (string-capitalize "one two" :start 4) ; => "one Two"

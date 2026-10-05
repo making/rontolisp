@@ -9,6 +9,7 @@ import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
+import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -8975,6 +8976,13 @@ class JvmLispCompilerTest {
 		// raw StringIndexOutOfBoundsException, a ClassCastException, a truncated list or
 		// an AREF report used to answer instead.
 		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunBoundedStringOperatorsRefuseABadRangeAsATypeError() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError.
+		assertThat(compileAndRun(BoundedStringBoundsFixture.PROGRAM)).isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
 	@Test
