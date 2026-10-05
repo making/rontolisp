@@ -552,6 +552,44 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void exportOfAStandardNameReExportsTheClSymbol() {
+		// (:use :cl) + (:export #:car) exports cl's CAR (CLHS 11.1.1.2), so the qualified
+		// spelling and a package using this one -- even without cl -- reach the bare
+		// name.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :rsa (:use :cl) (:export :car :boole))");
+		assertThat(resolve(resolver, "(rsa:car x)")).isEqualTo("(CAR X)");
+		assertThat(resolve(resolver, "(rsa::boole x)")).isEqualTo("(BOOLE X)");
+		resolve(resolver, "(defpackage :rsb (:use :rsa))");
+		resolve(resolver, "(in-package :rsb)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR RSB::X)");
+		assertThat(resolve(resolver, "'(car boole)")).isEqualTo("'(CAR BOOLE)");
+	}
+
+	@Test
+	void aDefpackageOverAPackageThatOwnsAStandardNameKeepsItsOwnSymbol() {
+		// The name is already present in the package, so exporting it again exports that
+		// symbol -- a pre-seeded package's own sin is not cl's.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :rso (:use) (:export :car))");
+		resolve(resolver, "(defpackage :rso (:use :cl) (:export :car))");
+		assertThat(resolve(resolver, "(rso:car x)")).isEqualTo("(RSO:CAR X)");
+	}
+
+	@Test
+	void aStandardNameInAPackageWithoutClResolvesThroughItsUseList() {
+		// A package that does not use cl inherits a used package's own symbol of a
+		// standard name; only a name nothing provides is the undefined-symbol error.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :lin (:use) (:export :sin))");
+		resolve(resolver, "(defpackage :lu (:use :lin))");
+		resolve(resolver, "(in-package :lu)");
+		assertThat(resolve(resolver, "(sin x)")).isEqualTo("(LIN:SIN LU::X)");
+		assertThatThrownBy(() -> resolve(resolver, "(cos x)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Undefined symbol: COS");
+	}
+
+	@Test
 	void importFromARedirectedMemberRecordsItsTrueHome() {
 		// The :import-from spelling of the same chain: importing a member the source
 		// package itself holds only as a redirect must land on the true home.

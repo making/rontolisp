@@ -15480,6 +15480,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAnExportOfAnInheritedStandardNameReExportsTheClSymbol() throws Exception {
+		// (:use :cl) + (:export #:car) exports cl's CAR: pkg:car is the bare symbol and a
+		// package using pkg inherits it, without cl too. The twins are
+		// LispEvaluatorTest#anExportOfAnInheritedStandardNameReExportsTheClSymbol and
+		// WasmLispCompilerIntegrationTest#exportOfAnInheritedStandardName.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ReExportedStandardNameFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ReExportedStandardNameFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunPackageWalksListTheCarCdrCompositions() throws Exception {
 		// The 28 car/cdr compositions are external symbols of cl: every enumeration of
 		// its

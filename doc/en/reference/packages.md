@@ -143,7 +143,11 @@ A name that is another package's nickname stays an error.
   (Common Lisp signals a conflict instead).
 - `:export` declares the package's external symbols. Symbols interned later
   (a `defun` under `(in-package name)` that is not in the `:export` clause, a
-  free variable) are internal, exactly like the built-in packages.
+  free variable) are internal, exactly like the built-in packages. A name the
+  package inherits instead of defining -- a standard name through `cl`
+  (`(:use :cl) (:export #:car)`) or a used package's export -- is re-exported:
+  `mypkg:car` is `cl`'s `car`, and a package using `mypkg` inherits that symbol
+  even without `cl`.
 - `:nicknames` registers alternate names that resolve everywhere the canonical
   name does (in qualifiers, `in-package`, `:use`, ...). A nickname colliding
   with an existing package or nickname is an error — the built-in nicknames

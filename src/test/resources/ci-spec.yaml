@@ -20772,6 +20772,46 @@ cases:
       (CDAR)
       T
       (CAADR :INHERITED)
+  - name: export-of-an-inherited-standard-name
+    source: |
+      (defpackage :ci-rsn-x (:use :cl) (:export #:car #:list #:print #:boole #:ci-rsn-own))
+      (export 'cons :ci-rsn-x)
+      (defpackage :ci-rsn-u (:use :ci-rsn-x))
+      (print (list (eq 'ci-rsn-x:car 'car) (eq 'ci-rsn-x::list 'list) (eq 'ci-rsn-x:boole 'boole) (eq 'ci-rsn-x:cons 'cons)))
+      (print (multiple-value-list (find-symbol "CAR" :ci-rsn-x)))
+      (print (multiple-value-list (find-symbol "CAR" :ci-rsn-u)))
+      (print (multiple-value-list (find-symbol "BOOLE" :ci-rsn-u)))
+      (print (multiple-value-list (find-symbol (string-upcase "car") :ci-rsn-x)))
+      (print (multiple-value-list (find-symbol (string-upcase "list") :ci-rsn-u)))
+      (print (multiple-value-list (find-symbol (string-upcase "boole") :ci-rsn-x)))
+      (print (eq (symbol-package 'ci-rsn-x:car) (symbol-package 'cons)))
+      (print (ci-rsn-x:car (ci-rsn-x:list 1 2)))
+      (print (funcall (find-symbol "LIST" :ci-rsn-u) 3 4))
+      (let ((names '()))
+        (do-external-symbols (s :ci-rsn-x) (push s names))
+        (print (sort names #'string< :key #'symbol-name)))
+      (print (find 'car (let ((l '())) (do-symbols (s :ci-rsn-u) (push s l)) l)))
+      (print (multiple-value-list (find-symbol "CI-RSN-OWN" :ci-rsn-u)))
+      (cl:in-package :ci-rsn-u)
+      (print (car (list 5 6)))
+      (print (cons 7 (cl:if (cl:eq 'car 'cl:car) 1 0)))
+      (cl:in-package :cl-user)
+    expected: |
+      (T T T T)
+      (CAR :EXTERNAL)
+      (CAR :INHERITED)
+      (BOOLE :INHERITED)
+      (CAR :EXTERNAL)
+      (LIST :INHERITED)
+      (BOOLE :EXTERNAL)
+      T
+      1
+      (3 4)
+      (BOOLE CAR CI-RSN-X:CI-RSN-OWN CONS LIST PRINT)
+      CAR
+      (CI-RSN-X:CI-RSN-OWN :INHERITED)
+      5
+      (7 . 1)
 standalone:
   - name: uncaught-condition-report
     source: |

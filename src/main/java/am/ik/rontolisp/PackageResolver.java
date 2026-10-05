@@ -1379,10 +1379,21 @@ public final class PackageResolver {
 		// S-SQL:SQL rather than minting a POSTMODERN:SQL of its own. Resolution here is
 		// textual, so record it as an import: both resolveUnqualified and
 		// resolveQualified already redirect through that map to the source package.
-		// (A re-exported cl symbol needs no entry -- the isClSymbol branch of
-		// resolveUnqualified runs before the owns() check and yields the bare name.)
+		// A standard name is no exception: (:use :cl) + (:export #:car) exports CL's CAR.
+		// Inside the package resolveUnqualified's isClSymbol branch already yields the
+		// bare name, but pkg:car (resolveQualified) and a package inheriting it
+		// (usedExport) only see this map. cl is asked first, as resolveUnqualified asks
+		// it before the use list; a name an EXISTING package already owns stays its own
+		// (a pre-seeded linalg:sin is not cl's).
+		boolean usesCl = useList.contains(LispNames.CL_PKG);
 		for (String exported : exports) {
-			if (shadows.contains(exported) || imports.containsKey(exported) || PackageRegistry.isClSymbol(exported)) {
+			if (shadows.contains(exported) || imports.containsKey(exported)) {
+				continue;
+			}
+			if (usesCl && this.registry.get(LispNames.CL_PKG).exports(exported)) {
+				if (existing == null || !existing.owns(exported)) {
+					imports.put(exported, LispNames.CL_PKG);
+				}
 				continue;
 			}
 			for (String used : useList) {
@@ -2200,6 +2211,14 @@ public final class PackageResolver {
 		if (PackageRegistry.isClSymbol(name)) {
 			if (currentUsesCl()) {
 				return new LispSymbol(name);
+			}
+			// A package that does not use cl may still inherit a symbol of this name
+			// from a package it uses: cl's re-exported, or that package's own.
+			for (String used : current.useList()) {
+				LispSymbol viaUsed = usedExport(used, name);
+				if (viaUsed != null) {
+					return viaUsed;
+				}
 			}
 			// In DATA position the name is not a call, so there is nothing to reject:
 			// the reader interns it in the current package, exactly like any other

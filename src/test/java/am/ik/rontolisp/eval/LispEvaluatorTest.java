@@ -16765,6 +16765,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
 	}
 
+	// An :export of a standard name in a package that uses cl re-exports cl's symbol. The
+	// twins are
+	// JvmLispCompilerTest#compileAndRunAnExportOfAnInheritedStandardNameReExportsTheClSymbol
+	// and WasmLispCompilerIntegrationTest#exportOfAnInheritedStandardName.
+	@Test
+	void anExportOfAnInheritedStandardNameReExportsTheClSymbol() {
+		assertThat(printedLines(am.ik.rontolisp.ReExportedStandardNameFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.ReExportedStandardNameFixture.EXPECTED);
+	}
+
 	// The package walks list the 28 car/cdr compositions as external symbols of cl. The
 	// twins are JvmLispCompilerTest#compileAndRunPackageWalksListTheCarCdrCompositions
 	// and

@@ -18093,6 +18093,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void exportOfAnInheritedStandardName() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunAnExportOfAnInheritedStandardNameReExportsTheClSymbol
+		// twin, on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ReExportedStandardNameFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.ReExportedStandardNameFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms))
+			.isEqualTo(am.ik.rontolisp.ReExportedStandardNameFixture.EXPECTED);
+	}
+
+	@Test
 	void packageWalksListTheCarCdrCompositions() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunPackageWalksListTheCarCdrCompositions
 		// twin,

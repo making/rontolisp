@@ -18,7 +18,8 @@ internal -- so canonical forms re-resolve to themselves. `*package*` stays the b
 read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
 
 Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use
-`cl`; a single-colon reference to a non-external member. Adding a package is a registry change, not
+`cl` and inherits no symbol of that name through its use list; a single-colon reference to a
+non-external member. Adding a package is a registry change, not
 a resolver change; the registry is per-resolver-instance, and the backends only ever see canonical
 strings, so no per-backend codegen exists.
 
@@ -195,14 +196,29 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
 
 ## Resolution order and imports
 - `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,
-  `current.owns()`, then the use list.
+  `current.owns()`, then the use list. In a package that does not use `cl`, a `cl`-table name
+  first tries the use list (a re-exported standard symbol, or a used package's own `sin`) before
+  the undefined-symbol error.
 - **Use-list visibility checks `exports`, not `owns`.** Conflicts resolve first-wins in `:use`
   order (real CL signals). `resolveQualified` redirects through `imports` after the externality
   check. Uninterned `#:g1` symbols pass through unresolved, like keywords and `&`-markers.
 - **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage`
-  records every exported name the package does not shadow, does not `:import-from`, is not a `cl`
-  symbol, and that some used package exports, as an `imports` entry. Without it `(:use :s-sql)` +
-  `(:export #:sql)` minted a distinct `POSTMODERN:SQL`.
+  records every exported name the package does not shadow and does not `:import-from`, and that
+  some used package exports, as an `imports` entry -- `cl` first when the package uses it (the
+  order `resolveUnqualified` asks in), then the use list. Without it `(:use :s-sql)` +
+  `(:export #:sql)` minted a distinct `POSTMODERN:SQL`. A standard name was skipped until it
+  was found that the skip held only inside the package (the `cl`-table branch): `pkg:car` and a
+  package using `pkg` met `PKG:CAR`, an undefined function on every backend. Nothing depended
+  on the skip; the `export` directive already recorded the `cl` redirect (`exportSymbols`).
+  One exception: a name an EXISTING package already owns stays its own (a `defpackage` over a
+  pre-seeded package whose members include `sin`, `read`, `close`). Libraries that re-export a
+  standard name: ironclad (`stream`), yason (`null`), iterate (`while`, rontolisp's own `cl`
+  extension). Measured on the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
+  / component): byte-identical except the clack / tiny-routes examples (+11-15 B, ironclad's
+  `stream` in the packed package rows), the ningle ones (-14 to -16 B, `stream` and `null`)
+  and `jvm/cffi-sqlite.lisp` (-18 B, `ITERATE:WHILE` -> `WHILE`). Pinned by
+  `ReExportedStandardNameFixture` (four suites), ci-spec `export-of-an-inherited-standard-name`,
+  `PackageResolverTest#{exportOfAStandardNameReExportsTheClSymbol,aDefpackageOverAPackageThatOwnsAStandardNameKeepsItsOwnSymbol,aStandardNameInAPackageWithoutClResolvesThroughItsUseList}`.
 - **The recorded entry must point at the TRUE home, not the used package** (`trueHome`): a used
   package may hold the name only as a redirect. `trueHome` follows the source's own import entry
   (one hop suffices by induction) and **also walks the source's USE list**, since CL's import works
