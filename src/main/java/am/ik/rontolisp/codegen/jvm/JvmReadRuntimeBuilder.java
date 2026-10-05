@@ -1027,6 +1027,7 @@ final class JvmReadRuntimeBuilder {
 		MethodCode.Label vend = a.newLabel();
 		MethodCode.Label sym = a.newLabel();
 		MethodCode.Label intPath = a.newLabel();
+		MethodCode.Label noTrailingDot = a.newLabel();
 		MethodCode.Label big = a.newLabel();
 		// Upcase the token to its canonical spelling first (uppercase-canonical: the
 		// reader upcases every unescaped symbol character like CL's :upcase readtable
@@ -1360,6 +1361,28 @@ final class JvmReadRuntimeBuilder {
 		ldc(a, "");
 		a.invokevirtual(this.stringReplace);
 		a.astore(5);
+		// A trailing '.' after the digits ("5.", "-5.") is a decimal INTEGER (CLHS
+		// 2.3.1),
+		// at any magnitude: drop the dot and take the integer path. A dot before the end
+		// is a float, and a token whose dot trails an exponent marker was sent to the
+		// symbol path above.
+		a.aload(0);
+		a.iload(2);
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(this.stringCharAt);
+		a.loadConstant('.');
+		a.if_icmpne(noTrailingDot);
+		a.aload(5);
+		a.loadConstant(0);
+		a.aload(5);
+		a.invokevirtual(this.stringLength);
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(this.stringSubstring);
+		a.astore(5);
+		a.goto_(intPath);
+		a.labelBinding(noTrailingDot);
 		// double? -- a '.' or an exponent marker makes the token a float
 		a.iload(4);
 		a.iload(7);

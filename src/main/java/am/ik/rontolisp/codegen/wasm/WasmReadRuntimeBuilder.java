@@ -1433,9 +1433,10 @@ final class WasmReadRuntimeBuilder {
 	/**
 	 * Emits the integer classifier/parser for the token at {@code [START, START+LEN)}. If
 	 * the token is a valid signed integer (optional leading {@code -}, digits, grouping
-	 * commas), pushes the value (an i31, boxed or limb integer -- {@code ACC} is the
-	 * caller's tier-aware accumulator local, stepped through {@code _big_grow}) and
-	 * returns from the function; otherwise falls through.
+	 * commas, optionally one trailing {@code .} as in {@code 5.}), pushes the value (an
+	 * i31, boxed or limb integer -- {@code ACC} is the caller's tier-aware accumulator
+	 * local, stepped through {@code _big_grow}) and returns from the function; otherwise
+	 * falls through.
 	 */
 	private static void emitTryInteger(WasmWriter w, int BYTE, int START, int LEN, int POS, int NEG, int ACC, int VALID,
 			int SAWDIGIT) {
@@ -1487,13 +1488,30 @@ final class WasmReadRuntimeBuilder {
 		i32(w, '0');
 		w.write(Instruction.I32_LT_S);
 		ifVoid(w);
-		// not a digit; only ',' is allowed
+		// not a digit; only ',' is allowed, and a '.' after the digits and last in the
+		// token ("5.", "-5.": a decimal integer, CLHS 2.3.1)
 		getLocal(w, BYTE);
 		i32(w, ',');
 		w.write(Instruction.I32_NE);
 		ifVoid(w);
+		getLocal(w, BYTE);
+		i32(w, '.');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, SAWDIGIT);
+		w.write(Instruction.I32_AND);
+		getLocal(w, POS);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, START);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
 		i32(w, 0);
 		setLocal(w, VALID);
+		end(w);
 		end(w);
 		w.write(Instruction.ELSE);
 		// b >= '0'
@@ -1564,16 +1582,16 @@ final class WasmReadRuntimeBuilder {
 	/**
 	 * Emits the float classifier/parser for the token at {@code [START, START+LEN)}. A
 	 * decimal float is an optional leading {@code -}, digits, at most one {@code .}, and
-	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}, {@code 5.}), plus
-	 * an optional Common Lisp exponent suffix: one marker {@code e}/{@code s}/{@code f}/
-	 * {@code d}/{@code l} (either case), an optional sign, and at least one digit (e.g.
-	 * {@code 1E5}, {@code 1.5F3}, {@code .5E2}, {@code 1.E5}) -- the same grammar the
-	 * frontend lexer's {@code exponentEndsAt} accepts, so {@code 1e}, {@code e5} and
-	 * {@code 1.2.3} stay symbols here too. On a match, builds a
-	 * {@link WasmLispCompiler#TYPE_FLOAT} struct and returns from the function; otherwise
-	 * falls through. Integer tokens never reach here because the integer parser already
-	 * returned for them, and a token with a {@code .} fails the integer parser (so it
-	 * falls through to this classifier).
+	 * at least one digit (e.g. {@code 1.0}, {@code -2.5}, {@code .5}; {@code 5.} is the
+	 * integer {@code emitTryInteger} has already returned), plus an optional Common Lisp
+	 * exponent suffix: one marker {@code e}/{@code s}/{@code f}/ {@code d}/{@code l}
+	 * (either case), an optional sign, and at least one digit (e.g. {@code 1E5},
+	 * {@code 1.5F3}, {@code .5E2}, {@code 1.E5}) -- the same grammar the frontend lexer's
+	 * {@code exponentEndsAt} accepts, so {@code 1e}, {@code e5} and {@code 1.2.3} stay
+	 * symbols here too. On a match, builds a {@link WasmLispCompiler#TYPE_FLOAT} struct
+	 * and returns from the function; otherwise falls through. Integer tokens never reach
+	 * here because the integer parser already returned for them, and a token with a
+	 * {@code .} fails the integer parser (so it falls through to this classifier).
 	 * <p>
 	 * The value is the double nearest {@code mantissa * 10^k}, as the frontend's
 	 * {@code Double.parseDouble} answers: the digits accumulate in an i64 while they fit
