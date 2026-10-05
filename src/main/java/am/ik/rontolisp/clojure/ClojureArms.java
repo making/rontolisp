@@ -238,14 +238,16 @@ public final class ClojureArms {
 		 * {@code merge-with} walks) and the printer writes readably as its Clojure kind:
 		 * only a {@code java:} operator hands one to the program. The aliases are
 		 * {@code instance?} of a class a core kind's value is and a host object may be
-		 * ({@code Number}, {@code CharSequence}), each to the kind's own test.
+		 * ({@code Number}, {@code CharSequence}), each to the kind's own test, and
+		 * {@code future?}'s call {@code (host-future-p value false)}, which stands for
+		 * {@code (progn value false)}.
 		 */
 		HOST("host-object",
 				Set.of(ClojureDispatchLowering.HOST_OBJECT_P, "RONTOLISP::%CLOJURE-HOST-EQUAL-P",
 						ClojureCollectionLowering.HOST_SEQABLE_P),
 				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE),
 				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
-						"STRINGP"),
+						"STRINGP", ClojurePredicateLowering.HOST_FUTURE_P, "PROGN"),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of()),
 
 		/**

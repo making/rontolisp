@@ -305,6 +305,8 @@ categories:
       - { slug: volatile-p, name: "volatile?" }
       - { slug: delay-p, name: "delay?" }
       - { slug: future-p, name: "future?" }
+      - { slug: future-done-p, name: "future-done?" }
+      - { slug: future-cancelled-p, name: "future-cancelled?" }
       - { slug: realized-p, name: "realized?" }
       - { slug: bound-p, name: "bound?" }
       - { slug: thread-bound-p, name: "thread-bound?" }
@@ -335,6 +337,7 @@ categories:
       - { slug: send-off, name: "send-off" }
       - { slug: await, name: "await" }
       - { slug: shutdown-agents, name: "shutdown-agents" }
+      - { slug: future-cancel, name: "future-cancel" }
   - title: "マルチメソッドと階層"
     index_page: clojure/reference/multimethods.md
     functions:

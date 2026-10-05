@@ -2425,8 +2425,12 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defprotocol P (m [x])) (extends? P java.util.Date)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("extends? needs a core type, not java.util.Date");
-		assertThatThrownBy(() -> Clojure.read("(future-done? 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("future-done? is not supported yet");
+		for (String name : new String[] { "future?", "future-done?", "future-cancelled?", "future-cancel" }) {
+			assertThatThrownBy(() -> Clojure.read("(" + name + ")", null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/" + name);
+			assertThatThrownBy(() -> Clojure.read("(" + name + " 1 2)", null)).isInstanceOf(LispReadException.class)
+				.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/" + name);
+		}
 		assertThatThrownBy(() -> Clojure.read("(map extends? [])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: extends?");
 	}

@@ -863,6 +863,42 @@ class ClojureInteropTest {
 						""");
 	}
 
+	// Oracle (clj 1.12.6): a host Future is a future for future?, future-done?,
+	// future-cancelled? and future-cancel (isDone, isCancelled, cancel(true)); a value
+	// that
+	// is no Future is a ClassCastException (nil a NullPointerException) for the three
+	// verbs, and realized? of a host Future a ClassCastException.
+	@Test
+	void theFuturePredicatesReadAHostFuture() throws Exception {
+		assertBothEqual(
+				"""
+						(import '(java.util.concurrent CompletableFuture FutureTask Callable))
+						(def done (CompletableFuture/completedFuture 1))
+						(def pending (CompletableFuture.))
+						(def cancelled (doto (CompletableFuture.) (.cancel true)))
+						(defn kind [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+						(println [(future? done) (future? pending) (future? (FutureTask. (proxy [Callable] [] (call [] 1)))) (future? 1) (future? nil) (future? (atom 1)) (future? [done]) (future? "s")])
+						(println [(future-done? done) (future-done? pending) (future-done? cancelled) (future-cancelled? done) (future-cancelled? pending) (future-cancelled? cancelled)])
+						(println [(kind #(future-done? 1)) (kind #(future-done? nil)) (kind #(future-done? (atom 1))) (kind #(future-cancelled? "s")) (kind #(future-cancelled? nil)) (kind #(future-cancel 1)) (kind #(future-cancel nil)) (kind #(future-cancel [done])) (kind #(realized? done))])
+						(println (future-cancel done) (future-done? done) (future-cancelled? done))
+						(println (future-cancel pending) (future-done? pending) (future-cancelled? pending) (future-cancel pending) (future-cancel cancelled))
+						(println (map future? [done 1]) (map future-done? [done pending]) (map future-cancelled? [done]) (apply future-done? [done]) (map future-cancel [(CompletableFuture.)]))
+						(def n (atom 0))
+						(println (future? (do (swap! n inc) done)) (future-done? (do (swap! n inc) done)) (future-cancel (CompletableFuture.)) @n)
+						(println (if (future? done) @done :no) (if (future? 5) @5 :no))
+						""",
+				"""
+						[true true true false false false false false]
+						[true false true false false true]
+						[:cce :npe :cce :cce :npe :cce :npe :cce :cce]
+						false true false
+						true true true true true
+						(true false) (true true) (false) true (true)
+						true true true 2
+						1 :no
+						""");
+	}
+
 	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a
 	// RandomAccess List as a vector, any other List as a list, a Map as a map and a Set
 	// as a set, each member readably and under *print-length* / *print-level*; another

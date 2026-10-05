@@ -6799,6 +6799,18 @@ cases:
     expected: |
       false false false false false false false false false false false false false false false
       (false false) (false) (false) (false) (false) (false) (false)
+  - name: future-verbs-refuse-a-value-that-is-no-future
+    # Oracle-identical (clj 1.12.6): future-done?, future-cancelled? and future-cancel
+    # cast their argument to java.util.concurrent.Future, which only a host object can be
+    # here, so every other value is a ClassCastException (nil a NullPointerException);
+    # the host Future's own answers are pinned by ClojureInteropTest.
+    source: |
+      (defn fvk [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+      (println [(fvk #(future-done? 1)) (fvk #(future-done? nil)) (fvk #(future-done? (atom 1))) (fvk #(future-cancelled? "s")) (fvk #(future-cancelled? nil)) (fvk #(future-cancel [1])) (fvk #(future-cancel nil)) (fvk #(realized? 1))])
+      (println (fvk #(apply future-done? [1])) (fvk #(first (map future-cancel [nil]))) (map future? [1 nil]))
+    expected: |
+      [:cce :npe :cce :cce :npe :cce :npe :cce]
+      :cce :npe (false false)
   - name: special-symbol-names-the-special-forms
     # Oracle-identical (clj 1.12.6).
     source: |

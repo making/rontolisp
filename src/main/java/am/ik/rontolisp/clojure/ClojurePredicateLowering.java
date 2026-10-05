@@ -15,8 +15,10 @@ import org.jspecify.annotations.Nullable;
  * one test answering a Common Lisp boolean -- a CL type predicate or a spliced
  * {@code rontolisp::%clojure-is-} helper in {@code clojure.lisp} -- wrapped in
  * {@code (if test T false)}; as a value it is a one-argument lambda over the same test. A
- * predicate whose kind no value here can have ({@code delay?}, {@code future?},
- * {@code decimal?}, ...) answers false after evaluating its argument. {@code set?} and
+ * predicate whose kind no value here can have ({@code delay?}, {@code decimal?}, ...)
+ * answers false after evaluating its argument; {@code future?} and the future verbs
+ * ({@code future-done?}, {@code future-cancelled?}, {@code future-cancel}) know the one
+ * kind that exists, a host {@code java.util.concurrent.Future}. {@code set?} and
  * {@code reversible?} name the sorted-aware helpers, which a program building no sorted
  * collection calls as the plain ones ({@link ClojureArms.Family#SORTED}).
  *
@@ -74,12 +76,21 @@ final class ClojurePredicateLowering {
 
 	/**
 	 * The predicates of a kind no value here can have: no chunked seq, decimal, byte
-	 * array, delay, future, reader conditional or tagged literal exists on any backend,
-	 * so each answers false for every value, which is the oracle's answer for every value
-	 * a program here can build.
+	 * array, delay, reader conditional or tagged literal exists on any backend, so each
+	 * answers false for every value, which is the oracle's answer for every value a
+	 * program here can build.
 	 */
-	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?", "future?",
+	private static final List<String> NEVER = List.of("chunked-seq?", "decimal?", "bytes?", "delay?",
 			"reader-conditional?", "tagged-literal?");
+
+	/**
+	 * The verbs of a host {@code Future}, each to the library function reading it (an arm
+	 * of {@link ClojureArms.Family#HOST}): {@code isDone}, {@code isCancelled} and
+	 * {@code cancel(true)}, the oracle's casts to {@code java.util.concurrent.Future}.
+	 */
+	private static final Map<String, String> FUTURE_VERBS = Map.of("future-done?",
+			"RONTOLISP::%CLOJURE-HOST-FUTURE-DONE-P", "future-cancelled?",
+			"RONTOLISP::%CLOJURE-HOST-FUTURE-CANCELLED-P", "future-cancel", "RONTOLISP::%CLOJURE-HOST-FUTURE-CANCEL");
 
 	/**
 	 * A one-argument predicate's bare test over an already-lowered value: the Common Lisp
@@ -109,6 +120,15 @@ final class ClojurePredicateLowering {
 		if (test != null) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
 			return ctx.booleanAnswer(test.over(ctx.lower(items.get(1))));
+		}
+		if (name.equals("future?")) {
+			ClojureCoreLowering.arity(name, n, 1, 1);
+			return hostFuture(ctx, ctx.lower(items.get(1)));
+		}
+		String verb = FUTURE_VERBS.get(name);
+		if (verb != null) {
+			ClojureCoreLowering.arity(name, n, 1, 1);
+			return futureVerb(ctx, name, verb, ctx.lower(items.get(1)));
 		}
 		if (NEVER.contains(name) || name.equals("any?")) {
 			ClojureCoreLowering.arity(name, n, 1, 1);
@@ -140,8 +160,6 @@ final class ClojurePredicateLowering {
 			case "extends?":
 				ClojureCoreLowering.arity(name, n, 2, 2);
 				return extendsOf(ctx, items);
-			case "future-done?", "future-cancelled?":
-				throw new LispReadException(name + " is not supported yet: there is no thread pool on any backend");
 			default:
 				return null;
 		}
@@ -158,6 +176,17 @@ final class ClojurePredicateLowering {
 		Test test = TESTS.get(name);
 		if (test != null) {
 			return ClojureFnLowering.predValue(ctx, test::over);
+		}
+		if (name.equals("future?")) {
+			LispSymbol one = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+					hostFuture(ctx, one));
+		}
+		String verb = FUTURE_VERBS.get(name);
+		if (verb != null) {
+			LispSymbol one = ctx.freshTemp();
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(one),
+					futureVerb(ctx, name, verb, one));
 		}
 		if (NEVER.contains(name) || name.equals("any?")) {
 			LispSymbol one = ctx.freshTemp();
@@ -189,6 +218,38 @@ final class ClojurePredicateLowering {
 			default:
 				return null;
 		}
+	}
+
+	/**
+	 * {@code future?}: {@code (%clojure-host-future-p value false)}, which answers
+	 * {@code T} for a host {@code Future} and the false object otherwise. A program
+	 * naming no {@code java:} operator has the call stand for {@code (progn value false)}
+	 * ({@link ClojureArms.Family#HOST}'s aliases), what it lowered to before a host
+	 * {@code Future} could be one.
+	 */
+	private static LispVal hostFuture(ClojureLowering ctx, LispVal lowered) {
+		return ClojureLowerUtil.list(new LispSymbol(HOST_FUTURE_P), lowered, ctx.falseVariable);
+	}
+
+	/** {@code future?}'s host arm ({@code clojure.lisp}). */
+	static final String HOST_FUTURE_P = "RONTOLISP::%CLOJURE-HOST-FUTURE-P";
+
+	/**
+	 * A verb of a host {@code Future}: the library function over the value when it is
+	 * one, answering a Clojure boolean, else the oracle's cast failure (nil a
+	 * {@code NullPointerException}). A program naming no {@code java:} operator folds the
+	 * host test away ({@link ClojureArms.Family#HOST}), leaving the refusal.
+	 */
+	private static LispVal futureVerb(ClojureLowering ctx, String name, String function, LispVal lowered) {
+		LispSymbol cell = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), cell,
+								LispString.literal(ClojureStateLowering.HOST_FUTURE)),
+						ctx.booleanAnswer(ClojureLowerUtil.list(new LispSymbol(function), cell)),
+						ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+								LispString.literal(name + " needs a future"), cell)));
 	}
 
 	/**

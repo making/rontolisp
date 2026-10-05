@@ -7424,6 +7424,21 @@
 (defun rontolisp::%clojure-host-future-get (f)
   (java:call (the (java:object "java.util.concurrent.Future") f) "get"))
 
+;; future?: T for a host Future, NO (the false object) for anything else.
+(defun rontolisp::%clojure-host-future-p (x no)
+  (if (rontolisp::%clojure-host-object-p x "java.util.concurrent.Future") t no))
+
+;; The host Future verbs (future-done?, future-cancelled?, future-cancel): the
+;; host's isDone, isCancelled and cancel(true).
+(defun rontolisp::%clojure-host-future-done-p (f)
+  (java:call (the (java:object "java.util.concurrent.Future") f) "isDone"))
+
+(defun rontolisp::%clojure-host-future-cancelled-p (f)
+  (java:call (the (java:object "java.util.concurrent.Future") f) "isCancelled"))
+
+(defun rontolisp::%clojure-host-future-cancel (f)
+  (java:call (the (java:object "java.util.concurrent.Future") f) "cancel" t))
+
 ;; The three-argument deref of the host Future F: get within MS milliseconds
 ;; (truncated, as the oracle's long coercion), answering DEFAULT when the host
 ;; reports a TimeoutException and letting any other failure through.
