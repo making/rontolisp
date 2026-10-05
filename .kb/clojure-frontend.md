@@ -486,7 +486,7 @@ the host's own in both directions** (oracle-checked clj 1.12.6, 2026-10-05). The
 - Run time (JVM, 200k iterations): a caught host failure 0.80 -> 1.09 s (the `_jexMap`
   record and the condition: a CL `handler-case` pays the same +1.3 us), an ex-info throw/catch
   in a `java:` program within noise; interpreter: host failures within noise, an ex-info
-  loop +10% in a `java:` file (the C%E builder slot, the binding) and within noise elsewhere.
+  loop +12-17% in a `java:` file (the C%E builder slot, the binding) and within noise elsewhere.
 - Pins: `ClojureInteropTest#aFailedHostCallIsCaughtAsTheExceptionTheHostThrew`,
   `#aCaughtHostExceptionRethrowsAndWrapsAsItself`,
   `#anExceptionPassedToAHostMemberIsAHostThrowableOfItsClass` (oracle-identical);
