@@ -118,7 +118,7 @@ final class WasmSymbolApiCompiler {
 			// find-symbol (an unknown package is a call-time signal, or -- when the
 			// program can create packages -- a runtime-table lookup first).
 			WasmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable,
-					ctx.usesRuntimePackages, ctx.functions::containsKey), ctx);
+					ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess), ctx);
 			return;
 		}
 		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx, true);
@@ -217,7 +217,7 @@ final class WasmSymbolApiCompiler {
 	static void compileFindSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (cons.toList().size() == 3) {
 			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons, ctx.packageTable,
-					ctx.usesRuntimePackages, ctx.functions::containsKey);
+					ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess);
 			if (inPackage == null) {
 				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
 						+ " needs a literal package designator in compiled mode: " + cons.print());
@@ -247,7 +247,7 @@ final class WasmSymbolApiCompiler {
 	static void compileFindSymbolStatus(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// The answer is a keyword or nil, both self-evaluating: no quote needed.
 		WasmExprCompiler.compileExpr(LispMacroExpander.expandFindSymbolStatus(cons, ctx.packageTable,
-				ctx.userDefunNames, ctx.usesRuntimePackages), ctx);
+				ctx.userDefunNames, ctx.usesRuntimePackages, ctx.functions::containsKey, ctx.bakedSymbolAccess), ctx);
 	}
 
 	/**

@@ -44,7 +44,8 @@ class CtxBuilderSeedTest {
 			() -> new WasmUncaughtLocations.Module(WasmReportLocations.values()[0], List.of(), false, false),
 			SymbolPrintTable.class,
 			() -> new SymbolPrintTable(new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>(), false),
-			ClosRegistry.class, ClosRegistry::new);
+			ClosRegistry.class, ClosRegistry::new, am.ik.rontolisp.macro.BakedSymbolAccess.class,
+			() -> am.ik.rontolisp.macro.BakedSymbolAccess.of(new am.ik.rontolisp.PackageResolver()));
 
 	@Test
 	void aSeededBuilderCarriesEveryFieldOfItsPrototype() throws Exception {

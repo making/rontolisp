@@ -18067,6 +18067,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void findSymbolOfAnInheritedName() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunFindSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol
+		// twin, on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.InheritedFindSymbolFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
+	}
+
+	@Test
 	void longStringConstant() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunALongStringConstant twin, on Preview 1 and
 		// the component.

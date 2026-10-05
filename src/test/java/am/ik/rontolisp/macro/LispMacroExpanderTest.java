@@ -1235,4 +1235,43 @@ class LispMacroExpanderTest {
 			.isTrue();
 	}
 
+	@Test
+	void injectBakedAccessLeavesAProgramNoRowServesUnchanged() {
+		// Every package a computed lookup can reach answers through cl or its own
+		// members only: nothing is injected, so the program stays byte-identical.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-plain (:use :cl) (:export #:x))
+				(defun iba-f (n p) (find-symbol n p))
+				(print (intern (string-upcase "x") :iba-plain))
+				"""));
+		assertThat(LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver))).isSameAs(program);
+	}
+
+	@Test
+	void injectBakedAccessServesAComputedLookupInAPackageThatUsesAnother() {
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-u (:use) (:export #:b1))
+				(defpackage :iba-all (:use :iba-u))
+				(print (find-symbol (string-upcase "b1") :iba-all))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected.get(0).print())
+			.startsWith("(DEFVAR %BAKED-ACCESS% '((\"IBA-U:\") NIL (:IBA-ALL \"\" (:IBA-U) \"\")");
+	}
+
+	@Test
+	void thePackageWalkNormalizerAloneCarriesNoRows() {
+		// The normalizer looks an enumerated symbol up in its own home, which no row
+		// answers differently: its computed site does not inject the rows.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-u2 (:use) (:export #:b1))
+				(defpackage :iba-all2 (:use :iba-u2))
+				(defun %package-spelling-normalize (s h) (find-symbol (symbol-name s) h))
+				"""));
+		assertThat(LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver))).isSameAs(program);
+	}
+
 }
