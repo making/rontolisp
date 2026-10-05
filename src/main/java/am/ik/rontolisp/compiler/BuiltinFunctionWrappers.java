@@ -1091,7 +1091,7 @@ public final class BuiltinFunctionWrappers {
 
 	// (name s &optional st &key start end), write-line's and write-string's lambda list.
 	private static WrapperDef optionalStreamBounded(String name) {
-		LispVal start = getfKwOr(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
 		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("s"), new LispSymbol("st"),
 				new LispSymbol(LispNames.START_KEYWORD), start, new LispSymbol(LispNames.END_KEYWORD),
 				getfKw(LispNames.END_KEYWORD)));
@@ -1432,7 +1432,7 @@ public final class BuiltinFunctionWrappers {
 	 */
 	private static WrapperDef boundedCaseConversion(String name) {
 		LispVal bounded = listToCons(List.of(new LispSymbol(name), new LispSymbol("s"),
-				new LispSymbol(LispNames.START_KEYWORD), getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.START_KEYWORD), getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)),
 				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
 		LispVal body = listToCons(
 				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "s")));
@@ -1675,8 +1675,18 @@ public final class BuiltinFunctionWrappers {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), lower, lower, upperGet));
 	}
 
+	// (getf kw :indicator default) -- the default stands for an ABSENT indicator only: an
+	// indicator present with a nil value stays nil, which a bound that is no bound
+	// (:start nil) must reach the operator as. getfKwOr cannot tell the two apart.
+	private static LispVal getfKwDefault(String indicator, LispVal dflt) {
+		String upper = indicator.toUpperCase(java.util.Locale.ROOT);
+		LispVal fallback = upper.equals(indicator) ? dflt
+				: callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(upper), dflt);
+		return callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator), fallback);
+	}
+
 	// (if (getf kw :indicator) (getf kw :indicator) default) -- getf is pure, so the
-	// double extraction is safe.
+	// double extraction is safe. A present nil reads as the default.
 	private static LispVal getfKwOr(String indicator, LispVal dflt) {
 		return listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(indicator), getfKw(indicator), dflt));
 	}

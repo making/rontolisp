@@ -255,12 +255,20 @@ signals a `type-error` for all five and its text names no operator either.
 - Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest` -- P1 and component), ci-spec
   `bounded-string-operators-refuse-a-bad-range` (SBCL's class; a 2^32 end and a 2^62 start
-  included).
-- A non-integer bound is refused like `subseq`'s ("Bounds check" above). Known gap: a nil
-  `:start` is refused by the interpreter (and SBCL) but read as 0 on the compiled paths by
-  `write-string` / `write-line` (`lowerWriteStringBounds` binds `(or start 0)`) and by every
-  first-class wrapper of the five (`BuiltinFunctionWrappers`' `getf` default cannot tell an
-  absent `:start` from a nil one); a call-position case conversion refuses it.
+  included), `subseq-refuses-a-non-integer-bound` (a nil `:start`, direct and through `funcall`).
+- A non-integer bound is refused like `subseq`'s ("Bounds check" above), a nil `:start`
+  included: only a nil `:end` means the string's length, a nil `:start` is no bound and is the
+  same `type-error` (datum `NIL`) on every backend, SBCL's too. `lowerWriteStringBounds` hands a
+  given `:start` to `subseq` as written, and the first-class wrappers read it with
+  `getfKwDefault` (`(getf kw :start 0)`: the default stands for an ABSENT indicator only; the
+  older `getfKwOr` reads a present nil as the default).
+- Programs with no `:start` stay byte-identical (`write-string` / `write-line` plain, `hello`);
+  a `:start` site gets smaller (no `or` around the bound): a literal-bound program JVM 9,889 ->
+  9,799, P1 5,482 -> 5,455, component 6,619 -> 6,592; a `funcall` program JVM 33,266 -> 32,584,
+  P1 40,879 -> 40,129, component 42,117 -> 41,363.
+- Still `getfKwOr` and unpinned: the sequence operators' first-class wrappers
+  (`reduce`, `position`, `count`, `find`, `remove`, `fill`, `read-sequence`, `write-sequence`)
+  read a nil `:start` as 0 where SBCL refuses it.
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

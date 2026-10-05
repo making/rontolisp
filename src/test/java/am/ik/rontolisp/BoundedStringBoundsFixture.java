@@ -24,6 +24,7 @@ public final class BoundedStringBoundsFixture {
 			(defvar *bsb-lo* 3)
 			(defvar *bsb-hi* 9)
 			(defvar *bsb-neg* -1)
+			(defvar *bsb-nil* nil)
 			(defvar *bsb-one* 1)
 			(defvar *bsb-str* "a")
 			(defvar *bsb-flt* 1.5)
@@ -39,7 +40,9 @@ public final class BoundedStringBoundsFixture {
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* *bsb-flt*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* 3)))
 			        (bsb-probe (lambda () (funcall op "hello" 0 *bsb-2-32*)))
-			        (bsb-probe (lambda () (funcall op "hello" *bsb-2-62* nil)))))
+			        (bsb-probe (lambda () (funcall op "hello" *bsb-2-62* nil)))
+			        (bsb-probe (lambda () (funcall op "hello" *bsb-nil* nil)))
+			        (bsb-probe (lambda () (funcall op "hello" *bsb-nil* 3)))))
 			(dolist (op (list (lambda (s i e) (with-output-to-string (o) (write-string s o :start i :end e)))
 			                  (lambda (s i e) (with-output-to-string (o) (write-line s o :start i :end e)))
 			                  (lambda (s i e) (string-upcase s :start i :end e))
@@ -47,7 +50,9 @@ public final class BoundedStringBoundsFixture {
 			                  (lambda (s i e) (string-capitalize s :start i :end e))
 			                  (lambda (s i e) (with-output-to-string (o) (funcall #'write-string s o :start i :end e)))
 			                  (lambda (s i e) (with-output-to-string (o) (funcall #'write-line s o :start i :end e)))
-			                  (lambda (s i e) (funcall #'string-upcase s :start i :end e))))
+			                  (lambda (s i e) (funcall #'string-upcase s :start i :end e))
+			                  (lambda (s i e) (funcall #'string-downcase s :start i :end e))
+			                  (lambda (s i e) (funcall #'string-capitalize s :start i :end e))))
 			  (print (bsb-row op)))
 			""";
 
@@ -69,12 +74,21 @@ public final class BoundedStringBoundsFixture {
 
 	private static final String START_2_62 = "(4611686018427387904 (INTEGER 0 5) \"SUBSEQ: invalid bounds 4611686018427387904, 5 for string of length 5\")";
 
+	// A nil :start is no bound at all (only a nil :end means the string's length), so it
+	// is
+	// refused whether or not an :end follows.
+	private static final String START_NIL = "(NIL (INTEGER 0 5) \"SUBSEQ: invalid bounds NIL, 5 for string of length 5\")";
+
+	private static final String START_NIL_END_3 = "(NIL (INTEGER 0 5) \"SUBSEQ: invalid bounds NIL, 3 for string of length 5\")";
+
 	private static String row() {
 		return "(" + RANGE_3_1 + " " + RANGE_1_9 + " " + RANGE_M1 + " " + RANGE_9 + " " + RANGE_0_M1 + " " + START_A
-				+ " " + END_FLOAT + " :OK " + END_2_32 + " " + START_2_62 + ")";
+				+ " " + END_FLOAT + " :OK " + END_2_32 + " " + START_2_62 + " " + START_NIL + " " + START_NIL_END_3
+				+ ")";
 	}
 
 	/** What {@link #PROGRAM} prints, one row per operator. */
-	public static final String EXPECTED = String.join("\n", row(), row(), row(), row(), row(), row(), row(), row());
+	public static final String EXPECTED = String.join("\n", row(), row(), row(), row(), row(), row(), row(), row(),
+			row(), row());
 
 }

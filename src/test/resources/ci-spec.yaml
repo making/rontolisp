@@ -491,6 +491,18 @@ cases:
                    (snb-probe (lambda () (string-upcase "hello" :start *snb-a*)))))
       (print (list (snb-probe (lambda () (string-downcase "hello" :end *snb-f*)))
                    (snb-probe (lambda () (string-capitalize "hello" :start *snb-n*)))))
+      ;; A nil :start is no bound at all, through a direct call and through funcall; only a
+      ;; nil :end means the string's length.
+      (print (list (snb-probe (lambda () (with-output-to-string (o) (write-string "hello" o :start *snb-n*))))
+                   (snb-probe (lambda () (with-output-to-string (o) (write-line "hello" o :start *snb-n* :end 3))))
+                   (snb-probe (lambda () (with-output-to-string (o) (funcall #'write-string "hello" o :start *snb-n*))))
+                   (snb-probe (lambda () (with-output-to-string (o) (funcall #'write-line "hello" o :start *snb-n*))))))
+      (print (list (snb-probe (lambda () (funcall #'string-upcase "hello" :start *snb-n*)))
+                   (snb-probe (lambda () (funcall #'string-downcase "hello" :start *snb-n*)))
+                   (snb-probe (lambda () (funcall #'string-capitalize "hello" :start *snb-n*)))))
+      (print (list (snb-probe (lambda () (with-output-to-string (o) (write-string "hello" o :end *snb-n*))))
+                   (snb-probe (lambda () (with-output-to-string (o) (funcall #'write-line "hello" o :end *snb-n*))))
+                   (snb-probe (lambda () (funcall #'string-upcase "hello" :end *snb-n*)))))
     expected: |
       ((:TYPE-ERROR "a") (:TYPE-ERROR "a") (:TYPE-ERROR 1.5) (:TYPE-ERROR NIL))
       ((:TYPE-ERROR "a") (:TYPE-ERROR "a") (:TYPE-ERROR 1.5) (:TYPE-ERROR NIL))
@@ -501,6 +513,9 @@ cases:
       ((:TYPE-ERROR "a") (:TYPE-ERROR "a") (:TYPE-ERROR 1.5) (:TYPE-ERROR NIL))
       ((:TYPE-ERROR "a") (:TYPE-ERROR 1.5) (:TYPE-ERROR "a"))
       ((:TYPE-ERROR 1.5) (:TYPE-ERROR NIL))
+      ((:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL))
+      ((:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL))
+      (:OK :OK :OK)
   - name: make-array-element-type-deftype-alias
     source: |
       (deftype mae-octet () '(unsigned-byte 8))
