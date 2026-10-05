@@ -6672,20 +6672,19 @@ class LispEvaluatorTest {
 			.isEqualTo("((1 1 2 3) (1 1 2 3))");
 		assertThat(evalMulti("(let ((l (list 1 2 3 4))) (list (replace l l :start2 1) l))").print())
 			.isEqualTo("((2 3 4 4) (2 3 4 4))");
-		// A bounding index the source does not have still SIGNALS, from the same element
-		// and with the same message. That is the one surviving three-way disagreement
-		// with the compile paths (which truncate), and a cursor that stopped silently
-		// would have erased it -- .kb/sequence-op-runtimes.md.
+		// A bounding index the source does not have is refused before anything is
+		// copied, as subseq refuses the range -- on every backend, which used to
+		// disagree here (this cursor signalled from the missing element, the compile
+		// paths' stopped and truncated) -- .kb/sequence-op-runtimes.md.
 		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2) :end2 4)"))
-			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2)");
+			.hasMessageContaining("SUBSEQ: invalid bounds 0, 4 for list of length 2");
 		assertThatThrownBy(() -> evalMulti("(replace (list 0 0 0 0) '(1 2) :end2 4)"))
-			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2)");
+			.hasMessageContaining("SUBSEQ: invalid bounds 0, 4 for list of length 2");
 		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2) :start2 5 :end2 8)"))
-			.hasMessageContaining("sequence-ref: index 5 out of range for (1 2)");
-		// A DOTTED source signals where the walk runs off the tail, not where the list
-		// would have ended.
+			.hasMessageContaining("SUBSEQ: invalid bounds 5, 8 for list of length 2");
+		// A DOTTED source is as long as its conses.
 		assertThatThrownBy(() -> evalMulti("(replace (make-array 4 :initial-element 0) '(1 2 . 3) :end2 3)"))
-			.hasMessageContaining("sequence-ref: index 2 out of range for (1 2 . 3)");
+			.hasMessageContaining("SUBSEQ: invalid bounds 0, 3 for list of length 2");
 		// Long enough that the old head-walk showed. Same answer, different complexity.
 		assertThat(evalMulti("""
 				(let* ((long (let ((out nil))
@@ -10422,6 +10421,31 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void sequenceOperatorsRefuseABadBound() {
+		// A negative, non-integer or out-of-range bound and a start past its end are a
+		// type-error before anything is called or written, in call position and first
+		// class -- sbcl's answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.BAD_BOUND_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.BAD_BOUND_EXPECTED);
+	}
+
+	@Test
+	void aBadSequenceBoundReportsAsSubseqDoes() {
+		// The refusal's datum, expected type and text: subseq's, the same on all four
+		// backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.BOUND_REPORT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.BOUND_REPORT_EXPECTED);
 	}
 
 	@Test

@@ -559,11 +559,25 @@ class LispMacroExpanderTest {
 		// three subseqs and a concatenate -- 3.8 KB / 1.7 KB / 1.9 KB of wasm PER SITE.
 		// chipz's update-window is four replaces and was 18 KB for thirty lines of Lisp.
 		// If those shapes come back into the site, the cost comes back with it.
+		LispCons plainReplace = (LispCons) LispReader.readAllFromString("(replace a b)").get(0);
+		assertThat(LispMacroExpander.expandReplace(plainReplace, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME A B 0 NIL 0 NIL)");
+		LispCons plainFill = (LispCons) LispReader.readAllFromString("(fill a v)").get(0);
+		assertThat(LispMacroExpander.expandFill(plainFill, true).print()).isEqualTo("(%FILL-RUNTIME A V 0 NIL)");
+		// A spelled bound adds the one check of the bounds it spells, over the arguments
+		// bound in the order the site evaluates them, and the same call
+		// (.kb/sequence-bounding-keywords.md).
 		LispCons replace = (LispCons) LispReader.readAllFromString("(replace a b :start1 i :end2 j)").get(0);
 		assertThat(LispMacroExpander.expandReplace(replace, true, true).print())
-			.isEqualTo("(%REPLACE-RUNTIME A B I NIL 0 J)");
+			.isEqualTo("(LET* ((|__rplc_1| A) (|__rplc_2| B) (|__rplc_s1| I) (|__rplc_e2| J))"
+					+ " (%CHECK-SEQUENCE |__rplc_1| 'REPLACE) (%CHECK-BOUNDS |__rplc_1| |__rplc_s1| NIL)"
+					+ " (%CHECK-SEQUENCE |__rplc_2| 'REPLACE) (%CHECK-BOUNDS |__rplc_2| 0 |__rplc_e2|)"
+					+ " (%REPLACE-RUNTIME |__rplc_1| |__rplc_2| |__rplc_s1| NIL 0 |__rplc_e2|))");
 		LispCons fill = (LispCons) LispReader.readAllFromString("(fill a v :start i)").get(0);
-		assertThat(LispMacroExpander.expandFill(fill, true).print()).isEqualTo("(%FILL-RUNTIME A V I NIL)");
+		assertThat(LispMacroExpander.expandFill(fill, true).print())
+			.isEqualTo("(LET* ((|__fllc_s| A) (|__fllc_v| V) (|__fllc_a| I))"
+					+ " (%CHECK-SEQUENCE |__fllc_s| 'FILL) (%CHECK-BOUNDS |__fllc_s| |__fllc_a| NIL)"
+					+ " (%FILL-RUNTIME |__fllc_s| |__fllc_v| |__fllc_a| NIL))");
 		// map-into routes to the helper of its own SOURCE-SEQUENCE COUNT: the loop body
 		// is a funcall of exactly that many arguments, so one helper cannot serve two
 		// counts without an apply (and with it the spread dispatcher).
@@ -583,9 +597,12 @@ class LispMacroExpanderTest {
 		// test whose answer is already known, and leaves the wide dispatch (the list
 		// rewrite, the immutable-string rebuild) reachable only from a site that needs
 		// it.
-		assertThat(LispMacroExpander.expandReplace(replace, true, true, true).print())
-			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B I NIL 0 J)");
-		assertThat(LispMacroExpander.expandFill(fill, true, true).print()).isEqualTo("(%FILL-RUNTIME-ARRAY A V I NIL)");
+		assertThat(LispMacroExpander.expandReplace(plainReplace, true, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B 0 NIL 0 NIL)");
+		assertThat(LispMacroExpander.expandFill(plainFill, true, true).print())
+			.isEqualTo("(%FILL-RUNTIME-ARRAY A V 0 NIL)");
+		assertThat(LispMacroExpander.expandFill(fill, true, true).print())
+			.endsWith(" (%FILL-RUNTIME-ARRAY |__fllc_s| |__fllc_v| |__fllc_a| NIL))");
 	}
 
 	@Test
@@ -848,21 +865,39 @@ class LispMacroExpanderTest {
 		assertThat(plain).doesNotContain("|__remove_i|")
 			.doesNotContain("|__remove_left|")
 			.doesNotContain("(REVERSE ")
-			.doesNotContain("(LENGTH ");
+			.doesNotContain("(LENGTH ")
+			.doesNotContain("%CHECK-BOUNDS");
 		String counted = removeExpansionOf("(remove 'a lst :count 2)");
 		assertThat(counted).contains("|__remove_left|")
 			.doesNotContain("|__remove_i|")
 			.doesNotContain("(REVERSE ")
-			.doesNotContain("(LENGTH ");
+			.doesNotContain("(LENGTH ")
+			.doesNotContain("%CHECK-BOUNDS");
 		// :start/:end are an INDEX bound on the walk, never a (subseq ...) handed to it:
 		// the excluded elements must not reach the :test or :key designator, and a
 		// subsequence would have to be built before the first element was looked at.
+		// They are checked ONCE, before the walk, against the sequence as passed -- the
+		// dispatch's input, not the list it walks -- and the loop carries no check.
 		String bounded = removeExpansionOf("(remove 'a lst :start 1 :end 3)");
 		assertThat(bounded).contains("|__remove_i|")
+			.contains("(PROGN (%CHECK-BOUNDS |__seq_in| |__remove_sv| |__remove_ev|) (LET ((|__remove_lo| ")
 			.doesNotContain("(SUBSEQ ")
 			.doesNotContain("|__remove_left|")
 			.doesNotContain("(REVERSE ")
 			.doesNotContain("(LENGTH ");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"));
+		// count binds its operand ahead of the sequence it walks, and the sequence as
+		// passed ahead of the list made of it, which is what the check reads.
+		assertThat(LispMacroExpander
+			.expandCount((LispCons) LispReader.readAllFromString("(count (f) (g) :start 1)").get(0))
+			.print()).startsWith("(LET ((|__count_item| (F))) (LET ((|__count_in| (G)))")
+			.contains("(%CHECK-BOUNDS |__count_in| |__count_sv| NIL)");
+		// The position family checks a spelled bound the same way, and only then.
+		assertThat(LispMacroExpander.expandPosition((LispCons) LispReader.readAllFromString("(position x s)").get(0))
+			.print()).doesNotContain("%CHECK-BOUNDS");
+		assertThat(LispMacroExpander
+			.expandPosition((LispCons) LispReader.readAllFromString("(position x s :start 1)").get(0))
+			.print()).contains("(PROGN (%CHECK-BOUNDS |__pos_lst| |__pos_startv| |__pos_endv|)");
 		// :from-end is served by reversing the walked list and running the SAME forward
 		// loop: the bounds are mapped into the reversed walk's own coordinates, and the
 		// closing nreverse becomes conditional instead of a second loop appearing.
@@ -945,27 +980,36 @@ class LispMacroExpanderTest {
 			.doesNotContain("|__rd_i|");
 		// :start/:end bound which elements are CONSIDERED: one outside the window is
 		// kept verbatim (the guard's else arm accumulates instead of skipping) and the
-		// duplicate is looked for by INDEX inside the window, never in a (subseq ...).
+		// duplicate is looked for by INDEX inside the window, never in a (subseq ...) --
+		// the position family's own scan, expanded in place over [i+1, hi), its bounds
+		// the window's. The window is checked ONCE, against the sequence as passed; the
+		// inner scan, whose bounds lie inside it, checks nothing per element.
 		String bounded = dedupExpansionOf("(remove-duplicates lst :start 1 :end 3)");
-		assertThat(bounded)
+		assertThat(bounded).contains("(PROGN (%CHECK-BOUNDS |__seq_in| |__rd_sv| |__rd_ev|)")
 			.contains("(IF (AND (>= |__rd_i| |__rd_lo|) (IF |__rd_hi| (< |__rd_i| |__rd_hi|) T)) "
-					+ "(IF (POSITION (CAR |__rd_cur|) |__seq_lst| :START (+ |__rd_i| 1) :END |__rd_hi|) NIL "
-					+ "(SETQ |__rd_acc| (CONS (CAR |__rd_cur|) |__rd_acc|))) "
+					+ "(IF (LET ((|__pos_a1| (CAR |__rd_cur|))) (LET ((|__pos_a2| |__seq_lst|)) "
+					+ "(LET ((|__pos_k3| (+ |__rd_i| 1))) (LET ((|__pos_k5| |__rd_hi|))")
+			.contains("NIL (SETQ |__rd_acc| (CONS (CAR |__rd_cur|) |__rd_acc|))) "
 					+ "(SETQ |__rd_acc| (CONS (CAR |__rd_cur|) |__rd_acc|)))")
-			.doesNotContain("(SUBSEQ ");
+			.doesNotContain("(SUBSEQ ")
+			.doesNotContain("(POSITION ");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"));
 		// :from-end moves that window to the other side of the element, keeping the
 		// FIRST occurrence ...
 		assertThat(dedupExpansionOf("(remove-duplicates lst :start 1 :from-end t)"))
-			.contains("(POSITION (CAR |__rd_cur|) |__seq_lst| :START |__rd_lo| :END |__rd_i|)");
+			.contains("(LET ((|__pos_k3| |__rd_lo|)) (LET ((|__pos_k5| |__rd_i|))");
 		// ... so a COMPUTED direction is a branch over those two index bounds rather
 		// than over two loops, which is why it no longer has to be a literal.
-		assertThat(dedupExpansionOf("(remove-duplicates lst :from-end (f))")).contains(
-				"(POSITION (CAR |__rd_cur|) |__seq_lst| :START (IF |__rd_dir| 0 (+ |__rd_i| 1)) :END (IF |__rd_dir| |__rd_i| NIL))");
+		assertThat(dedupExpansionOf("(remove-duplicates lst :from-end (f))"))
+			.contains("(LET ((|__pos_k3| (IF |__rd_dir| 0 (+ |__rd_i| 1)))) "
+					+ "(LET ((|__pos_k5| (IF |__rd_dir| |__rd_i| NIL)))")
+			.doesNotContain("%CHECK-BOUNDS");
 		// The :test-not pair forwards to the inner scan as it does to the inner member,
 		// and the :key is applied to the candidate before it (position's own :key covers
 		// the sequence side only).
-		assertThat(dedupExpansionOf("(remove-duplicates lst :end 3 :test-not #'eq :key #'car)")).contains(
-				"(POSITION (FUNCALL #'CAR (CAR |__rd_cur|)) |__seq_lst| :START (+ |__rd_i| 1) :END |__rd_hi| :TEST-NOT #'EQ :KEY #'CAR)");
+		assertThat(dedupExpansionOf("(remove-duplicates lst :end 3 :test-not #'eq :key #'car)"))
+			.contains("(LET ((|__pos_a1| (FUNCALL #'CAR (CAR |__rd_cur|))))")
+			.contains("(NOT (FUNCALL #'EQ |__pos_item| (FUNCALL #'CAR ");
 	}
 
 	@Test

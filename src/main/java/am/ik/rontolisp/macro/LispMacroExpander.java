@@ -2841,6 +2841,16 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The sequence a scan's bounds are checked against: a scan handed
+	 * {@link #seqResultDispatchForm}'s list variable walks the input's elements, so the
+	 * input itself -- in scope as the dispatch's input variable -- is what the caller
+	 * passed, a vector keeping its own length and kind; any other list is the argument.
+	 */
+	private static @Nullable LispVal originalOf(LispVal list) {
+		return list instanceof LispSymbol sym && SEQ_LIST_VAR.equals(sym.name()) ? new LispSymbol(SEQ_IN_VAR) : null;
+	}
+
+	/**
 	 * Wraps a {@code (sort seq pred)} call in the string dispatch: a string sequence
 	 * sorts as a list of its characters and the result is coerced back to a string.
 	 * Returns null when the sequence argument is already an internal dispatch variable
@@ -6014,7 +6024,11 @@ public final class LispMacroExpander {
 			parts.add(new LispSymbol(LispNames.KEY_KEYWORD));
 			parts.add(keyForm);
 		}
-		return listToCons(parts);
+		// Expanded here rather than left a (position ...) call: the window lies inside
+		// the list the caller already checked, so the scan runs per element without the
+		// bounds check a call would make. The sequence is always a list -- the vector
+		// arm the array gate would decide is dead.
+		return buildPositionScan(parts, PositionMode.ITEM, PositionResult.INDEX, false, false);
 	}
 
 	/**
@@ -6548,6 +6562,18 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal buildPositionScan(List<LispVal> callParts, PositionMode mode, PositionResult resultKind,
 			boolean arraysExist) {
+		return buildPositionScan(callParts, mode, resultKind, arraysExist, true);
+	}
+
+	/**
+	 * {@link #buildPositionScan(List, PositionMode, PositionResult, boolean)}, with
+	 * {@code checkBounds} false for an internal scan whose window is derived from bounds
+	 * already checked ({@link #positionCallForm}): a spelled {@code :start}/{@code :end}
+	 * is otherwise checked once, before the walk ({@code %check-bounds}), so a list too
+	 * short for it is refused as every other bounded operator refuses it.
+	 */
+	private static LispVal buildPositionScan(List<LispVal> callParts, PositionMode mode, PositionResult resultKind,
+			boolean arraysExist, boolean checkBounds) {
 		KeywordTail tail = KeywordTail.of(callParts, 3, "__pos");
 		List<LispVal> parts = tail.parts();
 		TestSpec testForm = testSpec(parts, 3);
@@ -6628,6 +6654,10 @@ public final class LispMacroExpander {
 		if (fromEndForm != null) {
 			result = makeLet(fromv.name(), fromEndForm, result);
 		}
+		if (checkBounds && (startForm != null || endForm != null)) {
+			// After lenv, whose arm refuses a non-sequence first.
+			result = makeProgn(List.of(checkBoundsOf(lst, startv, endv), result));
+		}
 		result = makeLet(endv.name(), endForm == null ? LispNil.INSTANCE : endForm, result);
 		result = makeLet(lenv.name(), lenvInit, result);
 		result = makeLet(startv.name(), startForm == null ? new LispInteger(0) : startForm, result);
@@ -6702,12 +6732,21 @@ public final class LispMacroExpander {
 	 * a fresh {@code reverse} would rewrite cells nobody can see. It is built only when
 	 * {@code :from-end} is spelled at all; every other bounded destructive scan walks the
 	 * argument itself and pays nothing.
+	 *
+	 * <p>
+	 * {@code :start}/{@code :end} are checked ONCE, before the walk is built
+	 * ({@code %check-bounds}, {@link LispNames#CHECK_BOUNDS_INTERNAL}), against the
+	 * sequence as the caller passed it -- a vector's own length, the report naming its
+	 * kind -- so a bad bound is {@code subseq}'s type-error before any designator runs,
+	 * and the guard compares indices already known to lie inside the sequence.
 	 */
 	private static final class SeqScanScaffold {
 
 		private final SeqScanBounds bounds;
 
 		private final LispVal listForm;
+
+		private final @Nullable LispVal original;
 
 		private final boolean cellList;
 
@@ -6737,8 +6776,9 @@ public final class LispMacroExpander {
 
 		private final boolean forcedIndex;
 
-		SeqScanScaffold(SeqScanBounds bounds, LispVal listForm, String prefix, boolean cells) {
-			this(bounds, listForm, prefix, cells, false);
+		SeqScanScaffold(SeqScanBounds bounds, LispVal listForm, @Nullable LispVal original, String prefix,
+				boolean cells) {
+			this(bounds, listForm, original, prefix, cells, false);
 		}
 
 		/**
@@ -6747,10 +6787,15 @@ public final class LispMacroExpander {
 		 * index for something other than the guard (the duplicate window of
 		 * {@code remove-duplicates}). It adds the index binding and nothing else: with no
 		 * bounding keyword there is still no guard and no {@code lo}/{@code hi}.
+		 * {@code original} is the variable holding the sequence as the caller passed it,
+		 * which the bounds are checked against; null when the walked list is that
+		 * sequence.
 		 */
-		SeqScanScaffold(SeqScanBounds bounds, LispVal listForm, String prefix, boolean cells, boolean forceIndex) {
+		SeqScanScaffold(SeqScanBounds bounds, LispVal listForm, @Nullable LispVal original, String prefix,
+				boolean cells, boolean forceIndex) {
 			this.bounds = bounds;
 			this.listForm = listForm;
+			this.original = original;
 			this.prefix = prefix;
 			this.forcedIndex = forceIndex;
 			this.cellList = cells && bounds.fromEnd() != null;
@@ -6861,6 +6906,13 @@ public final class LispMacroExpander {
 			if (this.bounds.fromEnd() != null) {
 				result = makeLet(this.walk.name(), walkInit(), result);
 			}
+			if (this.bounds.indexed()) {
+				// The bounds lie inside the sequence, or subseq's type-error -- once,
+				// before the walk is built and any designator runs.
+				result = makeProgn(List.of(checkBoundsOf(this.original != null ? this.original : this.seq,
+						this.bounds.start() == null ? new LispInteger(0) : this.startv,
+						this.bounds.end() == null ? LispNil.INSTANCE : this.endv), result));
+			}
 			// The keyword VALUES bind outermost, each evaluated exactly once and before
 			// the walk they shape.
 			if (this.bounds.count() != null) {
@@ -6902,20 +6954,10 @@ public final class LispMacroExpander {
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
 		}
 
-		// The forward :start, 0 when absent. A given one is (max start 0), evaluated once
-		// before the walk: a nil :start is no bound (only a nil :end means the
-		// sequence's length), so max refuses it as the type-error it is in SBCL -- on an
-		// empty sequence too -- and the guard compares the index against a value the
-		// backends know is a number, with no per-element operand check. A negative start
-		// selects the same elements either way. A literal integer needs no max.
+		// The forward :start, 0 when absent, else the start as given: wrap's bounds check
+		// has refused anything but an index inside the sequence before the walk is built.
 		private LispVal forwardStart() {
-			if (this.bounds.start() == null) {
-				return new LispInteger(0);
-			}
-			if (this.bounds.start() instanceof LispInteger) {
-				return this.startv;
-			}
-			return listToCons(List.of(new LispSymbol(LispNames.MAX), this.startv, new LispInteger(0)));
+			return this.bounds.start() == null ? new LispInteger(0) : this.startv;
 		}
 
 		// The forward :end; nil is "to the end of the sequence".
@@ -7332,22 +7374,40 @@ public final class LispMacroExpander {
 	 *     ((atom __count_cur) __count_n)
 	 *   (if MATCH (setq __count_n (+ __count_n 1)) nil))
 	 * </pre>
+	 *
+	 * <p>
+	 * With a bounding keyword the scaffold binds the sequence OUTSIDE the loop, so the
+	 * operand binds outside it first, keeping the call's argument order; with
+	 * {@code :start}/{@code :end} the sequence as passed is bound too, for the bounds
+	 * check to read its own length.
 	 */
 	private static LispVal countScan(SeqScanBounds bounds, LispSymbol operand, LispVal operandInit, LispVal seqForm,
 			String prefix, @Nullable String operator, java.util.function.UnaryOperator<LispVal> matchOf) {
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, seqAsListForm(seqForm, operator), prefix, false);
+		LispSymbol original = bounds.indexed() ? new LispSymbol(prefix + "_in") : null;
+		SeqScanScaffold scan = new SeqScanScaffold(bounds,
+				seqAsListForm(original != null ? original : seqForm, operator), original, prefix, false);
 		LispSymbol n = new LispSymbol(prefix + "_n");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
-		List<LispVal> bindings = new ArrayList<>(
-				List.of(listToCons(List.of(operand, operandInit)), listToCons(List.of(n, new LispInteger(0))),
-						listToCons(List.of(cur, scan.cursorInit(), callOf(LispNames.CDR, cur)))));
+		List<LispVal> bindings = new ArrayList<>();
+		if (bounds.absent()) {
+			bindings.add(listToCons(List.of(operand, operandInit)));
+		}
+		bindings.add(listToCons(List.of(n, new LispInteger(0))));
+		bindings.add(listToCons(List.of(cur, scan.cursorInit(), callOf(LispNames.CDR, cur))));
 		scan.addBindings(bindings);
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), n));
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.SETQ), n,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)))));
 		LispVal body = scan.select(matchOf.apply(scan.elementOf(cur)), increment, LispNil.INSTANCE, true);
-		return scan.wrap(expandDo(
+		LispVal loop = scan.wrap(expandDo(
 				(LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings), endClause, body))));
+		if (bounds.absent()) {
+			return loop;
+		}
+		if (original != null) {
+			loop = makeLet(original.name(), seqForm, loop);
+		}
+		return makeLet(operand.name(), operandInit, loop);
 	}
 
 	/**
@@ -7746,7 +7806,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal boundedDedupScan(LispVal list, SeqScanBounds bounds, @Nullable LispVal directionForm,
 			boolean keepFirst, TestSpec testForm, @Nullable LispVal keyForm) {
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, "__rd", false, true);
+		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, originalOf(list), "__rd", false, true);
 		LispSymbol acc = new LispSymbol("__rd_acc");
 		LispSymbol cur = new LispSymbol("__rd_cur");
 		LispSymbol direction = new LispSymbol("__rd_dir");
@@ -9044,7 +9104,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandFilter(LispSymbol operand, LispVal operandInit, LispVal list, String prefix,
 			java.util.function.UnaryOperator<LispVal> matchOf, boolean keepWhenMatch, SeqScanBounds bounds) {
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, prefix, false);
+		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, originalOf(list), prefix, false);
 		LispSymbol acc = new LispSymbol(prefix + "_acc");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
 		LispVal element = scan.elementOf(cur);
@@ -9074,7 +9134,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal substituteScan(LispVal newItem, LispVal list, String prefix,
 			java.util.function.UnaryOperator<LispVal> matchOf, boolean replaceWhenMatch, SeqScanBounds bounds) {
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, prefix, false);
+		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, originalOf(list), prefix, false);
 		LispSymbol acc = new LispSymbol(prefix + "_acc");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
 		LispVal element = scan.elementOf(cur);
@@ -9115,7 +9175,7 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.LET),
 					listToCons(List.of(listToCons(List.of(cur, LispNil.INSTANCE)))), initCur, whileExpr, list));
 		}
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, prefix, true);
+		SeqScanScaffold scan = new SeqScanScaffold(bounds, list, null, prefix, true);
 		List<LispVal> bindings = new ArrayList<>(
 				List.of(listToCons(List.of(cur, scan.cursorInit(), callOf(LispNames.CDR, cur)))));
 		scan.addBindings(bindings);
@@ -12327,25 +12387,70 @@ public final class LispMacroExpander {
 		// end: the call-site shape passes them through, the inline form defaults the
 		// ends below.
 		LispVal[] bounds = { new LispInteger(0), LispNil.INSTANCE, new LispInteger(0), LispNil.INSTANCE };
+		boolean[] spelled = new boolean[4];
 		for (int k = 3; k < parts.size(); k += 2) {
 			if (!(parts.get(k) instanceof LispSymbol key)) {
 				throw new UnsupportedOperationException("replace supports only literal keyword arguments");
 			}
-			switch (key.name()) {
-				case LispNames.START1_KEYWORD -> bounds[0] = parts.get(k + 1);
-				case LispNames.END1_KEYWORD -> bounds[1] = parts.get(k + 1);
-				case LispNames.START2_KEYWORD -> bounds[2] = parts.get(k + 1);
-				case LispNames.END2_KEYWORD -> bounds[3] = parts.get(k + 1);
+			int slot = switch (key.name()) {
+				case LispNames.START1_KEYWORD -> 0;
+				case LispNames.END1_KEYWORD -> 1;
+				case LispNames.START2_KEYWORD -> 2;
+				case LispNames.END2_KEYWORD -> 3;
 				default -> throw new UnsupportedOperationException(
 						"replace supports only the literal :start1/:end1/:start2/:end2 keywords");
-			}
+			};
+			bounds[slot] = parts.get(k + 1);
+			spelled[slot] = true;
 		}
+		boolean bounded1 = spelled[0] || spelled[1];
+		boolean bounded2 = spelled[2] || spelled[3];
+		if (!bounded1 && !bounded2) {
+			return replaceSite(parts.get(1), parts.get(2), bounds, arraysExist, helperPresent, arrayHelperTarget);
+		}
+		// A spelled bound is checked as subseq checks a range, once, before anything is
+		// copied: the arguments bind in the order the site evaluates them, each
+		// sequence checked to be one first so a non-sequence stays REPLACE's own error.
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal seq1 = boundSiteArgument("__rplc_1", parts.get(1), bindings, true);
+		LispVal seq2 = boundSiteArgument("__rplc_2", parts.get(2), bindings, true);
+		String[] names = { "__rplc_s1", "__rplc_e1", "__rplc_s2", "__rplc_e2" };
+		for (int k = 0; k < 4; k++) {
+			bounds[k] = boundSiteArgument(names[k], bounds[k], bindings, false);
+		}
+		List<LispVal> site = new ArrayList<>(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings)));
+		if (bounded1) {
+			site.add(checkedSequenceOf(seq1, LispNames.REPLACE));
+			site.add(checkBoundsOf(seq1, bounds[0], bounds[1]));
+		}
+		if (bounded2) {
+			site.add(checkedSequenceOf(seq2, LispNames.REPLACE));
+			site.add(checkBoundsOf(seq2, bounds[2], bounds[3]));
+		}
+		site.add(replaceSite(seq1, seq2, bounds, arraysExist, helperPresent, arrayHelperTarget));
+		return listToCons(site);
+	}
+
+	// The replace site over its six arguments: a helper call, or the dispatch inline.
+	private static LispVal replaceSite(LispVal seq1, LispVal seq2, LispVal[] bounds, boolean arraysExist,
+			boolean helperPresent, boolean arrayHelperTarget) {
 		if (arrayHelperTarget || helperPresent) {
 			String helper = arrayHelperTarget ? LispNames.REPLACE_ARRAY_RUNTIME : LispNames.REPLACE_RUNTIME;
-			return listToCons(List.of(new LispSymbol(helper), parts.get(1), parts.get(2), bounds[0], bounds[1],
-					bounds[2], bounds[3]));
+			return listToCons(List.of(new LispSymbol(helper), seq1, seq2, bounds[0], bounds[1], bounds[2], bounds[3]));
 		}
-		return replaceDispatch(parts.get(1), parts.get(2), bounds, arraysExist, SeqOpArms.ALL);
+		return replaceDispatch(seq1, seq2, bounds, arraysExist, SeqOpArms.ALL);
+	}
+
+	// A fill / replace site argument as the bounded site reads it: bound to a temp, in
+	// the order the bindings are added, unless it is a form whose evaluation nothing can
+	// observe (a literal, a quote) and the site reads it once -- a sequence is read
+	// twice, by the check and by the site.
+	private static LispVal boundSiteArgument(String name, LispVal form, List<LispVal> bindings, boolean always) {
+		if (!always && KeywordTail.isInertValue(form)) {
+			return form;
+		}
+		bindings.add(listToCons(List.of(new LispSymbol(name), form)));
+		return new LispSymbol(name);
 	}
 
 	/**
@@ -12621,6 +12726,7 @@ public final class LispMacroExpander {
 		}
 		LispVal startArg = new LispInteger(0);
 		LispVal endArg = LispNil.INSTANCE;
+		boolean bounded = false;
 		for (int k = 3; k < parts.size(); k += 2) {
 			if (!(parts.get(k) instanceof LispSymbol key)) {
 				throw new UnsupportedOperationException("fill supports only literal keyword arguments");
@@ -12631,12 +12737,31 @@ public final class LispMacroExpander {
 				default ->
 					throw new UnsupportedOperationException("fill supports only the literal :start/:end keywords");
 			}
+			bounded = true;
 		}
+		if (!bounded) {
+			return fillSite(parts.get(1), parts.get(2), startArg, endArg, helperPresent, arrayHelperTarget);
+		}
+		// A spelled bound is checked as subseq checks a range, once, before anything is
+		// written (replace's rule).
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal seq = boundSiteArgument("__fllc_s", parts.get(1), bindings, true);
+		LispVal item = boundSiteArgument("__fllc_v", parts.get(2), bindings, false);
+		LispVal start = boundSiteArgument("__fllc_a", startArg, bindings, false);
+		LispVal end = boundSiteArgument("__fllc_b", endArg, bindings, false);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings),
+				checkedSequenceOf(seq, LispNames.FILL), checkBoundsOf(seq, start, end),
+				fillSite(seq, item, start, end, helperPresent, arrayHelperTarget)));
+	}
+
+	// The fill site over its four arguments: a helper call, or the dispatch inline.
+	private static LispVal fillSite(LispVal seq, LispVal item, LispVal start, LispVal end, boolean helperPresent,
+			boolean arrayHelperTarget) {
 		if (arrayHelperTarget || helperPresent) {
 			String helper = arrayHelperTarget ? LispNames.FILL_ARRAY_RUNTIME : LispNames.FILL_RUNTIME;
-			return listToCons(List.of(new LispSymbol(helper), parts.get(1), parts.get(2), startArg, endArg));
+			return listToCons(List.of(new LispSymbol(helper), seq, item, start, end));
 		}
-		return fillDispatch(parts.get(1), parts.get(2), startArg, endArg, SeqOpArms.ALL);
+		return fillDispatch(seq, item, start, end, SeqOpArms.ALL);
 	}
 
 	/**
@@ -17274,6 +17399,21 @@ public final class LispMacroExpander {
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.CHECK_SEQUENCE_INTERNAL), form,
 				operator == null ? LispNil.INSTANCE : callOf(LispNames.QUOTE, new LispSymbol(operator))));
+	}
+
+	/**
+	 * {@code (%check-bounds seq start end)}: nil when {@code 0 <= start <= end <= (length
+	 * seq)}, a nil end meaning the length, else {@code subseq}'s bounds type-error
+	 * ({@link LispNames#CHECK_BOUNDS_INTERNAL}). The one check a bounded sequence
+	 * operator's lowering makes, once, before its walk; {@code seq} must already be known
+	 * to be a sequence.
+	 * @param seq the sequence as the caller passed it
+	 * @param start the start as given, 0 when absent
+	 * @param end the end as given, nil when absent
+	 * @return the checking form
+	 */
+	static LispVal checkBoundsOf(LispVal seq, LispVal start, LispVal end) {
+		return listToCons(List.of(new LispSymbol(LispNames.CHECK_BOUNDS_INTERNAL), seq, start, end));
 	}
 
 	/**

@@ -12325,9 +12325,10 @@ public final class LispEvaluator {
 	// use: a forward scan honoring :start/:end, where a :from-end match records the
 	// match and keeps scanning (the last match wins). :test/:test-not apply only to
 	// position/find (ITEM mode); a nil keyword value counts as absent, like the
-	// expansion -- except a nil :start, which is no bound and is refused. elementResult
-	// selects the find family's answer (the matching element)
-	// over the position family's (its index) -- the two differ in nothing else.
+	// expansion -- except a nil :start, which is no bound: the bounds are checked as
+	// subseq checks a range, before the scan. elementResult selects the find family's
+	// answer (the matching element) over the position family's (its index) -- the two
+	// differ in nothing else.
 	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode,
 			boolean elementResult) {
 		if (args.size() < 2) {
@@ -12338,8 +12339,8 @@ public final class LispEvaluator {
 		LispVal testNot = null;
 		LispVal keyFn = null;
 		boolean fromEnd = false;
-		long start = 0;
-		Long end = null;
+		LispVal startValue = new LispInteger(0);
+		LispVal endValue = LispNil.INSTANCE;
 		List<String> allowed = mode == PositionScanMode.ITEM
 				? List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD, LispNames.KEY_KEYWORD,
 						LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD)
@@ -12368,8 +12369,8 @@ public final class LispEvaluator {
 				}
 				case LispNames.KEY_KEYWORD -> keyFn = absent ? null : value;
 				case LispNames.FROM_END_KEYWORD -> fromEnd = !absent;
-				case LispNames.START_KEYWORD -> start = Environment.requireIndex(opName, value);
-				case LispNames.END_KEYWORD -> end = absent ? null : (long) Environment.requireIndex(opName, value);
+				case LispNames.START_KEYWORD -> startValue = value;
+				case LispNames.END_KEYWORD -> endValue = value;
 				default -> {
 					// :allow-other-keys itself, or a key it admitted.
 				}
@@ -12377,6 +12378,11 @@ public final class LispEvaluator {
 		}
 		LispVal item = args.get(0);
 		LispVal cur = Environment.seqAsList(args.get(1));
+		// The bounds lie inside the sequence, or subseq's type-error -- before any
+		// element reaches a designator.
+		Environment.checkBoundingIndices(args.get(1), startValue, endValue);
+		long start = Environment.requireIndex(opName, startValue);
+		Long end = endValue instanceof LispNil ? null : (long) Environment.requireIndex(opName, endValue);
 		long index = 0;
 		LispVal found = LispNil.INSTANCE;
 		while (cur instanceof LispCons cell && (end == null || index < end)) {
@@ -13682,8 +13688,6 @@ public final class LispEvaluator {
 		LispVal endValue = presentKeyword(args, tail, LispNames.END_KEYWORD);
 		LispVal countValue = action == SeqScanAction.COUNT ? null : presentKeyword(args, tail, LispNames.COUNT_KEYWORD);
 		boolean fromEnd = presentKeyword(args, tail, LispNames.FROM_END_KEYWORD) != null;
-		long start = startValue == null ? 0 : Environment.requireIndex(name, startValue);
-		Long end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
 		// CLHS 17.2.1: a negative :count acts as zero, a nil one as no limit at all.
 		Long budget = countValue == null ? null : Math.max(0L, requireCount(name, countValue));
 		LispVal operand = args.get(seqIndex - 1);
@@ -13697,8 +13701,18 @@ public final class LispEvaluator {
 				cells.add(cell);
 			}
 		}
+		// The bounds lie inside the sequence, or subseq's type-error -- before any
+		// element reaches a designator.
+		long start = 0;
+		Long end = null;
+		if (startValue != null || endValue != null) {
+			LispVal givenStart = startValue == null ? new LispInteger(0) : startValue;
+			Environment.checkBoundingIndices(original, givenStart, endValue);
+			start = Environment.requireIndex(name, givenStart);
+			end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
+		}
 		int size = elements.size();
-		long last = end == null ? size : Math.min(end, size);
+		long last = end == null ? size : end;
 		boolean[] acted = new boolean[size];
 		RuntimeTest test = runtimeTest(args, tail);
 		int hits = 0;
@@ -13816,16 +13830,20 @@ public final class LispEvaluator {
 		LispVal startValue = optionalKeywordArg(args, 1, LispNames.START_KEYWORD);
 		LispVal endValue = presentKeyword(args, 1, LispNames.END_KEYWORD);
 		boolean keepFirst = presentKeyword(args, 1, LispNames.FROM_END_KEYWORD) != null;
-		long start = startValue == null ? 0 : Environment.requireIndex(name, startValue);
-		Long end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
 		RuntimeTest test = runtimeTest(args, 1);
 		LispVal original = args.get(0);
 		List<LispVal> elements = new ArrayList<>();
 		for (LispVal cursor = Environment.seqAsList(original); cursor instanceof LispCons cell; cursor = cell.cdr()) {
 			elements.add(cell.car());
 		}
+		// The window lies inside the sequence, or subseq's type-error -- before any
+		// element is compared.
+		LispVal givenStart = startValue == null ? new LispInteger(0) : startValue;
+		Environment.checkBoundingIndices(original, givenStart, endValue);
+		long start = Environment.requireIndex(name, givenStart);
+		Long end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
 		int size = elements.size();
-		long last = end == null ? size : Math.min(end, size);
+		long last = end == null ? size : end;
 		List<LispVal> kept = new ArrayList<>();
 		for (int i = 0; i < size; i++) {
 			LispVal element = elements.get(i);

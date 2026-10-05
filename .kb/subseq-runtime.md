@@ -273,10 +273,11 @@ signals a `type-error` for all five and its text names no operator either.
   a `:start` site gets smaller (no `or` around the bound): a literal-bound program JVM 9,889 ->
   9,799, P1 5,482 -> 5,455, component 6,619 -> 6,592; a `funcall` program JVM 33,266 -> 32,584,
   P1 40,879 -> 40,129, component 42,117 -> 41,363.
-- The sequence operators refuse a nil `:start` the same way, call position and first class
-  (`.kb/sequence-bounding-keywords.md`), and so do the string comparisons and the `nstring-*`
-  conversions, whose window is this lowering's (`.kb/characters-code-points.md`, "String
-  comparison family").
+- The sequence operators refuse every bad bound with this same `type-error` and text, call
+  position and first class, through one check of their own before the walk (`%check-bounds`,
+  `.kb/sequence-bounding-keywords.md`, "Every bound is checked once"); the string comparisons and
+  the `nstring-*` conversions refuse a nil `:start` the same way (`.kb/characters-code-points.md`,
+  "String comparison family").
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

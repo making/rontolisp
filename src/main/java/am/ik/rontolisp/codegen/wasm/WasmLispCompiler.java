@@ -2094,6 +2094,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and shaken when nothing refuses a range.
 	static final int FUNC_SUBSEQ_BAD = FUNC_DIV_ZERO + 1;
 
+	// _ck_bounds (seq, start, end) -> nil: %check-bounds, the one bounds check of every
+	// bounded sequence operator (WasmStringRuntimeBuilder.buildCheckBoundsBody): a string
+	// or vector against its _seq_len, a list walked as far as the larger bound, a range
+	// outside refused through _subseq_bad in EH mode, a bare unreachable outside it.
+	// Appended after the last fixed helper so no index above shifts, and shaken when
+	// nothing spells a bound.
+	static final int FUNC_CK_BOUNDS = FUNC_SUBSEQ_BAD + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2124,7 +2132,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_SUBSEQ_BAD + 1;
+	static final int FUNC_VEC_BASE = FUNC_CK_BOUNDS + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2142,10 +2150,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
 	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
-	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero) and the subseq
-	// bounds landing (_subseq_bad) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_SUBSEQ_BAD + 1;
+	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
+	// bounds landing (_subseq_bad) and the bounds check (_ck_bounds) -- plus, under
+	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_CK_BOUNDS + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7470,6 +7478,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _subseq_bad (start, end,
 															// length, piece) -> value
 															// (FUNC_SUBSEQ_BAD)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _ck_bounds (seq, start,
+															// end) -> nil
+															// (FUNC_CK_BOUNDS)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8479,6 +8490,9 @@ public final class WasmLispCompiler implements LispCompiler {
 							operandTexts != null ? operandTexts.compoundNames()
 								.get(am.ik.rontolisp.compiler.OperandTypes.INTEGER_TYPE) : null,
 							this.usesIdentityHashTables));
+				// the bounds check body (FUNC_CK_BOUNDS): shaken when nothing spells a
+				// bound.
+				code.addFunction(WasmStringRuntimeBuilder.buildCheckBoundsBody(ehMode, subseqBoundsForLength));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

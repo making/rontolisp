@@ -89,6 +89,21 @@ final class WasmSubseqCompiler {
 		get(ctx, end);
 	}
 
+	/**
+	 * Compiles {@code (%check-bounds seq start end)} (see
+	 * {@link LispNames#CHECK_BOUNDS_INTERNAL}): a call of the module's one
+	 * {@code _ck_bounds}, which answers nil or refuses the range
+	 * ({@code WasmStringRuntimeBuilder.buildCheckBoundsBody}).
+	 */
+	static void compileCheckBounds(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		for (int i = 1; i <= 3; i++) {
+			WasmExprCompiler.compileExpr(args.get(i), ctx);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_CK_BOUNDS);
+	}
+
 	private static void get(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

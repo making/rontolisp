@@ -2527,6 +2527,7 @@ final class WasmExprCompiler {
 			case LispNames.CHECK_INDEX_INTERNAL -> WasmCharCompiler.compileCheckIndex(cons, ctx);
 			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> WasmCharCompiler.compileOperandTypeError(cons, ctx);
 			case LispNames.CHECK_SEQUENCE_INTERNAL -> WasmCharCompiler.compileCheckSequence(cons, ctx);
+			case LispNames.CHECK_BOUNDS_INTERNAL -> WasmSubseqCompiler.compileCheckBounds(cons, ctx);
 			case LispNames.CHECK_CHARACTER_INTERNAL -> WasmCharCompiler.compileCheckCharacter(cons, ctx);
 			case LispNames.ELT -> compileExpansion(LispMacroExpander.expandElt(cons), ctx, tail);
 			case LispNames.RASSOC -> compileExpansion(LispMacroExpander.expandRassoc(cons), ctx, tail);

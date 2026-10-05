@@ -1769,6 +1769,19 @@ public final class LispNames {
 	public static final String CHECK_SEQUENCE_INTERNAL = "%CHECK-SEQUENCE";
 
 	/**
+	 * The {@code %check-bounds} internal: {@code (%check-bounds seq start end)} answers
+	 * nil when {@code 0 <= start <= end <= (length seq)} -- a nil {@code end} meaning the
+	 * length -- and otherwise signals {@code subseq}'s bounds {@code type-error} over the
+	 * bounds as given (datum the refused bound, expected type its range, the report
+	 * {@code "SUBSEQ: invalid bounds S, E for KIND of length N"}). {@code seq} is a
+	 * sequence the caller has already checked; a list is walked only as far as the larger
+	 * bound, and counted whole only for a report. The sequence operators' lowerings call
+	 * it once, before their walk, whenever a bound was spelled
+	 * ({@code .kb/sequence-bounding-keywords.md}).
+	 */
+	public static final String CHECK_BOUNDS_INTERNAL = "%CHECK-BOUNDS";
+
+	/**
 	 * The shared defun a compiled {@code %check-sequence} site calls:
 	 * {@code (%check-sequence-runtime x token)}, the token the backend's own spelling of
 	 * the operator {@code %operand-type-error} names at run time.

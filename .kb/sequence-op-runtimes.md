@@ -22,11 +22,17 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
 
 - **The bounds are PARAMETERS**, so ONE call-site shape serves every keyword combination. An end
   is nil for "the length" (`(or end (length seq))` in the helper); a start is always a value --
-  the site passes 0 when the keyword is absent and the given form as written otherwise, so a nil
-  start is no bound and the helper's arithmetic (`(- e s)`, the loop's comparison, `nthcdr`)
-  signals its `type-error`. Until the start stopped defaulting, a site passed nil for an absent
-  start and the helper's `(or start 0)` read a given nil the same way. Argument order is the canonical keyword order (the inline `let*` order), so
-  evaluation order is unchanged.
+  the site passes 0 when the keyword is absent and the given form as written otherwise. Argument
+  order is the canonical keyword order (the inline `let*` order), so evaluation order is
+  unchanged.
+- **A site that SPELLS a bound checks it, the helper never does**: `(let* (<the arguments, in
+  the site's order>) (%check-sequence s 'fill) (%check-bounds s start end) <the same call>)`,
+  each spelled pair of `replace` against its own sequence (`.kb/sequence-bounding-keywords.md`,
+  "Every bound is checked once") -- a negative, non-integer or out-of-range bound or a start past
+  its end is `subseq`'s `type-error` before anything is written. Inside a helper the check
+  would ride every unbounded site too and change its bytes. Before 2026-10-05 only a nil start
+  was refused (the helper's arithmetic tripped on it); every other bad bound wrote nothing or
+  part of the range.
 - **`map-into` gets one helper per SOURCE-SEQUENCE COUNT**, not one taking a list: its loop body is
   a `funcall` of exactly that many arguments, and a list would need `apply` and the spread
   dispatcher (12 KB). Count read off the call shape (`sequenceOpRuntimeWrappers`), capped at 8
@@ -77,20 +83,20 @@ two arguments only.
   no-op). Dispatch is now `%arrayp` -> element store, else `listp` -> a `nthcdr`/`rplaca` cursor
   walk, else the string rebuild.
 - **A LIST source is walked with a cursor, not indexed with `elt`** (every `elt` was an `nth` walk
-  from the head: quadratic). **Trap: the `(null cell)` stop changes an INVALID call's behavior on
-  the compile paths, deliberately** -- `(replace <array> '(1 2) :end2 4)` now copies what there is
-  and stops, where the interpreter's native `replace` still SIGNALS. The disagreement is
-  interpreter-signals / compile-paths-truncate. The `search`/`mismatch` prelude bodies took the
-  same cursor but could NOT take the same stop (`.kb/seq-coerce-runtime.md`); theirs falls back to
-  the `elt` call, which is why theirs grew where this one shrank.
+  from the head: quadratic), with a `(null cell)` stop. A range the source lacks no longer
+  reaches it: `(replace <array> '(1 2) :end2 4)` is refused up front on every backend, where the
+  compile paths copied what there was and stopped and the interpreter signalled `sequence-ref`
+  from the missing element. The `search`/`mismatch` prelude bodies took the same cursor but could
+  NOT take the same stop (`.kb/seq-coerce-runtime.md`); theirs falls back to the `elt` call,
+  which is why theirs grew where this one shrank.
 - The list DESTINATION arm's SOURCE read likewise falls back rather than stopping:
   `(if (consp c) (prog1 (car c) (setq c (cdr c))) (elt r2 (+ vs2 k)))`, seeded
   `(nthcdr start2 source)` only when the source is `listp` and `start2` a non-negative integer.
 - **The INTERPRETER had the mirror defect**: `Environment`'s `replace` read
   `sequenceRef(source, start2 + k)` per element. One `Environment.SequenceSourceCursor` serves all
   three destination arms, monotonic, re-seeding if a caller reads backwards, keeping `sequenceRef`
-  for every non-list representation. **It still SIGNALS**, from the same element, for a proper list
-  run out, a dotted tail and a `:start2` past the end.
+  for every non-list representation. A list too short for the range is refused before it runs
+  (`Environment.checkBoundingIndices`, a dotted tail counting its conses).
 
 ## Narrowing the arms to the ones a site can reach
 `%replace-runtime-array` / `%fill-runtime-array` hold the `%arrayp` arm; the wide helper's array

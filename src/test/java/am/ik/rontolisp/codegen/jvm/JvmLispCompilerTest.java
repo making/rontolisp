@@ -9246,7 +9246,11 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 7 8) :start1 2))")).isEqualTo("(0 0 7 8)");
 		assertThat(compileAndRun("(print (replace (list 0 0 0) \"xy\"))")).isEqualTo("(#\\x #\\y 0)");
 		assertThat(compileAndRun("(print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))")).isEqualTo("(4 5 6)");
-		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 1 2) :start2 9))")).isEqualTo("(0 0 0 0)");
+		// A :start2 past the source is refused before anything is written, where the
+		// cursor used to stop and answer the destination untouched.
+		assertThat(compileAndRun(
+				"(print (handler-case (replace (list 0 0 0 0) (list 1 2) :start2 9) (type-error () :refused)))"))
+			.isEqualTo(":REFUSED");
 		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (replace l l :start1 1) (print l))"))
 			.isEqualTo("(1 1 2 3)");
 		// Long enough that the head-walk showed.
@@ -13469,6 +13473,20 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.NIL_START_PROGRAM))
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSequenceOperatorsRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_BOUND_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BAD_BOUND_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadSequenceBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BOUND_REPORT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BOUND_REPORT_EXPECTED);
 	}
 
 	@Test

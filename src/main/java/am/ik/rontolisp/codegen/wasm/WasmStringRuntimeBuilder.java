@@ -2435,6 +2435,156 @@ final class WasmStringRuntimeBuilder {
 		refuse.run();
 	}
 
+	/**
+	 * Builds {@code _ck_bounds(seq, start, end) -> nil} ({@code FUNC_CK_BOUNDS},
+	 * {@code TYPE_CALLABLE_BASE + 2}), the body behind {@code %check-bounds}: a string or
+	 * vector is measured by {@code _seq_len} and its range tested as {@code _subseq}
+	 * tests one; a list is walked only as far as the larger bound, after a negative start
+	 * or a start past a given end is refused, and counted whole only on the way to the
+	 * report. A refusal is {@code subseq}'s -- {@code _subseq_bad} with the sequence's
+	 * kind in EH mode, a bare {@code unreachable} outside it. The bounds are params 1 and
+	 * 2 as given (the end nil for the length), which is what the report reads;
+	 * {@code seq} is a sequence the caller has checked.
+	 * @param ehMode whether the module is in EH mode
+	 * @param boundsForLength {@code " for string of length "}, non-null exactly when
+	 * {@code ehMode}
+	 * @return the function body
+	 */
+	static byte[] buildCheckBoundsBody(boolean ehMode,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsForLength) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// ref local 3: node; i32 locals 4..7: startIdx, endIdx, len, walked.
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(4);
+		w.write(Type.I32);
+		int node = 3, startIdx = 4, endIdx = 5, len = 6, walked = 7;
+		WasmEmitHelper.emitBoundIndex(w, 1);
+		set(w, startIdx);
+		w.write(Instruction.BLOCK, 0x40); // done
+		w.write(Instruction.BLOCK, 0x40); // list
+		get(w, 0);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 0);
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.BR_IF, 0);
+		// A string or a vector: len = _seq_len(seq); endIdx = (end nil) ? len : end's
+		// index; 0 <= startIdx <= endIdx <= len, or the report of its kind.
+		get(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, len);
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		get(w, len);
+		w.write(Instruction.ELSE);
+		WasmEmitHelper.emitBoundIndex(w, 2);
+		w.write(Instruction.END);
+		set(w, endIdx);
+		get(w, startIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		get(w, endIdx);
+		get(w, len);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_OR);
+		get(w, startIdx);
+		get(w, endIdx);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		if (ehMode) {
+			WasmStringpCompiler.emitStringpI32(w, 0);
+			w.write(Instruction.IF, 0x40);
+			emitSubseqBoundsError(w, true, boundsForLength, "string", len);
+			w.write(Instruction.END);
+			emitSubseqBoundsError(w, true, boundsForLength, "vector", len);
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
+		w.write(Instruction.END);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END); // list
+		w.write(Instruction.BLOCK, 0x40); // refused
+		// startIdx < 0, or a given end before it: refused before the walk
+		get(w, startIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		get(w, startIdx);
+		w.write(Instruction.ELSE);
+		WasmEmitHelper.emitBoundIndex(w, 2);
+		w.write(Instruction.END);
+		set(w, endIdx);
+		get(w, endIdx);
+		get(w, startIdx);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		// The list must hold endIdx cells (startIdx when the end is omitted).
+		get(w, 0);
+		set(w, node);
+		i32(w, 0);
+		set(w, walked);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, walked);
+		get(w, endIdx);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 2);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitCdr(w, node);
+		set(w, node);
+		get(w, walked);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, walked);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // refused
+		// len = the number of conses; the list report
+		get(w, 0);
+		set(w, node);
+		i32(w, 0);
+		set(w, len);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitCdr(w, node);
+		set(w, node);
+		get(w, len);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, len);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		emitSubseqBoundsError(w, ehMode, boundsForLength, "list", len);
+		w.write(Instruction.END); // done
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 	// Pushes 1 when _subseq's end (param 2) was given, 0 when it is nil (omitted).
 	private static void emitEndGiven(WasmWriter w) {
 		get(w, 2);

@@ -1019,12 +1019,26 @@ final class JvmOperandTypeRuntime {
 		 * @param piece {@code " for KIND of length "}
 		 */
 		void emitRefusal(MethodCode m, int startParam, int endParam, int lenSlot, String piece) {
+			emitReport(m, startParam, endParam, lenSlot, piece);
+			m.athrow();
+		}
+
+		/**
+		 * Pushes {@code _subseqBad(start, end, len, piece)} -- the refusal unthrown, for
+		 * a cold helper that hands it to its caller to throw.
+		 * @param m the method being emitted
+		 * @param startParam the {@code Object} local holding the start as given
+		 * @param endParam the {@code Object} local holding the end as given, nil when
+		 * omitted
+		 * @param lenSlot the int length of the sequence
+		 * @param piece {@code " for KIND of length "}
+		 */
+		void emitReport(MethodCode m, int startParam, int endParam, int lenSlot, String piece) {
 			m.aload(startParam);
 			m.aload(endParam);
 			m.iload(lenSlot);
 			m.ldc(this.cp.stringEntry(piece));
 			m.invokestatic(refusal());
-			m.athrow();
 		}
 
 		private MethodRefEntry index() {

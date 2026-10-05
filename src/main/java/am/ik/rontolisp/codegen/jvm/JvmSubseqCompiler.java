@@ -104,6 +104,200 @@ final class JvmSubseqCompiler {
 		});
 	}
 
+	/** The per-class helper behind {@code %check-bounds}. */
+	static final String CHECK_BOUNDS = "_ckBounds";
+
+	/** {@link #CHECK_BOUNDS}'s cold half: the refusal, built only when one is due. */
+	static final String CHECK_BOUNDS_REPORT = "_ckBoundsBad";
+
+	/**
+	 * Compiles {@code (%check-bounds seq start end)}: nil, or the bounds report of the
+	 * sequence's kind (see {@link LispNames#CHECK_BOUNDS_INTERNAL}). The test is ONE
+	 * per-class helper, {@code _ckBounds(seq, start, end)}, answering null for bounds
+	 * inside the sequence: a string or vector is measured by the program's own
+	 * {@code length} helper, a list walked only as far as the larger bound. Anything
+	 * else, the site hands to a second helper, {@code _ckBoundsBad}, which counts a list
+	 * whole, decides the kind and builds the report the site throws. The refusal stays
+	 * out of the test so a JIT that inlines the test into the operator's loop -- before
+	 * the test has a profile of its own -- does not inline the report with it: inlined
+	 * whole, the pair spent Graal's budget for a bounded {@code count} over a list, whose
+	 * loop helpers then ran uninlined, ~3x slower on a first, OSR-compiled call.
+	 */
+	static void compileCheckBounds(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList().subList(1, 4);
+		// The lowerings hand variables and literals, which the refusal reads again;
+		// anything else is held in temps, read once.
+		boolean reread = args.stream().allMatch(JvmSubseqCompiler::rereadable);
+		int[] slots = new int[3];
+		for (int i = 0; i < 3; i++) {
+			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			if (!reread) {
+				slots[i] = ctx.allocTemp();
+				ctx.body.astore(slots[i]);
+			}
+		}
+		if (!reread) {
+			for (int slot : slots) {
+				ctx.body.aload(slot);
+			}
+		}
+		JvmEmitHelper.emitSharedCall(ctx, className, CHECK_BOUNDS, 3, helper -> emitCheckBounds(helper, className));
+		MethodCode.Label inside = ctx.body.newLabel();
+		ctx.body.ifnull(inside);
+		for (int i = 0; i < 3; i++) {
+			if (reread) {
+				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			}
+			else {
+				ctx.body.aload(slots[i]);
+			}
+		}
+		JvmEmitHelper.emitSharedCall(ctx, className, CHECK_BOUNDS_REPORT, 3,
+				helper -> emitCheckBoundsReport(helper, className));
+		ctx.body.checkcast(ctx.cp.classEntry("java/lang/RuntimeException"));
+		ctx.body.athrow();
+		ctx.body.labelBinding(inside);
+		ctx.body.aconst_null();
+	}
+
+	// A form whose second evaluation reads what its first did and does nothing else: a
+	// variable or a self-evaluating literal.
+	private static boolean rereadable(LispVal form) {
+		return form instanceof am.ik.rontolisp.LispSymbol || form instanceof am.ik.rontolisp.LispInteger
+				|| form instanceof am.ik.rontolisp.LispNil;
+	}
+
+	// _ckBounds over its parameters 0 = seq, 1 = start, 2 = end (nil: the length);
+	// leaves null when the bounds lie inside the sequence, non-null otherwise.
+	private static void emitCheckBounds(JvmLispCompiler.Ctx ctx, String className) {
+		MethodCode m = ctx.body;
+		JvmOperandTypeRuntime.SubseqRuntime runtime = runtime(ctx);
+		int startSlot = ctx.allocTemp();
+		int lenSlot = ctx.allocTemp();
+		int endSlot = ctx.allocTemp();
+		int nodeSlot = ctx.allocTemp();
+		int walkedSlot = ctx.allocTemp();
+		MethodCode.Label list = m.newLabel();
+		MethodCode.Label bad = m.newLabel();
+		MethodCode.Label done = m.newLabel();
+		runtime.emitIndex(m, 1);
+		m.istore(startSlot);
+		m.aload(0);
+		m.ifnull(list);
+		m.aload(0);
+		m.instanceOf(ctx.objectArrayClass);
+		m.ifne(list);
+		// A string or a vector: 0 <= start <= end <= its own length.
+		emitLength(ctx, className);
+		m.istore(lenSlot);
+		emitResolveEnd(m, runtime, 2, lenSlot, endSlot);
+		emitBoundsTest(m, startSlot, endSlot, lenSlot, bad);
+		m.goto_(done);
+		// A list: a negative start, or a start past a given end, refused before the walk;
+		// then the list must hold as many cells as the larger bound.
+		m.labelBinding(list);
+		MethodCode.Label endGiven = m.newLabel();
+		MethodCode.Label needKnown = m.newLabel();
+		m.iload(startSlot);
+		m.iflt(bad);
+		m.aload(2);
+		m.ifnonnull(endGiven);
+		m.iload(startSlot);
+		m.goto_(needKnown);
+		m.labelBinding(endGiven);
+		runtime.emitIndex(m, 2);
+		m.labelBinding(needKnown);
+		m.istore(endSlot);
+		m.iload(endSlot);
+		m.iload(startSlot);
+		m.if_icmplt(bad);
+		m.aload(0);
+		m.astore(nodeSlot);
+		m.iconst_0();
+		m.istore(walkedSlot);
+		MethodCode.Label walk = m.newLabel();
+		m.labelBinding(walk);
+		m.iload(walkedSlot);
+		m.iload(endSlot);
+		m.if_icmpge(done);
+		m.aload(nodeSlot);
+		m.instanceOf(ctx.objectArrayClass);
+		m.ifeq(bad);
+		m.aload(nodeSlot);
+		m.checkcast(ctx.objectArrayClass);
+		m.iconst_1();
+		m.aaload();
+		m.astore(nodeSlot);
+		m.iinc(walkedSlot, 1);
+		m.goto_(walk);
+		m.labelBinding(bad);
+		JvmEmitHelper.compileTrue(ctx);
+		MethodCode.Label answered = m.newLabel();
+		m.goto_(answered);
+		m.labelBinding(done);
+		m.aconst_null();
+		m.labelBinding(answered);
+	}
+
+	// _ckBoundsBad over the same parameters: the bounds report of the sequence's kind,
+	// a list counted whole for its length, left on the stack for the site to throw.
+	private static void emitCheckBoundsReport(JvmLispCompiler.Ctx ctx, String className) {
+		MethodCode m = ctx.body;
+		JvmOperandTypeRuntime.SubseqRuntime runtime = runtime(ctx);
+		int lenSlot = ctx.allocTemp();
+		int nodeSlot = ctx.allocTemp();
+		MethodCode.Label list = m.newLabel();
+		MethodCode.Label vector = m.newLabel();
+		MethodCode.Label done = m.newLabel();
+		m.aload(0);
+		m.ifnull(list);
+		m.aload(0);
+		m.instanceOf(ctx.objectArrayClass);
+		m.ifne(list);
+		emitLength(ctx, className);
+		m.istore(lenSlot);
+		JvmStringpCompiler.emitStringpCheck(ctx, 0);
+		m.ifnull(vector);
+		runtime.emitReport(m, 1, 2, lenSlot, " for string of length ");
+		m.goto_(done);
+		m.labelBinding(vector);
+		runtime.emitReport(m, 1, 2, lenSlot, " for vector of length ");
+		m.goto_(done);
+		m.labelBinding(list);
+		m.iconst_0();
+		m.istore(lenSlot);
+		m.aload(0);
+		m.astore(nodeSlot);
+		MethodCode.Label count = m.newLabel();
+		MethodCode.Label counted = m.newLabel();
+		m.labelBinding(count);
+		m.aload(nodeSlot);
+		m.instanceOf(ctx.objectArrayClass);
+		m.ifeq(counted);
+		m.aload(nodeSlot);
+		m.checkcast(ctx.objectArrayClass);
+		m.iconst_1();
+		m.aaload();
+		m.astore(nodeSlot);
+		m.iinc(lenSlot, 1);
+		m.goto_(count);
+		m.labelBinding(counted);
+		runtime.emitReport(m, 1, 2, lenSlot, " for list of length ");
+		m.labelBinding(done);
+	}
+
+	// Pushes the int length of the string or vector in parameter 0, through the
+	// program's own length helper (the packed-array dispatch when it has one, as
+	// JvmLengthCompiler picks).
+	private static void emitLength(JvmLispCompiler.Ctx ctx, String className) {
+		String method = ctx.usesIntArray ? JvmIntArrayRuntimeBuilder.LENGTH
+				: ctx.usesFloatArray ? JvmFloatArrayRuntimeBuilder.LENGTH : JvmLengthRuntimeBuilder.METHOD;
+		ctx.body.aload(0);
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), method, JvmLengthRuntimeBuilder.DESC));
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.body.l2i();
+	}
+
 	// The class's subseq bounds runtime, which every full compilation sets.
 	private static JvmOperandTypeRuntime.SubseqRuntime runtime(JvmLispCompiler.Ctx ctx) {
 		return java.util.Objects.requireNonNull(ctx.subseqRuntime, "subseqRuntime");

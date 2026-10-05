@@ -4641,6 +4641,67 @@ public final class Environment implements Scope {
 				LispNames.SUBSEQ, refused, OperandTypes.integerRange(startRefused ? 0 : startIndex, length));
 	}
 
+	/**
+	 * A sequence operator's bounding indices, checked the way {@code subseq} checks its
+	 * range and refused with {@code subseq}'s {@code type-error}
+	 * ({@link #subseqBoundsError}): {@code 0 <= start <= end <= length}, a nil end
+	 * meaning the length. A list is walked only as far as the larger bound and counted
+	 * whole only for the report; anything that is no sequence is left to the operator's
+	 * own check. The {@code %check-bounds} built-in, and the check every runtime twin of
+	 * a bounded operator makes before it reads an element.
+	 * @param seq the sequence as given
+	 * @param start the start as given
+	 * @param end the end as given, nil or null when omitted
+	 */
+	static void checkBoundingIndices(LispVal seq, LispVal start, @Nullable LispVal end) {
+		LispVal givenEnd = end instanceof LispNil ? null : end;
+		int startIndex = subseqBound(start);
+		if (seq instanceof LispCons || seq instanceof LispNil) {
+			int need = givenEnd == null ? startIndex : subseqBound(givenEnd);
+			if (startIndex >= 0 && need >= startIndex) {
+				int walked = 0;
+				LispVal cur = seq;
+				while (walked < need && cur instanceof LispCons cell) {
+					walked++;
+					cur = cell.cdr();
+				}
+				if (walked == need) {
+					return;
+				}
+			}
+			int length = 0;
+			for (LispVal cur = seq; cur instanceof LispCons cell; cur = cell.cdr()) {
+				length++;
+			}
+			throw subseqBoundsError("list", start, givenEnd, length);
+		}
+		String kind;
+		int length;
+		if (seq instanceof LispString str) {
+			kind = "string";
+			length = str.length();
+		}
+		else if (seq instanceof LispArray arr && arr.dimensions().length == 1) {
+			kind = "vector";
+			length = arr.effectiveLength();
+		}
+		else if (seq instanceof LispIntVector iv) {
+			kind = "vector";
+			length = iv.length();
+		}
+		else if (seq instanceof LispFloatArray fa && fa.rank() == 1) {
+			kind = "vector";
+			length = fa.totalSize();
+		}
+		else {
+			return;
+		}
+		int endIndex = givenEnd == null ? length : subseqBound(givenEnd);
+		if (startIndex < 0 || endIndex > length || startIndex > endIndex) {
+			throw subseqBoundsError(kind, start, givenEnd, length);
+		}
+	}
+
 	private static void registerStringOps(Environment env) {
 		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE,
 				args -> boundedCaseConversion(LispNames.STRING_UPCASE, args, s -> caseFoldString(s, true))));
@@ -4887,11 +4948,9 @@ public final class Environment implements Scope {
 	 * round. The cursor is monotonic and re-seeds if a caller ever reads backwards, so it
 	 * answers the same element for the same index however it is driven.
 	 * <p>
-	 * It also raises the SAME {@code sequence-ref: index N out of range} error at the
-	 * same element, rather than stopping silently when the list runs out. That error is
-	 * the one surviving three-way disagreement with the compile paths, which truncate
-	 * (see {@code .kb/sequence-op-runtimes.md}); erasing it here would be a behavior
-	 * change hiding inside a performance fix.
+	 * A range the source lacks never reaches it: {@code replace} checks both ranges first
+	 * ({@link #checkBoundingIndices}). Running out still raises
+	 * {@code sequence-ref: index N out of range} rather than stopping silently.
 	 */
 	private static final class SequenceSourceCursor {
 
@@ -8027,26 +8086,29 @@ public final class Environment implements Scope {
 			requireMinArgCount(LispNames.REPLACE, args, 2);
 			LispVal target = args.get(0);
 			LispVal source = args.get(1);
-			int end1 = sequenceLength(LispNames.REPLACE, target);
-			int end2 = sequenceLength(LispNames.REPLACE, source);
-			int start1 = 0;
-			int start2 = 0;
-			// A nil end keeps its default (the sequence's length, as in CL); a nil start
-			// is no bound, so requireIndex refuses it.
+			int length1 = sequenceLength(LispNames.REPLACE, target);
+			int length2 = sequenceLength(LispNames.REPLACE, source);
+			// Each pair of bounds is checked as subseq checks a range, before anything is
+			// written: a nil end is the sequence's length, a nil start no bound.
+			LispVal[] bounds = { new LispInteger(0), LispNil.INSTANCE, new LispInteger(0), LispNil.INSTANCE };
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key) {
 					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, value);
-						case LispNames.END1_KEYWORD ->
-							end1 = value instanceof LispNil ? end1 : requireIndex(LispNames.REPLACE, value);
-						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, value);
-						case LispNames.END2_KEYWORD ->
-							end2 = value instanceof LispNil ? end2 : requireIndex(LispNames.REPLACE, value);
+						case LispNames.START1_KEYWORD -> bounds[0] = value;
+						case LispNames.END1_KEYWORD -> bounds[1] = value;
+						case LispNames.START2_KEYWORD -> bounds[2] = value;
+						case LispNames.END2_KEYWORD -> bounds[3] = value;
 						default -> throw new LispEvalException("replace: unsupported keyword " + key.name());
 					}
 				}
 			}
+			checkBoundingIndices(target, bounds[0], bounds[1]);
+			checkBoundingIndices(source, bounds[2], bounds[3]);
+			int start1 = requireIndex(LispNames.REPLACE, bounds[0]);
+			int end1 = bounds[1] instanceof LispNil ? length1 : requireIndex(LispNames.REPLACE, bounds[1]);
+			int start2 = requireIndex(LispNames.REPLACE, bounds[2]);
+			int end2 = bounds[3] instanceof LispNil ? length2 : requireIndex(LispNames.REPLACE, bounds[3]);
 			int copied = Math.min(end1 - start1, end2 - start2);
 			// Common Lisp REPLACE is destructive: mutate the target sequence in place and
 			// return it, so buffers filled by successive REPLACE calls (cl-who's
@@ -8132,20 +8194,23 @@ public final class Environment implements Scope {
 			requireMinArgCount(LispNames.FILL, args, 2);
 			LispVal target = args.get(0);
 			LispVal item = args.get(1);
-			int start = 0;
-			int end = sequenceLength(LispNames.FILL, target);
-			// A nil end keeps its default and a nil start is refused, as in replace.
+			int length = sequenceLength(LispNames.FILL, target);
+			// The bounds are checked as in replace, before anything is written.
+			LispVal startValue = new LispInteger(0);
+			LispVal endValue = LispNil.INSTANCE;
 			for (int i = 2; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol key) {
 					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, value);
-						case LispNames.END_KEYWORD ->
-							end = value instanceof LispNil ? end : requireIndex(LispNames.FILL, value);
+						case LispNames.START_KEYWORD -> startValue = value;
+						case LispNames.END_KEYWORD -> endValue = value;
 						default -> throw new LispEvalException("fill: unsupported keyword " + key.name());
 					}
 				}
 			}
+			checkBoundingIndices(target, startValue, endValue);
+			int start = requireIndex(LispNames.FILL, startValue);
+			int end = endValue instanceof LispNil ? length : requireIndex(LispNames.FILL, endValue);
 			// Destructive, like replace: the sequence itself comes back, so a buffer
 			// cleared between uses stays the same object (chipz's code-length tables,
 			// salza2's bitstream reset).
@@ -8596,6 +8661,14 @@ public final class Environment implements Scope {
 					throw reported == null ? OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE)
 							: OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE, reported);
 				}));
+		// (%check-bounds seq start end): nil when the bounding indices lie inside seq,
+		// else subseq's bounds type-error -- the check a bounded sequence operator's
+		// lowering makes once, before its walk.
+		env.defineFunction(LispNames.CHECK_BOUNDS_INTERNAL, new LispFunction(LispNames.CHECK_BOUNDS_INTERNAL, args -> {
+			requireArgCount(LispNames.CHECK_BOUNDS_INTERNAL, args, 3);
+			checkBoundingIndices(args.get(0), args.get(1), args.get(2));
+			return LispNil.INSTANCE;
+		}));
 		// (%operand-type-error x 'op 'kind): OP's type-error over x naming KIND -- the
 		// signal a lowering places where its own type dispatch has no arm left; a nil
 		// op reports unnamed.

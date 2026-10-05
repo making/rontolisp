@@ -8364,7 +8364,11 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("(0 3 4 5 0)");
 		assertThat(compileAndRun("(print (replace (list 0 0 0) \"xy\"))")).isEqualTo("(#\\x #\\y 0)");
 		assertThat(compileAndRun("(print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))")).isEqualTo("(4 5 6)");
-		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 1 2) :start2 9))")).isEqualTo("(0 0 0 0)");
+		// A :start2 past the source is refused before anything is written, where the
+		// cursor used to stop and answer the destination untouched.
+		assertThat(compileAndRun(
+				"(print (handler-case (replace (list 0 0 0 0) (list 1 2) :start2 9) (type-error () :refused)))"))
+			.isEqualTo(":REFUSED");
 		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (replace l l :start1 1) (print l))"))
 			.isEqualTo("(1 1 2 3)");
 		assertThat(compileAndRun("""
@@ -14520,6 +14524,26 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, true))
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void sequenceOperatorsRefuseABadBound() throws Exception {
+		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BAD_BOUND_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.BAD_BOUND_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BAD_BOUND_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.BAD_BOUND_EXPECTED);
+	}
+
+	@Test
+	void aBadSequenceBoundReportsAsSubseqDoes() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BOUND_REPORT_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.BOUND_REPORT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BOUND_REPORT_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.BOUND_REPORT_EXPECTED);
 	}
 
 	@Test
