@@ -2802,8 +2802,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		while (lambdaIdx < lambdaDecls.size()) {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
 			// Register lambda in CP: first param is Object[] env, rest are lambda params
-			String descriptor = "([Ljava/lang/Object;" + "Ljava/lang/Object;".repeat(lambda.paramNames.size())
-					+ ")Ljava/lang/Object;";
+			String descriptor = lambdaDescriptor(lambda.paramNames.size());
 			Utf8Entry nameUtf8 = cp.utf8Entry(lambda.methodName);
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
@@ -3153,46 +3152,53 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry applyRefForDispatch = usesEval
 				? cp.methodRef(thisClass, "_apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;") : null;
 		MethodRefEntry lookupRefForDispatch = needsLookup ? cp.methodRef(thisClass, lookupName, lookupDesc) : null;
-		List<DispatchMethod> dispatchMethods = new ArrayList<>();
 		// The arity reporters a wrong argument COUNT is signalled through, each emitted
 		// only for a program that has the site it serves: _arityErr for a per-arity
 		// dispatcher's no-match arm, _arityChk for a SPREAD case or a literal apply's
 		// direct call. A program with neither is byte-identical to a build that never
 		// knew about the check (JvmRuntimeBuilder.ArityReporting).
-		JvmRuntimeBuilder.ArityReporting arityReporting = JvmRuntimeBuilder.ArityReporting.NONE;
 		boolean reportsMiss = !indirectCallArities.isEmpty();
 		boolean reportsCount = usesApplyRuntime || !arityGuardShapes.isEmpty();
-		if (reportsMiss || reportsCount) {
-			arityReporting = new JvmRuntimeBuilder.ArityReporting(
-					reportsMiss ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_ERR_NAME,
-							JvmRuntimeBuilder.ARITY_ERR_DESC) : null,
-					reportsCount ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME,
-							JvmRuntimeBuilder.ARITY_CHK_DESC) : null,
-					reportsCount ? arityOperators : null);
-			dispatchMethods.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
-					objectArrayClass, stringClass, dispatchableFuncIds, reportsMiss, reportsCount, arityOperators));
-		}
-		// What applying a non-function raises, shared by every dispatcher and by _apply
-		// (the eval runtime, which the spread dispatcher comes with).
-		if (!indirectCallArities.isEmpty() || usesApplyRuntime) {
-			dispatchMethods.add(new DispatchMethod(cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_NAME),
-					cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_DESC),
-					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod)));
-		}
-		for (int arity : indirectCallArities) {
-			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
-					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting,
-					mainCtx.unsupplied));
-		}
-		// The spread dispatcher _apply calls: it takes the argument list whole, so an
-		// apply through a COMPUTED designator has no arity ceiling. Emitted with _apply.
-		if (usesApplyRuntime) {
-			dispatchMethods.addAll(
-					JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass,
-							objectArrayClass, integerClass, integerValue, objectClass, stringClass, applyRefForDispatch,
-							lookupRefForDispatch, true, dispatchableFuncIds, arityReporting, mainCtx.unsupplied));
-		}
+		JvmRuntimeBuilder.ArityReporting arityReporting = reportsMiss || reportsCount
+				? new JvmRuntimeBuilder.ArityReporting(
+						reportsMiss ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_ERR_NAME,
+								JvmRuntimeBuilder.ARITY_ERR_DESC) : null,
+						reportsCount ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME,
+								JvmRuntimeBuilder.ARITY_CHK_DESC) : null,
+						reportsCount ? arityOperators : null)
+				: JvmRuntimeBuilder.ArityReporting.NONE;
+		// The dispatchers over a set of funcIds: built here over every dispatchable one,
+		// and again, once the class is assembled, over the ones a kept body can make a
+		// value of (rebuildDispatchers).
+		java.util.function.Function<Set<Integer>, List<DispatchMethod>> dispatchers = funcIds -> {
+			List<DispatchMethod> built = new ArrayList<>();
+			if (reportsMiss || reportsCount) {
+				built.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
+						objectArrayClass, stringClass, funcIds, reportsMiss, reportsCount, arityOperators));
+			}
+			// What applying a non-function raises, shared by every dispatcher and by
+			// _apply (the eval runtime, which the spread dispatcher comes with).
+			if (!indirectCallArities.isEmpty() || usesApplyRuntime) {
+				built.add(new DispatchMethod(cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_NAME),
+						cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_DESC),
+						JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod)));
+			}
+			for (int arity : indirectCallArities) {
+				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp,
+						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
+						applyRefForDispatch, lookupRefForDispatch, funcIds, arityReporting, mainCtx.unsupplied));
+			}
+			// The spread dispatcher _apply calls: it takes the argument list whole, so an
+			// apply through a COMPUTED designator has no arity ceiling. Emitted with
+			// _apply.
+			if (usesApplyRuntime) {
+				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp,
+						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
+						applyRefForDispatch, lookupRefForDispatch, true, funcIds, arityReporting, mainCtx.unsupplied));
+			}
+			return built;
+		};
+		List<DispatchMethod> dispatchMethods = dispatchers.apply(dispatchableFuncIds);
 
 		// Build the runtime reader methods (read/load), only when used
 		Utf8Entry readSrcName = cp.utf8Entry("_readSrc");
@@ -4842,7 +4848,94 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		JvmTailBounce.unwBody(unwCode, cp, thisClass, trampolineLive(classDefinition, roots, mainCtx.bouncingBodies));
+		if (roots != null) {
+			classDefinition = rebuildDispatchers(classDefinition, roots, dispatchMethods, dispatchers,
+					dispatchableFuncIds, functions, lambdaFuncInfos);
+		}
 		return this.write(classDefinition, roots, exportDecls, writeStart);
+	}
+
+	/**
+	 * The class with its dispatchers rebuilt over the funcIds a kept body can make a
+	 * value of. A funcId is dispatchable once Pass 2 compiled a {@code (lambda ...)} or a
+	 * {@code #'name} of it, wherever that code sits -- a body the shake drops included --
+	 * and the dispatcher's case would then keep the method, and all it reaches, for a
+	 * value nothing can make. The shake already follows a case only when a kept body
+	 * makes its value ({@link MethodCode#invokestaticThroughValue}); this drops the dead
+	 * case's code too, and the {@code _arityErr} row with it. The {@code _lookup} rows
+	 * are values too, so a name the registry answers keeps its case while the registry is
+	 * kept. Asked after {@code _unw} is written, so the trampoline's re-entries count.
+	 * @param definition the class as assembled
+	 * @param roots the shake's roots
+	 * @param built the dispatch methods the class holds, all of them in one run
+	 * @param dispatchers builds the dispatch methods over a set of funcIds
+	 * @param dispatchable the funcIds {@code built} covers
+	 * @param functions the program's functions by name
+	 * @param lambdaFuncInfos the lambdas' registry entries
+	 * @return the class, or {@code definition} itself when every case stays
+	 */
+	private static ClassDefinition rebuildDispatchers(ClassDefinition definition, java.util.Set<String> roots,
+			List<DispatchMethod> built, java.util.function.Function<Set<Integer>, List<DispatchMethod>> dispatchers,
+			Set<Integer> dispatchable, Map<String, FunctionInfo> functions, List<FunctionInfo> lambdaFuncInfos) {
+		JvmClassSplitter.Reach reach = JvmClassSplitter.reach(definition, roots);
+		List<ClassDefinition.Method> methods = definition.methods();
+		Set<String> valued = new HashSet<>();
+		for (int m = 0; m < methods.size(); m++) {
+			if (reach.valued()[m]) {
+				valued.add(methods.get(m).name().stringValue() + methods.get(m).descriptor().stringValue());
+			}
+		}
+		// Per dispatchable funcId, whether a kept body makes a value of its method.
+		Map<Integer, Boolean> made = new HashMap<>();
+		List<FunctionInfo> infos = new ArrayList<>(functions.values());
+		infos.addAll(lambdaFuncInfos);
+		for (FunctionInfo fi : infos) {
+			if (dispatchable.contains(fi.funcId())) {
+				made.merge(fi.funcId(), valued.contains(fi.nameUtf8().stringValue() + fi.descUtf8().stringValue()),
+						Boolean::logicalOr);
+			}
+		}
+		Set<Integer> live = new HashSet<>(dispatchable);
+		made.forEach((funcId, isMade) -> {
+			if (!isMade) {
+				live.remove(funcId);
+			}
+		});
+		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			System.err.println("[dispatch-gate] " + (dispatchable.size() - live.size()) + " of " + dispatchable.size()
+					+ " dispatchable funcIds have no value a kept body makes");
+		}
+		if (live.size() == dispatchable.size() || built.isEmpty()) {
+			return definition;
+		}
+		Set<MethodCode> old = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (DispatchMethod dm : built) {
+			old.add(dm.code());
+		}
+		List<ClassDefinition.Method> swapped = new ArrayList<>();
+		boolean placed = false;
+		for (ClassDefinition.Method method : methods) {
+			if (!old.contains(method.body())) {
+				swapped.add(method);
+			}
+			else if (!placed) {
+				placed = true;
+				for (DispatchMethod dm : dispatchers.apply(live)) {
+					swapped.add(new ClassDefinition.Method(method.access(), dm.nameUtf8(), dm.descUtf8(), dm.code(),
+							List.of()));
+				}
+			}
+		}
+		return definition.withMethods(swapped);
+	}
+
+	/**
+	 * The descriptor of a lambda's method: its closure environment, then its parameters.
+	 * @param params the lambda's physical parameter count
+	 * @return the descriptor
+	 */
+	static String lambdaDescriptor(int params) {
+		return "([Ljava/lang/Object;" + "Ljava/lang/Object;".repeat(params) + ")Ljava/lang/Object;";
 	}
 
 	/**

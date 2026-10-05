@@ -291,6 +291,83 @@ class JvmDeadMethodEliminationTest {
 	}
 
 	@Test
+	void aClosureWhoseEveryCreatorIsShakenTakesItsDispatcherCaseAlong() throws Exception {
+		// MAKER makes a closure and nothing calls MAKER, so no closure of it can exist:
+		// the arity-1 dispatcher a live computed funcall keeps carries no case for it,
+		// and ONLY-CLOSURE, which only the closure calls, shakes with it. Call MAKER and
+		// both come back; without --optimize nothing is shaken at all. ONLY-CLOSURE's
+		// body is not a single integer tree, which would be inlined
+		// (JvmIntFusionCompiler).
+		String defs = "(defun only-closure (x) x (* x 3)) (defun maker () (lambda (y) (only-closure y))) "
+				+ "(defun f (x) (+ x 1)) (print (funcall (car (list #'f)) 1)) ";
+		byte[] shaken = compile(defs, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(shaken)).contains("F", "_invoke_1")
+			.doesNotContain("MAKER", "ONLY-CLOSURE")
+			.noneMatch(name -> name.startsWith("_lambda_"));
+		assertThat(run(shaken)).isEqualTo("2");
+		byte[] made = compile(defs + "(print (funcall (maker) 2))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(made)).contains("MAKER", "ONLY-CLOSURE")
+			.anyMatch(name -> name.startsWith("_lambda_"));
+		assertThat(run(made)).isEqualTo("2\n6");
+		assertThat(declaredMethodNames(compile(defs, OptimizeLevel.NONE))).contains("MAKER", "ONLY-CLOSURE")
+			.anyMatch(name -> name.startsWith("_lambda_"));
+	}
+
+	@Test
+	void theRegistryKeepsTheCaseOfEveryNameItAnswers() throws Exception {
+		// A name the run-time registry (_lookup) resolves is a value the registry makes:
+		// H, reached only through its quoted name, keeps its dispatcher cases -- the
+		// per-arity one funcall takes and the spread one apply takes. G has a row only
+		// because NOBODY, which nothing calls, takes #'g; the computed name the program
+		// interns still resolves to it, so its case stays too.
+		String source = """
+				(defun h (x) x (* x 10))
+				(defun g (x) x (* x 100))
+				(defun nobody () #'g)
+				(print (funcall (car (list 'h)) 3))
+				(print (apply (car (list 'h)) '(4)))
+				(print (funcall (intern (string-upcase "g")) 5))
+				""";
+		byte[] optimized = compile(source, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(optimized)).contains("H", "G").doesNotContain("NOBODY");
+		assertThat(run(optimized)).isEqualTo("30\n40\n500");
+	}
+
+	@Test
+	void aClosureMadeOnlyBehindATrampolineBounceKeepsItsCase() throws Exception {
+		// Every call through a value here is a tail call, so each bounces and only the
+		// trampoline re-enters the arity-1 dispatcher. The closure MAKE-ADDER makes is
+		// made only on that path: the cases are decided once the trampoline is written,
+		// or the adder's case is dropped and the funcall that lands on it fails.
+		String source = """
+				(defun make-adder (n) (lambda (x) (+ x n)))
+				(defun run-it (f) (funcall f 2))
+				(print (run-it (lambda (k) (funcall (make-adder k) 3))))
+				""";
+		byte[] optimized = compile(source, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(optimized)).contains("_tramp", "MAKE-ADDER");
+		assertThat(run(optimized)).isEqualTo("5");
+	}
+
+	@Test
+	void valuesThroughEveryDispatcherShapeAnswerAsUnoptimized() throws Exception {
+		// The dispatcher shapes a value reaches -- a computed funcall, an apply through
+		// the spread dispatcher, reduce :from-end's argument-swapping closures, a #'name
+		// of a built-in's wrapper -- answer the same with the shake as without it.
+		String source = """
+				(defun twice (x) (* 2 x))
+				(print (funcall (car (list #'twice)) 21))
+				(print (apply (car (list #'list)) 1 '(2 3)))
+				(print (reduce #'- '(1 2 3 4) :from-end t))
+				(print (reduce (car (list #'-)) '(1 2 3 4) :from-end t))
+				(print (mapcar (car (list #'car)) '((1) (2))))
+				""";
+		String expected = "42\n(1 2 3)\n-2\n-2\n(1 2)";
+		assertThat(run(compile(source, OptimizeLevel.DEFAULT))).isEqualTo(expected);
+		assertThat(run(compile(source, OptimizeLevel.NONE))).isEqualTo(expected);
+	}
+
+	@Test
 	void keepsTheReflectiveApplyRootForJavaInterop() throws Exception {
 		// The java: bridge looks up _apply reflectively (no bytecode edge); the shaker is
 		// invoked with _apply as an extra root, so a proxy callback still works. The

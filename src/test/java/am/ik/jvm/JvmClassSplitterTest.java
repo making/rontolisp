@@ -143,6 +143,54 @@ class JvmClassSplitterTest {
 	}
 
 	@Test
+	void aCallThroughAValueKeepsItsTargetOnlyWhileAKeptBodyMakesTheValue() {
+		// dispatch's two cases call through a value: "made" is kept because main, a
+		// root, makes its value; "orphan" is not, because only "dead" -- which nothing
+		// calls -- makes its value. What only orphan reaches goes with it, and the
+		// reach reports which methods a kept body makes values of.
+		ConstantPool cp = new ConstantPool();
+		Builder b = new Builder(cp);
+		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
+				new MethodCode().makesValueOf("made", "()V").invokestatic(b.ref("dispatch", "()V")).return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "dispatch", "()V",
+				new MethodCode().invokestaticThroughValue(b.ref("made", "()V"))
+					.invokestaticThroughValue(b.ref("orphan", "()V"))
+					.return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "made", "()V", new MethodCode().return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "orphan", "()V",
+				new MethodCode().invokestatic(b.ref("onlyOrphan", "()V")).return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "onlyOrphan", "()V", new MethodCode().return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "dead", "()V",
+				new MethodCode().makesValueOf("orphan", "()V").return_());
+		ClassDefinition definition = b.build();
+		JvmClassSplitter.Reach reach = JvmClassSplitter.reach(definition, Set.of("main"));
+		List<String> names = definition.methods().stream().map(m -> m.name().stringValue()).toList();
+		List<String> kept = new ArrayList<>();
+		List<String> valued = new ArrayList<>();
+		for (int m = 0; m < names.size(); m++) {
+			if (reach.kept()[m]) {
+				kept.add(names.get(m));
+			}
+			if (reach.valued()[m]) {
+				valued.add(names.get(m));
+			}
+		}
+		assertThat(kept).containsExactly("main", "dispatch", "made");
+		assertThat(valued).containsExactly("made");
+		// A kept "dead" makes orphan's value, and the call through it keeps orphan.
+		assertThat(JvmClassSplitter.reachable(definition, Set.of("main", "dead"))).containsExactly(true, true, true,
+				true, true, true);
+		// The written class: a value is no instruction, the call through it a plain
+		// invokestatic.
+		JvmClassSplitter.Split split = split(definition, Set.of("main"), method -> false, ConstantPool.MAX_INDEX);
+		assertThat(shape(split.mainClass())).contains("method made:()V")
+			.doesNotContain("method orphan:()V", "method onlyOrphan:()V", "method dead:()V");
+		// The value made before an appended block moves with it.
+		MethodCode appended = new MethodCode().append(new MethodCode().makesValueOf("orphan", "()V"));
+		assertThat(appended.values()).containsExactly(new OwnCallGraph.Member("orphan", "()V"));
+	}
+
+	@Test
 	void unresolvedOwnCallsAreReportedWithTheirCallers() {
 		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);

@@ -1084,7 +1084,8 @@ and +1.0% on its wasm module.
 ## JVM
 The shake runs as `am.ik.jvm.JvmClassSplitter.write` writes the class, on the class as DATA (the
 `ClassDefinition` `JvmLispCompiler.compile` ends with): the call graph comes from every body's
-`invoke*` operands (`am.ik.jvm.OwnCallGraph`), methods reachable from `main` are kept (plus
+`invoke*` operands (`am.ik.jvm.OwnCallGraph`; a dispatcher case's only while a kept body makes its
+value, below), methods reachable from `main` are kept (plus
 `_apply` as an extra root when the program uses `java:` interop -- the embedded bridge looks
 `_apply` up REFLECTIVELY, an edge bytecode cannot show; under `--no-main` there is no `main` root at
 all), and an unreachable method, or a field only unreachable methods referenced, is never written.
@@ -1106,3 +1107,53 @@ Tests: `JvmDeadMethodEliminationTest` (structural + behavior, incl. the `_apply`
 identical run output -- the completeness guard for `CodeReplay`'s record player, like
 `WasmTreeShakerCorpusTest`); `JvmClassSplitterTest#aShakenDefinitionWritesOnlyWhatItsRootsReach`.
 Limitations: README "Optimize".
+
+### A dispatcher case lives while a kept body makes its value
+A funcId joins `valueFuncIds` when Pass 2 COMPILES its `(lambda ...)` / `#'name`, wherever that
+code sits -- a defun the shake then drops included. Its `_invoke_<n>` case used to be an ordinary
+edge, so the case kept the method, and all it reaches, for a value nothing can make. Two facts in
+`MethodCode` that the writer never writes: `makesValueOf(name, desc)` -- recorded by
+`JvmLambdaCompiler.compileValue`, `JvmFunctionFormCompiler.compileNamed` and every `_lookup` row
+(a name the registry answers is a value it makes) -- and `invokestaticThroughValue`, a dispatcher
+case's call (`JvmRuntimeBuilder.renderCase`/`renderSpreadCase`; flagged in the instruction's unused
+operand, played as a plain `invokestatic`). `OwnCallGraph.reach` follows such a call only once a
+KEPT body makes the target's value. A value is no instruction, so it moves with `append` (a tail
+group's laid-out members) and mints no pool entry -- a master-pool entry minted early would shift
+the `ldc` widths the size budgets read.
+
+Then `JvmLispCompiler.rebuildDispatchers` asks `JvmClassSplitter.reach` and, when some
+dispatchable funcId has no value a kept body makes, rebuilds the dispatch methods
+(`_invoke_<n>`, `_invoke_v`, `_arityErr`'s table, `_notFn`) over the rest and swaps them in
+(`ClassDefinition.withMethods`): the dead case's code goes, not only its target. **It is asked
+after `_unw` is written**: a closure made only on the trampoline's re-entry path (every call
+through a value a tail call, so only `_tramp` reaches the dispatcher) is otherwise dropped and the
+call answers NIL. The trampoline gate itself asks before, over the same value semantics, so the
+dead closures no longer hold `_tramp`. `_lookup` rows and `_funName` keep `dispatchableFuncIds`;
+`--optimize=off` writes every case. `-Drontolisp.debug.dispatchgate=true` prints how many
+dispatchable funcIds no kept body makes.
+
+Measured (default `--optimize`, class bytes, `Prog*.class` summed): bench-report `clos` 28,858 ->
+25,600 (-11.3%), `string` 39,326 -> 36,097 (-8.2%), `sort` 46,318 -> 42,774 (-7.7%) -- all three
+lose every lambda and `_tramp` (`reduce :from-end`'s swapping closures in a wrapper body the
+program never calls) -- `list` 24,729 -> 24,629, the other six identical; size-report `zlib`
+180,079 -> 177,283 (-1.6%), the rest identical; scheme-spec 1,024,708 -> 1,015,305, clojure-spec
+7,347,457 -> 7,333,381; ci-spec 7,450,469 unchanged (its 8 remaining such lambdas are made in
+UNREACHABLE code of kept methods, which `java.lang.classfile` patches away at the write -- a
+value recorded in dead instructions still counts). The 116 JVM-compiled examples 47,021,166 ->
+46,439,839 B (-1.2%): 84 shrink (median -3.1%), none grows; the HTTP servers most
+(`net/http-handler` 88,883 -> 52,775, -41%) -- the shared `%http-serve-request` async thunk kept
+the request-environment builder (`%http-make-env`, the percent/UTF-8 decoders) alive on the JVM,
+whose transport never calls it. WASM output byte-identical (P1 and component). bench-report time
+within noise.
+
+**Not narrowed: the registry's own rows.** `_lookup` holds a row for every dispatchable funcId,
+`valueFuncIds` included, so a `#'name` compiled only in dead code still keeps its function
+whenever the registry is emitted -- i.e. whenever any dispatcher is. Dropping the registry's
+values (unsound, an upper bound) would take a further 5-7 KB off the gate-on deep-learning
+examples, 590 B off `string`, 999 B off `zlib`; narrowing the rows is a both-backends decision
+(the registries must answer the same names).
+
+Pins: `JvmClassSplitterTest#aCallThroughAValueKeepsItsTargetOnlyWhileAKeptBodyMakesTheValue`,
+`JvmDeadMethodEliminationTest#aClosureWhoseEveryCreatorIsShakenTakesItsDispatcherCaseAlong`,
+`#theRegistryKeepsTheCaseOfEveryNameItAnswers`, `#aClosureMadeOnlyBehindATrampolineBounceKeepsItsCase`,
+`#valuesThroughEveryDispatcherShapeAnswerAsUnoptimized`.

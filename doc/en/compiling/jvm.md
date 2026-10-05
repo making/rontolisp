@@ -139,7 +139,9 @@ The dispatch methods `funcall` goes through list only the functions your program
 can actually obtain as a value — `#'name`, a quoted `'name` designator, a
 `lambda`, or (while the program holds a symbol builder such as `intern` or
 `find-symbol`) a string or keyword constant spelling the name — so everything
-else becomes ordinary dead code the shaker removes. That listing switches off,
+else becomes ordinary dead code the shaker removes. A `lambda` counts only while
+code that survives the shake makes it: a closure made only inside a function
+nothing calls goes with that function. That listing switches off,
 and every function stays reachable, only when the program can name a function
 out of data this compile never sees: any use of `eval`, `read`,
 `read-from-string`, a runtime `load` or a `~/name/`

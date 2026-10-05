@@ -1023,7 +1023,9 @@ final class JvmRuntimeBuilder {
 				emitCell(code, objectArrayClass, 1);
 			}
 		}
-		code.invokestatic(fi.methodref());
+		// A case runs only for a value some body made: the shake keeps the target for it
+		// only while such a body is kept.
+		code.invokestaticThroughValue(fi.methodref());
 		code.areturn();
 		return new Case(fi.funcId(), code);
 	}
@@ -1087,7 +1089,9 @@ final class JvmRuntimeBuilder {
 			// nothing past the optionals: the empty rest list
 			code.aconst_null();
 		}
-		code.invokestatic(fi.methodref());
+		// A case runs only for a value some body made: the shake keeps the target for it
+		// only while such a body is kept.
+		code.invokestaticThroughValue(fi.methodref());
 		code.areturn();
 		return new Case(fi.funcId(), code);
 	}
