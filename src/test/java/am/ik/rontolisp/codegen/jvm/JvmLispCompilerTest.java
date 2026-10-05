@@ -8986,11 +8986,14 @@ class JvmLispCompilerTest {
 				(defun f (s i j) (%subseq-core s i j))
 				(print (f "abcd" 1 3))
 				(print (f (list 1 2 3) 1 nil))
-				(print (handler-case (f "abc" 2 1) (simple-error () :refused)))
-				(print (handler-case (f (list 1 2 3) 1 5) (simple-error () :refused)))
-				(print (handler-case (f (list 1 2 3) 4 nil) (simple-error () :refused)))
-				(print (handler-case (f (list 1 2 3) -1 nil) (simple-error () :refused)))
-				""")).isEqualTo("\"bc\"\n(2 3)\n:REFUSED\n:REFUSED\n:REFUSED\n:REFUSED");
+				(defun g (s i j)
+				  (handler-case (f s i j) (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))))
+				(print (g "abc" 2 1))
+				(print (g (list 1 2 3) 1 5))
+				(print (g (list 1 2 3) 4 nil))
+				(print (g (list 1 2 3) -1 nil))
+				"""))
+			.isEqualTo("\"bc\"\n(2 3)\n(1 (INTEGER 2 3))\n(5 (INTEGER 1 3))\n(4 (INTEGER 0 3))\n(-1 (INTEGER 0 3))");
 	}
 
 	@Test

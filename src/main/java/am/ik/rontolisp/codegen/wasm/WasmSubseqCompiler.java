@@ -23,9 +23,10 @@ final class WasmSubseqCompiler {
 
 	/**
 	 * The bounds report's pieces, interned up front in EH mode
-	 * ({@code WasmLispCompiler.compile}): {@code "SUBSEQ: invalid bounds "}, {@code ", "}
-	 * and the string report's {@code " for string of length "}, whose {@code " for "} and
-	 * {@code " of length "} the list and vector reports cut out of it
+	 * ({@code WasmLispCompiler.compile}): {@code "SUBSEQ: invalid bounds "} and
+	 * {@code ", "}, which {@code _subseq_bad} cites, and the string report's
+	 * {@code " for string of length "}, whose {@code " for "} and {@code " of length "}
+	 * the list and vector reports cut out of it
 	 * ({@code WasmStringRuntimeBuilder.emitKindOfLength}).
 	 */
 	static final String BOUNDS_PREFIX = "\"" + LispNames.SUBSEQ + ": invalid bounds \"";
@@ -39,8 +40,8 @@ final class WasmSubseqCompiler {
 
 	/**
 	 * Compiles {@code (%subseq-end start end length)}: the resolved end, or the
-	 * {@code vector} bounds report (see {@link LispNames#SUBSEQ_END}) -- thrown on
-	 * {@code $lisp-cond} in EH mode, a bare {@code unreachable} outside it.
+	 * {@code vector} bounds report (see {@link LispNames#SUBSEQ_END}) -- signalled
+	 * through {@code _subseq_bad} in EH mode, a bare {@code unreachable} outside it.
 	 */
 	static void compileEnd(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
@@ -75,10 +76,8 @@ final class WasmSubseqCompiler {
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		if (ctx.ehMode) {
-			WasmLispCompiler.StringTable table = ctx.stringTable;
-			WasmLispCompiler.StringTable.StringEntry forString = table.addBodyString(STRING_LENGTH);
-			WasmStringRuntimeBuilder.emitSubseqBoundsThrow(ctx.writer, ctx.usesIdentityHashTables,
-					table.addBodyString(BOUNDS_PREFIX), table.addBodyString(BOUNDS_COMMA),
+			WasmLispCompiler.StringTable.StringEntry forString = ctx.stringTable.addBodyString(STRING_LENGTH);
+			WasmStringRuntimeBuilder.emitSubseqBoundsThrow(ctx.writer,
 					() -> WasmStringRuntimeBuilder.emitKindOfLength(ctx.writer, forString, "vector"),
 					() -> get(ctx, start), () -> get(ctx, end), () -> get(ctx, len));
 		}

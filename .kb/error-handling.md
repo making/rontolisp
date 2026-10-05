@@ -1983,6 +1983,13 @@ on wasm-GC even in EH mode.
   - Pinned by `compileAndRunMakeArrayInitialContentsFillsARunTimeRank` (`JvmLispCompilerTest`)
     and `makeArrayInitialContentsFillsARunTimeRank` (`WasmLispCompilerIntegrationTest`, P1 and
     component).
+- **`subseq` outside its sequence** (2026-10-05) is a `type-error` too, but keeps its own text,
+  `SUBSEQ: invalid bounds S, E for KIND of length N`, rather than this section's `OP: The value
+  ...` shape: datum the first bound outside its range, expected type `(INTEGER low N)`. It does
+  not go through `_oob` / `_idx_in` (they word the report): interpreter
+  `OperandTypeException.reported`, JVM `_subseqRec` over the `_teTl` record, wasm-GC the
+  `_subseq_bad` landing building the instance where `_type_err` would
+  ([subseq-runtime.md](subseq-runtime.md), "Bounds check").
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in

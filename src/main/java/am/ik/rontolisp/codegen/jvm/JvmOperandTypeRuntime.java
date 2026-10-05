@@ -176,6 +176,17 @@ final class JvmOperandTypeRuntime {
 
 	static final String IS_CONS_DESC = "(Ljava/lang/Object;)Z";
 
+	/**
+	 * {@code subseq}'s bounds recorder, {@code _subseqRec(e, start, end, len)}: records
+	 * the refusal {@code e} under a pad as a {@code type-error} whose datum is the
+	 * refused bound and whose expected type is its range
+	 * ({@code OperandTypes.subseqStartRefused}), and answers {@code e}. Built on first
+	 * use ({@link SubseqRecords}).
+	 */
+	static final String SUBSEQ_REC = "_subseqRec";
+
+	static final String SUBSEQ_REC_DESC = "(Ljava/lang/RuntimeException;III)Ljava/lang/RuntimeException;";
+
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
 
@@ -942,6 +953,99 @@ final class JvmOperandTypeRuntime {
 	 * numeric runtime's method list. A wrapper is the helper's own invocation under a
 	 * catch-any entry whose handler throws {@code _opTypeErr(e, "OP", "TYPE")}.
 	 */
+	/**
+	 * Builds {@link #SUBSEQ_REC} on first use, into the numeric runtime's methods: only a
+	 * class with a landing pad records a refusal (without one nothing reads the record),
+	 * and only one that refuses a {@code subseq} range carries the method, so every other
+	 * class keeps its bytes.
+	 */
+	static final class SubseqRecords {
+
+		private final ConstantPool cp;
+
+		private final ClassEntry thisClass;
+
+		private final FieldRefEntry teTl;
+
+		private final List<JvmNumericRuntimeBuilder.NumericMethod> sink;
+
+		private @Nullable MethodRefEntry ref;
+
+		SubseqRecords(ConstantPool cp, ClassEntry thisClass, FieldRefEntry teTl,
+				List<JvmNumericRuntimeBuilder.NumericMethod> sink) {
+			this.cp = cp;
+			this.thisClass = thisClass;
+			this.teTl = teTl;
+			this.sink = sink;
+		}
+
+		/**
+		 * {@return the {@code _subseqRec} reference, the method built on the first call}
+		 */
+		MethodRefEntry ref() {
+			MethodRefEntry built = this.ref;
+			if (built != null) {
+				return built;
+			}
+			built = self(this.cp, this.thisClass, SUBSEQ_REC, SUBSEQ_REC_DESC);
+			this.ref = built;
+			ClassEntry object = this.cp.classEntry("java/lang/Object");
+			Records records = Records.of(this.cp, this.thisClass, this.teTl,
+					this.cp.methodRef(this.cp.classEntry("java/lang/ThreadLocal"), "get", "()Ljava/lang/Object;"),
+					object, this.cp.classEntry("[Ljava/lang/Object;"));
+			MethodRefEntry longValueOf = this.cp.methodRef(this.cp.classEntry("java/lang/Long"), "valueOf",
+					"(J)Ljava/lang/Long;");
+			StringEntry integerKind = this.cp.stringEntry(OperandTypes.INTEGER_TYPE);
+			// Locals: 0 = e, 1 = start, 2 = end, 3 = len, 4 = the refused bound, 5 = the
+			// least member of its range. The start is refused when outside [0, len],
+			// else the end, outside [start, len].
+			MethodCode c = new MethodCode();
+			c.iload(1);
+			c.istore(4);
+			c.iconst_0();
+			c.istore(5);
+			MethodCode.Label decided = c.newLabel();
+			c.iload(1);
+			c.iflt(decided);
+			c.iload(1);
+			c.iload(3);
+			c.if_icmpgt(decided);
+			c.iload(2);
+			c.istore(4);
+			c.iload(1);
+			c.istore(5);
+			c.labelBinding(decided);
+			records.emit(c, 0, () -> {
+				c.iload(4);
+				c.i2l();
+				c.invokestatic(longValueOf);
+			}, () -> {
+				// (INTEGER low len): {"INTEGER", {low, {len, nil}}}
+				emitConsHead(c, object, () -> c.ldc(integerKind));
+				emitConsHead(c, object, () -> {
+					c.iload(5);
+					c.i2l();
+					c.invokestatic(longValueOf);
+				});
+				emitConsHead(c, object, () -> {
+					c.iload(3);
+					c.i2l();
+					c.invokestatic(longValueOf);
+				});
+				c.aconst_null();
+				emitConsTail(c);
+				emitConsTail(c);
+				emitConsTail(c);
+			});
+			c.aload(0);
+			c.areturn();
+			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.utf8Entry(SUBSEQ_REC),
+					this.cp.utf8Entry(SUBSEQ_REC_DESC), c));
+			return built;
+		}
+
+	}
+
 	static final class Wrappers {
 
 		private final ConstantPool cp;

@@ -1942,9 +1942,6 @@ final class WasmStringRuntimeBuilder {
 	 * report ({@link #buildSubseqBody}).
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @param ehMode whether the module is in EH mode
-	 * @param boundsPrefix {@code "SUBSEQ: invalid bounds "}, non-null exactly when
-	 * {@code ehMode}
-	 * @param boundsComma {@code ", "}, non-null exactly when {@code ehMode}
 	 * @param boundsForLength {@code " for string of length "}, non-null exactly when
 	 * {@code ehMode}
 	 * @return the function body (signature
@@ -1952,8 +1949,6 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 2)
 	 */
 	static byte[] buildSubseqStrBody(boolean identityHash, boolean ehMode,
-			WasmLispCompiler.StringTable.@Nullable StringEntry boundsPrefix,
-			WasmLispCompiler.StringTable.@Nullable StringEntry boundsComma,
 			WasmLispCompiler.StringTable.@Nullable StringEntry boundsForLength) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -1987,7 +1982,7 @@ final class WasmStringRuntimeBuilder {
 		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.END);
 		set(w, realEnd);
-		emitSubseqBoundsCheck(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, st, realEnd, len);
+		emitSubseqBoundsCheck(w, ehMode, boundsForLength, st, realEnd, len);
 		// n = realEnd - st
 		get(w, realEnd);
 		get(w, st);
@@ -2184,24 +2179,21 @@ final class WasmStringRuntimeBuilder {
 	 * The string branch checks {@code 0 <= start <= end <= (length seq)} before
 	 * translating the character indices to byte offsets (todo a42): in EH mode a
 	 * violation throws the interpreter's exact
-	 * {@code "SUBSEQ: invalid bounds S, E for string of length N"} text on
-	 * {@code $lisp-cond}; outside EH mode it is a bare {@code unreachable}, like every
-	 * other unchecked failure that backend takes (no tag exists to throw on, and citing
-	 * the string/prin1 runtime would pin it into every module). The list branch refuses
-	 * the same ranges with {@code " for list of length N"}, finding a short list during
-	 * the copy walk itself and counting the whole list only on the way to the report.
+	 * {@code "SUBSEQ: invalid bounds S, E for string of length N"} type-error through
+	 * {@code _subseq_bad} ({@link #buildSubseqBadBody}); outside EH mode it is a bare
+	 * {@code unreachable}, like every other unchecked failure that backend takes (no tag
+	 * exists to throw on, and citing the string/prin1 runtime would pin it into every
+	 * module). The list branch refuses the same ranges with
+	 * {@code " for list of length N"}, finding a short list during the copy walk itself
+	 * and counting the whole list only on the way to the report.
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @param ehMode whether the module is in EH mode
-	 * @param boundsPrefix {@code "SUBSEQ: invalid bounds "}, interned before this body is
-	 * built (like {@code WasmOperandTypes.Texts}), non-null exactly when {@code ehMode}
-	 * @param boundsComma {@code ", "}, non-null exactly when {@code ehMode}
-	 * @param boundsForLength {@code " for string of length "}, non-null exactly when
+	 * @param boundsForLength {@code " for string of length "}, interned before this body
+	 * is built (like {@code WasmOperandTypes.Texts}), non-null exactly when
 	 * {@code ehMode}
 	 * @return the function body
 	 */
 	static byte[] buildSubseqBody(boolean identityHash, boolean ehMode,
-			WasmLispCompiler.StringTable.@Nullable StringEntry boundsPrefix,
-			WasmLispCompiler.StringTable.@Nullable StringEntry boundsComma,
 			WasmLispCompiler.StringTable.@Nullable StringEntry boundsForLength) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -2261,8 +2253,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		set(w, actualEnd);
 		// 0 <= startIdx <= actualEnd <= charLen, or a bounds error.
-		emitSubseqBoundsCheck(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
-				charLen);
+		emitSubseqBoundsCheck(w, ehMode, boundsForLength, startIdx, actualEnd, charLen);
 		// pos = _str_char_byte_offset(str, startIdx)
 		get(w, 0);
 		get(w, startIdx);
@@ -2289,8 +2280,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.ELSE);
 		// --- List branch ---
 		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash, charLen, actualEnd,
-				() -> emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, "list",
-						startIdx, actualEnd, charLen));
+				() -> emitSubseqBoundsError(w, ehMode, boundsForLength, "list", startIdx, actualEnd, charLen));
 		w.write(Instruction.END); // dispatch if
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -3299,9 +3289,7 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	// 0 <= start <= end <= len falls through; anything else is the string report.
-	private static void emitSubseqBoundsCheck(WasmWriter w, boolean ehMode, boolean identityHash,
-			WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
-			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
+	private static void emitSubseqBoundsCheck(WasmWriter w, boolean ehMode,
 			WasmLispCompiler.StringTable.@Nullable StringEntry forLength, int startLocal, int endLocal, int lenLocal) {
 		get(w, startLocal);
 		i32(w, 0);
@@ -3315,19 +3303,16 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.I32_GT_S);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitSubseqBoundsError(w, ehMode, identityHash, prefix, comma, forLength, "string", startLocal, endLocal,
-				lenLocal);
+		emitSubseqBoundsError(w, ehMode, forLength, "string", startLocal, endLocal, lenLocal);
 		w.write(Instruction.END);
 	}
 
-	// A subseq bounds violation over three i32 locals: in EH mode, throws the
-	// interpreter's exact "SUBSEQ: invalid bounds S, E for KIND of length N" text
+	// A subseq bounds violation over three i32 locals: in EH mode, signals the
+	// interpreter's exact "SUBSEQ: invalid bounds S, E for KIND of length N" type-error
 	// (emitSubseqBoundsThrow); outside EH mode a bare unreachable, matching every other
 	// unchecked failure that backend takes when no tag exists to throw on. Never
 	// returns.
-	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode, boolean identityHash,
-			WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
-			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
+	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode,
 			WasmLispCompiler.StringTable.@Nullable StringEntry forString, String kind, int startLocal, int endLocal,
 			int lenLocal) {
 		if (!ehMode) {
@@ -3337,9 +3322,8 @@ final class WasmStringRuntimeBuilder {
 		// Non-null whenever ehMode is true (the builders' callers intern them under the
 		// same condition).
 		WasmLispCompiler.StringTable.StringEntry forStringOfLength = java.util.Objects.requireNonNull(forString);
-		emitSubseqBoundsThrow(w, identityHash, java.util.Objects.requireNonNull(prefix),
-				java.util.Objects.requireNonNull(comma), () -> emitKindOfLength(w, forStringOfLength, kind),
-				() -> boxLocal(w, startLocal), () -> boxLocal(w, endLocal), () -> boxLocal(w, lenLocal));
+		emitSubseqBoundsThrow(w, () -> emitKindOfLength(w, forStringOfLength, kind), () -> boxLocal(w, startLocal),
+				() -> boxLocal(w, endLocal), () -> boxLocal(w, lenLocal));
 	}
 
 	private static void boxLocal(WasmWriter w, int local) {
@@ -3348,41 +3332,138 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
-	 * Throws {@code "SUBSEQ: invalid bounds S, E for KIND of length N"} as a
-	 * condition-less {@code (nil . message)} payload on {@code $lisp-cond}, like
-	 * {@code WasmErrorCompiler.emitThrowPayload}: each number pusher leaves a fixnum (an
-	 * i31), rendered through {@code _prin1_to_str} (the
-	 * {@code WasmOperandTypes.pushBound} trick, so no itoa is duplicated here). EH mode
-	 * only. Never returns.
+	 * Signals {@code "SUBSEQ: invalid bounds S, E for KIND of length N"}: hands the
+	 * bounds and the {@code " for KIND of length "} piece to {@code _subseq_bad}
+	 * ({@link #buildSubseqBadBody}), which never returns. EH mode only.
 	 * @param w the body being written
-	 * @param identityHash whether a cons carries the identity-hash field
-	 * @param prefix {@code "SUBSEQ: invalid bounds "}
-	 * @param comma {@code ", "}
 	 * @param forKindOfLength pushes {@code " for KIND of length "}
 	 * ({@link #emitKindOfLength})
-	 * @param start pushes the start
-	 * @param end pushes the resolved end
-	 * @param length pushes the sequence's length
+	 * @param start pushes the start as a fixnum
+	 * @param end pushes the resolved end as a fixnum
+	 * @param length pushes the sequence's length as a fixnum
 	 */
-	static void emitSubseqBoundsThrow(WasmWriter w, boolean identityHash,
-			WasmLispCompiler.StringTable.StringEntry prefix, WasmLispCompiler.StringTable.StringEntry comma,
-			Runnable forKindOfLength, Runnable start, Runnable end, Runnable length) {
-		// (condition-instance . message): a plain error has no instance.
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
+	static void emitSubseqBoundsThrow(WasmWriter w, Runnable forKindOfLength, Runnable start, Runnable end,
+			Runnable length) {
+		start.run();
+		end.run();
+		length.run();
+		forKindOfLength.run();
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ_BAD);
+		w.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Builds {@code _subseq_bad(start, end, length, piece) -> value}
+	 * ({@code FUNC_SUBSEQ_BAD}, {@code TYPE_CALLABLE_BASE + 3}), the one landing of every
+	 * {@code subseq} bounds refusal ({@link #emitSubseqBoundsThrow}); it never returns.
+	 * In EH mode it renders {@code "SUBSEQ: invalid bounds S, E"} + {@code piece} +
+	 * {@code N} -- each number through {@code _prin1_to_str} (the
+	 * {@code WasmOperandTypes.pushBound} trick, so no itoa is duplicated here) -- and
+	 * throws it on {@code $lisp-cond} as a {@code type-error} whose datum is the refused
+	 * bound and whose expected type is its range {@code (INTEGER low length)}
+	 * ({@code OperandTypes.subseqStartRefused}), or, in a module that did not bake the
+	 * class ({@code typeError} null: no handler landing pad, so nothing can observe it),
+	 * as the instance-less {@code (nil . message)} payload the entry landing pad reports
+	 * the same way. Outside EH mode no site calls it and it is a bare
+	 * {@code unreachable}.
+	 * @param prefix {@code "SUBSEQ: invalid bounds "}, non-null exactly in EH mode
+	 * @param comma {@code ", "}, non-null exactly in EH mode
+	 * @param typeError the type-error shape, or null for the instance-less payload
+	 * @param integerName the interned {@code INTEGER} symbol, non-null with
+	 * {@code typeError}
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @return the function body
+	 */
+	static byte[] buildSubseqBadBody(WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
+			WasmOperandTypes.@Nullable TypeErrorShape typeError,
+			WasmLispCompiler.StringTable.@Nullable StringEntry integerName, boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		if (prefix == null || comma == null) {
+			w.write(0); // no locals
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// params: start = 0, end = 1, length = 2 (fixnums), piece = 3 (string); with a
+		// type-error to build, locals msg = 4, slots = 5 (eqref) and startRefused = 6
+		// (i32)
+		int msg = 4, slots = 5, startRefused = 6;
+		if (typeError == null) {
+			w.write(0);
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+		else {
+			w.write(2);
+			w.write(2);
+			w.writeRefType(true, Type.EQ.code());
+			w.write(1);
+			w.write(Type.I32);
+		}
 		strBuild(w, prefix);
-		appendPrinted(w, start);
+		appendPrinted(w, () -> get(w, 0));
 		strBuild(w, comma);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		appendPrinted(w, end);
-		forKindOfLength.run();
+		appendPrinted(w, () -> get(w, 1));
+		get(w, 3);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		appendPrinted(w, length);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.THROW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		appendPrinted(w, () -> get(w, 2));
+		if (typeError == null) {
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		WasmLispCompiler.StringTable.StringEntry integer = java.util.Objects.requireNonNull(integerName);
+		set(w, msg);
+		// startRefused = start < 0 | start > length
+		get(w, 0);
+		WasmEmitHelper.castI31GetS(w);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		get(w, 0);
+		WasmEmitHelper.castI31GetS(w);
+		get(w, 2);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_OR);
+		set(w, startRefused);
+		WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), slots, msg,
+				java.util.Map.of(typeError.datumSlot(), () -> {
+					// the refused bound
+					get(w, startRefused);
+					w.write(Instruction.IF);
+					w.writeRefType(true, Type.EQ.code());
+					get(w, 0);
+					w.write(Instruction.ELSE);
+					get(w, 1);
+					w.write(Instruction.END);
+				}, typeError.expectedTypeSlot(), () -> {
+					// (INTEGER low length), low 0 for the start, the start for the end
+					strBuild(w, integer);
+					get(w, startRefused);
+					w.write(Instruction.IF);
+					w.writeRefType(true, Type.EQ.code());
+					i32(w, 0);
+					w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+					w.write(Instruction.ELSE);
+					get(w, 0);
+					w.write(Instruction.END);
+					get(w, 2);
+					w.write(Instruction.REF_NULL);
+					w.writeHeapType(Type.EQ.code());
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					WasmEmitHelper.emitNewCons(w, identityHash);
+				}));
+		w.write(Instruction.END);
+		return body.toByteArray();
 	}
 
 	/**

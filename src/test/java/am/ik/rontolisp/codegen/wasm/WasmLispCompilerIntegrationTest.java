@@ -8113,9 +8113,10 @@ class WasmLispCompilerIntegrationTest {
 		// The wasm twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: an
 		// invalid range used to truncate a list, trap on a built string or a vector, or
 		// report through AREF instead of signalling SUBSEQ's own text. The component
-		// shares the core module but not the I/O adapter, so it runs too.
-		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
-		assertThat(compileComponentAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+		// shares the core module but not the I/O adapter, so it runs too. The
+		// type-error slot readers are prelude Lisp.
+		assertThat(compileAndRunPrelude(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+		assertThat(compileComponentAndRunPrelude(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	@Test

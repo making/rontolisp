@@ -34,9 +34,14 @@ final class OperandTypeException extends LispEvalException {
 
 	private OperandTypeException(LispVal datum, OperandTypes.Kind kind, @Nullable String operator,
 			@Nullable LispVal compoundType) {
-		super(OperandTypes.message(operator, datum.print(),
-				compoundType == null ? OperandTypes.expectedType(operator, kind) : compoundType.print()), null,
-				ClosRegistry.TYPE_ERROR_CLASS_NAME);
+		this(OperandTypes.message(operator, datum.print(),
+				compoundType == null ? OperandTypes.expectedType(operator, kind) : compoundType.print()), datum, kind,
+				operator, compoundType);
+	}
+
+	private OperandTypeException(String report, LispVal datum, OperandTypes.Kind kind, @Nullable String operator,
+			@Nullable LispVal compoundType) {
+		super(report, null, ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		this.datum = datum;
 		this.kind = kind;
 		this.operator = operator;
@@ -90,6 +95,21 @@ final class OperandTypeException extends LispEvalException {
 	 */
 	static OperandTypeException notOfType(LispVal datum, java.util.List<?> type) {
 		return new OperandTypeException(datum, OperandTypes.Kind.ARRAY, null, typeValue(type));
+	}
+
+	/**
+	 * A type error whose report the built-in words itself rather than as
+	 * {@code OP: The value X is not of type T} -- {@code subseq}'s bounds report, kept
+	 * byte-identical across the backends -- carrying its datum and compound type. It is
+	 * already named, so the built-in seam leaves it as it is.
+	 * @param report the full report
+	 * @param operator the operator's symbol name
+	 * @param datum the rejected value
+	 * @param type the type, as nested lists of symbol names and numbers
+	 * @return the exception to throw
+	 */
+	static OperandTypeException reported(String report, String operator, LispVal datum, java.util.List<?> type) {
+		return new OperandTypeException(report, datum, OperandTypes.Kind.INTEGER, operator, typeValue(type));
 	}
 
 	private static LispVal indexType(long dimension) {

@@ -358,7 +358,7 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
-			ClassEntry selfClass, boolean usesFloatArray) {
+			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
@@ -2742,7 +2742,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.areturn();
 		// Both arms' refusal.
 		sc.labelBinding(scBad);
-		JvmSubseqCompiler.emitBoundsError(sc, cp, 1, 12, 11, "string");
+		JvmSubseqCompiler.emitBoundsError(sc, cp, subseqRecords, 1, 12, 11, "string");
 		methods.add(new ArrayMethod(cp.utf8Entry(SUBSEQ_CV), cp.utf8Entry(SUBSEQ_CV_DESC), sc));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED

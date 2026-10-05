@@ -499,7 +499,32 @@ public final class OperandTypes {
 	 * @return the type
 	 */
 	public static List<Object> fillPointerType(long dimension) {
-		return List.of(INTEGER_TYPE, 0L, dimension);
+		return integerRange(0, dimension);
+	}
+
+	/**
+	 * The inclusive integer range {@code (INTEGER low high)}, nested lists like
+	 * {@link #FILL_POINTER_VECTOR_TYPE}.
+	 * @param low the least member
+	 * @param high the greatest member
+	 * @return the type
+	 */
+	public static List<Object> integerRange(long low, long high) {
+		return List.of(INTEGER_TYPE, low, high);
+	}
+
+	/**
+	 * Whether {@code subseq}'s refused bound is its START: a type error names the first
+	 * bounding index outside its range (CLHS 17.1.1) -- {@code start} outside
+	 * {@code [0, length]}, else {@code end} outside {@code [start, length]} -- so the
+	 * datum is that bound and the expected type {@code (INTEGER low length)}, {@code low}
+	 * being 0 for the start and the start for the end. Every backend decides it this way.
+	 * @param start the start
+	 * @param length the sequence's length
+	 * @return whether the start is the refused bound
+	 */
+	public static boolean subseqStartRefused(long start, long length) {
+		return start < 0 || start > length;
 	}
 
 	/**

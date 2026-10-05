@@ -405,10 +405,13 @@ cases:
     # string, a list, a general vector, a built (mutable) string, a packed vector, a
     # fill-pointer vector (whose length is the fill pointer) and a displaced view. The
     # bounds reach subseq as arguments, so no backend sees them at compile time
-    # (.kb/subseq-runtime.md, "Bounds check"). Output matches SBCL.
+    # (.kb/subseq-runtime.md, "Bounds check"). The refusal is a type-error (CLHS
+    # 17.1.1). Output matches SBCL.
     source: |
       (defun ssb-probe (s i &optional e)
-        (handler-case (if e (subseq s i e) (subseq s i)) (error () :error)))
+        (handler-case (if e (subseq s i e) (subseq s i))
+          (type-error () :type-error)
+          (error () :error)))
       (defvar *ssb-fp* (make-array 4 :fill-pointer 2 :initial-contents '(1 2 3 4)))
       (dolist (s (list "abc" (list 1 2 3) (vector 1 2 3) (concatenate 'string "ab" "c")
                        (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))
@@ -416,13 +419,13 @@ cases:
         (print (list (ssb-probe s -1) (ssb-probe s 1 5) (ssb-probe s 2 1) (ssb-probe s 4)
                      (ssb-probe s 1 2) (ssb-probe s 2) (ssb-probe s 3 3))))
     expected: |
-      (:ERROR :ERROR :ERROR :ERROR "b" "c" "")
-      (:ERROR :ERROR :ERROR :ERROR (2) (3) NIL)
-      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
-      (:ERROR :ERROR :ERROR :ERROR "b" "c" "")
-      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
-      (:ERROR :ERROR :ERROR :ERROR #(2) #() :ERROR)
-      (:ERROR :ERROR :ERROR :ERROR #(2) #(3) #())
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "b" "c" "")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR (2) (3) NIL)
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #(3) #())
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR "b" "c" "")
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #(3) #())
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #() :TYPE-ERROR)
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #(2) #(3) #())
   - name: make-array-element-type-deftype-alias
     source: |
       (deftype mae-octet () '(unsigned-byte 8))

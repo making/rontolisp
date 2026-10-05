@@ -4593,6 +4593,20 @@ public final class Environment implements Scope {
 		return new LispString(full.substring(0, from) + convert.apply(full.substring(from, to)) + full.substring(to));
 	}
 
+	/**
+	 * {@code subseq}'s refusal of a bad range: a {@code type-error} reporting
+	 * {@code SUBSEQ: invalid bounds S, E for KIND of length N}, whose datum is the
+	 * refused bound and whose expected type is its range
+	 * ({@link OperandTypes#subseqStartRefused}).
+	 */
+	private static OperandTypeException subseqBoundsError(String kind, int start, int end, int length) {
+		boolean startRefused = OperandTypes.subseqStartRefused(start, length);
+		return OperandTypeException.reported(
+				LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end + " for " + kind + " of length " + length,
+				LispNames.SUBSEQ, new LispInteger(startRefused ? start : end),
+				OperandTypes.integerRange(startRefused ? 0 : start, length));
+	}
+
 	private static void registerStringOps(Environment env) {
 		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE,
 				args -> boundedCaseConversion(LispNames.STRING_UPCASE, args, s -> caseFoldString(s, true))));
@@ -4620,8 +4634,7 @@ public final class Environment implements Scope {
 				int cpLen = str.length();
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : cpLen;
 				if (start < 0 || end > cpLen || start > end) {
-					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for string of length " + cpLen);
+					throw subseqBoundsError("string", start, end, cpLen);
 				}
 				return str.subsequence(start, end);
 			}
@@ -4634,8 +4647,7 @@ public final class Environment implements Scope {
 				}
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : elements.size();
 				if (start < 0 || end > elements.size() || start > end) {
-					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for list of length " + elements.size());
+					throw subseqBoundsError("list", start, end, elements.size());
 				}
 				LispVal result = LispNil.INSTANCE;
 				for (int i = end - 1; i >= start; i--) {
@@ -4657,8 +4669,7 @@ public final class Environment implements Scope {
 				int len = arr.effectiveLength();
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for vector of length " + len);
+					throw subseqBoundsError("vector", start, end, len);
 				}
 				LispVal[] copy = new LispVal[end - start];
 				for (int i = start; i < end; i++) {
@@ -4682,8 +4693,7 @@ public final class Environment implements Scope {
 				int len = iv.length();
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for vector of length " + len);
+					throw subseqBoundsError("vector", start, end, len);
 				}
 				return iv.copyOfRange(start, end);
 			}
@@ -4697,8 +4707,7 @@ public final class Environment implements Scope {
 				int len = fa.totalSize();
 				int end = (endArg != null) ? requireIndex(LispNames.SUBSEQ, endArg) : len;
 				if (start < 0 || end > len || start > end) {
-					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
-							+ " for vector of length " + len);
+					throw subseqBoundsError("vector", start, end, len);
 				}
 				List<LispVal> elements = new ArrayList<>(end - start);
 				for (int i = start; i < end; i++) {
