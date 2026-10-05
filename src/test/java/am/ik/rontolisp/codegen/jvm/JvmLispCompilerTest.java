@@ -21299,7 +21299,7 @@ class JvmLispCompilerTest {
 				(defun fl (a) (floor a))
 				(print (list (try (fl *inf*)) (try (round *nan*))
 				             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
-				(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+				(print (list (try (truncate *nan* 0.0)) (try (funcall #'fround *nan*))
 				             (try (floor 5 *inf*))))
 				(print (list (try (rational *nan*)) (try (rationalize *inf*))
 				             (try (decode-float *inf*))))

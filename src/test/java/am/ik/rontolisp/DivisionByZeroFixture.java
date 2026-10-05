@@ -1,19 +1,16 @@
 package am.ik.rontolisp;
 
 /**
- * A program that divides by an exact zero through every integer and ratio division path
- * -- {@code /} (unary, n-ary, ratio, wide-integer and complex dividends), the
- * two-argument rounding family (a float dividend included: an exact zero divisor signals,
- * a zero float divisor stays IEEE and fails the non-finite rounding),
- * {@code mod}/{@code rem} at each integer tier and over a ratio, a negative power of
- * zero, the fused fixnum trees and the function values -- and prints the
- * {@code division-by-zero} each signals: its report and that it is an
- * {@code arithmetic-error}. The wasm-GC backends trapped on every one of them, past any
- * handler, and {@code mod}/{@code rem} reported the host's {@code / by zero} or
- * {@code BigInteger divide by zero} on the interpreter and the JVM. Shared by the backend
- * suites, so every backend is held to one expected text; {@code ci-spec.yaml}'s
- * {@code division-by-zero-is-a-catchable-condition} pins the same rows on the native
- * binary.
+ * A program that divides by zero through every division path -- {@code /} by an exact
+ * zero (unary, n-ary, ratio, wide-integer and complex dividends), the two-argument
+ * rounding family and {@code mod}/{@code rem} by any zero (exact or float, over every
+ * dividend kind; a NaN or infinite dividend reports the non-finite rounding first), a
+ * negative power of an exact zero, the fused fixnum trees and the function values -- and
+ * prints the {@code division-by-zero} each signals: its report and that it is an
+ * {@code arithmetic-error}. Float {@code /} and {@code expt} stay IEEE, so their rows
+ * answer an infinity. Shared by the backend suites, so every backend is held to one
+ * expected text; {@code ci-spec.yaml}'s {@code division-by-zero-is-a-catchable-condition}
+ * pins the same rows on the native binary.
  */
 public final class DivisionByZeroFixture {
 
@@ -54,7 +51,30 @@ public final class DivisionByZeroFixture {
 			(print (dz (lambda () (let ((a 7.5d0) (b *dz-zero*)) (declare (double-float a)) (floor a b)))))
 			(print (dz (lambda () (floor 7.5 *dz-fzero*))))
 			(print (dz (lambda () (floor 7 *dz-fzero*))))
+			(print (dz (lambda () (floor 1/2 *dz-fzero*))))
+			(print (dz (lambda () (fround -7.5 *dz-fzero*))))
+			(print (dz (lambda () (multiple-value-list (truncate 7.5 *dz-fzero*)))))
+			(print (dz (lambda () (let ((a 7.5d0) (b *dz-fzero*)) (declare (double-float a b)) (floor a b)))))
 			(print (dz (lambda () (floor (/ 1.0 *dz-fzero*) *dz-zero*))))
+			(print (dz (lambda () (floor (/ 1.0 *dz-fzero*) *dz-fzero*))))
+			(print (dz (lambda () (mod 7.5 *dz-zero*))))
+			(print (dz (lambda () (rem -7.5 *dz-zero*))))
+			(print (dz (lambda () (mod 7.5 0))))
+			(print (dz (lambda () (mod 0.0 *dz-zero*))))
+			(print (dz (lambda () (mod 7.5 *dz-fzero*))))
+			(print (dz (lambda () (rem 7 *dz-fzero*))))
+			(print (dz (lambda () (mod 1/2 *dz-fzero*))))
+			(print (dz (lambda () (let ((a 7.5d0) (b *dz-zero*)) (declare (double-float a)) (rem a b)))))
+			(print (dz (lambda () (let ((a 7.5d0) (b *dz-fzero*)) (declare (double-float a b)) (mod a b)))))
+			(print (dz (lambda () (funcall #'mod 7.5 *dz-fzero*))))
+			(print (dz (lambda () (mod (/ 1.0 *dz-fzero*) *dz-zero*))))
+			(print (dz (lambda () (rem (/ -1.0 *dz-fzero*) 2.0))))
+			(print (dz (lambda () (mod 7.5 (- (/ 1.0 *dz-fzero*) (/ 1.0 *dz-fzero*))))))
+			(print (dz (lambda () (mod -7.5 (/ 1.0 *dz-fzero*)))))
+			(print (dz (lambda () (/ 1.5 *dz-zero*))))
+			(print (dz (lambda () (expt *dz-zero* -1/2))))
+			(print (dz (lambda () (expt *dz-zero* -1.5))))
+			(print (dz (lambda () (expt *dz-fzero* -1))))
 			(print (dz (lambda () (mod 7 *dz-zero*))))
 			(print (dz (lambda () (rem *dz-long* *dz-zero*))))
 			(print (dz (lambda () (mod *dz-wide* *dz-zero*))))
@@ -92,9 +112,32 @@ public final class DivisionByZeroFixture {
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+			(:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
+			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
 			(:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
 			(:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+			(:VALUE Infinity)
+			(:VALUE Infinity)
+			(:VALUE Infinity)
+			(:VALUE Infinity)
+			(:VALUE Infinity)
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)

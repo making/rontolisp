@@ -323,7 +323,8 @@ and re-derive only the zero (`_frem`, which `_fmod` calls first, so `mod` and `r
 magnitude. Both wasm backends reach the exact `fmod` through `codegen/wasm/WasmFmodRuntimeBuilder`,
 emitted into the wasm-GC `_rat_rem`/`_rat_mod` float arm and INLINED at the site by
 `NoGcWasmCompiler.compileModRem` -- **one builder, so the two cannot drift**. An INFINITE divisor
-takes no loop; a zero divisor is `NaN` on all five.
+takes no loop. A zero divisor, a NaN or an infinite dividend has no remainder: it signals as `floor`/
+`truncate` do on the four (error-handling.md, "Per operator") and is `NaN` on `--no-gc`.
 
 **Trap: `mod`'s sign correction must not multiply the operands.** Both the JVM's `_fmod` and the
 first wasm draft tested "opposite signs" as `r * b < 0`; that product UNDERFLOWS to zero when both
@@ -346,8 +347,8 @@ two its quotient landed on. A divisor of `1` covers the one-argument forms. Per 
 `eval/ExactRounding` (reached from `LispEvaluator.evalCons`, which recognizes both `(op a b)` and the
 `(op (/ a b))` its lowerings leave behind), the JVM's `_fdiv`/`_frat` (`JvmNumericRuntimeBuilder`),
 and wasm-GC's `_f64_fdiv` (`WasmFloatFdivRuntimeBuilder`, handing two rationals to the limb-tier
-`_big_fdiv`). All three DECLINE -- keeping the old f64 route -- for a ratio operand, a non-finite
-dividend and a zero divisor.
+`_big_fdiv`). All three DECLINE -- keeping the old f64 route -- for a ratio operand and a non-finite
+dividend; a zero divisor over a finite dividend signals `division-by-zero` (error-handling.md).
 
 **An INFINITE divisor is settled by sign, not declined.** With a FINITE NONZERO dividend `a/b` is an
 infinitesimal under 1/2, so `truncate`/`round` are always `0` and `floor`/`ceiling` give `0`/`1` when
@@ -357,7 +358,7 @@ old route (`ExactRounding.infiniteDivisorQuotient`,
 `WasmFloatFdivRuntimeBuilder.emitInfiniteDivisorQuotient`).
 
 **A non-finite QUOTIENT signals** (2026-09-19): a NaN or infinite argument, or a two-argument call
-whose `a/b` is one (`(floor inf 2)`, `(truncate 1.0 0.0)`), has no integer, so every backend signals
+whose `a/b` is one (`(floor inf 2)`, `(truncate nan 0.0)`), has no integer, so every backend signals
 the constant `ClosRegistry.NON_FINITE_ROUNDING_MESSAGE` (a `simple-error`; wasm traps outside EH
 mode). It used to clamp to a long -- `(floor inf)` was `9223372036854775807`, and on the JVM a NaN
 slipped past the range guard (`DCMPL` answers -1 for unordered; it is `DCMPG` now) into `D2L`'s `0`.

@@ -262,6 +262,8 @@
   `0.33333334` と表示します）。float の範囲を超える値は同様にシグナルします。`int` と `long` は
   切り捨てるだけで、範囲外の値を拒否しません（オラクルは `integer overflow`、
   `Value out of range for long: ...`）。
+- 被除数が NaN や無限大の `mod` と `rem` は `ArithmeticException` を投げます（オラクルは
+  `NumberFormatException`）。
 - `vector-of` は通常のベクターを返します。あとの `conj` や `assoc` は値をそのまま格納し
   （オラクルは型変換を続けます）、`:float` も倍精度で保持します。
 - リスト・遅延シーケンス・シーケンスの `empty` は `nil` を返し（オラクルは `()`。`rest` と同じ、空を

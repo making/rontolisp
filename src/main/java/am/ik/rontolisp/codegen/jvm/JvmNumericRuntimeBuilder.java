@@ -557,7 +557,7 @@ final class JvmNumericRuntimeBuilder {
 				numberClass, numDoubleValue, doubleValueOf, rFrem, ratArrClass, rRatNum, rRatDen, rRat, biMul,
 				divZero));
 		methods.add(buildFmod(nFmod, dFmod, rFrem));
-		methods.add(buildFrem(nFrem, dFmod));
+		methods.add(buildFrem(nFrem, dFmod, dblIsFinite, divZero, typeErrRefs, roundingNonFiniteStr));
 		methods.add(buildCmp(nCmp, dCmp, longClass, longValue, rBig, biCompareTo, ratArrClass, rRatNum, rRatDen, biMul,
 				doubleClass, rDbl, numberClass, numDoubleValue, bigClass, rFrat, intSignum, typeErrRefs));
 		methods.add(buildCmpBits(nCmpb, dCmp, doubleClass, rDbl, numberClass, numDoubleValue, rCmp, intSignum, rcClass,
@@ -599,7 +599,7 @@ final class JvmNumericRuntimeBuilder {
 				typeErrRefs, rationalNonFiniteStr, rcClass, hasComplex));
 		methods.add(buildFdiv(nFdiv, dFdiv, doubleClass, numberClass, numDoubleValue, ratArrClass, rFrat, rDiv,
 				rRatTrunc, rRatFloor, rRatCeil, rRatRound, dblIsInfinite, dblIsFinite, longClass, longValue, bigClass,
-				biSignum, longValueOf, typeErrRefs, roundingNonFiniteStr));
+				biSignum, longValueOf, typeErrRefs, roundingNonFiniteStr, divZero));
 		methods
 			.add(buildLogOp(nLogand, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biAnd, MethodCode::land));
 		methods
@@ -1027,8 +1027,9 @@ final class JvmNumericRuntimeBuilder {
 	// UNDERFLOWS to a zero when both operands are tiny, and the correction then silently
 	// did not fire -- (mod -1.2345678e-296 1d-300) answered the negative remainder
 	// instead of the positive one, and (mod 4.9d-324 -0.1) answered the dividend.
-	// DCMPG(x, 0.0) is -1 below zero and 1 above (and 1 for a NaN, which lands on
-	// whichever arm leaves the NaN alone), so equal results mean equal signs.
+	// DCMPG(x, 0.0) is -1 below zero and 1 above, so equal results mean equal signs.
+	// _frem signals rather than answering a NaN, so neither operand of the comparison
+	// is one.
 	//
 	// r = _frem(a, b); if (r == 0) return r;
 	// return dcmpg(r, 0) == dcmpg(b, 0) ? r : r + b;
@@ -1040,7 +1041,7 @@ final class JvmNumericRuntimeBuilder {
 		c.dstore(4);
 		c.dload(4);
 		c.dconst_0();
-		c.dcmpl(); // NaN compares as -1, so a NaN remainder is not a zero
+		c.dcmpl();
 		MethodCode.Label ifNonZero = c.newLabel();
 		c.ifne(ifNonZero);
 		c.dload(4);
@@ -1072,10 +1073,21 @@ final class JvmNumericRuntimeBuilder {
 	// the zero is re-derived: a zero dividend has q = +0, leaving b*q with the
 	// DIVISOR's sign, and a nonzero dividend cancels against itself as IEEE's +0.0.
 	//
-	// r = a % b; if (r != 0) return r; // NaN too
+	// A NaN result has no integer quotient behind it -- the floor/truncate this is the
+	// remainder of fails there -- so it signals as they do: a finite dividend over a zero
+	// divisor (the exact zero arrives here as 0.0 too) "Division by zero", anything else
+	// (a NaN or infinite dividend, a NaN divisor) the non-finite rounding.
+	//
+	// r = a % b;
+	// if (r != 0) { // NaN too
+	// if (r == r) return r;
+	// throw Double.isFinite(a) && b == 0 ? new ArithmeticException(DIV0)
+	// : new RuntimeException(NON_FINITE);
+	// }
 	// if (a != 0) return 0.0; // a - a
 	// return b < 0 ? a + 0.0 : a - 0.0; // a - copysign(0.0, b)
-	private static NumericMethod buildFrem(Utf8Entry name, Utf8Entry desc) {
+	private static NumericMethod buildFrem(Utf8Entry name, Utf8Entry desc, MethodRefEntry dblIsFinite,
+			DivZeroRefs divZero, TypeErrRefs typeErrRefs, StringEntry nonFiniteStr) {
 		MethodCode c = new MethodCode();
 		c.dload(0);
 		c.dload(2);
@@ -1087,7 +1099,28 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label ifZeroResult = c.newLabel();
 		c.ifeq(ifZeroResult);
 		c.dload(4);
+		c.dload(4);
+		c.dcmpl(); // 0 unless r is a NaN
+		MethodCode.Label ifNaN = c.newLabel();
+		c.ifne(ifNaN);
+		c.dload(4);
 		c.dreturn();
+		c.labelBinding(ifNaN);
+		c.dload(0);
+		c.invokestatic(dblIsFinite);
+		MethodCode.Label ifNonFinite = c.newLabel();
+		c.ifeq(ifNonFinite);
+		c.dload(2);
+		c.dconst_0();
+		c.dcmpl(); // -1 for a NaN divisor, 0 for either zero
+		c.ifne(ifNonFinite);
+		divZero.emitThrow(c);
+		c.labelBinding(ifNonFinite);
+		c.new_(typeErrRefs.rte());
+		c.dup();
+		c.ldc(nonFiniteStr);
+		c.invokespecial(typeErrRefs.rteInit());
+		c.athrow();
 		c.labelBinding(ifZeroResult);
 		c.dload(0);
 		c.dconst_0();
@@ -2910,14 +2943,12 @@ final class JvmNumericRuntimeBuilder {
 
 	// _fdiv(Object a, Object b, int mode): the floor family's quotient when a float is
 	// involved, or null to decline (no float operand, a ratio, a non-finite divisor over
-	// a
-	// non-finite or zero dividend, a zero float divisor -- all of which keep the ordinary
-	// route, the last so the non-trapping (/ x 0.0) policy stands). A NaN or infinite
-	// dividend over a finite nonzero divisor signals: its quotient has no integer. Both
-	// operands become the exact rationals
-	// they are and divide through _div, which is exact at any magnitude; an even
-	// division answers an integer already and everything else rounds through the
-	// rational rounder the mode names.
+	// a non-finite or zero dividend -- all of which keep the ordinary route). A zero
+	// divisor over a finite dividend signals "Division by zero"; a NaN or infinite
+	// dividend over a finite divisor signals: its quotient has no integer. Both operands
+	// become the exact rationals they are and divide through _div, which is exact at any
+	// magnitude; an even division answers an integer already and everything else rounds
+	// through the rational rounder the mode names.
 	//
 	// An INFINITE divisor is a separate case handled by sign alone, before the exact
 	// rational route (which would decline: infinity is not a rational and _frat says so).
@@ -2935,7 +2966,7 @@ final class JvmNumericRuntimeBuilder {
 			MethodRefEntry rDiv, MethodRefEntry rRatTrunc, MethodRefEntry rRatFloor, MethodRefEntry rRatCeil,
 			MethodRefEntry rRatRound, MethodRefEntry dblIsInfinite, MethodRefEntry dblIsFinite, ClassEntry longClass,
 			MethodRefEntry longValue, ClassEntry bigClass, MethodRefEntry biSignum, MethodRefEntry longValueOf,
-			TypeErrRefs typeErrRefs, StringEntry nonFiniteStr) {
+			TypeErrRefs typeErrRefs, StringEntry nonFiniteStr, DivZeroRefs divZero) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
 		c.instanceOf(doubleClass);
@@ -2947,7 +2978,6 @@ final class JvmNumericRuntimeBuilder {
 		c.aconst_null();
 		c.areturn();
 		c.labelBinding(ifFloat);
-		// A zero float divisor declines: (/ x 0.0) is an infinity here, not a signal.
 		c.aload(1);
 		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotFloatDivisor = c.newLabel();
@@ -2964,23 +2994,19 @@ final class JvmNumericRuntimeBuilder {
 		c.ifeq(ifNotInfiniteDivisor);
 		emitInfiniteDivisorQuotient(c, doubleClass, numDoubleValue, dblIsFinite, longClass, longValue, bigClass,
 				biSignum, longValueOf);
+		// A zero float divisor takes the exact route like an exact one: the dividend's
+		// own checks first, then _div's "Division by zero" (through _rat).
 		c.labelBinding(ifNotInfiniteDivisor);
-		c.dconst_0();
-		c.dcmpl();
-		MethodCode.Label ifNonZeroDivisor = c.newLabel();
-		c.ifne(ifNonZeroDivisor);
-		c.aconst_null();
-		c.areturn();
+		c.pop2();
 		c.labelBinding(ifNotFloatDivisor);
-		c.labelBinding(ifNonZeroDivisor);
 		c.aload(0);
 		c.invokestatic(rFrat);
 		c.astore(3);
 		c.aload(3);
 		MethodCode.Label ifDividendOk = c.newLabel();
 		c.ifnonnull(ifDividendOk);
-		// A NaN or an infinite float dividend over a finite nonzero divisor has a
-		// non-finite quotient: no integer to answer, so it signals -- the interpreter's
+		// A NaN or an infinite float dividend over a finite divisor (a zero included) has
+		// a non-finite quotient: no integer to answer, so it signals -- the interpreter's
 		// text. (A ratio dividend still declines.) The one-argument call site relies on
 		// this: its out-of-long-range arm calls here over a divisor of one and never
 		// sees a null.
@@ -2994,6 +3020,23 @@ final class JvmNumericRuntimeBuilder {
 		c.invokespecial(typeErrRefs.rteInit());
 		c.athrow();
 		c.labelBinding(ifRatioDividend);
+		// A ratio declines -- except over a zero float divisor, which the ordinary route
+		// would divide to an infinity.
+		c.aload(0);
+		c.instanceOf(ratArrClass);
+		MethodCode.Label ifDecline = c.newLabel();
+		c.ifeq(ifDecline);
+		c.aload(1);
+		c.instanceOf(doubleClass);
+		c.ifeq(ifDecline);
+		c.aload(1);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		c.dconst_0();
+		c.dcmpl();
+		c.ifne(ifDecline);
+		divZero.emitThrow(c);
+		c.labelBinding(ifDecline);
 		c.aconst_null();
 		c.areturn();
 		c.labelBinding(ifDividendOk);

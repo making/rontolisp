@@ -9272,7 +9272,7 @@ class LispEvaluatorTest {
 		// both. decode-float of an infinity and integer-decode-float/rationalize of a NaN
 		// never returned.
 		for (String form : List.of("(floor *inf*)", "(ceiling (- *inf*))", "(round *nan*)", "(truncate *nan*)",
-				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate 1.0 0.0)", "(floor *nan* 1.0)",
+				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate *nan* 0.0)", "(floor *nan* 1.0)",
 				"(funcall #'floor *inf*)")) {
 			assertThatThrownBy(() -> eval(nonFinite(form))).as(form)
 				.isInstanceOf(LispEvalException.class)

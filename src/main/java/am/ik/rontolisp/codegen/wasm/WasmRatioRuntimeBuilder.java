@@ -6,6 +6,8 @@ import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Builds WASM bytecode for the rational (ratio) runtime helpers. A ratio is a normalized
  * {@code TYPE_RATIO} struct whose numerator and denominator are exact integers in their
@@ -441,6 +443,37 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.UNREACHABLE);
 	}
 
+	// The float remainder with no value (locals 4 = |a|, 5 = |b|): a finite dividend over
+	// a zero divisor signals division-by-zero through _div_zero, anything else (a NaN or
+	// infinite dividend, a NaN divisor) the non-finite rounding -- floor's and
+	// truncate's conditions. nonFiniteMessage is non-null exactly where the module
+	// signals a division by zero (WasmLispCompiler's divZeroLanding: EH mode, a
+	// division operator reachable); elsewhere the operation traps, as an error does
+	// outside EH mode.
+	private static void emitUndefinedRemainder(WasmWriter w,
+			WasmLispCompiler.StringTable.@Nullable StringEntry nonFiniteMessage, boolean identityHash) {
+		if (nonFiniteMessage == null) {
+			w.write(Instruction.UNREACHABLE);
+			return;
+		}
+		// |a| - |a| is 0.0 for a finite dividend and NaN otherwise, so
+		// (|a| - |a|) + |b| == (|a| - |a|) holds exactly when the dividend is finite and
+		// the divisor a zero -- without the two 9-byte f64 constants.
+		getLocal(w, 4);
+		getLocal(w, 4);
+		w.write(Instruction.F64_SUB);
+		getLocal(w, 5);
+		w.write(Instruction.F64_ADD);
+		getLocal(w, 4);
+		getLocal(w, 4);
+		w.write(Instruction.F64_SUB);
+		w.write(Instruction.F64_EQ);
+		w.write(Instruction.IF, 0x40);
+		WasmRuntimeBuilder.emitDivisionByZero(w, true);
+		w.write(Instruction.END);
+		WasmRuntimeBuilder.emitMessageThrow(w, nonFiniteMessage, identityHash);
+	}
+
 	// _rat_rem/_rat_mod((ref null eq) a, (ref null eq) b) -> (ref null eq): the Common
 	// Lisp remainder (sign of the dividend) and modulo (sign of the divisor). Both are
 	// a - b*q with q = trunc(a/b) for rem and q = floor(a/b) for mod. A float operand
@@ -450,8 +483,10 @@ final class WasmRatioRuntimeBuilder {
 	// integers (any tier) go through _big_divrem / _big_mod, exact at any magnitude;
 	// otherwise the exact rational helpers compute a - b*(trunc|floor)(a/b). Mirrors the
 	// dispatch shape of buildRatBinaryBody so a float reaching mod/rem through a
-	// variable is handled.
-	static byte[] buildRatRemBody(boolean mod) {
+	// variable is handled. A float pair with no remainder signals as the floor/truncate
+	// it is the remainder of does (emitUndefinedRemainder).
+	static byte[] buildRatRemBody(boolean mod, WasmLispCompiler.StringTable.@Nullable StringEntry nonFiniteMessage,
+			boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -467,7 +502,8 @@ final class WasmRatioRuntimeBuilder {
 		setLocal(w, 2);
 		emitLocalToF64(w, 1);
 		setLocal(w, 3);
-		WasmFmodRuntimeBuilder.emitRemainder(w, mod, 2, 3, 4, 5, 6);
+		WasmFmodRuntimeBuilder.emitRemainder(w, mod, 2, 3, 4, 5, 6,
+				() -> emitUndefinedRemainder(w, nonFiniteMessage, identityHash));
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);

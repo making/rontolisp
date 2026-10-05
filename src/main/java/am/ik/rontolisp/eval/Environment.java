@@ -9053,9 +9053,25 @@ public final class Environment implements Scope {
 	 */
 	private static double integerQuotientZero(double a, double b, double r) {
 		if (r != 0.0) {
-			return r; // nonzero, or NaN
+			if (Double.isNaN(r)) {
+				throw undefinedFloatRemainder(a, b);
+			}
+			return r;
 		}
 		return a == 0.0 ? a - Math.copySign(0.0, b) : 0.0;
+	}
+
+	/**
+	 * The signal of a float {@code mod}/{@code rem} that has no value -- exactly where
+	 * the {@code floor}/{@code truncate} it is the remainder of has none, with the same
+	 * condition: a NaN or infinite dividend (or a NaN divisor) reports the non-finite
+	 * rounding, and a finite dividend over a zero divisor, exact or float, is a
+	 * {@code division-by-zero}. IEEE's NaN is not an answer here: the operation is
+	 * defined by an integer quotient, and no such quotient exists.
+	 */
+	private static LispEvalException undefinedFloatRemainder(double a, double b) {
+		return Double.isFinite(a) && b == 0.0 ? LispEvalException.divisionByZero()
+				: new LispEvalException(ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 	}
 
 	private static long nonZeroDivisor(long divisor) {

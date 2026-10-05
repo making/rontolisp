@@ -272,6 +272,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `float` answers a double, so `(float 1/3)` is `0.3333333333333333` (the oracle's Float prints
   `0.33333334`); a value past the float range still signals. `int` and `long` truncate and do not
   refuse a value out of range (the oracle: `integer overflow`, `Value out of range for long: ...`).
+- `mod` and `rem` of a NaN or infinite dividend throw an `ArithmeticException` (the oracle: a
+  `NumberFormatException`).
 - `vector-of` answers an ordinary vector: a later `conj` or `assoc` stores its value as
   given, where the oracle's keeps casting, and `:float` holds doubles.
 - `empty` of a list, a lazy seq or a seq answers `nil` (the oracle `()`, the empty-as-`nil` position

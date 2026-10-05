@@ -2022,14 +2022,14 @@ cases:
       (defvar *mre-inf* (/ 1.0 0.0))
       (print (list (mre-rem 1d18 7.0) (mre-rem 1d300 7.0) (mre-mod -1d300 7.0)))
       (print (list (mre-rem 3.0 *mre-inf*) (mre-mod 3.0 *mre-inf*) (mre-mod -3.0 *mre-inf*)))
-      (print (list (mre-mod 3.0 (- *mre-inf*)) (mre-rem -0.0 *mre-inf*) (mre-rem *mre-inf* 3.0)))
+      (print (list (mre-mod 3.0 (- *mre-inf*)) (mre-rem -0.0 *mre-inf*) (mre-rem -3.0 *mre-inf*)))
       (print (list (mre-rem 1d-300 4.9d-324) (mre-mod 1d30 3.0) (mre-rem 1d30 3.0)))
       (print (list (mre-mod -1.2345678d-296 1d-300) (mre-mod 4.9d-324 -0.1) (mre-mod -4.9d-324 0.1)))
       (print (list (rem 1d18 7.0) (mod -1d300 7.0) (mod 4.9d-324 -0.1)))
     expected: |
       (1.0 1.0 6.0)
       (3.0 3.0 Infinity)
-      (-Infinity -0.0 NaN)
+      (-Infinity -0.0 -3.0)
       (0.0 1.0 1.0)
       (3.219999999997487e-301 -0.1 0.1)
       (1.0 6.0 -0.1)
@@ -2127,7 +2127,7 @@ cases:
                    (nf-try (truncate *nf-nan*)) (nf-try (nf-fl *nf-inf*)) (nf-try (floor (/ 1.0 0.0)))))
       (print (list (nf-try (ffloor *nf-inf*)) (nf-try (fceiling *nf-nan*)) (nf-try (fround *nf-inf*))
                    (nf-try (ftruncate (- *nf-inf*)))))
-      (print (list (nf-try (floor *nf-inf* 2)) (nf-try (truncate 1.0 0.0)) (nf-try (nf-ro2 *nf-nan* 1.0))
+      (print (list (nf-try (floor *nf-inf* 2)) (nf-try (truncate *nf-nan* 0.0)) (nf-try (nf-ro2 *nf-nan* 1.0))
                    (nf-try (ffloor *nf-inf* 2.0)) (nf-try (floor *nf-inf* *nf-inf*))))
       (print (list (nf-try (funcall #'floor *nf-inf*)) (nf-try (mapcar #'fround (list 1.5 *nf-nan*)))
                    (nf-try (let ((nf-x *nf-inf*)) (declare (type double-float nf-x)) (round nf-x)))))
@@ -18928,10 +18928,11 @@ cases:
       TYPE-ERROR
   - name: division-by-zero-is-a-catchable-condition
     source: |
-      ;; A division by an exact zero through every integer and ratio path signals
-      ;; a CATCHABLE division-by-zero reporting "Division by zero" on every
-      ;; backend (on the wasm pair it trapped past every handler; mod and rem
-      ;; reported the host's "/ by zero" on the interpreter and the JVM).
+      ;; A division by an exact zero through every integer and ratio path, and the
+      ;; rounding family and mod/rem by any zero, signal a CATCHABLE
+      ;; division-by-zero reporting "Division by zero" on every backend; a NaN or
+      ;; infinite dividend reports the non-finite rounding first. Float / and expt
+      ;; stay IEEE.
       (defvar *ci-dz-zero* 0)
       (defvar *ci-dz-long* 10000000000)
       (defvar *ci-dz-wide* 100000000000000000000000)
@@ -18960,7 +18961,24 @@ cases:
       (print (ci-dz (lambda () (let ((a 7.5d0) (b *ci-dz-zero*)) (declare (double-float a)) (floor a b)))))
       (print (ci-dz (lambda () (floor 7.5 *ci-dz-fzero*))))
       (print (ci-dz (lambda () (floor 7 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (floor 1/2 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (let ((a 7.5d0) (b *ci-dz-fzero*)) (declare (double-float a b)) (floor a b)))))
       (print (ci-dz (lambda () (floor (/ 1.0 *ci-dz-fzero*) *ci-dz-zero*))))
+      (print (ci-dz (lambda () (floor (/ 1.0 *ci-dz-fzero*) *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (mod 7.5 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (rem -7.5 0))))
+      (print (ci-dz (lambda () (mod 0.0 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (mod 7.5 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (rem 7 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (mod 1/2 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (let ((a 7.5d0) (b *ci-dz-zero*)) (declare (double-float a)) (rem a b)))))
+      (print (ci-dz (lambda () (funcall #'mod 7.5 *ci-dz-fzero*))))
+      (print (ci-dz (lambda () (mod (/ 1.0 *ci-dz-fzero*) *ci-dz-zero*))))
+      (print (ci-dz (lambda () (rem (/ -1.0 *ci-dz-fzero*) 2.0))))
+      (print (ci-dz (lambda () (mod 7.5 (- (/ 1.0 *ci-dz-fzero*) (/ 1.0 *ci-dz-fzero*))))))
+      (print (ci-dz (lambda () (/ 1.5 *ci-dz-zero*))))
+      (print (ci-dz (lambda () (expt *ci-dz-zero* -1/2))))
+      (print (ci-dz (lambda () (expt *ci-dz-zero* -1.5))))
       (print (ci-dz (lambda () (mod 7 *ci-dz-zero*))))
       (print (ci-dz (lambda () (rem *ci-dz-long* *ci-dz-zero*))))
       (print (ci-dz (lambda () (mod *ci-dz-wide* *ci-dz-zero*))))
@@ -18988,9 +19006,26 @@ cases:
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+      (:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
+      (:DIVISION-BY-ZERO "Division by zero" T)
       (:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
       (:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
       (:OTHER SIMPLE-ERROR "rounding a non-finite float to an integer is undefined")
+      (:VALUE Infinity)
+      (:VALUE Infinity)
+      (:VALUE Infinity)
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)

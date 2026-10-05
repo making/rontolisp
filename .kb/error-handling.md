@@ -1206,11 +1206,12 @@ operator it serves:
 
 ## A division by zero signals division-by-zero
 **Invariant: a division by an exact zero -- `/`, the two-argument rounding family, `mod`/`rem`, at
-every integer tier and over a ratio, `expt` of zero to a negative power -- signals a CATCHABLE
-`division-by-zero` (an `arithmetic-error`) reporting `ClosRegistry.DIVISION_BY_ZERO_MESSAGE`
-(`Division by zero`), byte-identical on all four backends (wasm-GC: in EH mode).** A float
-operand stays IEEE (`(/ 1.0 0)` is infinity, `(mod 7.5 0)` NaN) everywhere, except that a finite float
-rounded by an exact zero signals (below). Pinned by
+every integer tier and over a ratio, `expt` of an exact zero to a negative integer power -- and the
+rounding family and `mod`/`rem` by ANY zero (exact or float) over a finite dividend, signal a
+CATCHABLE `division-by-zero` (an `arithmetic-error`) reporting `ClosRegistry.DIVISION_BY_ZERO_MESSAGE`
+(`Division by zero`), byte-identical on all four backends (wasm-GC: in EH mode).** `/` and `expt`
+with a float operand stay IEEE (`(/ 1.5 0)` is infinity, `(expt 0 -1/2)` too); see "Per operator"
+below. Pinned by
 `DivisionByZeroFixture` (`LispEvaluatorTest`/`JvmLispCompilerTest`/
 `WasmLispCompilerIntegrationTest#divisionByZeroIsACatchableCondition`, P1 and component),
 `ci-spec.yaml`'s `division-by-zero-is-a-catchable-condition` and `clojure-spec.yaml`'s
@@ -1244,24 +1245,72 @@ by `ehAnUncaughtDivisionByZeroReportsBeforeTrapping`.
   zero divisor in the two-argument rounding family (`(floor 7.5 0)`, `ceiling`/`truncate`/`round`,
   `ffloor` and twins) signals `division-by-zero`, like an integer or ratio dividend; it used to be
   `division-by-zero` on the JVM only and the non-finite-rounding `simple-error` (IEEE `7.5/0` =
-  infinity, then no integer) on the interpreter and both wasm-GC backends. Only an operation that
-  FAILED either way changed class; no value moved. SBCL signals `division-by-zero` for every one of
-  these; the two cuts that stay are deliberate and now pinned on all four backends
-  (`DivisionByZeroFixture`, `ci-spec.yaml`'s `division-by-zero-is-a-catchable-condition`):
-  - a zero FLOAT divisor (`(floor 7.5 0.0)`) keeps the non-finite-rounding `simple-error` -- float
-    division is IEEE by design, and `/`, `mod`, `rem` over a float dividend and an exact zero keep
-    their infinity / NaN values (`(/ 1.5 0)`, `(mod 7.5 0)`), which SBCL signals and rontolisp does
-    not;
-  - a NaN or infinite dividend keeps the non-finite-rounding `simple-error` even over an exact zero
-    (SBCL: `simple-error` for `(floor infinity 0)` too, measured), so the dividend's check comes
-    first on every backend.
-  Where: the interpreter's `ExactRounding.quotient` (before its zero-divisor decline); the JVM's
-  `_fdiv` already declined into `_div`, which signals; wasm-GC's `_f64_fdiv` at its zero-divisor
-  decline signals through `_div_zero` when the divisor is not a float and the module has the landing
-  (`divZeroLanding`; the parameter of `buildBody`), so a non-EH module keeps its bytes and its trap.
-- Not this invariant: `(expt 0 -1/2)` answers infinity on every backend where SBCL signals
-  `division-by-zero` (`(expt 0 -1)` signals); `/`, `mod`, `rem` with a float operand and an exact
-  zero stay IEEE.
+  infinity, then no integer) on the interpreter and both wasm-GC backends. A NaN or infinite
+  dividend keeps the non-finite-rounding `simple-error` even over a zero (SBCL: `simple-error` for
+  `(floor infinity 0)` too, measured), so the dividend's check comes first on every backend.
+
+### Per operator: where a zero signals and where IEEE answers (decided 2026-10-05)
+Measured 2026-10-05 with SBCL 2.2.9 default (float traps on) and traps masked
+(`sb-int:with-float-traps-masked`), ECL 21.2.1, ABCL 1.9.0, Clojure 1.12.6 and Gauche 0.9.15:
+
+| Form | SBCL default | SBCL masked | ECL | ABCL | Clojure | Gauche | rontolisp now |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `(/ 1.5 0)`, `(/ 1.5 0.0)` | DBZ, DBZ | inf, inf | DBZ, DBZ | inf, inf | ##Inf, ##Inf | +inf.0 | inf, inf |
+| `(expt 0 -1.5)`, `(expt 0 -1/2)` | DBZ | inf | DBZ | 0 (wrong) | `Math/pow` inf | +inf.0, error | inf |
+| `(expt 0.0 -1)` | DBZ | inf | DBZ | 0.0 (wrong) | -- | +inf.0 | inf |
+| `(mod 7.5 0)`, `(mod 7.5 0.0)` | DBZ | simple-error | DBZ | fp-overflow | ArithmeticException | error | DBZ |
+| `(floor 7.5 0.0)` | DBZ | simple-error | DBZ | fp-overflow | ArithmeticException | error | DBZ |
+| `(mod inf 2.0)`, `(mod inf 0)` | simple-error | simple-error | -- | fp-overflow | NumberFormatException | +nan.0 | simple-error |
+
+The signal in SBCL's default column is its FLOAT TRAP, not an exact-zero rule: masked, SBCL
+answers `(/ 1.5 0)` with infinity exactly as it answers `(/ 1.5 0.0)` (CLHS 12.1.4.1 contagion turns
+the exact zero into `0.0` first). No implementation measured draws an exact-versus-float line for
+`/`: each traps both (SBCL default, ECL) or neither (SBCL masked, ABCL, Clojure, Gauche). rontolisp's
+float environment is the non-trapping one (`(/ 1.5 0.0)`, overflow to infinity), so:
+
+- **`/` with a float operand: IEEE, kept.** Making only an exact zero signal would break contagion
+  equivalence and put the Clojure and Scheme frontends (which lower to CL `/`) out of line with both
+  oracles. `(/ 0.0 0)` is NaN. Typed double loops (`mandelbrot`'s `(/ (* 3.0d0 x) n)`) keep their
+  bare `ddiv` / `f64.div`.
+- **`expt` with a float result: IEEE, kept** -- `(expt 0 -1.5)`, `(expt 0 -1/2)` (a ratio power
+  computes in float), `(expt 0.0 -1)`. `(expt 0 -1)` (exact result) signals as before.
+- **The rounding family by a zero FLOAT: signals `division-by-zero`** over a finite dividend (any
+  real: `(floor 7 0.0)`, `(floor 1/2 0.0)` too); it used to report the non-finite rounding. Only a
+  failure changed class. Every implementation fails here.
+- **`mod`/`rem` by any zero, and of a NaN or infinite operand: signal as `floor`/`truncate` do**
+  (`division-by-zero` over a finite dividend; the non-finite-rounding `simple-error` for a NaN or
+  infinite dividend or a NaN divisor). They answered NaN -- IEEE `fmod` -- on all four backends,
+  which no implementation measured does (SBCL masked: `simple-error`; CLHS defines them as the
+  remainder of `floor`/`truncate`, which have no quotient there). An INFINITE divisor keeps its
+  value (`(mod -7.5 inf)` is inf: linalg-simd.md, "mod / rem"). `(mod 0.0 0)` is
+  `division-by-zero` where SBCL reports `floating-point-invalid-operation`, a class rontolisp does
+  not define (as `(floor 0.0 0)`). Clojure deviation (`doc/*/clojure/deviations.md`): `(mod ##Inf 2.0)`
+  is an `ArithmeticException` here, `NumberFormatException` in the oracle.
+
+Where: the interpreter's `Environment.integerQuotientZero` (`mod`/`rem`'s float arm, on the NaN
+result) and `ExactRounding.quotient` (any zero over `isFiniteReal`); the JVM's `_frem` (on a NaN
+result, behind one extra compare on the nonzero path; `_fmod` and the inline double emission both
+reach it -- moving the throws out of line or testing `|r| > 0` instead cost more bytes and no
+time) and `_fdiv` (a zero float divisor now takes the exact route, `_div` throwing, and the
+ratio-dividend decline checks it); wasm-GC's `_rat_rem`/`_rat_mod` float arm
+(`WasmFmodRuntimeBuilder.emitRemainder`'s undefined branch, `WasmRatioRuntimeBuilder
+.emitUndefinedRemainder`: `_div_zero`, else the `(nil . message)` payload `(error "...")` throws)
+and `_f64_fdiv` (any zero divisor; a ratio dividend over a zero float checked before its decline).
+Outside EH mode the wasm remainder TRAPS (`unreachable`) where it answered NaN; `--no-gc` keeps NaN
+(its own IEEE scalar tower, `(/ 1 0)` is infinity there). The non-finite message is interned LAST
+and only where `mod`/`rem`/`evenp`/`oddp` is spelled (`REMAINDER_OPERATORS`), so a module whose
+remainder helper is shaken keeps every other address.
+
+Size, measured 2026-10-05 (before -> after): `size-report` (all 18 rows) and `bench-report` P1 /
+`--optimize=size` / component byte-identical except `--optimize=off` hello/pi/dom -16 B and
+`matmul --optimize=size` -8 B (non-EH `_rat_rem`/`_rat_mod`: a NaN constant became `unreachable`);
+zlib `--optimize=off` +87 B, the others identical. An EH program taking a float `mod` +246 B P1 /
++252 B component on 10 KB (the message, the classification, `_div_zero` becoming reachable). JVM:
+every class keeping `_fdiv` +32 B (fib 15,075 -> 15,107; jar +10..+16 B, matmul/sort +35/+37 B);
+a program using float `mod` without other division (ConstantPool gains the two messages and
+exception classes) +133 B jar. Performance: bench-report mandelbrot/matmul/sort/bignum/fib/sieve
+unchanged within noise on JVM and P1; a loop of 200M float `mod`+`rem` on the JVM ~+7%
+(1.60 -> 1.73 s; the one NaN compare per call), P1 unchanged.
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of
