@@ -21243,6 +21243,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aRatioLiteralRoundsToItsExactQuotient() throws Exception {
+		// A ratio literal -- what (op (/ a b)) over two literals folds to -- goes
+		// straight
+		// to the rational rounding helper: both signs, every mode, past the long range.
+		assertThat(compileAndRun("""
+				(print (list (floor 7/2) (ceiling 7/2) (truncate 7/2) (round 7/2) (round 5/2)))
+				(print (list (floor -7/2) (ceiling -7/2) (truncate -7/2) (round -7/2) (round -5/2)))
+				(print (list (floor (/ 7 2)) (round (/ 1 3)) (ffloor (/ 7 2))))
+				(print (floor 340282366920938463463374607431768211457/18446744073709551616))
+				(print (ceiling -1/36893488147419103232))
+				""")).isEqualTo("""
+				(3 4 3 4 2)
+				(-4 -3 -3 -4 -2)
+				(3 0 3.0)
+				18446744073709551616
+				0""");
+	}
+
+	@Test
 	void theFloorFamilyQuotientIsExactPastTheLongRange() throws Exception {
 		// The quotient used to be computed as a double and narrowed into a long, so it
 		// clamped past 2^63 and the remainder derived from it came back equal to the

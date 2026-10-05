@@ -6,6 +6,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -19,7 +20,8 @@ import am.ik.wasm.Instruction;
  * {@code (op (/ a b))} shape -- which is also what the two-argument
  * {@code (truncate a b)} family lowers to -- fuses into {@code _big_fdiv} when both
  * operands are exact integers, so the division stays exact at any magnitude without
- * allocating the ratio intermediate.
+ * allocating the ratio intermediate; a ratio literal argument is that division with both
+ * operands known, and calls {@code _big_fdiv} directly.
  */
 final class WasmIntConvCompiler {
 
@@ -48,6 +50,18 @@ final class WasmIntConvCompiler {
 	private static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int f64RoundingOp, int ratioFunc,
 			int fdivMode) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 2 && args.get(1) instanceof LispRatio ratio) {
+			// A ratio literal -- what the literal fold leaves of (op (/ a b)) over two
+			// literal integers -- is the quotient of two exact integers the compiler
+			// already holds: _big_fdiv over them is the whole conversion, with no ratio
+			// built and no type dispatch.
+			WasmEmitHelper.compileExactIntegerLiteral(ratio.numerator(), ctx);
+			WasmEmitHelper.compileExactIntegerLiteral(ratio.denominator(), ctx);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(fdivMode);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_FDIV);
+			return;
+		}
 		int tmpSlot = ctx.allocTemp();
 		// (op (/ a b)): evaluate a and b once; two exact integers divide exactly
 		// through _big_fdiv, anything else recreates the plain (/ a b) value and

@@ -7,6 +7,7 @@ import java.util.List;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
@@ -45,6 +46,14 @@ final class JvmIntConvCompiler {
 	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
 			@Nullable MethodRefEntry mathMethod, String ratioOpKey, int mode) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 2 && args.get(1) instanceof LispRatio ratio) {
+			// A ratio literal -- what the literal fold leaves of (op (/ a b)) over two
+			// literal integers -- is known to be a ratio: the rational runtime helper is
+			// the whole conversion, with no type dispatch around it.
+			JvmEmitHelper.compileRatio(ratio, ctx);
+			ctx.body.invokestatic(ctx.numOp(ratioOpKey));
+			return;
+		}
 		ClassEntry bigClass = ctx.cp.classEntry("java/math/BigInteger");
 		int temp = ctx.allocTemp();
 		// (op (/ a b)) -- which is what both the single-value and the multiple-value

@@ -114,6 +114,74 @@ public final class FoldDifferential {
 		add(probes, "expt", "2", "10");
 		add(probes, "expt", "2", "100");
 		add(probes, "expt", "-3", "3");
+		// -- exact rational arithmetic -------------------------------------------
+		// A ratio is an argument and a result like an integer: normalized, with the
+		// sign on the numerator, demoted when the denominator reduces to one, and its
+		// components exact past the i64 range on every backend.
+		add(probes, "/", "7", "2");
+		add(probes, "/", "-7", "2");
+		add(probes, "/", "7", "-14");
+		add(probes, "/", "5");
+		add(probes, "/", "-5");
+		add(probes, "/", "1/2", "1/3");
+		add(probes, "/", "1/2", "2", "3");
+		add(probes, "/", "3000000000", "7");
+		add(probes, "/", "1", "36893488147419103232");
+		add(probes, "/", "340282366920938463463374607431768211457", "18446744073709551616");
+		add(probes, "+", "1/2", "1/3");
+		add(probes, "+", "1/2", "1/2");
+		add(probes, "+", "1/18446744073709551616", "1");
+		add(probes, "*", "2/3", "3");
+		add(probes, "*", "2/3", "3/7");
+		add(probes, "*", "1/3", "100000000000000000000000");
+		add(probes, "-", "1/2");
+		add(probes, "-", "1", "1/3", "1/6");
+		add(probes, "1+", "1/2");
+		add(probes, "1-", "-1/2");
+		add(probes, "abs", "-1/2");
+		add(probes, "signum", "-1/2");
+		add(probes, "signum", "7/2");
+		add(probes, "min", "1/2", "1/3");
+		add(probes, "max", "1", "3/2");
+		add(probes, "max", "1", "1/2");
+		add(probes, "mod", "7/2", "1");
+		add(probes, "mod", "-7/2", "1");
+		add(probes, "mod", "1", "-2/3");
+		add(probes, "rem", "-7/2", "1");
+		add(probes, "rem", "5/3", "1/2");
+		add(probes, "expt", "2", "-1");
+		add(probes, "expt", "2/3", "3");
+		add(probes, "expt", "-1/2", "-3");
+		add(probes, "expt", "1/2", "0");
+		add(probes, "expt", "1/2", "70");
+		add(probes, "expt", "3", "-45");
+		add(probes, "<", "1/3", "1/2");
+		add(probes, "<", "1/18446744073709551616", "1/18446744073709551615");
+		add(probes, "=", "1/2", "2/4");
+		add(probes, "=", "1/2", "1");
+		add(probes, "/=", "1/2", "1/3", "1/2");
+		add(probes, ">", "1/2", "1/3");
+		add(probes, "<=", "1/3", "1/3");
+		add(probes, ">=", "1/3", "1/2");
+		add(probes, "zerop", "1/2");
+		add(probes, "plusp", "-1/2");
+		add(probes, "minusp", "-1/2");
+		add(probes, "numerator", "3/4");
+		add(probes, "numerator", "-6/4");
+		add(probes, "numerator", "5");
+		add(probes, "denominator", "3/4");
+		add(probes, "denominator", "5");
+		add(probes, "denominator", "1/36893488147419103232");
+		// rational of a float is the exact value the double IS: a ratio over a power
+		// of two, or an integer when the double has no fraction.
+		add(probes, "rational", "1/2");
+		add(probes, "rational", "5");
+		add(probes, "rational", "0.5");
+		add(probes, "rational", "0.1");
+		add(probes, "rational", "-1.5");
+		add(probes, "rational", "1.0e10");
+		add(probes, "rational", "1.0e300");
+		add(probes, "rational", "4.9e-324");
 		// -- bitwise ------------------------------------------------------------
 		add(probes, "logand", "12", "10");
 		add(probes, "logand", "-1", "255");
@@ -203,6 +271,9 @@ public final class FoldDifferential {
 		add(probes, "prin1-to-string", "#\\a");
 		add(probes, "prin1-to-string", "42");
 		add(probes, "prin1-to-string", "3.14159");
+		add(probes, "princ-to-string", "1/3");
+		add(probes, "prin1-to-string", "-2/3");
+		add(probes, "prin1-to-string", "1/36893488147419103232");
 		// The expander's internal piece conversions: the same rendering as the two
 		// public names, folded to a PLAIN literal (a piece never reaches the program,
 		// so it needs no fresh copy), while the public names fold to the fresh-string
@@ -211,6 +282,7 @@ public final class FoldDifferential {
 		add(probes, "%princ-piece", "\"hi\"");
 		add(probes, "%princ-piece", "nil");
 		add(probes, "%princ-piece", "1.21");
+		add(probes, "%princ-piece", "-1/3");
 		add(probes, "%prin1-piece", "\"hi\"");
 		add(probes, "%prin1-piece", "#\\a");
 		// CL folds character by character, so no mapping changes the length -- and the

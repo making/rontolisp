@@ -31,21 +31,60 @@ Consumed by `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegra
 Preview 1 and `--component`) and ci-spec `pure-builtin-literal-fold`.
 
 ## In the table
-- Exact integer arithmetic `+ - * / 1+ 1- abs signum isqrt min max gcd lcm mod rem expt` (`/` only
-  when the quotient is an exact integer); bitwise `logand logior logxor lognot ash integer-length
-  logbitp`; comparison/predicates `= /= < > <= >= zerop plusp minusp evenp oddp`.
+- Exact rational arithmetic `+ - * / 1+ 1- abs signum min max mod rem expt numerator denominator
+  rational` over integers AND ratios (below); integer-only `isqrt gcd lcm`; bitwise `logand logior
+  logxor lognot ash integer-length logbitp`; comparison/predicates `= /= < > <= >= zerop plusp
+  minusp` (rational) and `evenp oddp` (integer).
 - Characters `char-code code-char char-upcase char-downcase char= char< char> char<= char>=` — a
   character is a Unicode CODE POINT on all four backends (`.kb/characters-code-points.md`); case
   CONVERSION is checksum-verified over `[0, 0x10FFFF]` minus surrogates against
   `java.lang.Character`, and the same sweep over `string-upcase`/`string-downcase` agrees.
 - Measurement `length char schar string= nth car first second third`.
 - String production: `symbol-name`, `%princ-piece`, `%prin1-piece` fold to plain literals; the
-  FRESH-STRING producers fold to `(%str-fresh "...")` (below).
+  FRESH-STRING producers fold to `(%str-fresh "...")` (below). The rendered types are
+  `WasmLiteralPrint`'s: string, integer, ratio, float, character, `nil`, `t`.
 - The packed literal table: `coerce` and `make-array`, ONLY into an `(unsigned-byte 8|16|32)`
   vector — ~11.8 bytes of wasm per element at run time where the packed vector is 4.
 
-Justification is per GROUP; the two deviations (`/`'s exact quotient, case-insensitive operators
-being OUT) carry their own sentences.
+Justification is per GROUP; the deviation (case-insensitive operators being OUT) carries its own
+sentence.
+
+## Ratios
+A ratio is an argument and a result like an integer: `(/ 7 2)` folds to `7/2`, `(+ 1/2 1/2)` to
+`1`, `(rational 0.1)` to `3602879701896397/36028797018963968`, `(expt 2 -1)` to `1/2`. Sound
+because every backend holds a ratio as a normalized pair of exact integers (`.kb/wasm-bignum.md`,
+"Ratios"); the folder computes over the same pairs (`PureBuiltinFolder.Rational`) and bounds EACH
+component at 4096 bits. `rational` of a float is `LispRatio.ofDouble`, the raw-bits value every
+backend computes. A zero divisor, `(expt 0 -1)` and a ratio where CL wants an integer (`gcd`,
+`evenp`, `isqrt`) decline; a ratio exponent or any float result is out.
+
+**The floor family over a folded ratio.** `(floor (/ 7 2))` becomes `(floor 7/2)`, which the
+`(op (/ a b))` fusion no longer recognizes. Both `IntConv` compilers therefore take a ratio
+LITERAL argument directly: WASM calls `_big_fdiv` over the two known components (byte-identical
+to `(floor 7 2)`, `WasmTreeShakerTest.aRatioLiteralRoundsWithoutTheGenericConversion`), the JVM
+calls the rational rounding helper with no type dispatch around it.
+
+Size, measured 2026-10-05 (`--optimize=default`, P1 / component / JVM `.jar`, before -> after):
+- Unaffected: every `size-report/` and `bench-report/` program byte-identical on all three
+  (none has literal ratio arithmetic).
+- `(print (/ 1 3))` 1,155 -> 350 / 2,302 -> 1,504 / 5,211 -> 3,777; `(+ 1/2 1/3)` 3,992 -> 350;
+  `(rational 0.1)` 3,887 -> 381; `(expt 2 -10)` 4,184 -> 353; `(< (/ 1 3) 1/2)` 3,053 -> 494;
+  `(princ-to-string (/ 1 3))` 7,515 -> 1,352. A folded ratio feeding a computed value still
+  shrinks on WASM (`(float (/ 1 3))` 6,872 -> 6,688; a `defparameter` of one 4,150 -> 3,975).
+- `(floor (/ 7 2))`: 3,911 -> 3,966 P1 and 6,114 -> 6,131 jar WITHOUT the IntConv branches;
+  3,911 -> 3,911 and 6,114 -> 4,217 with them.
+- The cost left: on the JVM a ratio literal is a `BigInteger[2]` over two pooled static fields,
+  ~34 B more than the `(/ 7 2)` call when the division runtime is kept anyway -- a folded ratio
+  bound to a variable and consumed by something that does not fold: `(multiple-value-list
+  (floor (/ 7 2)))` +42 B jar (-71 B P1), ci-spec `slice-c-rationalize` +54 B, `rounding-or-
+  decoding-an-infinity-or-a-nan-signals` +22 B. Not worth a second literal representation.
+- ci-spec corpus as one program: P1 6,662,675 -> 6,660,886, component 6,874,191 -> 6,872,342,
+  jar 1,498,496 -> 1,498,350. Per case: `fused-integer-expression-trees` -3,131 B P1,
+  `rational-exact-value` -956 / -680 jar, `rationals-common-lisp-ratios` -880 / -1,014.
+
+The literal rows of `rationals-common-lisp-ratios`, `ratio-mod-rem` and `rational-exact-value`
+now print folded constants. The RUNTIME ratio paths stay covered by `FoldDifferential`'s control
+column (every ratio probe again behind `%id`) and by those cases' `let`/`funcall` rows.
 
 ## The fresh-string producers fold to a per-evaluation copy
 `string-upcase`, `string-downcase`, `(concatenate 'string ...)` and `subseq` fold their VALUE, but
@@ -69,10 +108,6 @@ literal, the forgery returns. Pins:
 - **Float ARITHMETIC** — a float literal is fine as an ARGUMENT and the print family folds it
   (every backend prints the same Schubfach shortest decimal, `.kb/format.md`), but contagion, zero
   divisor and overflow-to-infinity are not pinned. Trigger: float rows in `FoldDifferential`.
-- **Every RATIO**, argument and result: `(/ 7 2)` declines, `(/ 100 5)` folds. The reason was the
-  WASM ratio tier's i32 components; the trigger fired 2026-10-03 (the components are exact
-  integers now, a ratio literal included, `.kb/wasm-bignum.md` "Ratios"), and folding ratios is
-  `.todo/c04`.
 - **Case-INSENSITIVE operators** (`char-equal`, `string-equal`, `alpha-char-p`, `alphanumericp`):
   ASCII-only on WASM, full-Unicode elsewhere.
 - **Any value with IDENTITY** (cons, general array, hash table, instance) — enforced as a property
