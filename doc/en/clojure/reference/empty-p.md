@@ -2,11 +2,10 @@
 
 `(empty? coll)`
 
-Answers whether `coll` is empty, table-, vector- and string-aware: `nil`, the false
-object, an empty map, set, vector or string are empty, and a lazy seq when it realizes
-to nothing (one element realizes). Answers `T`-or-false.
-
-Deviation: `(empty? false)` answers `true` here, where the oracle signals.
+Answers whether `coll` is empty, table-, vector- and string-aware: `nil`, an empty map,
+set, vector or string are empty, and a lazy seq when it realizes to nothing (one element
+realizes). Anything that is no collection (a keyword, `false`, a number) signals as `seq`
+does, `IllegalArgumentException` like the oracle. Answers `T`-or-false.
 
 ```clojure
 (println (empty? '()))    ; true

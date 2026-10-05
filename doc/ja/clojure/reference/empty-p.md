@@ -2,9 +2,7 @@
 
 `(empty? coll)`
 
-`coll` が空かどうかを返します。表・ベクター・文字列を認識します。`nil`、false オブジェクト、空のマップ・セット・ベクター・文字列が空で、lazy seq は何も realize されないとき空です（1要素だけ realize します）。`T` か false を返します。
-
-仕様との差異: `(empty? false)` はここでは `true` を返します。オラクルはシグナルを上げます。
+`coll` が空かどうかを返します。表・ベクター・文字列を認識します。`nil`、空のマップ・セット・ベクター・文字列が空で、lazy seq は何も realize されないとき空です（1要素だけ realize します）。コレクションでないもの（キーワード、`false`、数）は `seq` と同じくシグナルします。オラクルと同じ `IllegalArgumentException` です。`T` か false を返します。
 
 ```clojure
 (println (empty? '()))    ; true
