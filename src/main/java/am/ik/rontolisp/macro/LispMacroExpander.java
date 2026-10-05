@@ -25134,6 +25134,13 @@ public final class LispMacroExpander {
 		if (definesCloserMopFunction(program)) {
 			closRegistry.ensureMopClassesSeeded();
 		}
+		// java:java-exception is registered where a host call can be made (the
+		// interpreter with its java: functions, the JVM backend for a program naming a
+		// java: operator) and wherever the program names the class or its reader, before
+		// any type test over it expands.
+		if (program.stream().anyMatch(f -> usesAnySymbol(f, JAVA_EXCEPTION_NAMES))) {
+			closRegistry.ensureJavaExceptionSeeded();
+		}
 		// A find-class or class-of reference compiles to the generated metaobject
 		// runtime injected below; the MOP base classes must register BEFORE the walk so
 		// the emitted %obj-new tags, the typep tables and every dispatch answer see one
@@ -32446,6 +32453,13 @@ public final class LispMacroExpander {
 			// (expandInternInPackage, lowered with the call).
 			if (scan.packageErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
+			}
+			// And the java:java-exception of a java: member that threw, which a pad
+			// synthesizes from what _jfail recorded: registered exactly where a host
+			// call can be made.
+			String javaException = LispLayout.CLASS_TAG_PREFIX + ClosRegistry.JAVA_EXCEPTION_CLASS_NAME;
+			if (closRegistry.findLayoutByTag(javaException) != null) {
+				scan.tags.add(javaException);
 			}
 		}
 		// A signalling read builds its end-of-file during the expression expansion
@@ -45408,6 +45422,36 @@ public final class LispMacroExpander {
 				collectSymbolNames(cell.cdr(), names);
 			}
 		}
+	}
+
+	/**
+	 * The names whose presence registers {@code java:java-exception} on every backend:
+	 * the class and its reader.
+	 */
+	private static final java.util.Set<String> JAVA_EXCEPTION_NAMES = java.util.Set
+		.of(LispNames.JAVA_EXCEPTION_QUALIFIED, LispNames.JAVA_EXCEPTION_CAUSE_QUALIFIED);
+
+	/**
+	 * Whether the form mentions any of the symbol names, in one walk.
+	 * @param form the form
+	 * @param names the canonical symbol names
+	 * @return {@code true} when one occurs
+	 */
+	private static boolean usesAnySymbol(LispVal form, java.util.Set<String> names) {
+		if (form instanceof LispSymbol sym) {
+			return names.contains(sym.name());
+		}
+		if (form instanceof LispCons cons) {
+			for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+				if (usesAnySymbol(cell.car(), names)) {
+					return true;
+				}
+				if (!(cell.cdr() instanceof LispCons) && usesAnySymbol(cell.cdr(), names)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static boolean usesSymbol(LispVal form, String name) {

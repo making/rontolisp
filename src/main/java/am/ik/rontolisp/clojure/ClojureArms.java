@@ -46,6 +46,36 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ClojureArms {
 
+	/**
+	 * The host-exception family's test of a host {@code Throwable}: what {@code throw},
+	 * {@code ex-cause} and a cause argument take as the host's own exception.
+	 */
+	static final String HOST_THROWABLE_P = "RONTOLISP::%CLOJURE-HOST-THROWABLE-P";
+
+	/**
+	 * The host-exception family's test of a condition standing for a host exception alone
+	 * (a {@code java:java-exception}: a {@code java:} member that threw, a host
+	 * {@code Throwable} thrown), which a catch takes by that exception's class.
+	 */
+	static final String HOST_FAILURE_P = "RONTOLISP::%CLOJURE-HOST-FAILURE-P";
+
+	/**
+	 * The host-exception family's test of an instance (a condition above all), which the
+	 * host arms count as a Lisp value: a {@code java:} call handed one would take the
+	 * host exception it may stand for.
+	 */
+	static final String LISP_INSTANCE_P = "RONTOLISP::%CLOJURE-LISP-INSTANCE-P";
+
+	/**
+	 * Whether a family's arms fold where the host is not (wasm), whatever the program
+	 * names: only the host makes a value of it.
+	 * @param family the family
+	 * @return {@code true} when only the host can make one
+	 */
+	public static boolean needsHost(Family family) {
+		return family == Family.HOST_EXCEPTION;
+	}
+
 	private ClojureArms() {
 	}
 
@@ -207,6 +237,23 @@ public final class ClojureArms {
 				Set.of(ClojureUpdateLowering.HOST_SELECT_KEYS, ClojureUpdateLowering.HOST_TABLE),
 				Map.of("RONTOLISP::%CLOJURE-HOST-NUMBER-P", "NUMBERP", "RONTOLISP::%CLOJURE-HOST-CHAR-SEQUENCE-P",
 						"STRINGP"),
+				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of()),
+
+		/**
+		 * A host exception: a host {@code Throwable} ({@link #HOST_THROWABLE_P}) -- which
+		 * {@code throw} signals as itself, {@code ex-cause} answers the cause of and a
+		 * cause argument keeps -- and the {@code java:java-exception} standing for one
+		 * ({@link #HOST_FAILURE_P}: a {@code java:} member that threw, a host
+		 * {@code Throwable} thrown), which a catch takes by that exception's class and
+		 * binds as the exception. Only a {@code java:} operator makes one, and only where
+		 * the host is: a program compiled for wasm, where {@code java:} is a call-time
+		 * error, has the family's arms folded like a program naming no {@code java:}
+		 * operator ({@code eval/ClojureLibrary}), so it compiles to the bytes it did
+		 * before host exceptions crossed the boundary. {@link #LISP_INSTANCE_P} keeps a
+		 * condition off the host arms' {@code java:} calls, which would hand it over as
+		 * the host exception it stands for.
+		 */
+		HOST_EXCEPTION("host-exception", Set.of(HOST_THROWABLE_P, HOST_FAILURE_P, LISP_INSTANCE_P), Set.of(), Map.of(),
 				Set.copyOf(LispNames.JAVA_OPERATORS_QUALIFIED), Set.of());
 
 		private final String label;

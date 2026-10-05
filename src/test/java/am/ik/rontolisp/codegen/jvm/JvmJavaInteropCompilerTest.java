@@ -680,6 +680,14 @@ class JvmJavaInteropCompilerTest {
 			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
 	}
 
+	// What the member throws is caught as a java:java-exception carrying it, and a
+	// caught one passed to a member is that throwable again, as on the interpreter.
+	@Test
+	void aFailedCallSignalsAJavaExceptionCarryingWhatTheMemberThrew() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_EXCEPTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EXCEPTION_OUTPUT);
+	}
+
 	// A function value passed where an interface is expected becomes the interface's
 	// generated proxy class, as a java:proxy of it: nothing reflects, and the class
 	// travels beside the program.

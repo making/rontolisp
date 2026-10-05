@@ -18,7 +18,9 @@ error an `ArithmeticException`, a wrong argument count a `clojure.lang.ArityExce
 open a `java.io.FileNotFoundException`. A refusal of the runtime is taken by the class the
 oracle throws for the same call (`(first 5)` an `IllegalArgumentException`, a failed `assert`
 an `AssertionError`); an error naming no class by any catch but `clojure.lang.ExceptionInfo`'s
-([Deviations](../deviations.md)). The caught
+([Deviations](../deviations.md)). On the interpreter and the JVM, an exception a Java member
+throws is the host's own, as in the oracle: a catch takes it by its class and binds that
+object. The caught
 exception is what `ex-message`/`ex-data`/`ex-cause`, `.getMessage`/`.getCause` and `str` read.
 
 ```clojure
@@ -26,4 +28,5 @@ exception is what `ex-message`/`ex-data`/`ex-cause`, `.getMessage`/`.getCause` a
 (println (try (throw (IllegalStateException. "bad")) (catch IllegalArgumentException e :iae) (catch IllegalStateException e :ise))) ; :ise
 (println (try (+ 1 "a") (catch ArithmeticException e :arith) (catch ClassCastException e :cce))) ; :cce
 (println (try (try (throw (ex-info "m" {})) (catch IllegalArgumentException e :iae)) (catch clojure.lang.ExceptionInfo e (ex-message e)))) ; m
+(println (try (Integer/parseInt "x") (catch NumberFormatException e (.getMessage e)))) ; For input string: "x"
 ```

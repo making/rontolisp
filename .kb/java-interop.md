@@ -237,8 +237,9 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   it was not chosen for (a13 converted it when convertible and re-derived the varargs packing --
   both gone). X is `print` / the program's `_lispToString`, so the texts agree for every value.
   Then the member is called with the packing the resolution chose; what it throws is `error
-  calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...` --
-  unless a function called back from Java raised it ("What a callback raises", below).
+  calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...`, a
+  `java:java-exception` carrying the throwable ("What a member throws", below) -- unless a
+  function called back from Java raised it ("What a callback raises", below).
 - Variable types: `compiler/JavaDeclarations` rewrites references to a typed variable in java:
   receiver/argument positions into `(the <spec> v)` -- the ONE scope walk (special forms
   structurally; built-in and user macros expanded, once per walk and cached, only to learn what
@@ -682,6 +683,39 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `ShippedBridgeNativeImageE2eTest` (the agent-config program binds `_jsig`/`_jfail`; the
   `--java-static` one needs no configuration for them); user doc `guides/java-interop.md`,
   "Errors and non-local exits".
+
+## What a member throws: `java:java-exception`
+
+**A failed call signals `java:java-exception`, a `simple-error` (report `error calling C.m:
+<throwable>`, as before) whose slot 2 (`%JAVA-EXCEPTION-CAUSE`) holds the throwable;
+`java:java-exception-cause` (prelude) answers it.** Handed back to a member -- an argument of a
+dispatched or run-time site, the receiver of a run-time `java:call` -- one is that throwable.
+
+- The class is seeded on demand (`ClosRegistry.ensureJavaExceptionSeeded`, never in
+  `CONDITION_SEEDS`: a registered class joins every `error` typep table): by the interpreter in
+  `registerJava`, by the JVM backend for a program naming a `java:` operator, by
+  `expandTopLevelDefinitions` for one naming the class or its reader. Never for wasm otherwise,
+  so a wasm program is byte-identical.
+- Interpreter: `JavaInterop.fail` throws `LispEvalException.ofClass(JAVA_EXCEPTION)` with the
+  throwable as its Java cause; `synthesizeCondition` (every landing and seam) builds the instance.
+- JVM: `_jfail` records the throwable under the `RuntimeException` it makes in `_jexMap`, a
+  `Collections.synchronizedMap` over a `WeakHashMap` (one per class: the record follows the
+  exception across an await or a join); `_hcSynth`'s first arm builds the instance from it.
+  Both exist only where a `java:` program has a landing. Not the exception's cause: the default
+  handler would print the cause's frames under the one-line uncaught report.
+- Conversion back (`JavaInterop.hostArguments`/`hostException`, registry-free: slot 2's name;
+  JVM `_jexc`, an outlined Lisp body called at each unknown-kind argument of a dispatched site,
+  each argument of a bridged one and a bridged receiver): slot 2 holds the throwable, or a
+  function building it, which is called with the condition -- the protocol an exception of the
+  Clojure runtime uses (`.kb/clojure-frontend.md`, "Host exceptions"); `java:java-exception-cause`
+  reads it the same way. `_jexc` exists only where a condition can be held
+  (`routesConditionReports`) and the class is registered.
+- Cost, JVM: a caught failure +1.3 us (200k `handler-case` iterations 0.69 -> 0.93 s; the weak
+  record alone 0.2-0.8 us); a CL `java:` program with a handler-case +0.3-0.5 KB of class.
+- Pins: `JavaInteropTest` / `JvmJavaInteropCompilerTest#aFailedCallSignalsAJavaExceptionCarryingWhatTheMemberThrew`
+  over `testsupport/JavaInteropPrograms.HOST_EXCEPTION_PROGRAM`,
+  `ClojureProjectNamespacesTest#aClojureExceptionCaughtInCommonLispCarriesItsHostException`; user doc
+  `guides/java-interop.md`, "Errors and non-local exits", `reference/functions/java-exception-cause.md`.
 
 ## Tests / docs
 `JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),

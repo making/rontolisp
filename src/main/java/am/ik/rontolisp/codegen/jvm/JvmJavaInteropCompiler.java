@@ -1,17 +1,24 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaSite;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the seven {@code java:} interop functions ({@code java:new},
@@ -114,7 +121,7 @@ final class JvmJavaInteropCompiler {
 		switch (member) {
 			case LispNames.JAVA_NEW -> {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				compileRestArray(args, 2, ctx, className);
+				compileArgumentArray(args, 2, ctx, className);
 				emitBridgeCall(ctx, ops, "new");
 			}
 			case LispNames.JAVA_CALL -> {
@@ -122,14 +129,16 @@ final class JvmJavaInteropCompiler {
 				// The receiver may itself be a packed array ((java:call arr "clone")),
 				// and Java reads it raw: materialize it like every other argument.
 				emitMaterialize(ctx);
+				// A condition standing for a host exception is called as that exception.
+				emitHostException(ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-				compileRestArray(args, 3, ctx, className);
+				compileArgumentArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "call");
 			}
 			case LispNames.JAVA_STATIC -> {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-				compileRestArray(args, 3, ctx, className);
+				compileArgumentArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "static");
 			}
 			case LispNames.JAVA_FIELD -> {
@@ -262,6 +271,12 @@ final class JvmJavaInteropCompiler {
 			if (i >= firstArgument && site.arguments().get(i - firstArgument).mayBeString()) {
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
+			if (i >= firstArgument) {
+				JavaSite.Argument argument = site.arguments().get(i - firstArgument);
+				if (!argument.known() && argument.bound() == null) {
+					emitHostException(ctx, className);
+				}
+			}
 			if (packed) {
 				ctx.body.aastore();
 			}
@@ -293,8 +308,98 @@ final class JvmJavaInteropCompiler {
 		}
 	}
 
+	/**
+	 * Replaces the value on top of the stack -- an argument of a kind the site does not
+	 * know -- with the host exception it stands for when it is a
+	 * {@code java:java-exception} ({@code _jexc}), as the interpreter's
+	 * {@code JavaInterop} hands a member such an argument; nothing where the program can
+	 * hold no such condition.
+	 */
+	private static void emitHostException(JvmLispCompiler.Ctx ctx, String className) {
+		MethodRefEntry helper = hostExceptionArgument(ctx, className);
+		if (helper != null) {
+			ctx.body.invokestatic(helper);
+		}
+	}
+
+	private static final String HOST_EXCEPTION_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * {@code _jexc}, built on first use from the Lisp form below over its one parameter:
+	 * a {@code java:java-exception}'s cause slot holds the host exception, or a function
+	 * building it, which keeps what it built, and anything else is the value itself. Null
+	 * where no such condition can reach program code: the class is registered only in a
+	 * program that can make a host call, and only one that can hold a condition hands one
+	 * to a member.
+	 */
+	private static @Nullable MethodRefEntry hostExceptionArgument(JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		if (channel.javaExceptionArgument != null) {
+			return channel.javaExceptionArgument;
+		}
+		if (!ctx.closRegistry.routesConditionReports() || ctx.closRegistry
+			.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.JAVA_EXCEPTION_CLASS_NAME) == null) {
+			return null;
+		}
+		String methodName = "_jexc";
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(HOST_EXCEPTION_DESC);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, HOST_EXCEPTION_DESC);
+		channel.javaExceptionArgument = ref;
+		JvmLispCompiler.Ctx body = ctx.ctxBuilder.build();
+		body.evalStoreRef = ctx.evalStoreRef;
+		body.nextLocal = 1;
+		body.maxLocals = 1;
+		String value = "__jexc_value$0";
+		body.locals.put(value, 0);
+		JvmExprCompiler.compileExpr(hostExceptionForm(new LispSymbol(value)), body, className);
+		body.body.areturn();
+		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, body));
+		return ref;
+	}
+
+	/**
+	 * The body of {@code _jexc} over its parameter:
+	 * {@code (if (typep x 'java:java-exception) (let ((held (%obj-ref x 2))) (if (functionp held) (funcall held x) (if held held x))) x)}.
+	 */
+	private static LispVal hostExceptionForm(LispSymbol x) {
+		LispSymbol held = new LispSymbol("%JEXC-HELD");
+		LispVal isException = list(sym(LispNames.TYPEP), x,
+				list(sym(LispNames.QUOTE), sym(LispNames.JAVA_EXCEPTION_QUALIFIED)));
+		LispVal read = list(sym(LispNames.OBJ_REF), x, new LispInteger(ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX));
+		LispVal answer = list(sym(LispNames.IF), list(sym(LispNames.FUNCTIONP), held),
+				list(sym(LispNames.FUNCALL), held, x), list(sym(LispNames.IF), held, held, x));
+		return list(sym(LispNames.IF), isException, list(sym(LispNames.LET), list(list(held, read)), answer), x);
+	}
+
+	private static LispSymbol sym(String name) {
+		return new LispSymbol(name);
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			out = new LispCons(items[i], out);
+		}
+		return out;
+	}
+
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
+		compileRestArray(args, from, ctx, className, false);
+	}
+
+	/**
+	 * {@link #compileRestArray} over a member's arguments, which the bridge resolves when
+	 * the call runs: each may be a condition standing for a host exception
+	 * ({@link #emitHostException}).
+	 */
+	private static void compileArgumentArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
+		compileRestArray(args, from, ctx, className, true);
+	}
+
+	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className,
+			boolean memberArguments) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
 		ctx.body.anewarray(ctx.objectClass);
 		for (int i = from; i < args.size(); i++) {
@@ -302,6 +407,9 @@ final class JvmJavaInteropCompiler {
 			JvmEmitHelper.emitIntConst(ctx, i - from);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			emitMaterialize(ctx);
+			if (memberArguments) {
+				emitHostException(ctx, className);
+			}
 			ctx.body.aastore();
 		}
 	}

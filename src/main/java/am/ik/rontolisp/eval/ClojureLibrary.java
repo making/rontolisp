@@ -142,6 +142,18 @@ public final class ClojureLibrary {
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, true);
+	}
+
+	/**
+	 * {@link #process(List)} for a target: where the host is not (wasm, where a
+	 * {@code java:} call is a call-time error) a family only the host makes a value of
+	 * ({@link ClojureArms#needsHost}) has its arms stripped whatever the program names.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param hostTarget whether the target is one where the host is (the JVM)
+	 * @return the program with the library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, boolean hostTarget) {
 		if (!referencesAny(program)) {
 			return program;
 		}
@@ -150,10 +162,10 @@ public final class ClojureLibrary {
 		Set<ClojureArms.Family> made = EnumSet.noneOf(ClojureArms.Family.class);
 		for (ClojureArms.Family family : ClojureArms.Family.values()) {
 			ClojureArms.Scan scan = ClojureArms.scan(body, family);
-			if (scan.builds()) {
+			if (scan.builds() && (hostTarget || !ClojureArms.needsHost(family))) {
 				made.add(family);
 			}
-			else if (scan.strips()) {
+			else if (scan.arms()) {
 				body = ClojureArms.strip(body, family);
 			}
 		}

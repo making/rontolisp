@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
@@ -685,6 +686,10 @@ final class JvmHandlerCaseCompiler {
 			JvmLispCompiler.Ctx ctx, String className) {
 		List<String> classes = LispMacroExpander.rawFailureConditionClasses();
 		MethodCode.Label joins = ctx.body.newLabel();
+		if (ctx.javaSites != null && ctx.closRegistry
+			.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.JAVA_EXCEPTION_CLASS_NAME) != null) {
+			emitJavaExceptionArm(excSlot, condSlot, msgVar, ctx, className, joins);
+		}
 		for (int i = 0; i < classes.size(); i++) {
 			MethodCode.Label skip = ctx.body.newLabel();
 			emitRawFailureTest(i, excSlot, rawSlot, ctx, skip);
@@ -710,6 +715,38 @@ final class JvmHandlerCaseCompiler {
 		JvmExprCompiler.compileExpr(instance, ctx, className);
 		ctx.body.astore(condSlot);
 		ctx.body.labelBinding(joins);
+	}
+
+	/**
+	 * Emits the arm of a {@code java:} member that threw, ahead of the raw-failure arms:
+	 * the throwable {@code _jfail} recorded for the caught exception ({@code _jexMap}),
+	 * when there is one, makes the instance a {@code java:java-exception} carrying it --
+	 * the interpreter's {@code JavaInterop.fail}, synthesized at its landing alike.
+	 */
+	private static void emitJavaExceptionArm(int excSlot, int condSlot, LispSymbol msgVar, JvmLispCompiler.Ctx ctx,
+			String className, MethodCode.Label joins) {
+		FieldRefEntry map = ctx.conditionChannel.ensureJavaExceptions(ctx.cp, className);
+		int causeSlot = ctx.allocTemp();
+		MethodCode.Label skip = ctx.body.newLabel();
+		ctx.body.getstatic(map).aload(excSlot);
+		ctx.body.invokeinterface(
+				ctx.cp.interfaceMethodRef("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		ctx.body.astore(causeSlot);
+		ctx.body.aload(causeSlot).ifnull(skip);
+		String causeVar = "__hc_jex$" + causeSlot;
+		ctx.locals.put(causeVar, causeSlot);
+		try {
+			JvmExprCompiler.compileExpr(
+					LispMacroExpander.reportingConditionForm(ctx.closRegistry, ClosRegistry.JAVA_EXCEPTION_CLASS_NAME,
+							msgVar, java.util.Map.of(ClosRegistry.JAVA_EXCEPTION_CAUSE_SLOT, new LispSymbol(causeVar))),
+					ctx, className);
+		}
+		finally {
+			ctx.locals.remove(causeVar);
+		}
+		ctx.body.astore(condSlot);
+		ctx.body.goto_(joins);
+		ctx.body.labelBinding(skip);
 	}
 
 	/**

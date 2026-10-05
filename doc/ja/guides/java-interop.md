@@ -306,12 +306,29 @@ callable は、名前を挙げた各メソッドに対して `(callable this "me
 
 ## エラーと非局所脱出
 
-Java のメンバが投げた例外は、メンバと例外を示す Lisp のエラーとして通知されます。
+Java のメンバが投げた例外は `java:java-exception` として通知されます。これはメンバと例外を示す `simple-error` で、例外そのものを保持しており、`java:java-exception-cause` がそれを返します。
 
 ```lisp
 (handler-case (java:static "java.lang.Integer" "parseInt" "x")
   (error (e) (format nil "~a" e)))
 ; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:java-exception-cause e) "getMessage")))
+; => "For input string: \"x\""
+```
+
+`java:java-exception` を Java に渡すと、メンバの引数としても、実行前にクラスの分からない `java:call` のレシーバとしても、保持している例外として扱われます。
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:call (java:new "java.lang.RuntimeException" "wrapped" e) "getCause")
+               "getMessage")))
+; => "For input string: \"x\""
 ```
 
 Java からコールバックとして呼ばれた rontolisp の関数が通知したコンディションや、その関数から抜ける `return-from`・`throw`・`go` は、Lisp のフレームを抜けるときと同じく途中の Java のフレームをそのまま伝播し、Java を呼び出したコードに到達します。

@@ -17,6 +17,7 @@ import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -24,6 +25,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
@@ -150,7 +152,8 @@ final class JavaInterop {
 
 	}
 
-	static LispVal newInstance(String classDesignator, List<LispVal> args, Caller caller) {
+	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
+		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean tagged = isTagged(classDesignator);
 		String name = tagged ? member(classDesignator).name() : classDesignator;
 		ReflectiveJavaClasses.Type type = loadClass(name);
@@ -173,7 +176,9 @@ final class JavaInterop {
 	}
 
 	static LispVal callInstance(LispVal target, String methodName, List<LispVal> args, Caller caller) {
-		Object receiver = LispJavaObject.receiverObject(target);
+		// A condition standing for a host exception is called as that exception, as a
+		// member takes it; the refusal shows the value handed in.
+		Object receiver = LispJavaObject.receiverObject(hostException(target, caller));
 		if (receiver == null) {
 			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
 		}
@@ -187,7 +192,8 @@ final class JavaInterop {
 	// A static call chooses among the static methods only (JavaOverloads.staticMethods),
 	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
-			List<LispVal> args, Caller caller) {
+			List<LispVal> rawArgs, Caller caller) {
+		List<LispVal> args = hostArguments(rawArgs, caller);
 		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
 		// choice is found by the designator as written.
@@ -451,14 +457,17 @@ final class JavaInterop {
 						+ ", got " + args.get(i).print());
 			}
 		}
+		// What the checks above show is the value the site was handed; what the member
+		// takes, a condition standing for a host exception as that exception.
+		List<LispVal> taken = hostArguments(args, caller);
 		JavaOverloads.Overload overload;
 		if (site.dispatched()) {
-			overload = dispatch(site, args, caller);
+			overload = dispatch(site, taken, caller);
 			if (overload == null) {
 				String designator = java.util.Objects.requireNonNull(site.designator());
 				throw new LispEvalException(site.operator() == JavaSite.Operator.NEW
-						? "No matching constructor for " + designator + " with " + args.size() + " argument(s)"
-						: "No matching method " + className + "." + designator + " with " + args.size()
+						? "No matching constructor for " + designator + " with " + taken.size() + " argument(s)"
+						: "No matching method " + className + "." + designator + " with " + taken.size()
 								+ " argument(s)");
 			}
 		}
@@ -466,7 +475,7 @@ final class JavaInterop {
 			overload = new JavaOverloads.Overload(java.util.Objects.requireNonNull(site.executable()), site.packed());
 		}
 		JavaExecutable executable = overload.executable();
-		@Nullable Object[] javaArgs = marshalArguments(overload, args, caller);
+		@Nullable Object[] javaArgs = marshalArguments(overload, taken, caller);
 		try {
 			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
 			if (reflected instanceof Constructor<?> constructor) {
@@ -1243,7 +1252,8 @@ final class JavaInterop {
 
 	// What a failed Java call throws: what a function called back from Java raised -- an
 	// exit, a condition, uiop:quit -- on to the Lisp code that made the call, as it is;
-	// anything else is the error calling the member.
+	// anything else is the error calling the member, a java:java-exception carrying
+	// what the member threw (the landing that catches it builds the condition from it).
 	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
 		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
 		if (passedOn(cause)) {
@@ -1254,7 +1264,46 @@ final class JavaInterop {
 				throw error;
 			}
 		}
-		return new LispEvalException("error " + what + ": " + cause);
+		LispEvalException failure = LispEvalException.ofClass(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME,
+				"error " + what + ": " + cause);
+		failure.initCause(cause);
+		return failure;
+	}
+
+	// The arguments a member takes: each condition standing for a host exception -- a
+	// java:java-exception, whose cause slot holds the exception or a function building
+	// it -- as that exception; the list itself when none is one.
+	private static List<LispVal> hostArguments(List<LispVal> args, Caller caller) {
+		List<LispVal> out = null;
+		for (int i = 0; i < args.size(); i++) {
+			LispVal converted = hostException(args.get(i), caller);
+			if (converted != args.get(i)) {
+				if (out == null) {
+					out = new ArrayList<>(args);
+				}
+				out.set(i, converted);
+			}
+		}
+		return out == null ? args : out;
+	}
+
+	// The host exception a java:java-exception stands for, the value itself otherwise.
+	// The class is the cause slot's name at its index: every subclass lays its slots
+	// out after it, so no registry is needed to tell.
+	private static LispVal hostException(LispVal value, Caller caller) {
+		if (!(value instanceof LispInstance instance)) {
+			return value;
+		}
+		List<String> slots = instance.layout().slotNames();
+		if (slots.size() <= ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX
+				|| !ClosRegistry.JAVA_EXCEPTION_CAUSE_SLOT.equals(slots.get(ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX))) {
+			return value;
+		}
+		LispVal held = instance.slot(ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX);
+		if (held instanceof LispLambda || held instanceof LispFunction) {
+			held = caller.call(held, List.of(value));
+		}
+		return held instanceof LispJavaObject ? held : value;
 	}
 
 	// Records a throwable leaving a function called back from Java; answers it.

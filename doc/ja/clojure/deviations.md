@@ -102,8 +102,8 @@
   オラクルが投げるクラスとして実行時エラーを捕捉し、Clojure ランタイム自身の拒否は同じ呼び出しで
   オラクルが投げるクラスとして捕捉します（`(first 5)` は `IllegalArgumentException`、失敗した
   `assert` は `Exception` の catch が捕捉しない `AssertionError`）。クラスを示さないエラー --
-  オラクルが受け付ける構文の拒否（正規表現の先読み、`(partition 0 coll)`）、失敗したホスト呼び出し
-  -- は、`clojure.lang.ExceptionInfo` 以外のどのクラスの catch でも最初のものが捕捉します。
+  オラクルが受け付ける構文の拒否（正規表現の先読み、`(partition 0 coll)`）-- は、
+  `clojure.lang.ExceptionInfo` 以外のどのクラスの catch でも最初のものが捕捉します。
   下位の関数が先に拒否する誤用は、その関数のクラスになります。`(shuffle 5)` は `seq` の
   `IllegalArgumentException` で、オラクルは `java.util.Collection` へのキャストで失敗します。範囲外の添字は `IndexOutOfBoundsException` で、
   そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException`、
@@ -116,12 +116,19 @@
   NUMBER` で、オラクルでは `NullPointerException` の文言）、`str` はオラクルのクラス名の
   接頭辞を持たないその report です。throwable の構築が例外になるのは、メッセージと
   cause 以外に何も持たないクラスだけです。独自のメンバーを持つクラス
-  （`java.net.URISyntaxException`）は throw されるまでホストオブジェクトのままです。
-  例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
+  （`java.net.URISyntaxException`）はホストオブジェクトのままです。インタプリタと JVM では、
+  Java のメンバが投げた例外と throw されたホストオブジェクトはオラクルと同じくホスト自身の
+  ものです。catch はそのクラスで捕捉し、そのオブジェクト自体を束縛します。
+  プログラムが作った例外の `class` はクラス名をキーワードで返し（`:java.lang.Exception`。オラクルはホストの
   クラスを返します）、クラスを示さないエラーには `:java.lang.RuntimeException` を返します。`.printStackTrace` は `toString` の行を `*err*` に書き（オラクルはそれとフレーム
   ごとの行を、`*err*` の束縛に関わらずプロセスの標準エラーに書きます）、`.getStackTrace` は
-  空のベクターを返します。`.getClass` は `class` と同じ値を返します。`.getMessage`、
-  `.getLocalizedMessage`、`.getCause`、`.toString` 以外のメソッドは拒否します。例外でない値の `throw` は、値のレンダリングをメッセージとする
+  空のベクターを返します。`.getClass` は `class` と同じ値を返します。インタプリタと JVM では、
+  それ以外のメソッドは、例外のクラスのホストの例外に対して呼び出され、Java のメンバに渡した
+  例外もそのホストの例外として渡ります。ホストの例外はメッセージと cause から一度だけ作り、
+  `ex-info` のものは `RuntimeException` です。そのため `(.getCause (UncheckedIOException. "u" e))`
+  が返すのはそのホストの例外で、`e` 自体ではありません（オラクルでは `e` と `identical?` です）。
+  実行時エラーとランタイムの拒否にはそのようなホストの例外がないため、`Throwable` を受け取る
+  Java のメンバはそれに一致しません。例外でない値の `throw` は、値のレンダリングをメッセージとする
   `ClassCastException` になります（オラクルのメッセージは 2 つのクラス名を挙げます）。
 - multimethod のディスパッチ値はマップのキーと同じく（ベクターも含めて `=` で）比較されます。
  階層経由のディスパッチは厳密に最も具体的なメソッドを優先し、その後

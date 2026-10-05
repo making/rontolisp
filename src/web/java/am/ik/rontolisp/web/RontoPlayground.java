@@ -230,7 +230,8 @@ public final class RontoPlayground {
 								.process(GgufLibrary.process(TokenizersLibrary
 									.process(am.ik.rontolisp.eval.ClojureLibrary.process(
 											am.ik.rontolisp.eval.SchemeLibrary.process(read, features,
-													am.ik.rontolisp.eval.SourceStandards.DEFAULT))))))))),
+													am.ik.rontolisp.eval.SourceStandards.DEFAULT),
+											!features.contains("rontolisp-wasm"))))))))),
 						features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.clojure;
 
+import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -17,6 +18,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
@@ -104,7 +106,10 @@ final class ClojureStateLowering {
 				String var = ((LispSymbol) caught.get(2)).name();
 				LispVal clauseBody = ctx.inScope(new HashMap<>(Map.of(var, ClojureLowering.Kind.VARIABLE)),
 						() -> ctx.nonTailBodyOf(caught.subList(3, caught.size())));
-				handler.add(ClojureLowerUtil.list(type, ClojureLowerUtil.list(ctx.localSym(var)), clauseBody));
+				LispCons clause = (LispCons) ClojureLowerUtil.list(type, ClojureLowerUtil.list(ctx.localSym(var)),
+						clauseBody);
+				ctx.recordCatch(clause);
+				handler.add(clause);
 			}
 			guarded = ClojureLowerUtil.list(handler);
 		}
@@ -319,6 +324,7 @@ final class ClojureStateLowering {
 	 */
 	static LispVal exInfoValue(ClojureLowering ctx) {
 		ctx.usedExInfo = true;
+		ctx.hostExceptionClasses.add(EXCEPTION_INFO);
 		LispSymbol message = new LispSymbol(ClojureLowering.mangle("ex-message"));
 		LispSymbol data = new LispSymbol(ClojureLowering.mangle("ex-data"));
 		LispSymbol cause = new LispSymbol(ClojureLowering.mangle("ex-cause"));
@@ -326,6 +332,9 @@ final class ClojureStateLowering {
 				ClojureLowerUtil.list(List.of(message, data, ClojureLowerUtil.sym("&optional"), cause)),
 				ClojureLowerUtil.list(new LispSymbol(EX_INFO), message, data, cause));
 	}
+
+	/** The class {@code ex-info} builds an exception of. */
+	static final String EXCEPTION_INFO = "clojure.lang.ExceptionInfo";
 
 	/** The library functions behind the exception verbs ({@code clojure.lisp}). */
 	static final String EX_INFO = "RONTOLISP::%CLOJURE-EX-INFO";
@@ -352,6 +361,7 @@ final class ClojureStateLowering {
 		ClojureLowerUtil.isTrue(items.size() == 3 || items.size() == 4,
 				"ex-info takes a message, a data map and an optional cause");
 		ctx.usedExInfo = true;
+		ctx.hostExceptionClasses.add(EXCEPTION_INFO);
 		return ClojureLowerUtil.list(new LispSymbol(EX_INFO), ctx.lower(items.get(1)), ctx.lower(items.get(2)),
 				items.size() == 4 ? ctx.lower(items.get(3)) : ClojureLowering.NIL_CONST);
 	}
@@ -1082,8 +1092,16 @@ final class ClojureStateLowering {
 	 * readers and builders over them are library functions ({@code clojure.lisp},
 	 * "Exceptions"), which only a program carrying this runtime reaches. Pure lowering
 	 * over the shared condition runtime, so every backend runs it unchanged.
+	 * <p>
+	 * A program that names a {@code java:} operator and builds an exception, for a target
+	 * where the host is ({@link #hostExceptions}), passes its exceptions to Java members,
+	 * which take a host {@code Throwable}: there the class is a
+	 * {@code java:java-exception} whose cause slot holds {@code C%E-HOST}, the function
+	 * building the host exception it stands for once ({@link #hostExceptionOf}, kept in a
+	 * fifth slot) -- what the {@code java:} boundary hands the member in its place.
 	 */
 	static List<LispVal> exInfoRuntime(ClojureLowering ctx) {
+		boolean host = hostExceptions(ctx);
 		List<LispVal> runtime = new ArrayList<>();
 		LispSymbol cls = new LispSymbol("C%E-EXCEPTION");
 		LispSymbol cond = new LispSymbol("c");
@@ -1107,6 +1125,14 @@ final class ClojureStateLowering {
 			initargs.add(initarg);
 			initargs.add(param);
 		}
+		LispSymbol hostAccessor = new LispSymbol("C%E-EXCEPTION-HOST");
+		LispSymbol hostBuilder = new LispSymbol("C%E-HOST");
+		if (host) {
+			slotSpecs.add(ClojureLowerUtil.list(new LispSymbol("C%E-HOST"), ClojureLowerUtil.sym(":initform"),
+					ClojureLowering.NIL_CONST, ClojureLowerUtil.sym(":accessor"), hostAccessor));
+			initargs.add(ClojureLowerUtil.sym(":" + LispNames.JAVA_EXCEPTION_CAUSE_SLOT));
+			initargs.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), hostBuilder));
+		}
 		LispVal report = ClojureLowerUtil.list(ClojureLowerUtil.sym(":report"), ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cond, stream)), ClojureLowerUtil.list(
 					ClojureLowerUtil.sym("write-string"),
@@ -1115,8 +1141,9 @@ final class ClojureStateLowering {
 							ClojureLowerUtil.list(readers.get(2), cond)),
 					stream)));
 		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("define-condition"), cls,
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.sym("error"))), ClojureLowerUtil.list(slotSpecs),
-				report));
+				ClojureLowerUtil.list(List
+					.of(host ? new LispSymbol(LispNames.JAVA_EXCEPTION_QUALIFIED) : ClojureLowerUtil.sym("error"))),
+				ClojureLowerUtil.list(slotSpecs), report));
 		runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol("C%E-NEW"),
 				ClojureLowerUtil.list(params), ClojureLowerUtil.list(initargs)));
 		List<LispVal> parts = new ArrayList<>();
@@ -1130,7 +1157,168 @@ final class ClojureStateLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), ex,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), cls)),
 						ClojureLowerUtil.list(parts), ClojureLowering.NIL_CONST)));
+		if (host) {
+			// (defun C%E-HOST (e) (or (C%E-EXCEPTION-HOST e) (setf (C%E-EXCEPTION-HOST e)
+			// (C%E-HOST-OF chain message (%clojure-host-cause cause))))), the message a
+			// string: ex-info's lowering takes any value, the oracle's a String alone
+			LispSymbol text = new LispSymbol("text");
+			LispVal message = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil
+						.list(List.of(ClojureLowerUtil.list(text, ClojureLowerUtil.list(readers.get(1), ex)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), text), text));
+			LispVal built = ClojureLowerUtil.list(new LispSymbol(HOST_OF), ClojureLowerUtil.list(readers.get(0), ex),
+					message,
+					ClojureLowerUtil.list(new LispSymbol(HOST_CAUSE), ClojureLowerUtil.list(readers.get(3), ex)));
+			runtime.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), hostBuilder,
+					ClojureLowerUtil.list(List.of(ex)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), ClojureLowerUtil.list(hostAccessor, ex),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), ClojureLowerUtil.list(hostAccessor, ex),
+									built))));
+			runtime.add(hostExceptionOf(ctx));
+		}
 		return runtime;
+	}
+
+	/**
+	 * Whether the program's exceptions are host-backed ({@link #exInfoRuntime}): it names
+	 * a {@code java:} operator, for a target where the host is, and builds an exception
+	 * ({@link ClojureLowering#hostExceptionClasses}) -- or it is a session, which runs on
+	 * the interpreter.
+	 */
+	static boolean hostExceptions(ClojureLowering ctx) {
+		return ctx.session || (ctx.hostTarget && ctx.namedHost && !ctx.hostExceptionClasses.isEmpty());
+	}
+
+	/** The function building the host exception a chain, message and cause stand for. */
+	static final String HOST_OF = "C%E-HOST-OF";
+
+	/** The library function a cause is a host exception through. */
+	static final String HOST_CAUSE = "RONTOLISP::%CLOJURE-HOST-CAUSE";
+
+	/**
+	 * {@code (defun C%E-HOST-OF (chain message cause) ...)}: the host exception of the
+	 * first class of the chain the program builds exceptions of
+	 * ({@link ClojureLowering#hostExceptionClasses}) that the host builds with a message
+	 * and a cause -- a construction of the literal class, so every site resolves before
+	 * it runs and nothing reflects -- else a {@code RuntimeException}: {@code (C. message
+	 * cause)} where the class has a {@code (String, Throwable)} constructor, else
+	 * {@code (C. message)} and {@code initCause}. The classes it covers are recorded, so
+	 * a session defines it again once a later buffer builds another.
+	 * @param ctx the lowering
+	 * @return the definition
+	 */
+	static LispVal hostExceptionOf(ClojureLowering ctx) {
+		LispSymbol chain = new LispSymbol("chain");
+		LispSymbol message = new LispSymbol("message");
+		LispSymbol cause = new LispSymbol("cause");
+		LispSymbol built = new LispSymbol("built");
+		LispSymbol name = new LispSymbol("name");
+		List<LispVal> clauses = new ArrayList<>();
+		clauses.add(ClojureLowerUtil.sym("cond"));
+		for (String className : ctx.hostExceptionClasses) {
+			LispVal construction = hostConstruction(className, message, cause);
+			if (construction != null) {
+				clauses.add(ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"), name, LispString.literal(className)),
+						construction));
+			}
+		}
+		ctx.hostExceptionClassesEmitted.addAll(ctx.hostExceptionClasses);
+		// RuntimeException's constructors are known: no reflection, which a native image
+		// may not answer
+		LispVal fallback = construction("java.lang.RuntimeException", message, cause, true);
+		LispVal body;
+		if (clauses.size() == 1) {
+			body = fallback;
+		}
+		else {
+			// (let ((built nil)) (dolist (name chain) (if (null built) (setq built (cond
+			// ...)))) (or built fallback))
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(built, ClojureLowering.NIL_CONST))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("dolist"), ClojureLowerUtil.list(name, chain),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), built),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), built,
+											ClojureLowerUtil.list(clauses)))),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("or"), built, fallback));
+		}
+		List<LispVal> params = new ArrayList<>(List.of(chain, message, cause));
+		List<LispVal> defun = new ArrayList<>();
+		defun.add(ClojureLowerUtil.sym("defun"));
+		defun.add(new LispSymbol(HOST_OF));
+		defun.add(ClojureLowerUtil.list(params));
+		if (clauses.size() == 1) {
+			defun.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("declare"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), chain)));
+		}
+		defun.add(body);
+		return ClojureLowerUtil.list(defun);
+	}
+
+	/**
+	 * The construction of the host exception of a class with a message and a cause, or
+	 * null when the host cannot build one from them: no such public concrete
+	 * {@code Throwable}, or no public constructor taking a message.
+	 */
+	private static @Nullable LispVal hostConstruction(String className, LispSymbol message, LispSymbol cause) {
+		Class<?> type;
+		try {
+			type = Class.forName(className, false, ClojureStateLowering.class.getClassLoader());
+		}
+		catch (ClassNotFoundException | LinkageError _) {
+			return null;
+		}
+		if (!Throwable.class.isAssignableFrom(type) || !Modifier.isPublic(type.getModifiers())
+				|| Modifier.isAbstract(type.getModifiers())) {
+			return null;
+		}
+		if (hasPublicConstructor(type, String.class, Throwable.class)) {
+			return construction(className, message, cause, true);
+		}
+		return hasPublicConstructor(type, String.class) ? construction(className, message, cause, false) : null;
+	}
+
+	/**
+	 * {@code (java:new "C" message cause)} for a class with a {@code (String, Throwable)}
+	 * constructor, else
+	 * {@code (let ((made (java:new "C" message))) (if cause (java:call made "initCause" cause)) made)}.
+	 */
+	private static LispVal construction(String className, LispSymbol message, LispSymbol cause, boolean takesCause) {
+		LispVal javaNew = new LispSymbol(LispNames.JAVA_NEW_QUALIFIED);
+		LispVal text = typed("java.lang.String", message);
+		if (takesCause) {
+			return ClojureLowerUtil.list(javaNew, LispString.literal(className), text,
+					typed("java.lang.Throwable", cause));
+		}
+		LispSymbol made = new LispSymbol("made");
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(made,
+						ClojureLowerUtil.list(javaNew, LispString.literal(className), text)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), cause, ClojureLowerUtil
+					.list(new LispSymbol(LispNames.JAVA_CALL_QUALIFIED), made, LispString.literal("initCause"), cause)),
+				made);
+	}
+
+	/**
+	 * {@code (the (java:object "C") value)}: the value as the class, so a construction
+	 * resolves to the constructor taking it before it runs.
+	 */
+	private static LispVal typed(String className, LispVal value) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("the"),
+				ClojureLowerUtil.list(new LispSymbol(LispNames.JAVA_OBJECT_QUALIFIED), LispString.literal(className)),
+				value);
+	}
+
+	private static boolean hasPublicConstructor(Class<?> type, Class<?>... parameters) {
+		try {
+			type.getConstructor(parameters);
+			return true;
+		}
+		catch (NoSuchMethodException | LinkageError _) {
+			return false;
+		}
 	}
 
 }

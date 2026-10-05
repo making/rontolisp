@@ -105,7 +105,7 @@ answered `2 5 3` before).
 | `dorun` / `doall` | `%clojure-dorun` / `-doall` (`-n` with a count) | walk to the end, answering `nil` / the collection; with a count `n + 1` members realize, like the oracle; `doall` never coerces |
 | `if` `when` `cond` `do` `and` `or` `not` | the core forms over null-or-false tests | `cond`'s odd trailing arm is the default (the oracle refuses); `:else` is true; `and`/`or`/`assert` have no function value |
 | `when-let` `if-let` `when-not` `if-not` `when-first` | `let*` over one temporary plus the test | `when-let`/`if-let` destructure, testing the whole init; `when-first` binds the head of the seq view |
-| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` converts), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
+| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` is `%clojure-throw` | one `handler-case` clause per catch, in order, of the type its class takes ("Catching"); `throw` signals an exception as itself (a caught one rethrows unchanged, a host `Throwable` as the `java:java-exception` carrying it, "Host exceptions"), anything else a `ClassCastException` (nil a `NullPointerException`) whose message is its rendering, so strings keep their message |
 | `ex-info` `ex-data` `ex-message` `ex-cause`, `.getMessage` `.getLocalizedMessage` `.getCause` | one call to the `clojure.lisp` "Exceptions" function | see "Exceptions" |
 | `assert` | `if` around the `AssertionError` carrier ("Refusals") | the `Assert failed:` message evaluates only on failure; it names the failed form, built only in the failure branch: rendered at lower time (`ClojureStringLowering.prSource`: symbols, keywords, integers, strings, chars, lists, vectors, maps) so no printer is linked, else `quote` through the readable `%clojure-str-of` (double, ratio, set, regex...) which links the collection printer (measured 2026-10-03: `(assert (nil? x))` wasm 3171 -> 3282 bytes; with a double in the form 3171 -> 54237 versus 21992 before) |
 | `atom` `deref`/`@` `swap!` `reset!` `compare-and-set!` `volatile!` `vswap!` `vreset!` | reads/writes of the cell | answer the new value; `compare-and-set!` compares with `eql`; `seq`/`first`/`count`/`empty?`/`cons`/`conj` onto a cell signal like the oracle |
@@ -203,9 +203,9 @@ Each is a real work item unless the reason says otherwise.
 - In a REPL, a local named like a `^:dynamic` var a LATER input defines binds that var once
   it is defined (a function called in its scope reads the local's value; the oracle: the
   var). A file is pre-scanned whole, so there it is lexical ("Locals named like a special").
-- An error naming no class (a refusal of a construct the oracle accepts, a failed host call) is
+- An error naming no class (a refusal of a construct the oracle accepts) is
   taken by any catch but `ExceptionInfo`'s ("Catching"); a misuse a lower verb refuses first
-  carries that verb's class ("Refusals"). Exceptions: see "Exceptions".
+  carries that verb's class ("Refusals"). Exceptions: see "Exceptions" and "Host exceptions".
 - Dispatch: numeric host classes merge into `:number` for multimethods and protocols;
   class chains carry no interface or `Object` ("Class chains");
   protocol dispatch reads no hierarchy; two namespaces' records of one simple name share a
@@ -232,7 +232,8 @@ An exception is a condition on every backend (oracle-checked clj 1.12.6, 2026-10
   `usedExInfo` may reach one (a kept library function reaching them otherwise compiles as an
   undefined call). A `define-condition` stays in the program because the library pruner keeps
   every non-defun definition.
-- `%clojure-exception-of`: a condition is itself, a host `Throwable` (`%clojure-host-throwable`,
+- `%clojure-exception-of`: a condition is itself (one standing for a host exception alone that
+  exception's, "Host exceptions"), a host `Throwable` (`%clojure-host-throwable`,
   a host arm: NIL stand-in without `java:`) a new exception of its class chain (read at run time,
   `%clojure-host-chain`), message and cause, anything else NIL. `throw`, `ex-message`, `ex-cause` go through it; `ex-data` reads
   `C%E-PARTS` (a host throwable has no data). `ex-message` of a non-exception is `nil` (was the
@@ -312,9 +313,9 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   the end); `program-error` `ArityException`; `file-error` `FileNotFoundException`. It matches
   when the catch's class is that class, a superclass or a subclass (the operation may throw a
   subclass: `aget`'s `ArrayIndexOutOfBoundsException`). A condition naming no class (a refusal
-  of a construct the oracle accepts, a failed host call) matches every catch but
-  `ExceptionInfo`'s, so a program that caught one keeps working; a failed host call's throwable
-  is reduced to text at the `java:` boundary (`.todo/c64`).
+  of a construct the oracle accepts) matches every catch but
+  `ExceptionInfo`'s, so a program that caught one keeps working. A host exception goes by the
+  host's class ("Host exceptions").
 - A program that catches by class but builds no exception carries `C%E-PARTS` answering NIL
   (`catchRuntime`'s reader) instead of the exception runtime (measured 2026-10-04: a one-`try`
   program 48,229 B of wasm, 64,068 B with an `ex-info` built beside it). A session emits the reader while no buffer built an
@@ -412,8 +413,8 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   oracle's `StringIndexOutOfBoundsException`, in `subseq`'s words.
 - Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
   `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
-  `Can't take value of a macro` (a compile error in the oracle), a failed host call
-  (`.todo/c64`), internal invariants. A misuse a lower verb refuses first carries that verb's
+  `Can't take value of a macro` (a compile error in the oracle), internal invariants. A
+  misuse a lower verb refuses first carries that verb's
   class: `(shuffle 5)` is `seq`'s IAE, the oracle's CCE casting to `Collection`. A verb that
   answers where the oracle refuses (`(count :a)` is 2) is not a refusal.
 - Size, measured 2026-10-04 (wasm P1 / component / JVM class, before -> after): `(println (try
@@ -436,6 +437,61 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   `RontoLispCliStreamsTest#aClojureRefusalReportsTheSameLineWhetherOrNotTheProgramReadsAClass`,
   `LispMacroExpanderTest#anUnreferencedConditionConstructorBuildsNothingToRender` /
   `#aSignalOfItsOwnTextControlNeedsNoRenderer`.
+
+## Host exceptions
+
+**On a host target (the interpreter, the JVM), an exception crossing the `java:` boundary is
+the host's own in both directions** (oracle-checked clj 1.12.6, 2026-10-05). The CL half is
+`.kb/java-interop.md`, "What a member throws": a failed call signals `java:java-exception`, a
+`simple-error` whose slot 2 holds the throwable; one passed to a member is that throwable.
+
+- Host to program: a catch takes a `java:java-exception` by its throwable's class
+  (`%clojure-catches`' arm, `%clojure-host-is-a`: the class and superclasses by name, through
+  typed resolved calls -- `Class.forName` + `isInstance` per test was 3x slower) and BINDS THE
+  THROWABLE (`%clojure-caught`), so `.getMessage`, `class`, `instance?`, host members
+  (`.getIndex`), `identical?` and a rethrow are the host's. `throw` of a host `Throwable`
+  signals a `java:java-exception` carrying it (not a converted exception), `ex-cause` of one is
+  `.getCause`, and a cause argument keeps one as itself (`%clojure-cause-of`,
+  `%clojure-exception-new-1`). The binding is a lowering post-pass (`ClojureLowering.recordCatch`
+  / `bindCaught`: `(let ((e (%clojure-caught e))) body)` once the whole file is known to name a
+  `java:` operator; a session at once) -- an arm cannot fold back to the old clause.
+- Program to host: in a program naming a `java:` operator that builds an exception
+  (`hostExceptionClasses`: a plain throwable construction's class, ex-info's), `C%E-EXCEPTION`
+  is a `java:java-exception` whose slot 2 holds `#'C%E-HOST`, which the boundary calls; it
+  builds the host exception once (kept in the fifth slot `C%E-HOST`) through the generated
+  `C%E-HOST-OF`, one literal `(java:new "C" message cause)` per class of the chain the program
+  builds (`(C. message)` + `initCause` without a `(String, Throwable)` constructor; else
+  `RuntimeException`, spelled without asking reflection, which a native image may not answer),
+  so every site resolves and nothing reflects (a reflective builder in
+  `clojure.lisp` was +9 KB of class on a two-line program). The twin is a copy:
+  `(.getCause (UncheckedIOException. "u" e))` is not `identical?` to `e` (user doc
+  deviation). A runtime error or refusal (a CL condition) has no twin. A CL file of the same
+  program catches one as `java:java-exception`; `java:java-exception-cause` calls the builder.
+- `%clojure-lisp-value-p` counts an instance (`%clojure-lisp-instance-p`): the host arms'
+  own `java:call`s (`isInstance`) would otherwise hand a condition over as its twin.
+- Byte-identity: the arms (`%clojure-host-throwable-p`, `%clojure-host-failure-p`,
+  `%clojure-lisp-instance-p`) are `ClojureArms.Family.HOST_EXCEPTION`, folded where the
+  program names no `java:` operator AND where the target has no host
+  (`ClojureArms.needsHost`, `ClojureLibrary.process(program, hostTarget)` from
+  `CompileFrontend`'s `!wasm` and the playground's `rontolisp-wasm` feature); the lowering
+  takes the target from `SourceLanguage`'s features
+  (`Clojure.read(..., hostTarget)`), and the JVM backend alone registers the class for a
+  `java:` program (`JvmLispCompiler.compile`). Measured 2026-10-05 over `examples/`,
+  `size-report/`, `bench-report/` and the `clojure-spec.yaml` program: every compilable
+  program byte-identical on wasm P1, `--optimize=size` and component; on the JVM all but the
+  `java:` programs (CL `cffi-sqlite` +50 B, `java-store` +348 B; Clojure: catch +
+  `.getMessage` + one interop call +2.9 KB -- `_jexc`, `_jexMap`, the class layout and
+  `%clojure-host-is-a`'s three resolved sites --, the same building and passing an exception
+  +6.4 KB, the spec program +28 KB of 6.7 MB).
+- Run time (JVM, 200k iterations): a caught host failure 0.80 -> 1.09 s (the `_jexMap`
+  record and the condition: a CL `handler-case` pays the same +1.3 us), an ex-info throw/catch
+  in a `java:` program within noise; interpreter: host failures within noise, an ex-info
+  loop +10% in a `java:` file (the C%E builder slot, the binding) and within noise elsewhere.
+- Pins: `ClojureInteropTest#aFailedHostCallIsCaughtAsTheExceptionTheHostThrew`,
+  `#aCaughtHostExceptionRethrowsAndWrapsAsItself`,
+  `#anExceptionPassedToAHostMemberIsAHostThrowableOfItsClass` (oracle-identical);
+  `ClojureLibraryTest#aHostExceptionIsMadeOnlyByAJavaOperatorWhereTheHostIs`,
+  `ClojureProjectNamespacesTest#aClojureExceptionCaughtInCommonLispCarriesItsHostException`.
 
 ## Sorted collections
 
