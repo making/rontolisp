@@ -15500,6 +15500,29 @@ class JvmLispCompilerTest {
 			.isLessThanOrEqualTo(500 + 6 * matchPieces);
 	}
 
+	// A package walk costs the same however many globals the eval runtime sees. In a
+	// program that carries the eval runtime every assignment of a global is mirrored
+	// into its global environment, a list holding every global the program assigned, and
+	// the multiple-value spill -- written by nearly every function return -- was one of
+	// them: each call paid a walk of that list. 4,000 globals made the probe below 300x
+	// slower (30 ms -> 9.6 s); in the ci-spec corpus it was ~85% of a package walk.
+	// The bound is a ratio between two probes of the same program, each the best of
+	// three, so it does not depend on the machine. The WASM twin is
+	// WasmLispCompilerIntegrationTest#aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees.
+	@Test
+	void compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() throws Exception {
+		String[] lines = compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE,
+						am.ik.rontolisp.reader.Features.JVM, false, false))
+			.split("\n");
+		assertThat(lines[2].trim()).as("the globals reach the eval runtime").isEqualTo("3999");
+		long few = Long.parseLong(lines[0].trim());
+		long many = Long.parseLong(lines[1].trim());
+		assertThat(many)
+			.as("three apropos-list walks with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
+			.isLessThanOrEqualTo(200 + 3 * few);
+	}
+
 	@Test
 	void compileAndRunRuntimePackageMemberTable() throws Exception {
 		// The runtime package MEMBER table on the JVM backend (.todo/917): the

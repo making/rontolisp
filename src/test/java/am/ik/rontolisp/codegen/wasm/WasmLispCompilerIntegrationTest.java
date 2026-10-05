@@ -18031,6 +18031,28 @@ class WasmLispCompilerIntegrationTest {
 			.isLessThanOrEqualTo(500 + 6 * matchPieces);
 	}
 
+	// The
+	// JvmLispCompilerTest#compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees
+	// twin, on both module shapes: the mirrored multiple-value spill made the probe 50x
+	// slower with 4,000 more globals (104 ms -> 5.6 s on P1 and the component).
+	@Test
+	void aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() throws Exception {
+		String source = am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE;
+		assertManyGlobalsCostNothing(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)));
+		assertManyGlobalsCostNothing(runComponentFrontendProgramWithDir(source));
+	}
+
+	private static void assertManyGlobalsCostNothing(String output) {
+		String[] lines = output.split("\n");
+		assertThat(lines[2].trim()).as("the globals reach the eval runtime").isEqualTo("3999");
+		long few = Long.parseLong(lines[0].trim());
+		long many = Long.parseLong(lines[1].trim());
+		assertThat(many)
+			.as("three apropos-list walks with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
+			.isLessThanOrEqualTo(200 + 3 * few);
+	}
+
 	@Test
 	void lonePackageOperation() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunALonePackageOperation twin, through the

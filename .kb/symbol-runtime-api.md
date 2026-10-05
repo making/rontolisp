@@ -169,8 +169,8 @@ the per-call reset guards (`cabi_post_*`, the serve adapter) depend on. History:
 O(table) per call, and the runtime records lived in a fixed 8 KB region, so the 1,025th fresh
 symbol overwrote the heap's first pooled token (out-of-bounds trap on P1 and component).
 Measured 2026-10-04 (jar): a 32,000-row `do-symbols` 8.0 s -> 0.1 s, `apropos-list` 26 s ->
-1.2 s; ci-spec `runtime-package-api` ~4.9 s -> ~2.5 s per WASM leg (the rest is
-`.todo/d11`). Size: a module without the real `_intern` is byte-identical; one with it +218 to
+1.2 s; ci-spec `runtime-package-api` ~4.9 s -> ~2.5 s per WASM leg (-> ~0.8 s once the
+eval mirror stopped recording `%mv-spill`, `.kb/eval-runtime.md`). Size: a module without the real `_intern` is byte-identical; one with it +218 to
 +222 B. Pinned by `WasmLispCompilerIntegrationTest#runtimeInternKeepsEverySymbolPastAThousand`,
 `#runtimeInternCostsTheSameWhereverItsSymbolSits` and
 `#aPackageWalkCostsItsUniverseNotItsSquare`.

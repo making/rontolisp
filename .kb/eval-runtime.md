@@ -187,6 +187,24 @@ mirroring a loop variable costs one walk per assignment per iteration (7.1x JVM 
 ever run -- a function body assigning a global in an eval-using program pays the
 same per call since b78).
 
+**The compiler's own channels are never mirrored** (`GlobalVarCollector.mirrorsIntoEval`,
+asked by both `mirrorsGlobal`s): `%mv-spill` and the `%handler-clusters%` /
+`%restart-clusters%` stacks. No eval'd form reads them (the runtime has no `values` /
+`handler-bind` / `restart-case`; it calls compiled code, which reads the globals), and
+`%mv-spill` is written by nearly every function return (`.kb/multiple-values.md`), so since
+b78 every call of an eval-using program walked the whole alist. Measured 2026-10-05 on the
+ci-spec program (~450 mirrored globals): 5,301 `%mv-spill` and 1,017 handler-stack mirror
+sites; `_env_lookup` was 68% of the P1 leg's samples. Program run time P1 6.6 -> 2.4 s,
+component 7.1 -> 2.5 s, JVM 21.2 -> 19.1 s; a package walk there ~1.5 s -> ~0.2 s (WASM).
+Size: an eval-using program shrinks (ci-spec program JVM -73 KB, P1 / component -89 KB;
+the ningle Workers -27 KB JVM / -43 to -48 KB wasm; 126 of 841 example outputs, none
+grew); everything else in size-report, bench-report and examples is byte-identical (P1,
+`--optimize=size`, component, JVM). Pinned by
+`aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees` (`EvalMirrorFixture`: the same walk
+before and after 4,000 `set` globals; before the fix 30 ms -> 9.6 s JVM, 104 ms -> 5.6 s WASM)
+in `JvmLispCompilerTest` (`compileAndRun...`), `WasmLispCompilerIntegrationTest` (P1 and
+component) and `LispEvaluatorTest`. A user global assigned in a loop still pays the walk.
+
 ## Tests
 
 - `JvmLispCompilerTest.aProgramThatNeverMentionsEvalCarriesNoEvalRuntime`,

@@ -16746,6 +16746,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees() {
+		// The interpreter leg of the compiled backends' ratio pin
+		// (JvmLispCompilerTest#compileAndRunAPackageWalkCostsTheSameHoweverManyGlobalsEvalSees):
+		// the same program answers the same last line, and its global table is a map.
+		String[] lines = printedLines(am.ik.rontolisp.EvalMirrorFixture.MANY_GLOBALS_PROBE).split("\n");
+		assertThat(lines[2].trim()).isEqualTo("3999");
+		long few = Long.parseLong(lines[0].trim());
+		long many = Long.parseLong(lines[1].trim());
+		assertThat(many).as("with 4,000 more globals (%d ms) against before them (%d ms)", many, few)
+			.isLessThanOrEqualTo(200 + 3 * few);
+	}
+
+	@Test
 	void symbolBuildersAnswerTheTAndNilSingletons() {
 		// The compiled harnesses pin the same line; (intern "T" "CL") reaches the
 		// singleton through the designated-package arm too.

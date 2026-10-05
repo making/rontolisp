@@ -1937,28 +1937,23 @@ public final class LispPreludeLibrary {
 						""");
 		SOURCES.put(LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, """
 				(defun %baked-import-redirect (%bir-name %bir-home)
-				  (let ((%bir-imports nil))
-				    (dolist (%bir-e %baked-packages%)
-				      (when (string= (string %bir-home) (car %bir-e))
-				        (setq %bir-imports (sixth %bir-e))))
-				    (let ((%bir-hit (assoc %bir-name %bir-imports :test #'string=)))
-				      (when %bir-hit
-				        (let ((%bir-dest (cdr %bir-hit)))
-				          (if (string= %bir-dest "CL")
-				              (intern %bir-name)
-				              (intern (concatenate 'string %bir-dest ":" %bir-name))))))))
+				  (let* ((%bir-e (assoc (string %bir-home) %baked-packages% :test #'string=))
+				         (%bir-hit (if %bir-e (assoc %bir-name (sixth %bir-e) :test #'string=) nil)))
+				    (when %bir-hit
+				      (let ((%bir-dest (cdr %bir-hit)))
+				        (if (string= %bir-dest "CL")
+				            (intern %bir-name)
+				            (intern (concatenate 'string %bir-dest ":" %bir-name)))))))
 				""");
 		SOURCES.put(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, """
 				(defun %package-spelling-normalize (%psn-s)
-				  (if (or (not (symbolp %psn-s))
-				          (null (symbol-package %psn-s))
-				          (search "::" (prin1-to-string %psn-s)))
-				      %psn-s
-				      (let ((%psn-name (symbol-name %psn-s))
-				            (%psn-home (symbol-package %psn-s)))
-				        (or (%baked-import-redirect %psn-name %psn-home)
-				            (find-symbol %psn-name %psn-home)
-				            %psn-s))))
+				  (let ((%psn-home (if (symbolp %psn-s) (symbol-package %psn-s) nil)))
+				    (if (or (null %psn-home) (search "::" (prin1-to-string %psn-s)))
+				        %psn-s
+				        (let ((%psn-name (symbol-name %psn-s)))
+				          (or (%baked-import-redirect %psn-name %psn-home)
+				              (find-symbol %psn-name %psn-home)
+				              %psn-s)))))
 				""");
 		SOURCES.put(LispNames.BAKED_PACKAGE_FIND_INTERNAL, """
 				(defun %baked-package-find (%bpf-s)

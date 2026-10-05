@@ -51,8 +51,10 @@ package walk, `.kb/packages.md` "The enumeration universe"), and
 `landing-pads-read-fresh-references-after-a-collection` 45% of the interpreter's (5M
 interpreted `cons` iterations; now the same cells by `make-list`, 250 per iteration).
 Later that day `_intern` became a hash table: on the jar, the program's own time in the P1
-and component legs went ~9.5 s -> ~6.9 s, `runtime-package-api` ~4.9 s -> ~2.5 s of it
-(the rest: `.todo/d11`).
+and component legs went ~9.5 s -> ~6.9 s, `runtime-package-api` ~4.9 s -> ~2.5 s of it.
+The next day the eval mirror stopped recording `%mv-spill` (`.kb/eval-runtime.md`): P1
+6.6 s -> 2.4 s, component 7.1 s -> 2.5 s, JVM 21.2 s -> 19.1 s, `runtime-package-api`
+0.8 s on both WASM legs and 2.8 s on the JVM (its first walk runs cold).
 **Find the case that owns a leg before touching the timeout**: prepend
 `(cl:format cl:*error-output* "~&@@T ~A ~A~%" "<case>" (cl:get-internal-real-time))` to each
 case of the concatenated program, run the leg, and diff consecutive stamps. What owns the

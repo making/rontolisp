@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.wasm.Instruction;
 
 /**
@@ -287,7 +288,7 @@ final class WasmSetqCompiler {
 	 * @return {@code true} when the mirror emits
 	 */
 	static boolean mirrorsGlobal(String name, WasmLispCompiler.Ctx ctx) {
-		return ctx.usesEval && ctx.globalIndices.containsKey(name);
+		return ctx.usesEval && ctx.globalIndices.containsKey(name) && GlobalVarCollector.mirrorsIntoEval(name);
 	}
 
 }
