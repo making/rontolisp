@@ -209,7 +209,8 @@ public final class ClojureArms {
 		 * no condition.
 		 */
 		REFUSAL("refusal-class", Set.of("RONTOLISP::%CLOJURE-REFUSAL-P"), Set.of(ClojureRefusals.VEC_ARG),
-				Map.of(ClojureRefusals.SUBS, "SUBSEQ", ClojureRefusals.CHAR_AT, "CHAR"),
+				Map.of(ClojureRefusals.SUBS, "SUBSEQ", ClojureRefusals.CHAR_AT, "CHAR",
+						ClojureRefusals.SUBS_BY_REFLECTION, "SUBSEQ", ClojureRefusals.CHAR_AT_BY_REFLECTION, "CHAR"),
 				Set.of("RONTOLISP::%CLOJURE-CATCHES", ClojureDispatchLowering.EXCEPTION_CLASS,
 						ClojureDispatchLowering.INSTANCE_OF),
 				Set.of(), false, Set.of(), ClojureRefusals.CARRIERS, Set.of(ClojureRefusals.CONDITION)),

@@ -71,6 +71,20 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aStringMethodOfAReceiverNotKnownToBeAStringIsTheReflectiveAlias() {
+		// the oracle calls .substring / .charAt of a receiver it cannot type by
+		// reflection, which refuses a non-number bound as another class than a typed
+		// call (and subs) does: only the receiver a literal or a known class types
+		assertThat(lowered("(defn f [s i] (.substring s i))")).contains("(RONTOLISP::%CLOJURE-SUBS-BY-REFLECTION ");
+		assertThat(lowered("(defn f [s i] (.charAt s i))")).contains("(RONTOLISP::%CLOJURE-CHAR-AT-BY-REFLECTION ");
+		assertThat(lowered("(defn f [i] (.substring \"hello\" i) (.charAt \"hello\" i))"))
+			.contains("(RONTOLISP::%CLOJURE-SUBS |__clojure_")
+			.contains("(RONTOLISP::%CLOJURE-CHAR-AT |__clojure_")
+			.doesNotContain("BY-REFLECTION");
+		assertThat(lowered("(defn f [s i] (subs s i))")).doesNotContain("BY-REFLECTION");
+	}
+
+	@Test
 	void defLoneStringIsTheValueNotADocstring() {
 		assertThat(lowered("(def x \"hello\") x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| \"hello\")\n|c%x|");
 		assertThat(lowered("(def x \"doc\" 1) x")).isEqualTo(FALSE_BINDING + "(SETQ |c%x| 1)\n|c%x|");

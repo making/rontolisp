@@ -109,6 +109,20 @@ final class ClojureRefusals {
 	static final String CHAR_AT = "RONTOLISP::%CLOJURE-CHAR-AT";
 
 	/**
+	 * {@link #SUBS} for a {@code .substring} whose receiver the lowering does not know to
+	 * be a {@code String}: the oracle calls it by reflection, so a non-number bound is an
+	 * {@code IllegalArgumentException} where a typed call's is a
+	 * {@code ClassCastException}.
+	 */
+	static final String SUBS_BY_REFLECTION = "RONTOLISP::%CLOJURE-SUBS-BY-REFLECTION";
+
+	/**
+	 * {@link #CHAR_AT} for a receiver not known to be a {@code String}
+	 * ({@link #SUBS_BY_REFLECTION}).
+	 */
+	static final String CHAR_AT_BY_REFLECTION = "RONTOLISP::%CLOJURE-CHAR-AT-BY-REFLECTION";
+
+	/**
 	 * {@code vec}'s argument: itself when the oracle's {@code vec} takes it, else its
 	 * {@code RuntimeException} (it casts a non-collection to an array before it seqs it);
 	 * the family's view of its argument where no class is read.

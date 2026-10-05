@@ -1154,11 +1154,21 @@
         ((rationalp x) (truncate x))
         (t x)))
 
-(defun rontolisp::%clojure-subs (s start &optional end)
-  "(subs S START END): subseq, whose refusal of bounds outside a string is the
-   oracle's StringIndexOutOfBoundsException here, in subseq's own words. The
-   refusal family's alias of subseq: a program that reads no condition's class
-   calls subseq itself."
+(defun rontolisp::%clojure-string-bound-number (x reflective)
+  "X when it is a number, the bound of subs, .substring and .charAt; any other
+   value is the oracle's refusal: its NullPointerException for nil, else the
+   ClassCastException a typed call casts X with, or, when REFLECTIVE (a receiver
+   the compiler cannot type), the IllegalArgumentException of the method no
+   argument list matches."
+  (cond ((numberp x) x)
+        (reflective (rontolisp::%clojure-illegal-argument-exception-of
+                     "no String method takes a bound that is not a number" x))
+        (t (rontolisp::%clojure-class-cast-exception-of
+            "a string bound is not a number" x))))
+
+(defun rontolisp::%clojure-subs-checked (s start end end-p reflective)
+  (rontolisp::%clojure-string-bound-number start reflective)
+  (if end-p (rontolisp::%clojure-string-bound-number end reflective))
   (let ((n (if (stringp s) (length s) 0)))
     (if (and (stringp s) (integerp start) (or (null end) (integerp end))
              (not (<= 0 start (if end end n) n)))
@@ -1167,16 +1177,42 @@
                  start (if end end n) n))
         (subseq s start end))))
 
-(defun rontolisp::%clojure-char-at (s i)
-  "(.charAt S I): char, whose refusal of an index outside a string is the
-   oracle's StringIndexOutOfBoundsException here, in char's own words. The
-   refusal family's alias of char: a program that reads no condition's class
-   calls char itself."
+(defun rontolisp::%clojure-subs (s start &optional (end nil end-p))
+  "(subs S START END): subseq, whose refusal of bounds outside a string is the
+   oracle's StringIndexOutOfBoundsException here, in subseq's own words, and of
+   a bound that is no number its NullPointerException (nil, an END of nil
+   included) or ClassCastException. The refusal family's alias of subseq: a
+   program that reads no condition's class calls subseq itself."
+  (rontolisp::%clojure-subs-checked s start end end-p nil))
+
+(defun rontolisp::%clojure-subs-by-reflection
+    (s start &optional (end nil end-p))
+  "%clojure-subs for a .substring whose receiver is not known to be a String:
+   the oracle's reflective call refuses a bound that is no number as an
+   IllegalArgumentException."
+  (rontolisp::%clojure-subs-checked s start end end-p t))
+
+(defun rontolisp::%clojure-char-at-checked (s i reflective)
+  (rontolisp::%clojure-string-bound-number i reflective)
   (let ((n (if (stringp s) (length s) 0)))
     (if (and (stringp s) (integerp i) (not (and (<= 0 i) (< i n))))
         (rontolisp::%clojure-string-index-out-of-bounds-exception
          (format nil "CHAR: The value ~D is not of type (INTEGER 0 (~D))" i n))
         (char s i))))
+
+(defun rontolisp::%clojure-char-at (s i)
+  "(.charAt S I): char, whose refusal of an index outside a string is the
+   oracle's StringIndexOutOfBoundsException here, in char's own words, and of
+   an index that is no number its NullPointerException or ClassCastException.
+   The refusal family's alias of char: a program that reads no condition's
+   class calls char itself."
+  (rontolisp::%clojure-char-at-checked s i nil))
+
+(defun rontolisp::%clojure-char-at-by-reflection (s i)
+  "%clojure-char-at for a receiver not known to be a String: the oracle's
+   reflective call refuses an index that is no number as an
+   IllegalArgumentException."
+  (rontolisp::%clojure-char-at-checked s i t))
 
 ;;;; Exceptions: what a program throws, catches and reads.
 ;;
