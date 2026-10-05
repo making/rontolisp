@@ -181,7 +181,7 @@ final class WasmFunctionFormCompiler {
 			// Create closure struct {funcId, null env}
 			// This is one of the two places a funcId becomes a callable VALUE, so it is
 			// where the dispatch ladders learn they must carry a case for it.
-			ctx.valueFuncIds.add(fi.funcId());
+			ctx.noteFunctionValue(fi.funcId());
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(fi.funcId());
 			ctx.writer.write(Instruction.REF_NULL);

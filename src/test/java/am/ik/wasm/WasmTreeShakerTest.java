@@ -579,6 +579,87 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void aClosureWhoseEveryCreatorIsShakenTakesItsLadderArmAlong() {
+		// MAKER makes a closure and nothing calls MAKER, so no closure of it can exist:
+		// the arity-1 ladder a live computed funcall keeps carries no arm for it, and
+		// ONLY-CLOSURE, which only the closure calls, shakes with it -- the module has
+		// the functions of the program without either defun. Call MAKER and both come
+		// back. ONLY-CLOSURE's body is not a single integer tree, which would be fused.
+		String live = "(defun f (x) (+ x 1)) (print (funcall (car (list #'f)) 1)) ";
+		String defs = "(defun only-closure (x) x (* x 3)) (defun maker () (lambda (y) (only-closure y))) ";
+		Module without = Module.parse(compile(live, false, OptimizeLevel.DEFAULT));
+		Module shaken = Module.parse(compile(defs + live, false, OptimizeLevel.DEFAULT));
+		Module made = Module.parse(compile(defs + live + "(print (funcall (maker) 2))", false, OptimizeLevel.DEFAULT));
+		shaken.assertWellFormed();
+		made.assertWellFormed();
+		assertThat(shaken.definedFunctionCount()).isEqualTo(without.definedFunctionCount());
+		assertThat(made.definedFunctionCount()).isGreaterThan(shaken.definedFunctionCount());
+		// The component's core is shaken by the same pass: it differs from the one
+		// without the two defuns only where a funcId is encoded.
+		assertThat(compileComponent(defs + live, OptimizeLevel.DEFAULT).length)
+			.isCloseTo(compileComponent(live, OptimizeLevel.DEFAULT).length, org.assertj.core.data.Offset.offset(8));
+		// A host import shifts every function index after the module is assembled; the
+		// rebuilt ladder is in the module before that, so it is renumbered with the rest.
+		String imported = "(rontolisp:wasm-import 'pull :from \"env\" :as \"pull\" :params '() :returns :int) "
+				+ "(defun f (x) (+ x (pull))) (print (funcall (car (list #'f)) 1)) ";
+		Module importedWithout = Module.parse(compile(imported, false, OptimizeLevel.DEFAULT));
+		Module importedShaken = Module.parse(compile(defs + imported, false, OptimizeLevel.DEFAULT));
+		importedShaken.assertWellFormed();
+		assertThat(importedShaken.functionImportNames()).contains("pull");
+		assertThat(importedShaken.definedFunctionCount()).isEqualTo(importedWithout.definedFunctionCount());
+	}
+
+	@Test
+	void aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue() {
+		// r calls the dispatcher d, whose arms call t (value 7) and u (value 8); m makes
+		// value 8 and t makes it too. Nothing reached makes either value, so neither arm
+		// is taken; exporting m makes 8, and making 7 takes t's arm, which makes 8.
+		int[][] calls = { { 1 }, { 2, 3 }, {}, {}, {} };
+		WasmTreeShaker.ValueCalls valueCalls = new WasmTreeShaker.ValueCalls(java.util.Set.of(1),
+				java.util.Map.of(2, 7, 3, 8), java.util.Map.of(4, java.util.Set.of(8), 2, java.util.Set.of(8)),
+				java.util.Set.of());
+		assertThat(WasmTreeShaker.madeValues(callModule(calls, false), valueCalls)).isEmpty();
+		assertThat(WasmTreeShaker.madeValues(callModule(calls, true), valueCalls)).containsExactly(8);
+		assertThat(WasmTreeShaker.madeValues(callModule(calls, false), new WasmTreeShaker.ValueCalls(
+				valueCalls.dispatchers(), valueCalls.targetValues(), valueCalls.makers(), java.util.Set.of(7))))
+			.containsExactlyInAnyOrder(7, 8);
+	}
+
+	// Void functions whose bodies only call: function 0 is exported, and the last one
+	// too when asked.
+	private static byte[] callModule(int[][] calls, boolean exportLast) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> {
+				for (int i = 0; i < calls.length; i++) {
+					functions.addFunction(0);
+				}
+			})
+			.writeExport(exports -> {
+				exports.addExport("r", ExternalKind.FUNCTION, 0);
+				if (exportLast) {
+					exports.addExport("m", ExternalKind.FUNCTION, calls.length - 1);
+				}
+			})
+			.writeCode(code -> {
+				for (int[] callees : calls) {
+					ByteArrayOutputStream body = new ByteArrayOutputStream();
+					WasmWriter w = new WasmWriter(body);
+					w.write(0); // no locals
+					for (int callee : callees) {
+						w.write(Instruction.CALL);
+						w.writeUnsignedLeb128(callee);
+					}
+					w.write(Instruction.END);
+					code.addFunction(body.toByteArray());
+				}
+			});
+		return out.toByteArray();
+	}
+
+	@Test
 	void anUnselectableGenericBranchAndItsMethodShakeOut() {
 		// The dispatcher lists only the branches some call site's argument shapes may
 		// select (compiler/GenericDispatchNarrowing): with (sizeof 21) as the only

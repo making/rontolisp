@@ -695,7 +695,7 @@ final class WasmAsyncEmit {
 		// callable value (Ctx.valueFuncIds), and the only one outside
 		// WasmFunctionFormCompiler/WasmLambdaCompiler -- the future runtime calls the
 		// waiter back through the arity-1 dispatcher, so its case must survive.
-		ctx.valueFuncIds.add(ar.resumeFuncId);
+		ctx.noteFunctionValue(ar.resumeFuncId);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(ar.resumeFuncId);
 		w.write(Instruction.GET_LOCAL);

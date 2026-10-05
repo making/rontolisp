@@ -3,6 +3,7 @@ package am.ik.wasm;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -26,8 +27,10 @@ public final class WasmSections {
 	private WasmSections() {
 	}
 
-	// The one section id this class needs by name (the walkers take ids from callers).
+	// The section ids this class needs by name (the walkers take ids from callers).
 	private static final int SEC_IMPORT = 2;
+
+	private static final int SEC_CODE = 10;
 
 	// Import / export descriptor kinds.
 	static final int KIND_FUNC = 0x00;
@@ -349,6 +352,41 @@ public final class WasmSections {
 			p[0] += size;
 		}
 		return entries;
+	}
+
+	/**
+	 * Replaces the code entries of some defined functions, leaving every index, type and
+	 * other section as it was: the new body must keep its function's type.
+	 * @param module a core WASM module
+	 * @param bodies module function index (imports counted) to its new code entry --
+	 * locals and expression, without the size prefix
+	 * @return the module with those bodies swapped in
+	 */
+	public static byte[] replaceBodies(byte[] module, Map<Integer, byte[]> bodies) {
+		if (bodies.isEmpty()) {
+			return module;
+		}
+		List<Section> sections = parseSections(module);
+		int numImportedFuncs = importedFunctionCount(module);
+		List<Section> rebuilt = new ArrayList<>(sections.size());
+		for (Section s : sections) {
+			if (s.id() != SEC_CODE) {
+				rebuilt.add(s);
+				continue;
+			}
+			List<byte[]> entries = parseCodeEntries(s.payload());
+			for (Map.Entry<Integer, byte[]> replaced : bodies.entrySet()) {
+				entries.set(replaced.getKey() - numImportedFuncs, replaced.getValue());
+			}
+			ByteArrayOutputStream payload = new UnsynchronizedByteArrayOutputStream();
+			writeU(payload, entries.size());
+			for (byte[] entry : entries) {
+				writeU(payload, entry.length);
+				writeRaw(payload, entry);
+			}
+			rebuilt.add(new Section(s.id(), payload.toByteArray()));
+		}
+		return assemble(rebuilt);
 	}
 
 	static byte[] rebuildExportSection(byte[] payload, int[] remap) {

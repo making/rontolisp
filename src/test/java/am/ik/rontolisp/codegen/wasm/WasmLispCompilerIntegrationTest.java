@@ -4391,6 +4391,19 @@ class WasmLispCompilerIntegrationTest {
 				"(defgeneric gsz (x)) (defmethod gsz ((x integer)) (* x 2))"
 						+ " (defmethod gsz ((x string)) 999) (defmethod gsz (x) 'other)"
 						+ " (print (gsz 21)) (print (gsz 'sym))",
+				// A ladder arm lives while a kept function makes its value: through
+				// every dispatcher shape, a closure made only inside another closure, a
+				// name only the registry answers (its row is the value), and a #'name
+				// whose only other maker nothing calls.
+				"(defun twice (x) (* 2 x)) (print (funcall (car (list #'twice)) 21))"
+						+ " (print (apply (car (list #'list)) 1 '(2 3))) (print (reduce #'- '(1 2 3 4) :from-end t))"
+						+ " (print (reduce (car (list #'-)) '(1 2 3 4) :from-end t))"
+						+ " (print (mapcar (car (list #'car)) '((1) (2))))",
+				"(defun make-adder (n) (lambda (x) (+ x n))) (defun run-it (f) (funcall f 2))"
+						+ " (print (run-it (lambda (k) (funcall (make-adder k) 3))))",
+				"(defun h (x) x (* x 10)) (defun g (x) x (* x 100)) (defun nobody () #'g)"
+						+ " (print (funcall (car (list 'h)) 3)) (print (apply (car (list 'h)) '(4)))"
+						+ " (print (funcall (intern (string-upcase \"g\")) 5))",
 				// The type-test fold (am.ik.wasm.WasmRefTypeFolder) decides the generic
 				// arithmetic's float/ratio/bignum arms from what the program can
 				// construct; a wrongly-folded arm answers WRONG, not with a trap. Every

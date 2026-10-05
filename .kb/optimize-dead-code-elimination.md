@@ -1045,6 +1045,45 @@ written-out literal's own module, byte for byte), each paired with the same bind
 use; `LetBoundDesignatorsTest`; the ci-spec case grew the three shapes that KEEP the binding --
 value use, `setq`, shadowing.
 
+### A ladder arm lives while a kept function makes its value
+The WASM twin of the JVM section below. A funcId joins `valueFuncIds` wherever Pass 2 compiles
+its `(lambda ...)` / `#'name` / async waiter, a body the shake then drops included, and the
+ladder arm's `call` kept the callee and all it reaches. Now every such site goes through
+`Ctx.noteFunctionValue`, which also credits `WasmValueMakers` with the function being compiled
+-- the Pass 2 unit: a defun (2a), `_start` (2b, its top-level chunks included), a lambda (2c).
+A body compiled while a unit is open (an async lambda's resume halves, a chunk) is reached only
+through code that unit emitted, so crediting the unit is never later than the truth; a value
+noted outside every unit (import/export wrappers) is `UNATTRIBUTED` = always made.
+
+`WasmLispCompiler.narrowLadders` runs on the assembled core module BEFORE
+`WasmImportInjector.inject` (a ladder rebuilt after it would miss the renumbering -- the first
+cut did, and every host-importing example failed in `WasmRefTypeFolder`), at every
+`eliminatesDeadCode()` level. It asks `am.ik.wasm.WasmTreeShaker.madeValues` (`ValueCalls`:
+the ladder roots and page slots as dispatchers, funcIndex -> funcId for every arm target, the
+makers, the always-made): reach from exports/start where a dispatcher's call to a valued target
+is followed only once a reached function makes that value. Makers beyond the credits:
+`FUNC_LOOKUP` makes every registry row's funcId (every dispatchable defun when `registryLive`;
+the blob's one reader); a dispatchable defun with neither a row nor a credit (`--dynamic` /
+`anyNameResolvable` without the registry) is always made. When some dispatchable funcId is
+not made, the ladders are rebuilt over the rest (`LadderBuilder`, the same
+`WasmRuntimeBuilder.buildDispatch` call over the same page slots; a slot a smaller ladder leaves
+gets an `unreachable` body the shake drops) and swapped in by `WasmSections.replaceBodies`.
+The rebuild may intern no string (the data section is written; checked). `_lookup` rows and
+`_fun_name` keep the full sets, as on the JVM.
+
+Measured 2026-10-05 (raw / gzip -9n, base 167f74409): bench-report `list` 14,119 -> 12,139
+(-14.0%), `sort` 21,607 -> 20,820 (-3.6%), component and `size` alike, the other eight
+byte-identical; size-report `zlib` 130,239 -> 128,297 (-1.5%) / 42,584 -> 42,387; Workers
+`httpbin` 175,784 -> 168,883 (-3.9%), its component core 170,188 -> 166,745, the clack /
+ningle / tiny-routes / fetcher ones byte-identical. The 145 wasm/component/reactor example
+legs 41,619,240 -> 41,268,898 B (-0.84%, gzip -0.35%): 92 shrink, none grows; most the
+`net/` servers' components (-8.8..-9.2%, `kv-server` 189,093 -> 172,248) and the scheme
+examples (-8.9..-12.2%). ci-spec byte-identical (P1 and component; it uses `eval`); the concatenated scheme-spec
+961,244 -> 956,201 and clojure-spec 6,329,837 -> 6,324,846 (P1; outputs identical). Compile time and bench-report time
+within noise. Pins: `WasmTreeShakerTest#aClosureWhoseEveryCreatorIsShakenTakesItsLadderArmAlong`
+(P1, component, a host import), `#aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue`,
+the four ladder programs in `WasmLispCompilerIntegrationTest#optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`.
+
 ## cl-ppcre, decided
 Adding tiny-routes to a Clack reactor nearly triples the module, and the extra is **cl-ppcre, its
 only dependency**: a route template is compiled to a scanner at RUN time (`path-template.lisp` even
@@ -1147,7 +1186,9 @@ the request-environment builder (`%http-make-env`, the percent/UTF-8 decoders) a
 whose transport never calls it. WASM output byte-identical (P1 and component). bench-report time
 within noise.
 
-**Not narrowed: the registry's own rows.** `_lookup` holds a row for every dispatchable funcId,
+The WASM twin: "A ladder arm lives while a kept function makes its value" above.
+
+**Not narrowed: the registry's own rows** (on either backend). `_lookup` holds a row for every dispatchable funcId,
 `valueFuncIds` included, so a `#'name` compiled only in dead code still keeps its function
 whenever the registry is emitted -- i.e. whenever any dispatcher is. Dropping the registry's
 values (unsound, an upper bound) would take a further 5-7 KB off the gate-on deep-learning
