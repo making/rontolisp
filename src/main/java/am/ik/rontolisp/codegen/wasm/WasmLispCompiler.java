@@ -2085,6 +2085,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts, and shaken when nothing divides.
 	static final int FUNC_DIV_ZERO = FUNC_RAT_TO_F64 + 1;
 
+	// _subseq_bad (start, end, length, piece) -> value: the landing of every subseq
+	// bounds refusal (_subseq, _subseq_str, %subseq-end) in EH mode
+	// (WasmStringRuntimeBuilder.buildSubseqBadBody): it throws "SUBSEQ: invalid bounds
+	// S, E for KIND of length N" as a type-error naming the refused bound (or the
+	// instance-less payload where the class is not baked). Never returns; outside EH mode
+	// no site calls it. Appended after the last fixed helper so no index above shifts,
+	// and shaken when nothing refuses a range.
+	static final int FUNC_SUBSEQ_BAD = FUNC_DIV_ZERO + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2115,7 +2124,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_DIV_ZERO + 1;
+	static final int FUNC_VEC_BASE = FUNC_SUBSEQ_BAD + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2133,9 +2142,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
 	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
-	// conversion (_rat_to_f64) and the division-by-zero landing (_div_zero) -- plus,
-	// under --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_DIV_ZERO + 1;
+	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero) and the subseq
+	// bounds landing (_subseq_bad) -- plus, under --simd, the vec: SIMD block. Use
+	// userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_SUBSEQ_BAD + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7449,6 +7459,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_BIG_TO_F64); // _rat_to_f64 (rational) -> f64
 													// (FUNC_RAT_TO_F64)
 				fnDef.addFunction(TYPE_START); // _div_zero () -> () (FUNC_DIV_ZERO)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _subseq_bad (start, end,
+															// length, piece) -> value
+															// (FUNC_SUBSEQ_BAD)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8108,7 +8121,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
 					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables, ehMode,
-							subseqBoundsPrefix, subseqBoundsComma, subseqBoundsForLength))
+							subseqBoundsForLength))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
@@ -8340,7 +8353,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody(this.usesIdentityHashTables, ehMode,
-						subseqBoundsPrefix, subseqBoundsComma, subseqBoundsForLength));
+						subseqBoundsForLength));
 				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
 				// shared make-array dimension parse bodies (FUNC_ARR_DIMS/FUNC_ARR_TOTAL)
@@ -8449,6 +8462,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// divides.
 				code.addFunction(WasmRuntimeBuilder.buildDivZeroBody(divZeroMessage, divZeroInstance,
 						this.usesIdentityHashTables));
+				// the subseq bounds landing body (FUNC_SUBSEQ_BAD): shaken when nothing
+				// refuses a range.
+				code.addFunction(WasmStringRuntimeBuilder
+					.buildSubseqBadBody(subseqBoundsPrefix, subseqBoundsComma, operandTypeError,
+							operandTexts != null ? operandTexts.compoundNames()
+								.get(am.ik.rontolisp.compiler.OperandTypes.INTEGER_TYPE) : null,
+							this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

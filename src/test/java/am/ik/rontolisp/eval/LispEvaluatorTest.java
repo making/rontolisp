@@ -1993,7 +1993,8 @@ class LispEvaluatorTest {
 	@Test
 	void subseqSignalsInvalidBoundsOnEveryBackend() {
 		// A start < 0, an end past the sequence's length, or start > end are all one
-		// report per representation; the compile-path twins pin the same text.
+		// report per representation, a type-error naming the first bound outside its
+		// range; the compile-path twins pin the same text and slots.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		for (LispVal expr : LispReader.readAllFromString(SubseqBoundsFixture.PROGRAM)) {

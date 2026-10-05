@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
@@ -94,7 +95,7 @@ final class JvmSubseqCompiler {
 			unboxEnd(helper, 1, endSlot);
 			unboxIndex(helper, 2, lenSlot);
 			emitResolveEnd(helper.body, endSlot, lenSlot, realEndSlot);
-			emitBoundsCheck(helper.body, helper.cp, startSlot, realEndSlot, lenSlot, "vector");
+			emitBoundsCheck(helper.body, helper.cp, helper.subseqRecords, startSlot, realEndSlot, lenSlot, "vector");
 			helper.body.iload(realEndSlot).i2l();
 			JvmEmitHelper.boxLong(helper);
 		});
@@ -203,7 +204,7 @@ final class JvmSubseqCompiler {
 					JvmStringIndexRuntimeBuilder.COUNT_DESC));
 			asm.istore(lenSlot);
 			emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
-			emitBoundsCheck(asm, ctx.cp, startSlot, realEndSlot, lenSlot, "string");
+			emitBoundsCheck(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "string");
 			// a = _cpoff(s, start) -- the offset of character `start` past the leading
 			// quote.
 			asm.aload(sSlot);
@@ -388,7 +389,7 @@ final class JvmSubseqCompiler {
 		asm.goto_(countLoop);
 		asm.labelBinding(countDone);
 		emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
-		emitBoundsError(asm, ctx.cp, startSlot, realEndSlot, lenSlot, "list");
+		emitBoundsError(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "list");
 
 		asm.labelBinding(doneLabel);
 		asm.aload(resultSlot);
@@ -413,19 +414,22 @@ final class JvmSubseqCompiler {
 	 * {@code "SUBSEQ: invalid bounds S, E for KIND of length N"} otherwise.
 	 * @param m the method being emitted
 	 * @param cp its constant pool
+	 * @param records the class's {@code _subseqRec} builder, or null when it has no
+	 * landing pad
 	 * @param startSlot the int start
 	 * @param endSlot the int end, already resolved (never the omitted sentinel)
 	 * @param lenSlot the int length of the sequence
 	 * @param kind the report's sequence kind ({@code string}, {@code list},
 	 * {@code vector})
 	 */
-	static void emitBoundsCheck(MethodCode m, ConstantPool cp, int startSlot, int endSlot, int lenSlot, String kind) {
+	static void emitBoundsCheck(MethodCode m, ConstantPool cp, JvmOperandTypeRuntime.@Nullable SubseqRecords records,
+			int startSlot, int endSlot, int lenSlot, String kind) {
 		MethodCode.Label ok = m.newLabel();
 		MethodCode.Label bad = m.newLabel();
 		emitBoundsTest(m, startSlot, endSlot, lenSlot, bad);
 		m.goto_(ok);
 		m.labelBinding(bad);
-		emitBoundsError(m, cp, startSlot, endSlot, lenSlot, kind);
+		emitBoundsError(m, cp, records, startSlot, endSlot, lenSlot, kind);
 		m.labelBinding(ok);
 	}
 
@@ -442,10 +446,22 @@ final class JvmSubseqCompiler {
 		m.if_icmpgt(bad);
 	}
 
-	// Throws the bounds report: a condition-less RuntimeException, which lands as a
-	// simple-error under handler-case exactly like the interpreter's condition-less
-	// LispEvalException. Never falls through.
-	static void emitBoundsError(MethodCode m, ConstantPool cp, int startSlot, int endSlot, int lenSlot, String kind) {
+	/**
+	 * Throws the bounds report, a {@code RuntimeException}: under a landing pad
+	 * ({@code records} non-null) recorded by {@code _subseqRec}, so the pad catches it as
+	 * the interpreter's {@code type-error} naming the refused bound; without one nothing
+	 * can observe the class and the exception is thrown bare. Never falls through.
+	 * @param m the method being emitted
+	 * @param cp its constant pool
+	 * @param records the class's {@code _subseqRec} builder, or null when it has no
+	 * landing pad
+	 * @param startSlot the int start
+	 * @param endSlot the int end, already resolved
+	 * @param lenSlot the int length of the sequence
+	 * @param kind the report's sequence kind
+	 */
+	static void emitBoundsError(MethodCode m, ConstantPool cp, JvmOperandTypeRuntime.@Nullable SubseqRecords records,
+			int startSlot, int endSlot, int lenSlot, String kind) {
 		ClassEntry rtEx = cp.classEntry("java/lang/RuntimeException");
 		MethodRefEntry concat = cp.methodRef("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		MethodRefEntry intToStr = cp.methodRef("java/lang/String", "valueOf", "(I)Ljava/lang/String;");
@@ -466,6 +482,12 @@ final class JvmSubseqCompiler {
 		m.invokestatic(intToStr);
 		m.invokevirtual(concat);
 		m.invokespecial(cp.methodRef(rtEx, "<init>", "(Ljava/lang/String;)V"));
+		if (records != null) {
+			m.iload(startSlot);
+			m.iload(endSlot);
+			m.iload(lenSlot);
+			m.invokestatic(records.ref());
+		}
 		m.athrow();
 	}
 
