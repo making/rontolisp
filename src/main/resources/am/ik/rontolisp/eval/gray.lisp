@@ -427,11 +427,14 @@
           nil)
         (fresh-line stream))))
 
-(defun rontolisp::%gray-write-line-dispatch (s stream &optional start end)
-  ;; A nil bound is ABSENT, never an explicit nil: user methods default start to
-  ;; 0 (the echo stream does), and an explicit nil would override that default.
-  ;; The no-bounds fallback keeps the exact old two-argument shape, which the
-  ;; component socket rewrite matches by arity.
+(defun rontolisp::%gray-write-line-dispatch
+    (s stream &optional (start nil start-p) end)
+  ;; A nil bound is ABSENT for a Gray instance, never an explicit nil: user methods
+  ;; default start to 0 (the echo stream does), and an explicit nil would override that
+  ;; default. Any other stream gets the bounds as written -- a given nil :start is the
+  ;; bounds type-error there, which START-P tells from an omitted one. The no-bounds
+  ;; fallback keeps the exact old two-argument shape, which the component socket
+  ;; rewrite matches by arity.
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
@@ -444,9 +447,9 @@
                   (rontolisp:stream-write-string stream s)))
           (rontolisp:stream-terpri stream)
           s)
-        (if (and (null start) (null end))
+        (if (and (not start-p) (null end))
             (write-line s stream)
-            (write-line s stream :start (or start 0) :end end)))))
+            (write-line s stream :start (if start-p start 0) :end end)))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
   (let ((stream (%stream-target stream)))

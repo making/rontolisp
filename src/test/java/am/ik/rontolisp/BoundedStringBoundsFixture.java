@@ -8,7 +8,10 @@ package am.ik.rontolisp;
  * {@code subseq} gives the same range ({@link SubseqBoundsFixture}) on every backend,
  * through a direct call and through {@code funcall}; a bound that is no integer is
  * refused the same way, and so is an integer past the int range (it never reads as its
- * low bits). The bounds are computed at run time so no backend can fold them.
+ * low bits). The bounds are computed at run time so no backend can fold them. The program
+ * defines a Gray stream class, so the compile paths carry the Gray write-line dispatch
+ * the {@code write-line} sites then route through (a program without one lowers them
+ * directly).
  */
 public final class BoundedStringBoundsFixture {
 
@@ -17,6 +20,8 @@ public final class BoundedStringBoundsFixture {
 
 	/** The program: one row per operator, one cell per refused range. */
 	public static final String PROGRAM = """
+			(defclass bsb-gray (rontolisp:fundamental-character-output-stream) ())
+			(defmethod rontolisp:stream-write-string ((s bsb-gray) str) str)
 			(defun bsb-probe (thunk)
 			  (handler-case (progn (funcall thunk) :ok)
 			    (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))
