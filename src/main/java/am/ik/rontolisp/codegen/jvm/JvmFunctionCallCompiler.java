@@ -41,11 +41,11 @@ final class JvmFunctionCallCompiler {
 		int arity = parts.size() - 2;
 		if (ctx.tailBounce && ctx.tailMark == cons
 				&& JvmDesignatorCall.directTarget(parts.get(1), arity, ctx) == null) {
-			// The method's true tail through a value: bounce instead of calling, and the
-			// trampoline loop above drives the call in its own frame
-			// (JvmTailBounce). A literal designator names its target, so that call
+			// The method's true tail through a value: a call while the stack holds few
+			// such frames, else a bounce the trampoline loop above drives in its own
+			// frame (JvmTailBounce). A literal designator names its target, so that call
 			// stays the direct one below.
-			JvmTailBounce.emitBounce(parts.get(1), parts, 2, ctx, className);
+			JvmTailBounce.emitValueTail(parts.get(1), parts, 2, ctx, className);
 			return;
 		}
 		// A literal designator is called directly, anything else goes through the arity
@@ -66,8 +66,8 @@ final class JvmFunctionCallCompiler {
 		List<LispVal> args = cons.toList();
 		int arity = args.size() - 1;
 		if (ctx.tailBounce && ctx.tailMark == cons) {
-			// The method's true tail through a value: bounce (JvmTailBounce).
-			JvmTailBounce.emitBounce(args.get(0), args, 1, ctx, className);
+			// The method's true tail through a value (JvmTailBounce).
+			JvmTailBounce.emitValueTail(args.get(0), args, 1, ctx, className);
 			return;
 		}
 		ctx.indirectCallArities.add(arity);

@@ -1709,12 +1709,13 @@ outside such a cycle changes: a program with none lowers byte-identically.
   closure a `funcall`/`apply` names in its own loop frame (`.kb/interpreter-tail-calls.md`).
   On the JVM the emitter trampolines them too (2026-10-03, `.todo/b69`): a tail call
   whose target the compiler cannot name -- the lowering's `(funcall
-  (%scheme-ensure-procedure f) ...)` -- is emitted as a BOUNCE: the designator and the
-  arguments evaluate into `Object[]{Boolean.TRUE-marker, designator, arg...}` and that
-  array is the method's result. Every caller of a compiled function's result checks for
-  the array and, on the shape, drives the call it names in ITS OWN frame -- the shared
-  `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes back
-  (`JvmTailBounce`). The check is one `invokestatic _unw` per call site (a 34-byte
+  (%scheme-ensure-procedure f) ...)` -- is a value tail, a call of the class's `_vtc<n>`
+  that is a real call while fewer than 64 such frames are on the stack of the thread that
+  owns the count, and past that answers a BOUNCE: `Object[]{Boolean.TRUE-marker,
+  designator, arg...}`, the method's result. Every caller of a compiled function's result
+  checks for the array and, on the shape, drives the call it names in ITS OWN frame -- the
+  shared `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes
+  back (`JvmTailBounce`). The check is one `invokestatic _unw` per call site (a 34-byte
   helper that hands a bounce to `_tramp`); spelled out inline it cost ~22 bytes a site and
   took the ci-spec corpus's largest top-level form to 68,454 B, past the 64 KB method limit
   (2026-10-03, CI red at `ec836db36`). One frame per tail chain plus the dispatcher's; the

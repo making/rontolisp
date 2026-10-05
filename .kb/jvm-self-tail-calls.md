@@ -39,8 +39,8 @@ tail mechanism, the trampoline for a tail call through a value, is `JvmTailBounc
   `multiple-value-bind`, `destructuring-bind`, `symbol-macrolet`, `with-slots`,
   `with-accessors`, `multiple-value-call`, `dolist`, `dotimes`, `do`, `do*`, `loop`, `prog`,
   `prog*`; since 2026-10-04 for the ones after `etypecase`). The extended relays reach the
-  bounce too, so a trampolined class bounces in those positions as well. Only an arm that
-  emits nothing after its expansion may relay.
+  value tail too, so a call through a value in those positions is one as well. Only an arm
+  that emits nothing after its expansion may relay.
 - **The exit chain** (`Ctx.exitMark`, 2026-10-04): the forms that relay the mark lay a second
   one on EVERY sub-form they compile in place -- a `progn`'s, a plain `let`'s, a block's
   statements, both `if` arms, a `while` body, the statements of a `tagbody`, an inline
@@ -142,13 +142,13 @@ pair, Clojure's regex matcher, a multi-arity `defn`'s clause helper.
   special", has the depths.
 - A self tail call in a `_k$N` continuation (`JvmBodyOutliner` split a body past the
   method-size budget): another method, so a call, one frame a round (a tail through a value
-  there bounces and passes on, [jvm-tail-bounce.md](jvm-tail-bounce.md)).
+  there is a value tail and passes its bounce on, [jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - A tail group laid out apart (a rooted method past 8000 bytecodes): each member's tail call
   to another is a direct call, a frame a round. A jump from a member that is not rooted is a
   call into a rooted method: one frame per entry, not per round.
-- A tail `apply` of itself (it bounces, [jvm-tail-bounce.md](jvm-tail-bounce.md)), and a nested
-  `defun` (a global variable that may be reassigned).
-- A `multiple-value-call` of a computed function (a value in a temporary: it bounces).
+- A tail `apply` of itself (a value tail, [jvm-tail-bounce.md](jvm-tail-bounce.md)), and a
+  nested `defun` (a global variable that may be reassigned).
+- A `multiple-value-call` of a computed function (a value in a temporary: a value tail).
   `(multiple-value-call #'f ..)` keeps the literal in its `funcall`
   (`LispMacroExpander.expandMultipleValueCall`, 2026-10-04), so it is a jump; the name is
   then resolved after the producers, which is what SBCL prints for a producer that redefines

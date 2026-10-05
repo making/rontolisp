@@ -5,8 +5,9 @@
   interpreter (`rontolisp prog.scm`, the REPL), and on the JVM (`-o Prog.class`,
   `java Prog`) -- where a named `let` or `do`, a direct self or mutual tail call, and
   a tail call through a procedure value (an argument, a variable, any computed
-  designator: the callee's own tail call re-enters through the class's trampoline
-  instead of stacking a frame) all run in constant stack, a tail `apply` included.
+  designator: an ordinary call until 64 of them are on the stack, after which the chain
+  re-enters through the class's trampoline instead of stacking frames) all run in
+  constant stack, a tail `apply` included.
   Recursion NOT in tail position uses one Java frame per two calls, and the compiled
   `main` runs on a 16 MiB worker (`-Drontolisp.stack` raises it).
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still

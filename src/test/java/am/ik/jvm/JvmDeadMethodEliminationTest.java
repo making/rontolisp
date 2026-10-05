@@ -335,10 +335,11 @@ class JvmDeadMethodEliminationTest {
 
 	@Test
 	void aClosureMadeOnlyBehindATrampolineBounceKeepsItsCase() throws Exception {
-		// Every call through a value here is a tail call, so each bounces and only the
-		// trampoline re-enters the arity-1 dispatcher. The closure MAKE-ADDER makes is
-		// made only on that path: the cases are decided once the trampoline is written,
-		// or the adder's case is dropped and the funcall that lands on it fails.
+		// Every call through a value here is a tail call, so only the value tails' _vtc1
+		// and the trampoline reach the arity-1 dispatcher, and only behind them is the
+		// closure MAKE-ADDER makes made: the cases are decided once the trampoline is
+		// written, every caller of the dispatcher counted, so the adder's case stays and
+		// the funcall that lands on it answers.
 		String source = """
 				(defun make-adder (n) (lambda (x) (+ x n)))
 				(defun run-it (f) (funcall f 2))

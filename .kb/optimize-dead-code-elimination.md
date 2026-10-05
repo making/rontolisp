@@ -1125,9 +1125,10 @@ Then `JvmLispCompiler.rebuildDispatchers` asks `JvmClassSplitter.reach` and, whe
 dispatchable funcId has no value a kept body makes, rebuilds the dispatch methods
 (`_invoke_<n>`, `_invoke_v`, `_arityErr`'s table, `_notFn`) over the rest and swaps them in
 (`ClassDefinition.withMethods`): the dead case's code goes, not only its target. **It is asked
-after `_unw` is written**: a closure made only on the trampoline's re-entry path (every call
-through a value a tail call, so only `_tramp` reaches the dispatcher) is otherwise dropped and the
-call answers NIL. The trampoline gate itself asks before, over the same value semantics, so the
+after `_unw` is written**, so every caller of a dispatcher counts: when every call through a
+value is a tail call, the value tails' `_vtc<n>` and the trampoline's re-entries are the only
+ones, and a closure made only behind them must keep its case or the call that lands on it
+answers NIL. The trampoline gate itself asks before, over the same value semantics, so the
 dead closures no longer hold `_tramp`. `_lookup` rows and `_funName` keep `dispatchableFuncIds`;
 `--optimize=off` writes every case. `-Drontolisp.debug.dispatchgate=true` prints how many
 dispatchable funcIds no kept body makes.

@@ -108,9 +108,10 @@ final class JvmApplyCompiler {
 		}
 
 		if (ctx.tailBounce && ctx.tailMark == cons) {
-			// The method's true tail through a value: bounce with the list unspread, and
-			// the trampoline applies it in its own frame (JvmTailBounce).
-			JvmTailBounce.emitSpreadBounce(ctx, funcSlot, curSlot);
+			// The method's true tail through a value: the spread value tail applies the
+			// list, or bounces it unspread past the limit for the trampoline to apply in
+			// its own frame (JvmTailBounce).
+			JvmTailBounce.emitSpreadValueTail(ctx, funcSlot, curSlot, className);
 			return;
 		}
 

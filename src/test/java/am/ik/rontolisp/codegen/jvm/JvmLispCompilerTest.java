@@ -23515,6 +23515,32 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	/**
+	 * Runs the class as {@link #runClass} does, then reads the named static fields of the
+	 * class it ran: the output under {@code "out"}, each field under its name.
+	 */
+	private Map<String, Object> runClassReading(byte[] classBytes, String... fields) throws Exception {
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			Map<String, Object> read = new java.util.HashMap<>();
+			read.put("out", baos.toString().trim());
+			for (String name : fields) {
+				java.lang.reflect.Field field = clazz.getDeclaredField(name);
+				field.setAccessible(true);
+				read.put(name, field.get(null));
+			}
+			return read;
+		}
+	}
+
 	@Test
 	void aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv() throws Exception {
 		// The eval mirror (_store into _genv) exists so an eval'd form can read a
@@ -23649,21 +23675,24 @@ class JvmLispCompilerTest {
 	@Test
 	void theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue() throws Exception {
 		// A tail that stays direct -- a self call the lowering made a loop -- carries no
-		// trampoline at all: no _tramp, no unwrap, the class the pre-trampoline emitter
-		// wrote (.kb/scheme-frontend.md, "Not a trampoline"). One whose tail leaves
-		// through the variable the callee arrived in bounces, and the same program runs
-		// a depth the plain call chain overflows on the JVM's sized worker.
+		// trampoline at all: no _tramp, no value tail, no unwrap, the class the
+		// pre-trampoline emitter wrote (.kb/scheme-frontend.md, "Not a trampoline"). One
+		// whose tail leaves through the variable the callee arrived in is a value tail,
+		// and the same program runs a depth the plain call chain overflows on the JVM's
+		// sized worker.
 		byte[] direct = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
 				(defun f (n) (if (= n 0) 'done (f (- n 1))))
 				(print (f 100000))
 				"""));
-		assertThat(declaredMethodNames(direct)).doesNotContain("_tramp");
+		assertThat(declaredMethodNames(direct)).doesNotContain("_tramp", "_vtc2", JvmTailBounce.CLAIM_NAME);
+		assertThat(declaredFieldNames(direct)).doesNotContain(JvmTailBounce.OWNER_FIELD, JvmTailBounce.DEPTH_FIELD);
 		assertThat(runClass(direct)).isEqualTo("DONE");
 		byte[] bounced = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
 				(defun g (self n) (if (= n 0) 'done (funcall self self (- n 1))))
 				(print (g (function g) 300000))
 				"""));
-		assertThat(declaredMethodNames(bounced)).contains("_tramp");
+		assertThat(declaredMethodNames(bounced)).contains("_tramp", "_vtc2", JvmTailBounce.CLAIM_NAME);
+		assertThat(valueTailSitesIn(bounced, "G")).isEqualTo(1);
 		assertThat(runClass(bounced)).isEqualTo("DONE");
 	}
 
@@ -23716,18 +23745,20 @@ class JvmLispCompilerTest {
 	void aLambdasTailCallThroughAValueRunsInConstantStack() throws Exception {
 		// A closure's tail call through a value -- itself through the variable holding
 		// it, a partner closure, a defun handed the closure as its continuation, a state
-		// machine of closures in a vector -- bounces through the trampoline as a defun's
-		// does (JvmTailBounce), so a depth the frame-per-call chain overflowed on the
-		// 16 MiB worker runs. The continuation's tail call of CTV-HOP is a direct call
-		// whose bounce passes on as the closure's own answer: unwrapped there, each
+		// machine of closures in a vector -- is a value tail as a defun's is
+		// (JvmTailBounce): its _vtc<n> bounces once the chain fills the limit, so a depth
+		// the frame-per-call chain overflowed on the 16 MiB worker runs, and no lambda
+		// builds a bounce itself. The continuation's tail call of CTV-HOP is a direct
+		// call whose bounce passes on as the closure's own answer: unwrapped there, each
 		// round would keep the closure's frame under the trampoline it drives.
 		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(CLOSURE_TAIL_CALLS));
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
 		List<String> lambdas = declaredMethodNames(classBytes).stream().filter(n -> n.startsWith("_lambda_")).toList();
-		assertThat(lambdas.stream().filter(n -> bounceSitesIn(classBytes, n) > 0).count())
-			.as("the self loop, the pair and the two states bounce")
+		assertThat(lambdas.stream().filter(n -> valueTailSitesIn(classBytes, n) > 0).count())
+			.as("the self loop, the pair and the two states call through a value")
 			.isGreaterThanOrEqualTo(5);
+		assertThat(lambdas.stream().mapToInt(n -> markerReadsIn(classBytes, n)).sum()).isZero();
 		List<String> hopCallers = lambdas.stream().filter(n -> ownCallsIn(classBytes, n, "CTV-HOP") > 0).toList();
 		assertThat(hopCallers).hasSize(1);
 		assertThat(unwrapsAfterCallsTo(classBytes, hopCallers.get(0), "CTV-HOP")).isZero();
@@ -23779,9 +23810,10 @@ class JvmLispCompilerTest {
 
 	@Test
 	void aTailApplyThroughAValueBouncesWithItsArgumentListUnspread() throws Exception {
-		// (apply f ...) over a computed designator in tail position bounces as
+		// (apply f ...) over a computed designator in tail position calls _vtcv, which
+		// applies the list through the raw apply or, past the limit, bounces it as
 		// {FALSE, f, list}, and the trampoline re-enters the raw apply with it
-		// (JvmTailBounce.emitSpreadBounce): a closure applying itself and a defun
+		// (JvmTailBounce.emitSpreadValueTail): a closure applying itself and a defun
 		// applying the closure that calls it run 1,000,000 deep. _apply itself still
 		// answers a real value, to a Java caller among others.
 		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
@@ -23797,7 +23829,10 @@ class JvmLispCompilerTest {
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
 		assertThat(ownCallsIn(classBytes, "_tramp", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
 		assertThat(ownCallsIn(classBytes, "_apply", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, JvmTailBounce.VALUE_TAIL_SPREAD_NAME, JvmTailBounce.APPLY_RAW_NAME))
+			.isEqualTo(1);
 		assertThat(ownCallsIn(classBytes, "AP-STEP", "_apply")).isZero();
+		assertThat(ownCallsIn(classBytes, "AP-STEP", JvmTailBounce.VALUE_TAIL_SPREAD_NAME)).isEqualTo(1);
 		assertThat(runClass(classBytes)).isEqualTo("(:DONE (:A :B))\n:STEPPED\n(1 2 3)");
 		// The Clojure front end calls every value through %clojure-call's apply.
 		byte[] clojure = new am.ik.rontolisp.cli.JvmSourceCompiler("Test").sourceLanguage("clojure").compile("""
@@ -23821,9 +23856,9 @@ class JvmLispCompilerTest {
 				             (lit-c #'lit-a 3) (lit-c #'lit-a nil)))
 				"""));
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
-		assertThat(bounceSitesIn(classBytes, "LIT-A")).isZero();
+		assertThat(valueTailSitesIn(classBytes, "LIT-A")).isZero();
 		assertThat(ownCallsIn(classBytes, "LIT-A", "LIT-B")).isEqualTo(1);
-		assertThat(bounceSitesIn(classBytes, "LIT-C")).isZero();
+		assertThat(valueTailSitesIn(classBytes, "LIT-C")).isZero();
 		assertThat(ownCallsIn(classBytes, "LIT-C", "LIT-V")).isEqualTo(1);
 		assertThat(unwrapsAfterCallsTo(classBytes, "LIT-C", "LIT-V")).as("LIT-V's bounce passes on").isZero();
 		assertThat(runClass(classBytes)).isEqualTo("((:B 1) (:B 2) (:B 3) :NONE)");
@@ -23834,17 +23869,77 @@ class JvmLispCompilerTest {
 		// Every dispatcher call site checks for a bounce, and the class carries _tramp
 		// only when a method the shake keeps can make one: otherwise _unw answers its
 		// argument and _tramp -- with every dispatcher arity it names and the closures
-		// only those reach -- goes away.
+		// only those reach -- goes away, and the value tails' _vtc<n> with it, the count
+		// and its claim.
 		byte[] none = new JvmLispCompiler("Test")
 			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
-		assertThat(declaredMethodNames(none)).contains("_unw").doesNotContain("_tramp");
+		assertThat(declaredMethodNames(none)).contains("_unw")
+			.doesNotContain("_tramp", "_vtc1", JvmTailBounce.CLAIM_NAME);
+		assertThat(declaredFieldNames(none)).doesNotContain(JvmTailBounce.OWNER_FIELD, JvmTailBounce.DEPTH_FIELD);
 		assertThat(codeLengthOf(none, "_unw")).isEqualTo(2);
 		assertThat(runClass(none)).isEqualTo("(1 4 9)");
 		byte[] live = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
 				(let ((f nil)) (setq f (lambda (n) (if (= n 0) :done (funcall f (- n 1))))) (print (funcall f 300000)))
 				"""));
-		assertThat(declaredMethodNames(live)).contains("_unw", "_tramp");
+		assertThat(declaredMethodNames(live)).contains("_unw", "_tramp", "_vtc1", JvmTailBounce.CLAIM_NAME);
+		assertThat(declaredFieldNames(live)).contains(JvmTailBounce.OWNER_FIELD, JvmTailBounce.DEPTH_FIELD);
 		assertThat(runClass(live)).isEqualTo(":DONE");
+	}
+
+	@Test
+	void aShallowValueTailIsACallAndAChainPastTheLimitBouncesIntoTheTrampoline() throws Exception {
+		// _vtc<n> calls through the dispatcher while the value-tail frames on the owner
+		// thread's stack stay under the limit, and bounces past it; _tramp then holds the
+		// count at the limit while it drives the rest of the chain (JvmTailBounce). Every
+		// chain length around the limit answers, the count is back at zero once the top
+		// level returns, and the thread that made the first value tail -- the program's
+		// worker, not the thread that called main -- owns it.
+		String program = """
+				(defun vtl-chain (n)
+				  (let ((f (lambda (x) (list :end x))))
+				    (dotimes (i n f) (let ((next f)) (setq f (lambda (x) (funcall next (+ x 1))))))))
+				(print (mapcar (lambda (n) (second (funcall (vtl-chain n) 0))) '(0 1 63 64 65 128 129 100000)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(ownCallsIn(classBytes, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(markerReadsIn(classBytes, "_vtc1")).as("the bounce it answers past the limit").isEqualTo(1);
+		assertThat(fieldWritesIn(classBytes, "_tramp", JvmTailBounce.DEPTH_FIELD)).as("hold and restore")
+			.isGreaterThanOrEqualTo(2);
+		Map<String, Object> statics = runClassReading(classBytes, JvmTailBounce.DEPTH_FIELD, JvmTailBounce.OWNER_FIELD);
+		assertThat(statics.get("out")).isEqualTo("(0 1 63 64 65 128 129 100000)");
+		assertThat(statics.get(JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
+		assertThat(statics.get(JvmTailBounce.OWNER_FIELD)).isInstanceOf(Thread.class)
+			.isNotSameAs(Thread.currentThread());
+	}
+
+	@Test
+	void theValueTailCountComesBackWhenANonLocalExitLeavesAChain() throws Exception {
+		// A throw, a return-from out of a closure and an error each leave a chain of
+		// value tails from deeper than the limit -- out of the trampoline that holds the
+		// count -- and from shallower, out of the frames _vtc<n> counted. Every frame
+		// they unwind restores what it raised, so the count is zero once the top level
+		// returns: no exit leaves the next chain fewer real calls. The last exit is the
+		// shallow one, so a frame that failed to restore would leave its depth behind.
+		String program = """
+				(defun vte-thrower (d)
+				  (let ((f nil))
+				    (setq f (lambda (n) (if (= n 0) (throw 'vte-out d) (funcall f (- n 1)))))
+				    (catch 'vte-out (funcall f d))))
+				(defun vte-finder (d)
+				  (block found
+				    (let ((g nil))
+				      (setq g (lambda (n) (if (= n 0) (return-from found d) (funcall g (- n 1)))))
+				      (funcall g d))))
+				(defun vte-erring (d)
+				  (handler-case
+				      (let ((h nil)) (setq h (lambda (n) (if (= n 0) (error "deep") (funcall h (- n 1))))) (funcall h d))
+				    (error () d)))
+				(print (loop for d in '(500 65 64 63 3) collect (list (vte-thrower d) (vte-finder d) (vte-erring d))))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		Map<String, Object> statics = runClassReading(classBytes, JvmTailBounce.DEPTH_FIELD);
+		assertThat(statics.get("out")).isEqualTo("((500 500 500) (65 65 65) (64 64 64) (63 63 63) (3 3 3))");
+		assertThat(statics.get(JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
 	}
 
 	@Test
@@ -23863,7 +23958,7 @@ class JvmLispCompilerTest {
 			.filter(n -> n.startsWith("_lambda_") && ownCallsIn(classBytes, n, "_invoke_0") > 0)
 			.toList();
 		assertThat(binders).hasSize(1);
-		assertThat(bounceSitesIn(classBytes, binders.get(0))).isZero();
+		assertThat(valueTailSitesIn(classBytes, binders.get(0))).isZero();
 		assertThat(runClass(classBytes)).isEqualTo("(7 :TOP)");
 	}
 
@@ -24319,22 +24414,61 @@ class JvmLispCompilerTest {
 		return jumps;
 	}
 
-	/** The bounces method {@code method} makes: its reads of the marker of the array. */
-	private static int bounceSitesIn(byte[] classBytes, String method) {
+	/**
+	 * The tail calls through a value method {@code method} makes: its calls of a
+	 * {@code _vtc<n>} or {@code _vtcv}, each of which answers a bounce past the limit.
+	 */
+	private static int valueTailSitesIn(byte[] classBytes, String method) {
 		int sites = 0;
 		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
 			if (!model.methodName().equalsString(method)) {
 				continue;
 			}
 			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
-				if (element instanceof java.lang.classfile.instruction.FieldInstruction field
-						&& field.owner().asInternalName().equals("java/lang/Boolean")
-						&& field.name().equalsString("TRUE")) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().stringValue().matches("_vtc(\\d+|v)")) {
 					sites++;
 				}
 			}
 		}
 		return sites;
+	}
+
+	/**
+	 * The bounce arrays method {@code method} builds itself: its reads of the marker a
+	 * bounce carries in slot 0.
+	 */
+	private static int markerReadsIn(byte[] classBytes, String method) {
+		int reads = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction field
+						&& field.owner().asInternalName().equals("java/lang/Boolean")) {
+					reads++;
+				}
+			}
+		}
+		return reads;
+	}
+
+	/** The writes method {@code method} makes to the static field {@code field}. */
+	private static int fieldWritesIn(byte[] classBytes, String method, String field) {
+		int writes = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction write
+						&& write.opcode() == java.lang.classfile.Opcode.PUTSTATIC && write.name().equalsString(field)) {
+					writes++;
+				}
+			}
+		}
+		return writes;
 	}
 
 	/**
