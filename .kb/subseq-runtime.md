@@ -88,6 +88,20 @@ until d13 a list truncated (`(subseq '(1 2 3) 1 5)` -> `(2 3)`), a vector report
 `AREF` or trapped `allocation size too large`, and a built string threw a JVM
 `ClassCastException` / trapped on wasm -- Clojure `.substring` inherited it.
 
+**An omitted `end` is the end argument's nil, read as nil -- never an int sentinel.** The
+JVM helpers take `end` as an `Object` (`_subseqCore`, `_subseqCv`, `_subseqEnd`; the
+resolve is `JvmSubseqCompiler.emitResolveEnd`), wasm `_subseq` tests its param 2 with
+`ref.is_null` (`_subseq_str` and `%subseq-end` always did). Nil used to travel as the int
+`-1`, so a GIVEN `-1` read as omitted: `(subseq s 0 -1)` answered the whole sequence on
+the JVM for every representation and on wasm for a literal string or a list, and
+`write-string :end -1` wrote it all. `Integer.MIN_VALUE` would not have been safe either:
+a fixnum bound is narrowed with `l2i`, which reaches every int. Cost: wasm modules with a
+subseq lane -8 B (the per-cell list test is `ref.is_null` instead of an `i32` compare),
+JVM classes -14 B with `_subseqCore`, +5 B with `_subseqCv` alone (`sieve`); programs
+without a lane byte-identical (`hello_world`, `pi_approx`, `dom_reactor`, `string`,
+`list`, `fib`, ... at the default and `size` levels; `--optimize=off` carries the lane:
+-5/-14 B JVM, -8 B wasm).
+
 Where each lane checks:
 - **Interpreter**: every representation's arm throws `Environment.subseqBoundsError`, an
   `OperandTypeException.reported` -- the report worded by the built-in, already named so the
@@ -199,10 +213,8 @@ signals a `type-error` for all five and its text names no operator either.
 - Pins: `BoundedStringBoundsFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest` -- P1 and component), ci-spec
   `bounded-string-operators-refuse-a-bad-range` (SBCL's class).
-- Known gaps, NOT these operators': a NEGATIVE `end` given to a compiled `subseq` is read
-  as "omitted" on the JVM (the sentinel is -1) and on the wasm literal-string lane; a
-  non-integer bound is a `simple-error` in the interpreter, a bare type-error on the JVM
-  and a cast trap on wasm.
+- Known gap, NOT these operators': a non-integer bound is a `simple-error` in the
+  interpreter, a bare type-error on the JVM and a cast trap on wasm.
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

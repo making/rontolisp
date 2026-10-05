@@ -320,7 +320,7 @@ final class JvmArrayRuntimeBuilder {
 	 */
 	static final String SUBSEQ_CV = "_subseqCv";
 
-	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;II)Ljava/lang/Object;";
+	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object;";
 
 	/**
 	 * {@code _toMutStr(Object) -> Object}: the mutable-result wrap the flipped string
@@ -2570,16 +2570,16 @@ final class JvmArrayRuntimeBuilder {
 
 		// _subseqCv(o, start, end): the string subseq lane answering a MUTABLE character
 		// vector (.todo/559 step 2 -- a copy-seq/subseq result has a writable identity,
-		// like the interpreter's and SBCL's). end == -1 means "to the length". A
+		// like the interpreter's and SBCL's). A nil end means "to the length". A
 		// character vector or string view copies its elements [start, end) directly
 		// through _rmGet (never rendering the source, so chained slicing stays linear);
 		// an immutable String slices by code point and converts once through
 		// _strToCharVec, then clears the fill-pointer slot that promotion path sets so
 		// the result is a SIMPLE string like the other backends'. Both arms refuse a
 		// range outside the string with the interpreter's report, from one shared
-		// block. Locals: 0 = o, 1 = start, 2 = end, 3 = header, 5 = n, 6 = out,
-		// 7 = i, 8 = s, 9 = a, 10 = b, 11 = the character count, 12 = the resolved
-		// end.
+		// block. Locals: 0 = o, 1 = start, 2 = end (nil or a fixnum), 3 = header,
+		// 5 = n, 6 = out, 7 = i, 8 = s, 9 = a, 10 = b, 11 = the character count, 12 =
+		// the resolved end.
 		MethodRefEntry scStrToCharVec = cp.methodRef(selfClass, STR_TO_CHAR_VEC, STR_TO_CHAR_VEC_DESC);
 		MethodRefEntry strLength = cp.methodRef(strClass, "length", "()I");
 		MethodRefEntry strConcat = cp.methodRef(strClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
@@ -2633,8 +2633,8 @@ final class JvmArrayRuntimeBuilder {
 		emitLoadDim0(sc, longClass, objectArrayClass, longIntValue, 3);
 		sc.istore(11);
 		sc.labelBinding(scHaveLen);
-		// realEnd = (end < 0 ? len : end), checked against len; n = realEnd - start
-		JvmSubseqCompiler.emitResolveEnd(sc, 2, 11, 12);
+		// realEnd = (end nil ? len : end), checked against len; n = realEnd - start
+		JvmSubseqCompiler.emitResolveEnd(sc, cp, 2, 11, 12);
 		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
 		sc.iload(12);
 		sc.iload(1);
@@ -2696,7 +2696,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(8);
 		sc.invokestatic(strCount);
 		sc.istore(11);
-		JvmSubseqCompiler.emitResolveEnd(sc, 2, 11, 12);
+		JvmSubseqCompiler.emitResolveEnd(sc, cp, 2, 11, 12);
 		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
 		sc.aload(8);
 		sc.iload(1);
@@ -2704,8 +2704,8 @@ final class JvmArrayRuntimeBuilder {
 		sc.istore(9);
 		MethodCode.Label scHaveEnd = sc.newLabel();
 		MethodCode.Label scGotB = sc.newLabel();
-		sc.iload(2);
-		sc.ifge(scHaveEnd);
+		sc.aload(2);
+		sc.ifnonnull(scHaveEnd);
 		sc.aload(8);
 		sc.invokevirtual(strLength);
 		sc.loadConstant(1);
@@ -2714,7 +2714,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.goto_(scGotB);
 		sc.labelBinding(scHaveEnd);
 		sc.aload(8);
-		sc.iload(2);
+		sc.iload(12);
 		sc.invokestatic(strCpOffset);
 		sc.istore(10);
 		sc.labelBinding(scGotB);

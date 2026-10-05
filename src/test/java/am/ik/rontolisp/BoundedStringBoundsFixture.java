@@ -29,6 +29,7 @@ public final class BoundedStringBoundsFixture {
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* *bsb-hi*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-neg* nil)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-hi* nil)))
+			        (bsb-probe (lambda () (funcall op "hello" 0 *bsb-neg*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* 3)))))
 			(dolist (op (list (lambda (s i e) (with-output-to-string (o) (write-string s o :start i :end e)))
 			                  (lambda (s i e) (with-output-to-string (o) (write-line s o :start i :end e)))
@@ -49,8 +50,10 @@ public final class BoundedStringBoundsFixture {
 
 	private static final String RANGE_9 = "(9 (INTEGER 0 5) \"SUBSEQ: invalid bounds 9, 5 for string of length 5\")";
 
+	private static final String RANGE_0_M1 = "(-1 (INTEGER 0 5) \"SUBSEQ: invalid bounds 0, -1 for string of length 5\")";
+
 	private static String row() {
-		return "(" + RANGE_3_1 + " " + RANGE_1_9 + " " + RANGE_M1 + " " + RANGE_9 + " :OK)";
+		return "(" + RANGE_3_1 + " " + RANGE_1_9 + " " + RANGE_M1 + " " + RANGE_9 + " " + RANGE_0_M1 + " :OK)";
 	}
 
 	/** What {@link #PROGRAM} prints, one row per operator. */

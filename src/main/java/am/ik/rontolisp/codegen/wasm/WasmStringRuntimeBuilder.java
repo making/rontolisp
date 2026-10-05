@@ -2212,14 +2212,17 @@ final class WasmStringRuntimeBuilder {
 		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
 		int charLen = 15, actualEnd = 16;
 		int strArr = 17;
-		// startIdx = i31(startArg); endIdx = (endArg nil) ? -1 : i31(endArg)
+		// startIdx = i31(startArg); endIdx = (endArg nil) ? 0 : i31(endArg). The 0 is a
+		// placeholder: an omitted end is read from endArg's nil, never from endIdx, since
+		// a caller can give any i31 -- a -1 sentinel read (subseq s 0 -1) as the whole
+		// sequence.
 		emitI31GetS(w, 1);
 		set(w, startIdx);
 		get(w, 2);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		i32(w, -1);
+		i32(w, 0);
 		w.write(Instruction.ELSE);
 		emitI31GetS(w, 2);
 		w.write(Instruction.END);
@@ -2236,15 +2239,14 @@ final class WasmStringRuntimeBuilder {
 		// the UTF-8 walking helper _str_char_byte_offset so a subseq over a string
 		// carrying non-ASCII characters preserves them.
 		setStrArray(w, 0, strArr);
-		// charLen = _seq_len(seq) unboxed; actualEnd = (endIdx < 0) ? charLen : endIdx
+		// charLen = _seq_len(seq) unboxed; actualEnd = (endArg nil) ? charLen : endIdx
 		get(w, 0);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
 		WasmEmitHelper.castI31GetS(w);
 		set(w, charLen);
-		get(w, endIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_LT_S);
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
 		get(w, charLen);
@@ -2260,10 +2262,9 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		set(w, pos);
-		// end = (endIdx < 0) ? length - 1 : _str_char_byte_offset(str, endIdx)
-		get(w, endIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_LT_S);
+		// end = (endArg nil) ? length - 1 : _str_char_byte_offset(str, endIdx)
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
 		emitStrLen(w, 0);
@@ -2287,23 +2288,21 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	// Returns a fresh cons chain of the elements of the list in param 0 from index
-	// startIdx up to endIdx (or to the end when endIdx < 0). A range the list cannot
-	// supply -- a negative start, a start past a given end, a list that runs out before
-	// start or before a given end -- leaves the walk it already does for the block
-	// around it, and only then is the whole list counted into `len`, the end resolved
-	// into `realEnd`, and `refuse` emitted (which never returns). A valid range pays
-	// the two tests in front of the walk and nothing per cell.
+	// startIdx up to endIdx (or to the end when param 2, the end, is nil). A range the
+	// list cannot supply -- a negative start, a start past a given end, a list that
+	// runs out before start or before a given end -- leaves the walk it already does
+	// for the block around it, and only then is the whole list counted into `len`, the
+	// end resolved into `realEnd`, and `refuse` emitted (which never returns). A valid
+	// range pays the two tests in front of the walk and nothing per cell.
 	private static void emitSubseqList(WasmWriter w, int node, int head, int tail, int newc, int startIdx, int endIdx,
 			int ii, boolean identityHash, int len, int realEnd, Runnable refuse) {
 		w.write(Instruction.BLOCK, 0x40); // refused
-		// startIdx < 0 || (endIdx >= 0 && startIdx > endIdx): refused
+		// startIdx < 0 || (end given && startIdx > endIdx): refused
 		get(w, startIdx);
 		i32(w, 0);
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.BR_IF, 0);
-		get(w, endIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_GE_S);
+		emitEndGiven(w);
 		w.write(Instruction.IF, 0x40);
 		get(w, startIdx);
 		get(w, endIdx);
@@ -2348,11 +2347,9 @@ final class WasmStringRuntimeBuilder {
 		set(w, ii);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		// up to endIdx (>= 0): stop at it, and a non-cons node first is a list shorter
+		// up to a given endIdx: stop at it, and a non-cons node first is a list shorter
 		// than end; to the end: stop at the first non-cons node
-		get(w, endIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_GE_S);
+		emitEndGiven(w);
 		w.write(Instruction.IF, 0x40);
 		get(w, ii);
 		get(w, endIdx);
@@ -2413,7 +2410,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, head);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // refused
-		// len = the number of conses; realEnd = endIdx < 0 ? len : endIdx; refuse
+		// len = the number of conses; realEnd = end nil ? len : endIdx; refuse
 		get(w, 0);
 		set(w, node);
 		i32(w, 0);
@@ -2434,9 +2431,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		get(w, endIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_LT_S);
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, Type.I32);
 		get(w, len);
 		w.write(Instruction.ELSE);
@@ -2444,6 +2440,13 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		set(w, realEnd);
 		refuse.run();
+	}
+
+	// Pushes 1 when _subseq's end (param 2) was given, 0 when it is nil (omitted).
+	private static void emitEndGiven(WasmWriter w) {
+		get(w, 2);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
 	}
 
 	// Pushes cdr (field 1) of the cons held in the given local.

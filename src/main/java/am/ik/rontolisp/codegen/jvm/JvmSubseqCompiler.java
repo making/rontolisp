@@ -30,8 +30,10 @@ import org.jspecify.annotations.Nullable;
  * quotes), the content at {@code [start, end)} is {@code s.substring(1 + start, 1 + end)}
  * re-wrapped in quotes. For a list (an {@code Object[2]} cons chain, nil = null), the
  * elements from index {@code start} up to {@code end} are copied into a fresh cons chain.
- * When {@code end} is omitted (passed as the sentinel int {@code -1}) it defaults to the
- * sequence length.
+ * An omitted {@code end} is nil and defaults to the sequence length; the lanes test the
+ * nil itself, never an int sentinel, so a GIVEN negative {@code end} reaches the bounds
+ * check (an int sentinel such as {@code -1} read {@code (subseq s 0 -1)} as the whole
+ * sequence).
  *
  * <p>
  * The lane is ONE per-class helper, {@code _subseqCore(seq, start, end)}
@@ -88,13 +90,11 @@ final class JvmSubseqCompiler {
 		}
 		JvmEmitHelper.emitSharedCall(ctx, className, END, 3, helper -> {
 			int startSlot = helper.allocTemp();
-			int endSlot = helper.allocTemp();
 			int lenSlot = helper.allocTemp();
 			int realEndSlot = helper.allocTemp();
 			unboxIndex(helper, 0, startSlot);
-			unboxEnd(helper, 1, endSlot);
 			unboxIndex(helper, 2, lenSlot);
-			emitResolveEnd(helper.body, endSlot, lenSlot, realEndSlot);
+			emitResolveEnd(helper.body, helper.cp, 1, lenSlot, realEndSlot);
 			emitBoundsCheck(helper.body, helper.cp, helper.subseqRecords, startSlot, realEndSlot, lenSlot, "vector");
 			helper.body.iload(realEndSlot).i2l();
 			JvmEmitHelper.boxLong(helper);
@@ -108,7 +108,9 @@ final class JvmSubseqCompiler {
 		ctx.body.l2i().istore(slot);
 	}
 
-	// slot = (int) the fixnum in Object parameter `param`, or -1 ("to the end") for nil
+	// slot = (int) the fixnum in Object parameter `param`, or 0 for nil. The 0 is a
+	// placeholder, not a sentinel: whether end was omitted is read from the parameter
+	// itself, since a caller can give any int.
 	private static void unboxEnd(JvmLispCompiler.Ctx ctx, int param, int slot) {
 		MethodCode.Label nil = ctx.body.newLabel();
 		MethodCode.Label done = ctx.body.newLabel();
@@ -119,7 +121,7 @@ final class JvmSubseqCompiler {
 		ctx.body.l2i();
 		ctx.body.goto_(done);
 		ctx.body.labelBinding(nil);
-		ctx.body.iconst_m1();
+		ctx.body.iconst_0();
 		ctx.body.labelBinding(done);
 		ctx.body.istore(slot);
 	}
@@ -153,7 +155,12 @@ final class JvmSubseqCompiler {
 		int lenSlot = ctx.allocTemp();
 		int realEndSlot = ctx.allocTemp();
 		unboxIndex(ctx, 1, startSlot);
-		unboxEnd(ctx, 2, endSlot);
+		if (!ctx.usesArrays) {
+			// Both arms read a given end; with the array runtime the string arm is
+			// _subseqCv's, which reads it from the parameter, and only the list arm
+			// unboxes it.
+			unboxEnd(ctx, 2, endSlot);
+		}
 
 		MethodCode asm = ctx.body;
 		MethodCode.Label listLabel = asm.newLabel();
@@ -177,7 +184,7 @@ final class JvmSubseqCompiler {
 			asm.labelBinding(cvLabel);
 			asm.aload(seqSlot);
 			asm.iload(startSlot);
-			asm.iload(endSlot);
+			asm.aload(2);
 			asm.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmArrayRuntimeBuilder.SUBSEQ_CV,
 					JvmArrayRuntimeBuilder.SUBSEQ_CV_DESC));
 			asm.astore(resultSlot);
@@ -203,7 +210,7 @@ final class JvmSubseqCompiler {
 			asm.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.COUNT_METHOD,
 					JvmStringIndexRuntimeBuilder.COUNT_DESC));
 			asm.istore(lenSlot);
-			emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
+			emitResolveEnd(asm, 2, endSlot, lenSlot, realEndSlot);
 			emitBoundsCheck(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "string");
 			// a = _cpoff(s, start) -- the offset of character `start` past the leading
 			// quote.
@@ -211,11 +218,11 @@ final class JvmSubseqCompiler {
 			asm.iload(startSlot);
 			asm.invokestatic(cpOffset);
 			asm.istore(aSlot);
-			// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
+			// b = (end == nil) ? s.length() - 1 : _cpoff(s, end)
 			MethodCode.Label haveEnd = asm.newLabel();
 			MethodCode.Label gotB = asm.newLabel();
-			asm.iload(endSlot);
-			asm.ifge(haveEnd);
+			asm.aload(2);
+			asm.ifnonnull(haveEnd);
 			asm.aload(sSlot);
 			asm.invokevirtual(length);
 			asm.loadConstant(1);
@@ -224,7 +231,7 @@ final class JvmSubseqCompiler {
 			asm.goto_(gotB);
 			asm.labelBinding(haveEnd);
 			asm.aload(sSlot);
-			asm.iload(endSlot);
+			asm.iload(realEndSlot);
 			asm.invokestatic(cpOffset);
 			asm.istore(bSlot);
 			asm.labelBinding(gotB);
@@ -264,13 +271,16 @@ final class JvmSubseqCompiler {
 			asm.athrow();
 			asm.labelBinding(isList);
 		}
+		if (ctx.usesArrays) {
+			unboxEnd(ctx, 2, endSlot);
+		}
 		// A negative start, or a start past a given end, is refused before the walk.
 		MethodCode.Label listBad = asm.newLabel();
 		MethodCode.Label noEndCheck = asm.newLabel();
 		asm.iload(startSlot);
 		asm.iflt(listBad);
-		asm.iload(endSlot);
-		asm.iflt(noEndCheck);
+		asm.aload(2);
+		asm.ifnull(noEndCheck);
 		asm.iload(startSlot);
 		asm.iload(endSlot);
 		asm.if_icmpgt(listBad);
@@ -310,10 +320,10 @@ final class JvmSubseqCompiler {
 		MethodCode.Label doBody = asm.newLabel();
 		MethodCode.Label toEnd = asm.newLabel();
 		asm.labelBinding(buildLoop);
-		// to the end (end < 0): stop at the last cell; up to end: stop at end, and a
+		// to the end (end nil): stop at the last cell; up to end: stop at end, and a
 		// list that runs out first is shorter than end
-		asm.iload(endSlot);
-		asm.iflt(toEnd);
+		asm.aload(2);
+		asm.ifnull(toEnd);
 		asm.iload(iSlot);
 		asm.iload(endSlot);
 		asm.if_icmpge(buildDone);
@@ -388,19 +398,48 @@ final class JvmSubseqCompiler {
 		asm.iinc(lenSlot, 1);
 		asm.goto_(countLoop);
 		asm.labelBinding(countDone);
-		emitResolveEnd(asm, endSlot, lenSlot, realEndSlot);
+		emitResolveEnd(asm, 2, endSlot, lenSlot, realEndSlot);
 		emitBoundsError(asm, ctx.cp, ctx.subseqRecords, startSlot, realEndSlot, lenSlot, "list");
 
 		asm.labelBinding(doneLabel);
 		asm.aload(resultSlot);
 	}
 
-	// realEnd = end < 0 (omitted) ? len : end
-	static void emitResolveEnd(MethodCode m, int endSlot, int lenSlot, int realEndSlot) {
+	/**
+	 * {@code realEnd = (end == nil) ? len : (int) end}. Whether {@code end} was omitted
+	 * is read from the parameter's nil, never from an int sentinel: a caller can give any
+	 * int, and the {@code -1} the lanes used to pass for nil read {@code (subseq s 0 -1)}
+	 * as the whole sequence instead of refusing it.
+	 * @param m the method being emitted
+	 * @param cp its constant pool
+	 * @param endParam the {@code Object} parameter holding {@code end}, nil when omitted
+	 * @param lenSlot the int length of the sequence
+	 * @param realEndSlot the int local to store
+	 */
+	static void emitResolveEnd(MethodCode m, ConstantPool cp, int endParam, int lenSlot, int realEndSlot) {
 		MethodCode.Label given = m.newLabel();
 		MethodCode.Label resolved = m.newLabel();
-		m.iload(endSlot);
-		m.ifge(given);
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		m.aload(endParam);
+		m.ifnonnull(given);
+		m.iload(lenSlot);
+		m.goto_(resolved);
+		m.labelBinding(given);
+		m.aload(endParam);
+		m.checkcast(longClass);
+		m.invokevirtual(cp.methodRef(longClass, "longValue", "()J"));
+		m.l2i();
+		m.labelBinding(resolved);
+		m.istore(realEndSlot);
+	}
+
+	// realEnd = (end == nil) ? len : end, the end already unboxed into endSlot
+	// (unboxEnd)
+	private static void emitResolveEnd(MethodCode m, int endParam, int endSlot, int lenSlot, int realEndSlot) {
+		MethodCode.Label given = m.newLabel();
+		MethodCode.Label resolved = m.newLabel();
+		m.aload(endParam);
+		m.ifnonnull(given);
 		m.iload(lenSlot);
 		m.goto_(resolved);
 		m.labelBinding(given);
@@ -417,7 +456,7 @@ final class JvmSubseqCompiler {
 	 * @param records the class's {@code _subseqRec} builder, or null when it has no
 	 * landing pad
 	 * @param startSlot the int start
-	 * @param endSlot the int end, already resolved (never the omitted sentinel)
+	 * @param endSlot the int end, already resolved (never the omitted nil)
 	 * @param lenSlot the int length of the sequence
 	 * @param kind the report's sequence kind ({@code string}, {@code list},
 	 * {@code vector})
