@@ -108,7 +108,8 @@
   `IllegalArgumentException` で、オラクルは `java.util.Collection` へのキャストで失敗します。範囲外の添字は `IndexOutOfBoundsException` で、
   そのサブクラスの catch も捕捉します（オラクルの `aget` は `ArrayIndexOutOfBoundsException` を
   投げます）。文字列の範囲を超える `subs`、`.substring`、`.charAt` は
-  `StringIndexOutOfBoundsException` を投げます。catch が名指すクラスはこの
+  `StringIndexOutOfBoundsException` を投げます（int の範囲を超える double の境界も同じで、
+  オラクルの `subs` は `ArithmeticException` か `IllegalArgumentException` を投げます）。catch が名指すクラスはこの
   ホストで解決できなければなりません（`java.*`、`clojure.lang` の throwable）。オラクルの
   クラスパスにしかないクラスは拒否します。
 - 例外はクラス、メッセージ、データ、cause を持つコンディションです。実行時エラーは

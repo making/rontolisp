@@ -3588,6 +3588,18 @@ public final class LispNames {
 	public static final String SUBSEQ_CORE = "%SUBSEQ-CORE";
 
 	/**
+	 * The internal {@code %subseq-end} operator (compile-path only):
+	 * {@code (%subseq-end start end length)} answers {@code end} -- {@code length} when
+	 * {@code end} is nil -- when {@code 0 <= start <= end <= length}, and otherwise
+	 * signals the interpreter's {@code "SUBSEQ: invalid bounds S, E for vector of length
+	 * N"}. The vector arm of the shared subseq dispatch
+	 * ({@link am.ik.rontolisp.macro.LispMacroExpander#subseqRuntimeWrapper()}) calls it
+	 * before allocating its copy; the string and list lanes check inside
+	 * {@link #SUBSEQ_CORE}.
+	 */
+	public static final String SUBSEQ_END = "%SUBSEQ-END";
+
+	/**
 	 * The {@code %subseq-runtime} internal helper: the whole
 	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSubseqCompat} dispatch --
 	 * string, general array (a {@code %array-alike} plus an element copy loop), cons

@@ -1140,6 +1140,20 @@
       (rontolisp::%clojure-class-cast-exception message)
       (rontolisp::%clojure-illegal-argument-exception message)))
 
+(defun rontolisp::%clojure-string-bound (x)
+  "X as the bound subs, .substring and .charAt take: a double or a ratio
+   truncated toward zero (NaN is 0, and a double past the int range is clamped
+   to its edge, which the verb then refuses as outside the string); anything
+   else, an integer included, is left to the verb."
+  (cond ((integerp x) x)
+        ((floatp x)
+         (cond ((/= x x) 0)
+               ((>= x 2147483647.0) 2147483647)
+               ((<= x -2147483648.0) -2147483648)
+               (t (truncate x))))
+        ((rationalp x) (truncate x))
+        (t x)))
+
 (defun rontolisp::%clojure-subs (s start &optional end)
   "(subs S START END): subseq, whose refusal of bounds outside a string is the
    oracle's StringIndexOutOfBoundsException here, in subseq's own words. The

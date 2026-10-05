@@ -1937,40 +1937,59 @@ final class WasmStringRuntimeBuilder {
 	 * elements {@code [start, end)} directly through {@code _arr_get} -- never rendering
 	 * the source, so chained slicing stays linear; anything else runs the byte-level
 	 * {@code _subseq}, and a string result is converted once with {@code _str_to_cv}
-	 * while a list result passes through unchanged.
+	 * while a list result passes through unchanged. The character-vector arm checks
+	 * {@code 0 <= start <= end <= (length seq)} first, with {@code _subseq}'s string
+	 * report ({@link #buildSubseqBody}).
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @param ehMode whether the module is in EH mode
+	 * @param boundsPrefix {@code "SUBSEQ: invalid bounds "}, non-null exactly when
+	 * {@code ehMode}
+	 * @param boundsComma {@code ", "}, non-null exactly when {@code ehMode}
+	 * @param boundsForLength {@code " for string of length "}, non-null exactly when
+	 * {@code ehMode}
 	 * @return the function body (signature
 	 * {@code ((ref null eq), (ref null eq), (ref null eq)) -> (ref null eq)},
 	 * TYPE_CALLABLE_BASE + 2)
 	 */
-	static byte[] buildSubseqStrBody(boolean identityHash) {
+	static byte[] buildSubseqStrBody(boolean identityHash, boolean ehMode,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsPrefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsComma,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsForLength) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: seq = 0, start = 1, end = 2 (eqref).
-		// locals: st = 3, n = 4, i = 5 (i32); buckets = 6, scratch = 7 (eqref).
+		// locals: st = 3, n = 4, i = 5, len = 6, realEnd = 7 (i32); buckets = 8,
+		// scratch = 9 (eqref).
 		w.write(2);
-		w.write(3);
+		w.write(5);
 		w.write(Type.I32);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
-		int seq = 0, start = 1, end = 2, st = 3, n = 4, i = 5, buckets = 6, scratch = 7;
+		int seq = 0, start = 1, end = 2, st = 3, n = 4, i = 5, len = 6, realEnd = 7, buckets = 8, scratch = 9;
 		get(w, seq);
 		WasmEmitHelper.emitCharvecPCall(w);
 		w.write(Instruction.IF, 0x40);
-		// st = i31(start); n = (end == nil ? length : i31(end)) - st
+		// st = i31(start); len = (length seq); realEnd = (end == nil ? len : i31(end))
 		get(w, start);
 		WasmEmitHelper.castI31GetS(w);
 		set(w, st);
-		get(w, end);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, Type.I32);
 		get(w, seq);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
 		WasmEmitHelper.castI31GetS(w);
+		set(w, len);
+		get(w, end);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, Type.I32);
+		get(w, len);
 		w.write(Instruction.ELSE);
 		get(w, end);
 		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.END);
+		set(w, realEnd);
+		emitSubseqBoundsCheck(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, st, realEnd, len);
+		// n = realEnd - st
+		get(w, realEnd);
 		get(w, st);
 		w.write(Instruction.I32_SUB);
 		set(w, n);
@@ -2168,9 +2187,9 @@ final class WasmStringRuntimeBuilder {
 	 * {@code "SUBSEQ: invalid bounds S, E for string of length N"} text on
 	 * {@code $lisp-cond}; outside EH mode it is a bare {@code unreachable}, like every
 	 * other unchecked failure that backend takes (no tag exists to throw on, and citing
-	 * the string/prin1 runtime would pin it into every module). The list branch is
-	 * unchecked, matching the JVM backend's `_subseqCv` (an over-large `end` there
-	 * silently truncates instead of erroring) -- not part of this fix.
+	 * the string/prin1 runtime would pin it into every module). The list branch refuses
+	 * the same ranges with {@code " for list of length N"}, finding a short list during
+	 * the copy walk itself and counting the whole list only on the way to the report.
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @param ehMode whether the module is in EH mode
 	 * @param boundsPrefix {@code "SUBSEQ: invalid bounds "}, interned before this body is
@@ -2242,27 +2261,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		set(w, actualEnd);
 		// 0 <= startIdx <= actualEnd <= charLen, or a bounds error.
-		get(w, startIdx);
-		i32(w, 0);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
+		emitSubseqBoundsCheck(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
 				charLen);
-		w.write(Instruction.END);
-		get(w, actualEnd);
-		get(w, charLen);
-		w.write(Instruction.I32_GT_S);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
-				charLen);
-		w.write(Instruction.END);
-		get(w, startIdx);
-		get(w, actualEnd);
-		w.write(Instruction.I32_GT_S);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
-				charLen);
-		w.write(Instruction.END);
 		// pos = _str_char_byte_offset(str, startIdx)
 		get(w, 0);
 		get(w, startIdx);
@@ -2288,21 +2288,43 @@ final class WasmStringRuntimeBuilder {
 		emitBuildCore(w, strArr, pos, end, start, cur, b);
 		w.write(Instruction.ELSE);
 		// --- List branch ---
-		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash);
+		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash, charLen, actualEnd,
+				() -> emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, "list",
+						startIdx, actualEnd, charLen));
 		w.write(Instruction.END); // dispatch if
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
 
-	// Copies the elements of the list in param 0 from index startIdxLocal up to
-	// endIdxLocal (or to the end when endIdxLocal < 0) into a fresh cons chain, left on
-	// the stack.
+	// Returns a fresh cons chain of the elements of the list in param 0 from index
+	// startIdx up to endIdx (or to the end when endIdx < 0). A range the list cannot
+	// supply -- a negative start, a start past a given end, a list that runs out before
+	// start or before a given end -- leaves the walk it already does for the block
+	// around it, and only then is the whole list counted into `len`, the end resolved
+	// into `realEnd`, and `refuse` emitted (which never returns). A valid range pays
+	// the two tests in front of the walk and nothing per cell.
 	private static void emitSubseqList(WasmWriter w, int node, int head, int tail, int newc, int startIdx, int endIdx,
-			int ii, boolean identityHash) {
+			int ii, boolean identityHash, int len, int realEnd, Runnable refuse) {
+		w.write(Instruction.BLOCK, 0x40); // refused
+		// startIdx < 0 || (endIdx >= 0 && startIdx > endIdx): refused
+		get(w, startIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		get(w, endIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, startIdx);
+		get(w, endIdx);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.END);
 		// node = seq
 		get(w, 0);
 		set(w, node);
-		// Skip the first startIdx cells: ii = 0; while (ii < startIdx && node is cons)
+		// Skip the first startIdx cells: ii = 0; while (ii < startIdx) { a non-cons node
+		// is a list shorter than start; node = cdr }
 		i32(w, 0);
 		set(w, ii);
 		w.write(Instruction.BLOCK, 0x40);
@@ -2315,7 +2337,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.BR_IF, 2);
 		emitCdr(w, node);
 		set(w, node);
 		get(w, ii);
@@ -2336,13 +2358,8 @@ final class WasmStringRuntimeBuilder {
 		set(w, ii);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		// stop when node is not a cons
-		get(w, node);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-		// stop when endIdx >= 0 && ii >= endIdx
+		// up to endIdx (>= 0): stop at it, and a non-cons node first is a list shorter
+		// than end; to the end: stop at the first non-cons node
 		get(w, endIdx);
 		i32(w, 0);
 		w.write(Instruction.I32_GE_S);
@@ -2350,6 +2367,17 @@ final class WasmStringRuntimeBuilder {
 		get(w, ii);
 		get(w, endIdx);
 		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 2);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 3);
+		w.write(Instruction.ELSE);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF, 2);
 		w.write(Instruction.END);
 		// newc = cons(car(node), nil)
@@ -2392,8 +2420,40 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// result = head
 		get(w, head);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // refused
+		// len = the number of conses; realEnd = endIdx < 0 ? len : endIdx; refuse
+		get(w, 0);
+		set(w, node);
+		i32(w, 0);
+		set(w, len);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, node);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitCdr(w, node);
+		set(w, node);
+		get(w, len);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, len);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, endIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, Type.I32);
+		get(w, len);
+		w.write(Instruction.ELSE);
+		get(w, endIdx);
+		w.write(Instruction.END);
+		set(w, realEnd);
+		refuse.run();
 	}
 
 	// Pushes cdr (field 1) of the cons held in the given local.
@@ -3238,57 +3298,160 @@ final class WasmStringRuntimeBuilder {
 		w.writeSignedLeb128(value);
 	}
 
-	// _subseq's bounds violation (todo a42): in EH mode, throws the interpreter's exact
-	// "SUBSEQ: invalid bounds S, E for string of length N" text as a condition-less
-	// (nil . message) payload on $lisp-cond, like WasmErrorCompiler.emitThrowPayload;
-	// each int is boxed as an i31 and rendered through _prin1_to_str (the same trick
-	// WasmOperandTypes.pushBound uses for a dynamic bound), so no itoa is duplicated
-	// here. Outside EH mode a bare unreachable, matching every other unchecked failure
-	// that backend takes when no tag exists to throw on. Never returns.
-	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode, boolean identityHash,
+	// 0 <= start <= end <= len falls through; anything else is the string report.
+	private static void emitSubseqBoundsCheck(WasmWriter w, boolean ehMode, boolean identityHash,
 			WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
 			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
 			WasmLispCompiler.StringTable.@Nullable StringEntry forLength, int startLocal, int endLocal, int lenLocal) {
+		get(w, startLocal);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		get(w, endLocal);
+		get(w, lenLocal);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_OR);
+		get(w, startLocal);
+		get(w, endLocal);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitSubseqBoundsError(w, ehMode, identityHash, prefix, comma, forLength, "string", startLocal, endLocal,
+				lenLocal);
+		w.write(Instruction.END);
+	}
+
+	// A subseq bounds violation over three i32 locals: in EH mode, throws the
+	// interpreter's exact "SUBSEQ: invalid bounds S, E for KIND of length N" text
+	// (emitSubseqBoundsThrow); outside EH mode a bare unreachable, matching every other
+	// unchecked failure that backend takes when no tag exists to throw on. Never
+	// returns.
+	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode, boolean identityHash,
+			WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
+			WasmLispCompiler.StringTable.@Nullable StringEntry forString, String kind, int startLocal, int endLocal,
+			int lenLocal) {
 		if (!ehMode) {
 			w.write(Instruction.UNREACHABLE);
 			return;
 		}
-		// Non-null whenever ehMode is true (buildSubseqBody interns them under the same
-		// condition).
-		java.util.Objects.requireNonNull(prefix);
-		java.util.Objects.requireNonNull(comma);
-		java.util.Objects.requireNonNull(forLength);
+		// Non-null whenever ehMode is true (the builders' callers intern them under the
+		// same condition).
+		WasmLispCompiler.StringTable.StringEntry forStringOfLength = java.util.Objects.requireNonNull(forString);
+		emitSubseqBoundsThrow(w, identityHash, java.util.Objects.requireNonNull(prefix),
+				java.util.Objects.requireNonNull(comma), () -> emitKindOfLength(w, forStringOfLength, kind),
+				() -> boxLocal(w, startLocal), () -> boxLocal(w, endLocal), () -> boxLocal(w, lenLocal));
+	}
+
+	private static void boxLocal(WasmWriter w, int local) {
+		get(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/**
+	 * Throws {@code "SUBSEQ: invalid bounds S, E for KIND of length N"} as a
+	 * condition-less {@code (nil . message)} payload on {@code $lisp-cond}, like
+	 * {@code WasmErrorCompiler.emitThrowPayload}: each number pusher leaves a fixnum (an
+	 * i31), rendered through {@code _prin1_to_str} (the
+	 * {@code WasmOperandTypes.pushBound} trick, so no itoa is duplicated here). EH mode
+	 * only. Never returns.
+	 * @param w the body being written
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @param prefix {@code "SUBSEQ: invalid bounds "}
+	 * @param comma {@code ", "}
+	 * @param forKindOfLength pushes {@code " for KIND of length "}
+	 * ({@link #emitKindOfLength})
+	 * @param start pushes the start
+	 * @param end pushes the resolved end
+	 * @param length pushes the sequence's length
+	 */
+	static void emitSubseqBoundsThrow(WasmWriter w, boolean identityHash,
+			WasmLispCompiler.StringTable.StringEntry prefix, WasmLispCompiler.StringTable.StringEntry comma,
+			Runnable forKindOfLength, Runnable start, Runnable end, Runnable length) {
 		// (condition-instance . message): a plain error has no instance.
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		strBuild(w, prefix);
-		get(w, startLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		appendPrinted(w, start);
 		strBuild(w, comma);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		get(w, endLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		appendPrinted(w, end);
+		forKindOfLength.run();
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		strBuild(w, forLength);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		get(w, lenLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		appendPrinted(w, length);
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
+	 * Pushes {@code " for KIND of length "}. The string report's own piece is that text
+	 * for {@code string}; any other kind is CUT out of it -- {@code " for "} and
+	 * {@code " of length "} are built straight from its bytes, around the kind word built
+	 * from constants -- because a data entry of its own would move every later address of
+	 * every EH-mode module, which interns the string piece whether or not a subseq site
+	 * survives the shake.
+	 * <p>
+	 * A cut works because a string's first and last bytes are its frame and
+	 * {@code _string_concat} copies only what lies between them: {@code _str_build} over
+	 * the piece's bytes {@code [0, 7)} is a string whose content is {@code " for "}
+	 * (framed by the opening quote and the {@code s} of {@code string}), and over
+	 * {@code [11, 24)} one whose content is {@code " of length "}. Each is concatenated
+	 * at once and never escapes.
+	 * @param w the body being written
+	 * @param forStringOfLength the interned {@code " for string of length "}
+	 * @param kind the sequence kind the report names
+	 */
+	static void emitKindOfLength(WasmWriter w, WasmLispCompiler.StringTable.StringEntry forStringOfLength,
+			String kind) {
+		if (kind.equals("string")) {
+			strBuild(w, forStringOfLength);
+			return;
+		}
+		String text = WasmSubseqCompiler.STRING_LENGTH;
+		int kindAt = text.indexOf("string");
+		int kindEnd = kindAt + "string".length();
+		// " for " framed by the bytes on either side of it
+		i32(w, forStringOfLength.offset());
+		i32(w, kindAt + 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		emitTransientString(w, "\"" + kind + "\"");
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		// " of length " framed by the last byte of the kind and the closing quote
+		i32(w, forStringOfLength.offset() + kindEnd - 1);
+		i32(w, text.length() - kindEnd + 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+	}
+
+	// A string built from constants, never from data: only ever concatenated at once,
+	// so its id (field 0) is 0, which no interned or runtime string carries. ASCII only.
+	private static void emitTransientString(WasmWriter w, String framed) {
+		i32(w, 0);
+		i32(w, framed.length());
+		for (int k = 0; k < framed.length(); k++) {
+			i32(w, framed.charAt(k));
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(framed.length());
+		emitSeedCursor(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+	}
+
+	// Appends (prin1-to-string <pushed>) to the string on the stack.
+	private static void appendPrinted(WasmWriter w, Runnable push) {
+		push.run();
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
 	}
 
 	private static void strBuild(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {

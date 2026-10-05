@@ -4357,14 +4357,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _div_zero's text, interned HERE for the same reason as operandTexts above.
 		StringTable.StringEntry divZeroMessage = divZeroLanding
 				? stringTable.addBodyString("\"" + ClosRegistry.DIVISION_BY_ZERO_MESSAGE + "\"") : null;
-		// _subseq's bounds-error text (todo a42), interned HERE for the same reason as
-		// operandTexts above: buildSubseqBody runs after the data segment's content is
-		// fixed. EH mode only: outside it the check is a bare `unreachable`.
+		// subseq's bounds-error text (_subseq, _subseq_str, %subseq-end), interned HERE
+		// for the same reason as operandTexts above: those bodies are built after the
+		// data segment's content is fixed. EH mode only: outside it the check is a bare
+		// `unreachable`. The list and vector reports cut their " for KIND of length "
+		// out of the string one (WasmStringRuntimeBuilder.emitKindOfLength): a new
+		// entry would move every later address of every EH-mode module.
 		StringTable.StringEntry subseqBoundsPrefix = ehMode
-				? stringTable.addBodyString("\"" + LispNames.SUBSEQ + ": invalid bounds \"") : null;
-		StringTable.StringEntry subseqBoundsComma = ehMode ? stringTable.addBodyString("\", \"") : null;
-		StringTable.StringEntry subseqBoundsForLength = ehMode ? stringTable.addBodyString("\" for string of length \"")
+				? stringTable.addBodyString(WasmSubseqCompiler.BOUNDS_PREFIX) : null;
+		StringTable.StringEntry subseqBoundsComma = ehMode ? stringTable.addBodyString(WasmSubseqCompiler.BOUNDS_COMMA)
 				: null;
+		StringTable.StringEntry subseqBoundsForLength = ehMode
+				? stringTable.addBodyString(WasmSubseqCompiler.STRING_LENGTH) : null;
 		final List<LispVal> spelledProgram = program;
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
@@ -8335,7 +8339,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
-				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody(this.usesIdentityHashTables));
+				code.addFunction(WasmStringRuntimeBuilder.buildSubseqStrBody(this.usesIdentityHashTables, ehMode,
+						subseqBoundsPrefix, subseqBoundsComma, subseqBoundsForLength));
 				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
 				// shared make-array dimension parse bodies (FUNC_ARR_DIMS/FUNC_ARR_TOTAL)

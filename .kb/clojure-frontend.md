@@ -125,7 +125,7 @@ answered `2 5 3` before).
 | `ns` `require` `use` `import` `in-ns` | alias and refer wiring; a project namespace's file loaded at the `require` | "Namespaces and project files" |
 | `clojure.string` (`join` `split` `split-lines` `upper-case` `lower-case` `capitalize` `trim` `triml` `trimr` `trim-newline` `blank?` `starts-with?` `ends-with?` `includes?` `index-of` `last-index-of` `replace` `replace-first` `escape` `re-quote-replacement` `reverse`) | core string operations | reached as `alias/var`, `clojure.string/var` or a referred var. `split`/`replace` take a pattern (through the regex runtime) or a literal string/char (a plain string never compiles to a pattern). Empty literal-`split` input is `nil` (a pattern answers one empty part); a positive `split` limit caps, a negative keeps every part, else trailing empties drop |
 | `clojure.set` (`union` `intersection` `difference` `select` `project` `rename-keys` `rename` `index` `map-invert` `join` `subset?` `superset?`: every public var) | `ClojureSetLowering`: one call to the spliced `rontolisp::%clojure-set-NAME` worker (`?` spelled `-p`, the variadic three over one list of their sets, `join` with a key map `-join-km`) after a lower-time arity check in the oracle's wording (`... passed to: clojure.set/NAME`); as a value `#'...-v` | the oracle's own algorithms, so an answer's kind follows the same input: `union` grows its largest input (bubble order and all; a vector or list there answers one, a map signals), `intersection` shrinks its smallest, `difference`/`select` the first; nil stays nil, an unchanged input is answered itself, a set changes in a fresh copy. Membership goes through the structural-key runtime; `contains?` on a vector is by index, like the oracle's. Relation members may be records: `join`'s merge keeps the first's record, `rename-keys` keeps it unless a declared field is renamed away. Answers carry no metadata. Corpus witness: shcloj4 `examples.test.sequences` `test-sets`/`test-joins` (`ClojureProjectNamespacesTest`); the whole namespace stays red on `examples.utils` (the `?.` macro), `clojure.xml` and `file-seq` (measured 2026-10-03: the load stops at `utils.clj:37:1`) |
-| `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read |
+| `subs`, `.substring` | `%clojure-subs`, the refusal family's alias of `subseq` ("Refusals") | a bound outside a string is the oracle's `StringIndexOutOfBoundsException` where a class is read; a double or ratio bound is truncated (`%clojure-string-bound`, "Refusals") |
 | `format` | the Java directives translated to `format` over Clojure-rendered arguments | literal format string only; `%s` like `str` (nil spells `null`), `%b`; `%e`/`%g`, flags and the rest refused |
 | `spit` `slurp` `line-seq` `clojure.java.io/reader` | `with-open-file` of the `str` spelling / a `read-char` loop / a `read-line` loop / `open` | every backend; wasm needs a `--dir` preopen (without it the open signals). `spit` supersedes unless `:append` is truthy, `nil` writes nothing. `line-seq` takes a path or an open reader, strictly, and never closes the reader. `file-seq` and every other `clojure.java.io` fn are refused |
 | `read-string` `read` | `rontolisp::%clojure-read-string`/`-read` (`-opts` for an options map, `-v` as values) over the call site's namespace context | "Reading"; every backend |
@@ -431,8 +431,29 @@ for the same call**, decided where it is detected (oracle-checked clj 1.12.6, 20
   reports what the interpreter's `char` reports (the compiled `char` of such a program stays
   unchecked). Where a class is read both check before the verb runs, so a built string's
   out-of-range bound is refused alike on every backend, where the unchecked compiled
-  `subseq` / `char` read garbage or trap. A non-integer bound (`(.substring "abc" 1.0)`) goes
-  to the verb unchecked.
+  `subseq` / `char` read garbage or trap.
+- **A bound of `subs` / `.substring` / `.charAt` is truncated at run time, on every program**
+  (`ClojureStringLowering.bound`, `%clojure-string-bound`): the oracle takes a double or a ratio
+  as its truncation toward zero (`(subs "abc" 1.0)` and `(.charAt "abc" 1.5)` answer `"bc"` and
+  `\b`), NaN as 0. The wrapper is part of the lowering, not of the refusal family, so a
+  program reading no class gets it too. A literal bound inside the int range is truncated at
+  lower time (an integer literal site compiles to the bytes it did before), and so is a
+  `length` form; any other bound, a `count` or `.length` included, is one call. A double past the int range is clamped to its edge, so the verb refuses it as
+  outside the string (`StringIndexOutOfBoundsException`): the oracle's `subs` makes it an
+  `ArithmeticException` (past the int range) or an `IllegalArgumentException` (past the long
+  range), while its `.substring` / `.charAt` of a non-literal receiver saturate like this and
+  of a literal one differ again. The helper costs 1.9 KB of JVM class on a program with no
+  other numeric code (`truncate` brings `_div` / `_fdiv` / `_rtrunc`), 0.2 KB of it the
+  clamps; the exception carriers and `princ-to-string` the exact classes need were 2.3 KB
+  more and were left out. Pins: clojure-spec `subs-and-substring-truncate-a-double-or-ratio-bound`,
+  `subs-and-substring-refuse-a-truncated-bound-outside-the-string` (the class-reading program),
+  `ClojureStringBoundE2eTest` (a program reading no class, on all four backends),
+  `ClojureLoweringTest#aStringBoundIsTruncatedAtRunTimeUnlessItIsALiteralInteger`. Measured: `(defn f [s i j] (subs s i j))` wasm P1 / component / JVM
+  class 31,958 / 33,171 / 59,227 -> 31,990 / 33,203 / 61,168; a 5M-iteration loop of one
+  `subs`, `.charAt` and `.substring` each over variable bounds is within noise (wasm 4.8-5.0
+  s both, JVM 2.1-2.2 s both). A non-number bound (nil, a string, a character) goes to the
+  verb unchanged (the oracle's `NullPointerException` / `ClassCastException` is not
+  reproduced).
 - Names no class: a refusal of a construct the oracle accepts (regex lookaround, named groups,
   `\G`, POSIX classes, `(partition 0 ...)`, `#inst`, a deftype literal), a value macro's
   `Can't take value of a macro` (a compile error in the oracle), internal invariants. A

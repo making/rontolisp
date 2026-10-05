@@ -8111,8 +8111,11 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void subseqSignalsInvalidBounds() throws Exception {
 		// The wasm twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: an
-		// invalid range used to silently truncate/pad instead of signalling (todo a42).
+		// invalid range used to truncate a list, trap on a built string or a vector, or
+		// report through AREF instead of signalling SUBSEQ's own text. The component
+		// shares the core module but not the I/O adapter, so it runs too.
 		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+		assertThat(compileComponentAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	@Test
