@@ -104,11 +104,11 @@ public final class RontoHashTable {
 	 * <p>
 	 * Over the JVM backend's value representation: a Lisp string (a Java String with its
 	 * framing quotes) and a character (an {@code int[]} of one code point) fold to upper
-	 * case ONE CODE POINT AT A TIME, a float whose value is an INTEGER to that integer
-	 * (so {@code 1}, {@code 1.0} and {@code 2/2} are one key), and a cons
-	 * ({@code Object[2]}) folds element-wise. Everything else is its own representative
-	 * -- a SYMBOL (a bare String, with no framing quotes), a general ARRAY and a float
-	 * with a fraction deliberately included.
+	 * case ONE CODE POINT AT A TIME, a finite float to the exact rational it equals (so
+	 * {@code 1}, {@code 1.0} and {@code 2/2} are one key, and so are {@code 0.5} and
+	 * {@code 1/2}), and a cons ({@code Object[2]}) folds element-wise. Everything else is
+	 * its own representative -- a SYMBOL (a bare String, with no framing quotes) and a
+	 * general ARRAY deliberately included.
 	 *
 	 * <p>
 	 * The specification is {@code LispEquality.equalpKey}, which folds the same values in
@@ -142,7 +142,7 @@ public final class RontoHashTable {
 			return character.length == 1 ? new int[] { Character.toUpperCase(character[0]) } : key;
 		}
 		if (key instanceof Double number) {
-			return integerValued(number.doubleValue());
+			return exactValue(number.doubleValue());
 		}
 		// The cons discrimination the emitted _hash makes: an Object[] that is neither a
 		// ratio (a BigInteger[]) nor a function reference (an Integer funcId in slot 0)
@@ -168,13 +168,14 @@ public final class RontoHashTable {
 		return folded.toString();
 	}
 
-	// The exact integer a double equals, in the shape the emitted _norm produces: a Long
-	// when it fits one, a BigInteger otherwise. A finite double is exactly
-	// mantissa * 2^exponent, which is where the integer is read from -- no decimal
-	// detour, exact at every magnitude. A float with a FRACTION does not fold to the
-	// ratio it equals (the WASM ratio cannot hold one, so folding it here would split
-	// the backends) and neither does a non-finite one; both are their own key.
-	private static Object integerValued(double value) {
+	// The exact rational a double equals, in the shapes the emitted arithmetic produces:
+	// an integer is a Long when it fits one and a BigInteger otherwise, a ratio a
+	// BigInteger[] { numerator, denominator } in lowest terms. A finite double is exactly
+	// mantissa * 2^exponent, which is where the value is read from -- no decimal detour,
+	// exact at every magnitude. Stripping the mantissa's trailing zero bits against a
+	// negative exponent leaves an odd numerator over a power of two, already in lowest
+	// terms. A non-finite double has no rational value and is its own key.
+	private static Object exactValue(double value) {
 		if (Double.isNaN(value) || Double.isInfinite(value)) {
 			return Double.valueOf(value);
 		}
@@ -191,12 +192,11 @@ public final class RontoHashTable {
 			mantissa >>= 1;
 			exponent++;
 		}
+		java.math.BigInteger numerator = java.math.BigInteger.valueOf(bits < 0 ? -mantissa : mantissa);
 		if (exponent < 0) {
-			// An odd mantissa still owing a division by a power of two: a fraction.
-			return Double.valueOf(value);
+			return new java.math.BigInteger[] { numerator, java.math.BigInteger.ONE.shiftLeft(-exponent) };
 		}
-		java.math.BigInteger magnitude = java.math.BigInteger.valueOf(bits < 0 ? -mantissa : mantissa)
-			.shiftLeft(exponent);
+		java.math.BigInteger magnitude = numerator.shiftLeft(exponent);
 		return magnitude.bitLength() < 64 ? (Object) Long.valueOf(magnitude.longValue()) : magnitude;
 	}
 

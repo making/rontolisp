@@ -17112,6 +17112,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	// A float with a fraction folds to the ratio it equals -- the exact mantissa over a
+	// power of two, a limb denominator for the least subnormal -- so the float stored
+	// and its ratio looked up, or the other way round, are one key, as on the
+	// interpreter (.kb/hash-tables.md).
+	void compileEqualpHashTableFoldsAFloatWithAFractionToItsRatio() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 0.5d0 h) 'half)
+				  (setf (gethash 0.1d0 h) 'tenth)
+				  (setf (gethash -0.75d0 h) 'neg)
+				  (setf (gethash 3/4 h) 'pos)
+				  (setf (gethash 4.9406564584124654d-324 h) 'tiny)
+				  (setf (gethash 1/2 h) 'half-again)
+				  (print (list (gethash 1/2 h) (gethash 3602879701896397/36028797018963968 h)
+				               (gethash -3/4 h) (gethash 0.75d0 h) (gethash (/ 1 (expt 2 1074)) h)
+				               (gethash 1/3 h) (gethash 0.3d0 h) (hash-table-count h))))
+				""")).isEqualTo("(HALF-AGAIN TENTH NEG POS TINY NIL NIL 5)");
+	}
+
+	@Test
 	// The printed :TEST field and hash-table-test report the test lookup implements, now
 	// that a table knows whether it folds.
 	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {

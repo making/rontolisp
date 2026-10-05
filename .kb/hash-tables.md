@@ -94,24 +94,29 @@ read the same on all four backends:
 
 ## `equalp` is a KEY FOLD, on all four backends
 `equalp` on two values is `equal` on their folds, so one structural table carries both tests.
-Fold: string/character to UPPER CASE code point by code point; a float whose value is an INTEGER to
-that integer (`1`, `1.0`, `2/2` are one key, read out of `mantissa * 2^exponent`); a cons
-element-wise; everything else is its own key. Two deliberate ANSI deviations, both a MISS and never
-a false match: an ARRAY does not fold (`equal` on a vector is identity); a float with a FRACTION
-does not fold to the ratio it equals. The second one's reason -- WASM `TYPE_RATIO` held two i32
-components, too narrow for a float's power-of-two denominator -- is gone since 2026-10-03, when the
-components became exact integers; folding the fraction on all four backends is `.todo/c03`.
-**The fold is also what is STORED**, so `maphash` hands back the representative.
+Fold: string/character to UPPER CASE code point by code point; a finite float to the exact rational
+it equals, read out of `mantissa * 2^exponent` (`1`, `1.0`, `2/2` are one key, and so are `0.5` and
+`1/2`; the least subnormal folds to `1/2^1074`); a cons element-wise; everything else is its own key
+(NaN and the infinities included). One deliberate ANSI deviation, a MISS and never a false match:
+an ARRAY does not fold (`equal` on a vector is identity). The fraction fold waited on WASM
+`TYPE_RATIO`'s two i32 components, too narrow for a power-of-two denominator, until they became
+exact integers ([[wasm-bignum]], "Ratios").
+**The fold is also what is STORED**, so `maphash` hands back the representative (`1/2` for a key
+written as `0.5`; SBCL hands back the key as written).
 
-- interpreter `LispHashTable` via `LispEquality.equalpKey`.
+- interpreter `LispHashTable` via `LispEquality.equalpKey`; the float arm is `LispRatio.ofDouble`,
+  the same decomposition `rational` answers.
 - JVM `runtime/RontoHashTable.equalpKey`, so that class TRAVELS beside a compiled program making an
   `equalp` table (`.kb/jvm-export.md`). Marker = reserved String key `#equalp` beside `#order`
   (`#eql`/`#eq` for identity tables); `_hashKey` folds and `_hashGet`/`_hashPut`/`_hashRem`
   run every key through it, then compare and hash by `_hashTest`. **Trap**:
   `_hashClr` must read the markers before the clear and hang them back.
 - WASM `_equalp_key` (`WasmEqualpKeyRuntimeBuilder`, `FUNC_EQUALP_KEY`, appended after the last
-  fixed helper so no index shifts). The tag rides in the LOW TWO BITS of the header count, stored as
-  `entries * 4 + test` (0 equal, 1 equalp, 2 eql, 3 eq), so the header car stays an i31; every
+  fixed helper so no index shifts). A fraction strips the mantissa's trailing zero bits and builds
+  the `TYPE_RATIO` directly (`_int_new` numerator, `_big_ash` denominator): an odd numerator over a
+  power of two is already in lowest terms, so `_rat_new`'s gcd never comes aboard: +54 B in a
+  module with an `equalp` table, every other module byte-identical. The tag rides in the LOW TWO
+  BITS of the header count, stored as `entries * 4 + test` (0 equal, 1 equalp, 2 eql, 3 eq), so the header car stays an i31; every
   count read shifts past it. An eql/eq key is placed by `_ihash` (`FUNC_IHASH`, the
   identity-hash slot below) and compared with the eql/eq comparison inlined at the bucket
   scan; `_hash_resize` reads the tag off the header it already takes and places by the

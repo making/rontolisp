@@ -8897,12 +8897,9 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Returns the exact rational a finite double IS, from its raw IEEE 754 bits: a normal
-	 * value is {@code (2^52 + mantissa) * 2^(biased-1075)}, a subnormal (or zero) is
-	 * {@code mantissa * 2^-1074}. The sign rides on the mantissa, so a zero mantissa
-	 * answers plain zero regardless of the sign bit. A NaN or an infinity has no exact
-	 * rational and signals (ANSI never feeds one -- *floats* holds no non-finite values
-	 * -- so the message is free).
+	 * Returns the exact rational a finite double IS ({@link LispRatio#ofDouble}). A NaN
+	 * or an infinity has no exact rational and signals (ANSI never feeds one -- *floats*
+	 * holds no non-finite values -- so the message is free).
 	 * @param value the double to convert
 	 * @return the exact rational value
 	 */
@@ -8910,28 +8907,7 @@ public final class Environment implements Scope {
 		if (!Double.isFinite(value)) {
 			throw new LispEvalException("rational of a non-finite float is undefined");
 		}
-		long bits = Double.doubleToRawLongBits(value);
-		int rawExp = (int) ((bits >>> 52) & 0x7FF);
-		BigInteger mant;
-		int exp;
-		if (rawExp == 0) {
-			mant = BigInteger.valueOf(bits & 0xFFFFFFFFFFFFFL);
-			exp = -1074;
-		}
-		else {
-			mant = BigInteger.valueOf(bits & 0xFFFFFFFFFFFFFL).setBit(52);
-			exp = rawExp - 1075;
-		}
-		if (bits < 0) {
-			mant = mant.negate();
-		}
-		if (mant.signum() == 0) {
-			return new LispInteger(0);
-		}
-		if (exp >= 0) {
-			return normalizeBig(mant.shiftLeft(exp));
-		}
-		return LispRatio.valueOf(mant, BigInteger.ONE.shiftLeft(-exp));
+		return LispRatio.ofDouble(value);
 	}
 
 	private static LispVal addBig(List<LispVal> args) {

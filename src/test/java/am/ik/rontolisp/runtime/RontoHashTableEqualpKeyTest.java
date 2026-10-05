@@ -60,13 +60,29 @@ class RontoHashTableEqualpKeyTest {
 	}
 
 	@Test
-	void aFloatWithAFractionIsItsOwnKeyInBothModels() {
-		// It does NOT fold to the ratio it equals: the WASM ratio cannot hold one, so
-		// folding it here would split the backends rather than join them.
-		assertThat(interpreterFold(new LispDouble(0.5))).isEqualTo(new LispDouble(0.5));
-		assertThat(jvmFold(Double.valueOf(0.5))).isEqualTo(Double.valueOf(0.5));
+	void aFloatWithAFractionFoldsToItsRatioInBothModels() {
+		// The exact mantissa over a power of two, already in lowest terms: the ratio
+		// equalp's = calls the float equal to.
+		assertThat(interpreterFold(new LispDouble(0.5)).print()).isEqualTo("1/2");
+		assertThat(jvmFold(Double.valueOf(0.5))).isEqualTo(new BigInteger[] { BigInteger.ONE, BigInteger.TWO });
+		assertThat(interpreterFold(new LispDouble(-0.1)).print()).isEqualTo("-3602879701896397/36028797018963968");
+		assertThat(jvmFold(Double.valueOf(-0.1))).isEqualTo(
+				new BigInteger[] { BigInteger.valueOf(-3602879701896397L), BigInteger.valueOf(36028797018963968L) });
+		// The least subnormal: a denominator past every fixed-width tier.
+		assertThat(interpreterFold(new LispDouble(Double.MIN_VALUE)).print())
+			.isEqualTo("1/" + BigInteger.ONE.shiftLeft(1074));
+		assertThat(jvmFold(Double.valueOf(Double.MIN_VALUE)))
+			.isEqualTo(new BigInteger[] { BigInteger.ONE, BigInteger.ONE.shiftLeft(1074) });
+	}
+
+	@Test
+	void aNonFiniteFloatIsItsOwnKeyInBothModels() {
 		assertThat(interpreterFold(new LispDouble(Double.NaN)).print()).isEqualTo(new LispDouble(Double.NaN).print());
 		assertThat(jvmFold(Double.valueOf(Double.NaN))).isEqualTo(Double.valueOf(Double.NaN));
+		assertThat(interpreterFold(new LispDouble(Double.NEGATIVE_INFINITY)).print())
+			.isEqualTo(new LispDouble(Double.NEGATIVE_INFINITY).print());
+		assertThat(jvmFold(Double.valueOf(Double.NEGATIVE_INFINITY)))
+			.isEqualTo(Double.valueOf(Double.NEGATIVE_INFINITY));
 	}
 
 	@Test

@@ -455,16 +455,16 @@ reproduces the file byte for byte.
 Keys are compared structurally (as if by `equal`): a list key like `(list r c)`
 matches an equal list, and numbers, symbols, characters and strings match by
 value. `:test 'equalp` widens that: such a table FOLDS each key before placing
-it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, `1`
-and `1.0` are one key, and a list of them folds element-wise. Two things
-deliberately do not fold -- an array (a vector key is compared by identity, so a
-folded copy would never find itself) and a float with a fraction (`0.5` and
-`1/2` stay two keys) -- and on the compiled backends the `:test` has to be
-written literally, since `make-hash-table`'s arguments are not evaluated there.
-The folded key is also the one that is stored, so `maphash` over such a table
-hands back `"CS"` for an entry written under `"cs"`.
-Every other test keys structurally: an `eql` table also matches
-structurally-equal aggregate keys. Iteration order (`maphash`) is not guaranteed
+it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, a
+float and the rational it equals are one key (`1` and `1.0`, `1/2` and `0.5`),
+and a list of them folds element-wise. An array deliberately does not fold (a
+vector key is compared by identity, so a folded copy would never find itself),
+and on the compiled backends the `:test` has to be written literally, since
+`make-hash-table`'s arguments are not evaluated there. The folded key is also the
+one that is stored, so `maphash` over such a table hands back `"CS"` for an entry
+written under `"cs"` and `1/2` for one written under `0.5`.
+An `eql` or `eq` table keys aggregates (conses, vectors, strings, instances) by
+identity and every other value by value. Iteration order (`maphash`) is not guaranteed
 across backends, so portable code should not depend on it. A table itself prints
 as SBCL's unreadable tag minus its trailing identity hash --
 `#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no

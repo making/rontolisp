@@ -14845,11 +14845,11 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void anEqualpHashTableFoldsAFloatToTheIntegerItEquals() {
-		// equalp compares numbers with =, so a float and the integer it equals are one
-		// key -- at any magnitude, since the fold reads the exact mantissa * 2^exponent
-		// out of the bits. A float with a FRACTION is its own key on every backend
-		// (.kb/hash-tables.md).
+	void anEqualpHashTableFoldsAFloatToTheRationalItEquals() {
+		// equalp compares numbers with =, so a float and the rational it equals are one
+		// key -- the integer for a float without a fraction, the ratio over a power of
+		// two for one with -- at any magnitude, since the fold reads the exact
+		// mantissa * 2^exponent out of the bits (.kb/hash-tables.md).
 		LispVal result = evalMulti("""
 				(defparameter *n* (make-hash-table :test 'equalp))
 				(setf (gethash 1 *n*) 'one)
@@ -14858,7 +14858,28 @@ class LispEvaluatorTest {
 				(list (gethash 1.0d0 *n*) (gethash 2/2 *n*) (gethash 1/2 *n*)
 				      (gethash 1.099511627776d12 *n*) (hash-table-count *n*))
 				""");
-		assertThat(result.print()).isEqualTo("(ONE ONE NIL BIG 3)");
+		assertThat(result.print()).isEqualTo("(ONE ONE HALF BIG 3)");
+	}
+
+	@Test
+	void anEqualpHashTableFoldsAFloatWithAFractionToItsRatio() {
+		// Stored as a float and looked up as its ratio, and the other way round: the
+		// double nearest 0.1 is exactly 3602879701896397/36028797018963968 and the least
+		// subnormal 1/2^1074. A ratio no double equals (1/3), and a double near but not
+		// equal to one stored (0.3), miss.
+		LispVal result = evalMulti("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 0.5d0 h) 'half)
+				  (setf (gethash 0.1d0 h) 'tenth)
+				  (setf (gethash -0.75d0 h) 'neg)
+				  (setf (gethash 3/4 h) 'pos)
+				  (setf (gethash 4.9406564584124654d-324 h) 'tiny)
+				  (setf (gethash 1/2 h) 'half-again)
+				  (list (gethash 1/2 h) (gethash 3602879701896397/36028797018963968 h)
+				        (gethash -3/4 h) (gethash 0.75d0 h) (gethash (/ 1 (expt 2 1074)) h)
+				        (gethash 1/3 h) (gethash 0.3d0 h) (hash-table-count h)))
+				""");
+		assertThat(result.print()).isEqualTo("(HALF-AGAIN TENTH NEG POS TINY NIL NIL 5)");
 	}
 
 	@Test

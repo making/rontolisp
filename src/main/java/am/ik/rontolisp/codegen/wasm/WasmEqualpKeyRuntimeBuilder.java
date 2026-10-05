@@ -24,10 +24,11 @@ import am.ik.wasm.WasmWriter;
  * {@code _string_upcase} -- an unframed one is a SYMBOL and is its own key;</li>
  * <li>a {@code TYPE_CHAR} folds through {@code _char_upcase}, the same range table the
  * string fold and the interpreter use;</li>
- * <li>a {@code TYPE_FLOAT} whose value is an INTEGER folds to that integer, read out of
- * its bits as {@code mantissa * 2^exponent} and built through {@code _int_new} /
- * {@code _big_ash}, so it is exact at every magnitude. A float with a fraction does NOT
- * fold to the ratio it equals, on any backend ({@code LispEquality.equalpKey});</li>
+ * <li>a finite {@code TYPE_FLOAT} folds to the exact rational it equals, read out of its
+ * bits as {@code mantissa * 2^exponent}: the integer through {@code _int_new} /
+ * {@code _big_ash} when the value has no fraction, otherwise the odd mantissa over the
+ * power of two {@code _big_ash} builds, a {@code TYPE_RATIO} already in lowest terms --
+ * exact at every magnitude;</li>
  * <li>a {@code TYPE_CONS} folds element-wise;</li>
  * <li>everything else -- an array included -- is its own key.</li>
  * </ul>
@@ -161,7 +162,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.ELSE);
 
-		// A float -> the integer it equals, or itself
+		// A float -> the rational it equals, or itself
 		refTest(w, WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
@@ -194,7 +195,8 @@ final class WasmEqualpKeyRuntimeBuilder {
 
 	// A finite double is exactly mantissa * 2^exponent. Strip the trailing zero bits the
 	// exponent still owes: what is left is an integer exactly when the exponent has
-	// reached zero, and then _int_new / _big_ash build it at any magnitude.
+	// reached zero, and then _int_new / _big_ash build it at any magnitude; otherwise it
+	// is the odd mantissa over 2^-exponent.
 	private static void emitFloatFold(WasmWriter w) {
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -254,7 +256,9 @@ final class WasmEqualpKeyRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// A negative exponent is a division by 2^-exponent the mantissa's trailing zero
-		// bits may or may not pay for: when they do not, the value has a fraction.
+		// bits may or may not pay for: when they do not, the value has a fraction, and
+		// stripping those bits leaves the odd numerator over 2^-(exponent + ctz) -- in
+		// lowest terms, so the ratio is built without a gcd.
 		getLocal(w, 3);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -271,7 +275,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
-		getLocal(w, 0);
+		emitRatioOf(w);
 		w.write(Instruction.ELSE);
 		getLocal(w, 2);
 		w.write(Instruction.I32_CONST);
@@ -289,6 +293,37 @@ final class WasmEqualpKeyRuntimeBuilder {
 
 		w.write(Instruction.END); // end zero if
 		w.write(Instruction.END); // end non-finite if
+	}
+
+	// Builds the ratio for the mantissa in local 2 (odd once its trailing zero bits are
+	// shifted out) over 2^-(exponent in local 3 + those bits), signed by the bit pattern
+	// in local 1. The numerator fits 53 bits, so _int_new answers it in its narrowest
+	// tier; the denominator's exponent is at most 1074, far below _big_ash's allocation
+	// guard, and _big_ash answers its narrowest tier too, so the ratio _equal and _hash
+	// compare component by component is the one a literal or _rat_new would build.
+	private static void emitRatioOf(WasmWriter w) {
+		getLocal(w, 3);
+		getLocal(w, 2);
+		w.write(Instruction.I64_CTZ);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, 3);
+		getLocal(w, 2);
+		getLocal(w, 2);
+		w.write(Instruction.I64_CTZ);
+		w.write(Instruction.I64_SHR_U);
+		setLocal(w, 2);
+		emitIntegerOf(w, false);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		getLocal(w, 3);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		call(w, WasmLispCompiler.FUNC_BIG_ASH);
+		WasmRatioRuntimeBuilder.emitNewRatio(w);
 	}
 
 	// Builds the exact integer for the mantissa in local 2, signed by the bit pattern in

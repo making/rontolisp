@@ -57,6 +57,43 @@ public record LispRatio(BigInteger numerator, BigInteger denominator) implements
 	}
 
 	/**
+	 * Returns the exact rational a finite double IS, from its raw IEEE 754 bits: a normal
+	 * value is {@code (2^52 + mantissa) * 2^(biased-1075)}, a subnormal (or zero) is
+	 * {@code mantissa * 2^-1074}. The sign rides on the mantissa, so either zero answers
+	 * plain zero. The result is an integer for a double without a fraction and a ratio
+	 * over a power of two otherwise -- what {@code rational} answers, and what an
+	 * {@code equalp} hash table folds a float key to.
+	 * @param value the double to convert, finite
+	 * @return the exact rational value
+	 * @throws IllegalArgumentException for a NaN or an infinity, which have no exact
+	 * rational
+	 */
+	public static LispVal ofDouble(double value) {
+		if (!Double.isFinite(value)) {
+			throw new IllegalArgumentException("not a finite double: " + value);
+		}
+		long bits = Double.doubleToRawLongBits(value);
+		int rawExp = (int) ((bits >>> 52) & 0x7FF);
+		long mantissa = bits & 0xFFFFFFFFFFFFFL;
+		int exp;
+		if (rawExp == 0) {
+			exp = -1074;
+		}
+		else {
+			mantissa |= 1L << 52;
+			exp = rawExp - 1075;
+		}
+		if (mantissa == 0) {
+			return new LispInteger(0);
+		}
+		BigInteger mant = BigInteger.valueOf(bits < 0 ? -mantissa : mantissa);
+		if (exp >= 0) {
+			return valueOf(mant.shiftLeft(exp), BigInteger.ONE);
+		}
+		return valueOf(mant, BigInteger.ONE.shiftLeft(-exp));
+	}
+
+	/**
 	 * Returns the closest {@code double} approximation of this rational, correctly
 	 * rounded (round-half-even per IEEE 754): the exact binary quotient is computed with
 	 * {@link BigInteger} arithmetic -- a 56-bit head plus the remainder as the sticky bit
