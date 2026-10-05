@@ -1987,9 +1987,10 @@ on wasm-GC even in EH mode.
   `SUBSEQ: invalid bounds S, E for KIND of length N`, rather than this section's `OP: The value
   ...` shape: datum the first bound outside its range, expected type `(INTEGER low N)`. It does
   not go through `_oob` / `_idx_in` (they word the report): interpreter
-  `OperandTypeException.reported`, JVM `_subseqRec` over the `_teTl` record, wasm-GC the
+  `OperandTypeException.reported`, JVM `_subseqBad` over the `_teTl` record, wasm-GC the
   `_subseq_bad` landing building the instance where `_type_err` would
-  ([subseq-runtime.md](subseq-runtime.md), "Bounds check").
+  ([subseq-runtime.md](subseq-runtime.md), "Bounds check"). A bound that is no integer takes
+  the same refusal, not an `INTEGER` operand check: it is outside its range like any other.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in

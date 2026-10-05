@@ -61,17 +61,18 @@ final class WasmSubseqCompiler {
 		get(ctx, len);
 		set(ctx, end);
 		ctx.writer.write(Instruction.END);
-		// start < 0 | end > len | start > end
-		getInt(ctx, start);
+		// start < 0 | end > len | start > end, over the bounds' indices
+		// (WasmEmitHelper.emitBoundIndex: -1 for a bound that is no fixnum)
+		WasmEmitHelper.emitBoundIndex(ctx.writer, start);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_LT_S);
-		getInt(ctx, end);
+		WasmEmitHelper.emitBoundIndex(ctx.writer, end);
 		getInt(ctx, len);
 		ctx.writer.write(Instruction.I32_GT_S);
 		ctx.writer.write(Instruction.I32_OR);
-		getInt(ctx, start);
-		getInt(ctx, end);
+		WasmEmitHelper.emitBoundIndex(ctx.writer, start);
+		WasmEmitHelper.emitBoundIndex(ctx.writer, end);
 		ctx.writer.write(Instruction.I32_GT_S);
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);

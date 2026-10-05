@@ -311,16 +311,17 @@ final class JvmArrayRuntimeBuilder {
 	static final String STR_TO_CHAR_VEC_DESC = "(Ljava/lang/String;)Ljava/lang/Object;";
 
 	/**
-	 * {@code _subseqCv(Object, int, int) -> Object}: the string {@code subseq} lane
+	 * {@code _subseqCv(Object, Object, Object) -> Object}: the string {@code subseq} lane
 	 * answering a MUTABLE character vector, so a {@code copy-seq}/{@code subseq} result
 	 * has a writable identity like the interpreter's ({@code .todo/559} step 2). A
 	 * character vector or string view input copies elements through {@code _rmGet}; an
 	 * immutable {@code String} slices by code point and converts once through
-	 * {@code _strToCharVec}. The int {@code end} uses {@code -1} for "to the length".
+	 * {@code _strToCharVec}. The bounds arrive as given, a nil {@code end} meaning "to
+	 * the length", so a refusal reports them as given.
 	 */
 	static final String SUBSEQ_CV = "_subseqCv";
 
-	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object;";
+	static final String SUBSEQ_CV_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
 	 * {@code _toMutStr(Object) -> Object}: the mutable-result wrap the flipped string
@@ -358,7 +359,7 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
-			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.@Nullable SubseqRecords subseqRecords) {
+			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.SubseqRuntime subseqRuntime) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
@@ -2577,9 +2578,9 @@ final class JvmArrayRuntimeBuilder {
 		// _strToCharVec, then clears the fill-pointer slot that promotion path sets so
 		// the result is a SIMPLE string like the other backends'. Both arms refuse a
 		// range outside the string with the interpreter's report, from one shared
-		// block. Locals: 0 = o, 1 = start, 2 = end (nil or a fixnum), 3 = header,
-		// 5 = n, 6 = out, 7 = i, 8 = s, 9 = a, 10 = b, 11 = the character count, 12 =
-		// the resolved end.
+		// block. Locals: 0 = o, 1 = start and 2 = end (each as given, the end nil when
+		// omitted), 3 = header, 4 = the start as an index, 5 = n, 6 = out, 7 = i, 8 = s,
+		// 9 = a, 10 = b, 11 = the character count, 12 = the resolved end.
 		MethodRefEntry scStrToCharVec = cp.methodRef(selfClass, STR_TO_CHAR_VEC, STR_TO_CHAR_VEC_DESC);
 		MethodRefEntry strLength = cp.methodRef(strClass, "length", "()I");
 		MethodRefEntry strConcat = cp.methodRef(strClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
@@ -2587,6 +2588,8 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode.Label scStr = sc.newLabel();
 		MethodCode.Label scCv = sc.newLabel();
 		MethodCode.Label scBad = sc.newLabel();
+		subseqRuntime.emitIndex(sc, 1);
+		sc.istore(4);
 		sc.aload(0);
 		sc.instanceOf(arrayListClass);
 		sc.ifeq(scStr);
@@ -2634,10 +2637,10 @@ final class JvmArrayRuntimeBuilder {
 		sc.istore(11);
 		sc.labelBinding(scHaveLen);
 		// realEnd = (end nil ? len : end), checked against len; n = realEnd - start
-		JvmSubseqCompiler.emitResolveEnd(sc, cp, 2, 11, 12);
-		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
+		JvmSubseqCompiler.emitResolveEnd(sc, subseqRuntime, 2, 11, 12);
+		JvmSubseqCompiler.emitBoundsTest(sc, 4, 12, 11, scBad);
 		sc.iload(12);
-		sc.iload(1);
+		sc.iload(4);
 		sc.isub();
 		sc.istore(5);
 		// out = new ArrayList holding the length-4 header {dims{n}, null, null, null}
@@ -2673,7 +2676,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(6);
 		sc.aload(0);
 		sc.loadConstant(1);
-		sc.iload(1);
+		sc.iload(4);
 		sc.iadd();
 		sc.iload(7);
 		sc.iadd();
@@ -2696,10 +2699,10 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(8);
 		sc.invokestatic(strCount);
 		sc.istore(11);
-		JvmSubseqCompiler.emitResolveEnd(sc, cp, 2, 11, 12);
-		JvmSubseqCompiler.emitBoundsTest(sc, 1, 12, 11, scBad);
+		JvmSubseqCompiler.emitResolveEnd(sc, subseqRuntime, 2, 11, 12);
+		JvmSubseqCompiler.emitBoundsTest(sc, 4, 12, 11, scBad);
 		sc.aload(8);
-		sc.iload(1);
+		sc.iload(4);
 		sc.invokestatic(strCpOffset);
 		sc.istore(9);
 		MethodCode.Label scHaveEnd = sc.newLabel();
@@ -2742,7 +2745,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.areturn();
 		// Both arms' refusal.
 		sc.labelBinding(scBad);
-		JvmSubseqCompiler.emitBoundsError(sc, cp, subseqRecords, 1, 12, 11, "string");
+		JvmSubseqCompiler.emitBoundsError(sc, subseqRuntime, new JvmSubseqCompiler.Bounds(1, 2, 11, "string"));
 		methods.add(new ArrayMethod(cp.utf8Entry(SUBSEQ_CV), cp.utf8Entry(SUBSEQ_CV_DESC), sc));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED

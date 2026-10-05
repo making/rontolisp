@@ -6,8 +6,8 @@ package am.ik.rontolisp;
  * {@code string-downcase} and {@code string-capitalize} with a {@code :start} /
  * {@code :end} outside the string refuse as a {@code type-error} with the text
  * {@code subseq} gives the same range ({@link SubseqBoundsFixture}) on every backend,
- * through a direct call and through {@code funcall}. The bounds are computed at run time
- * so no backend can fold them.
+ * through a direct call and through {@code funcall}; a bound that is no integer is
+ * refused the same way. The bounds are computed at run time so no backend can fold them.
  */
 public final class BoundedStringBoundsFixture {
 
@@ -24,12 +24,16 @@ public final class BoundedStringBoundsFixture {
 			(defvar *bsb-hi* 9)
 			(defvar *bsb-neg* -1)
 			(defvar *bsb-one* 1)
+			(defvar *bsb-str* "a")
+			(defvar *bsb-flt* 1.5)
 			(defun bsb-row (op)
 			  (list (bsb-probe (lambda () (funcall op "hello" *bsb-lo* *bsb-one*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* *bsb-hi*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-neg* nil)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-hi* nil)))
 			        (bsb-probe (lambda () (funcall op "hello" 0 *bsb-neg*)))
+			        (bsb-probe (lambda () (funcall op "hello" *bsb-str* nil)))
+			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* *bsb-flt*)))
 			        (bsb-probe (lambda () (funcall op "hello" *bsb-one* 3)))))
 			(dolist (op (list (lambda (s i e) (with-output-to-string (o) (write-string s o :start i :end e)))
 			                  (lambda (s i e) (with-output-to-string (o) (write-line s o :start i :end e)))
@@ -52,8 +56,13 @@ public final class BoundedStringBoundsFixture {
 
 	private static final String RANGE_0_M1 = "(-1 (INTEGER 0 5) \"SUBSEQ: invalid bounds 0, -1 for string of length 5\")";
 
+	private static final String START_A = "(\"a\" (INTEGER 0 5) \"SUBSEQ: invalid bounds \\\"a\\\", 5 for string of length 5\")";
+
+	private static final String END_FLOAT = "(1.5 (INTEGER 1 5) \"SUBSEQ: invalid bounds 1, 1.5 for string of length 5\")";
+
 	private static String row() {
-		return "(" + RANGE_3_1 + " " + RANGE_1_9 + " " + RANGE_M1 + " " + RANGE_9 + " " + RANGE_0_M1 + " :OK)";
+		return "(" + RANGE_3_1 + " " + RANGE_1_9 + " " + RANGE_M1 + " " + RANGE_9 + " " + RANGE_0_M1 + " " + START_A
+				+ " " + END_FLOAT + " :OK)";
 	}
 
 	/** What {@link #PROGRAM} prints, one row per operator. */

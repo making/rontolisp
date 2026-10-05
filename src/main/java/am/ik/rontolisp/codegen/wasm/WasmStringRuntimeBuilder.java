@@ -1964,9 +1964,10 @@ final class WasmStringRuntimeBuilder {
 		get(w, seq);
 		WasmEmitHelper.emitCharvecPCall(w);
 		w.write(Instruction.IF, 0x40);
-		// st = i31(start); len = (length seq); realEnd = (end == nil ? len : i31(end))
-		get(w, start);
-		WasmEmitHelper.castI31GetS(w);
+		// st = start's index; len = (length seq); realEnd = (end == nil ? len : end's
+		// index) -- an index is -1 for a bound that is no fixnum
+		// (WasmEmitHelper.emitBoundIndex)
+		WasmEmitHelper.emitBoundIndex(w, start);
 		set(w, st);
 		get(w, seq);
 		w.write(Instruction.CALL);
@@ -1978,8 +1979,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.IF, Type.I32);
 		get(w, len);
 		w.write(Instruction.ELSE);
-		get(w, end);
-		WasmEmitHelper.castI31GetS(w);
+		WasmEmitHelper.emitBoundIndex(w, end);
 		w.write(Instruction.END);
 		set(w, realEnd);
 		emitSubseqBoundsCheck(w, ehMode, boundsForLength, st, realEnd, len);
@@ -2212,11 +2212,12 @@ final class WasmStringRuntimeBuilder {
 		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
 		int charLen = 15, actualEnd = 16;
 		int strArr = 17;
-		// startIdx = i31(startArg); endIdx = (endArg nil) ? 0 : i31(endArg). The 0 is a
-		// placeholder: an omitted end is read from endArg's nil, never from endIdx, since
-		// a caller can give any i31 -- a -1 sentinel read (subseq s 0 -1) as the whole
-		// sequence.
-		emitI31GetS(w, 1);
+		// startIdx = startArg's index; endIdx = (endArg nil) ? 0 : endArg's index, an
+		// index being -1 for a bound that is no fixnum (WasmEmitHelper.emitBoundIndex).
+		// The 0 is a placeholder: an omitted end is read from endArg's nil, never from
+		// endIdx, since a caller can give any i31 -- a -1 sentinel read (subseq s 0 -1)
+		// as the whole sequence.
+		WasmEmitHelper.emitBoundIndex(w, 1);
 		set(w, startIdx);
 		get(w, 2);
 		w.write(Instruction.REF_IS_NULL);
@@ -2224,7 +2225,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Type.I32);
 		i32(w, 0);
 		w.write(Instruction.ELSE);
-		emitI31GetS(w, 2);
+		WasmEmitHelper.emitBoundIndex(w, 2);
 		w.write(Instruction.END);
 		set(w, endIdx);
 		// Dispatch: string struct vs list.
@@ -2280,8 +2281,8 @@ final class WasmStringRuntimeBuilder {
 		emitBuildCore(w, strArr, pos, end, start, cur, b);
 		w.write(Instruction.ELSE);
 		// --- List branch ---
-		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash, charLen, actualEnd,
-				() -> emitSubseqBoundsError(w, ehMode, boundsForLength, "list", startIdx, actualEnd, charLen));
+		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash, charLen,
+				() -> emitSubseqBoundsError(w, ehMode, boundsForLength, "list", charLen));
 		w.write(Instruction.END); // dispatch if
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -2291,11 +2292,11 @@ final class WasmStringRuntimeBuilder {
 	// startIdx up to endIdx (or to the end when param 2, the end, is nil). A range the
 	// list cannot supply -- a negative start, a start past a given end, a list that
 	// runs out before start or before a given end -- leaves the walk it already does
-	// for the block around it, and only then is the whole list counted into `len`, the
-	// end resolved into `realEnd`, and `refuse` emitted (which never returns). A valid
-	// range pays the two tests in front of the walk and nothing per cell.
+	// for the block around it, and only then is the whole list counted into `len` and
+	// `refuse` emitted (which never returns). A valid range pays the two tests in front
+	// of the walk and nothing per cell.
 	private static void emitSubseqList(WasmWriter w, int node, int head, int tail, int newc, int startIdx, int endIdx,
-			int ii, boolean identityHash, int len, int realEnd, Runnable refuse) {
+			int ii, boolean identityHash, int len, Runnable refuse) {
 		w.write(Instruction.BLOCK, 0x40); // refused
 		// startIdx < 0 || (end given && startIdx > endIdx): refused
 		get(w, startIdx);
@@ -2410,7 +2411,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, head);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // refused
-		// len = the number of conses; realEnd = end nil ? len : endIdx; refuse
+		// len = the number of conses; refuse
 		get(w, 0);
 		set(w, node);
 		i32(w, 0);
@@ -2431,14 +2432,6 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		get(w, 2);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, Type.I32);
-		get(w, len);
-		w.write(Instruction.ELSE);
-		get(w, endIdx);
-		w.write(Instruction.END);
-		set(w, realEnd);
 		refuse.run();
 	}
 
@@ -3291,7 +3284,8 @@ final class WasmStringRuntimeBuilder {
 		w.writeSignedLeb128(value);
 	}
 
-	// 0 <= start <= end <= len falls through; anything else is the string report.
+	// 0 <= start <= end <= len (the i32 indices) falls through; anything else is the
+	// string report over the bounds as given, params 1 and 2.
 	private static void emitSubseqBoundsCheck(WasmWriter w, boolean ehMode,
 			WasmLispCompiler.StringTable.@Nullable StringEntry forLength, int startLocal, int endLocal, int lenLocal) {
 		get(w, startLocal);
@@ -3306,18 +3300,18 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.I32_GT_S);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitSubseqBoundsError(w, ehMode, forLength, "string", startLocal, endLocal, lenLocal);
+		emitSubseqBoundsError(w, ehMode, forLength, "string", lenLocal);
 		w.write(Instruction.END);
 	}
 
-	// A subseq bounds violation over three i32 locals: in EH mode, signals the
-	// interpreter's exact "SUBSEQ: invalid bounds S, E for KIND of length N" type-error
-	// (emitSubseqBoundsThrow); outside EH mode a bare unreachable, matching every other
-	// unchecked failure that backend takes when no tag exists to throw on. Never
-	// returns.
+	// A subseq bounds violation over the bounds as given -- params 1 (start) and 2 (end,
+	// nil when omitted) of every lane function -- and the i32 length: in EH mode,
+	// signals the interpreter's exact "SUBSEQ: invalid bounds S, E for KIND of length N"
+	// type-error (emitSubseqBoundsThrow); outside EH mode a bare unreachable, matching
+	// every other unchecked failure that backend takes when no tag exists to throw on.
+	// Never returns.
 	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode,
-			WasmLispCompiler.StringTable.@Nullable StringEntry forString, String kind, int startLocal, int endLocal,
-			int lenLocal) {
+			WasmLispCompiler.StringTable.@Nullable StringEntry forString, String kind, int lenLocal) {
 		if (!ehMode) {
 			w.write(Instruction.UNREACHABLE);
 			return;
@@ -3325,8 +3319,8 @@ final class WasmStringRuntimeBuilder {
 		// Non-null whenever ehMode is true (the builders' callers intern them under the
 		// same condition).
 		WasmLispCompiler.StringTable.StringEntry forStringOfLength = java.util.Objects.requireNonNull(forString);
-		emitSubseqBoundsThrow(w, () -> emitKindOfLength(w, forStringOfLength, kind), () -> boxLocal(w, startLocal),
-				() -> boxLocal(w, endLocal), () -> boxLocal(w, lenLocal));
+		emitSubseqBoundsThrow(w, () -> emitKindOfLength(w, forStringOfLength, kind), () -> get(w, 1), () -> get(w, 2),
+				() -> boxLocal(w, lenLocal));
 	}
 
 	private static void boxLocal(WasmWriter w, int local) {
@@ -3341,8 +3335,8 @@ final class WasmStringRuntimeBuilder {
 	 * @param w the body being written
 	 * @param forKindOfLength pushes {@code " for KIND of length "}
 	 * ({@link #emitKindOfLength})
-	 * @param start pushes the start as a fixnum
-	 * @param end pushes the resolved end as a fixnum
+	 * @param start pushes the start as given
+	 * @param end pushes the end as given, nil when omitted
 	 * @param length pushes the sequence's length as a fixnum
 	 */
 	static void emitSubseqBoundsThrow(WasmWriter w, Runnable forKindOfLength, Runnable start, Runnable end,
@@ -3360,16 +3354,17 @@ final class WasmStringRuntimeBuilder {
 	 * Builds {@code _subseq_bad(start, end, length, piece) -> value}
 	 * ({@code FUNC_SUBSEQ_BAD}, {@code TYPE_CALLABLE_BASE + 3}), the one landing of every
 	 * {@code subseq} bounds refusal ({@link #emitSubseqBoundsThrow}); it never returns.
-	 * In EH mode it renders {@code "SUBSEQ: invalid bounds S, E"} + {@code piece} +
-	 * {@code N} -- each number through {@code _prin1_to_str} (the
-	 * {@code WasmOperandTypes.pushBound} trick, so no itoa is duplicated here) -- and
-	 * throws it on {@code $lisp-cond} as a {@code type-error} whose datum is the refused
-	 * bound and whose expected type is its range {@code (INTEGER low length)}
-	 * ({@code OperandTypes.subseqStartRefused}), or, in a module that did not bake the
-	 * class ({@code typeError} null: no handler landing pad, so nothing can observe it),
-	 * as the instance-less {@code (nil . message)} payload the entry landing pad reports
-	 * the same way. Outside EH mode no site calls it and it is a bare
-	 * {@code unreachable}.
+	 * The bounds arrive as given -- any value, the end nil when omitted -- and the length
+	 * as a fixnum. In EH mode it renders {@code "SUBSEQ: invalid bounds S, E"} +
+	 * {@code piece} + {@code N} -- each through {@code _prin1_to_str} (the
+	 * {@code WasmOperandTypes.pushBound} trick, so no itoa is duplicated here), an
+	 * omitted end as the length -- and throws it on {@code $lisp-cond} as a
+	 * {@code type-error} whose datum is the refused bound and whose expected type is its
+	 * range {@code (INTEGER low length)} ({@code OperandTypes.subseqStartRefused}), or,
+	 * in a module that did not bake the class ({@code typeError} null: no handler landing
+	 * pad, so nothing can observe it), as the instance-less {@code (nil . message)}
+	 * payload the entry landing pad reports the same way. Outside EH mode no site calls
+	 * it and it is a bare {@code unreachable}.
 	 * @param prefix {@code "SUBSEQ: invalid bounds "}, non-null exactly in EH mode
 	 * @param comma {@code ", "}, non-null exactly in EH mode
 	 * @param typeError the type-error shape, or null for the instance-less payload
@@ -3390,10 +3385,10 @@ final class WasmStringRuntimeBuilder {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		// params: start = 0, end = 1, length = 2 (fixnums), piece = 3 (string); with a
-		// type-error to build, locals msg = 4, slots = 5 (eqref) and startRefused = 6
-		// (i32)
-		int msg = 4, slots = 5, startRefused = 6;
+		// params: start = 0, end = 1 (as given, the end nil when omitted), length = 2 (a
+		// fixnum), piece = 3 (string); with a type-error to build, locals msg = 4,
+		// slots = 5 (eqref) and startRefused = 6, startIndex = 7 (i32)
+		int msg = 4, slots = 5, startRefused = 6, startIndex = 7;
 		if (typeError == null) {
 			w.write(0);
 			w.write(Instruction.REF_NULL);
@@ -3403,7 +3398,7 @@ final class WasmStringRuntimeBuilder {
 			w.write(2);
 			w.write(2);
 			w.writeRefType(true, Type.EQ.code());
-			w.write(1);
+			w.write(2);
 			w.write(Type.I32);
 		}
 		strBuild(w, prefix);
@@ -3411,7 +3406,17 @@ final class WasmStringRuntimeBuilder {
 		strBuild(w, comma);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
-		appendPrinted(w, () -> get(w, 1));
+		appendPrinted(w, () -> {
+			// the end, or the length when it was omitted
+			get(w, 1);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			get(w, 2);
+			w.write(Instruction.ELSE);
+			get(w, 1);
+			w.write(Instruction.END);
+		});
 		get(w, 3);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
@@ -3425,13 +3430,18 @@ final class WasmStringRuntimeBuilder {
 		}
 		WasmLispCompiler.StringTable.StringEntry integer = java.util.Objects.requireNonNull(integerName);
 		set(w, msg);
-		// startRefused = start < 0 | start > length
-		get(w, 0);
-		WasmEmitHelper.castI31GetS(w);
+		// startRefused = end omitted | start < 0 | start > length, over the start's index
+		// (WasmEmitHelper.emitBoundIndex: -1 for a start that is no fixnum); an omitted
+		// end resolves inside its range whenever the start is inside its own
+		WasmEmitHelper.emitBoundIndex(w, 0);
+		set(w, startIndex);
+		get(w, 1);
+		w.write(Instruction.REF_IS_NULL);
+		get(w, startIndex);
 		i32(w, 0);
 		w.write(Instruction.I32_LT_S);
-		get(w, 0);
-		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.I32_OR);
+		get(w, startIndex);
 		get(w, 2);
 		WasmEmitHelper.castI31GetS(w);
 		w.write(Instruction.I32_GT_S);

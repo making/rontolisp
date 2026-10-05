@@ -177,15 +177,17 @@ final class JvmOperandTypeRuntime {
 	static final String IS_CONS_DESC = "(Ljava/lang/Object;)Z";
 
 	/**
-	 * {@code subseq}'s bounds recorder, {@code _subseqRec(e, start, end, len)}: records
-	 * the refusal {@code e} under a pad as a {@code type-error} whose datum is the
-	 * refused bound and whose expected type is its range
-	 * ({@code OperandTypes.subseqStartRefused}), and answers {@code e}. Built on first
-	 * use ({@link SubseqRecords}).
+	 * {@code subseq}'s bound conversion, {@code _subseqIdx(bound) -> int}, and its one
+	 * refusal, {@code _subseqBad(start, end, len, piece) -> RuntimeException}, each built
+	 * on first use ({@link SubseqRuntime}).
 	 */
-	static final String SUBSEQ_REC = "_subseqRec";
+	static final String SUBSEQ_IDX = "_subseqIdx";
 
-	static final String SUBSEQ_REC_DESC = "(Ljava/lang/RuntimeException;III)Ljava/lang/RuntimeException;";
+	static final String SUBSEQ_IDX_DESC = "(Ljava/lang/Object;)I";
+
+	static final String SUBSEQ_BAD = "_subseqBad";
+
+	static final String SUBSEQ_BAD_DESC = "(Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/String;)Ljava/lang/RuntimeException;";
 
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
@@ -954,24 +956,41 @@ final class JvmOperandTypeRuntime {
 	 * catch-any entry whose handler throws {@code _opTypeErr(e, "OP", "TYPE")}.
 	 */
 	/**
-	 * Builds {@link #SUBSEQ_REC} on first use, into the numeric runtime's methods: only a
-	 * class with a landing pad records a refusal (without one nothing reads the record),
-	 * and only one that refuses a {@code subseq} range carries the method, so every other
-	 * class keeps its bytes.
+	 * The class's {@code subseq} bounds runtime, built on first use into the numeric
+	 * runtime's methods, so a class that compiles no {@code subseq} lane keeps its bytes.
+	 * <ul>
+	 * <li>{@code _subseqIdx(bound) -> int}: the bound as the int index the bounds check
+	 * compares. A {@code Long} that fits an int answers its value, anything else -- a
+	 * bound that is no integer (a string, a float, a nil start), a {@code BigInteger}, a
+	 * {@code Long} past the int range -- answers -1, which lies outside every range, so
+	 * the check refuses it and the report prints the bound as given. A bare {@code l2i}
+	 * would wrap {@code 2^32} to 0. One method, not the test at each of the lanes' bounds
+	 * (up to six per class): a call is four bytes and the JIT inlines the callee.</li>
+	 * <li>{@code _subseqBad(start, end, len, piece)}: the refusal every lane throws, the
+	 * bounds as given (an omitted end nil). It renders
+	 * {@code "SUBSEQ: invalid bounds S, E" + piece + N}, each bound through
+	 * {@code _lispToString} and an omitted end as the length, and, in a class with a
+	 * landing pad ({@code teTl} non-null), records the exception as a {@code type-error}
+	 * whose datum is the refused bound and whose expected type is its range
+	 * ({@code OperandTypes.subseqStartRefused}); without a pad nothing can observe the
+	 * class.</li>
+	 * </ul>
 	 */
-	static final class SubseqRecords {
+	static final class SubseqRuntime {
 
 		private final ConstantPool cp;
 
 		private final ClassEntry thisClass;
 
-		private final FieldRefEntry teTl;
+		private final @Nullable FieldRefEntry teTl;
 
 		private final List<JvmNumericRuntimeBuilder.NumericMethod> sink;
 
-		private @Nullable MethodRefEntry ref;
+		private @Nullable MethodRefEntry index;
 
-		SubseqRecords(ConstantPool cp, ClassEntry thisClass, FieldRefEntry teTl,
+		private @Nullable MethodRefEntry refusal;
+
+		SubseqRuntime(ConstantPool cp, ClassEntry thisClass, @Nullable FieldRefEntry teTl,
 				List<JvmNumericRuntimeBuilder.NumericMethod> sink) {
 			this.cp = cp;
 			this.thisClass = thisClass;
@@ -980,55 +999,167 @@ final class JvmOperandTypeRuntime {
 		}
 
 		/**
-		 * {@return the {@code _subseqRec} reference, the method built on the first call}
+		 * Pushes the index of the bound in {@code Object} local {@code param}
+		 * ({@code _subseqIdx}).
+		 * @param m the method being emitted
+		 * @param param the local holding the bound
 		 */
-		MethodRefEntry ref() {
-			MethodRefEntry built = this.ref;
+		void emitIndex(MethodCode m, int param) {
+			m.aload(param);
+			m.invokestatic(index());
+		}
+
+		/**
+		 * Emits {@code throw _subseqBad(start, end, len, piece)}.
+		 * @param m the method being emitted
+		 * @param startParam the {@code Object} local holding the start as given
+		 * @param endParam the {@code Object} local holding the end as given, nil when
+		 * omitted
+		 * @param lenSlot the int length of the sequence
+		 * @param piece {@code " for KIND of length "}
+		 */
+		void emitRefusal(MethodCode m, int startParam, int endParam, int lenSlot, String piece) {
+			m.aload(startParam);
+			m.aload(endParam);
+			m.iload(lenSlot);
+			m.ldc(this.cp.stringEntry(piece));
+			m.invokestatic(refusal());
+			m.athrow();
+		}
+
+		private MethodRefEntry index() {
+			MethodRefEntry built = this.index;
 			if (built != null) {
 				return built;
 			}
-			built = self(this.cp, this.thisClass, SUBSEQ_REC, SUBSEQ_REC_DESC);
-			this.ref = built;
+			built = self(this.cp, this.thisClass, SUBSEQ_IDX, SUBSEQ_IDX_DESC);
+			this.index = built;
+			ClassEntry longClass = this.cp.classEntry("java/lang/Long");
+			MethodCode c = new MethodCode();
+			MethodCode.Label outside = c.newLabel();
+			c.aload(0);
+			c.instanceOf(longClass);
+			c.ifeq(outside);
+			c.aload(0);
+			c.checkcast(longClass);
+			c.invokevirtual(this.cp.methodRef(longClass, "longValue", "()J"));
+			c.lstore(1);
+			// (long) (int) v == v
+			c.lload(1);
+			c.l2i();
+			c.i2l();
+			c.lload(1);
+			c.lcmp();
+			c.ifne(outside);
+			c.lload(1);
+			c.l2i();
+			c.ireturn();
+			c.labelBinding(outside);
+			c.iconst_m1();
+			c.ireturn();
+			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.utf8Entry(SUBSEQ_IDX),
+					this.cp.utf8Entry(SUBSEQ_IDX_DESC), c));
+			return built;
+		}
+
+		private MethodRefEntry refusal() {
+			MethodRefEntry built = this.refusal;
+			if (built != null) {
+				return built;
+			}
+			built = self(this.cp, this.thisClass, SUBSEQ_BAD, SUBSEQ_BAD_DESC);
+			this.refusal = built;
+			ClassEntry rte = this.cp.classEntry("java/lang/RuntimeException");
+			MethodRefEntry concat = this.cp.methodRef("java/lang/String", "concat",
+					"(Ljava/lang/String;)Ljava/lang/String;");
+			MethodRefEntry intToStr = this.cp.methodRef("java/lang/String", "valueOf", "(I)Ljava/lang/String;");
+			MethodRefEntry print = self(this.cp, this.thisClass, "_lispToString",
+					"(Ljava/lang/Object;)Ljava/lang/String;");
+			// Locals: 0 = start, 1 = end (as given, nil when omitted), 2 = len, 3 = the
+			// piece, 4 = the exception; with a pad 5 = the refused bound, 6 = the least
+			// member of its range, 7 = the start's index.
+			MethodCode c = new MethodCode();
+			MethodCode.Label endGiven = c.newLabel();
+			MethodCode.Label endPrinted = c.newLabel();
+			// The text first, so the end's branch runs with no uninitialized exception on
+			// the stack.
+			c.ldc(this.cp.stringEntry(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds "));
+			c.aload(0);
+			c.invokestatic(print);
+			c.invokevirtual(concat);
+			c.ldc(this.cp.stringEntry(", "));
+			c.invokevirtual(concat);
+			c.aload(1);
+			c.ifnonnull(endGiven);
+			c.iload(2);
+			c.invokestatic(intToStr);
+			c.goto_(endPrinted);
+			c.labelBinding(endGiven);
+			c.aload(1);
+			c.invokestatic(print);
+			c.labelBinding(endPrinted);
+			c.invokevirtual(concat);
+			c.aload(3);
+			c.invokevirtual(concat);
+			c.iload(2);
+			c.invokestatic(intToStr);
+			c.invokevirtual(concat);
+			c.new_(rte);
+			c.dup_x1();
+			c.swap();
+			c.invokespecial(this.cp.methodRef(rte, "<init>", "(Ljava/lang/String;)V"));
+			FieldRefEntry tl = this.teTl;
+			if (tl != null) {
+				c.astore(4);
+				emitRecord(c, tl);
+				c.aload(4);
+			}
+			c.areturn();
+			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.utf8Entry(SUBSEQ_BAD),
+					this.cp.utf8Entry(SUBSEQ_BAD_DESC), c));
+			return built;
+		}
+
+		// Records the exception in local 4 as the type-error naming the refused bound:
+		// the start when outside [0, len] -- an omitted end resolves inside its range
+		// then -- else the end, outside [start, len].
+		private void emitRecord(MethodCode c, FieldRefEntry tl) {
 			ClassEntry object = this.cp.classEntry("java/lang/Object");
-			Records records = Records.of(this.cp, this.thisClass, this.teTl,
+			Records records = Records.of(this.cp, this.thisClass, tl,
 					this.cp.methodRef(this.cp.classEntry("java/lang/ThreadLocal"), "get", "()Ljava/lang/Object;"),
 					object, this.cp.classEntry("[Ljava/lang/Object;"));
 			MethodRefEntry longValueOf = this.cp.methodRef(this.cp.classEntry("java/lang/Long"), "valueOf",
 					"(J)Ljava/lang/Long;");
 			StringEntry integerKind = this.cp.stringEntry(OperandTypes.INTEGER_TYPE);
-			// Locals: 0 = e, 1 = start, 2 = end, 3 = len, 4 = the refused bound, 5 = the
-			// least member of its range. The start is refused when outside [0, len],
-			// else the end, outside [start, len].
-			MethodCode c = new MethodCode();
-			c.iload(1);
-			c.istore(4);
+			c.aload(0);
+			c.astore(5);
 			c.iconst_0();
-			c.istore(5);
+			c.istore(6);
+			emitIndex(c, 0);
+			c.istore(7);
 			MethodCode.Label decided = c.newLabel();
-			c.iload(1);
+			c.aload(1);
+			c.ifnull(decided);
+			c.iload(7);
 			c.iflt(decided);
-			c.iload(1);
-			c.iload(3);
-			c.if_icmpgt(decided);
+			c.iload(7);
 			c.iload(2);
-			c.istore(4);
-			c.iload(1);
-			c.istore(5);
+			c.if_icmpgt(decided);
+			c.aload(1);
+			c.astore(5);
+			c.iload(7);
+			c.istore(6);
 			c.labelBinding(decided);
-			records.emit(c, 0, () -> {
-				c.iload(4);
-				c.i2l();
-				c.invokestatic(longValueOf);
-			}, () -> {
+			records.emit(c, 4, () -> c.aload(5), () -> {
 				// (INTEGER low len): {"INTEGER", {low, {len, nil}}}
 				emitConsHead(c, object, () -> c.ldc(integerKind));
 				emitConsHead(c, object, () -> {
-					c.iload(5);
+					c.iload(6);
 					c.i2l();
 					c.invokestatic(longValueOf);
 				});
 				emitConsHead(c, object, () -> {
-					c.iload(3);
+					c.iload(2);
 					c.i2l();
 					c.invokestatic(longValueOf);
 				});
@@ -1037,11 +1168,6 @@ final class JvmOperandTypeRuntime {
 				emitConsTail(c);
 				emitConsTail(c);
 			});
-			c.aload(0);
-			c.areturn();
-			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.utf8Entry(SUBSEQ_REC),
-					this.cp.utf8Entry(SUBSEQ_REC_DESC), c));
-			return built;
 		}
 
 	}
