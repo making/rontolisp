@@ -63,7 +63,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [s] (subs s 1.5 -2.5))")).contains("(RONTOLISP::%CLOJURE-SUBS |c%s| 1 -2)")
 			.doesNotContain("STRING-BOUND");
 		assertThat(lowered("(defn f [s] (subs s 3/2))")).contains("(RONTOLISP::%CLOJURE-SUBS |c%s| 1)");
-		assertThat(lowered("(defn f [s] (subs s 1e20))")).contains(bound + "1.0E20)");
+		assertThat(lowered("(defn f [s] (subs s 1e20))")).contains(bound + "1.0e20)");
 		assertThat(lowered("(defn f [s i] (.substring s i))")).contains("(RONTOLISP::%CLOJURE-SUBS");
 		assertThat(lowered("(defn f [s i] (.charAt s i))")).contains("(RONTOLISP::%CLOJURE-CHAR-AT")
 			.contains(bound + "|c%i|)");
