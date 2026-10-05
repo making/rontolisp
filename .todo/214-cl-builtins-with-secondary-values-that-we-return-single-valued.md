@@ -26,7 +26,9 @@ ignores -- so the producer is recognized at ONE argument only and such a call
 keeps its old single value rather than answering an index computed as if the
 keywords were absent. `:start`/`:end` move the index; `:preserve-whitespace`
 decides whether the token's terminator is counted. Take the arguments and the
-index together or not at all.
+index together or not at all. A nil `:start` must then be SBCL's `type-error`, and
+`eof-error-p` has to reach the compiled readers, which answer nil for an input
+holding no datum (`.kb/read-load-streams.md`, measured 2026-10-05).
 
 Also left: the `decode-universal-time` / `truncate`-on-ratio rows below.
 
