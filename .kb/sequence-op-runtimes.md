@@ -20,8 +20,12 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
 `mapIntoRuntimeWrapper(n)` -> `(%map-into-runtime-<n> result fn s0 ... s<n-1>)`;
 `replaceArrayRuntimeWrapper()` / `fillArrayRuntimeWrapper()` for the `%arrayp` arms.
 
-- **The bounds are PARAMETERS, nil meaning "the default"**, so ONE call-site shape serves every
-  keyword combination. Argument order is the canonical keyword order (the inline `let*` order), so
+- **The bounds are PARAMETERS**, so ONE call-site shape serves every keyword combination. An end
+  is nil for "the length" (`(or end (length seq))` in the helper); a start is always a value --
+  the site passes 0 when the keyword is absent and the given form as written otherwise, so a nil
+  start is no bound and the helper's arithmetic (`(- e s)`, the loop's comparison, `nthcdr`)
+  signals its `type-error`. Until the start stopped defaulting, a site passed nil for an absent
+  start and the helper's `(or start 0)` read a given nil the same way. Argument order is the canonical keyword order (the inline `let*` order), so
   evaluation order is unchanged.
 - **`map-into` gets one helper per SOURCE-SEQUENCE COUNT**, not one taking a list: its loop body is
   a `funcall` of exactly that many arguments, and a list would need `apply` and the spread

@@ -13462,6 +13462,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.NIL_START_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunReadSequenceOnAGrayStreamValidatesItsBoundsToo() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#readSequenceOnAGrayStreamValidatesItsBoundsToo,

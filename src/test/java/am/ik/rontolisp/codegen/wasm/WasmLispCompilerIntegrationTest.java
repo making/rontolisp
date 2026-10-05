@@ -14446,6 +14446,16 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SequenceBoundsFixture.EXPECTED);
 	}
 
+	@Test
+	void sequenceOperatorsRefuseANilStart() throws Exception {
+		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
 	/**
 	 * Compiles a source through the CLI's whole front end and runs it with the working
 	 * directory preopened, as Preview 1 or as a component.

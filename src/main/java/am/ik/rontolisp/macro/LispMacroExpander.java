@@ -6902,11 +6902,20 @@ public final class LispMacroExpander {
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
 		}
 
-		// The forward :start, defaulting to 0 -- a nil value is the default too, which is
-		// how (count x l :start nil) reads.
+		// The forward :start, 0 when absent. A given one is (max start 0), evaluated once
+		// before the walk: a nil :start is no bound (only a nil :end means the
+		// sequence's length), so max refuses it as the type-error it is in SBCL -- on an
+		// empty sequence too -- and the guard compares the index against a value the
+		// backends know is a number, with no per-element operand check. A negative start
+		// selects the same elements either way. A literal integer needs no max.
 		private LispVal forwardStart() {
-			return this.bounds.start() == null ? new LispInteger(0)
-					: makeIf(this.startv, this.startv, new LispInteger(0));
+			if (this.bounds.start() == null) {
+				return new LispInteger(0);
+			}
+			if (this.bounds.start() instanceof LispInteger) {
+				return this.startv;
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.MAX), this.startv, new LispInteger(0)));
 		}
 
 		// The forward :end; nil is "to the end of the sequence".
@@ -12270,9 +12279,11 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * The two answers are the same lowering; the caller decides only where it lives. The
-	 * four bounds become plain arguments, nil meaning "the default" -- which is what the
-	 * inline form's {@code (or expr default)} wrapper already allowed at run time, so ONE
-	 * call-site shape serves every keyword combination. A compiler passes
+	 * four bounds become plain arguments -- each start as written (0 when absent), each
+	 * end nil meaning the sequence's length, which is what the inline form's
+	 * {@code (or expr (length seq))} wrapper allows at run time -- so ONE call-site shape
+	 * serves every keyword combination. A start has no such default: a nil one is no
+	 * bound and reaches the arithmetic as the type-error it is in SBCL. A compiler passes
 	 * {@code helperPresent} true exactly when {@code %replace-runtime} is among the
 	 * program's functions, so a gate that under-predicts costs the module the sharing and
 	 * nothing else.
@@ -12312,9 +12323,10 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					"replace expects (replace seq1 seq2 [:start1 s] [:end1 e] [:start2 s] [:end2 e])");
 		}
-		// The bounds as the caller wrote them, nil where the keyword is absent: the
-		// call-site shape passes them through, the inline form defaults them below.
-		LispVal[] bounds = { LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE };
+		// The bounds as the caller wrote them -- 0 for an absent start, nil for an absent
+		// end: the call-site shape passes them through, the inline form defaults the
+		// ends below.
+		LispVal[] bounds = { new LispInteger(0), LispNil.INSTANCE, new LispInteger(0), LispNil.INSTANCE };
 		for (int k = 3; k < parts.size(); k += 2) {
 			if (!(parts.get(k) instanceof LispSymbol key)) {
 				throw new UnsupportedOperationException("replace supports only literal keyword arguments");
@@ -12338,8 +12350,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the shared {@code %replace-runtime} defun: the dispatch
-	 * {@link #expandReplace} used to inline at every site, over six parameters whose four
-	 * bounds may be nil ("the default") at run time.
+	 * {@link #expandReplace} used to inline at every site, over six parameters whose two
+	 * end bounds may be nil (the sequence's length) at run time.
 	 *
 	 * <p>
 	 * <strong>Why a call and not the dispatch inline.</strong> The body is a runtime
@@ -12409,17 +12421,19 @@ public final class LispMacroExpander {
 	}
 
 	// The replace lowering shared by the inline site and the %replace-runtime defuns. The
-	// four bounds are the caller's expressions, nil where absent; each is defaulted here
-	// against the let*-bound sequences, so a runtime nil falls back the same way.
+	// four bounds are the caller's expressions, a start 0 and an end nil where absent;
+	// each end is defaulted here against the let*-bound sequences, so a runtime nil end
+	// falls back the same way. A start is taken as given.
 	private static LispVal replaceDispatch(LispVal seq1, LispVal seq2, LispVal[] bounds, boolean arraysExist,
 			SeqOpArms arms) {
 		LispSymbol r1 = new LispSymbol("__rpl_1");
 		LispSymbol r2 = new LispSymbol("__rpl_2");
-		// A nil bound keeps its default (a runtime nil through the or-wrapper), as in
-		// the interpreter.
-		LispVal s1 = boundOrDefault(bounds[0], new LispInteger(0));
+		// A nil end keeps its default (a runtime nil through the or-wrapper); a nil start
+		// is no bound, so (- e s) below is its type-error, as in SBCL and the
+		// interpreter.
+		LispVal s1 = bounds[0];
 		LispVal e1 = boundOrDefault(bounds[1], fmtCall(LispNames.LENGTH, r1));
-		LispVal s2 = boundOrDefault(bounds[2], new LispInteger(0));
+		LispVal s2 = bounds[2];
 		LispVal e2 = boundOrDefault(bounds[3], fmtCall(LispNames.LENGTH, r2));
 		LispSymbol vs1 = new LispSymbol("__rpl_s1");
 		LispSymbol ve1 = new LispSymbol("__rpl_e1");
@@ -12510,7 +12524,7 @@ public final class LispMacroExpander {
 		}
 		LispVal mutating = sourceDetached(r1, r2, vs1, vs2, n, src, o, makeProgn(List.of(copyLoop, r1)));
 		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
-			// The bounds are already defaulted here, so the callee's own or-wrappers see
+			// The ends are already defaulted here, so the callee's own or-wrappers see
 			// integers and default nothing again.
 			mutating = fmtCall(LispNames.REPLACE_ARRAY_RUNTIME, r1, r2, vs1, ve1, vs2, ve2);
 		}
@@ -12576,7 +12590,8 @@ public final class LispMacroExpander {
 	/**
 	 * Like {@link #expandFill(LispCons)}, but answers a CALL to the shared
 	 * {@link #fillRuntimeWrapper()} when the program carries it ({@code helperPresent}).
-	 * The two bounds become plain arguments, nil meaning "the default"; see
+	 * The two bounds become plain arguments, the start as written (0 when absent) and the
+	 * end nil meaning the sequence's length; see
 	 * {@link #expandReplace(LispCons, boolean, boolean)}, whose call-site rule this
 	 * follows exactly.
 	 * @param cons the fill expression
@@ -12604,7 +12619,7 @@ public final class LispMacroExpander {
 		if (parts.size() < 3 || parts.size() % 2 == 0) {
 			throw new IllegalArgumentException("fill expects (fill sequence item [:start s] [:end e])");
 		}
-		LispVal startArg = LispNil.INSTANCE;
+		LispVal startArg = new LispInteger(0);
 		LispVal endArg = LispNil.INSTANCE;
 		for (int k = 3; k < parts.size(); k += 2) {
 			if (!(parts.get(k) instanceof LispSymbol key)) {
@@ -12626,8 +12641,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the shared {@code %fill-runtime} defun: the dispatch {@link #expandFill}
-	 * used to inline at every site, over four parameters whose two bounds may be nil
-	 * ("the default") at run time. Same shape and same reason as
+	 * used to inline at every site, over four parameters whose end bound may be nil (the
+	 * sequence's length) at run time. Same shape and same reason as
 	 * {@link #replaceRuntimeWrapper()} -- three runtime arms, each itself a
 	 * representation dispatch, about 1.7 KB of wasm a site.
 	 * @return the helper's definition, wrapper-shaped
@@ -12658,12 +12673,14 @@ public final class LispMacroExpander {
 	}
 
 	// The fill lowering shared by the inline site and the %fill-runtime defuns; the two
-	// bounds are the caller's expressions, nil where absent.
+	// bounds are the caller's expressions, a start 0 and an end nil where absent. A nil
+	// start is no bound: it reaches the loop's comparison (or nthcdr, or the filler's
+	// width) as the type-error it is in SBCL.
 	private static LispVal fillDispatch(LispVal sequence, LispVal value, LispVal startArg, LispVal endArg,
 			SeqOpArms arms) {
 		LispSymbol seq = new LispSymbol("__fll_s");
 		LispSymbol item = new LispSymbol("__fll_v");
-		LispVal start = boundOrDefault(startArg, new LispInteger(0));
+		LispVal start = startArg;
 		LispVal end = boundOrDefault(endArg, fmtCall(LispNames.LENGTH, seq));
 		LispSymbol from = new LispSymbol("__fll_a");
 		LispSymbol to = new LispSymbol("__fll_b");
@@ -12698,8 +12715,8 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, arrayLoop));
 		}
 		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
-			// The bounds are already defaulted here, so the callee's own or-wrappers see
-			// integers and default nothing again.
+			// The end is already defaulted here, so the callee's own or-wrapper sees an
+			// integer and defaults nothing again.
 			arrayLoop = fmtCall(LispNames.FILL_ARRAY_RUNTIME, seq, item, from, to);
 		}
 		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seq), arrayLoop,

@@ -5557,8 +5557,9 @@ class LispEvaluatorTest {
 			.isEqualTo("(0 1 2 3 1 3 9)");
 		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start 2)").print()).isEqualTo("(0 1 1 2 3 9)");
 		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :end 6)").print()).isEqualTo("(0 3 1 2 3 9)");
-		// A nil bound is the default one, as everywhere else in 17.2.1.
-		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start nil :end nil)").print()).isEqualTo("(0 1 2 3 9)");
+		// A nil :end is the default one, as everywhere else in 17.2.1; a nil :start is no
+		// bound and is refused (SequenceBoundsFixture.NIL_START_PROGRAM).
+		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start 0 :end nil)").print()).isEqualTo("(0 1 2 3 9)");
 		assertThat(eval("(delete-duplicates (list 1 2 3 1 3 1 2 4) :start 0 :end nil)").print()).isEqualTo("(3 1 2 4)");
 		// The window travels through the sequence dispatch, so a string and a vector are
 		// rebuilt from the same bounded scan.
@@ -10370,6 +10371,20 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void sequenceOperatorsRefuseANilStart() {
+		// A nil :start is no bound: every sequence operator taking one signals a
+		// type-error whose datum is NIL, in call position and first class, while a nil
+		// :end still means the sequence's length -- sbcl's answers, pinned on all four
+		// backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.NIL_START_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
 	}
 
 	@Test

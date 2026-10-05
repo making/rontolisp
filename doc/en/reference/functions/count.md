@@ -2,7 +2,7 @@
 
 `(count item sequence &key test key start end from-end)`
 
-Returns the number of elements in `sequence` that match `item`. The comparison is `eql` by default; the optional `:test` keyword takes a function designator to use a different comparison, and the optional `:key` keyword takes a selector function applied to each element before the comparison. The sequence may be a list or a string (whose elements are characters). Use `count-if` to count by a predicate. `:start`/`:end` bound the scanned subsequence and `:from-end` reverses the order the elements are visited -- that cannot change a count, but a side-effecting `:key` or `:test` sees the reversed order.
+Returns the number of elements in `sequence` that match `item`. The comparison is `eql` by default; the optional `:test` keyword takes a function designator to use a different comparison, and the optional `:key` keyword takes a selector function applied to each element before the comparison. The sequence may be a list or a string (whose elements are characters). Use `count-if` to count by a predicate. `:start`/`:end` bound the scanned subsequence and `:from-end` reverses the order the elements are visited -- that cannot change a count, but a side-effecting `:key` or `:test` sees the reversed order. A nil `:end` means the length; a nil `:start` signals a `type-error`.
 
 ```lisp
 (count 2 '(1 2 3 2 2)) ; => 3

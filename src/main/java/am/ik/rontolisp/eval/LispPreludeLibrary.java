@@ -3324,13 +3324,14 @@ public final class LispPreludeLibrary {
 		// count -- it reverses the order the predicate and :key designator are called in,
 		// which a side-effecting one sees (ANSI's count-list.9) -- so it is forwarded,
 		// not swallowed. A nil :key is defaulted here because the expansion inlines the
-		// designator and would call nil.
+		// designator and would call nil; a nil :start is forwarded, since it is no bound
+		// and count-if refuses it.
 		SOURCES.put(LispNames.COUNT_IF_NOT, """
 				(defun count-if-not (predicate sequence &key from-end (start 0) end key)
 				  (count-if (lambda (x) (not (funcall predicate x)))
 				            (%check-sequence sequence 'count-if-not)
 				            :key (if key key #'identity)
-				            :start (if start start 0) :end end :from-end from-end))
+				            :start start :end end :from-end from-end))
 				""");
 		// set-exclusive-or: the symmetric difference. Both scans call the shared matcher
 		// with the list-1 element FIRST, so an asymmetric :test/:test-not sees the same

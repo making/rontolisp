@@ -5039,11 +5039,19 @@ public final class Environment implements Scope {
 		}
 	}
 
+	/**
+	 * A bounding index or size given to {@code name}: one that is no integer -- a nil
+	 * start included, which is no bound -- is the operator's {@code INTEGER} type-error,
+	 * as in SBCL.
+	 * @param name the operator, for the report
+	 * @param val the index as given
+	 * @return the index
+	 */
 	static int requireIndex(String name, LispVal val) {
 		if (val instanceof LispInteger i) {
 			return (int) i.value();
 		}
-		throw new LispEvalException(name + " expects an integer index, got: " + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, name);
 	}
 
 	// Applies char-upcase (or char-downcase) to EVERY character, which is how CLHS
@@ -7975,14 +7983,18 @@ public final class Environment implements Scope {
 			int end2 = sequenceLength(LispNames.REPLACE, source);
 			int start1 = 0;
 			int start2 = 0;
-			// A nil bound keeps its default (nil :end = the sequence's length, as in CL).
+			// A nil end keeps its default (the sequence's length, as in CL); a nil start
+			// is no bound, so requireIndex refuses it.
 			for (int i = 2; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+				if (args.get(i) instanceof LispSymbol key) {
+					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.END1_KEYWORD -> end1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.END2_KEYWORD -> end2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, value);
+						case LispNames.END1_KEYWORD ->
+							end1 = value instanceof LispNil ? end1 : requireIndex(LispNames.REPLACE, value);
+						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, value);
+						case LispNames.END2_KEYWORD ->
+							end2 = value instanceof LispNil ? end2 : requireIndex(LispNames.REPLACE, value);
 						default -> throw new LispEvalException("replace: unsupported keyword " + key.name());
 					}
 				}
@@ -8074,12 +8086,14 @@ public final class Environment implements Scope {
 			LispVal item = args.get(1);
 			int start = 0;
 			int end = sequenceLength(LispNames.FILL, target);
-			// A nil bound keeps its default, as in replace.
+			// A nil end keeps its default and a nil start is refused, as in replace.
 			for (int i = 2; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+				if (args.get(i) instanceof LispSymbol key) {
+					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, args.get(i + 1));
-						case LispNames.END_KEYWORD -> end = requireIndex(LispNames.FILL, args.get(i + 1));
+						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, value);
+						case LispNames.END_KEYWORD ->
+							end = value instanceof LispNil ? end : requireIndex(LispNames.FILL, value);
 						default -> throw new LispEvalException("fill: unsupported keyword " + key.name());
 					}
 				}
