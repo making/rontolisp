@@ -35,6 +35,18 @@ enclosing expression's pending operands.
   `(ash x -k)` literal non-positive count -> arithmetic right shift clamped at 63.
 - **Masked-wrap peephole**: under a non-negative literal `logand` mask or a power-of-two `mod`, the
   `+ - *`/left-`ash`-by-literal subtree emits as UNCHECKED wrap-around `long` ops.
+- **Masked signed field**: `(%mask-signed-field k x)` (SBCL's `sb-c::mask-signed-field`, a `cl`
+  internal) with a literal `1 <= k <= 64` is an op node over `(k, x)`: `x` emits WRAPPED as under a
+  mask, and a field narrower than 64 sign-extends (`LSHL`/`LSHR` by `64 - k`). So
+  `(%mask-signed-field 64 (* a b))` is one `LMUL` -- the Clojure unchecked verbs' wrap
+  (`.kb/clojure-frontend.md`). The fallback is the lowering's arm
+  (`LispMacroExpander.expandMaskSignedField`: `logxor` with `-2^(k-1)`, `logand` with `2^k - 1`,
+  `+` of `-2^(k-1)`) through `_logxor`/`_logand`/`_add`, so a non-integer reports as `LOGXOR`
+  exactly as the unfused lowering and the interpreter's builtin do. Over a lone leaf it declines
+  (`hasConstOperand` does not count the size): the site would only re-box. Any other size is a
+  leaf the lowering owns. Pinned by
+  `JvmLispCompilerTest.aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong` (an `LMUL` in a
+  fused method; default and size levels print SBCL's values, `testsupport/MaskSignedFieldProgram`).
 
 ## Entry points beyond plain trees
 - **Fused comparisons** (`= < > <= >=`, binary): `_fx$N` returning a raw `int`; generic

@@ -23509,6 +23509,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void maskSignedFieldReadsTheLowBitsAsATwosComplementInteger() {
+		// SBCL's sb-c::mask-signed-field, which answers every value here: the low SIZE
+		// bits of an integer of any magnitude as a signed SIZE-bit integer.
+		assertThat(evalMulti("""
+				(list (%mask-signed-field 64 (* 9223372036854775807 31))
+				      (%mask-signed-field 64 (* -9223372036854775808 -1))
+				      (%mask-signed-field 64 12)
+				      (%mask-signed-field 64 (* 18446744073709551617 3))
+				      (%mask-signed-field 64 (- (expt 2 64) 1))
+				      (%mask-signed-field 32 (* 46341 46341))
+				      (%mask-signed-field 8 255) (%mask-signed-field 8 -129)
+				      (%mask-signed-field 1 1) (%mask-signed-field 0 12345)
+				      (%mask-signed-field 100 (expt 2 99)))
+				""").print()).isEqualTo("(9223372036854775777 -9223372036854775808 12 3 -1 -2147479015 -1 127 -1 0"
+				+ " -633825300114114700748351602688)");
+		// A non-integer is a type error, reported as the compiled lowering's first
+		// integer operation reports it.
+		assertThat(evalMulti("(handler-case (%mask-signed-field 64 1.5) (type-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"LOGXOR: The value 1.5 is not of type INTEGER\"");
+	}
+
+	@Test
 	void bfloat16BitsAndBackRoundTripEveryPattern() {
 		assertThat(eval("(list (rontolisp:bfloat16-bits 1.0) (rontolisp:bfloat16-bits -2.5)"
 				+ " (rontolisp:bits-bfloat16 16256) (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))")

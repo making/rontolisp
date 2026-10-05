@@ -9655,6 +9655,17 @@ public final class LispNames {
 	public static final String PRINT_PPRINT_DISPATCH_VAR = "*PRINT-PPRINT-DISPATCH*";
 
 	/**
+	 * {@code %mask-signed-field} -- SBCL's {@code sb-c::mask-signed-field}: the low
+	 * {@code size} bits of an integer read as a signed {@code size}-bit integer. The size
+	 * must be a literal on the compile path (the lowering's masks are literals), and a
+	 * non-integer signals the type error {@code logxor} reports on every backend. The
+	 * compiled backends fuse {@code (%mask-signed-field 64 (* a b))} into one wrapping
+	 * multiply (.kb/jvm-int-fusion.md); the Clojure front end's unchecked verbs wrap
+	 * through it.
+	 */
+	public static final String MASK_SIGNED_FIELD = "%MASK-SIGNED-FIELD";
+
+	/**
 	 * {@code %ieee754-double-bits} -- the IEEE 754 bits of a double as an unsigned 64-bit
 	 * integer. The float-features shim library is built over these four.
 	 */

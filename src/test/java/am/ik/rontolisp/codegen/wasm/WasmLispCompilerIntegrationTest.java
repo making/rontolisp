@@ -31,6 +31,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -1996,6 +1997,21 @@ class WasmLispCompilerIntegrationTest {
 						(print (princ-to-string (make-condition 'simple-error :format-control "~a!" :format-arguments (list 1))))
 						"""))
 			.isEqualTo(expected + "\n\"1!\"");
+	}
+
+	@Test
+	void aMaskedSignedFieldAnswersTheSameFusedUnfusedAndAsAComponent() throws Exception {
+		// The fused root of (%mask-signed-field 64 (* a b)) keeps only the low 64 bits,
+		// which a wrapping i64.mul computes exactly, and bails to the lowering's generic
+		// helpers for a bignum or float leaf. The size level (no fused site) and the
+		// component answer the same; so does the JVM, over the same program.
+		List<LispVal> parsed = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MaskSignedFieldProgram.PROGRAM));
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(parsed);
+		assertThat(runModule(fast, "msf-fast.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(runModule(small, "msf-small.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(compileAndRunComponent(MaskSignedFieldProgram.PROGRAM)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
 	}
 
 	@Test

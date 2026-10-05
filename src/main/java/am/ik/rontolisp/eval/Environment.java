@@ -3086,6 +3086,15 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.FLOAT_RADIX, args, 1);
 			return new LispInteger(2);
 		}));
+		// SBCL's sb-c::mask-signed-field (LispNames.MASK_SIGNED_FIELD). A non-integer
+		// reports as LOGXOR, the compiled lowering's first integer operation.
+		env.defineFunction(LispNames.MASK_SIGNED_FIELD, new LispFunction(LispNames.MASK_SIGNED_FIELD, args -> {
+			requireArgCount(LispNames.MASK_SIGNED_FIELD, args, 2);
+			if (!(args.get(0) instanceof LispInteger size) || size.value() < 0) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.INTEGER, LispNames.MASK_SIGNED_FIELD);
+			}
+			return maskSignedField(size.value(), args.get(1));
+		}));
 		// IEEE 754 bit reinterpretation, the primitive quartet under the float-features
 		// shim library. Bits travel as unsigned integers (bignums when the sign bit is
 		// set), so ldb/ash arithmetic over them behaves like CL's (unsigned-byte 64).
@@ -8962,6 +8971,36 @@ public final class Environment implements Scope {
 			return b.value();
 		}
 		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER);
+	}
+
+	/**
+	 * The low {@code size} bits of an integer read as a signed {@code size}-bit integer:
+	 * an integer already inside the field answers itself, a {@code long} narrower than
+	 * one shifts, and the rest goes through {@link BigInteger}.
+	 */
+	private static LispVal maskSignedField(long size, LispVal n) {
+		if (n instanceof LispInteger i) {
+			if (size >= 64) {
+				return i;
+			}
+			if (size == 0) {
+				return new LispInteger(0);
+			}
+			int shift = 64 - (int) size;
+			return new LispInteger((i.value() << shift) >> shift);
+		}
+		if (!(n instanceof LispBigInteger b)) {
+			throw OperandTypeException.of(n, OperandTypes.Kind.INTEGER, LispNames.LOGXOR);
+		}
+		if (b.value().bitLength() < size) {
+			return b;
+		}
+		if (size == 0) {
+			return new LispInteger(0);
+		}
+		BigInteger field = BigInteger.ONE.shiftLeft(Math.toIntExact(size));
+		BigInteger low = b.value().mod(field);
+		return normalizeBig(low.testBit((int) size - 1) ? low.subtract(field) : low);
 	}
 
 	/**

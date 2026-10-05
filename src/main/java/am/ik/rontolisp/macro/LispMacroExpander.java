@@ -41052,6 +41052,59 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (%mask-signed-field size n)} ({@link LispNames#MASK_SIGNED_FIELD})
+	 * over its literal size, the integer evaluated once:
+	 *
+	 * <pre>
+	 * (%mask-signed-field 64 n) ->
+	 *   (let ((__msf_n n))
+	 *     (if (and (integerp __msf_n) (&lt;= -2^63 __msf_n 2^63-1))
+	 *         __msf_n
+	 *         (+ (logand (logxor __msf_n -2^63) 2^64-1) -2^63)))
+	 * </pre>
+	 *
+	 * The test answers an integer already inside the field without a mask (a 64-bit
+	 * field's mask is a bignum, an operation on it a bignum allocation); the arm flips
+	 * the field's sign bit, keeps the field and takes the sign bit's weight back off. A
+	 * non-integer fails in the {@code logxor}. Size 0 is the arm alone, answering 0. The
+	 * temporary needs no fresh name: {@code n} is evaluated outside its scope.
+	 * @param cons the {@code %mask-signed-field} expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMaskSignedField(LispCons cons) {
+		int size = maskSignedFieldSize(cons);
+		if (size < 0) {
+			throw new IllegalArgumentException("%mask-signed-field expects a literal size from 0 to "
+					+ LITERAL_BYTESPEC_LIMIT + " and an integer: " + cons.print());
+		}
+		java.math.BigInteger signBit = size == 0 ? java.math.BigInteger.ZERO
+				: java.math.BigInteger.ONE.shiftLeft(size - 1);
+		LispVal negativeSignBit = integerLiteral(signBit.negate());
+		LispSymbol n = new LispSymbol("__msf_n");
+		LispVal arm = mvCall(LispNames.ADD, mvCall(LispNames.LOGAND, mvCall(LispNames.LOGXOR, n, negativeSignBit),
+				integerLiteral(lowBitMask(size))), negativeSignBit);
+		LispVal body = size == 0 ? arm
+				: mvCall(
+						LispNames.IF, mvCall(LispNames.AND, mvCall(LispNames.INTEGERP, n), mvCall(LispNames.LE,
+								negativeSignBit, n, integerLiteral(signBit.subtract(java.math.BigInteger.ONE)))),
+						n, arm);
+		return nestMvBindings(List.of(new MvBinding(n, cons.toList().get(2))), body);
+	}
+
+	/**
+	 * The literal size of a well-formed {@code (%mask-signed-field size n)}, or -1 when
+	 * the size is not a literal from 0 to {@link #LITERAL_BYTESPEC_LIMIT} or the arity is
+	 * wrong.
+	 * @param cons the {@code %mask-signed-field} expression
+	 * @return the size, or -1
+	 */
+	public static int maskSignedFieldSize(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return parts.size() == 3 && parts.get(1) instanceof LispInteger size && size.value() >= 0
+				&& size.value() <= LITERAL_BYTESPEC_LIMIT ? (int) size.value() : -1;
+	}
+
+	/**
 	 * Expands {@code (dpb newbyte bytespec integer)} (deposit byte) over the bit
 	 * primitives: the low {@code size} bits of {@code newbyte} replace the byte
 	 * specifier's field of the integer, the other bits unchanged.
