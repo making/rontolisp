@@ -2144,9 +2144,6 @@ public final class PackageResolver {
 	}
 
 	private boolean isExternal(String pkg, String member) {
-		if (LispNames.CL_PKG.equals(pkg) && LispNames.isCarCdrComposition(member)) {
-			return true;
-		}
 		return this.registry.get(pkg).exports(member);
 	}
 
@@ -2157,9 +2154,6 @@ public final class PackageResolver {
 	 * the external set of that package (see {@link #declaredExternals}).
 	 */
 	private boolean spellsExternal(String pkg, String member) {
-		if (LispNames.CL_PKG.equals(pkg) && LispNames.isCarCdrComposition(member)) {
-			return true;
-		}
 		Set<String> declared = this.declaredExternals.get(pkg);
 		return declared != null ? declared.contains(member) : this.registry.get(pkg).exports(member);
 	}
@@ -2639,8 +2633,6 @@ public final class PackageResolver {
 			return null;
 		}
 		if (LispNames.CL_PKG.equals(used)) {
-			// isExternal, not the external set alone: the car/cdr compositions are
-			// external by pattern.
 			return isExternal(used, member) && PackageRegistry.isClMemberName(member)
 					? new Accessible(member, LispNames.STATUS_INHERITED) : null;
 		}

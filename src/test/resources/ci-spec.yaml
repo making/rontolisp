@@ -20710,6 +20710,65 @@ cases:
       T
       T
       (CONS :INHERITED)
+  - name: package-walks-list-the-car-cdr-compositions
+    source: |
+      (defpackage :ci-ccu-a (:use :cl))
+      (defpackage :ci-ccu-b (:use :ci-ccu-a))
+      (defun ci-ccu-composition-p (name)
+        (and (<= 4 (length name) 6)
+             (char= (char name 0) #\C)
+             (char= (char name (1- (length name))) #\R)
+             (every (lambda (c) (find c "AD")) (subseq name 1 (1- (length name))))))
+      (defun ci-ccu-names (names)
+        (sort (remove-duplicates (remove-if-not #'ci-ccu-composition-p names) :test #'string=) #'string<))
+      (let ((names '()))
+        (do-external-symbols (s :cl) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names)))
+        (print (list (first (ci-ccu-names names)) (car (last (ci-ccu-names names))))))
+      (let ((names '()))
+        (do-symbols (s :ci-ccu-a) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names))))
+      (let ((names '()))
+        (do-external-symbols (s :ci-ccu-a) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names))))
+      (let ((names '()))
+        (do-symbols (s :ci-ccu-b) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names))))
+      (let ((names '()))
+        (do-symbols (s :cl-user) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names))))
+      (let ((names '()))
+        (with-package-iterator (next '(:ci-ccu-a :cl) :internal :external :inherited)
+          (loop (multiple-value-bind (more s) (next)
+                  (unless more (return))
+                  (push (symbol-name s) names))))
+        (print (length (ci-ccu-names names))))
+      (let ((names '()))
+        (do-all-symbols (s) (push (symbol-name s) names))
+        (print (length (ci-ccu-names names))))
+      (print (find-all-symbols "CADDR"))
+      (print (find-all-symbols 'cdddr))
+      (print (apropos-list "CADDDR"))
+      (print (apropos-list "CADDDR" :cl))
+      (print (apropos-list "CDAR" :ci-ccu-a))
+      (print (eq (car (find-all-symbols "CADDR")) 'caddr))
+      (print (multiple-value-list (find-symbol "CAADR" :ci-ccu-a)))
+    expected: |
+      28
+      ("CAAAAR" "CDDR")
+      28
+      0
+      0
+      28
+      28
+      28
+      (CADDR)
+      (CDDDR)
+      (CADDDR)
+      (CADDDR)
+      (CDAR)
+      T
+      (CAADR :INHERITED)
 standalone:
   - name: uncaught-condition-report
     source: |

@@ -16764,6 +16764,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
 	}
 
+	// The package walks list the 28 car/cdr compositions as external symbols of cl. The
+	// twins are JvmLispCompilerTest#compileAndRunPackageWalksListTheCarCdrCompositions
+	// and
+	// WasmLispCompilerIntegrationTest#packageWalksListTheCarCdrCompositions.
+	@Test
+	void packageWalksListTheCarCdrCompositions() {
+		assertThat(printedLines(am.ik.rontolisp.CarCdrUniverseFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CarCdrUniverseFixture.EXPECTED);
+	}
+
 	// A string constant past one JVM CONSTANT_Utf8 (65,535 bytes): a long literal and
 	// package universes packing past it. The twins are
 	// JvmLispCompilerTest#compileAndRunALongStringConstant and

@@ -15477,6 +15477,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunPackageWalksListTheCarCdrCompositions() throws Exception {
+		// The 28 car/cdr compositions are external symbols of cl: every enumeration of
+		// its
+		// universe lists them. The twins are
+		// LispEvaluatorTest#packageWalksListTheCarCdrCompositions and
+		// WasmLispCompilerIntegrationTest#packageWalksListTheCarCdrCompositions.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.CarCdrUniverseFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.CarCdrUniverseFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunALongStringConstant() throws Exception {
 		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
 		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and

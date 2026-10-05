@@ -26,7 +26,7 @@ strings, so no per-backend codegen exists.
 - `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
   `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon.
 - `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`, plus
-  `CL_EXPORTED_ONLY`; car/cdr compositions via `isCarCdrComposition`); `cl-user` exports nothing;
+  `CL_EXPORTED_ONLY` and the 28 car/cdr compositions, `CL_COMPOSITIONS`); `cl-user` exports nothing;
   `rontolisp`/`java` export everything registered.
 - `pkg::anything` interns permissively; an unregistered member is internal. The JVM method-name
   mangler maps each `:` to `$colon`.
@@ -576,8 +576,7 @@ operator name, which died with `The function MY-PKG:LIST is undefined`. One tabl
 
 - **`%standard-name-p`** (`LispMacroExpander.standardNameDefinition`, a prelude entry and
   injected by `injectBakedAccess` when the prelude did not splice it): the names `cl`
-  exports (`PackageRegistry.standardNames`: `CL_EXTERNALS` plus the 28 car/cdr
-  compositions, 979 with `while`), sorted and front-coded into one ASCII string (one mark
+  exports (`PackageRegistry.standardNames`: `CL_EXTERNALS`, 979 with `while`), sorted and front-coded into one ASCII string (one mark
   character `(code-char (+ 96 K))` for the K characters shared with the name before, then
   the rest: 7,427 characters against 13.7 K length-prefixed), decoded into an `equal`
   hash table on the first call. The global holds the string so it is built once: a
@@ -615,9 +614,25 @@ operator name, which died with `The function MY-PKG:LIST is undefined`. One tabl
   name) refined by the table; the package walks (`%package-spelling-normalize`,
   `%package-iterator-entries`) call `%symbol-home` -- they look the symbol up in that home
   anyway, and a walk program carries no table (its bytes change by the helper's name).
-- The interpreter had the compositions wrong: `inheritedFrom` asked `cl`'s external SET,
-  which holds no car/cdr composition, so `(find-symbol "CADR" :p)` was `NIL NIL` and the
-  literal fold built `P:CADR`. It asks `isExternal` now.
+- The compositions are members of `cl`'s owned and external sets (`CL_COMPOSITIONS`,
+  generated, not in `CL_SYMBOLS`: resolution still recognizes them by spelling,
+  `LispNames.isCarCdrComposition`). Once they were recognized by pattern only, so
+  `find-symbol` and the use-list inheritance answered them and every enumeration
+  (`accessibleEntries`, the `%baked-packages%` universes) missed them: `do-external-symbols`
+  over `cl` listed 951 names, `(find-all-symbols "CADDR")` was NIL. Now 979 (978 plus `while`) on every backend,
+  checked against SBCL (`CarCdrUniverseFixture`).
+  **Set against enumeration, measured**: the 28 names are packed into the `accessible` row
+  of every package that uses `cl` and into the `externals` row of `cl` itself (+1,840 B on
+  the JVM class, +1,650 B P1, +1,680 B component over the ~640 KB / 556 KB / 563 KB of a
+  program that walks `cl-user`: 0.3%); a program with no package walk, and one with only
+  `find-symbol` / `intern`, is byte-identical. The alternative -- tables unchanged, the 28
+  names generated at each walk -- costs ~1.2 KB class / ~0.7 KB WASM for ONE site (a
+  generator over `A`/`D` merged into one `do-symbols` walk), and every site that reads the
+  universe (`%do-symbols-list`, `find-all-symbols`, `apropos`, the iterator, the externals
+  row, the interpreter) would need it plus the "does this package reach `cl`" test, so the
+  saving shrinks to nothing as sites join and the registry would keep two answers. Walk
+  time is unchanged within noise (20 walks of `do-symbols` + `do-external-symbols`: JVM
+  0.43 s, P1 0.15-0.28 s, component 0.16-0.27 s, both jars).
 
 Cost (2026-10-05, JVM / P1 / component). In an example that already does string work
 (`console/word-frequency.lisp` plus one lookup) +9.2 / +8.8 / +8.8 KB, the table ~7.4 KB

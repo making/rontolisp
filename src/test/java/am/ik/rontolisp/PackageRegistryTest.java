@@ -53,12 +53,7 @@ class PackageRegistryTest {
 		Set<String> standard = standardNames();
 		assertThat(standard).hasSize(978);
 		Set<String> externals = new PackageRegistry().get(LispNames.CL_PKG).externals();
-		List<String> notExported = standard.stream()
-			// The car/cdr compositions are a PATTERN, not a set (caar ... cddddr), so
-			// they are external without being enumerated anywhere.
-			.filter(name -> !externals.contains(name) && !LispNames.isCarCdrComposition(name))
-			.sorted()
-			.toList();
+		List<String> notExported = standard.stream().filter(name -> !externals.contains(name)).sorted().toList();
 		assertThat(notExported).isEmpty();
 	}
 

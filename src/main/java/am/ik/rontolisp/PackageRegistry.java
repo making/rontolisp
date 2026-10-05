@@ -407,13 +407,37 @@ public final class PackageRegistry {
 			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
-	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
-	 * (car/cdr compositions are recognized separately by
-	 * {@link LispNames#isCarCdrComposition} and are also external), plus the standard
-	 * names {@link #CL_EXPORTED_ONLY} exports without implementing.
+	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
+	 * them by spelling ({@link LispNames#isCarCdrComposition}), so they are not in
+	 * {@link #CL_SYMBOLS}; the package still OWNS and EXPORTS them, which is what the
+	 * enumerations ({@code do-external-symbols}, {@code do-symbols}, ...) read.
+	 */
+	private static final Set<String> CL_COMPOSITIONS = compositions();
+
+	private static Set<String> compositions() {
+		Set<String> names = new HashSet<>();
+		List<String> middles = List.of("");
+		for (int length = 1; length <= 4; length++) {
+			List<String> longer = new java.util.ArrayList<>();
+			for (String middle : middles) {
+				longer.add(middle + "A");
+				longer.add(middle + "D");
+			}
+			middles = longer;
+			if (length >= 2) {
+				middles.forEach(middle -> names.add("C" + middle + "R"));
+			}
+		}
+		return Set.copyOf(names);
+	}
+
+	/**
+	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals,
+	 * plus the car/cdr compositions and the standard names {@link #CL_EXPORTED_ONLY}
+	 * exports without implementing.
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_TYPES, CL_CONDITION_TYPES, CL_EXPORTED_ONLY);
+			CL_TYPES, CL_CONDITION_TYPES, CL_EXPORTED_ONLY, CL_COMPOSITIONS);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
@@ -884,7 +908,8 @@ public final class PackageRegistry {
 		// The owned set is the implemented symbols PLUS the export-only standard names,
 		// so the package's externals stay a subset of its symbols; the resolution
 		// predicate isClSymbol still reads CL_SYMBOLS alone.
-		define(new LispPackage(LispNames.CL_PKG, List.of(), union(CL_SYMBOLS, CL_EXPORTED_ONLY), CL_EXTERNALS));
+		define(new LispPackage(LispNames.CL_PKG, List.of(), union(CL_SYMBOLS, CL_EXPORTED_ONLY, CL_COMPOSITIONS),
+				CL_EXTERNALS));
 		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
 		// symbols are reachable as cl-user::name, never cl-user:name.
 		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
@@ -1822,27 +1847,8 @@ public final class PackageRegistry {
 		return isClSymbol(name) || CL_EXPORTED_ONLY.contains(name);
 	}
 
-	/**
-	 * The names {@code cl} exports, sorted: {@link #CL_EXTERNALS} plus the car/cdr
-	 * compositions, which {@link LispNames#isCarCdrComposition} recognizes rather than a
-	 * set holds.
-	 */
-	private static final List<String> STANDARD_NAMES = standardNameList();
-
-	private static List<String> standardNameList() {
-		Set<String> names = new java.util.TreeSet<>(CL_EXTERNALS);
-		List<String> middles = List.of("");
-		for (int length = 1; length <= 4; length++) {
-			List<String> longer = new java.util.ArrayList<>();
-			for (String middle : middles) {
-				longer.add(middle + "A");
-				longer.add(middle + "D");
-			}
-			middles = longer;
-			middles.forEach(middle -> names.add("C" + middle + "R"));
-		}
-		return List.copyOf(names);
-	}
+	/** The names {@code cl} exports, sorted. */
+	private static final List<String> STANDARD_NAMES = List.copyOf(new java.util.TreeSet<>(CL_EXTERNALS));
 
 	/**
 	 * Returns the names the {@code cl} package exports -- what a package using {@code cl}
