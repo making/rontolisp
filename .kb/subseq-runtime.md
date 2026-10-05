@@ -262,6 +262,13 @@ signals a `type-error` for all five and its text names no operator either.
   given `:start` to `subseq` as written, and the first-class wrappers read it with
   `getfKwDefault` (`(getf kw :start 0)`: the default stands for an ABSENT indicator only; the
   older `getfKwOr` reads a present nil as the default).
+- A program that carries the Gray streams library routes a `write-line` with bounds through
+  `%gray-write-line-dispatch` (`GrayStreamsLibrary`), so the lowering above is not the only
+  reader of `:start`: the helper's non-instance arm passes the bounds on as written
+  (`start-p` tells a given nil from an omitted one). A Gray INSTANCE still reads a nil bound
+  as absent (user `stream-write-string` methods default `start`), in the interpreter too.
+  `BoundedStringBoundsFixture` defines a Gray class so its rows exercise this arm; the
+  ci-spec case does only because the corpus program does (a case run alone does not).
 - Programs with no `:start` stay byte-identical (`write-string` / `write-line` plain, `hello`);
   a `:start` site gets smaller (no `or` around the bound): a literal-bound program JVM 9,889 ->
   9,799, P1 5,482 -> 5,455, component 6,619 -> 6,592; a `funcall` program JVM 33,266 -> 32,584,

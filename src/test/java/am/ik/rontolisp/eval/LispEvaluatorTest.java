@@ -1715,6 +1715,42 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readFromStringDropsAnExplicitPlusOnlyWhenTheRestIsANumber() {
+		assertThat(evalMulti(
+				"""
+						(list (read-from-string "+.5") (read-from-string "+.5e1") (read-from-string "+5") (read-from-string "+1/2")
+						      (read-from-string "(a +.5 -.5 +5.)")
+						      (symbol-name (read-from-string "+.")) (symbol-name (read-from-string "+"))
+						      (symbol-name (read-from-string "+5x")) (symbol-name (read-from-string "+.5x"))
+						      (symbol-name (read-from-string "+1+")) (symbol-name (read-from-string "++.5")))
+						""")
+			.print()).isEqualTo("(0.5 5.0 5 1/2 (A 0.5 -0.5 5) \"+.\" \"+\" \"+5X\" \"+.5X\" \"+1+\" \"++.5\")");
+	}
+
+	@Test
+	void readFromStringAnswersTheFirstDatumAndNeverLooksPastIt() {
+		// A token ended by a ')' that closes nothing, and text after the datum that would
+		// not read, are not the caller's errors.
+		assertThat(evalMulti("""
+				(list (read-from-string "5.)") (read-from-string "5)") (read-from-string "abc)")
+				      (read-from-string "(1 2))") (read-from-string "+.5)") (read-from-string "1 (2")
+				      (read-from-string "x )") (read-from-string "1 #<"))
+				""").print()).isEqualTo("(5 5 ABC (1 2) 0.5 1 X 1)");
+		assertThat(evalMulti("""
+				(list (handler-case (read-from-string ")") (error () :error))
+				      (handler-case (read-from-string "(1 2") (error () :error)))
+				""").print()).isEqualTo("(:ERROR :ERROR)");
+	}
+
+	@Test
+	void aSignedNumberShapedSymbolKeepsItsPlusInSource() {
+		assertThat(evalMulti("""
+				(list (symbol-name '+5x) (symbol-name '+.5x) (symbol-name '+1+) (symbol-name '+1/2x)
+				      '+.5 '+5. '+5 '+1/2)
+				""").print()).isEqualTo("(\"+5X\" \"+.5X\" \"+1+\" \"+1/2X\" 0.5 5 5 1/2)");
+	}
+
+	@Test
 	void evalConcatenateStrings() {
 		assertThat(eval("(concatenate 'string \"foo\" \"bar\" \"baz\")")).isEqualTo(new LispString("foobarbaz"));
 		assertThat(eval("(concatenate 'string)")).isEqualTo(new LispString(""));

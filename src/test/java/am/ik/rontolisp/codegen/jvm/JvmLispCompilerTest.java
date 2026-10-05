@@ -8982,7 +8982,8 @@ class JvmLispCompilerTest {
 	void compileAndRunBoundedStringOperatorsRefuseABadRangeAsATypeError() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError.
-		assertThat(compileAndRun(BoundedStringBoundsFixture.PROGRAM)).isEqualTo(BoundedStringBoundsFixture.EXPECTED);
+		assertThat(compileAndRunGray(BoundedStringBoundsFixture.PROGRAM))
+			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
 	@Test
@@ -16849,6 +16850,48 @@ class JvmLispCompilerTest {
 				(print (symbolp (read-from-string "1/2.")))
 				""")).isEqualTo(
 				"5\n-5\n5\n0\n7\n1073741824\n-4611686018427387905\n9223372036854775808\n123456789012345678901234567890\n-123456789012345678901234567890\n6\n(1 2 -3)\n(A . 5)\nT\nT\nT\nT\nT\nT\nT\nT\nT");
+	}
+
+	@Test
+	void compileReadFromStringExplicitPlusNumbers() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "+.5"))
+				(print (read-from-string "+.5e1"))
+				(print (floatp (read-from-string "+.5")))
+				(print (read-from-string "(a +.5 -.5 +5. +5 +1/2)"))
+				(print (read-from-string "+."))
+				(print (read-from-string "+"))
+				(print (symbol-name (read-from-string "+.e1")))
+				(print (symbol-name (read-from-string "+5x")))
+				(print (symbol-name (read-from-string "+.5x")))
+				(print (symbol-name (read-from-string "+1+")))
+				(print (symbol-name (read-from-string "++.5")))
+				(print (symbol-name (read-from-string "+1/2x")))
+				""")).isEqualTo(
+				"0.5\n5.0\nT\n(A 0.5 -0.5 5 5 1/2)\n+.\n+\n\"+.E1\"\n\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"++.5\"\n\"+1/2X\"");
+	}
+
+	@Test
+	void compileSourcePlusNumberShapedSymbol() throws Exception {
+		assertThat(compileAndRun("""
+				(print (symbol-name '+5x))
+				(print (symbol-name '+.5x))
+				(print (symbol-name '+1+))
+				(print (symbol-name '+1/2x))
+				(print (list '+.5 '+5. '+5 '+1/2 '+.5e1))
+				""")).isEqualTo("\"+5X\"\n\"+.5X\"\n\"+1+\"\n\"+1/2X\"\n(0.5 5 5 1/2 5.0)");
+	}
+
+	@Test
+	void compileReadFromStringAnswersTheFirstDatum() throws Exception {
+		assertThat(compileAndRun("""
+				(print (read-from-string "5.)"))
+				(print (read-from-string "abc)"))
+				(print (read-from-string "(1 2))"))
+				(print (read-from-string "+.5)"))
+				(print (read-from-string "1 (2"))
+				(print (read-from-string "1 #<"))
+				""")).isEqualTo("5\nABC\n(1 2)\n0.5\n1\n1");
 	}
 
 	@Test

@@ -1056,10 +1056,16 @@ final class JvmReadRuntimeBuilder {
 		ldc(a, "T");
 		a.areturn();
 		a.labelBinding(notT);
-		// Leading '+': an explicitly positive number literal (+347, +2.5, +1/3) drops
-		// the sign when a digit follows, like the frontend tokenizer; any other '+'
-		// token stays a symbol.
+		// Leading '+': an explicitly positive number literal (+347, +2.5, +.5, +1/3)
+		// drops
+		// the sign when a digit, or a '.' and a digit, follows, like the frontend
+		// tokenizer; any other '+' token stays a symbol. A token that then turns out not
+		// to be a number (+5x) is the symbol spelled with its sign: slot 10 keeps it.
 		MethodCode.Label noPlus = a.newLabel();
+		MethodCode.Label plusDot = a.newLabel();
+		MethodCode.Label plusStrip = a.newLabel();
+		a.aload(0);
+		a.astore(10);
 		a.aload(0);
 		a.invokevirtual(this.stringLength);
 		a.loadConstant(2);
@@ -1072,6 +1078,11 @@ final class JvmReadRuntimeBuilder {
 		a.aload(0);
 		a.loadConstant(1);
 		a.invokevirtual(this.stringCharAt);
+		a.loadConstant('.');
+		a.if_icmpeq(plusDot);
+		a.aload(0);
+		a.loadConstant(1);
+		a.invokevirtual(this.stringCharAt);
 		a.loadConstant('0');
 		a.if_icmplt(noPlus);
 		a.aload(0);
@@ -1079,6 +1090,23 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.stringCharAt);
 		a.loadConstant('9');
 		a.if_icmpgt(noPlus);
+		a.goto_(plusStrip);
+		a.labelBinding(plusDot);
+		a.aload(0);
+		a.invokevirtual(this.stringLength);
+		a.loadConstant(3);
+		a.if_icmplt(noPlus);
+		a.aload(0);
+		a.loadConstant(2);
+		a.invokevirtual(this.stringCharAt);
+		a.loadConstant('0');
+		a.if_icmplt(noPlus);
+		a.aload(0);
+		a.loadConstant(2);
+		a.invokevirtual(this.stringCharAt);
+		a.loadConstant('9');
+		a.if_icmpgt(noPlus);
+		a.labelBinding(plusStrip);
 		a.aload(0);
 		a.loadConstant(1);
 		a.invokevirtual(this.stringSubstringFrom);
@@ -1436,7 +1464,7 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(big);
 		a.areturn(); // bi (BigInteger) still on stack
 		a.labelBinding(sym);
-		a.aload(0);
+		a.aload(10);
 		a.areturn();
 		return a;
 	}
