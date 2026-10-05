@@ -18105,6 +18105,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void packageWalksListTheCarCdrCompositions() throws Exception {
+		// The JvmLispCompilerTest#compileAndRunPackageWalksListTheCarCdrCompositions
+		// twin,
+		// on Preview 1 and the component.
+		List<LispVal> forms = am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.CarCdrUniverseFixture.PROGRAM, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.CarCdrUniverseFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(forms)).isEqualTo(am.ik.rontolisp.CarCdrUniverseFixture.EXPECTED);
+	}
+
+	@Test
 	void longStringConstant() throws Exception {
 		// The JvmLispCompilerTest#compileAndRunALongStringConstant twin, on Preview 1 and
 		// the component.

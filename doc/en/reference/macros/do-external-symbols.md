@@ -3,6 +3,7 @@
 `(do-external-symbols (var [package [result]]) body...)`
 
 Evaluates the body once per external (exported) symbol of `package` -- the current package when omitted -- with `var` bound to the symbol, then evaluates `result` with `var` bound to nil and returns its value (nil when no result form is given). The symbols come in sorted order.
+Over `cl` it visits the standard's 978 external names -- the `car`/`cdr` compositions `caar` to `cddddr` among them -- and `while`.
 
 This works on every backend: the interpreter reads its live registry, and the
 compiled backends answer from the package table baked in at compile time (plus
