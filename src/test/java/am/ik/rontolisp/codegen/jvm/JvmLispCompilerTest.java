@@ -8982,7 +8982,8 @@ class JvmLispCompilerTest {
 	void compileAndRunBoundedStringOperatorsRefuseABadRangeAsATypeError() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError.
-		assertThat(compileAndRun(BoundedStringBoundsFixture.PROGRAM)).isEqualTo(BoundedStringBoundsFixture.EXPECTED);
+		assertThat(compileAndRunGray(BoundedStringBoundsFixture.PROGRAM))
+			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
 	@Test

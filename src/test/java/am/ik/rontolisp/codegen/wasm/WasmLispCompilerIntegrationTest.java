@@ -318,6 +318,13 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// The component twin of compileAndRunProgram.
+	// The component twin of compileAndRunGray: the Gray streams pre-pass over the prelude
+	// splice, in the CLI's order.
+	private static String compileComponentAndRunGray(String lispCode) throws Exception {
+		return compileComponentAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	private static String compileComponentAndRunProgram(List<LispVal> program) throws Exception {
 		byte[] component = WasmLispCompiler.builder().component(true).build().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
@@ -8217,9 +8224,9 @@ class WasmLispCompilerIntegrationTest {
 		// The wasm twin of
 		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError,
 		// Preview 1 and the component.
-		assertThat(compileAndRunPrelude(BoundedStringBoundsFixture.PROGRAM))
+		assertThat(compileAndRunGray(BoundedStringBoundsFixture.PROGRAM))
 			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
-		assertThat(compileComponentAndRunPrelude(BoundedStringBoundsFixture.PROGRAM))
+		assertThat(compileComponentAndRunGray(BoundedStringBoundsFixture.PROGRAM))
 			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
 	}
 
