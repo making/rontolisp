@@ -14571,8 +14571,11 @@ public final class LispMacroExpander {
 	 * The symbol a literal package reaches a name as, when the registry knows better than
 	 * the spelling build: a literal name whose accessible symbol is spelled otherwise
 	 * folds to it; a computed name in a package whose {@code %baked-access} row the
-	 * program carries reads the row first and falls back to {@code build}. Null when
-	 * neither applies -- the spelling build stands.
+	 * program carries reads the row first, then -- in a package that uses {@code cl},
+	 * when the program carries the standard names -- answers a standard name with the
+	 * {@code cl} symbol, and falls back to {@code build}. Null when neither applies --
+	 * the spelling build stands. ({@code cl-user} spells a standard name bare like the
+	 * build, so only its status asks the table.)
 	 * @param name the name form
 	 * @param pkg the literal package designator
 	 * @param definedFunction whether a function of that name is defined in the program
@@ -14592,13 +14595,33 @@ public final class LispMacroExpander {
 					: symbolFormOfSpelling(answer.spelling());
 		}
 		String row = access.rowName(pkg);
-		if (row == null || !access.serves(row) || !definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL)) {
+		boolean rowServed = row != null && access.serves(row) && definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL);
+		boolean standard = !LispNames.CL_USER_PKG.equalsIgnoreCase(row)
+				&& inheritsStandardNames(pkg, definedFunction, access);
+		if (!rowServed && !standard) {
 			return null;
 		}
 		LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(nameVar, name)))),
-						bakedAccessLookup(new LispSymbol(":" + row), nameVar, LispNames.CAR, build.apply(nameVar))));
+		LispVal answer = build.apply(nameVar);
+		if (standard) {
+			answer = makeIf(listToCons(List.of(new LispSymbol(LispNames.STANDARD_NAME_P_INTERNAL), nameVar)),
+					listToCons(List.of(new LispSymbol(LispNames.INTERN), nameVar)), answer);
+		}
+		if (rowServed) {
+			answer = bakedAccessLookup(new LispSymbol(":" + row), nameVar, LispNames.CAR, answer);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(nameVar, name)))), answer));
+	}
+
+	/**
+	 * Whether a lookup with a computed name in a literal package asks the table of the
+	 * standard names: the package uses {@code cl} and the program carries the table for
+	 * its lookups ({@link #injectBakedAccess}).
+	 */
+	private static boolean inheritsStandardNames(String pkg, java.util.function.Predicate<String> definedFunction,
+			BakedSymbolAccess access) {
+		return access.standardNames() && definedFunction.test(LispNames.STANDARD_NAME_P_INTERNAL) && access.usesCl(pkg);
 	}
 
 	/**
@@ -14794,9 +14817,15 @@ public final class LispMacroExpander {
 		if (parts.size() < 3) {
 			// (find-symbol NAME): the current package. A standard symbol reaches it
 			// through the use list, so it is inherited rather than external -- the
-			// interpreter's answer for every current package but cl itself.
-			return literal == null ? new LispSymbol(LispNames.STATUS_INTERNAL)
-					: imageStatus(literal, LispNames.STATUS_INHERITED, userDefunNames);
+			// interpreter's answer for every current package but cl itself. A computed
+			// name is spelled bare, as in cl-user, and answers like a computed name
+			// there when the program carries the standard names.
+			if (literal != null) {
+				return imageStatus(literal, LispNames.STATUS_INHERITED, userDefunNames);
+			}
+			LispVal internal = new LispSymbol(LispNames.STATUS_INTERNAL);
+			return access.standardNames()
+					? literalPackageStatus(name, LispNames.CL_USER_PKG, internal, definedFunction, access) : internal;
 		}
 		String pkg = literalPackageDesignator(parts.get(2));
 		if (pkg == null) {
@@ -14805,7 +14834,11 @@ public final class LispMacroExpander {
 			// whose %baked-access row does (the designator is a bound temporary here,
 			// so reading it again costs nothing).
 			LispVal built = new LispSymbol(LispNames.STATUS_EXTERNAL);
-			if (definedFunction.test(LispNames.BAKED_ACCESS_STATUS_INTERNAL)) {
+			if (definedFunction.test(LispNames.STANDARD_ACCESS_STATUS_INTERNAL)) {
+				built = listToCons(
+						List.of(new LispSymbol(LispNames.STANDARD_ACCESS_STATUS_INTERNAL), parts.get(2), name));
+			}
+			else if (definedFunction.test(LispNames.BAKED_ACCESS_STATUS_INTERNAL)) {
 				built = listToCons(List.of(new LispSymbol(LispNames.BAKED_ACCESS_STATUS_INTERNAL), parts.get(2), name));
 			}
 			if (!runtimeMutation) {
@@ -14842,11 +14875,28 @@ public final class LispMacroExpander {
 			PackageResolver.Accessible answer = access.answer(pkg, literal);
 			return answer == null ? built : new LispSymbol(answer.status());
 		}
+		return literalPackageStatus(name, pkg, built, definedFunction, access);
+	}
+
+	/**
+	 * The status of a computed name in a literal package: the package's
+	 * {@code %baked-access} row when the program carries it, then {@code :inherited} for
+	 * a standard name when the package uses {@code cl} and the program carries the table,
+	 * else {@code built}. The name is a bound temporary ({@link #lowerMvProducer}), so
+	 * reading it twice costs nothing.
+	 */
+	private static LispVal literalPackageStatus(LispVal name, String pkg, LispVal built,
+			java.util.function.Predicate<String> definedFunction, BakedSymbolAccess access) {
+		LispVal status = built;
+		if (inheritsStandardNames(pkg, definedFunction, access)) {
+			status = makeIf(listToCons(List.of(new LispSymbol(LispNames.STANDARD_NAME_P_INTERNAL), name)),
+					new LispSymbol(LispNames.STATUS_INHERITED), built);
+		}
 		String row = access.rowName(pkg);
 		if (row != null && access.serves(row) && definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL)) {
-			return bakedAccessLookup(new LispSymbol(":" + row), name, LispNames.CDR, built);
+			return bakedAccessLookup(new LispSymbol(":" + row), name, LispNames.CDR, status);
 		}
-		return built;
+		return status;
 	}
 
 	/** The status of a literal name in the {@code cl} package: nil unless cl owns it. */
@@ -15021,33 +15071,64 @@ public final class LispMacroExpander {
 	 * @return the program with the rows and the lookup prepended, or unchanged
 	 */
 	public static List<LispVal> injectBakedAccess(List<LispVal> program, BakedSymbolAccess access) {
-		java.util.Set<String> literalRows = new java.util.TreeSet<>();
-		boolean[] computedDesignator = { false };
+		AccessSites sites = new AccessSites(access);
 		for (LispVal form : program) {
 			// The package-walk normalizer looks an enumerated symbol up in its own home:
 			// no row answers that differently, so its site alone carries no rows.
 			if (!isDefunOf(form, LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL)) {
-				bakedAccessSites(form, access, literalRows, computedDesignator);
+				sites.scan(form);
 			}
 		}
-		if (literalRows.isEmpty() && !computedDesignator[0]) {
+		if (sites.literalRows.isEmpty() && !sites.computedDesignator) {
 			return program;
 		}
-		java.util.Map<String, PackageResolver.AccessRow> rows = access.rows();
+		boolean standardNames = sites.standardNames;
+		java.util.Map<String, PackageResolver.AccessRow> rows = access.rows(standardNames);
 		String clUser = LispNames.CL_USER_PKG.toUpperCase(java.util.Locale.ROOT);
 		java.util.Set<String> served = new java.util.TreeSet<>();
 		java.util.Set<String> exporters = new java.util.TreeSet<>();
 		for (PackageResolver.AccessRow row : rows.values()) {
-			boolean reachable = literalRows.contains(row.name())
-					|| computedDesignator[0] && (!row.builtin() || clUser.equals(row.name()));
+			boolean reachable = sites.literalRows.contains(row.name())
+					|| sites.computedDesignator && (!row.builtin() || clUser.equals(row.name()));
 			if (reachable && (!row.present().isEmpty() || !row.uses().isEmpty())) {
 				served.add(row.name());
 				exporters.addAll(row.uses());
 			}
 		}
-		if (served.isEmpty()) {
+		if (served.isEmpty() && !standardNames) {
 			return program;
 		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 8);
+		if (!served.isEmpty()) {
+			out.add(bakedAccessTable(rows, served, exporters, access));
+			out.addAll(LispReader.readAllFromString(BAKED_ACCESS_SOURCE, Features.INTERPRETER));
+		}
+		boolean computedStandard = standardNames && sites.computedDesignator;
+		if (standardNames) {
+			if (program.stream().noneMatch(form -> isDefunOf(form, LispNames.STANDARD_NAME_P_INTERNAL))) {
+				// symbol-package's prelude splice may already carry it.
+				out.addAll(LispReader.readAllFromString(standardNameDefinition(), Features.INTERPRETER));
+			}
+			if (computedStandard) {
+				out.add(clUsersTable(access, rows));
+				out.addAll(LispReader.readAllFromString(standardAccessStatusDefinition(!served.isEmpty()),
+						Features.INTERPRETER));
+			}
+		}
+		for (LispVal form : program) {
+			out.add(isDefunOf(form, LispNames.SYMBOL_IN_PACKAGE_INTERNAL)
+					? symbolInPackageDefun(!served.isEmpty(), computedStandard) : form);
+		}
+		access.served(served, standardNames);
+		return out;
+	}
+
+	/**
+	 * The {@code (defvar %baked-access% '...)} table of the served rows: see
+	 * {@link #injectBakedAccess}.
+	 */
+	private static LispVal bakedAccessTable(java.util.Map<String, PackageResolver.AccessRow> rows,
+			java.util.Set<String> served, java.util.Set<String> exporters, BakedSymbolAccess access) {
 		java.util.Map<String, Integer> prefixes = new java.util.LinkedHashMap<>();
 		List<LispVal> entries = new java.util.ArrayList<>();
 		java.util.Set<String> emitted = new java.util.TreeSet<>(served);
@@ -15085,16 +15166,29 @@ public final class LispMacroExpander {
 		table.add(consList(prefixes.keySet().stream().map(prefix -> (LispVal) new LispString(prefix)).toList()));
 		table.add(consList(aliases));
 		table.addAll(entries);
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4);
-		out.add(listToCons(
+		return listToCons(
 				List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.BAKED_ACCESS_TABLE_INTERNAL),
-						listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(table))))));
-		out.addAll(LispReader.readAllFromString(BAKED_ACCESS_SOURCE, Features.INTERPRETER));
-		for (LispVal form : program) {
-			out.add(isDefunOf(form, LispNames.SYMBOL_IN_PACKAGE_INTERNAL) ? symbolInPackageDefun(true) : form);
-		}
-		access.served(served);
-		return out;
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(table)))));
+	}
+
+	/**
+	 * The {@code (defvar %cl-users% '(...))} list a computed designator's lookup asks
+	 * whether the package it found uses {@code cl}: every designator, as a keyword, of
+	 * each package such a lookup reaches -- the program's own and {@code cl-user}, as for
+	 * the rows -- that uses {@code cl}.
+	 */
+	private static LispVal clUsersTable(BakedSymbolAccess access,
+			java.util.Map<String, PackageResolver.AccessRow> rows) {
+		String clUser = LispNames.CL_USER_PKG.toUpperCase(java.util.Locale.ROOT);
+		List<LispVal> keywords = new java.util.ArrayList<>();
+		new java.util.TreeMap<>(access.designators()).forEach((designator, canonical) -> {
+			if ((clUser.equals(canonical) || !PackageRegistry.isBuiltinPackageName(canonical))
+					&& access.usesCl(canonical)) {
+				keywords.add(new LispSymbol(":" + designator));
+			}
+		});
+		return listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CL_USERS_INTERNAL),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), consList(keywords)))));
 	}
 
 	/** Whether a top-level form is {@code (defun NAME ...)}. */
@@ -15129,50 +15223,137 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Collects the {@code find-symbol} / {@code intern} sites {@link #injectBakedAccess}
-	 * serves: the row names of the literal packages asked for a computed name, and
-	 * whether some site computes its package designator -- a call, a
-	 * {@code uiop:symbol-call}, or {@code #'find-symbol} / {@code #'intern} (or the
-	 * quoted name), whose wrapper is a lookup in any package.
+	 * The {@code find-symbol} / {@code intern} sites {@link #injectBakedAccess} serves:
+	 * the row names of the literal packages asked for a computed name, whether some site
+	 * computes its package designator -- a call, a {@code uiop:symbol-call}, or
+	 * {@code #'find-symbol} / {@code #'intern} (or the quoted name), whose wrapper is a
+	 * lookup in any package -- and whether some site can ask a package that uses
+	 * {@code cl} for a standard name, which the rows then answer from the table of the
+	 * standard names. A name the site spells as a constant that is no standard name
+	 * cannot. The one-argument operators reach the current package ({@code cl-user} on
+	 * the compiled backends) and differ there only in the status, so they count where a
+	 * multiple-value consumer reads it.
 	 */
-	private static void bakedAccessSites(LispVal val, BakedSymbolAccess access, java.util.Set<String> literalRows,
-			boolean[] computedDesignator) {
-		while (val instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol head) {
-				String member = memberName(head.name());
-				if ((LispNames.FIND_SYMBOL.equals(member) || LispNames.INTERN.equals(member))
-						&& cons.cdr() instanceof LispCons args && args.cdr() instanceof LispCons pkgCell
-						&& pkgCell.cdr() instanceof LispNil && !isKeywordPackageDesignator(pkgCell.car())) {
-					String pkg = literalPackageDesignator(pkgCell.car());
-					if (pkg == null) {
-						computedDesignator[0] = true;
-					}
-					else if (!(args.car() instanceof LispString)) {
-						String row = access.rowName(pkg);
-						if (row != null) {
-							literalRows.add(row);
-						}
-					}
+	private static final class AccessSites {
+
+		private final BakedSymbolAccess access;
+
+		final java.util.Set<String> literalRows = new java.util.TreeSet<>();
+
+		boolean computedDesignator;
+
+		boolean standardNames;
+
+		AccessSites(BakedSymbolAccess access) {
+			this.access = access;
+		}
+
+		void scan(LispVal val) {
+			while (val instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol head) {
+					visit(cons, head);
 				}
-				else if ((LispNames.FUNCTION.equals(head.name()) || LispNames.QUOTE.equals(head.name()))
-						&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol designated
-						&& (LispNames.FIND_SYMBOL.equals(designated.name())
-								|| LispNames.INTERN.equals(designated.name()))) {
-					// The operator as a function designator: its wrapper's body is a
-					// lookup with whatever package the caller passes.
-					computedDesignator[0] = true;
+				scan(cons.car());
+				val = cons.cdr();
+			}
+		}
+
+		private void visit(LispCons cons, LispSymbol head) {
+			String member = memberName(head.name());
+			if ((LispNames.FIND_SYMBOL.equals(member) || LispNames.INTERN.equals(member))
+					&& cons.cdr() instanceof LispCons args && args.cdr() instanceof LispCons pkgCell
+					&& pkgCell.cdr() instanceof LispNil && !isKeywordPackageDesignator(pkgCell.car())) {
+				String pkg = literalPackageDesignator(pkgCell.car());
+				if (pkg == null) {
+					this.computedDesignator = true;
+					this.standardNames |= mayBeStandardName(args.car());
 				}
-				else {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
-					if (qn != null && UiopExports.isUiopFamily(qn.pkg())
-							&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SYMBOL_CALL)) {
-						computedDesignator[0] = true;
+				else if (!(args.car() instanceof LispString)) {
+					String row = this.access.rowName(pkg);
+					if (row != null) {
+						this.literalRows.add(row);
+						this.standardNames |= mayBeStandardName(args.car()) && this.access.usesCl(pkg);
 					}
 				}
 			}
-			bakedAccessSites(cons.car(), access, literalRows, computedDesignator);
-			val = cons.cdr();
+			else if ((LispNames.FUNCTION.equals(head.name()) || LispNames.QUOTE.equals(head.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol designated
+					&& (LispNames.FIND_SYMBOL.equals(designated.name())
+							|| LispNames.INTERN.equals(designated.name()))) {
+				// The operator as a function designator: its wrapper's body is a lookup
+				// with whatever name and package the caller passes.
+				this.computedDesignator = true;
+				this.standardNames = true;
+			}
+			else if (MV_STATUS_CONSUMERS.contains(head.name())) {
+				for (LispVal producer : cons.toList()) {
+					if (producer instanceof LispCons call && call.car() instanceof LispSymbol op
+							&& (LispNames.FIND_SYMBOL.equals(op.name()) || LispNames.INTERN.equals(op.name()))
+							&& call.cdr() instanceof LispCons args && args.cdr() instanceof LispNil
+							&& mayBeStandardName(args.car())) {
+						this.literalRows.add(LispNames.CL_USER_PKG.toUpperCase(java.util.Locale.ROOT));
+						this.standardNames = true;
+					}
+				}
+			}
+			else {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+				if (qn != null && UiopExports.isUiopFamily(qn.pkg())
+						&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SYMBOL_CALL)) {
+					this.computedDesignator = true;
+					this.standardNames |= !(cons.cdr() instanceof LispCons args && args.cdr() instanceof LispCons name)
+							|| mayBeStandardName(name.car());
+				}
+			}
 		}
+
+	}
+
+	/**
+	 * The multiple-value consumers whose producer, a one-argument {@code find-symbol} /
+	 * {@code intern}, has its status read ({@link #lowerMvProducer}).
+	 */
+	private static final java.util.Set<String> MV_STATUS_CONSUMERS = java.util.Set.of(LispNames.MULTIPLE_VALUE_BIND,
+			LispNames.MULTIPLE_VALUE_LIST, LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE,
+			LispNames.MULTIPLE_VALUE_SETQ);
+
+	/**
+	 * Whether a {@code find-symbol} / {@code intern} name form can be a standard name: it
+	 * is computed, or it is a constant spelling of one -- a string, a quoted symbol, or
+	 * {@code (string SYM)} / {@code (symbol-name SYM)} of a constant symbol.
+	 */
+	private static boolean mayBeStandardName(LispVal nameForm) {
+		String constant = constantSymbolName(nameForm);
+		return constant == null || STANDARD_NAME_SET.contains(constant);
+	}
+
+	private static final java.util.Set<String> STANDARD_NAME_SET = java.util.Set
+		.copyOf(PackageRegistry.standardNames());
+
+	/** The name a constant name form spells, or null when it is computed. */
+	private static @Nullable String constantSymbolName(LispVal form) {
+		if (form instanceof LispString str) {
+			return str.value();
+		}
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.cdr() instanceof LispCons arg
+				&& arg.cdr() instanceof LispNil) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return arg.car() instanceof LispSymbol sym ? constantSymbolMember(sym) : null;
+			}
+			if (LispNames.STRING.equals(op.name()) || LispNames.SYMBOL_NAME.equals(op.name())) {
+				// A keyword or uninterned symbol, a quoted symbol or a string; a bare
+				// symbol is a variable.
+				if (arg.car() instanceof LispSymbol sym) {
+					return sym.isKeyword() || sym.name().startsWith("#:") ? constantSymbolMember(sym) : null;
+				}
+				return constantSymbolName(arg.car());
+			}
+		}
+		return null;
+	}
+
+	private static String constantSymbolMember(LispSymbol sym) {
+		return sym.name().startsWith("#:") ? sym.name().substring(2) : LispSymbol.memberName(sym.name());
 	}
 
 	/**
@@ -15225,6 +15406,100 @@ public final class LispMacroExpander {
 			  (let ((%bas-hit (%baked-access (if (keywordp %bas-p) %bas-p (find-package %bas-p)) %bas-n)))
 			    (if %bas-hit (cdr %bas-hit) :external)))
 			""";
+
+	/**
+	 * The {@code %standard-access-status} defun: the status of a computed designator's
+	 * lookup -- the found package's row first when the program carries rows, then a
+	 * standard name through {@code cl}, else the build's {@code :external}. A keyword
+	 * designator is taken as it comes ({@code %cl-users%} and the rows' aliases hold
+	 * every designator), as {@code %baked-access-status} takes it.
+	 * @param rows whether the program carries {@code %baked-access} rows
+	 * @return the defun source
+	 */
+	private static String standardAccessStatusDefinition(boolean rows) {
+		return """
+				(defun %standard-access-status (%sas-p %sas-n)
+				  (let* ((%sas-k (if (keywordp %sas-p) %sas-p (find-package %sas-p)))
+				         (%sas-hit ROWS))
+				    (cond (%sas-hit (cdr %sas-hit))
+				          ((and (member %sas-k %cl-users%) (%standard-name-p %sas-n)) :inherited)
+				          (t :external))))
+				""".replace("ROWS", rows ? "(%baked-access %sas-k %sas-n)" : "nil");
+	}
+
+	/** The first character of a prefix-length mark in {@link #packStandardNames}. */
+	private static final int STANDARD_NAME_MARK = 96;
+
+	/**
+	 * The {@code %standard-name-p} prelude defun and its table: whether {@code cl}
+	 * exports a name. One definition for {@code symbol-package} (a prelude edge) and the
+	 * computed lookups ({@link #injectBakedAccess}), so the two cannot disagree on the
+	 * set.
+	 * @return the source of the defvars and the defun
+	 */
+	public static String standardNameDefinition() {
+		return STANDARD_NAME_SOURCE;
+	}
+
+	/**
+	 * The sorted standard names front-coded: per name one mark character,
+	 * {@code (code-char (+ 96 K))} for the K leading characters it shares with the name
+	 * before it, then the rest of it. No standard name holds a character at or past the
+	 * mark range, so a mark also ends the name before it and the decoder needs no length.
+	 * Half the length-prefixed packing the package tables use (979 names, 11,276
+	 * characters, 7.4 K packed), and printable ASCII, which keeps every index into it
+	 * O(1) on every backend ({@code .kb/string-index-cost.md}).
+	 * @param sorted the names, sorted
+	 * @return the packed names
+	 */
+	static String packStandardNames(List<String> sorted) {
+		StringBuilder packed = new StringBuilder();
+		String previous = "";
+		for (String name : sorted) {
+			int shared = 0;
+			int limit = Math.min(previous.length(), name.length());
+			while (shared < limit && previous.charAt(shared) == name.charAt(shared)) {
+				shared++;
+			}
+			if (STANDARD_NAME_MARK + shared > '~' || name.isEmpty() || name.compareTo(previous) <= 0
+					|| name.chars().anyMatch(ch -> ch < ' ' || ch >= STANDARD_NAME_MARK || ch == '"' || ch == '\\')) {
+				throw new IllegalStateException("A standard name the packing cannot carry: " + name);
+			}
+			packed.append((char) (STANDARD_NAME_MARK + shared)).append(name, shared, name.length());
+			previous = name;
+		}
+		return packed.toString();
+	}
+
+	/**
+	 * The table decodes into an {@code equal} hash table on the first call, so a lookup
+	 * after it is one {@code gethash}: the runtime hashes the name natively, where a walk
+	 * of the packed string in Lisp read ~500 characters per lookup in the bigger blocks
+	 * (~15 us a lookup on WASM, ~30 ns per character read). The packed string is a
+	 * global, read once.
+	 */
+	private static final String STANDARD_NAME_SOURCE = """
+			(defvar %standard-names% "PACKED")
+			(defvar %standard-name-table% nil)
+			(defun %standard-name-p (%snp-n)
+			  (let ((%snp-h %standard-name-table%))
+			    (when (null %snp-h)
+			      (setq %snp-h (make-hash-table :test 'equal))
+			      (let ((%snp-s %standard-names%) (%snp-i 0) (%snp-p ""))
+			        (while (< %snp-i LENGTH)
+			          (let ((%snp-j (+ %snp-i 1)))
+			            (while (and (< %snp-j LENGTH) (< (char-code (char %snp-s %snp-j)) MARK))
+			              (setq %snp-j (+ %snp-j 1)))
+			            (setq %snp-p (concatenate 'string
+			                                      (subseq %snp-p 0 (- (char-code (char %snp-s %snp-i)) MARK))
+			                                      (subseq %snp-s (+ %snp-i 1) %snp-j)))
+			            (setf (gethash %snp-p %snp-h) t)
+			            (setq %snp-i %snp-j))))
+			      (setq %standard-name-table% %snp-h))
+			    (gethash %snp-n %snp-h)))
+			""".replace("MARK", Integer.toString(STANDARD_NAME_MARK))
+		.replace("LENGTH", Integer.toString(packStandardNames(PackageRegistry.standardNames()).length()))
+		.replace("\"PACKED\"", new LispString(packStandardNames(PackageRegistry.standardNames())).print());
 
 	private static LispVal inlineRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
 			boolean runtimeMutation) {
@@ -15848,7 +16123,8 @@ public final class LispMacroExpander {
 		// (injectBakedAccess rewrites its body); an inline site reads them here.
 		LispVal built = helper
 				? listToCons(List.of(new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL), nameVar, pkgVar))
-				: computedGuardedSpelling(pkgVar, nameVar, definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL));
+				: computedGuardedSpelling(pkgVar, nameVar, definedFunction.test(LispNames.BAKED_ACCESS_INTERNAL),
+						definedFunction.test(LispNames.STANDARD_ACCESS_STATUS_INTERNAL));
 		if (!runtimeMutation) {
 			return bindFindSymbolTemps(name, packageForm, built);
 		}
@@ -15861,22 +16137,33 @@ public final class LispMacroExpander {
 	 * read/compile-time half of every computed-designator lookup, inline at a site or as
 	 * the body of the {@code %symbol-in-package} prelude defun
 	 * ({@link #symbolInPackageDefinition}). With {@code bakedAccess} the found package's
-	 * {@code %baked-access} row answers first ({@link #injectBakedAccess}).
+	 * {@code %baked-access} row answers first, and with {@code standardNames} a standard
+	 * name the found package inherits from {@code cl} answers before the build
+	 * ({@link #injectBakedAccess}).
 	 */
-	private static LispVal computedGuardedSpelling(LispSymbol pkgVar, LispSymbol nameVar, boolean bakedAccess) {
+	private static LispVal computedGuardedSpelling(LispSymbol pkgVar, LispSymbol nameVar, boolean bakedAccess,
+			boolean standardNames) {
 		LispVal built = listToCons(
 				List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar)));
-		if (!bakedAccess) {
+		if (!bakedAccess && !standardNames) {
 			return makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)), built,
 					computedNoSuchPackage(pkgVar));
 		}
 		// (let ((K (find-package PKG))) (if K <row answer, else the build> <signal>)):
 		// the package is found once, and its value is the row key.
 		LispSymbol found = new LispSymbol(FIND_SYMBOL_FOUND_PACKAGE_VAR);
+		if (standardNames) {
+			LispVal inherits = listToCons(List.of(new LispSymbol(LispNames.AND),
+					listToCons(List.of(new LispSymbol(LispNames.MEMBER), found,
+							new LispSymbol(LispNames.CL_USERS_INTERNAL))),
+					listToCons(List.of(new LispSymbol(LispNames.STANDARD_NAME_P_INTERNAL), nameVar))));
+			built = makeIf(inherits, listToCons(List.of(new LispSymbol(LispNames.INTERN), nameVar)), built);
+		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(
 						List.of(found, listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)))))),
-				makeIf(found, bakedAccessLookup(found, nameVar, LispNames.CAR, built), computedNoSuchPackage(pkgVar))));
+				makeIf(found, bakedAccess ? bakedAccessLookup(found, nameVar, LispNames.CAR, built) : built,
+						computedNoSuchPackage(pkgVar))));
 	}
 
 	/**
@@ -15886,18 +16173,19 @@ public final class LispMacroExpander {
 	 * @return the {@code defun} source text
 	 */
 	public static String symbolInPackageDefinition() {
-		return symbolInPackageDefun(false).print();
+		return symbolInPackageDefun(false, false).print();
 	}
 
 	/**
-	 * The {@code %symbol-in-package} defun, reading the {@code %baked-access} rows or
-	 * not.
+	 * The {@code %symbol-in-package} defun, reading the {@code %baked-access} rows and
+	 * the standard names or not.
 	 */
-	private static LispVal symbolInPackageDefun(boolean bakedAccess) {
+	private static LispVal symbolInPackageDefun(boolean bakedAccess, boolean standardNames) {
 		LispSymbol nameVar = new LispSymbol("%SIP-NAME");
 		LispSymbol pkgVar = new LispSymbol("%SIP-PKG");
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL),
-				listToCons(List.of(nameVar, pkgVar)), computedGuardedSpelling(pkgVar, nameVar, bakedAccess)));
+				listToCons(List.of(nameVar, pkgVar)),
+				computedGuardedSpelling(pkgVar, nameVar, bakedAccess, standardNames)));
 	}
 
 	/**

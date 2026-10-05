@@ -2639,7 +2639,9 @@ public final class PackageResolver {
 			return null;
 		}
 		if (LispNames.CL_PKG.equals(used)) {
-			return source.exports(member) && PackageRegistry.isClMemberName(member)
+			// isExternal, not the external set alone: the car/cdr compositions are
+			// external by pattern.
+			return isExternal(used, member) && PackageRegistry.isClMemberName(member)
 					? new Accessible(member, LispNames.STATUS_INHERITED) : null;
 		}
 		LispSymbol viaUsed = usedExport(used, member);
@@ -2808,8 +2810,9 @@ public final class PackageResolver {
 	 * {@code find-package} answers)
 	 * @param builtin whether the package is one the registry seeds
 	 * @param present the names the package answers ITSELF, as {@code (name spelling
-	 * status)} triples: the ones whose answer is neither the inherited one its uses give
-	 * nor the spelling a compiled lookup builds when nothing answers
+	 * status)} triples: the ones whose answer differs from what the runtime finds without
+	 * them -- the inherited one its uses give, a standard name through {@code cl}, or the
+	 * spelling a compiled lookup builds when nothing answers
 	 * @param uses the upcased used packages whose exports it inherits, in use order
 	 * ({@code cl} left out)
 	 * @param exports what the package's users inherit from it, as {@code (name spelling)}
@@ -2817,6 +2820,14 @@ public final class PackageResolver {
 	 */
 	public record AccessRow(String name, boolean builtin, List<List<String>> present, List<String> uses,
 			List<List<String>> exports) {
+	}
+
+	/**
+	 * What a used package exports to its users: the names homed elsewhere than
+	 * {@code cl}, name to spelling at the true home, in name order, and the standard
+	 * names it passes on.
+	 */
+	private record ExportRow(Map<String, String> exports, Set<String> standard) {
 	}
 
 	/**
@@ -2828,37 +2839,47 @@ public final class PackageResolver {
 	 * such a lookup builds when nothing answers (a shadowing or internal member). The
 	 * lookup is {@link #accessible}'s, split so the runtime can run it: a row's
 	 * {@code present} triples first, then the {@code exports} of each of its {@code uses}
-	 * in order. A symbol homed in {@code cl} is left out on both sides -- the compiled
-	 * backends carry no table of the standard names -- so such a lookup keeps building
-	 * the permissive spelling for it. Packages with nothing to answer have no row. Read
-	 * AFTER {@link #resolveProgram}.
+	 * in order, then -- when {@code standardNames} and the package uses {@code cl} -- the
+	 * table of the standard names, which the lookup asks after the row. A symbol homed in
+	 * {@code cl} is left out of every export row: with the table, a package that uses
+	 * {@code cl} reaches it there and any other package that reaches one carries it as a
+	 * present entry; without it, such a lookup keeps building the permissive spelling.
+	 * Packages with nothing to answer have no row. Read AFTER {@link #resolveProgram}.
+	 * @param standardNames whether the runtime answers a standard name through a use of
+	 * {@code cl} from the table of the standard names
 	 * @return the rows by upcased package name, in name order
 	 */
-	public Map<String, AccessRow> bakedAccessRows() {
-		Map<String, Map<String, String>> exportRows = new HashMap<>();
+	public Map<String, AccessRow> bakedAccessRows(boolean standardNames) {
+		Map<String, ExportRow> exportRows = new HashMap<>();
 		Map<String, AccessRow> rows = new java.util.TreeMap<>();
 		Set<String> exporters = new java.util.TreeSet<>();
+		Set<String> standard = Set.copyOf(PackageRegistry.standardNames());
 		for (String canonical : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
 			if (LispNames.CL_PKG.equals(canonical) || "keyword".equals(canonical)
 					|| !this.registry.contains(canonical)) {
 				continue;
 			}
 			LispPackage p = this.registry.get(canonical);
+			boolean usesCl = standardNames && p.useList().contains(LispNames.CL_PKG);
 			List<String> uses = new ArrayList<>();
 			List<Map<String, String>> inherited = new ArrayList<>();
-			for (String used : p.useList()) {
-				if (!LispNames.CL_PKG.equals(used) && this.registry.contains(used)) {
-					Map<String, String> exports = exportRows.computeIfAbsent(used, this::exportRow);
-					if (!exports.isEmpty()) {
-						uses.add(used);
-						inherited.add(exports);
-					}
-				}
-			}
 			Set<String> names = new java.util.TreeSet<>(p.imports().keySet());
 			names.addAll(p.symbols());
-			for (Map<String, String> exports : inherited) {
-				names.addAll(exports.keySet());
+			for (String used : p.useList()) {
+				if (!LispNames.CL_PKG.equals(used) && this.registry.contains(used)) {
+					ExportRow exports = exportRows.computeIfAbsent(used, this::exportRow);
+					if (!exports.exports().isEmpty()) {
+						uses.add(used);
+						inherited.add(exports.exports());
+						names.addAll(exports.exports().keySet());
+					}
+					if (standardNames && !usesCl) {
+						// A standard name a used package re-exports reaches this one,
+						// which the table cannot answer for: it travels as a present
+						// entry.
+						names.addAll(exports.standard());
+					}
+				}
 			}
 			String upper = canonical.toUpperCase(java.util.Locale.ROOT);
 			List<List<String>> present = new ArrayList<>();
@@ -2874,13 +2895,23 @@ public final class PackageResolver {
 						break;
 					}
 				}
-				if (viaUses != null
-						? answer.spelling().equals(viaUses) && LispNames.STATUS_INHERITED.equals(answer.status())
-						: answer.spelling().equals(name) && PackageRegistry.isClMemberName(name)
-								|| answer.equals(permissiveAnswer(canonical, upper, name))) {
-					continue;
+				boolean found;
+				if (standardNames) {
+					// What the runtime answers without an entry: a used package's
+					// export, else a standard name through cl, else the build.
+					found = answer.equals(viaUses != null ? new Accessible(viaUses, LispNames.STATUS_INHERITED)
+							: usesCl && standard.contains(name) ? new Accessible(name, LispNames.STATUS_INHERITED)
+									: permissiveAnswer(canonical, upper, name));
 				}
-				present.add(List.of(name, answer.spelling(), answer.status()));
+				else {
+					found = viaUses != null
+							? answer.spelling().equals(viaUses) && LispNames.STATUS_INHERITED.equals(answer.status())
+							: answer.spelling().equals(name) && PackageRegistry.isClMemberName(name)
+									|| answer.equals(permissiveAnswer(canonical, upper, name));
+				}
+				if (!found) {
+					present.add(List.of(name, answer.spelling(), answer.status()));
+				}
 			}
 			if (!present.isEmpty() || !uses.isEmpty()) {
 				rows.put(upper,
@@ -2893,7 +2924,9 @@ public final class PackageResolver {
 		for (String used : exporters) {
 			String upper = used.toUpperCase(java.util.Locale.ROOT);
 			List<List<String>> exports = new ArrayList<>();
-			exportRows.getOrDefault(used, Map.of()).forEach((name, spelling) -> exports.add(List.of(name, spelling)));
+			exportRows.computeIfAbsent(used, this::exportRow)
+				.exports()
+				.forEach((name, spelling) -> exports.add(List.of(name, spelling)));
 			AccessRow row = rows.get(upper);
 			rows.put(upper,
 					row == null
@@ -2905,18 +2938,37 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * What a package exports to its users, name to spelling at the true home, in name
-	 * order -- {@link #inheritedFrom}'s answers, without the symbols homed in {@code cl}.
+	 * What a package exports to its users -- {@link #inheritedFrom}'s answers -- split
+	 * into the symbols homed elsewhere than {@code cl} and the standard names.
 	 */
-	private Map<String, String> exportRow(String used) {
+	private ExportRow exportRow(String used) {
 		Map<String, String> out = new java.util.LinkedHashMap<>();
+		Set<String> standard = new java.util.TreeSet<>();
 		for (String name : new java.util.TreeSet<>(this.registry.get(used).externals())) {
 			LispSymbol spelling = usedExport(used, name);
-			if (spelling != null && !(spelling.name().equals(name) && PackageRegistry.isClMemberName(name))) {
+			if (spelling == null) {
+				continue;
+			}
+			if (spelling.name().equals(name) && PackageRegistry.isClMemberName(name)) {
+				standard.add(name);
+			}
+			else {
 				out.put(name, spelling.name());
 			}
 		}
-		return out;
+		return new ExportRow(out, standard);
+	}
+
+	/**
+	 * Whether a package reaches the standard names through a use of {@code cl} -- what
+	 * decides whether a lookup in it with a computed name needs the table of them.
+	 * @param pkgDesignator the package name as given
+	 * @return whether the package exists and uses {@code cl}
+	 */
+	public boolean usesCl(String pkgDesignator) {
+		String pkg = findPackageName(pkgDesignator);
+		return pkg != null && this.registry.contains(pkg)
+				&& this.registry.get(pkg).useList().contains(LispNames.CL_PKG);
 	}
 
 	/**

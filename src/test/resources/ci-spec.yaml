@@ -20621,6 +20621,72 @@ cases:
       "CI-FSI-U1"
       (CI-FSI-U2:D1 :INHERITED)
       (CI-FSI-U1:B1 :INTERNAL)
+  - name: find-symbol-of-a-computed-standard-name
+    source: |
+      (defpackage :ci-stn-a (:use :cl))
+      (defpackage :ci-stn-sh (:use :cl) (:shadow #:list) (:export #:list))
+      (defpackage :ci-stn-imp (:use) (:import-from :cl #:car))
+      (defun ci-stn-show (n p) (print (multiple-value-list (find-symbol n p))))
+      (defun ci-stn-intern (n p) (print (multiple-value-list (intern n p))))
+      (let ((car-name (string-upcase "car")) (list-name (string-upcase "list")))
+        (print (multiple-value-list (find-symbol car-name :ci-stn-a)))
+        (print (multiple-value-list (find-symbol car-name "CI-STN-A")))
+        (print (multiple-value-list (intern car-name :ci-stn-a)))
+        (print (multiple-value-list (find-symbol car-name :cl-user)))
+        (print (multiple-value-list (find-symbol car-name :cl)))
+        (print (multiple-value-list (find-symbol (string-upcase "cadr") :ci-stn-a)))
+        (print (multiple-value-list (find-symbol list-name :ci-stn-sh)))
+        (print (multiple-value-list (find-symbol car-name :ci-stn-imp)))
+        (print (multiple-value-list (find-symbol car-name)))
+        (print (multiple-value-list (intern list-name)))
+        (print (funcall (intern list-name :ci-stn-a) 1 2))
+        (print (eq (find-symbol car-name :ci-stn-a) 'car)))
+      (dolist (p (list :ci-stn-a "CI-STN-SH" (find-package :cl-user) "CL"))
+        (ci-stn-show (string-upcase "list") p)
+        (ci-stn-intern (string-upcase "car") p))
+      (ci-stn-show (string-upcase "car") 'ci-stn-imp)
+      (print (multiple-value-list (find-symbol "CADR" :ci-stn-a)))
+      (print (multiple-value-list (find-symbol (string 'cdddr) :ci-stn-a)))
+      (print (eq (symbol-package 'car) (find-package :cl)))
+      (print (eq (symbol-package (read-from-string "mapcan")) (find-package :cl)))
+      (print (eq (symbol-package (intern (string-upcase "cdddr"))) (find-package :cl)))
+      (print (eq (symbol-package nil) (find-package :cl)))
+      (print (eq (symbol-package 'ci-stn-own) (find-package :cl-user)))
+      (print (eq (symbol-package 'ci-stn-sh:list) (find-package :ci-stn-sh)))
+      (print (eq (symbol-package :car) (find-package :keyword)))
+      (print (let ((f #'find-symbol)) (multiple-value-list (funcall f (string-upcase "cons") :ci-stn-a))))
+    expected: |
+      (CAR :INHERITED)
+      (CAR :INHERITED)
+      (CAR :INHERITED)
+      (CAR :INHERITED)
+      (CAR :EXTERNAL)
+      (CADR :INHERITED)
+      (CI-STN-SH:LIST :EXTERNAL)
+      (CAR :INTERNAL)
+      (CAR :INHERITED)
+      (LIST :INHERITED)
+      (1 2)
+      T
+      (LIST :INHERITED)
+      (CAR :INHERITED)
+      (CI-STN-SH:LIST :EXTERNAL)
+      (CAR :INHERITED)
+      (LIST :INHERITED)
+      (CAR :INHERITED)
+      (LIST :EXTERNAL)
+      (CAR :EXTERNAL)
+      (CAR :INTERNAL)
+      (CADR :INHERITED)
+      (CDDDR :INHERITED)
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      (CONS :INHERITED)
 standalone:
   - name: uncaught-condition-report
     source: |

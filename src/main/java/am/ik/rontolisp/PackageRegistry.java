@@ -1823,6 +1823,38 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * The names {@code cl} exports, sorted: {@link #CL_EXTERNALS} plus the car/cdr
+	 * compositions, which {@link LispNames#isCarCdrComposition} recognizes rather than a
+	 * set holds.
+	 */
+	private static final List<String> STANDARD_NAMES = standardNameList();
+
+	private static List<String> standardNameList() {
+		Set<String> names = new java.util.TreeSet<>(CL_EXTERNALS);
+		List<String> middles = List.of("");
+		for (int length = 1; length <= 4; length++) {
+			List<String> longer = new java.util.ArrayList<>();
+			for (String middle : middles) {
+				longer.add(middle + "A");
+				longer.add(middle + "D");
+			}
+			middles = longer;
+			middles.forEach(middle -> names.add("C" + middle + "R"));
+		}
+		return List.copyOf(names);
+	}
+
+	/**
+	 * Returns the names the {@code cl} package exports -- what a package using {@code cl}
+	 * inherits, and what the compiled runtime's table of the standard names holds --
+	 * sorted.
+	 * @return the exported {@code cl} names
+	 */
+	public static List<String> standardNames() {
+		return STANDARD_NAMES;
+	}
+
+	/**
 	 * Returns the standard names the {@code cl} package exports without implementing.
 	 * @return the export-only standard names
 	 */

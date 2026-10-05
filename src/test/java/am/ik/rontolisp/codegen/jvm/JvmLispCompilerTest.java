@@ -15448,6 +15448,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol() throws Exception {
+		// A standard name reached through a computed name or package designator, or
+		// asked of symbol-package, answers the cl symbol -- the compiled runtime carries
+		// the table of the standard names for it. The twins are
+		// LispEvaluatorTest#aComputedLookupOfAStandardNameAnswersTheClSymbol and
+		// WasmLispCompilerIntegrationTest#computedLookupOfAStandardName.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.StandardNameLookupFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunALongStringConstant() throws Exception {
 		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
 		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and

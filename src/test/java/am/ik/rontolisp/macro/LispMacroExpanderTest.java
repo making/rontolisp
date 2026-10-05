@@ -1238,14 +1238,84 @@ class LispMacroExpanderTest {
 	@Test
 	void injectBakedAccessLeavesAProgramNoRowServesUnchanged() {
 		// Every package a computed lookup can reach answers through cl or its own
-		// members only: nothing is injected, so the program stays byte-identical.
+		// members only, and every name asked is a constant no standard name spells:
+		// nothing is injected, so the program stays byte-identical.
 		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
 		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
 				(defpackage :iba-plain (:use :cl) (:export #:x))
-				(defun iba-f (n p) (find-symbol n p))
-				(print (intern (string-upcase "x") :iba-plain))
+				(defun iba-f (p) (list (find-symbol "IBA-X" p) (intern (string '#:run) p)))
+				(print (intern (symbol-name :x) :iba-plain))
+				(print (multiple-value-list (find-symbol "IBA-Y")))
 				"""));
 		assertThat(LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver))).isSameAs(program);
+	}
+
+	@Test
+	void injectBakedAccessCarriesTheStandardNamesForAComputedNameInAPackageThatUsesCl() {
+		// A computed name can be a standard one, which a package using cl inherits: the
+		// walk of the standard names joins the program, and no row does -- the package
+		// answers nothing else differently.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-c (:use :cl))
+				(print (find-symbol (string-upcase "car") :iba-c))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected).hasSize(program.size() + 3);
+		assertThat(injected.get(2).print()).startsWith("(DEFUN %STANDARD-NAME-P ");
+	}
+
+	@Test
+	void aComputedDesignatorWithAComputedNameCarriesTheClUsers() {
+		// (string 'car) spells a standard name; a computed designator can name any
+		// program package or cl-user, so the ones using cl travel as keywords, every
+		// designator of each.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-d (:use :cl) (:nicknames :iba-dn))
+				(defpackage :iba-e (:use))
+				(defun iba-g (p) (find-symbol (string 'car) p))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected).anySatisfy(form -> assertThat(form.print())
+			.isEqualTo("(DEFVAR %CL-USERS% '(:CL-USER :COMMON-LISP-USER :IBA-D :IBA-DN))"));
+	}
+
+	@Test
+	void aOneArgumentLookupWhoseStatusIsReadCarriesTheStandardNames() {
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(
+				LispReader.readAllFromString("(print (multiple-value-list (intern (string-upcase \"list\"))))"));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected.get(2).print()).startsWith("(DEFUN %STANDARD-NAME-P ");
+	}
+
+	@Test
+	void theStandardNameTableAnswersExactlyTheNamesClExports() {
+		// The front-coded table, decoded on the interpreter and asked for every
+		// standard name and the near misses around each: one character more, one
+		// less, the last one moved up or down, lower case.
+		List<String> standard = am.ik.rontolisp.PackageRegistry.standardNames();
+		java.util.Set<String> probes = new java.util.TreeSet<>(standard);
+		probes.addAll(List.of("", "a", "`", "CAR`", "~", "ZZZZ", "&", "*", "CAAAAAR"));
+		for (String name : standard) {
+			String stem = name.substring(0, name.length() - 1);
+			char last = name.charAt(name.length() - 1);
+			probes.addAll(List.of(name + "X", name + "-", stem, stem + (char) (last + 1), stem + (char) (last - 1),
+					name.toLowerCase(java.util.Locale.ROOT), name + "a"));
+		}
+		StringBuilder call = new StringBuilder("(let ((hits nil)) (dolist (n '(");
+		probes.forEach(probe -> call.append(new LispString(probe).print()).append(' '));
+		call.append(")) (if (%standard-name-p n) (push n hits))) (nreverse hits))");
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		LispReader.readAllFromString(LispMacroExpander.standardNameDefinition()).forEach(evaluator::eval);
+		List<String> hits = new ArrayList<>();
+		for (LispVal hit = evaluator
+			.eval(LispReader.readFromString(call.toString())); hit instanceof LispCons cell; hit = cell.cdr()) {
+			hits.add(((LispString) cell.car()).value());
+		}
+		assertThat(hits).isEqualTo(probes.stream().filter(standard::contains).toList());
 	}
 
 	@Test

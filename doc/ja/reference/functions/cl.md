@@ -148,7 +148,7 @@
 | `find-symbol` | `(find-symbol "car")` | パッケージがその名前をアクセス可能にしていれば(存在するメンバー、継承したエクスポート、標準名、キーワード)`car`、なければ `nil`。存在しないパッケージを指定した場合も `nil`(コンパイラ: 読み込み/コンパイル時パッケージで `nil` を返せるのはリテラル文字列のときだけ。`make-package` の産物のメンバーテーブルはどこでも参照されます) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite 版: 大文字化されたパッケージ名のキーワード(パッケージオブジェクトはありません)。未知なら `nil`(コンパイラは計算された指定子をコンパイル時に埋め込んだ表から解決します) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- シンボルは CL 同様大文字化されて読まれるので `(symbol-name 'car)` も `"CAR"` |
-| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `t` と `nil` も含めて `:cl`、それ以外は `:cl-user`、`#:` シンボルと `unintern` がホームから取り除いたシンボルは `nil`)。コンパイラは `cl` と `cl-user` のどちらにも `:cl-user` を返します |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `t` と `nil` も含めて `:cl`、それ以外は `:cl-user`、`#:` シンボルと `unintern` がホームから取り除いたシンボルは `nil`) |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- パッケージ指示子の名前文字列。`find-package` で解決され、未知の指示子はシグナルします |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- そのパッケージが use しているパッケージを `find-package` のキーワードで返します。未知の指示子はシグナルします |
 | `package-used-by-list` | `(package-used-by-list :cl)` | 逆向き: use リストにこのパッケージを含むすべてのパッケージ |

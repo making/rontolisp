@@ -21,10 +21,14 @@ public final class BakedSymbolAccess {
 
 	private final @Nullable PackageResolver resolver;
 
-	private @Nullable Map<String, PackageResolver.AccessRow> rows;
+	/** The rows, without and with the standard names, each computed on first use. */
+	private final Map<Boolean, Map<String, PackageResolver.AccessRow>> rows = new java.util.HashMap<>();
 
 	/** The row names {@link LispMacroExpander#injectBakedAccess} put in the program. */
 	private Set<String> served = Set.of();
+
+	/** Whether {@link LispMacroExpander#injectBakedAccess} put the standard names in. */
+	private boolean standardNames;
 
 	private BakedSymbolAccess(@Nullable PackageResolver resolver) {
 		this.resolver = resolver;
@@ -71,13 +75,24 @@ public final class BakedSymbolAccess {
 
 	/**
 	 * Every package's row, computed on first use.
+	 * @param standardNames whether the runtime answers the standard names through a use
+	 * of {@code cl} ({@link PackageResolver#bakedAccessRows})
 	 * @return the rows by upcased package name
 	 */
-	synchronized Map<String, PackageResolver.AccessRow> rows() {
-		if (this.rows == null) {
-			this.rows = this.resolver == null ? Map.of() : this.resolver.bakedAccessRows();
-		}
-		return this.rows;
+	synchronized Map<String, PackageResolver.AccessRow> rows(boolean standardNames) {
+		PackageResolver registry = this.resolver;
+		return this.rows.computeIfAbsent(standardNames,
+				standard -> registry == null ? Map.of() : registry.bakedAccessRows(standard));
+	}
+
+	/**
+	 * Whether a literal package designator names a package that reaches the standard
+	 * names through a use of {@code cl}.
+	 * @param pkg the literal package designator
+	 * @return whether the package uses {@code cl}
+	 */
+	boolean usesCl(String pkg) {
+		return this.resolver != null && this.resolver.usesCl(pkg);
 	}
 
 	/**
@@ -90,8 +105,19 @@ public final class BakedSymbolAccess {
 		return this.served.contains(rowName);
 	}
 
-	void served(Set<String> rowNames) {
+	/**
+	 * Whether the program carries the table of the standard names for its lookups
+	 * ({@link LispMacroExpander#injectBakedAccess}), so a lookup in a package that uses
+	 * {@code cl} asks it after the package's row.
+	 * @return whether the lookups read the table of the standard names
+	 */
+	boolean standardNames() {
+		return this.standardNames;
+	}
+
+	void served(Set<String> rowNames, boolean standardNames) {
 		this.served = Set.copyOf(rowNames);
+		this.standardNames = standardNames;
 	}
 
 }

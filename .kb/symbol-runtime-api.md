@@ -50,8 +50,10 @@ literals.
 - `symbol-package`: registry-backed on the interpreter (`PackageResolver.symbolPackageName`: the
   home off the spelling -- `cl` for every standard name, `t`/`nil`/the exported-only ones
   included -- minus the `unintern` tombstones, `.kb/packages.md` "The member table");
-  elsewhere a `LispPreludeLibrary` defun reading the qualifier off `prin1-to-string`, so it
-  cannot tell `cl` from `cl-user` and keeps an uninterned symbol's old home.
+  elsewhere a `LispPreludeLibrary` defun: `%symbol-home` reads the qualifier off
+  `prin1-to-string` and a bare name is `cl`'s when the table of the standard names holds
+  it (`.kb/packages.md`, "The standard names at run time"); an uninterned symbol keeps its
+  old home.
 - `type-of`: a prelude defun over the internal `%class-designator` (NOT `class-of`, which
   answers a metaobject), stripping the `%struct-`/`%class-` tag prefix. It `intern`s the
   remainder, so it is right only because `PackageResolver.internSpelling` routes a qualifier the
@@ -355,7 +357,8 @@ no qualifier (`computedQualifiedSpelling`: `keyword` -> `:NAME`, `cl`/`cl-user` 
 anything else -> `PKG:NAME`); unconditionally prefixing `(string PKG)` built `KEYWORD:X` instead
 of the keyword `:X`. Before either build, a package the registry knows to reach the name
 another way answers it (`%baked-access`, `.kb/packages.md` "Compiled lookups answer through
-the registry").
+the registry"), and a standard name a package using `cl` inherits answers the `cl` symbol
+(`.kb/packages.md`, "The standard names at run time").
 
 **A designator naming no package signals a `package-error`, as `intern`'s does** (`.todo/997`;
 nil until then). `nil` designates the package `"NIL"`, which no image has, so it signals too.
