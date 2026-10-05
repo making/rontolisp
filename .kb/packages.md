@@ -213,7 +213,9 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   One exception: a name an EXISTING package already owns stays its own (a `defpackage` over a
   pre-seeded package whose members include `sin`, `read`, `close`). Libraries that re-export a
   standard name: ironclad (`stream`), yason (`null`), iterate (`while`, rontolisp's own `cl`
-  extension). Measured on the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
+  extension). A `wit-import :package` is unaffected: it exports the lower-kebab labels
+  (`get`), never the reader's `GET`; a hand-written `(:use cl) (:export "READ")` that binds its
+  own `READ` must `:shadow` it, as in CL. Measured on the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
   / component): byte-identical except the clack / tiny-routes examples (+11-15 B, ironclad's
   `stream` in the packed package rows), the ningle ones (-14 to -16 B, `stream` and `null`)
   and `jvm/cffi-sqlite.lisp` (-18 B, `ITERATE:WHILE` -> `WHILE`). Pinned by

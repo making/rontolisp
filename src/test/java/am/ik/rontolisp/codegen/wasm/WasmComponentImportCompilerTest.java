@@ -454,7 +454,8 @@ class WasmComponentImportCompilerTest {
 				    feed: func(body: stream<u8>);
 				}
 				""";
-		String program = "(defpackage sx (:use cl) (:export \"READ\" \"FEED\"))\n"
+		// READ is shadowed: exporting the inherited name would re-export cl's READ.
+		String program = "(defpackage sx (:use cl) (:shadow \"READ\") (:export \"READ\" \"FEED\"))\n"
 				+ importForm("local:x/s", streamWit, "(\"read\" \"SX:READ\")", "(\"feed\" \"SX:FEED\")")
 				+ "(sx:feed (sx:read))\n";
 		byte[] component = compileComponent(program);
