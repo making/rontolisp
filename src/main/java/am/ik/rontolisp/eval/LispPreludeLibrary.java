@@ -566,6 +566,17 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.FILE_ERROR_PATHNAME, """
 				(defun file-error-pathname (condition) (slot-value condition 'pathname))
 				""");
+		// The throwable a java:java-exception carries, read in place: the class is
+		// seeded with its slot after the simple-error pair (ClosRegistry), and a
+		// slot-value would splice the run-time slot dispatch. A function there builds
+		// the throwable (a Clojure exception's), and keeps what it built.
+		SOURCES.put(LispNames.JAVA_EXCEPTION_CAUSE, """
+				(defun java:java-exception-cause (condition)
+				  (if (typep condition 'java:java-exception)
+				      (let ((held (%obj-ref condition 2)))
+				        (if (functionp held) (funcall held condition) held))
+				      (error 'type-error :datum condition :expected-type 'java:java-exception)))
+				""");
 		// Undoes the |...|-framing todo 626 gave prin1-to-string's spelling of a symbol
 		// whose name is not upcase-invariant. type-of and symbol-package both read a
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text

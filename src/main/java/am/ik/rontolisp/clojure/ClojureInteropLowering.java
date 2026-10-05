@@ -331,6 +331,7 @@ final class ClojureInteropLowering {
 		};
 		if (call != null) {
 			ctx.usedExInfo = true;
+			ctx.hostExceptionClasses.add(type.getName());
 		}
 		return call;
 	}

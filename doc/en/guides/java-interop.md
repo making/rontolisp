@@ -455,13 +455,33 @@ page](../reference/functions/java-subclass.md) has more examples.
 
 ## Errors and non-local exits
 
-An exception a Java member throws is signalled as a Lisp error that names the member and
-the exception:
+An exception a Java member throws is signalled as a `java:java-exception`, a `simple-error`
+that reports the member and the exception and carries the exception itself, which
+`java:java-exception-cause` answers:
 
 ```lisp
 (handler-case (java:static "java.lang.Integer" "parseInt" "x")
   (error (e) (format nil "~a" e)))
 ; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:java-exception-cause e) "getMessage")))
+; => "For input string: \"x\""
+```
+
+Handed back to Java -- as an argument of a member, or as the receiver of a `java:call`
+whose class is not known before it runs -- a `java:java-exception` is the exception it
+carries:
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:call (java:new "java.lang.RuntimeException" "wrapped" e) "getCause")
+               "getMessage")))
+; => "For input string: \"x\""
 ```
 
 A condition a rontolisp function signals while Java calls it back, and a `return-from`,

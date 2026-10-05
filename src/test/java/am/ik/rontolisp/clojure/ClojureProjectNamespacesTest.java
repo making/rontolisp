@@ -620,6 +620,30 @@ class ClojureProjectNamespacesTest {
 		return path;
 	}
 
+	// A Common Lisp file catches what a Clojure file it loads throws: in a program that
+	// can make a host call, an exception of the Clojure runtime's is a
+	// java:java-exception whose cause is the host exception it stands for, built once,
+	// and a failed host call carries what the member threw.
+	@Test
+	void aClojureExceptionCaughtInCommonLispCarriesItsHostException() throws Exception {
+		entry("raise.clj", "(defn parse [s] (Integer/parseInt s)) (defn boom [] (throw (ex-info \"boom\" {:a 1})))");
+		Path path = project.resolve("test").resolve("app").resolve("raise_main.lisp");
+		Files.writeString(path, """
+				(load "raise.clj")
+				(handler-case (|c%boom|)
+				  (java:java-exception (e)
+				    (let ((h (java:java-exception-cause e)))
+				      (format t "~a ~a ~a~%" (java:call (java:call h "getClass") "getName")
+				              (java:call h "getMessage") (eq h (java:java-exception-cause e))))))
+				(handler-case (|c%parse| "z")
+				  (java:java-exception (e)
+				    (format t "~a~%" (java:call (java:call (java:java-exception-cause e) "getClass") "getName"))))
+				""");
+		String out = "java.lang.RuntimeException boom T\njava.lang.NumberFormatException\n";
+		assertThat(interpretLoads(path)).isEqualTo(out);
+		assertThat(runLoadsOnJvm(path, "Raise")).isEqualTo(out);
+	}
+
 	@Test
 	void aMissingNamespaceFileIsNamedWithTheRootsSearched() throws Exception {
 		Path entry = entry("missing_test.clj", "(ns app.missing-test (:require [app.nowhere]))");

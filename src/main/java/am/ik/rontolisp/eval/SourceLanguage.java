@@ -134,8 +134,10 @@ public enum SourceLanguage {
 					file);
 		}
 		if (this == CLOJURE) {
-			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader)),
-					source, file);
+			// The host is wherever the target is no wasm one: a java: member can throw
+			// and take an exception there.
+			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader),
+					!features.contains("rontolisp-wasm")), source, file);
 		}
 		return refuseCircularLists(
 				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)

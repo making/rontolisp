@@ -21,8 +21,12 @@ limitations.
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | an interface instance backed by the callable |
 | `java:subclass` | `(java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this m) ...))` | a class instance backed by the callable |
 | `java:reify` | `(java:reify "java.lang.Runnable" "run" (lambda () ...))` | an interface instance with one function per method |
+| `java:java-exception-cause` | `(java:java-exception-cause e)` | the exception a `java:java-exception` carries |
 
-Two more symbols serve resolution before a call runs: the type specifier
+A member that throws signals the condition type `java:java-exception`, a `simple-error`
+carrying the exception (the guide's [Errors and non-local
+exits](../../guides/java-interop.md#errors-and-non-local-exits)). Two more symbols serve
+resolution before a call runs: the type specifier
 `(java:object "fqcn")`, for `the` and `declare`, and the variable
 `java:*warn-on-reflection*`, which reports the calls left to run time (the guide's
 [Resolving calls before they run](../../guides/java-interop.md#resolving-calls-before-they-run)).

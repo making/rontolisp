@@ -7721,6 +7721,31 @@ public final class LispNames {
 	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;
 
 	/**
+	 * {@code java:java-exception} -- the condition type a {@code java:} member that
+	 * throws signals: a {@code simple-error} carrying the throwable.
+	 */
+	public static final String JAVA_EXCEPTION = "JAVA-EXCEPTION";
+
+	/** {@link #JAVA_EXCEPTION}, qualified. */
+	public static final String JAVA_EXCEPTION_QUALIFIED = JAVA_PKG + ":" + JAVA_EXCEPTION;
+
+	/**
+	 * {@code java:java-exception-cause} -- the throwable a {@code java:java-exception}
+	 * carries.
+	 */
+	public static final String JAVA_EXCEPTION_CAUSE = "JAVA-EXCEPTION-CAUSE";
+
+	/** {@link #JAVA_EXCEPTION_CAUSE}, qualified. */
+	public static final String JAVA_EXCEPTION_CAUSE_QUALIFIED = JAVA_PKG + ":" + JAVA_EXCEPTION_CAUSE;
+
+	/**
+	 * The slot of {@code java:java-exception} holding the throwable (or, in an exception
+	 * of the Clojure runtime's, the function building it), after the {@code simple-error}
+	 * pair; %-fenced, so no user slot named alike turns ambiguous.
+	 */
+	public static final String JAVA_EXCEPTION_CAUSE_SLOT = "%JAVA-EXCEPTION-CAUSE";
+
+	/**
 	 * The {@code objc} package name: the Objective-C runtime through the foreign function
 	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}), with LispWorks 8.1's
 	 * {@code OBJC} vocabulary written in {@code objc.lisp} -- reflection-free, so it runs

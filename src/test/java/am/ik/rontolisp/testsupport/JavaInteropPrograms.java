@@ -528,6 +528,51 @@ public final class JavaInteropPrograms {
 			(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)
 			(NIL NIL T)""";
 
+	/**
+	 * A member that throws signals a {@code java:java-exception}, a {@code simple-error}
+	 * reporting the member and the throwable whose {@code java:java-exception-cause} is
+	 * what the member threw; a caught one passed to a member is that throwable again, at
+	 * a site resolved before it runs and at one left to run time alike, a method called
+	 * on one is the throwable's, and a condition of no Java exception is still no
+	 * argument. Prints {@link #HOST_EXCEPTION_OUTPUT}.
+	 */
+	public static final String HOST_EXCEPTION_PROGRAM = """
+			(defun parse (s) (java:static "java.lang.Integer" "parseInt" s))
+			(print (handler-case (parse "x")
+			         (java:java-exception (e)
+			           (list (typep e 'simple-error)
+			                 (java:call (java:java-exception-cause e) "getMessage")
+			                 (format nil "~a" e)))))
+			(print (handler-case (java:new "java.lang.StringBuilder" -1)
+			         (error (e) (java:call (java:call (java:java-exception-cause e) "getClass") "getName"))))
+			(print (handler-case (parse "x")
+			         (java:java-exception (e)
+			           (let ((wrapped (java:new "java.lang.RuntimeException" "wrapped" e)))
+			             (list (java:call (java:call wrapped "getCause") "getMessage")
+			                   (eq (java:call wrapped "getCause") (java:java-exception-cause e)))))))
+			(defvar *init-cause* "initCause")
+			(print (handler-case (parse "y")
+			         (java:java-exception (e)
+			           (let ((r (java:new "java.lang.RuntimeException" "r")))
+			             (java:call r *init-cause* e)
+			             (java:call (java:call r "getCause") "getMessage")))))
+			(print (handler-case (parse "z") (java:java-exception (e) (java:call e "getMessage"))))
+			(print (handler-case (java:new "java.lang.RuntimeException" "x"
+			                               (make-condition 'simple-error :format-control "s"))
+			         (error (e) (format nil "~a" e))))
+			(print (handler-case (java:java-exception-cause 5) (type-error () :type-error)))
+			""";
+
+	/** What {@link #HOST_EXCEPTION_PROGRAM} prints. */
+	public static final String HOST_EXCEPTION_OUTPUT = """
+			(T "For input string: \\"x\\"" "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \\"x\\"")
+			"java.lang.NegativeArraySizeException"
+			("For input string: \\"x\\"" T)
+			"For input string: \\"y\\""
+			"For input string: \\"z\\""
+			"No matching constructor for java.lang.RuntimeException with 2 argument(s)"
+			:TYPE-ERROR""";
+
 	private JavaInteropPrograms() {
 	}
 

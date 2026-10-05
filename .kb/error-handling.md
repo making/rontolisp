@@ -224,6 +224,9 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   185,469 -> 185,966; `examples/net/hello-clack.lisp` (205 throw sites) 950,310 -> 948,474.
 - Whether the `handler-bind` handlers ran is part of the record too (`_condRan`), since
   2026-09-27: "Whether the handlers ran rides the flight" below.
+- The throwable a `java:` member threw is recorded the same way, but in one weak map for the
+  class (`_jexMap`), which `_hcSynth` reads to build the `java:java-exception`
+  ([java-interop.md](java-interop.md), "What a member throws").
 - Pins: ci-spec `condition-on-its-way-out-keeps-its-record`,
   `JvmLispCompilerTest#aConditionOnItsWayOutKeepsItsRecord*`,
   `#aConditionWhoseMessageIsNoStringIsStillSignalled`,

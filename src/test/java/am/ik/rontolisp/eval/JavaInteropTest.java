@@ -539,6 +539,14 @@ class JavaInteropTest {
 			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
 	}
 
+	// What the member throws is caught as a java:java-exception carrying it, and a
+	// caught one passed to a member is that throwable again.
+	@Test
+	void aFailedCallSignalsAJavaExceptionCarryingWhatTheMemberThrew() {
+		assertThat(output(JavaInteropPrograms.HOST_EXCEPTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EXCEPTION_OUTPUT);
+	}
+
 	// A function value passed to a resolved site where an interface is expected becomes a
 	// proxy, as on a compiled direct call.
 	@Test

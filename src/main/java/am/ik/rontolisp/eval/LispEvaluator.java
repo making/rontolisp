@@ -5027,6 +5027,9 @@ public final class LispEvaluator {
 	private void registerJava() {
 		JavaInterop.Caller caller = this.javaCaller;
 		this.globalEnv.define(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED, LispNil.INSTANCE);
+		// What a member that throws is signalled as (JavaInterop.fail, synthesized at the
+		// landing that catches it).
+		this.closRegistry.ensureJavaExceptionSeeded();
 		String jnew = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_NEW);
 		this.globalEnv.defineFunction(jnew, javaBuiltin(jnew, args -> {
 			if (args.isEmpty() || !(args.get(0) instanceof LispString cls)) {
@@ -11760,6 +11763,14 @@ public final class LispEvaluator {
 		if (e instanceof OperandTypeException operand
 				&& this.closRegistry.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map
 					.of("DATUM", operand.datum(), "EXPECTED-TYPE", operand.expectedType())) instanceof LispVal c) {
+			return c;
+		}
+		// A java: member that threw (JavaInterop.fail): the condition carries the
+		// throwable, the error's cause.
+		if (ClosRegistry.JAVA_EXCEPTION_CLASS_NAME.equals(className) && e.getCause() != null
+				&& this.closRegistry.newReportingCondition(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME, messageVal,
+						java.util.Map.of(ClosRegistry.JAVA_EXCEPTION_CAUSE_SLOT,
+								JavaInterop.unmarshal(e.getCause()))) instanceof LispVal c) {
 			return c;
 		}
 		if (className != null && this.closRegistry.newReportingCondition(className, messageVal) instanceof LispVal c) {

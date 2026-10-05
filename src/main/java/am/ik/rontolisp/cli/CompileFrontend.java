@@ -703,11 +703,14 @@ final class CompileFrontend {
 		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
 		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
 		// before any library is spliced.
-		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(
-				GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
-					.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(ClojureLibrary
-						.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)),
-								features, input.standards()))))))))))))));
+		// The lowered languages' run-time libraries first: a Clojure one strips the arms
+		// of a value only the host makes when the target has none (wasm).
+		List<LispVal> languages = ClojureLibrary.process(SchemeLibrary
+			.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features, input.standards()), !wasm);
+		List<LispVal> macos = ObjcLibrary
+			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
+				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(
+						SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))))));
 		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
 		// output, needed by the primitive calls the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary

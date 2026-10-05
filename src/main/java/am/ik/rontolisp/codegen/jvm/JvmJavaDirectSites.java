@@ -427,7 +427,8 @@ final class JvmJavaDirectSites {
 			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
 		}
 		if (this.failure != null) {
-			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl));
+			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl,
+					channel.javaExceptionsField));
 		}
 		this.finished = true;
 		return signals;
@@ -525,9 +526,11 @@ final class JvmJavaDirectSites {
 
 	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
 	// taken off with every newer node, its condition and exit entry put back -- else
-	// new RuntimeException(text + t), which carries no condition.
+	// new RuntimeException(text + t), which carries no condition; where a landing can
+	// catch it (_jexMap), t is recorded under it, so the landing makes the
+	// java:java-exception carrying t.
 	private Method buildFailure(@Nullable FieldRefEntry signals, @Nullable MethodRefEntry condPut,
-			@Nullable FieldRefEntry nleTl) {
+			@Nullable FieldRefEntry nleTl, @Nullable FieldRefEntry javaExceptions) {
 		MethodCode a = new MethodCode();
 		if (signals != null) {
 			ClassEntry objects = cls("[Ljava/lang/Object;");
@@ -599,6 +602,16 @@ final class JvmJavaDirectSites {
 		a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
 		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
 		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		if (javaExceptions != null) {
+			// _jexMap.put(e, t)
+			a.dup();
+			a.getstatic(javaExceptions);
+			a.swap();
+			a.aload(0);
+			a.invokeinterface(this.cp.interfaceMethodRef("java/util/Map", "put",
+					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+			a.pop();
+		}
 		a.areturn();
 		return new Method(this.cp.utf8Entry(FAIL), this.cp.utf8Entry(FAIL_DESC), a);
 	}

@@ -281,10 +281,10 @@ final class ClojureTestLowering {
 	 */
 	static LispVal caughtOf(ClojureLowering ctx, List<LispVal> parts, int from, LispVal type) {
 		LispSymbol condition = ctx.freshTemp();
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("HANDLER-CASE"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("PROGN"), ctx.nonTailBody(parts, from),
-						ClojureLowering.NIL_CONST),
-				ClojureLowerUtil.list(type, ClojureLowerUtil.list(condition), condition));
+		LispCons clause = (LispCons) ClojureLowerUtil.list(type, ClojureLowerUtil.list(condition), condition);
+		ctx.recordCatch(clause);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("HANDLER-CASE"), ClojureLowerUtil
+			.list(ClojureLowerUtil.sym("PROGN"), ctx.nonTailBody(parts, from), ClojureLowering.NIL_CONST), clause);
 	}
 
 	/**

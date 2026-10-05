@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureArms;
+import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -341,6 +342,33 @@ class ClojureLibraryTest {
 		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
 		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).contains(arm);
 		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE-HOST")).isNotEmpty();
+	}
+
+	@Test
+	void aHostExceptionIsMadeOnlyByAJavaOperatorWhereTheHostIs() {
+		// on the JVM a java: operator keeps the host-exception arms: throw signals a host
+		// Throwable as itself, a catch takes a failed host call by the host's class and
+		// binds the host's exception, and the program's exceptions are host-backed;
+		// compiled for wasm, where java: is a call-time error, the same program lowers
+		// and splices as one naming no java: operator
+		String source = "(println (try (Integer/parseInt \"x\") (catch NumberFormatException e (.getMessage e))))"
+				+ " (throw (Exception. \"m\"))";
+		String arm = "(RONTOLISP::%CLOJURE-HOST-THROWABLE-P X)";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-THROW")).contains(arm);
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(source, null, null, ClojureFiles.NONE, true), true);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-THROW")).contains(arm);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-CATCHES")).contains("(RONTOLISP::%CLOJURE-HOST-FAILURE-P C)");
+		assertThat(host.stream().map(LispVal::print)).anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-CAUGHT "))
+			.anyMatch(text -> text.startsWith("(DEFUN C%E-HOST-OF "))
+			.anyMatch(text -> text.startsWith("(DEFINE-CONDITION C%E-EXCEPTION (JAVA:JAVA-EXCEPTION)"));
+		List<LispVal> wasm = ClojureLibrary.process(Clojure.read(source, null, null, ClojureFiles.NONE, false), false);
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-THROW")).doesNotContain("HOST");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-CATCHES")).doesNotContain("HOST");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-LISP-VALUE-P")).doesNotContain("INSTANCE");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-CAUGHT")).doesNotContain("HOST");
+		assertThat(wasm.stream().map(LispVal::print)).noneMatch(text -> text.contains("(RONTOLISP::%CLOJURE-CAUGHT "))
+			.noneMatch(text -> text.contains("C%E-HOST"))
+			.anyMatch(text -> text.startsWith("(DEFINE-CONDITION C%E-EXCEPTION (ERROR)"));
 	}
 
 	/** The processed forms of the program itself: the tail past the spliced library. */

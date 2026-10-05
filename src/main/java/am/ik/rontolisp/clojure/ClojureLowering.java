@@ -232,6 +232,26 @@ public final class ClojureLowering {
 	boolean session;
 
 	/**
+	 * Whether the program is lowered for a target where the host is: the interpreter and
+	 * the JVM, where a {@code java:} member can be called -- and can throw, and take an
+	 * exception -- unlike wasm, where {@code java:} is a call-time error. Only such a
+	 * program binds a caught host exception ({@link #bindCaught}) and backs its
+	 * exceptions with host ones ({@code ClojureStateLowering.exInfoRuntime}); a wasm one
+	 * lowers as if no host existed.
+	 */
+	boolean hostTarget = true;
+
+	/**
+	 * The throwable classes the program builds exceptions of (a construction's class,
+	 * ex-info's {@code clojure.lang.ExceptionInfo}): what the host exception standing for
+	 * one is built as ({@code ClojureStateLowering.hostExceptionOf}).
+	 */
+	final Set<String> hostExceptionClasses = new LinkedHashSet<>();
+
+	/** The classes of {@link #hostExceptionClasses} the session's builder covers. */
+	final Set<String> hostExceptionClassesEmitted = new LinkedHashSet<>();
+
+	/**
 	 * The var keys whose top-level root reader a {@code #'} site under a shadowing local
 	 * already hoisted (see {@link ClojureVarLowering#varOf}).
 	 */
@@ -744,6 +764,71 @@ public final class ClojureLowering {
 	boolean hostClassWalkEmitted;
 
 	/**
+	 * The catch clauses lowered so far, each to bind the host exception a caught
+	 * {@code java:java-exception} stands for ({@link #bindCaught}).
+	 */
+	final List<CaughtBinding> caughtBindings = new ArrayList<>();
+
+	/**
+	 * A catch clause's body and the variable it binds: the clause cell whose car is the
+	 * body form.
+	 *
+	 * @param body the cell holding the clause's body form
+	 * @param variable the clause's variable
+	 */
+	record CaughtBinding(LispCons body, LispSymbol variable) {
+	}
+
+	/**
+	 * Records a {@code handler-case} clause a {@code catch} (or {@code thrown?}) lowered
+	 * to, {@code (type (variable) body)}: a program that names a {@code java:} operator
+	 * binds the host exception a caught {@code java:java-exception} stands for, the
+	 * oracle's caught object ({@code rontolisp::%clojure-caught}), and one naming none
+	 * the condition as before -- no such condition exists there. A file knows which once
+	 * it is lowered ({@link #bindCaught}); a session's buffers run as they are lowered,
+	 * on the interpreter, where the host is always there, so they bind through it at
+	 * once.
+	 * @param clause the clause
+	 */
+	void recordCatch(LispCons clause) {
+		LispCons params = (LispCons) clause.cdr();
+		LispSymbol variable = (LispSymbol) ((LispCons) params.car()).car();
+		CaughtBinding binding = new CaughtBinding((LispCons) params.cdr(), variable);
+		if (this.session) {
+			bindCaught(binding);
+		}
+		else {
+			this.caughtBindings.add(binding);
+		}
+	}
+
+	/**
+	 * Binds each recorded clause's variable through {@code rontolisp::%clojure-caught}
+	 * when the program names a {@code java:} operator: the body form becomes
+	 * {@code (let ((variable (%clojure-caught variable))) body)}.
+	 */
+	void bindCaught() {
+		if (this.hostTarget && this.namedHost) {
+			for (CaughtBinding binding : this.caughtBindings) {
+				bindCaught(binding);
+			}
+		}
+		this.caughtBindings.clear();
+	}
+
+	private static void bindCaught(CaughtBinding binding) {
+		LispSymbol variable = binding.variable();
+		binding.body()
+			.setCar(ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+					ClojureLowerUtil.list(List
+						.of(ClojureLowerUtil.list(variable, ClojureLowerUtil.list(new LispSymbol(CAUGHT), variable)))),
+					binding.body().car()));
+	}
+
+	/** The library function a catch binds through ({@link #recordCatch}). */
+	static final String CAUGHT = "RONTOLISP::%CLOJURE-CAUGHT";
+
+	/**
 	 * Turns on {@link #hostClassWalk} once the program uses a hierarchy and the forms
 	 * lowered so far name the host.
 	 * @param lowered forms just lowered
@@ -1107,7 +1192,13 @@ public final class ClojureLowering {
 
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files) {
+		return lower(datums, reader, macroEvaluator, files, true);
+	}
+
+	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget) {
 		ClojureLowering lowering = new ClojureLowering();
+		lowering.hostTarget = hostTarget;
 		lowering.reader = reader;
 		lowering.macroEvaluator = macroEvaluator;
 		lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
@@ -1128,6 +1219,8 @@ public final class ClojureLowering {
 		}
 		// a hierarchy meets a host class object only where the program names the host
 		lowering.noteHost(lowering.forms);
+		// and a catch binds a host exception only there
+		lowering.bindCaught();
 		// descendants of a class keyword is an exception of the program's runtime
 		lowering.usedExInfo |= lowering.usedClassChains && lowering.readsDescendants;
 		if (lowering.usedHierarchy) {
@@ -1268,6 +1361,12 @@ public final class ClojureLowering {
 			// replaces the catch runtime's, should an earlier buffer have carried it.
 			out.add(0, new ClojureTopLevel(ClojureStateLowering.exInfoRuntime(this), false));
 			this.exInfoEmitted = true;
+		}
+		else if (this.exInfoEmitted && ClojureStateLowering.hostExceptions(this)
+				&& !this.hostExceptionClassesEmitted.containsAll(this.hostExceptionClasses)) {
+			// A buffer building an exception of a class the host builder misses yet
+			// defines the builder again, ahead of itself.
+			out.add(0, new ClojureTopLevel(List.of(ClojureStateLowering.hostExceptionOf(this)), false));
 		}
 		List<List<String>> freshCatches = new ArrayList<>();
 		for (Map.Entry<String, List<String>> caught : this.caughtChains.entrySet()) {

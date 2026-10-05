@@ -518,6 +518,39 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Seeds {@code java:java-exception}, the condition a {@code java:} member that throws
+	 * signals: a {@code simple-error} reporting the member and the throwable, carrying
+	 * the throwable itself ({@code java:java-exception-cause}). Idempotent, and
+	 * deliberately NOT run from the constructor (the {@link #ensureMopClassesSeeded}
+	 * lesson) -- a program that can make no host call never registers it: the interpreter
+	 * seeds it with the {@code java:} functions, the compile path for a program naming a
+	 * {@code java:} operator or the class.
+	 */
+	public void ensureJavaExceptionSeeded() {
+		if (this.classes.containsKey(JAVA_EXCEPTION_CLASS_NAME)) {
+			return;
+		}
+		// %-fenced like the no-applicable-method slots: a plain CAUSE would turn a
+		// user's slot of that name ambiguous in every java: program.
+		seedClass(JAVA_EXCEPTION_CLASS_NAME, "SIMPLE-ERROR", JAVA_EXCEPTION_CAUSE_SLOT);
+	}
+
+	/**
+	 * The condition class {@link #ensureJavaExceptionSeeded} registers, as the registry
+	 * spells {@code java:java-exception}.
+	 */
+	public static final String JAVA_EXCEPTION_CLASS_NAME = "JAVA::JAVA-EXCEPTION";
+
+	/**
+	 * The slot of {@link #JAVA_EXCEPTION_CLASS_NAME} holding the throwable, after the
+	 * {@code simple-error} pair: index {@link #JAVA_EXCEPTION_CAUSE_INDEX}.
+	 */
+	public static final String JAVA_EXCEPTION_CAUSE_SLOT = LispNames.JAVA_EXCEPTION_CAUSE_SLOT;
+
+	/** The index of {@link #JAVA_EXCEPTION_CAUSE_SLOT} in the class's layout. */
+	public static final int JAVA_EXCEPTION_CAUSE_INDEX = 2;
+
+	/**
 	 * The condition class {@link #ensureNoApplicableErrorSeeded} registers. Not a CL
 	 * standard name (CLHS leaves the type of a no-applicable-method error
 	 * implementation-defined below {@code error}), so an {@code (error () ...)} clause is

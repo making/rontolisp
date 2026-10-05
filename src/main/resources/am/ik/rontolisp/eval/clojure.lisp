@@ -909,7 +909,14 @@
    printer's host arms ask before a java:call refusal could (numbers above all
    reach the printer's fall-through)."
   (or (numberp x) (characterp x) (symbolp x) (consp x) (arrayp x)
-      (hash-table-p x) (functionp x) (streamp x)))
+      (hash-table-p x) (functionp x) (streamp x)
+      (rontolisp::%clojure-lisp-instance-p x)))
+
+;; Whether X is an instance -- a condition above all, which a java: member would
+;; take as the host exception it may stand for. An arm test of the host-exception
+;; family (clojure/ClojureArms): a program that can make no host exception folds
+;; it.
+(defun rontolisp::%clojure-lisp-instance-p (x) (%obj-p x))
 
 (defun rontolisp::%clojure-host-class-name (x)
   "X's name when X is a host class object, which the oracle prints by its name
@@ -1190,6 +1197,53 @@
       (list (rontolisp::%clojure-host-chain (java:call x "getClass"))
             (java:call x "getMessage") (java:call x "getCause"))))
 
+;; The host exception a cause stands for, what the host exception of an
+;; exception of the program's runtime takes as its cause (the exception
+;; runtime's C%E-HOST): a java:java-exception's (an exception's, built), a host
+;; Throwable itself, none for anything else.
+(defun rontolisp::%clojure-host-cause (cause)
+  (cond ((typep cause 'java:java-exception)
+         (let ((held (%obj-ref cause 2)))
+           (if (functionp held) (funcall held cause) held)))
+        ((rontolisp::%clojure-host-throwable-p cause) cause)))
+
+;; Whether X is a host Throwable: an arm test of the host-exception family
+;; (clojure/ClojureArms), so a program that can make no host exception folds
+;; every arm it heads.
+(defun rontolisp::%clojure-host-throwable-p (x)
+  (rontolisp::%clojure-host-instance-p x "java.lang.Throwable"))
+
+;; Whether the condition C stands for a host exception alone: a
+;; java:java-exception carrying the host's own exception (a java: member that
+;; threw, a host Throwable thrown) -- an exception of the program's runtime
+;; carries a function building one instead. An arm test of the host-exception
+;; family.
+(defun rontolisp::%clojure-host-failure-p (c)
+  (and (typep c 'java:java-exception) (not (functionp (%obj-ref c 2)))))
+
+;; Whether the host Throwable X is of the class NAME or of a subclass of it: its
+;; class and superclasses, by name, through calls the declared types resolve
+;; before they run (a catch names a class, never an interface).
+(defun rontolisp::%clojure-host-is-a (x name)
+  (let ((found nil))
+    (do ((class
+          (java:call (the (java:object "java.lang.Throwable") x) "getClass")
+          (java:call (the (java:object "java.lang.Class") class)
+                     "getSuperclass")))
+        ((or found (null class)) found)
+      (if (equal
+           (java:call (the (java:object "java.lang.Class") class) "getName")
+           name)
+          (setq found t)))))
+
+;; What a catch binds for the condition C it took: the host exception a
+;; java:java-exception stands for -- the oracle's catch binds the host's own
+;; object -- and C itself otherwise. Only a program naming a java: operator,
+;; for a target where the host is, binds through it (clojure/ClojureLowering,
+;; recordCatch).
+(defun rontolisp::%clojure-caught (c)
+  (if (rontolisp::%clojure-host-failure-p c) (%obj-ref c 2) c))
+
 (defun rontolisp::%clojure-host-class-rows (name)
   "The class rows (name base ...) of the host Throwable class NAME and of each
    of its supers, NIL when NAME names none: the rows of the class of a host
@@ -1221,32 +1275,46 @@
           (dolist (b bases) (setq rows (rontolisp::%clojure-host-rows b rows)))
           rows))))
 
+;; A condition standing for a host exception alone (%clojure-host-failure-p)
+;; is that exception's: the arm goes from a program that can make no host
+;; exception.
 (defun rontolisp::%clojure-exception-of (x)
   "X as an exception: a condition itself, a host Throwable a new exception
    carrying its class, message and cause, anything else NIL."
-  (if (typep x 'condition)
-      x
-      (let ((parts (rontolisp::%clojure-host-throwable x)))
-        (if parts
-            (c%e-new (car parts) (car (cdr parts)) nil
-             (rontolisp::%clojure-exception-of (car (cdr (cdr parts)))))))))
+  (if (rontolisp::%clojure-host-failure-p x)
+      (rontolisp::%clojure-exception-of (%obj-ref x 2))
+      (if (typep x 'condition)
+          x
+          (let ((parts (rontolisp::%clojure-host-throwable x)))
+            (if parts
+                (c%e-new (car parts) (car (cdr parts)) nil
+                         (rontolisp::%clojure-exception-of
+                          (car (cdr (cdr parts))))))))))
 
+;; A host Throwable signals as the java:java-exception carrying it, reporting its
+;; toString, so a catch binds the very object thrown (%clojure-caught); the arm
+;; goes from a program that can make no host exception.
 (defun rontolisp::%clojure-throw (x)
   "throw: an exception signals itself (a caught one rethrows unchanged, a host
    Throwable as its exception). Anything else is the oracle's
    ClassCastException (nil its NullPointerException), whose message here is
    the value's Clojure rendering, so a thrown string keeps its text."
-  (let ((e (rontolisp::%clojure-exception-of x)))
-    (error
-     (or e
-         (c%e-new (if (null x)
-                      '("java.lang.NullPointerException"
-                        "java.lang.RuntimeException" "java.lang.Exception"
-                        "java.lang.Throwable")
-                      '("java.lang.ClassCastException"
-                        "java.lang.RuntimeException" "java.lang.Exception"
-                        "java.lang.Throwable"))
-                  (rontolisp::%clojure-str-of x "nil" nil) nil nil)))))
+  (if (rontolisp::%clojure-host-throwable-p x)
+      (let ((text (java:call x "toString")))
+        (error 'java:java-exception
+               :format-control (%text-control text)
+               :%java-exception-cause x))
+      (let ((e (rontolisp::%clojure-exception-of x)))
+        (error
+         (or e
+             (c%e-new (if (null x)
+                          '("java.lang.NullPointerException"
+                            "java.lang.RuntimeException" "java.lang.Exception"
+                            "java.lang.Throwable")
+                          '("java.lang.ClassCastException"
+                            "java.lang.RuntimeException" "java.lang.Exception"
+                            "java.lang.Throwable"))
+                      (rontolisp::%clojure-str-of x "nil" nil) nil nil))))))
 
 (defun rontolisp::%clojure-ex-message (x)
   "ex-message and .getMessage: an exception's message (nil when it has none),
@@ -1260,22 +1328,30 @@
   "ex-data: an exception's data (ex-info's map), NIL for anything else."
   (car (cdr (cdr (c%e-parts x)))))
 
+;; A host Throwable's cause is the host's own (the arm goes from a program that
+;; can make no host exception).
 (defun rontolisp::%clojure-ex-cause (x)
   "ex-cause and .getCause: an exception's cause, NIL for a runtime error and
    for anything that is no exception."
-  (let ((e (rontolisp::%clojure-exception-of x)))
-    (if e (car (cdr (cdr (cdr (c%e-parts e))))))))
+  (if (rontolisp::%clojure-host-throwable-p x)
+      (java:call x "getCause")
+      (let ((e (rontolisp::%clojure-exception-of x)))
+        (if e (car (cdr (cdr (cdr (c%e-parts e)))))))))
 
+;; A host Throwable is a cause as itself, so ex-cause answers that very object
+;; (the arm goes from a program that can make no host exception).
 (defun rontolisp::%clojure-cause-of (x)
   "A cause argument: NIL, or an exception; anything else is the oracle's
    refusal."
-  (if (null x)
-      nil
-      (or (rontolisp::%clojure-exception-of x)
-          (rontolisp::%clojure-class-cast-exception
-           (concatenate 'string "cannot cast "
-                        (rontolisp::%clojure-str-of x "nil" t)
-                        " to class java.lang.Throwable")))))
+  (if (rontolisp::%clojure-host-throwable-p x)
+      x
+      (if (null x)
+          nil
+          (or (rontolisp::%clojure-exception-of x)
+              (rontolisp::%clojure-class-cast-exception
+               (concatenate 'string "cannot cast "
+                            (rontolisp::%clojure-str-of x "nil" t)
+                            " to class java.lang.Throwable"))))))
 
 (defun rontolisp::%clojure-ex-info (message data cause)
   "(ex-info message data cause): an ExceptionInfo; nil data is {}, like the
@@ -1294,15 +1370,19 @@
       (rontolisp::%clojure-illegal-argument-exception
        (concatenate 'string "No matching ctor found for class " (car chain)))))
 
+;; A host Throwable is the cause as itself, its toString the message (the arm
+;; goes from a program that can make no host exception).
 (defun rontolisp::%clojure-exception-new-1 (chain x)
   "(Class. x) of a throwable class of the chain CHAIN taking a message or a
    cause (the lowering calls %clojure-exception-new for one taking a message
    only): an exception X is the cause and its toString the message, anything
    else the message."
-  (let ((cause (rontolisp::%clojure-exception-of x)))
-    (if cause
-        (c%e-new chain (format nil "~a" cause) nil cause)
-        (rontolisp::%clojure-exception-new chain x nil))))
+  (if (rontolisp::%clojure-host-throwable-p x)
+      (c%e-new chain (java:call x "toString") nil x)
+      (let ((cause (rontolisp::%clojure-exception-of x)))
+        (if cause
+            (c%e-new chain (format nil "~a" cause) nil cause)
+            (rontolisp::%clojure-exception-new chain x nil)))))
 
 (defun rontolisp::%clojure-exception-method (x method)
   "(.getMessage x), (.getLocalizedMessage x) or (.getCause x) of a receiver of
@@ -1472,14 +1552,23 @@
     (dolist (c chain) (if (equal c name) (setq found t)))
     found))
 
+;; A condition standing for a host exception alone carries that exception's
+;; class chain, read off the host (the arm goes from a program that can make no
+;; host exception).
 (defun rontolisp::%clojure-exact-chain (c)
   "The class chain the condition C carries itself: an exception's, a
    refusal's (the slot after the simple error's two, read in place), NIL for
    any other condition."
   (let ((parts (c%e-parts c)))
     (cond (parts (car parts))
-          ((rontolisp::%clojure-refusal-p c) (%obj-ref c 2)))))
+          ((rontolisp::%clojure-refusal-p c) (%obj-ref c 2))
+          ((rontolisp::%clojure-host-failure-p c)
+           (rontolisp::%clojure-host-chain
+            (java:call (%obj-ref c 2) "getClass"))))))
 
+;; A condition standing for a host exception is taken when the class names the
+;; exception's class or a superclass of it, read off the host up to the first
+;; match (the arm goes from a program that can make no host exception).
 (defun rontolisp::%clojure-catches (c chain)
   "Whether a catch of the class whose chain is CHAIN takes the condition C:
    an exception or a refusal when its class is that class or a subclass of it;
@@ -1487,16 +1576,18 @@
    superclass or a subclass of it (the operation may throw a subclass: aget's
    ArrayIndexOutOfBoundsException), or, when its type tells no class, unless
    the catch names ExceptionInfo."
-  (let ((exact (rontolisp::%clojure-exact-chain c)))
-    (if exact
-        (rontolisp::%clojure-chain-has exact (car chain))
-        (let ((class (rontolisp::%clojure-error-chain c)))
-          (if class
-              (or (rontolisp::%clojure-chain-has class (car chain))
-                  (rontolisp::%clojure-chain-has chain (car class)))
-              (not
-               (rontolisp::%clojure-chain-has chain
-                "clojure.lang.ExceptionInfo")))))))
+  (if (rontolisp::%clojure-host-failure-p c)
+      (rontolisp::%clojure-host-is-a (%obj-ref c 2) (car chain))
+      (let ((exact (rontolisp::%clojure-exact-chain c)))
+        (if exact
+            (rontolisp::%clojure-chain-has exact (car chain))
+            (let ((class (rontolisp::%clojure-error-chain c)))
+              (if class
+                  (or (rontolisp::%clojure-chain-has class (car chain))
+                      (rontolisp::%clojure-chain-has chain (car class)))
+                  (not
+                   (rontolisp::%clojure-chain-has chain
+                    "clojure.lang.ExceptionInfo"))))))))
 
 ;;;; The class of an exception: class, instance? and the stack-trace methods.
 ;;
@@ -7747,17 +7838,22 @@
   (rontolisp::%clojure-test-header "FAIL" msg loc)
   (rontolisp::%clojure-test-expected-actual expected actual))
 
+;; A condition standing for a host exception alone is described as that
+;; exception's toString (the arm goes from a program that can make no host
+;; exception).
 (defun rontolisp::%clojure-test-describe (e)
   "The actual line of an error report: an ExceptionInfo the oracle's way (its
    class and message, then the data on a line of its own), anything else its
    report, an exception's toString."
-  (let ((parts (c%e-parts e)))
-    (if (and parts (equal (car (car parts)) "clojure.lang.ExceptionInfo"))
-        (concatenate 'string "clojure.lang.ExceptionInfo: "
-         (rontolisp::%clojure-str-of (car (cdr parts)) "nil" nil)
-         (string #\Newline)
-         (rontolisp::%clojure-str-of (car (cdr (cdr parts))) "nil" t))
-        (format nil "~a" e))))
+  (if (rontolisp::%clojure-host-failure-p e)
+      (java:call (%obj-ref e 2) "toString")
+      (let ((parts (c%e-parts e)))
+        (if (and parts (equal (car (car parts)) "clojure.lang.ExceptionInfo"))
+            (concatenate 'string "clojure.lang.ExceptionInfo: "
+             (rontolisp::%clojure-str-of (car (cdr parts)) "nil" nil)
+             (string #\Newline)
+             (rontolisp::%clojure-str-of (car (cdr (cdr parts))) "nil" t))
+            (format nil "~a" e)))))
 
 (defun rontolisp::%clojure-test-message (e)
   "The message a thrown-with-msg? pattern searches: the exception's message,

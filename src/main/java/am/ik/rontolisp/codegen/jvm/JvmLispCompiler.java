@@ -943,6 +943,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// accessors setf-able places and resolve make-instance/slot-value/dispatch.
 		Map<String, Integer> structAccessors = new HashMap<>();
 		ClosRegistry closRegistry = new ClosRegistry();
+		// A java: member that throws signals java:java-exception: a program that can make
+		// a host call registers it before any type test over it expands (a wasm one
+		// cannot, so it registers the class only where it names it).
+		if (programUsesAnyJavaOp(program)) {
+			closRegistry.ensureJavaExceptionSeeded();
+		}
 		// Whether the program uses the restart system (handler-bind / restart-case /
 		// invoke-restart & friends). Decided on the SURFACE program -- the expansions
 		// happen lazily during Pass 2, so the pre-scans below cannot see their
@@ -4111,6 +4117,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			// <clinit>.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaSignals.name(), javaSignals.desc());
 		}
+		if (mainCtx.conditionChannel.javaExceptionsField != null) {
+			// What each java: member that threw threw, keyed by _jfail's wrapper;
+			// initialized in <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.javaExceptionsName),
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.javaExceptionsDesc));
+		}
 		// One private static String[] per instance layout the program references:
 		// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
 		// array in slot 0 of an instance is also its type discriminator.
@@ -4292,6 +4305,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor));
 				clinitCode.putstatic(tlField);
 			}
+			channel.initJavaExceptions(clinitCode);
 			if (dynVarRuntime != null) {
 				// The dynamic-binding ThreadLocals (one per bound special) join
 				// the
@@ -5894,6 +5908,76 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * same reason as {@link #hbGuardPad}: it reads only the caught throwable.
 		 */
 		@Nullable MethodRefEntry conditionSynthesizer;
+
+		/**
+		 * {@code _jexMap}: what each {@code java:} member that threw threw, keyed weakly
+		 * by the {@code RuntimeException} {@code _jfail} wrapped it in -- a
+		 * {@code Collections.synchronizedMap} over a {@code WeakHashMap}, one for the
+		 * class, so the throwable reaches a landing on whatever thread the exception does
+		 * (an await, a join). Null until the synthesis of a program with {@code java:}
+		 * sites asks ({@link #ensureJavaExceptions}): the cause would serve as well, but
+		 * the default handler prints a cause's frames under an uncaught report the class
+		 * keeps to one line.
+		 */
+		@Nullable FieldRefEntry javaExceptionsField;
+
+		@Nullable Utf8Entry javaExceptionsName;
+
+		@Nullable Utf8Entry javaExceptionsDesc;
+
+		/**
+		 * {@code _jexc(Object)Object}: a value handed to a {@code java:} member as an
+		 * argument whose kind the site does not know, a {@code java:java-exception} as
+		 * the host exception it stands for ({@code JvmJavaInteropCompiler}). Built on the
+		 * first site that needs it.
+		 */
+		@Nullable MethodRefEntry javaExceptionArgument;
+
+		// What <clinit> makes _jexMap of, minted with the field.
+		@Nullable ClassEntry weakMapClass;
+
+		@Nullable MethodRefEntry weakMapCtor;
+
+		@Nullable MethodRefEntry synchronizedMap;
+
+		/**
+		 * Mints {@code _jexMap}, which {@code _jfail} records into and the synthesis of a
+		 * condition-less throw reads ({@code JvmHandlerCaseCompiler}).
+		 * @param cp the constant pool
+		 * @param className the class
+		 * @return the field
+		 */
+		FieldRefEntry ensureJavaExceptions(ConstantPool cp, String className) {
+			FieldRefEntry field = this.javaExceptionsField;
+			if (field == null) {
+				this.javaExceptionsName = cp.utf8Entry("_jexMap");
+				this.javaExceptionsDesc = cp.utf8Entry("Ljava/util/Map;");
+				field = cp.fieldRef(cp.classEntry(className), this.javaExceptionsName, this.javaExceptionsDesc);
+				this.javaExceptionsField = field;
+				this.weakMapClass = cp.classEntry(JvmThrowableRecords.WEAK_MAP);
+				this.weakMapCtor = cp.methodRef(this.weakMapClass, "<init>", "()V");
+				this.synchronizedMap = cp.methodRef(cp.classEntry("java/util/Collections"), "synchronizedMap",
+						"(Ljava/util/Map;)Ljava/util/Map;");
+			}
+			return field;
+		}
+
+		/**
+		 * Appends {@code _jexMap}'s initialization to {@code <clinit>}, when the class
+		 * has it.
+		 * @param clinit the initializer's code
+		 */
+		void initJavaExceptions(MethodCode clinit) {
+			FieldRefEntry field = this.javaExceptionsField;
+			if (field == null) {
+				return;
+			}
+			clinit.new_(Objects.requireNonNull(this.weakMapClass));
+			clinit.dup();
+			clinit.invokespecial(Objects.requireNonNull(this.weakMapCtor));
+			clinit.invokestatic(Objects.requireNonNull(this.synchronizedMap));
+			clinit.putstatic(field);
+		}
 
 		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the

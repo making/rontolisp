@@ -59,8 +59,28 @@ public final class Clojure {
 	 */
 	public static List<LispVal> read(String source, @Nullable String file,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files) {
+		return read(source, file, macroEvaluator, files, true);
+	}
+
+	/**
+	 * {@link #read(String, String, ClojureMacroEvaluator, ClojureFiles)} for a target:
+	 * where the host is (the interpreter, the JVM) a {@code java:} member can throw and
+	 * take an exception, so a program naming one binds what a catch takes from the host
+	 * and backs its exceptions with host ones; where it is not (wasm) the program lowers
+	 * as if no host existed.
+	 * @param source the program text
+	 * @param file the origin file for diagnostics and for the source path, or
+	 * {@code null} when unknown (the working directory is the root)
+	 * @param macroEvaluator who evaluates one macro application in the macro-time
+	 * environment, or {@code null} when macro call sites must fail
+	 * @param files where required namespace files are read from
+	 * @param hostTarget whether the target is one where the host is
+	 * @return the top-level forms
+	 */
+	public static List<LispVal> read(String source, @Nullable String file,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget) {
 		ClojureReader reader = new ClojureReader(source, file);
-		return ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files);
+		return ClojureLowering.lower(reader.readAll(), reader, macroEvaluator, files, hostTarget);
 	}
 
 	/**

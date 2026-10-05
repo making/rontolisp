@@ -138,6 +138,112 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void aFailedHostCallIsCaughtAsTheExceptionTheHostThrew() throws Exception {
+		// measured against clj 1.12.6: the class of what the member threw decides the
+		// catch, and the catch binds that exception -- its message, class, cause and
+		// members are the host's
+		assertBothEqual(
+				"(println (try (Integer/parseInt \"x\") (catch NumberFormatException e"
+						+ " [(.getMessage e) (ex-message e) (.getLocalizedMessage e)])))",
+				"[For input string: \"x\" For input string: \"x\" For input string: \"x\"]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Exception e [(class e)"
+				+ " (instance? IllegalArgumentException e) (str e) (.toString e) (ex-data e) (ex-cause e) (.getCause e)])))",
+				"[java.lang.NumberFormatException true java.lang.NumberFormatException: For input string: \"x\""
+						+ " java.lang.NumberFormatException: For input string: \"x\" nil nil nil]\n");
+		assertBothEqual("(println (try (Class/forName \"no.Such\") (catch RuntimeException e :rt)"
+				+ " (catch ClassNotFoundException e [:cnf (.getMessage e)])))", "[:cnf no.Such]\n");
+		assertBothEqual("(println (try (try (Integer/parseInt \"x\") (catch ArithmeticException e :arith))"
+				+ " (catch IllegalArgumentException e :iae)))", ":iae\n");
+		assertBothEqual("(println (try (Thread/sleep -1) (catch IllegalArgumentException e (.getMessage e))))",
+				"timeout value is negative\n");
+		assertBothEqual("(println (try (.get (java.util.ArrayList.) 0) (catch IndexOutOfBoundsException e (class e))))",
+				"java.lang.IndexOutOfBoundsException\n");
+		assertBothEqual(
+				"(println (try (java.net.URI. \"a b\") (catch java.net.URISyntaxException e [(.getIndex e) (.getReason e)])))",
+				"[1 Illegal character in path]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Throwable e (class e))))",
+				"java.lang.NumberFormatException\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch clojure.lang.ExceptionInfo e :info)"
+				+ " (catch Exception e :exc)))", ":exc\n");
+	}
+
+	@Test
+	void aCaughtHostExceptionRethrowsAndWrapsAsItself() throws Exception {
+		// measured against clj 1.12.6: rethrown, it is the same object; as a cause, the
+		// host's own
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw e)))"
+						+ " (catch NumberFormatException e [:outer (.getMessage e)])))",
+				"[:outer For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (let [c (atom nil)] (try (try (Integer/parseInt \"x\")"
+						+ " (catch Exception e (reset! c e) (throw e))) (catch Exception e (identical? e @c)))))",
+				"true\n");
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw (RuntimeException."
+						+ " \"wrapped\" e)))) (catch RuntimeException e [(.getMessage e) (class (.getCause e))"
+						+ " (ex-message (ex-cause e))])))",
+				"[wrapped java.lang.NumberFormatException For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (try (Integer/parseInt \"x\") (catch Exception e (let [i (ex-info \"wrap\" {:a 1} e)]"
+						+ " [(ex-message i) (ex-data i) (identical? e (ex-cause i)) (ex-message (ex-cause i))]))))",
+				"[wrap {:a 1} true For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw (ex-info \"wrap\""
+						+ " {:a 1} e)))) (catch clojure.lang.ExceptionInfo e [(ex-message e) (class (ex-cause e))])))",
+				"[wrap java.lang.NumberFormatException]\n");
+		assertBothEqual("(def u (java.net.URISyntaxException. \"a\" \"b\"))"
+				+ " (println (try (throw u) (catch Exception e [(identical? e u) (class e)])))"
+				+ " (println (identical? u (ex-cause (ex-info \"w\" {} u))) (class (ex-cause (Exception. \"m\" u))))",
+				"[true java.net.URISyntaxException]\ntrue java.net.URISyntaxException\n");
+		assertBothEqual(
+				"(require '[clojure.test :refer [is]])"
+						+ " (println (class (is (thrown? NumberFormatException (Integer/parseInt \"x\")))))"
+						+ " (println (.getMessage (is (thrown-with-msg? NumberFormatException #\"input string\""
+						+ " (Integer/parseInt \"x\")))))",
+				"java.lang.NumberFormatException\nFor input string: \"x\"\n");
+	}
+
+	@Test
+	void anExceptionPassedToAHostMemberIsAHostThrowableOfItsClass() throws Exception {
+		// measured against clj 1.12.6: an exception the program built crosses into Java
+		// as a host throwable of its class, with its message and cause
+		assertBothEqual("(let [u (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\"))]"
+				+ " (println [(.getMessage u) (.getMessage (.getCause u)) (class (.getCause u)) (ex-message (ex-cause u))]))",
+				"[u io java.io.IOException io]\n");
+		assertBothEqual(
+				"(let [c (java.io.IOException. \"io\") u (java.io.UncheckedIOException. \"u\" c)]"
+						+ " (println [(.getMessage (.getCause u)) (class (.getCause u))]))",
+				"[io java.io.IOException]\n");
+		assertBothEqual(
+				"(println (.getMessage (java.util.concurrent.ExecutionException. (IllegalStateException. \"s\"))))",
+				"java.lang.IllegalStateException: s\n");
+		assertBothEqual("(println (let [f (java.util.concurrent.CompletableFuture.)]"
+				+ " (.completeExceptionally f (ArithmeticException. \"boom\")) (try (.get f)"
+				+ " (catch java.util.concurrent.ExecutionException e [(class (.getCause e)) (.getMessage (.getCause e))]))))",
+				"[java.lang.ArithmeticException boom]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Exception e (.getMessage (.getCause"
+				+ " (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\" e)))))))", "io\n");
+		assertBothEqual("(println (try (throw (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\")))"
+				+ " (catch java.io.UncheckedIOException e [(ex-message e) (ex-message (ex-cause e)) (class (ex-cause e))])))",
+				"[u io java.io.IOException]\n");
+		assertBothEqual("(println (.getMessage (.getCause (java.util.concurrent.ExecutionException. \"x\""
+				+ " (ex-info \"info\" {:a 1})))))", "info\n");
+		assertBothEqual(
+				"(println (let [e (Exception.)] (.getMessage (.getCause (java.util.concurrent.ExecutionException."
+						+ " \"x\" e)))))",
+				"nil\n");
+		assertBothEqual("(println (let [e (Exception. \"outer\" (IllegalStateException. \"inner\"))] (.getMessage"
+				+ " (.getCause (.getCause (java.util.concurrent.ExecutionException. \"x\" e))))))", "inner\n");
+		// a host method of the exception reaches that host throwable, the same one each
+		// time
+		assertBothEqual("(println (let [e (Exception. \"x\")] (.addSuppressed e (IllegalStateException. \"s\"))"
+				+ " [(count (.getSuppressed e)) (.getMessage (first (.getSuppressed e)))]))", "[1 s]\n");
+		assertBothEqual("(println (let [e (ex-info \"i\" {:a 1})] (.addSuppressed e (Exception. \"s\"))"
+				+ " [(count (.getSuppressed e)) (ex-data e)]))", "[1 {:a 1}]\n");
+	}
+
+	@Test
 	void aThrownHostThrowableIsCaughtByItsOwnClassChain() throws Exception {
 		// measured against clj 1.12.6: the host class's superclasses, read at run time,
 		// decide the catch -- a checked exception passes a RuntimeException catch
@@ -865,8 +971,8 @@ class ClojureInteropTest {
 				(def a (proxy [AbstractList] [] (size [] 0)))
 				(println (.size a))
 				(println (try (.get a 0)
-				           (catch Exception e (s/includes? (ex-message e) "UnsupportedOperationException: get"))))
-				""", "0\ntrue\n");
+				           (catch UnsupportedOperationException e [(class e) (ex-message e)])))
+				""", "0\n[java.lang.UnsupportedOperationException get]\n");
 		assertThatThrownBy(
 				() -> interpret("(ns proxyns (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
 			.isInstanceOf(Exception.class)
