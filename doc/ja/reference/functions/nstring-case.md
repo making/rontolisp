@@ -1,6 +1,6 @@
 # nstring-upcase nstring-downcase nstring-capitalize
 
-`(nstring-upcase string)` -- `(nstring-downcase string)` -- `(nstring-capitalize string)`
+`(nstring-upcase string &key start end)` -- `(nstring-downcase string &key start end)` -- `(nstring-capitalize string &key start end)`
 
 [`string-upcase`](string-upcase.md)、[`string-downcase`](string-downcase.md)、[`string-capitalize`](string-capitalize.md) の破壊的な綴りです。変換後の文字を引数へ書き戻し、その文字列を返します。変換規則は非破壊版と同一なので、戻り値はどのバックエンドでも同じです。
 
@@ -18,7 +18,13 @@
 (nstring-upcase (copy-seq "hello world")) ; => "HELLO WORLD"
 ```
 
-変換は文字列全体に及びます。非破壊版と異なり、`:start` / `:end` は受け付けません。いずれも第一級の関数値なので、`#'nstring-upcase` を `funcall`・`mapcar`・`intern` に渡せます。
+`:start` / `:end` は非破壊版と同じく変換する範囲を指定します。範囲外の文字はそのまま残り、`:end` が nil なら文字列の末尾までです。不正な境界 (nil の `:start` を含む) は非破壊版と同じ `type-error` です。
+
+```lisp
+(nstring-upcase (copy-seq "abcdef") :start 1 :end 3) ; => "aBCdef"
+```
+
+いずれも第一級の関数値なので、`#'nstring-upcase` を `funcall`・`mapcar`・`intern` に渡せます。
 
 ## バックエンド対応
 

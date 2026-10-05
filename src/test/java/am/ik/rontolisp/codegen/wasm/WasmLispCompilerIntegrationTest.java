@@ -22,6 +22,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.LispVal;
@@ -14519,6 +14520,16 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, true))
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void stringOperatorsRefuseANilStart() throws Exception {
+		// The wasm twin of LispEvaluatorTest#stringOperatorsRefuseANilStart, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringNilStartFixture.PROGRAM, false))
+			.isEqualTo(StringNilStartFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringNilStartFixture.PROGRAM, true))
+			.isEqualTo(StringNilStartFixture.EXPECTED);
 	}
 
 	/**

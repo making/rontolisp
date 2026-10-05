@@ -120,6 +120,13 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   list (`eof-error-p`, `eof-value`, `:start`, `:end`, `:preserve-whitespace`). The
   producer is recognized at ONE argument only, so a call carrying them keeps the old
   single value rather than answering an index computed as if they were absent.
+  Measured 2026-10-05 on all four backends: a direct call IGNORES the extra arguments --
+  `(read-from-string " 12 34" t nil :start 3)` reads `12` (SBCL `34`), so a nil `:start`
+  (SBCL's `type-error`) reads from 0 too -- and `#'read-from-string` given them is a
+  `program-error` on the compiled paths. An input holding no datum (`""`, `"  "`) is
+  `end-of-file` in SBCL and the interpreter but answers nil on the compiled readers, which is
+  where `eof-error-p` has to land. The nil `:start` is part of this row (`.todo/214`), not a
+  separate defect.
 
 Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `#aDiscardedReadFromStringLeavesNoSecondValueBehind`,

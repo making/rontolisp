@@ -1,6 +1,6 @@
 # nstring-upcase nstring-downcase nstring-capitalize
 
-`(nstring-upcase string)` -- `(nstring-downcase string)` -- `(nstring-capitalize string)`
+`(nstring-upcase string &key start end)` -- `(nstring-downcase string &key start end)` -- `(nstring-capitalize string &key start end)`
 
 The destructive spellings of [`string-upcase`](string-upcase.md), [`string-downcase`](string-downcase.md) and [`string-capitalize`](string-capitalize.md): the folded characters are written back into the argument, and the string is returned. The fold is the non-destructive sibling's, so the returned value is the same on every backend.
 
@@ -18,7 +18,13 @@ For a string **literal** -- and, on the compiled backends, for the few remaining
 (nstring-upcase (copy-seq "hello world")) ; => "HELLO WORLD"
 ```
 
-The whole string is folded: unlike their non-destructive siblings these take no `:start` / `:end`. Each is a first-class function value, so `#'nstring-upcase` can be passed to `funcall`, `mapcar` or `intern`.
+`:start` / `:end` bound the part that is folded, exactly as for the non-destructive siblings: the characters outside it are kept, a nil `:end` means the end of the string, and a bad bound (a nil `:start` included) is the sibling's `type-error`.
+
+```lisp
+(nstring-upcase (copy-seq "abcdef") :start 1 :end 3) ; => "aBCdef"
+```
+
+Each is a first-class function value, so `#'nstring-upcase` can be passed to `funcall`, `mapcar` or `intern`.
 
 ## Backend support
 

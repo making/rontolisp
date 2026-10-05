@@ -274,9 +274,9 @@ signals a `type-error` for all five and its text names no operator either.
   9,799, P1 5,482 -> 5,455, component 6,619 -> 6,592; a `funcall` program JVM 33,266 -> 32,584,
   P1 40,879 -> 40,129, component 42,117 -> 41,363.
 - The sequence operators refuse a nil `:start` the same way, call position and first class
-  (`.kb/sequence-bounding-keywords.md`). Still `getfKwOr`: `#'string=` / `#'string-equal`'s
-  `:start1`/`:start2` -- the string comparison family reads a nil start as 0 (the interpreter's
-  `string=`, every backend's `string<` family through `%string-compare`'s `(or start1 0)`).
+  (`.kb/sequence-bounding-keywords.md`), and so do the string comparisons and the `nstring-*`
+  conversions, whose window is this lowering's (`.kb/characters-code-points.md`, "String
+  comparison family").
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

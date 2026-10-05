@@ -1940,9 +1940,9 @@ public final class BuiltinFunctionWrappers {
 	// string= and with the interpreter's Java-side keyword parsing.
 	private static WrapperDef stringEquality(String name) {
 		LispVal boundedA = callV(LispNames.SUBSEQ, new LispSymbol("a"),
-				getfKwOr(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
+				getfKwDefault(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
 		LispVal boundedB = callV(LispNames.SUBSEQ, new LispSymbol("b"),
-				getfKwOr(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
+				getfKwDefault(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
 		LispVal bounded = listToCons(List.of(new LispSymbol(name), boundedA, boundedB));
 		LispVal body = listToCons(
 				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "a", "b")));

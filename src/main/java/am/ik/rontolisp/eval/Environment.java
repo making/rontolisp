@@ -4963,16 +4963,26 @@ public final class Environment implements Scope {
 		int end = cpLen;
 		String startKey = (which == 0) ? LispNames.START1_KEYWORD : LispNames.START2_KEYWORD;
 		String endKey = (which == 0) ? LispNames.END1_KEYWORD : LispNames.END2_KEYWORD;
+		boolean startSeen = false;
+		boolean endSeen = false;
 		for (int i = 2; i + 1 < args.size(); i += 2) {
-			if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
-				// A nil bound keeps its default (nil :end = the string's length, as in
-				// CL). The two keywords addressing the OTHER argument are this call's
-				// business too, so they are accepted and skipped rather than rejected.
+			if (args.get(i) instanceof LispSymbol key) {
+				// A nil :start is no bound (requireIndex's INTEGER type-error, datum
+				// NIL); a nil :end is the string's length. The FIRST occurrence of a
+				// keyword is the one that counts (CLHS 3.4.1.4). The two keywords
+				// addressing the OTHER argument are this call's business too, so they
+				// are accepted and skipped rather than rejected.
 				if (startKey.equals(key.name())) {
-					start = requireIndex(name, args.get(i + 1));
+					if (!startSeen) {
+						start = requireIndex(name, args.get(i + 1));
+						startSeen = true;
+					}
 				}
 				else if (endKey.equals(key.name())) {
-					end = requireIndex(name, args.get(i + 1));
+					if (!endSeen && !(args.get(i + 1) instanceof LispNil)) {
+						end = requireIndex(name, args.get(i + 1));
+					}
+					endSeen = true;
 				}
 				else if (!LispNames.START1_KEYWORD.equals(key.name()) && !LispNames.END1_KEYWORD.equals(key.name())
 						&& !LispNames.START2_KEYWORD.equals(key.name()) && !LispNames.END2_KEYWORD.equals(key.name())) {

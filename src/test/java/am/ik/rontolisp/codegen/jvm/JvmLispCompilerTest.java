@@ -8,6 +8,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -13468,6 +13469,12 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.NIL_START_PROGRAM))
 			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#stringOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(StringNilStartFixture.PROGRAM)).isEqualTo(StringNilStartFixture.EXPECTED);
 	}
 
 	@Test

@@ -3503,11 +3503,12 @@ public final class LispPreludeLibrary {
 		// which is what string<=/string>= must return). Each operator is then a one-line
 		// test on the order, so the case-folding and the bounding-index handling exist
 		// once instead of ten times. Iterative (not recursive) so comparing long strings
-		// cannot exhaust the stack on any backend.
+		// cannot exhaust the stack on any backend. A nil start is no bound: the walk's
+		// first comparison refuses it (a type-error, datum NIL); only a nil end defaults.
 		SOURCES.put(LispNames.STRING_COMPARE, """
 				(defun %string-compare (a b start1 end1 start2 end2 foldp)
 				  (let* ((sa (string a)) (sb (string b))
-				         (i (or start1 0)) (j (or start2 0))
+				         (i start1) (j start2)
 				         (e1 (or end1 (length sa))) (e2 (or end2 (length sb)))
 				         (result nil))
 				    (while (null result)
@@ -3585,7 +3586,10 @@ public final class LispPreludeLibrary {
 		// paths only -- a rebuilt string for an IMMUTABLE one, the lite edge
 		// .kb/string-write-runtime.md already documents for every indexed write. The
 		// value is correct on all four backends either way, which is what chunga's
-		// (intern (nstring-upcase s) :keyword) consumes.
+		// (intern (nstring-upcase s) :keyword) consumes. The :start / :end window is
+		// the sibling's too, so a bad bound (a nil :start included) is its refusal; the
+		// whole-string window takes the unbounded fold, so a keyword-free call does not
+		// pay for the window's cuts.
 		SOURCES.put(LispNames.NSTRING_REPLACE, """
 				(defun %nstring-replace (%nsr-s %nsr-folded)
 				  (let ((%nsr-n (length %nsr-s)) (%nsr-i 0))
@@ -3594,16 +3598,25 @@ public final class LispPreludeLibrary {
 				      (setq %nsr-i (+ %nsr-i 1)))))
 				""");
 		SOURCES.put(LispNames.NSTRING_UPCASE, """
-				(defun nstring-upcase (%nsu-s)
-				  (%nstring-replace %nsu-s (string-upcase %nsu-s)))
+				(defun nstring-upcase (%nsu-s &key ((:start %nsu-start) 0) ((:end %nsu-end)))
+				  (%nstring-replace %nsu-s
+				                    (if (and (eql %nsu-start 0) (null %nsu-end))
+				                        (string-upcase %nsu-s)
+				                        (string-upcase %nsu-s :start %nsu-start :end %nsu-end))))
 				""");
 		SOURCES.put(LispNames.NSTRING_DOWNCASE, """
-				(defun nstring-downcase (%nsd-s)
-				  (%nstring-replace %nsd-s (string-downcase %nsd-s)))
+				(defun nstring-downcase (%nsd-s &key ((:start %nsd-start) 0) ((:end %nsd-end)))
+				  (%nstring-replace %nsd-s
+				                    (if (and (eql %nsd-start 0) (null %nsd-end))
+				                        (string-downcase %nsd-s)
+				                        (string-downcase %nsd-s :start %nsd-start :end %nsd-end))))
 				""");
 		SOURCES.put(LispNames.NSTRING_CAPITALIZE, """
-				(defun nstring-capitalize (%nsc-s)
-				  (%nstring-replace %nsc-s (string-capitalize %nsc-s)))
+				(defun nstring-capitalize (%nsc-s &key ((:start %nsc-start) 0) ((:end %nsc-end)))
+				  (%nstring-replace %nsc-s
+				                    (if (and (eql %nsc-start 0) (null %nsc-end))
+				                        (string-capitalize %nsc-s)
+				                        (string-capitalize %nsc-s :start %nsc-start :end %nsc-end))))
 				""");
 		// The case-INSENSITIVE character ordering family, on the same "one shared walk,
 		// one-line operators" plan as %string-compare above: %char-fold-chain checks each
