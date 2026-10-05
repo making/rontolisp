@@ -12325,7 +12325,8 @@ public final class LispEvaluator {
 	// use: a forward scan honoring :start/:end, where a :from-end match records the
 	// match and keeps scanning (the last match wins). :test/:test-not apply only to
 	// position/find (ITEM mode); a nil keyword value counts as absent, like the
-	// expansion. elementResult selects the find family's answer (the matching element)
+	// expansion -- except a nil :start, which is no bound and is refused. elementResult
+	// selects the find family's answer (the matching element)
 	// over the position family's (its index) -- the two differ in nothing else.
 	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode,
 			boolean elementResult) {
@@ -12367,7 +12368,7 @@ public final class LispEvaluator {
 				}
 				case LispNames.KEY_KEYWORD -> keyFn = absent ? null : value;
 				case LispNames.FROM_END_KEYWORD -> fromEnd = !absent;
-				case LispNames.START_KEYWORD -> start = absent ? 0 : Environment.requireIndex(opName, value);
+				case LispNames.START_KEYWORD -> start = Environment.requireIndex(opName, value);
 				case LispNames.END_KEYWORD -> end = absent ? null : (long) Environment.requireIndex(opName, value);
 				default -> {
 					// :allow-other-keys itself, or a key it admitted.
@@ -13677,7 +13678,7 @@ public final class LispEvaluator {
 		allowed.add(LispNames.FROM_END_KEYWORD);
 		requireKeywordTail(name, args, tail, allowed);
 		LispVal keyFn = presentKeyword(args, tail, LispNames.KEY_KEYWORD);
-		LispVal startValue = presentKeyword(args, tail, LispNames.START_KEYWORD);
+		LispVal startValue = optionalKeywordArg(args, tail, LispNames.START_KEYWORD);
 		LispVal endValue = presentKeyword(args, tail, LispNames.END_KEYWORD);
 		LispVal countValue = action == SeqScanAction.COUNT ? null : presentKeyword(args, tail, LispNames.COUNT_KEYWORD);
 		boolean fromEnd = presentKeyword(args, tail, LispNames.FROM_END_KEYWORD) != null;
@@ -13812,7 +13813,7 @@ public final class LispEvaluator {
 		requireKeywordTail(name, args, 1, List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
 				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD));
 		LispVal keyFn = presentKeyword(args, 1, LispNames.KEY_KEYWORD);
-		LispVal startValue = presentKeyword(args, 1, LispNames.START_KEYWORD);
+		LispVal startValue = optionalKeywordArg(args, 1, LispNames.START_KEYWORD);
 		LispVal endValue = presentKeyword(args, 1, LispNames.END_KEYWORD);
 		boolean keepFirst = presentKeyword(args, 1, LispNames.FROM_END_KEYWORD) != null;
 		long start = startValue == null ? 0 : Environment.requireIndex(name, startValue);
@@ -13857,9 +13858,10 @@ public final class LispEvaluator {
 	}
 
 	// A keyword argument's value, or null when it is absent OR nil: CL's own default for
-	// every keyword this family takes is what a nil value asks for (:start nil is 0,
-	// :end nil is the whole sequence, :count nil is no limit, :key nil is identity),
-	// so the two spellings collapse here exactly as they do in the expansion.
+	// the keywords this family reads through it is what a nil value asks for (:end nil
+	// is the whole sequence, :count nil is no limit, :key nil is identity), so the two
+	// spellings collapse here exactly as they do in the expansion. Not :start: a nil one
+	// is no bound, read with optionalKeywordArg and refused.
 	private static @Nullable LispVal presentKeyword(List<LispVal> args, int start, String keyword) {
 		LispVal value = optionalKeywordArg(args, start, keyword);
 		return value == null || value instanceof LispNil ? null : value;

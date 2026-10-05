@@ -32,9 +32,8 @@ import am.ik.wasm.WasmWriter;
  *
  * <p>
  * It DECLINES (answers a null, which the call site reads as "keep the ordinary route")
- * for a ratio operand, a non-finite float and a zero FLOAT divisor, so the f64 division's
- * non-trapping policy for those is untouched. An exact zero divisor signals
- * {@code division-by-zero} first, where the module has the landing.
+ * for a ratio operand and a non-finite float. A zero divisor, exact or float, over a
+ * finite dividend signals {@code division-by-zero}, where the module has the landing.
  */
 final class WasmFloatFdivRuntimeBuilder {
 
@@ -48,8 +47,8 @@ final class WasmFloatFdivRuntimeBuilder {
 	/**
 	 * Builds the {@code _f64_fdiv} body.
 	 * @param landing whether the module signals a division by zero through
-	 * {@code _div_zero} (EH mode with a division operator reachable); without it the
-	 * exact-zero divisor keeps declining, so the module's bytes and trap are unchanged
+	 * {@code _div_zero} (EH mode with a division operator reachable); without it a zero
+	 * divisor keeps declining, so the module's bytes and trap are unchanged
 	 * @return the encoded function body
 	 */
 	static byte[] buildBody(boolean landing) {
@@ -114,6 +113,32 @@ final class WasmFloatFdivRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 
+		if (landing) {
+			// A ratio dividend over a zero float divisor signals here: emitRationalOf
+			// declines on the ratio below, before the zero divisor's own check.
+			get(w, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ifVoid(w);
+			get(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
+			ifVoid(w);
+			get(w, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.F64_CONST);
+			w.writeF64(0.0);
+			w.write(Instruction.F64_EQ);
+			ifVoid(w);
+			WasmRuntimeBuilder.emitDivisionByZero(w, true);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		emitRationalOf(w, 0, NUM_A, DEN_A);
 		emitRationalOf(w, 1, NUM_B, DEN_B);
 		// a/b = (na*db) / (da*nb), with the sign carried on the numerator.
@@ -125,11 +150,9 @@ final class WasmFloatFdivRuntimeBuilder {
 		get(w, NUM_B);
 		call(w, WasmLispCompiler.FUNC_BIG_MUL);
 		set(w, B);
-		// A zero divisor: a FLOAT one declines ((/ x 0.0) is an infinity here, not a
-		// signal),
-		// an EXACT one signals division-by-zero where the module has the landing -- after
-		// the dividend's own checks, so a NaN or an infinity over zero still reports the
-		// non-finite rounding, as SBCL does.
+		// A zero divisor, exact or float, signals division-by-zero where the module has
+		// the landing -- after the dividend's own checks, so a NaN or an infinity over
+		// zero still reports the non-finite rounding, as SBCL does.
 		get(w, B);
 		i31Const(w, 0);
 		call(w, WasmLispCompiler.FUNC_BIG_CMP);
@@ -138,13 +161,7 @@ final class WasmFloatFdivRuntimeBuilder {
 		w.write(Instruction.I32_EQZ);
 		ifVoid(w);
 		if (landing) {
-			get(w, 1);
-			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-			w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-			w.write(Instruction.I32_EQZ);
-			ifVoid(w);
 			WasmRuntimeBuilder.emitDivisionByZero(w, true);
-			w.write(Instruction.END);
 		}
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());

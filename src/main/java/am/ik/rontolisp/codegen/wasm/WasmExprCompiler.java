@@ -2512,6 +2512,11 @@ final class WasmExprCompiler {
 					WasmBitwiseCompiler.compileAsh(cons, ctx);
 				}
 			}
+			case LispNames.MASK_SIGNED_FIELD -> {
+				if (!WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+					compileExpansion(LispMacroExpander.expandMaskSignedField(cons), ctx, tail);
+				}
+			}
 			case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
 			case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
 			case LispNames.LIST_STAR -> compileExpansion(LispMacroExpander.expandListStar(cons), ctx, tail);

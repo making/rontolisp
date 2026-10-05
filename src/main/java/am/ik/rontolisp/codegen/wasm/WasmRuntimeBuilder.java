@@ -2906,12 +2906,7 @@ final class WasmRuntimeBuilder {
 		}
 		if (instance == null) {
 			w.write(0); // no locals
-			w.write(Instruction.REF_NULL);
-			w.writeHeapType(Type.EQ.code());
-			emitStrConst(w, message);
-			WasmEmitHelper.emitNewCons(w, identityHash);
-			w.write(Instruction.THROW);
-			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+			emitMessageThrow(w, message, identityHash);
 		}
 		else {
 			// locals: 0 = the message, 1 = the slot vector
@@ -2925,6 +2920,23 @@ final class WasmRuntimeBuilder {
 		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Emits the throw of the instance-less {@code (nil . message)} payload on
+	 * {@code $lisp-cond} -- what {@code (error "message")} throws, which a handler takes
+	 * as a {@code simple-error} and the entry landing pad reports as the message.
+	 * @param w the writer
+	 * @param message the interned quote-framed message
+	 * @param identityHash whether a cons carries the identity-hash field
+	 */
+	static void emitMessageThrow(WasmWriter w, WasmLispCompiler.StringTable.StringEntry message, boolean identityHash) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		emitStrConst(w, message);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
 
 	/**

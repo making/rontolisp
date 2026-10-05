@@ -3086,6 +3086,15 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.FLOAT_RADIX, args, 1);
 			return new LispInteger(2);
 		}));
+		// SBCL's sb-c::mask-signed-field (LispNames.MASK_SIGNED_FIELD). A non-integer
+		// reports as LOGXOR, the compiled lowering's first integer operation.
+		env.defineFunction(LispNames.MASK_SIGNED_FIELD, new LispFunction(LispNames.MASK_SIGNED_FIELD, args -> {
+			requireArgCount(LispNames.MASK_SIGNED_FIELD, args, 2);
+			if (!(args.get(0) instanceof LispInteger size) || size.value() < 0) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.INTEGER, LispNames.MASK_SIGNED_FIELD);
+			}
+			return maskSignedField(size.value(), args.get(1));
+		}));
 		// IEEE 754 bit reinterpretation, the primitive quartet under the float-features
 		// shim library. Bits travel as unsigned integers (bignums when the sign bit is
 		// set), so ldb/ash arithmetic over them behaves like CL's (unsigned-byte 64).
@@ -4954,16 +4963,26 @@ public final class Environment implements Scope {
 		int end = cpLen;
 		String startKey = (which == 0) ? LispNames.START1_KEYWORD : LispNames.START2_KEYWORD;
 		String endKey = (which == 0) ? LispNames.END1_KEYWORD : LispNames.END2_KEYWORD;
+		boolean startSeen = false;
+		boolean endSeen = false;
 		for (int i = 2; i + 1 < args.size(); i += 2) {
-			if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
-				// A nil bound keeps its default (nil :end = the string's length, as in
-				// CL). The two keywords addressing the OTHER argument are this call's
-				// business too, so they are accepted and skipped rather than rejected.
+			if (args.get(i) instanceof LispSymbol key) {
+				// A nil :start is no bound (requireIndex's INTEGER type-error, datum
+				// NIL); a nil :end is the string's length. The FIRST occurrence of a
+				// keyword is the one that counts (CLHS 3.4.1.4). The two keywords
+				// addressing the OTHER argument are this call's business too, so they
+				// are accepted and skipped rather than rejected.
 				if (startKey.equals(key.name())) {
-					start = requireIndex(name, args.get(i + 1));
+					if (!startSeen) {
+						start = requireIndex(name, args.get(i + 1));
+						startSeen = true;
+					}
 				}
 				else if (endKey.equals(key.name())) {
-					end = requireIndex(name, args.get(i + 1));
+					if (!endSeen && !(args.get(i + 1) instanceof LispNil)) {
+						end = requireIndex(name, args.get(i + 1));
+					}
+					endSeen = true;
 				}
 				else if (!LispNames.START1_KEYWORD.equals(key.name()) && !LispNames.END1_KEYWORD.equals(key.name())
 						&& !LispNames.START2_KEYWORD.equals(key.name()) && !LispNames.END2_KEYWORD.equals(key.name())) {
@@ -5040,11 +5059,19 @@ public final class Environment implements Scope {
 		}
 	}
 
+	/**
+	 * A bounding index or size given to {@code name}: one that is no integer -- a nil
+	 * start included, which is no bound -- is the operator's {@code INTEGER} type-error,
+	 * as in SBCL.
+	 * @param name the operator, for the report
+	 * @param val the index as given
+	 * @return the index
+	 */
 	static int requireIndex(String name, LispVal val) {
 		if (val instanceof LispInteger i) {
 			return (int) i.value();
 		}
-		throw new LispEvalException(name + " expects an integer index, got: " + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, name);
 	}
 
 	// Applies char-upcase (or char-downcase) to EVERY character, which is how CLHS
@@ -8004,14 +8031,18 @@ public final class Environment implements Scope {
 			int end2 = sequenceLength(LispNames.REPLACE, source);
 			int start1 = 0;
 			int start2 = 0;
-			// A nil bound keeps its default (nil :end = the sequence's length, as in CL).
+			// A nil end keeps its default (the sequence's length, as in CL); a nil start
+			// is no bound, so requireIndex refuses it.
 			for (int i = 2; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+				if (args.get(i) instanceof LispSymbol key) {
+					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.END1_KEYWORD -> end1 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
-						case LispNames.END2_KEYWORD -> end2 = requireIndex(LispNames.REPLACE, args.get(i + 1));
+						case LispNames.START1_KEYWORD -> start1 = requireIndex(LispNames.REPLACE, value);
+						case LispNames.END1_KEYWORD ->
+							end1 = value instanceof LispNil ? end1 : requireIndex(LispNames.REPLACE, value);
+						case LispNames.START2_KEYWORD -> start2 = requireIndex(LispNames.REPLACE, value);
+						case LispNames.END2_KEYWORD ->
+							end2 = value instanceof LispNil ? end2 : requireIndex(LispNames.REPLACE, value);
 						default -> throw new LispEvalException("replace: unsupported keyword " + key.name());
 					}
 				}
@@ -8103,12 +8134,14 @@ public final class Environment implements Scope {
 			LispVal item = args.get(1);
 			int start = 0;
 			int end = sequenceLength(LispNames.FILL, target);
-			// A nil bound keeps its default, as in replace.
+			// A nil end keeps its default and a nil start is refused, as in replace.
 			for (int i = 2; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+				if (args.get(i) instanceof LispSymbol key) {
+					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, args.get(i + 1));
-						case LispNames.END_KEYWORD -> end = requireIndex(LispNames.FILL, args.get(i + 1));
+						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, value);
+						case LispNames.END_KEYWORD ->
+							end = value instanceof LispNil ? end : requireIndex(LispNames.FILL, value);
 						default -> throw new LispEvalException("fill: unsupported keyword " + key.name());
 					}
 				}
@@ -8951,6 +8984,36 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * The low {@code size} bits of an integer read as a signed {@code size}-bit integer:
+	 * an integer already inside the field answers itself, a {@code long} narrower than
+	 * one shifts, and the rest goes through {@link BigInteger}.
+	 */
+	private static LispVal maskSignedField(long size, LispVal n) {
+		if (n instanceof LispInteger i) {
+			if (size >= 64) {
+				return i;
+			}
+			if (size == 0) {
+				return new LispInteger(0);
+			}
+			int shift = 64 - (int) size;
+			return new LispInteger((i.value() << shift) >> shift);
+		}
+		if (!(n instanceof LispBigInteger b)) {
+			throw OperandTypeException.of(n, OperandTypes.Kind.INTEGER, LispNames.LOGXOR);
+		}
+		if (b.value().bitLength() < size) {
+			return b;
+		}
+		if (size == 0) {
+			return new LispInteger(0);
+		}
+		BigInteger field = BigInteger.ONE.shiftLeft(Math.toIntExact(size));
+		BigInteger low = b.value().mod(field);
+		return normalizeBig(low.testBit((int) size - 1) ? low.subtract(field) : low);
+	}
+
+	/**
 	 * Normalizes a {@link BigInteger} result, demoting it back to a {@link LispInteger}
 	 * when it fits in a {@code long} so that fixnum-range values keep a single
 	 * representation.
@@ -9039,9 +9102,25 @@ public final class Environment implements Scope {
 	 */
 	private static double integerQuotientZero(double a, double b, double r) {
 		if (r != 0.0) {
-			return r; // nonzero, or NaN
+			if (Double.isNaN(r)) {
+				throw undefinedFloatRemainder(a, b);
+			}
+			return r;
 		}
 		return a == 0.0 ? a - Math.copySign(0.0, b) : 0.0;
+	}
+
+	/**
+	 * The signal of a float {@code mod}/{@code rem} that has no value -- exactly where
+	 * the {@code floor}/{@code truncate} it is the remainder of has none, with the same
+	 * condition: a NaN or infinite dividend (or a NaN divisor) reports the non-finite
+	 * rounding, and a finite dividend over a zero divisor, exact or float, is a
+	 * {@code division-by-zero}. IEEE's NaN is not an answer here: the operation is
+	 * defined by an integer quotient, and no such quotient exists.
+	 */
+	private static LispEvalException undefinedFloatRemainder(double a, double b) {
+		return Double.isFinite(a) && b == 0.0 ? LispEvalException.divisionByZero()
+				: new LispEvalException(ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 	}
 
 	private static long nonZeroDivisor(long divisor) {

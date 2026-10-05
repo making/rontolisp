@@ -561,7 +561,7 @@ class LispMacroExpanderTest {
 		// If those shapes come back into the site, the cost comes back with it.
 		LispCons replace = (LispCons) LispReader.readAllFromString("(replace a b :start1 i :end2 j)").get(0);
 		assertThat(LispMacroExpander.expandReplace(replace, true, true).print())
-			.isEqualTo("(%REPLACE-RUNTIME A B I NIL NIL J)");
+			.isEqualTo("(%REPLACE-RUNTIME A B I NIL 0 J)");
 		LispCons fill = (LispCons) LispReader.readAllFromString("(fill a v :start i)").get(0);
 		assertThat(LispMacroExpander.expandFill(fill, true).print()).isEqualTo("(%FILL-RUNTIME A V I NIL)");
 		// map-into routes to the helper of its own SOURCE-SEQUENCE COUNT: the loop body
@@ -584,7 +584,7 @@ class LispMacroExpanderTest {
 		// rewrite, the immutable-string rebuild) reachable only from a site that needs
 		// it.
 		assertThat(LispMacroExpander.expandReplace(replace, true, true, true).print())
-			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B I NIL NIL J)");
+			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B I NIL 0 J)");
 		assertThat(LispMacroExpander.expandFill(fill, true, true).print()).isEqualTo("(%FILL-RUNTIME-ARRAY A V I NIL)");
 	}
 
@@ -592,8 +592,11 @@ class LispMacroExpanderTest {
 	void theSharedSequenceOpDispatchesAnswerTheSameThingAsTheInlinedOnes() {
 		// One body, two homes each: the defun carries the same dispatch the inline
 		// lowering spells, so routing a site to it cannot change what it answers. The
-		// bounds are PARAMETERS, nil when the caller omitted the keyword, which is what
-		// lets one call-site shape serve every keyword combination. None may call its
+		// bounds are PARAMETERS -- an omitted end nil, an omitted start 0 -- which is
+		// what
+		// lets one call-site shape serve every keyword combination. A start is taken as
+		// given: a nil one is no bound, so no (or start 0) may read it as 0. None may
+		// call its
 		// own operator, or compiling the helper would re-enter the routing forever.
 		String replace = LispMacroExpander.replaceRuntimeWrapper().print();
 		// The parameter names are spelled in lower case on purpose: the reader upcases,
@@ -606,7 +609,8 @@ class LispMacroExpanderTest {
 		assertThat(replace).contains("%ARRAYP")
 			.contains("LISTP")
 			.contains("RPLACA")
-			.contains("(OR |%rpr_s1| 0)")
+			.contains("(OR |%rpr_e1| (LENGTH |__rpl_1|))")
+			.doesNotContain("(OR |%rpr_s1| 0)")
 			.contains("CONCATENATE")
 			.contains("(%REPLACE-RUNTIME-ARRAY |__rpl_1| |__rpl_2| |__rpl_s1| |__rpl_e1| |__rpl_s2| |__rpl_e2|)")
 			.doesNotContain("%ROW-MAJOR-ASET");
@@ -617,7 +621,8 @@ class LispMacroExpanderTest {
 		assertThat(replaceArray).startsWith(
 				"(SETQ %REPLACE-RUNTIME-ARRAY (LAMBDA (|%rpa_1| |%rpa_2| |%rpa_s1| |%rpa_e1| |%rpa_s2| |%rpa_e2|)");
 		assertThat(replaceArray).contains("%ROW-MAJOR-ASET")
-			.contains("(OR |%rpa_s1| 0)")
+			.contains("(OR |%rpa_e1| (LENGTH |__rpl_1|))")
+			.doesNotContain("(OR |%rpa_s1| 0)")
 			.doesNotContain("%ARRAYP")
 			.doesNotContain("RPLACA")
 			.doesNotContain("CONCATENATE")
@@ -630,14 +635,16 @@ class LispMacroExpanderTest {
 		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (|%flr_s| |%flr_v| |%flr_a| |%flr_b|)");
 		assertThat(fill).contains("%ARRAYP")
 			.contains("RPLACA")
-			.contains("(OR |%flr_a| 0)")
+			.contains("(OR |%flr_b| (LENGTH |__fll_s|))")
+			.doesNotContain("(OR |%flr_a| 0)")
 			.contains("(%FILL-RUNTIME-ARRAY |__fll_s| |__fll_v| |__fll_a| |__fll_b|)")
 			.doesNotContain("%ROW-MAJOR-ASET");
 		assertThat(fill).doesNotContain("(FILL ");
 		String fillArray = LispMacroExpander.fillArrayRuntimeWrapper().print();
 		assertThat(fillArray).startsWith("(SETQ %FILL-RUNTIME-ARRAY (LAMBDA (|%fla_s| |%fla_v| |%fla_a| |%fla_b|)");
 		assertThat(fillArray).contains("%ROW-MAJOR-ASET")
-			.contains("(OR |%fla_a| 0)")
+			.contains("(OR |%fla_b| (LENGTH |__fll_s|))")
+			.doesNotContain("(OR |%fla_a| 0)")
 			.doesNotContain("%ARRAYP")
 			.doesNotContain("RPLACA")
 			.doesNotContain("CONCATENATE")

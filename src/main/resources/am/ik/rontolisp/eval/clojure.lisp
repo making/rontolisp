@@ -6812,20 +6812,8 @@
   (rontolisp::%clojure-unchecked-float (car args)))
 
 (defun rontolisp::%clojure-wrap-long (n)
-  "The integer N as a signed 64-bit value; any other number passes. The mask and
-   the bounds are literals on purpose: a generic wrap over a computed mask ran an
-   overflowing hash loop 6x slower on the JVM."
-  (if (and (integerp n) (not (<= -9223372036854775808 n 9223372036854775807)))
-      (let ((r (logand n 18446744073709551615)))
-        (if (>= r 9223372036854775808) (- r 18446744073709551616) r))
-      n))
-
-(defun rontolisp::%clojure-wrap-int (n)
-  "The integer N as a signed 32-bit value."
-  (if (<= -2147483648 n 2147483647)
-      n
-      (let ((r (logand n 4294967295)))
-        (if (>= r 2147483648) (- r 4294967296) r))))
+  "The integer N as a signed 64-bit value; any other number passes."
+  (if (integerp n) (%mask-signed-field 64 n) n))
 
 (defun rontolisp::%clojure-int-arg (x)
   "X as the oracle's intCast takes it: an integer or a ratio (truncated) or a
@@ -6844,55 +6832,65 @@
    (t (rontolisp::%clojure-class-cast-exception-of "int needs a number" x))))
 
 (defun rontolisp::%clojure-unchecked-add (a b)
-  "(unchecked-add a b): the sum, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (+ a b)))
+  "(unchecked-add a b): the sum, an integer wrapped to 64 bits. Two integers
+   wrap as one masked field, which the compilers fuse into a wrapping add."
+  (if (and (integerp a) (integerp b))
+      (%mask-signed-field 64 (+ a b))
+      (rontolisp::%clojure-wrap-long (+ a b))))
 
 (defun rontolisp::%clojure-unchecked-subtract (a b)
   "(unchecked-subtract a b): the difference, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (- a b)))
+  (if (and (integerp a) (integerp b))
+      (%mask-signed-field 64 (- a b))
+      (rontolisp::%clojure-wrap-long (- a b))))
 
 (defun rontolisp::%clojure-unchecked-multiply (a b)
-  "(unchecked-multiply a b): the product, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (* a b)))
+  "(unchecked-multiply a b): the product, an integer wrapped to 64 bits. Two
+   integers wrap as one masked field, which the compilers fuse into a wrapping
+   multiply instead of a bignum product masked back down."
+  (if (and (integerp a) (integerp b))
+      (%mask-signed-field 64 (* a b))
+      (rontolisp::%clojure-wrap-long (* a b))))
 
 (defun rontolisp::%clojure-unchecked-inc (x)
-  "(unchecked-inc x): X plus one, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (+ x 1)))
+  "(unchecked-inc x): X plus one, an integer wrapped to 64 bits (a non-integer
+   plus one is no integer)."
+  (if (integerp x) (%mask-signed-field 64 (+ x 1)) (+ x 1)))
 
 (defun rontolisp::%clojure-unchecked-dec (x)
   "(unchecked-dec x): X minus one, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (- x 1)))
+  (if (integerp x) (%mask-signed-field 64 (- x 1)) (- x 1)))
 
 (defun rontolisp::%clojure-unchecked-negate (x)
   "(unchecked-negate x): minus X, an integer wrapped to 64 bits."
-  (rontolisp::%clojure-wrap-long (- x)))
+  (if (integerp x) (%mask-signed-field 64 (- x)) (- x)))
 
 (defun rontolisp::%clojure-unchecked-add-int (a b)
   "(unchecked-add-int a b): the sum of two ints wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int
+  (%mask-signed-field 32
    (+ (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
 
 (defun rontolisp::%clojure-unchecked-subtract-int (a b)
   "(unchecked-subtract-int a b): the difference of two ints wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int
+  (%mask-signed-field 32
    (- (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
 
 (defun rontolisp::%clojure-unchecked-multiply-int (a b)
   "(unchecked-multiply-int a b): the product of two ints wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int
+  (%mask-signed-field 32
    (* (rontolisp::%clojure-int-arg a) (rontolisp::%clojure-int-arg b))))
 
 (defun rontolisp::%clojure-unchecked-inc-int (x)
   "(unchecked-inc-int x): the int X plus one, wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int (+ (rontolisp::%clojure-int-arg x) 1)))
+  (%mask-signed-field 32 (+ (rontolisp::%clojure-int-arg x) 1)))
 
 (defun rontolisp::%clojure-unchecked-dec-int (x)
   "(unchecked-dec-int x): the int X minus one, wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x) 1)))
+  (%mask-signed-field 32 (- (rontolisp::%clojure-int-arg x) 1)))
 
 (defun rontolisp::%clojure-unchecked-negate-int (x)
   "(unchecked-negate-int x): minus the int X, wrapped to 32 bits."
-  (rontolisp::%clojure-wrap-int (- (rontolisp::%clojure-int-arg x))))
+  (%mask-signed-field 32 (- (rontolisp::%clojure-int-arg x))))
 
 (defun rontolisp::%clojure-unchecked-divide-int (a b)
   "(unchecked-divide-int a b): the truncated quotient of two ints, wrapped to
@@ -6900,7 +6898,7 @@
   (let ((x (rontolisp::%clojure-int-arg a)) (y (rontolisp::%clojure-int-arg b)))
     (if (= y 0)
         (rontolisp::%clojure-arithmetic-exception "Divide by zero")
-        (rontolisp::%clojure-wrap-int (truncate x y)))))
+        (%mask-signed-field 32 (truncate x y)))))
 
 (defun rontolisp::%clojure-unchecked-remainder-int (a b)
   "(unchecked-remainder-int a b): the remainder of two ints, signed like the

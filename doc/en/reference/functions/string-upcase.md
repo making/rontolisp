@@ -8,7 +8,7 @@ Returns a new string with every lowercase letter converted to uppercase; the ori
 (string-upcase "abc") ; => "ABC"
 ```
 
-`:start` / `:end` bound the part that is converted; the characters outside it are kept as they are, and a nil `:end` means the end of the string. A range outside the string (`:start` below 0, `:end` past the length, or `:start` after `:end`) or a non-`nil` bound that is not an integer is the same `type-error` as [`subseq`](subseq.md)'s, on every backend.
+`:start` / `:end` bound the part that is converted; the characters outside it are kept as they are, and a nil `:end` means the end of the string. A range outside the string (`:start` below 0, `:end` past the length, or `:start` after `:end`) or a bound that is not an integer -- a nil `:start` included -- is the same `type-error` as [`subseq`](subseq.md)'s, on every backend.
 
 ```lisp
 (string-upcase "hello" :start 1 :end 3) ; => "hELlo"

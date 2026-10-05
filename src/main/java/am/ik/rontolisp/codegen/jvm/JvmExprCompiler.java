@@ -2227,6 +2227,11 @@ final class JvmExprCompiler {
 					JvmBitwiseCompiler.compileAsh(cons, ctx, className);
 				}
 			}
+			case LispNames.MASK_SIGNED_FIELD -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskSignedField(cons), ctx, className);
+				}
+			}
 			case LispNames.INTEGER_LENGTH -> JvmBitwiseCompiler.compileIntegerLength(cons, ctx, className);
 			case LispNames.LOGBITP -> JvmBitwiseCompiler.compileLogbitp(cons, ctx, className);
 			case LispNames.LIST_STAR ->

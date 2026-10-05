@@ -54,7 +54,8 @@ final class WasmFmodRuntimeBuilder {
 	}
 
 	/**
-	 * Emits the exact float remainder, leaving one f64 on the stack.
+	 * Emits the exact float remainder, leaving one f64 on the stack; the operands with no
+	 * remainder answer NaN ({@code --no-gc}'s non-trapping float policy).
 	 * @param w the writer to emit into
 	 * @param mod true for {@code mod} (the result takes the divisor's sign), false for
 	 * {@code rem} (the dividend's)
@@ -65,6 +66,27 @@ final class WasmFmodRuntimeBuilder {
 	 * @param r a scratch f64 local (the result being corrected)
 	 */
 	static void emitRemainder(WasmWriter w, boolean mod, int a, int b, int x, int d, int r) {
+		emitRemainder(w, mod, a, b, x, d, r, () -> {
+			w.write(Instruction.F64_CONST);
+			w.writeF64(Double.NaN);
+		});
+	}
+
+	/**
+	 * {@link #emitRemainder(WasmWriter, boolean, int, int, int, int, int)} with the
+	 * operands that have no remainder -- either one NaN, an infinite dividend, a zero
+	 * divisor -- handed to {@code undefined}, which pushes one f64 or never returns. With
+	 * {@code x} = |a| and {@code d} = |b| set when it runs.
+	 * @param w the writer to emit into
+	 * @param mod true for {@code mod}, false for {@code rem}
+	 * @param a the local holding the dividend (f64), already set
+	 * @param b the local holding the divisor (f64), already set
+	 * @param x a scratch f64 local (|a| when {@code undefined} runs)
+	 * @param d a scratch f64 local (|b| when {@code undefined} runs)
+	 * @param r a scratch f64 local (the result being corrected)
+	 * @param undefined emits the undefined case's value or its signal
+	 */
+	static void emitRemainder(WasmWriter w, boolean mod, int a, int b, int x, int d, int r, Runnable undefined) {
 		// x = |a|, d = |b|
 		local(w, Instruction.GET_LOCAL, a);
 		w.write(Instruction.F64_ABS);
@@ -82,9 +104,9 @@ final class WasmFmodRuntimeBuilder {
 		local(w, Instruction.GET_LOCAL, a);
 		w.write(Instruction.ELSE);
 
-		// Everything the reduction cannot handle is a NaN: either operand NaN (the
-		// comparison above is unordered, so they arrive here), an infinite dividend,
-		// and a zero divisor -- the same non-trapping float policy (/ 1.0 0.0) follows.
+		// Everything the reduction cannot handle has no remainder: either operand NaN
+		// (the comparison above is unordered, so they arrive here), an infinite
+		// dividend, and a zero divisor. `undefined` answers for them.
 		local(w, Instruction.GET_LOCAL, x);
 		local(w, Instruction.GET_LOCAL, x);
 		w.write(Instruction.F64_NE);
@@ -103,8 +125,7 @@ final class WasmFmodRuntimeBuilder {
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, Type.F64);
-		w.write(Instruction.F64_CONST);
-		w.writeF64(Double.NaN);
+		undefined.run();
 		w.write(Instruction.ELSE);
 
 		// Both finite, 0 < |b| <= |a|. Scale d up while d*2 still fits under x; d*2 is

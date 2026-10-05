@@ -124,6 +124,8 @@ final class WasmOperandTypes {
 			map.put(shape, java.util.List.of("ARRAY-DIMENSIONS"));
 		}
 		map.put("LOOP", java.util.List.of("ENDP"));
+		// Its lowering and its fused fallback reject a non-integer in a logxor.
+		map.put(LispNames.MASK_SIGNED_FIELD, java.util.List.of("LOGXOR"));
 		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
 			map.put(modify, java.util.List.of("RPLACA", "RPLACD"));
 		}

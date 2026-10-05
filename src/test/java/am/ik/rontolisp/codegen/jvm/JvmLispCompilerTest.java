@@ -8,6 +8,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -32,6 +33,7 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
@@ -13463,6 +13465,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.NIL_START_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#stringOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(StringNilStartFixture.PROGRAM)).isEqualTo(StringNilStartFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunReadSequenceOnAGrayStreamValidatesItsBoundsToo() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#readSequenceOnAGrayStreamValidatesItsBoundsToo,
@@ -21292,7 +21307,7 @@ class JvmLispCompilerTest {
 				(defun fl (a) (floor a))
 				(print (list (try (fl *inf*)) (try (round *nan*))
 				             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
-				(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+				(print (list (try (truncate *nan* 0.0)) (try (funcall #'fround *nan*))
 				             (try (floor 5 *inf*))))
 				(print (list (try (rational *nan*)) (try (rationalize *inf*))
 				             (try (decode-float *inf*))))
@@ -23369,6 +23384,44 @@ class JvmLispCompilerTest {
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
+	}
+
+	@Test
+	void aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong() throws Exception {
+		// The fused root of (%mask-signed-field 64 (* a b)) keeps only the low 64 bits,
+		// which a wrapping LMUL computes exactly -- so an operand pair whose product
+		// leaves the long range never builds the bignum the lowering would mask back
+		// down. The size level (no fused site) must answer the same.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MaskSignedFieldProgram.PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(fusedMethodsUsing(fast, java.lang.classfile.Opcode.LMUL)).isNotEmpty();
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(runClass(fast)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(runClass(small)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+	}
+
+	private static List<String> fusedMethodsUsing(byte[] classBytes, java.lang.classfile.Opcode opcode) {
+		List<String> names = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (name.startsWith("_fx$") && method.code()
+				.orElseThrow()
+				.elementStream()
+				.anyMatch(e -> e instanceof java.lang.classfile.Instruction i && i.opcode() == opcode)) {
+				names.add(name);
+			}
+		}
+		return names;
 	}
 
 	private static final String GENERAL_ARRAY_LEAF_PROGRAM = """

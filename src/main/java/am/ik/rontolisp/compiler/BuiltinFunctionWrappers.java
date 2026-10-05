@@ -741,7 +741,7 @@ public final class BuiltinFunctionWrappers {
 		List<LispVal> keyed = new ArrayList<>(List.of(new LispSymbol(LispNames.REDUCE), new LispSymbol("f"),
 				new LispSymbol("seq"), new LispSymbol(LispNames.KEY_KEYWORD), getfKw(LispNames.KEY_KEYWORD),
 				new LispSymbol(LispNames.FROM_END_KEYWORD), getfKw(LispNames.FROM_END_KEYWORD),
-				new LispSymbol(LispNames.START_KEYWORD), getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.START_KEYWORD), getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)),
 				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
 		LispVal withoutInit = listToCons(keyed);
 		keyed.add(new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD));
@@ -1074,7 +1074,7 @@ public final class BuiltinFunctionWrappers {
 	private static WrapperDef boundedSequenceIo(String name) {
 		// ONE call: an :end of nil is the whole sequence in every expansion this reaches,
 		// so the absent keyword needs no second copy of the (large) inline expansion.
-		LispVal start = getfKwOr(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
 		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("seq"), new LispSymbol("st"),
 				new LispSymbol(LispNames.START_KEYWORD), start, new LispSymbol(LispNames.END_KEYWORD),
 				getfKw(LispNames.END_KEYWORD)));
@@ -1541,14 +1541,15 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// (lambda (a b &rest kw) (name a b :k1 (getf kw :k1) ...)) -- a two-operand operator
-	// whose keywords are all bounds, where nil means "the default" in the call-position
-	// lowering, so an absent keyword forwards as nil.
+	// whose keywords are all bounds. An end is nil -- the sequence's length -- in the
+	// call-position lowering, so an absent one forwards as nil; an absent start forwards
+	// as 0 and a given one as written, since a nil start is no bound.
 	private static WrapperDef boundingKeywords(String name, String... keywords) {
 		List<LispVal> callParts = new ArrayList<>(
 				List.of(new LispSymbol(name), new LispSymbol("a"), new LispSymbol("b")));
 		for (String keyword : keywords) {
 			callParts.add(new LispSymbol(keyword));
-			callParts.add(getfKw(keyword));
+			callParts.add(isStartKeyword(keyword) ? getfKwDefault(keyword, new LispInteger(0)) : getfKw(keyword));
 		}
 		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
 	}
@@ -1685,6 +1686,11 @@ public final class BuiltinFunctionWrappers {
 		return callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator), fallback);
 	}
 
+	private static boolean isStartKeyword(String keyword) {
+		return LispNames.START_KEYWORD.equals(keyword) || LispNames.START1_KEYWORD.equals(keyword)
+				|| LispNames.START2_KEYWORD.equals(keyword);
+	}
+
 	// (if (getf kw :indicator) (getf kw :indicator) default) -- getf is pure, so the
 	// double extraction is safe. A present nil reads as the default.
 	private static LispVal getfKwOr(String indicator, LispVal dflt) {
@@ -1743,7 +1749,7 @@ public final class BuiltinFunctionWrappers {
 		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
 		callParts.add(getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)));
 		callParts.add(new LispSymbol(LispNames.START_KEYWORD));
-		callParts.add(getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)));
+		callParts.add(getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)));
 		callParts.add(new LispSymbol(LispNames.END_KEYWORD));
 		callParts.add(getfKw(LispNames.END_KEYWORD));
 		if (counted) {
@@ -1805,7 +1811,7 @@ public final class BuiltinFunctionWrappers {
 		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
 		callParts.add(getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)));
 		callParts.add(new LispSymbol(LispNames.START_KEYWORD));
-		callParts.add(getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)));
+		callParts.add(getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)));
 		callParts.add(new LispSymbol(LispNames.END_KEYWORD));
 		callParts.add(getfKw(LispNames.END_KEYWORD));
 		callParts.add(new LispSymbol(LispNames.FROM_END_KEYWORD));
@@ -1849,7 +1855,8 @@ public final class BuiltinFunctionWrappers {
 				LispNames.FROM_END_KEYWORD));
 		for (String keyword : keywords) {
 			callParts.add(new LispSymbol(keyword));
-			callParts.add(getfKw(keyword));
+			// An absent :start forwards as 0: the position wrapper refuses a present nil.
+			callParts.add(isStartKeyword(keyword) ? getfKwDefault(keyword, new LispInteger(0)) : getfKw(keyword));
 		}
 		LispSymbol i = new LispSymbol("i");
 		LispVal element = listToCons(List.of(new LispSymbol(LispNames.IF), i,
@@ -1933,9 +1940,9 @@ public final class BuiltinFunctionWrappers {
 	// string= and with the interpreter's Java-side keyword parsing.
 	private static WrapperDef stringEquality(String name) {
 		LispVal boundedA = callV(LispNames.SUBSEQ, new LispSymbol("a"),
-				getfKwOr(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
+				getfKwDefault(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
 		LispVal boundedB = callV(LispNames.SUBSEQ, new LispSymbol("b"),
-				getfKwOr(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
+				getfKwDefault(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
 		LispVal bounded = listToCons(List.of(new LispSymbol(name), boundedA, boundedB));
 		LispVal body = listToCons(
 				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "a", "b")));

@@ -19,6 +19,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
@@ -5593,8 +5594,9 @@ class LispEvaluatorTest {
 			.isEqualTo("(0 1 2 3 1 3 9)");
 		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start 2)").print()).isEqualTo("(0 1 1 2 3 9)");
 		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :end 6)").print()).isEqualTo("(0 3 1 2 3 9)");
-		// A nil bound is the default one, as everywhere else in 17.2.1.
-		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start nil :end nil)").print()).isEqualTo("(0 1 2 3 9)");
+		// A nil :end is the default one, as everywhere else in 17.2.1; a nil :start is no
+		// bound and is refused (SequenceBoundsFixture.NIL_START_PROGRAM).
+		assertThat(eval("(remove-duplicates '(0 1 2 3 1 2 3 9) :start 0 :end nil)").print()).isEqualTo("(0 1 2 3 9)");
 		assertThat(eval("(delete-duplicates (list 1 2 3 1 3 1 2 4) :start 0 :end nil)").print()).isEqualTo("(3 1 2 4)");
 		// The window travels through the sequence dispatch, so a string and a vector are
 		// rebuilt from the same bounded scan.
@@ -9271,7 +9273,7 @@ class LispEvaluatorTest {
 		// both. decode-float of an infinity and integer-decode-float/rationalize of a NaN
 		// never returned.
 		for (String form : List.of("(floor *inf*)", "(ceiling (- *inf*))", "(round *nan*)", "(truncate *nan*)",
-				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate 1.0 0.0)", "(floor *nan* 1.0)",
+				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate *nan* 0.0)", "(floor *nan* 1.0)",
 				"(funcall #'floor *inf*)")) {
 			assertThatThrownBy(() -> eval(nonFinite(form))).as(form)
 				.isInstanceOf(LispEvalException.class)
@@ -10406,6 +10408,34 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void sequenceOperatorsRefuseANilStart() {
+		// A nil :start is no bound: every sequence operator taking one signals a
+		// type-error whose datum is NIL, in call position and first class, while a nil
+		// :end still means the sequence's length -- sbcl's answers, pinned on all four
+		// backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.NIL_START_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void stringOperatorsRefuseANilStart() {
+		// A nil :start (:start1, :start2) is no bound for string=/string-equal, the
+		// string< family and the nstring-* case conversions either, in call position and
+		// first class, while a nil :end still means the string's length -- sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(StringNilStartFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(StringNilStartFixture.EXPECTED);
 	}
 
 	@Test
@@ -23491,6 +23521,28 @@ class LispEvaluatorTest {
 			.isEqualTo("(4607182418800017408 1.0)");
 		// The sign bit makes the unsigned bits a bignum beyond Long.MAX_VALUE.
 		assertThat(eval("(%ieee754-double-bits -2.0d0)").print()).isEqualTo("13835058055282163712");
+	}
+
+	@Test
+	void maskSignedFieldReadsTheLowBitsAsATwosComplementInteger() {
+		// SBCL's sb-c::mask-signed-field, which answers every value here: the low SIZE
+		// bits of an integer of any magnitude as a signed SIZE-bit integer.
+		assertThat(evalMulti("""
+				(list (%mask-signed-field 64 (* 9223372036854775807 31))
+				      (%mask-signed-field 64 (* -9223372036854775808 -1))
+				      (%mask-signed-field 64 12)
+				      (%mask-signed-field 64 (* 18446744073709551617 3))
+				      (%mask-signed-field 64 (- (expt 2 64) 1))
+				      (%mask-signed-field 32 (* 46341 46341))
+				      (%mask-signed-field 8 255) (%mask-signed-field 8 -129)
+				      (%mask-signed-field 1 1) (%mask-signed-field 0 12345)
+				      (%mask-signed-field 100 (expt 2 99)))
+				""").print()).isEqualTo("(9223372036854775777 -9223372036854775808 12 3 -1 -2147479015 -1 127 -1 0"
+				+ " -633825300114114700748351602688)");
+		// A non-integer is a type error, reported as the compiled lowering's first
+		// integer operation reports it.
+		assertThat(evalMulti("(handler-case (%mask-signed-field 64 1.5) (type-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"LOGXOR: The value 1.5 is not of type INTEGER\"");
 	}
 
 	@Test

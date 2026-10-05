@@ -6250,6 +6250,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// referenced only from the two helper bodies, so the tree shaker can drop the
 		// segments together with the helpers when the program never case-folds. See
 		// WasmCaseFoldRuntimeBuilder.
+		// What a float mod/rem with no remainder signals besides division-by-zero (a NaN
+		// or infinite operand): the floor family's non-finite rounding text, under
+		// _div_zero's gate and only where a remainder is spelled. Interned LAST, so a
+		// module whose _rat_rem/_rat_mod is shaken out loses it from the tail and keeps
+		// every other address; a body built without it traps there, as outside EH mode.
+		StringTable.StringEntry nonFiniteRemainderMessage = divZeroLanding && (resolvesAnyName
+				|| REMAINDER_OPERATORS.stream().anyMatch(op -> programUsesSymbol(spelledDivisions, op)))
+						? stringTable.addBodyString("\"" + ClosRegistry.NON_FINITE_ROUNDING_MESSAGE + "\"") : null;
 		byte[] stringData = stringTable.toByteArray();
 		final byte[] upperFoldBytes = WasmCaseFoldRuntimeBuilder.upperTableBytes();
 		final byte[] lowerFoldBytes = WasmCaseFoldRuntimeBuilder.lowerTableBytes();
@@ -8144,8 +8152,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody(this.usesIdentityHashTables,
 						this.usesInstances ? instanceTypeBase() : -1));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
-				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false));
-				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(true));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(false, nonFiniteRemainderMessage,
+						this.usesIdentityHashTables));
+				code.addFunction(WasmRatioRuntimeBuilder.buildRatRemBody(true, nonFiniteRemainderMessage,
+						this.usesIdentityHashTables));
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// p1-future-await runtime helper body (FUNC_P1_FUTURE_AWAIT)
@@ -12362,6 +12372,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	private static final java.util.List<String> DIVISION_OPERATORS = java.util.List.of(LispNames.DIV, LispNames.FLOOR,
 			LispNames.CEILING, LispNames.TRUNCATE, LispNames.ROUND, LispNames.FFLOOR, LispNames.FCEILING,
 			LispNames.FTRUNCATE, LispNames.FROUND, LispNames.MOD, LispNames.REM, LispNames.EXPT);
+
+	/** The operators that compile to {@code _rat_rem}/{@code _rat_mod}. */
+	private static final java.util.List<String> REMAINDER_OPERATORS = java.util.List.of(LispNames.MOD, LispNames.REM,
+			LispNames.EVENP, LispNames.ODDP);
 
 	/**
 	 * Member names whose presence makes the reachable-layout set unknowable: subclass

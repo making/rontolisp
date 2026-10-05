@@ -47,6 +47,12 @@ through `_int_new`.
   the flet lowering's `(block name ...)` wrapper (via `singleBodyExpr`), or a declared flet param
   silently demotes to per-iteration funcall dispatch; **`substituteCall` ROLLS BACK leaves
   registered by a failed attempt**, or a side-effecting argument evaluates twice.
+- **Masked signed field**: `(%mask-signed-field k x)` with a literal `1 <= k <= 64` is an op node
+  whose operand emits WRAPPED and sign-extends below 64 (`i64.shl`/`i64.shr_s` by `64 - k`): the
+  JVM twin's node (`.kb/jvm-int-fusion.md`), same fallback through `_big_xor`/`_big_and`/`_rat_add`
+  under the `LOGXOR`/`LOGAND`/`+` operators. A program spelling the name gets the `LOGXOR` row of
+  the operator table (`WasmOperandTypes.LOWERED_TO`), else the report would carry no operator.
+  Pinned by `WasmLispCompilerIntegrationTest.aMaskedSignedFieldAnswersTheSameFusedUnfusedAndAsAComponent`.
 - Peepholes: `emitFastWrapped` (unchecked wrap-around i64 under a non-negative literal `logand`
   mask or power-of-two `mod`); `emitInlineCheckedLiteral` (a literal `+`/`-` operand becomes a
   plain i64 op plus ONE signed compare, exact for every i64 incl. `Long.MIN_VALUE`, `k = 0`

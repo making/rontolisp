@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispVal;
 
 import org.jspecify.annotations.Nullable;
@@ -56,10 +57,9 @@ final class ExactRounding {
 	/**
 	 * The exact quotient of {@code a/b} under one of the four rounding modes, or
 	 * {@code null} when the operands are not a float paired with a float or an exact
-	 * integer (a ratio operand, a non-finite dividend and a zero FLOAT divisor all
-	 * decline, so the caller keeps its ordinary route). An exact zero divisor over a
-	 * finite float signals {@code division-by-zero}, as it does for an integer or ratio
-	 * dividend.
+	 * integer (a ratio operand and a non-finite dividend decline, so the caller keeps its
+	 * ordinary route). A zero divisor, exact or float, over a finite dividend signals
+	 * {@code division-by-zero}, as the integer path does.
 	 * <p>
 	 * An INFINITE divisor is settled by sign rather than by the rational route (infinity
 	 * is not a rational, so {@link #rationalOf} declines on it): with a finite nonzero
@@ -75,12 +75,10 @@ final class ExactRounding {
 		if (!(a instanceof LispDouble) && !(b instanceof LispDouble)) {
 			return null;
 		}
-		if (b instanceof LispInteger zero && zero.value() == 0 && a instanceof LispDouble ad
-				&& Double.isFinite(ad.value())) {
-			// A finite float rounded by an EXACT zero: the integer path's
-			// division-by-zero,
-			// where IEEE would divide to an infinity and fail the non-finite rounding
-			// (which a NaN or infinite dividend keeps, as in SBCL).
+		if (isZero(b) && isFiniteReal(a)) {
+			// A finite number rounded by a zero, exact or float: the integer path's
+			// division-by-zero, where IEEE would divide to an infinity and fail the
+			// non-finite rounding (which a NaN or infinite dividend keeps, as in SBCL).
 			throw LispEvalException.divisionByZero();
 		}
 		if (b instanceof LispDouble bd && Double.isInfinite(bd.value())) {
@@ -133,6 +131,15 @@ final class ExactRounding {
 			case CEILING -> new LispInteger(sameSign ? 1 : 0);
 			default -> new LispInteger(0);
 		};
+	}
+
+	private static boolean isZero(LispVal v) {
+		return v instanceof LispInteger i ? i.value() == 0 : v instanceof LispDouble d && d.value() == 0.0;
+	}
+
+	private static boolean isFiniteReal(LispVal v) {
+		return v instanceof LispDouble d ? Double.isFinite(d.value())
+				: v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispRatio;
 	}
 
 	/**

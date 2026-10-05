@@ -22,6 +22,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
 import am.ik.rontolisp.LispVal;
@@ -31,6 +32,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -1999,6 +2001,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aMaskedSignedFieldAnswersTheSameFusedUnfusedAndAsAComponent() throws Exception {
+		// The fused root of (%mask-signed-field 64 (* a b)) keeps only the low 64 bits,
+		// which a wrapping i64.mul computes exactly, and bails to the lowering's generic
+		// helpers for a bignum or float leaf. The size level (no fused site) and the
+		// component answer the same; so does the JVM, over the same program.
+		List<LispVal> parsed = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MaskSignedFieldProgram.PROGRAM));
+		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
+		byte[] small = WasmLispCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(parsed);
+		assertThat(runModule(fast, "msf-fast.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(runModule(small, "msf-small.wasm")).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(compileAndRunComponent(MaskSignedFieldProgram.PROGRAM)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw
@@ -2338,8 +2355,8 @@ class WasmLispCompilerIntegrationTest {
 			(defvar *inf* (/ 1.0 0.0))
 			(print (list (mr 1d18 7.0) (mr 1d300 7.0) (mm -1d300 7.0)))
 			(print (list (mr 3.0 *inf*) (mm 3.0 *inf*) (mm -3.0 *inf*)))
-			(print (list (mm 3.0 (- *inf*)) (mr -0.0 *inf*) (mr *inf* 3.0)))
-			(print (list (mr 1.0 0.0) (mr -7.5 2.5) (mm -7.5 2.5)))
+			(print (list (mm 3.0 (- *inf*)) (mr -0.0 *inf*) (mr -3.0 *inf*)))
+			(print (list (mr -1.0 3.0) (mr -7.5 2.5) (mm -7.5 2.5)))
 			(print (list (mr 12345.678 3.0) (mm -12345.678 3.0)))
 			(print (list (mr 1d-300 4.9d-324) (mm 1d30 3.0) (mr 1d30 3.0)))
 			(print (list (rem 1d18 7.0) (mod -1d300 7.0) (rem 12345.678 3.0)))
@@ -2348,8 +2365,8 @@ class WasmLispCompilerIntegrationTest {
 	private static final String EXACT_REMAINDER_EXPECTED = """
 			(1.0 1.0 6.0)
 			(3.0 3.0 Infinity)
-			(-Infinity -0.0 NaN)
-			(NaN 0.0 0.0)
+			(-Infinity -0.0 -3.0)
+			(-1.0 0.0 0.0)
 			(0.6779999999998836 2.3220000000001164)
 			(0.0 1.0 1.0)
 			(1.0 6.0 0.6779999999998836)""";
@@ -2423,7 +2440,7 @@ class WasmLispCompilerIntegrationTest {
 			(defun fl (a) (floor a))
 			(print (list (try (fl *inf*)) (try (round *nan*))
 			             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
-			(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+			(print (list (try (truncate *nan* 0.0)) (try (funcall #'fround *nan*))
 			             (try (floor 5 *inf*))))
 			(print (list (try (rational *nan*)) (try (rationalize *inf*))
 			             (try (decode-float *inf*))))
@@ -14493,6 +14510,26 @@ class WasmLispCompilerIntegrationTest {
 	void componentReadAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() throws Exception {
 		assertThat(compileAndRunComponentWithDir(SequenceBoundsFixture.PROGRAM))
 			.isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void sequenceOperatorsRefuseANilStart() throws Exception {
+		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.NIL_START_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void stringOperatorsRefuseANilStart() throws Exception {
+		// The wasm twin of LispEvaluatorTest#stringOperatorsRefuseANilStart, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringNilStartFixture.PROGRAM, false))
+			.isEqualTo(StringNilStartFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringNilStartFixture.PROGRAM, true))
+			.isEqualTo(StringNilStartFixture.EXPECTED);
 	}
 
 	/**

@@ -95,8 +95,8 @@ final class WasmIntConvCompiler {
 			// any magnitude rather than the rounded double (/ a b) narrowed into an i64,
 			// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod/rem").
 			// It answers a null for the pairs it does not improve on -- a ratio operand,
-			// a non-finite float, a zero divisor -- which fall through to the ordinary
-			// division below.
+			// a non-finite float, a zero divisor outside EH mode -- which fall through to
+			// the ordinary division below.
 			int exactSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(aSlot);

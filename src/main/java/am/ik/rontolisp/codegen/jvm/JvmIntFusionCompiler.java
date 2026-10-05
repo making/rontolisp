@@ -613,7 +613,7 @@ final class JvmIntFusionCompiler {
 		return switch (head.name()) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.LOGAND,
 					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.ONE_PLUS,
-					LispNames.ONE_MINUS, LispNames.LDB, LispNames.AREF ->
+					LispNames.ONE_MINUS, LispNames.LDB, LispNames.AREF, LispNames.MASK_SIGNED_FIELD ->
 				true;
 			default -> ctx.inlinableDefuns.containsKey(head.name());
 		};
@@ -1162,6 +1162,9 @@ final class JvmIntFusionCompiler {
 			// The body did not classify under this env (a parameter-shaped aref, say):
 			// fall through to the ordinary leaf treatment of the call itself.
 		}
+		if (LispNames.MASK_SIGNED_FIELD.equals(op)) {
+			return classifyMaskSignedField(cons, ctx, env, site, depth);
+		}
 		boolean fusable = switch (op) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR ->
 				arity >= 2;
@@ -1201,6 +1204,35 @@ final class JvmIntFusionCompiler {
 			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
 			default -> makeOp(op, args, sourceSite);
 		};
+	}
+
+	/**
+	 * {@code (%mask-signed-field size x)} with a literal size from 1 to 64 is an
+	 * operation node over {@code (size, x)}: the low {@code size} bits of the result
+	 * depend only on the low bits of {@code x}, so the fast path computes {@code x}
+	 * WRAPPED and sign-extends ({@link #emitFast}). Any other size is a leaf, which the
+	 * lowering owns.
+	 */
+	@Nullable private static Node classifyMaskSignedField(LispCons cons, JvmLispCompiler.Ctx ctx, Map<String, Node> env,
+			Site site, int depth) {
+		int size = LispMacroExpander.maskSignedFieldSize(cons);
+		if (size < 1 || size > 64) {
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(cons), site.leaves) : null;
+		}
+		Node arg = classify(cons.toList().get(2), ctx, env, site, depth);
+		if (arg == null) {
+			return null;
+		}
+		return makeOp(LispNames.MASK_SIGNED_FIELD, List.of(new ConstLeaf(size), arg), sourceSite(cons, ctx, site));
+	}
+
+	/**
+	 * The signed value of the low {@code size} bits of {@code value},
+	 * {@code 1 <= size <= 64}.
+	 */
+	private static long signExtend(long value, int size) {
+		int shift = 64 - size;
+		return (value << shift) >> shift;
 	}
 
 	/**
@@ -1253,6 +1285,7 @@ final class JvmIntFusionCompiler {
 					case LispNames.MOD -> Math.floorMod(acc, v);
 					case LispNames.REM -> acc % v;
 					case LispNames.ASH -> foldAsh(acc, v);
+					case LispNames.MASK_SIGNED_FIELD -> signExtend(v, (int) acc);
 					default -> throw new ArithmeticException("not foldable");
 				};
 			}
@@ -1450,7 +1483,10 @@ final class JvmIntFusionCompiler {
 	}
 
 	private static boolean hasConstOperand(Node root) {
-		return root instanceof OpNode op && op.args().stream().anyMatch(arg -> arg instanceof ConstLeaf);
+		// A masked signed field's size is a parameter of the operation, not an operand:
+		// over a lone leaf the fused site would only re-box what the lowering answers.
+		return root instanceof OpNode op && !LispNames.MASK_SIGNED_FIELD.equals(op.op())
+				&& op.args().stream().anyMatch(arg -> arg instanceof ConstLeaf);
 	}
 
 	// -------------------------------------------------------- the outlined method
@@ -2131,6 +2167,19 @@ final class JvmIntFusionCompiler {
 			case RandomLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case RawLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case OpNode op -> {
+				// (%mask-signed-field k x) keeps the low k <= 64 bits, which the WRAPPED
+				// subtree computes exactly; a narrower field sign-extends from bit k-1.
+				if (LispNames.MASK_SIGNED_FIELD.equals(op.op())) {
+					int size = (int) ((ConstLeaf) op.args().get(0)).value();
+					emitFastWrapped(op.args().get(1), ctx, state);
+					if (size < 64) {
+						JvmEmitHelper.emitIntConst(ctx, 64 - size);
+						ctx.body.lshl();
+						JvmEmitHelper.emitIntConst(ctx, 64 - size);
+						ctx.body.lshr();
+					}
+					return;
+				}
 				// (mod x 2^k) with a positive power-of-two literal is a plain mask --
 				// two's complement makes x & (2^k - 1) the CL (divisor-signed) mod for
 				// ANY long x, with no overflow; the masked subtree may compute WRAPPED.
@@ -2314,6 +2363,28 @@ final class JvmIntFusionCompiler {
 				ctx.body.labelBinding(notRaw);
 				ctx.body.aload(leaf.shadowParam);
 				ctx.body.labelBinding(done);
+			}
+			case OpNode op when LispNames.MASK_SIGNED_FIELD.equals(op.op()) -> {
+				// The lowering's arm (LispMacroExpander.expandMaskSignedField) through
+				// the generic helpers: flip the sign bit, keep the field, take the sign
+				// bit's weight back off. A non-integer fails in the logxor, as it does
+				// there.
+				int size = (int) ((ConstLeaf) op.args().get(0)).value();
+				long negativeSignBit = -(1L << (size - 1));
+				emitFallback(op.args().get(1), ctx, className);
+				JvmEmitHelper.compileLong(negativeSignBit, ctx);
+				ctx.restoreSite(op.site());
+				ctx.body.invokestatic(numOpFor(LispNames.LOGXOR, JvmNumericRuntimeBuilder.LOGXOR, ctx));
+				if (size == 64) {
+					JvmEmitHelper.compileBigInteger(
+							java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE), ctx);
+				}
+				else {
+					JvmEmitHelper.compileLong((1L << size) - 1, ctx);
+				}
+				ctx.body.invokestatic(numOpFor(LispNames.LOGAND, JvmNumericRuntimeBuilder.LOGAND, ctx));
+				JvmEmitHelper.compileLong(negativeSignBit, ctx);
+				ctx.body.invokestatic(numOpFor(LispNames.ADD, JvmNumericRuntimeBuilder.ADD, ctx));
 			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx, className);

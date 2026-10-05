@@ -47,10 +47,36 @@ resolves through the compilers' function-designator normalization).
   whole before looking at the first element.
 - The guard (`in range` and `budget left`) is evaluated BEFORE the match form, so a designator
   is never called outside `:start`/`:end` or past an exhausted `:count`.
-- A negative `:count` acts as zero, a nil one as no limit (CLHS 17.2.1); a nil `:start` is 0
-  and a nil `:end` is the end. A nil `:key`/`:test` is the ABSENT designator, not a function
-  to call -- `keyedForm`/`testSpec` read a literal nil that way (ANSI spells
-  `(remove 'a x :key nil)`), and the runtime twin reads a nil VALUE the same way.
+- A negative `:count` acts as zero, a nil one as no limit (CLHS 17.2.1); a nil `:end` is the
+  end. A nil `:key`/`:test` is the ABSENT designator, not a function to call --
+  `keyedForm`/`testSpec` read a literal nil that way (ANSI spells `(remove 'a x :key nil)`), and
+  the runtime twin reads a nil VALUE the same way.
+- **A nil `:start` is no bound**: a `type-error` (datum `NIL`) on every backend, SBCL's answer.
+  The scaffold binds `lo` to `(max start 0)` (a literal integer start as itself), once before
+  the walk: `max` refuses the nil -- over an empty sequence too -- and leaves `lo` a value the
+  backends know is a number, so the guard's comparison carries no per-element operand check.
+  Binding the start as written instead refused it at the guard and measured ~+7% on a P1
+  `(count x l :start s)` loop (the compare's operand check per element); `max` measures within
+  noise of the old `(if start start 0)`, and a negative start selects the same elements either
+  way. Every first-class surface agrees: the wrappers read `:start` with `getfKwDefault`
+  (`(getf kw :start 0)`, the default for an ABSENT indicator only), the interpreter's runtime
+  twins read it with `optionalKeywordArg` and `Environment.requireIndex` (a non-integer bound is
+  the operator's `INTEGER` `type-error`), and `count-if-not`'s prelude forwards it unchanged.
+  `fill`/`replace` follow the same rule (`.kb/sequence-op-runtimes.md`). Pinned by
+  `SequenceBoundsFixture.NIL_START_PROGRAM` (interpreter, JVM, P1, component) and ci-spec
+  `sequence-operators-refuse-a-nil-start`.
+- Cost (JVM / P1 / component bytes): a call with no `:start` is byte-identical (`count`, `remove`,
+  `position`, `find`, `reduce`, `substitute`, `delete`, `remove-duplicates`, `hello`; 2,021 of
+  2,811 artifacts over every ci-spec case, the non-GUI examples, size-report and bench-report).
+  A `(count x l :start s)` program +127 / +124 / +124, `:from-end` too +49 / +175 / +175; a
+  `fill`/`replace` site passes 0 for an absent start (+2 B a start on wasm, helpers lose their
+  `or`): `fill` with `:start` -14 / +378 / +378, without 0 B on wasm; the largest growth is
+  +264 B JVM / +568 B wasm (a 417 KB module). The wrappers' `getfKwDefault` is shorter than
+  `getfKwOr`: a program carrying the compiled `eval`'s wrapper table -5.8 KB JVM / -2.9 KB wasm;
+  summed over the corpus -417 KB JVM, -170 KB P1, -179 KB component.
+- Known gap: no other bound is validated. A negative, float or out-of-range `:start`/`:end` and
+  `:start` > `:end` answer (a negative start acts as 0, a float compares, an `:end` past a
+  list's length stops at the end) where SBCL signals a `type-error`, on all four backends.
 
 ## The destructive spellings
 
