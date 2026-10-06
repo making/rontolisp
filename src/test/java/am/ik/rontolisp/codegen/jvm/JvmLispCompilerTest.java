@@ -13486,6 +13486,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAGrayStreamWriteChecksItsBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayStreamWriteChecksItsBounds.
+		// Through the CLI's front end: the program defines a user macro and a Gray class.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceOperatorsRefuseABadBound() throws Exception {
 		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_BOUND_PROGRAM))

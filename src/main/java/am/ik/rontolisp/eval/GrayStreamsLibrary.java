@@ -81,6 +81,10 @@ public final class GrayStreamsLibrary {
 
 	static final String WRITE_STRING_DISPATCH = "%GRAY-WRITE-STRING-DISPATCH";
 
+	static final String WRITE_STRING_BOUNDS_DISPATCH = "%GRAY-WRITE-STRING-BOUNDS-DISPATCH";
+
+	static final String WRITE_LINE_BOUNDS_DISPATCH = "%GRAY-WRITE-LINE-BOUNDS-DISPATCH";
+
 	static final String WRITE_CHAR_DISPATCH = "%GRAY-WRITE-CHAR-DISPATCH";
 
 	static final String WRITE_BYTE_DISPATCH = "%GRAY-WRITE-BYTE-DISPATCH";
@@ -143,17 +147,17 @@ public final class GrayStreamsLibrary {
 	 * call sites).
 	 */
 	private static final java.util.Set<String> DISPATCH_DEFUNS = java.util.Set.of(WRITE_STRING_DISPATCH,
-			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH,
-			READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH, UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH,
-			INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH, STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH,
-			LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH, WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH,
-			FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH, TERPRI_DISPATCH, FRESH_LINE_DISPATCH,
-			WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH,
-			PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
-			"%GRAY-DEFAULT-WRITE-SEQUENCE", "%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR",
-			"%GRAY-DEFAULT-TERPRI", "%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE",
-			"%GRAY-DEFAULT-ADVANCE-TO-COLUMN", "%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR",
-			"%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
+			WRITE_STRING_BOUNDS_DISPATCH, WRITE_LINE_BOUNDS_DISPATCH, WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH,
+			READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH,
+			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			"%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE", "%GRAY-DEFAULT-WRITE-SEQUENCE",
+			"%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR", "%GRAY-DEFAULT-TERPRI",
+			"%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE", "%GRAY-DEFAULT-ADVANCE-TO-COLUMN",
+			"%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR", "%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
 
 	/**
 	 * The dispatch defuns spliced only when a rewrite references them (see
@@ -162,13 +166,13 @@ public final class GrayStreamsLibrary {
 	 * (and the shim's) call and which therefore always travel with the protocol.
 	 */
 	private static final java.util.Set<String> SPLICE_ON_USE = java.util.Set.of(WRITE_STRING_DISPATCH,
-			WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH, READ_BYTE_DISPATCH, READ_CHAR_DISPATCH,
-			READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH, UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH,
-			INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH, STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH,
-			LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH, WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH,
-			FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH, TERPRI_DISPATCH, FRESH_LINE_DISPATCH,
-			WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH,
-			PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH);
+			WRITE_STRING_BOUNDS_DISPATCH, WRITE_LINE_BOUNDS_DISPATCH, WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH,
+			READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH,
+			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH);
 
 	/**
 	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
@@ -645,22 +649,24 @@ public final class GrayStreamsLibrary {
 				return listOf(dispatchSymbol(valueStreamHelper, ctx), rewrite(parts.get(1), ctx),
 						rewrite(parts.get(2), ctx));
 			}
-			if (LispNames.WRITE_LINE.equals(opName) && parts.size() > 3 && streamArgMayBeInstance(parts.get(2))) {
-				// (write-line value stream [:start s] [:end e]) -- like the
+			if ((LispNames.WRITE_LINE.equals(opName) || LispNames.WRITE_STRING.equals(opName)) && parts.size() > 3
+					&& streamArgMayBeInstance(parts.get(2))) {
+				// (write-line|write-string value stream [:start s] [:end e]) -- like the
 				// read/write-sequence precedent below, only the two bounding keywords
 				// ride the dispatch; anything else is left for the lowering (whose
-				// call-site program-error keeps :allow-other-keys working). A missing
-				// :end stays nil and the helper defaults it.
-				LispVal start = new am.ik.rontolisp.LispInteger(0);
-				LispVal end = am.ik.rontolisp.LispNil.INSTANCE;
+				// call-site program-error keeps :allow-other-keys working). The FIRST
+				// spelling of a keyword counts (CLHS 3.4.1.4); an unspelled :start is 0
+				// and an unspelled :end nil, which the helper resolves to the length.
+				LispVal start = null;
+				LispVal end = null;
 				boolean literalKeywords = (parts.size() - 3) % 2 == 0;
 				if (literalKeywords) {
 					for (int k = 3; k + 1 < parts.size(); k += 2) {
 						if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":START".equals(kw.name())) {
-							start = rewrite(parts.get(k + 1), ctx);
+							start = start == null ? rewrite(parts.get(k + 1), ctx) : start;
 						}
 						else if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":END".equals(kw.name())) {
-							end = rewrite(parts.get(k + 1), ctx);
+							end = end == null ? rewrite(parts.get(k + 1), ctx) : end;
 						}
 						else {
 							literalKeywords = false;
@@ -669,8 +675,11 @@ public final class GrayStreamsLibrary {
 					}
 				}
 				if (literalKeywords) {
-					return listOf(dispatchSymbol(WRITE_LINE_DISPATCH, ctx), rewrite(parts.get(1), ctx),
-							rewrite(parts.get(2), ctx), start, end);
+					String helper = LispNames.WRITE_LINE.equals(opName) ? WRITE_LINE_BOUNDS_DISPATCH
+							: WRITE_STRING_BOUNDS_DISPATCH;
+					return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), rewrite(parts.get(2), ctx),
+							start == null ? new am.ik.rontolisp.LispInteger(0) : start,
+							end == null ? am.ik.rontolisp.LispNil.INSTANCE : end);
 				}
 			}
 			if (LispNames.FILE_POSITION.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {

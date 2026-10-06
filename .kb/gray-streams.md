@@ -81,6 +81,47 @@ it -- its fallback is the built-in write-line, so a handle or string stream is u
 `warnWritesToAGrayErrorOutput` in `LispEvaluatorTest` / `WasmLispCompilerIntegrationTest`,
 `JvmLispCompilerTest#compileWarnWritesToAGrayErrorOutput`.
 
+## Bounds on `write-line` / `write-string`
+
+**A spelled `:start` / `:end` on a Gray instance is checked ONCE, before the method runs, and
+the method then sees integers.** SBCL signals a `type-error` for every bad bound whatever the
+stream -- a nil, negative or non-integer `:start`, a bound past the length, a start past the
+end -- and passes `(stream string start end)` with `end` never nil. Measured on the previous
+code, all four backends alike: a bound reached the method unchecked (a nil `:start` read as
+omitted, a negative or 9-past-5 one went through), and a bounded `write-string` to an instance
+on the compile paths bypassed the dispatch and wrote to standard output.
+
+- Two helpers, apart from the unbounded `%gray-write-line-dispatch (s stream)` /
+  `%gray-write-string-dispatch (s stream)`: `%gray-write-line-bounds-dispatch` and
+  `%gray-write-string-bounds-dispatch (s stream start end)`. Instance arm:
+  `%check-sequence-bounds` (the `write-sequence` dispatch's check, `type-error`, datum the
+  bound as given -- SBCL's datum for a range is a pair, so the pins print the class alone),
+  then `stream-write-string stream s start (or end (length s))`. Non-instance arm: the
+  built-in with the bounds as written.
+- Compile paths: `GrayStreamsLibrary.rewrite` maps `(write-line|write-string s stream
+  [:start a] [:end b])` with literal keywords to the bounds helper (first spelling wins; an
+  unspelled start is `0`, an unspelled end `nil`). Interpreter: the `write-line` /
+  `write-string` wrappers hand `grayStreamBounds` to the same helpers, so first-class use
+  on the interpreter agrees. A tail the rewrite cannot read (a non-literal keyword,
+  `:allow-other-keys`) keeps the lowering.
+- A call spelling NO bound is unchanged: the method receives the string alone, so a method
+  keeps its own defaults and `end` arrives as nil (SBCL passes the length -- not changed
+  here).
+- Cost (2026-10-06, 748 / 740 / 744 JVM / P1 / component artifacts of every ci-spec case,
+  size-report, bench-report and the non-GUI examples, compiled by the base and the new jar):
+  all byte-identical (bar the build timestamp) except the programs carrying the Gray protocol
+  -- 14 examples and three ci cases -- which SHRINK, JVM -0.6..-2.4 KB, P1 -0.1..-0.6 KB (the
+  unbounded write-line helper lost its `&optional`/`start-p` shape); the one program
+  spelling a bounded Gray write (the pinning case) grows +0.87 KB P1 / +0.86 KB component and
+  shrinks 0.5 KB on the JVM.
+  Speed (min of 12, 300,000 iterations of an unbounded and a bounded write-line plus an
+  unbounded write-string to a counting instance): JVM 15-25 ms before and after (noise), P1
+  155 -> 195 ms -- the bounded call pays the bounds check (~130 ns).
+- Pinned by `SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM` (sbcl's answers) in
+  `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` (P1 and
+  component) and ci-spec `gray-stream-bounds-are-checked`. The ci-spec case is part of the
+  corpus program, which is what carries the Gray library for every case after it.
+
 ## Compile path: `GrayStreamsLibrary.process`
 Runs after `UserMacroExpander`; triggered by any protocol name (`splitQualified` member match,
 so `trivial-gray-streams:` counts; the match set is ALL-UPPERCASE).
@@ -144,8 +185,9 @@ over the WHOLE program once ANY part uses the protocol. Walker rules (no positio
 ## Limits
 - `listen` on an instance works interpreter/JVM; Preview 1 WASM rejects ANY `listen` at
   compile time.
-- Not rewritten: a bounded `(write-string s instance :start ...)`; first-class
-  `(funcall #'read-byte instance)` does not dispatch on the compile paths.
+- Not rewritten on the compile paths: first-class `(funcall #'read-byte instance)`, and
+  `write-string` / `write-line` as function values (they write PAST the instance, to standard
+  output).
 - `input-stream-p`/`output-stream-p` = `typep` against the two DIRECTION base classes,
   ownable like `open-stream-p`, deliberately not full Gray's per-base-class generics.
 
@@ -284,8 +326,7 @@ external-format `:default`): `file-length` rides a new Gray dispatch
 non-broadcast instance the same answer the built-in gives one);
 `file-position`'s existing dispatch grew the same arm; `file-string-length` and
 `stream-external-format` -- prelude defuns, so one change covers every backend --
-test the tag inline. A nil bound is never passed explicitly to the generic (user
-methods default start to 0, and an explicit nil would override that).
+test the tag inline.
 
 - A zero-component `(make-broadcast-stream)` program now carries the Gray
   broadcast entry: JVM `.class` 5,896 -> 12,717 B (+6.8 KB); with a write,

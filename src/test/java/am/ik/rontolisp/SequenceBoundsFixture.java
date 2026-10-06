@@ -13,6 +13,9 @@ package am.ik.rontolisp;
  * ci-spec case): a nil `:start` (`:start1`, `:start2`) is no bound, so every sequence
  * operator taking one signals a `type-error` whose datum is NIL -- in call position and
  * through `funcall` -- while a nil `:end` still means the sequence's length.</li>
+ * <li>{@link #GRAY_BOUNDS_PROGRAM} (mirrored by the `gray-stream-bounds-are-checked`
+ * ci-spec case): the same refusals for the bounds of `write-line` / `write-string` on a
+ * Gray stream instance, which reach the user's method as checked integers.</li>
  * <li>{@link #BAD_BOUND_PROGRAM} (mirrored by the `sequence-operators-refuse-a-bad-bound`
  * ci-spec case): a negative, non-integer or out-of-range bound and a start past its end
  * are a `type-error` for the count / remove / substitute family, `remove-duplicates`,
@@ -142,6 +145,82 @@ public final class SequenceBoundsFixture {
 	public static final String NIL_START_EXPECTED = String.join("\n", REFUSED_ROW, REFUSED_ROW, REFUSED_ROW,
 			REFUSED_ROW, REFUSED_ROW, REFUSED_ROW, REFUSED_ROW, REFUSED_ROW, REFUSED_ROW, REFUSED_ROW, REFUSED_ROW,
 			"(2 (1 3) (0 0 0) (7 8 3))", "(2 3 2 4)", "(6 (1 0 0) (7 8 3) 3)");
+
+	/**
+	 * A bound spelled on {@code write-line} / {@code write-string} to a Gray stream
+	 * instance is checked once before the method runs, whatever the stream: a nil,
+	 * negative or non-integer {@code :start} (datum as given) and a range outside the
+	 * string or a start past its end are a {@code type-error} with nothing written, and a
+	 * method that receives the call sees integer bounds, a nil or omitted {@code :end}
+	 * being the length. Call position and first class (refusals only).
+	 */
+	public static final String GRAY_BOUNDS_PROGRAM = """
+			(defvar *gwb-nil* nil)
+			(defvar *gwb-m1* (read-from-string "-1"))
+			(defvar *gwb-f* (read-from-string "1.5"))
+			(defvar *gwb-1* (read-from-string "1"))
+			(defvar *gwb-3* (read-from-string "3"))
+			(defvar *gwb-9* (read-from-string "9"))
+			(defclass gwb-rec (rontolisp:fundamental-character-output-stream)
+			  ((gwb-log :initform nil)))
+			(defmethod rontolisp:stream-write-string ((gwb-s gwb-rec) gwb-str &optional (gwb-start 0) gwb-end)
+			  (push (list gwb-str gwb-start gwb-end) (slot-value gwb-s 'gwb-log))
+			  gwb-str)
+			(defmethod rontolisp:stream-write-char ((gwb-s gwb-rec) gwb-c)
+			  (push (list :char gwb-c) (slot-value gwb-s 'gwb-log))
+			  gwb-c)
+			(defun gwb-probe (thunk datum-p)
+			  (let ((gwb-o (make-instance 'gwb-rec)))
+			    (list (handler-case (progn (funcall thunk gwb-o) :ok)
+			            (type-error (c) (if datum-p (list :type-error (type-error-datum c)) :type-error))
+			            (error () :other-error))
+			          (reverse (slot-value gwb-o 'gwb-log)))))
+			(defmacro gwb-row (datum-p &rest forms)
+			  `(print (list ,@(mapcar (lambda (f) `(gwb-probe (lambda (gwb-o) ,f) ,datum-p)) forms))))
+			(gwb-row t (write-line "hello" gwb-o :start *gwb-nil* :end *gwb-3*)
+			           (write-string "hello" gwb-o :start *gwb-nil* :end *gwb-3*)
+			           (write-line "hello" gwb-o :start *gwb-nil*)
+			           (write-string "hello" gwb-o :start *gwb-nil*))
+			(gwb-row t (write-line "hello" gwb-o :start *gwb-m1*)
+			           (write-string "hello" gwb-o :start *gwb-m1*)
+			           (write-line "hello" gwb-o :start *gwb-f*)
+			           (write-string "hello" gwb-o :start *gwb-f*))
+			(gwb-row nil (write-line "hello" gwb-o :start *gwb-9*)
+			             (write-string "hello" gwb-o :start *gwb-9*)
+			             (write-line "hello" gwb-o :end *gwb-9*)
+			             (write-string "hello" gwb-o :end *gwb-9*))
+			(gwb-row nil (write-line "hello" gwb-o :start *gwb-3* :end *gwb-1*)
+			             (write-string "hello" gwb-o :start *gwb-3* :end *gwb-1*)
+			             (write-line "hello" gwb-o :end *gwb-m1*)
+			             (write-string "hello" gwb-o :end *gwb-f*))
+			(gwb-row nil (funcall #'write-line "hello" gwb-o :start *gwb-nil* :end *gwb-3*)
+			             (funcall #'write-string "hello" gwb-o :start *gwb-nil*)
+			             (funcall #'write-line "hello" gwb-o :start *gwb-9*)
+			             (funcall #'write-string "hello" gwb-o :end *gwb-9*))
+			(gwb-row nil (write-line "hello" gwb-o :start *gwb-1* :end *gwb-3*)
+			             (write-string "hello" gwb-o :start *gwb-1* :end *gwb-3*)
+			             (write-line "hello" gwb-o :start *gwb-1*)
+			             (write-string "hello" gwb-o :start *gwb-1*))
+			(gwb-row nil (write-line "hello" gwb-o :end *gwb-3*)
+			             (write-string "hello" gwb-o :end *gwb-3*)
+			             (write-line "hello" gwb-o :end *gwb-nil*)
+			             (write-string "hello" gwb-o :end *gwb-nil*))
+			(gwb-row nil (write-line "hello" gwb-o :start 0 :end 5)
+			             (write-string "hello" gwb-o :end 0)
+			             (write-line "" gwb-o :start 0)
+			             (write-string "hello" gwb-o :start 5))
+			""";
+
+	/** What {@link #GRAY_BOUNDS_PROGRAM} prints (sbcl's answers). */
+	public static final String GRAY_BOUNDS_EXPECTED = String.join("\n",
+			"(((:TYPE-ERROR NIL) NIL) ((:TYPE-ERROR NIL) NIL) ((:TYPE-ERROR NIL) NIL) ((:TYPE-ERROR NIL) NIL))",
+			"(((:TYPE-ERROR -1) NIL) ((:TYPE-ERROR -1) NIL) ((:TYPE-ERROR 1.5) NIL) ((:TYPE-ERROR 1.5) NIL))",
+			"((:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL))",
+			"((:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL))",
+			"((:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL) (:TYPE-ERROR NIL))",
+			"((:OK ((\"hello\" 1 3) (:CHAR #\\Newline))) (:OK ((\"hello\" 1 3))) (:OK ((\"hello\" 1 5) (:CHAR #\\Newline))) (:OK ((\"hello\" 1 5))))",
+			"((:OK ((\"hello\" 0 3) (:CHAR #\\Newline))) (:OK ((\"hello\" 0 3))) (:OK ((\"hello\" 0 5) (:CHAR #\\Newline))) (:OK ((\"hello\" 0 5))))",
+			"((:OK ((\"hello\" 0 5) (:CHAR #\\Newline))) (:OK ((\"hello\" 0 0))) (:OK ((\"\" 0 0) (:CHAR #\\Newline))) (:OK ((\"hello\" 5 5))))");
 
 	/**
 	 * A bad bound read at run time, for every sequence operator taking one, in call

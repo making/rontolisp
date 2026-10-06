@@ -56,7 +56,8 @@ resolves through the compilers' function-designator normalization).
   the default for an ABSENT indicator only), the runtime twins with `optionalKeywordArg`,
   `count-if-not`'s prelude unchanged -- and the bounds check below refuses it (datum `NIL`).
   Pinned by `SequenceBoundsFixture.NIL_START_PROGRAM` and ci-spec
-  `sequence-operators-refuse-a-nil-start`. The wrappers' `getfKwDefault` is shorter than the
+  `sequence-operators-refuse-a-nil-start`; the same rule for `write-line` / `write-string` on a
+  Gray instance is `.kb/gray-streams.md`, "Bounds on `write-line` / `write-string`". The wrappers' `getfKwDefault` is shorter than the
   older `getfKwOr`: a program carrying the compiled `eval`'s wrapper table -5.8 KB JVM /
   -2.9 KB wasm (2026-10-05).
 
