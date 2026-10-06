@@ -37,6 +37,23 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ。文字列は 1 回の `stream-write-string` に渡す) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |
 
+`*standard-output*` や `*standard-input*` に束縛したインスタンスは、SBCL と同じく
+ストリームを指定しない呼び出しの対象になります: `(princ x)`、`(read-char)`、ストリーム引数
+`nil`、`format t` は、ストリームを明示したときと同様にそのメソッドへ届きます。
+
+```lisp
+(defclass shout-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod rontolisp:stream-write-char ((s shout-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string (char-upcase c))))
+  c)
+(let ((s (make-instance 'shout-stream)))
+  (let ((*standard-output* s))
+    (princ "hi ")
+    (format t "~a" 42))
+  (slot-value s 'acc)) ; => "HI 42"
+```
+
 文字出力ストリームは **`stream-write-char` か `stream-write-string` のどちらか一方を
 定義すれば十分です**。それぞれ他方を使ったデフォルトメソッドを持つため、書いたほうから
 残りの出力プロトコルが組み上がります (どちらも定義しないのが唯一の壊れた形で、2 つの

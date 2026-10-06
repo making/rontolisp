@@ -2787,6 +2787,14 @@ public final class LispNames {
 	public static final String GRAY_WRITE_LINE_DISPATCH = "RONTOLISP::%GRAY-WRITE-LINE-DISPATCH";
 
 	/**
+	 * The name prefix of every {@code gray.lisp} helper defun in the {@code rontolisp}
+	 * package -- the dispatch helpers the Gray rewrite substitutes for the stream
+	 * built-ins and the default element loops. All are ordinary defuns: they evaluate
+	 * their arguments left to right.
+	 */
+	public static final String GRAY_HELPER_PREFIX = "%GRAY-";
+
+	/**
 	 * Internal two-argument primitive {@code (%error-cond condition message)} that
 	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
 	 * instance) alongside the pre-built message string. Produced by the {@code error}

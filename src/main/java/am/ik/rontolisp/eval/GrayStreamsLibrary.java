@@ -184,7 +184,11 @@ public final class GrayStreamsLibrary {
 	 * {@code listen}, {@code read-sequence}/{@code write-sequence},
 	 * {@code file-position}) onto the {@code rontolisp::%gray-*-dispatch} helpers, so a
 	 * CLOS instance stream reaches the Gray generics in compiled programs like it does on
-	 * the interpreter. Only the dispatch helpers a rewrite actually produced are spliced
+	 * the interpreter. In a program that binds {@code *standard-output*} (or
+	 * {@code *standard-input*}), the stream-less and literal-nil spellings of that family
+	 * -- and {@code format t}, through its ordinary lowering -- are rewritten too, since
+	 * the stream they designate is whatever the variable holds when they run. Only the
+	 * dispatch helpers a rewrite actually produced are spliced
 	 * ({@code LibraryDefunPruner} does not cover this splice, and an unused helper is not
 	 * just bloat: {@code %gray-listen-dispatch}'s fallback names the {@code listen}
 	 * built-in, which the Preview 1 WASM backend rejects at compile time -- a Gray
@@ -202,7 +206,8 @@ public final class GrayStreamsLibrary {
 		if (!usesProtocol(program)) {
 			return program;
 		}
-		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program));
+		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program),
+				binds(program, STANDARD_OUTPUT), binds(program, STANDARD_INPUT));
 		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			rewritten.add(rewrite(form, ctx));
@@ -475,8 +480,47 @@ public final class GrayStreamsLibrary {
 	 * @param used the helper names a rewrite has produced
 	 * @param owned the {@link #OWNABLE_OPERATORS} the PROGRAM defines a method on -- the
 	 * rewrite stands down for each of them
+	 * @param standardOutput whether the program binds {@code *standard-output*}: only
+	 * then can the stream a stream-less print designates be a Gray instance, so only then
+	 * are those calls routed through the dispatch helpers
+	 * @param standardInput the same for {@code *standard-input*} and the stream-less
+	 * character reads
 	 */
-	private record RewriteContext(java.util.Set<String> used, java.util.Set<String> owned) {
+	private record RewriteContext(java.util.Set<String> used, java.util.Set<String> owned, boolean standardOutput,
+			boolean standardInput) {
+	}
+
+	private static final java.util.SequencedSet<String> STANDARD_OUTPUT = java.util.Collections
+		.unmodifiableSequencedSet(new java.util.LinkedHashSet<>(List.of(LispNames.STANDARD_OUTPUT_VAR)));
+
+	private static final java.util.SequencedSet<String> STANDARD_INPUT = java.util.Collections
+		.unmodifiableSequencedSet(new java.util.LinkedHashSet<>(List.of(LispNames.STANDARD_INPUT_VAR)));
+
+	/**
+	 * Whether the program binds the standard stream variable -- the condition the
+	 * backends switch its redirect on with ({@code .kb/standard-output-redirect.md},
+	 * "Activation rule"): a {@code let} or binding macro of it, or a
+	 * {@code rontolisp:make-thread}, whose bindings alist can bind it at run time. A
+	 * program that does neither reads the seeded {@code t}, which is no Gray instance, so
+	 * its stream-less calls keep their own lowering.
+	 */
+	private static boolean binds(List<LispVal> program, java.util.SequencedSet<String> variable) {
+		if (!am.ik.rontolisp.macro.SpecialVarCollector.collectDynamicallyBound(program, variable).isEmpty()) {
+			return true;
+		}
+		String makeThread = am.ik.rontolisp.PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
+		return program.stream().anyMatch(form -> namesSymbol(form, makeThread));
+	}
+
+	private static boolean namesSymbol(LispVal form, String name) {
+		while (form instanceof am.ik.rontolisp.LispCons cons) {
+			if (cons.car() instanceof am.ik.rontolisp.LispSymbol sym ? name.equals(sym.name())
+					: namesSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
 	}
 
 	/**
@@ -555,35 +599,36 @@ public final class GrayStreamsLibrary {
 				dispatchSymbol(WRITE_LINE_DISPATCH, ctx);
 			}
 			List<LispVal> parts = cons.toList();
-			if (parts.size() == 3 && (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
-					&& streamArgMayBeInstance(parts.get(2))) {
+			if ((parts.size() == 2 || parts.size() == 3)
+					&& (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
+					&& mayDispatch(parts, 2, ctx.standardOutput())) {
 				String helper = LispNames.WRITE_STRING.equals(opName) ? WRITE_STRING_DISPATCH : WRITE_CHAR_DISPATCH;
-				return new am.ik.rontolisp.LispCons(dispatchSymbol(helper, ctx), new am.ik.rontolisp.LispCons(
-						rewrite(parts.get(1), ctx),
-						new am.ik.rontolisp.LispCons(rewrite(parts.get(2), ctx), am.ik.rontolisp.LispNil.INSTANCE)));
+				return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), streamArg(parts, 2, ctx));
 			}
 			// The read family shares the (stream [eof-error-p [eof-value]]) shape; the
 			// dispatch helpers take all three, so an absent argument becomes its
 			// default LITERALLY (t/nil evaluate to themselves -- no evaluation-order
 			// change). read-line's eof-error-p defaults to nil, the built-in's lite
 			// convention.
+			// read-byte's stream is required, so only the character reads have a
+			// stream-less spelling.
 			if ((LispNames.READ_BYTE.equals(opName) || LispNames.READ_CHAR.equals(opName)
-					|| LispNames.READ_LINE.equals(opName)) && parts.size() >= 2 && parts.size() <= 4
-					&& streamArgMayBeInstance(parts.get(1))) {
+					|| LispNames.READ_LINE.equals(opName)) && parts.size() <= 4
+					&& mayDispatch(parts, 1, !LispNames.READ_BYTE.equals(opName) && ctx.standardInput())) {
 				String helper = LispNames.READ_BYTE.equals(opName) ? READ_BYTE_DISPATCH
 						: LispNames.READ_CHAR.equals(opName) ? READ_CHAR_DISPATCH : READ_LINE_DISPATCH;
 				LispVal eofDefault = LispNames.READ_LINE.equals(opName) ? am.ik.rontolisp.LispNil.INSTANCE
 						: am.ik.rontolisp.LispTrue.INSTANCE;
-				return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx),
+				return listOf(dispatchSymbol(helper, ctx), streamArg(parts, 1, ctx),
 						parts.size() >= 3 ? rewrite(parts.get(2), ctx) : eofDefault,
 						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
 			}
 			// read-char-no-hang shares the read family's shape but not its helper: a
 			// class with a genuinely non-blocking source overrides
 			// stream-read-char-no-hang, whose default IS stream-read-char.
-			if (LispNames.READ_CHAR_NO_HANG.equals(opName) && parts.size() >= 2 && parts.size() <= 4
-					&& streamArgMayBeInstance(parts.get(1))) {
-				return listOf(dispatchSymbol(READ_CHAR_NO_HANG_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+			if (LispNames.READ_CHAR_NO_HANG.equals(opName) && parts.size() <= 4
+					&& mayDispatch(parts, 1, ctx.standardInput())) {
+				return listOf(dispatchSymbol(READ_CHAR_NO_HANG_DISPATCH, ctx), streamArg(parts, 1, ctx),
 						parts.size() >= 3 ? rewrite(parts.get(2), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
 						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
 			}
@@ -592,24 +637,25 @@ public final class GrayStreamsLibrary {
 			// looped inside the helper, because LispMacroExpander.expandPeekChar runs
 			// after this pass and its %peek-char/read-char calls would never see the
 			// instance. The stream-LESS (peek-char) / (peek-char t) spellings read
-			// standard input and are left alone.
-			if (LispNames.PEEK_CHAR.equals(opName) && parts.size() >= 3 && parts.size() <= 5
-					&& streamArgMayBeInstance(parts.get(2))) {
-				return listOf(dispatchSymbol(PEEK_CHAR_DISPATCH, ctx), rewrite(parts.get(1), ctx),
-						rewrite(parts.get(2), ctx),
+			// *standard-input*, so they join only when the program binds it.
+			if (LispNames.PEEK_CHAR.equals(opName) && parts.size() <= 5 && mayDispatch(parts, 2, ctx.standardInput())) {
+				return listOf(dispatchSymbol(PEEK_CHAR_DISPATCH, ctx),
+						parts.size() >= 2 ? rewrite(parts.get(1), ctx) : am.ik.rontolisp.LispNil.INSTANCE,
+						streamArg(parts, 2, ctx),
 						parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
 						parts.size() >= 5 ? rewrite(parts.get(4), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
 			}
-			if (LispNames.UNREAD_CHAR.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
+			if (LispNames.UNREAD_CHAR.equals(opName) && (parts.size() == 2 || parts.size() == 3)
+					&& mayDispatch(parts, 2, ctx.standardInput())) {
 				return listOf(dispatchSymbol(UNREAD_CHAR_DISPATCH, ctx), rewrite(parts.get(1), ctx),
-						rewrite(parts.get(2), ctx));
+						streamArg(parts, 2, ctx));
 			}
 			if (LispNames.WRITE_BYTE.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
 				return listOf(dispatchSymbol(WRITE_BYTE_DISPATCH, ctx), rewrite(parts.get(1), ctx),
 						rewrite(parts.get(2), ctx));
 			}
-			if (LispNames.LISTEN.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
-				return listOf(dispatchSymbol(LISTEN_DISPATCH, ctx), rewrite(parts.get(1), ctx));
+			if (LispNames.LISTEN.equals(opName) && parts.size() <= 2 && mayDispatch(parts, 1, ctx.standardInput())) {
+				return listOf(dispatchSymbol(LISTEN_DISPATCH, ctx), streamArg(parts, 1, ctx));
 			}
 			// The line-oriented, flush and stream-query operators, all (op STREAM) with
 			// an
@@ -618,9 +664,9 @@ public final class GrayStreamsLibrary {
 			// program may OWN with a defmethod (OWNABLE_OPERATORS); the rewrite stands
 			// down
 			// for each one it does. On the write side the stream-LESS spelling writes to
-			// *standard-output* and can never be an instance, so it keeps its own
-			// lowering
-			// (and every program that does not name a stream stays byte-identical).
+			// *standard-output*, which can be an instance only in a program that binds
+			// it; anywhere else it keeps its own lowering (and a program that names no
+			// stream and binds no standard stream stays byte-identical).
 			String unaryStreamHelper = switch (opName) {
 				case LispNames.TERPRI -> TERPRI_DISPATCH;
 				case LispNames.FRESH_LINE -> FRESH_LINE_DISPATCH;
@@ -638,8 +684,12 @@ public final class GrayStreamsLibrary {
 					ctx.owned().contains(LispNames.STREAM_ELEMENT_TYPE) ? null : STREAM_ELEMENT_TYPE_DISPATCH;
 				default -> null;
 			};
-			if (unaryStreamHelper != null && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
-				return listOf(dispatchSymbol(unaryStreamHelper, ctx), rewrite(parts.get(1), ctx));
+			boolean outputOperator = LispNames.TERPRI.equals(opName) || LispNames.FRESH_LINE.equals(opName)
+					|| LispNames.FORCE_OUTPUT.equals(opName) || LispNames.FINISH_OUTPUT.equals(opName)
+					|| LispNames.CLEAR_OUTPUT.equals(opName);
+			if (unaryStreamHelper != null && parts.size() <= 2
+					&& mayDispatch(parts, 1, outputOperator && ctx.standardOutput())) {
+				return listOf(dispatchSymbol(unaryStreamHelper, ctx), streamArg(parts, 1, ctx));
 			}
 			// (close STREAM :abort V): the built-in accepts and ignores the tail, so the
 			// dispatch does too -- but V still evaluates, and AFTER the stream, which is
@@ -665,12 +715,13 @@ public final class GrayStreamsLibrary {
 				case LispNames.PRINT -> PRINT_DISPATCH;
 				default -> null;
 			};
-			if (valueStreamHelper != null && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
+			if (valueStreamHelper != null && (parts.size() == 2 || parts.size() == 3)
+					&& mayDispatch(parts, 2, ctx.standardOutput())) {
 				return listOf(dispatchSymbol(valueStreamHelper, ctx), rewrite(parts.get(1), ctx),
-						rewrite(parts.get(2), ctx));
+						streamArg(parts, 2, ctx));
 			}
 			if ((LispNames.WRITE_LINE.equals(opName) || LispNames.WRITE_STRING.equals(opName)) && parts.size() > 3
-					&& streamArgMayBeInstance(parts.get(2))) {
+					&& mayDispatch(parts, 2, ctx.standardOutput())) {
 				// (write-line|write-string value stream [:start s] [:end e]) -- like the
 				// read/write-sequence precedent below, only the two bounding keywords
 				// ride the dispatch; anything else is left for the lowering (whose
@@ -697,7 +748,7 @@ public final class GrayStreamsLibrary {
 				if (literalKeywords) {
 					String helper = LispNames.WRITE_LINE.equals(opName) ? WRITE_LINE_BOUNDS_DISPATCH
 							: WRITE_STRING_BOUNDS_DISPATCH;
-					return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), rewrite(parts.get(2), ctx),
+					return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), streamArg(parts, 2, ctx),
 							start == null ? new am.ik.rontolisp.LispInteger(0) : start,
 							end == null ? am.ik.rontolisp.LispNil.INSTANCE : end);
 				}
@@ -742,6 +793,25 @@ public final class GrayStreamsLibrary {
 							: WRITE_SEQUENCE_DISPATCH;
 					return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), rewrite(parts.get(2), ctx),
 							start, end);
+				}
+			}
+			// (format t ...) writes to *standard-output*: in a program that binds it, the
+			// call takes its ordinary lowering here -- princ / terpri / fresh-line, all
+			// stream-less -- and that lowering is rewritten like any other, so each piece
+			// reaches the stream the variable holds when it runs (~& included, which
+			// asks the Gray stream itself). A call the lowering rejects is left for the
+			// backend to report.
+			if (LispNames.FORMAT.equals(opName) && parts.size() >= 3 && parts.get(1) instanceof am.ik.rontolisp.LispTrue
+					&& ctx.standardOutput()) {
+				LispVal lowered;
+				try {
+					lowered = am.ik.rontolisp.macro.LispMacroExpander.expandFormat(cons);
+				}
+				catch (RuntimeException rejected) {
+					lowered = null;
+				}
+				if (lowered != null) {
+					return rewrite(lowered, ctx);
 				}
 			}
 			if (LispNames.FORMAT.equals(opName) && parts.size() >= 3 && streamArgMayBeInstance(parts.get(1))) {
@@ -940,6 +1010,27 @@ public final class GrayStreamsLibrary {
 		}
 		return !(streamArg instanceof am.ik.rontolisp.LispTrue) && !(streamArg instanceof am.ik.rontolisp.LispNil)
 				&& !(streamArg instanceof am.ik.rontolisp.LispString);
+	}
+
+	/**
+	 * Whether the stream argument at {@code index} may designate a Gray instance: an
+	 * expression that is not a literal non-instance, or -- when {@code standard} says the
+	 * program binds the standard stream nil designates -- an omitted or literal-nil
+	 * argument.
+	 */
+	private static boolean mayDispatch(List<LispVal> parts, int index, boolean standard) {
+		if (index >= parts.size() || parts.get(index) instanceof am.ik.rontolisp.LispNil) {
+			return standard;
+		}
+		return streamArgMayBeInstance(parts.get(index));
+	}
+
+	/**
+	 * The stream argument a dispatch helper receives: the rewritten expression, or nil
+	 * for an omitted one, which the helper resolves to the current standard stream.
+	 */
+	private static LispVal streamArg(List<LispVal> parts, int index, RewriteContext ctx) {
+		return index < parts.size() ? rewrite(parts.get(index), ctx) : am.ik.rontolisp.LispNil.INSTANCE;
 	}
 
 	private static am.ik.rontolisp.LispSymbol dispatchSymbol(String helperName, RewriteContext ctx) {

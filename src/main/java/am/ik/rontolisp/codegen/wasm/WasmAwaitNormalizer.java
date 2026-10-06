@@ -103,9 +103,14 @@ final class WasmAwaitNormalizer {
 		if (qn != null) {
 			if (qn.member().startsWith("%")) {
 				// The socket rewrite substitutes ORDINARY defuns under %-prefixed names,
-				// so the reason the prefix excludes the rest (non-value positions) does
-				// not hold for them: they take their arguments strictly.
-				return WasmSocketsRewrite.strictDispatchMembers().contains(qn.member());
+				// and so does the Gray rewrite (gray.lisp's helpers, which stand in for
+				// every stream built-in a Gray instance can reach -- the stream-less
+				// print family included, in a program that binds *standard-output*), so
+				// the reason the prefix excludes the rest (non-value positions) does not
+				// hold for them: they take their arguments strictly.
+				return WasmSocketsRewrite.strictDispatchMembers().contains(qn.member())
+						|| (LispNames.RONTOLISP_PKG.equals(qn.pkg())
+								&& qn.member().startsWith(LispNames.GRAY_HELPER_PREFIX));
 			}
 			if (LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
 				// The rontolisp package's directive/special members; its ordinary

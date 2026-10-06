@@ -191,4 +191,48 @@ public final class GrayStreamCallFixture {
 	public static final String OPEN_STREAM_PUSHBACK_EXPECTED = String.join("\n", "#\\g", "(T #\\1 #\\1 \"34\" #\\2)",
 			"(0 #\\a)", "#\\a");
 
+	/**
+	 * A Gray instance bound to {@code *standard-input*} / {@code *standard-output*}
+	 * receives the stream-LESS read and print families, an explicit {@code nil} stream, a
+	 * stream argument that is nil at run time, {@code format t} and the operators taken
+	 * as function values -- the stream each designates is the current value of the
+	 * variable.
+	 */
+	public static final String STANDARD_STREAM_PROGRAM = """
+			(defclass gsd-src (rontolisp:fundamental-character-input-stream)
+			  ((gsd-text :initarg :text) (gsd-pos :initform 0)))
+			(defmethod rontolisp:stream-read-char ((gsd-s gsd-src))
+			  (with-slots (gsd-text gsd-pos) gsd-s
+			    (if (< gsd-pos (length gsd-text)) (prog1 (char gsd-text gsd-pos) (incf gsd-pos)) :eof)))
+			(defmethod rontolisp:stream-unread-char ((gsd-s gsd-src) gsd-c)
+			  (decf (slot-value gsd-s 'gsd-pos))
+			  nil)
+			(defclass gsd-sink (rontolisp:fundamental-character-output-stream)
+			  ((gsd-acc :initform nil)))
+			(defmethod rontolisp:stream-write-char ((gsd-s gsd-sink) gsd-c)
+			  (push gsd-c (slot-value gsd-s 'gsd-acc))
+			  gsd-c)
+			(defun gsd-read-from (&optional gsd-s) (read-char gsd-s))
+			(defun gsd-write-to (gsd-x &optional gsd-s) (princ gsd-x gsd-s))
+			(let ((*standard-input* (make-instance 'gsd-src :text (format nil "ab-cd~%line2~%  x~%rest"))))
+			  (print (list (read-char) (peek-char) (read-char nil) (progn (unread-char #\\b) (read-char))
+			               (read-char-no-hang) (read-line) (read-line nil)))
+			  (print (list (peek-char t) (gsd-read-from) (funcall #'read-line) (read-line nil nil :eof)
+			               (read-char nil nil :eof))))
+			(let ((gsd-out (make-instance 'gsd-sink)))
+			  (print (let ((*standard-output* gsd-out))
+			           (list (princ "ab") (prin1 "q") (write-char #\\c) (write-char #\\d nil) (write-string "ef")
+			                 (write-string "xyz" nil :start 1) (write-line "g"))))
+			  (print (let ((*standard-output* gsd-out))
+			           (list (terpri) (progn (fresh-line) :fresh) (format t "~a!" 2) (format nil "~a" 3)
+			                 (force-output) (finish-output) (clear-output) (gsd-write-to "h") (funcall #'princ "i"))))
+			  (print (coerce (reverse (slot-value gsd-out 'gsd-acc)) 'string)))
+			""";
+
+	/** What {@link #STANDARD_STREAM_PROGRAM} prints (SBCL's answers). */
+	public static final String STANDARD_STREAM_EXPECTED = String.join("\n",
+			"(#\\a #\\b #\\b #\\b #\\- \"cd\" \"line2\")", "(#\\x #\\x \"\" \"rest\" :EOF)",
+			"(\"ab\" \"q\" #\\c #\\d \"ef\" \"xyz\" \"g\")", "(NIL :FRESH NIL \"3\" NIL NIL NIL \"h\" \"i\")",
+			"\"ab\\\"q\\\"cdefyzg", "", "", "2!hi\"");
+
 }

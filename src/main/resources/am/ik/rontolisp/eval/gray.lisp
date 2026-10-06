@@ -363,9 +363,16 @@
 ;; the CLOS arm and die on "no applicable method", and a synonym's target --
 ;; which may itself be a Gray instance -- would never be reached.
 ;; %gray-close-dispatch is the one exception; see its comment.
+;;
+;; Where nil designates a standard stream -- the print family's output stream,
+;; the character reads' input stream -- the helper resolves nil to the CURRENT
+;; *standard-output* / *standard-input* before the instance test: a Gray
+;; instance bound to the variable is the stream the call designates. A program
+;; that never binds the variable reads it as the constant t, so nothing changes
+;; there.
 
 (defun rontolisp::%gray-write-string-dispatch (s stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (rontolisp:stream-write-string stream s 0 (length s))
         (write-string s stream))))
@@ -374,7 +381,7 @@
   ;; write-char reaches stream-write-char -- the one method full Gray requires
   ;; and, for a class that defines only it, the ONLY writer it has. The
   ;; non-instance fallback is what write-char lowers to everywhere else.
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-char stream c)
@@ -391,7 +398,7 @@
 ;; included, trailing where rontolisp's print puts it.
 
 (defun rontolisp::%gray-princ-dispatch (value stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (let ((text (%princ-piece value)))
           (rontolisp:stream-write-string stream text 0 (length text))
@@ -399,7 +406,7 @@
         (princ value stream))))
 
 (defun rontolisp::%gray-prin1-dispatch (value stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (let ((text (%prin1-piece value)))
           (rontolisp:stream-write-string stream text 0 (length text))
@@ -407,7 +414,7 @@
         (prin1 value stream))))
 
 (defun rontolisp::%gray-print-dispatch (value stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (let ((text (%prin1-piece value)))
           (rontolisp:stream-write-string stream text 0 (length text))
@@ -416,7 +423,7 @@
         (print value stream))))
 
 (defun rontolisp::%gray-terpri-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-terpri stream)
@@ -428,7 +435,7 @@
   ;; depend on which kind of stream it was handed. stream-fresh-line's own
   ;; CL-shaped t/nil answer is still what a direct caller (and the shim's
   ;; delegation) sees.
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-fresh-line stream)
@@ -436,7 +443,7 @@
         (fresh-line stream))))
 
 (defun rontolisp::%gray-write-line-dispatch (s stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-write-string stream s 0 (length s))
@@ -450,7 +457,7 @@
 ;; a nil end being the length. Apart from the unbounded helpers above, so a call
 ;; spelling no bound does not carry the check.
 (defun rontolisp::%gray-write-line-bounds-dispatch (s stream start end)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (%check-sequence-bounds s start end)
@@ -460,7 +467,7 @@
         (write-line s stream :start start :end end))))
 
 (defun rontolisp::%gray-write-string-bounds-dispatch (s stream start end)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (%check-sequence-bounds s start end)
@@ -469,7 +476,7 @@
         (write-string s stream :start start :end end))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-force-output stream)
@@ -477,7 +484,7 @@
         (force-output stream))))
 
 (defun rontolisp::%gray-finish-output-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-finish-output stream)
@@ -485,7 +492,7 @@
         (finish-output stream))))
 
 (defun rontolisp::%gray-clear-output-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((stream (%stream-target (or stream *standard-output*))))
     (if (%obj-p stream)
         (progn
           (rontolisp:stream-clear-output stream)
@@ -530,7 +537,7 @@
 ;; stream VALUE (unread-char.lisp) -- keyed by a bare handle, two string streams
 ;; read through these helpers would share one cell.
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (let ((c (rontolisp::%gray-read-char-1 target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
@@ -538,7 +545,7 @@
 
 (defun rontolisp::%gray-read-char-no-hang-dispatch
     (stream eof-error-p eof-value)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (let ((c (rontolisp:stream-read-char-no-hang target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
@@ -552,7 +559,7 @@
 ;; stream -- the same contract the handle-based built-in follows (CL 21.2).
 (defun rontolisp::%gray-peek-char-dispatch
     (peek-type stream eof-error-p eof-value)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (let ((result nil) (done nil))
           (do ()
@@ -579,7 +586,7 @@
         (peek-char peek-type stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-unread-char-dispatch (character stream)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (progn
           (rontolisp:stream-unread-char target character)
@@ -645,14 +652,14 @@
         (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (let ((l (rontolisp:stream-read-line target)))
           (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
-  (let ((target (%stream-target stream)))
+  (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
         (if (rontolisp:stream-listen target) t nil)
         (listen stream))))
