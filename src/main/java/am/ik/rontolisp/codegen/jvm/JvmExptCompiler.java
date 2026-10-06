@@ -36,6 +36,13 @@ final class JvmExptCompiler {
 			return;
 		}
 		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
+			if (JvmFloatOperands.guards(args.subList(1, 3), ctx)) {
+				// An operand may hold a complex the form does not spell: _pow hands a
+				// holder to _cpow.
+				JvmFloatOperands.compileCall(args.subList(1, 3), ctx.mathOp(JvmMathFnCompiler.POW),
+						ctx.numOp(JvmNumericRuntimeBuilder.POW), ctx, className);
+				return;
+			}
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.POW));

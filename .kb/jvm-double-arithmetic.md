@@ -29,12 +29,16 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   `(double) v`) and inlines an interior `+ - * / mod rem` node, so only the outermost node boxes.
   Users: `JvmArithCompiler`, `JvmComparisonCompiler`, `JvmMathFnCompiler`, `JvmAbsCompiler`,
   `JvmExptCompiler`. Unrecognised operands compile as ordinary expressions.
+- In a program that may observe a complex, a site whose operands may hold one takes
+  `JvmFloatOperands` instead: the same raw arithmetic when no operand is a holder, the generic
+  helpers when one is, each operation applied where the interpreter applies it
+  (`.kb/jvm-complex.md`, "A complex beside a float literal").
 - **`min`/`max` use the STRICTER `JvmLispCompiler.isDefinitelyDouble`**, not `hasDoubleLiteral`:
   they return one operand AS IT STANDS (no contagion), so reboxing the wrong one changes its TYPE
   — `(min 1 2.0)` answered `1.0` instead of `1`. `isDefinitelyDouble` needs EACH operand
   independently proven (a `LispDouble` literal, a declared/raw double local, or a
-  `+`/`-`/`*`/`mod`/`rem` tree with one provably-double operand); it never crosses a function call
-  or `min`/`max`. Then `_fmin`/`_fmax`, else the boxed `_min`/`_max`. **Trap**: the `mod`/`rem`
+  `+`/`-`/`*`/`mod`/`rem` tree with one provably-double operand and no complex literal); it never
+  crosses a function call or `min`/`max`. Then `_fmin`/`_fmax`, else the boxed `_min`/`_max`. **Trap**: the `mod`/`rem`
   arm assumes they answer a double whenever EITHER argument is one — if their result TYPE ever
   depends on which operand is which, this arm must move with it.
 - **Comparisons use the same STRICTER gate since `.todo/037`'s float-vs-exact fix**:

@@ -10,7 +10,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.MethodCode;
 
 /**
  * Compiles the unary floating-point math built-ins ({@code sqrt}, {@code exp},
@@ -120,41 +119,28 @@ final class JvmMathFnCompiler {
 			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
 			return;
 		}
-		if (ctx.usesComplex && !JvmArithCompiler.unboxesDirectly(args.get(1), ctx)) {
-			compileHolderAware(args.get(1), ctx, className, name);
+		List<LispVal> operand = args.subList(1, 2);
+		if (JvmFloatOperands.guards(operand, ctx)) {
+			// A program that may observe a complex, and an argument that may be one -- a
+			// variable, a call, a float-literal operation over one: a holder takes the
+			// gated _cu1's complex arm, every real the inline StrictMath call it always
+			// took (`.kb/jvm-complex.md`, "A complex through a variable").
+			JvmFloatOperands.Operands operands = JvmFloatOperands.evaluate(operand, ctx, className);
+			JvmFloatOperands.branch(operands, ctx, className, () -> {
+				operands.pushRaw(0, ctx, className);
+				ctx.body.invokestatic(ctx.mathOp(name));
+				JvmEmitHelper.boxDouble(ctx);
+			}, () -> {
+				operands.pushBoxed(0, ctx, className);
+				ctx.body.loadConstant(u1Op(name));
+				ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
+			});
 			return;
 		}
 		// Number.doubleValue() coerces both Long and Double arguments to double.
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 		ctx.body.invokestatic(ctx.mathOp(name));
 		JvmEmitHelper.boxDouble(ctx);
-	}
-
-	/**
-	 * A program that may observe a complex, and an argument whose value arrives boxed: a
-	 * holder takes the gated {@code _cu1}'s complex arm, every real the inline
-	 * {@code StrictMath} call it always took -- one holder test, behind the presence
-	 * probe, in front of the {@code _dbl} that would reject a holder
-	 * (`.kb/jvm-complex.md`, "A complex through a variable").
-	 */
-	private static void compileHolderAware(LispVal arg, JvmLispCompiler.Ctx ctx, String className, String name) {
-		JvmExprCompiler.compileExpr(arg, ctx, className);
-		int temp = ctx.allocTemp();
-		ctx.body.astore(temp);
-		MethodCode.Label real = ctx.body.newLabel();
-		JvmComplexCompiler.emitNoHolderJump(ctx, className, real);
-		ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx)).ifeq(real);
-		ctx.body.aload(temp);
-		ctx.body.loadConstant(u1Op(name));
-		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
-		MethodCode.Label done = ctx.body.newLabel();
-		ctx.body.goto_(done);
-		ctx.body.labelBinding(real);
-		ctx.body.aload(temp);
-		JvmEmitHelper.unboxDouble(ctx);
-		ctx.body.invokestatic(ctx.mathOp(name));
-		JvmEmitHelper.boxDouble(ctx);
-		ctx.body.labelBinding(done);
 	}
 
 	/**
@@ -170,7 +156,26 @@ final class JvmMathFnCompiler {
 		if (LispNames.ATAN.equals(name)) {
 			// Both arguments must be REAL (CLHS). A complex reaching the f64
 			// coercion is not silently reduced to its real part: _dbl throws the
-			// interpreter's REAL operand-type report there.
+			// interpreter's REAL operand-type report there -- for the complex an inner
+			// float-literal operation computed, too, which its generic arm hands over.
+			List<LispVal> operands = args.subList(1, 3);
+			if (JvmFloatOperands.guards(operands, ctx)) {
+				JvmFloatOperands.Operands evaluated = JvmFloatOperands.evaluate(operands, ctx, className);
+				JvmFloatOperands.branch(evaluated, ctx, className, () -> {
+					evaluated.pushRaw(0, ctx, className);
+					evaluated.pushRaw(1, ctx, className);
+					ctx.body.invokestatic(ctx.mathOp(ATAN2));
+					JvmEmitHelper.boxDouble(ctx);
+				}, () -> {
+					evaluated.pushBoxed(0, ctx, className);
+					JvmEmitHelper.unboxDouble(ctx);
+					evaluated.pushBoxed(1, ctx, className);
+					JvmEmitHelper.unboxDouble(ctx);
+					ctx.body.invokestatic(ctx.mathOp(ATAN2));
+					JvmEmitHelper.boxDouble(ctx);
+				});
+				return;
+			}
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.body.invokestatic(ctx.mathOp(ATAN2));

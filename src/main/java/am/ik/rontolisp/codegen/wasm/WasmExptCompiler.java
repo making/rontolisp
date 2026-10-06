@@ -71,9 +71,8 @@ final class WasmExptCompiler {
 		// for exactly the operand that can be one there (`.kb/wasm-complex.md`, "A
 		// complex through a variable").
 		WasmComplexBlock complexBlock = ctx.complexBlock;
-		WasmComplexBlock guard = complexBlock != null
-				&& (WasmComplexBlock.mayHoldComplex(args.get(1)) || WasmComplexBlock.mayHoldComplex(args.get(2)))
-						? complexBlock : null;
+		WasmComplexBlock guard = complexBlock != null && WasmFloatOperands.guards(args.subList(1, 3), ctx)
+				? complexBlock : null;
 
 		// if (base is a float || p is a float || p is a ratio) { the float path }
 		// else { the exact loop over an integer exponent }

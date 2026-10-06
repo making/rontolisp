@@ -1995,6 +1995,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplexBesideAFloatLiteral() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexBesideAFloatLiteral: a float
+		// literal routed (* 2.0 z) and its consumers onto the unboxed double path, whose
+		// _dbl reported the holder as a wrong-type operand, and an operand's wrong type
+		// was reported before a later operand ran.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false,
+				false)))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunComplexProductSignedZero() throws Exception {
 		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
 		assertThat(compileAndRun(

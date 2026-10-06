@@ -32,6 +32,33 @@ final class JvmComparisonCompiler {
 			branch = Opcode.IFNE;
 		}
 		else if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
+				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)
+				&& JvmFloatOperands.guards(args.subList(1, 3), ctx)) {
+			// Proven doubles -- unless an operand holds a complex the form does not spell
+			// ((* 2.0 z)): then = compares part-wise and an ordering signals, through
+			// the generic comparison the operands take when one is a holder.
+			JvmFloatOperands.Operands operands = JvmFloatOperands.evaluate(args.subList(1, 3), ctx, className);
+			MethodCode.Label trueLabel = ctx.body.newLabel();
+			MethodCode.Label endLabel = ctx.body.newLabel();
+			JvmFloatOperands.branch(operands, ctx, className, () -> {
+				operands.pushRaw(0, ctx, className);
+				operands.pushRaw(1, ctx, className);
+				emitDoubleCompare(ctx, branchOpcode);
+				ctx.body.branch(branchOpcode, trueLabel);
+			}, () -> {
+				operands.pushBoxed(0, ctx, className);
+				operands.pushBoxed(1, ctx, className);
+				ctx.body.invokestatic(orderingOrEquality(branchOpcode, ctx, className));
+				JvmEmitHelper.emitIntConst(ctx, maskFor(branchOpcode));
+				ctx.body.iand().ifne(trueLabel);
+			});
+			ctx.body.aconst_null().goto_(endLabel);
+			ctx.body.labelBinding(trueLabel);
+			JvmEmitHelper.compileTrue(ctx);
+			ctx.body.labelBinding(endLabel);
+			return;
+		}
+		else if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
 				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
 			// Both sides are PROVEN doubles (a literal, a declared/raw double local,
 			// or a true-contagion tree): their f64 comparison is exact, so the
@@ -41,15 +68,7 @@ final class JvmComparisonCompiler {
 			// hasDoubleLiteral-vs-isDefinitelyDouble distinction, JvmMinCompiler).
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			// IEEE: a comparison against NaN is false. javac's rule: DCMPG for < and
-			// <= (NaN falls out as +1, failing IFLT/IFLE), DCMPL for the others (NaN
-			// falls out as -1, failing IFGT/IFGE/IFEQ).
-			if (branchOpcode == Opcode.IFLT || branchOpcode == Opcode.IFLE) {
-				ctx.body.dcmpg();
-			}
-			else {
-				ctx.body.dcmpl();
-			}
+			emitDoubleCompare(ctx, branchOpcode);
 			branch = branchOpcode;
 		}
 		else {
@@ -89,6 +108,18 @@ final class JvmComparisonCompiler {
 		return ctx.usesComplex && branchOpcode != Opcode.IFEQ
 				? JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB)
 				: ctx.numOp(JvmNumericRuntimeBuilder.CMPB);
+	}
+
+	// IEEE: a comparison against NaN is false. javac's rule: DCMPG for < and <= (NaN
+	// falls out as +1, failing IFLT/IFLE), DCMPL for the others (NaN falls out as -1,
+	// failing IFGT/IFGE/IFEQ).
+	private static void emitDoubleCompare(JvmLispCompiler.Ctx ctx, Opcode branchOpcode) {
+		if (branchOpcode == Opcode.IFLT || branchOpcode == Opcode.IFLE) {
+			ctx.body.dcmpg();
+		}
+		else {
+			ctx.body.dcmpl();
+		}
 	}
 
 	private static int maskFor(Opcode branchOpcode) {

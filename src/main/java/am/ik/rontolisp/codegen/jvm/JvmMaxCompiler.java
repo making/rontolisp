@@ -18,6 +18,13 @@ final class JvmMaxCompiler {
 		// See JvmMinCompiler for why this is isDefinitelyDouble, not hasDoubleLiteral.
 		if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
 				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
+			if (JvmFloatOperands.guards(args.subList(1, 3), ctx)) {
+				// An operand may hold a complex the form does not spell, which the boxed
+				// helper reports as a REAL operand-type error.
+				JvmFloatOperands.compileCall(args.subList(1, 3), ctx.numOp(JvmNumericRuntimeBuilder.FMAX),
+						ctx.numOp(JvmNumericRuntimeBuilder.MAX), ctx, className);
+				return;
+			}
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMAX));

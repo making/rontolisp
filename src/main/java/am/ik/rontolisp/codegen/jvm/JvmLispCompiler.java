@@ -5843,7 +5843,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@link #CONTAGIOUS_ARITHMETIC_FORMS} -- true contagion, not a guess -- and never
 	 * crosses into an arbitrary function call (whose return type this pass cannot see) or
 	 * into {@code min}/{@code max} themselves (whose own result is exactly this same
-	 * ambiguity).
+	 * ambiguity). A syntactically visible complex anywhere in the tree disqualifies it
+	 * outright, as in the WASM twin: the tree answers a complex, not a double.
 	 * @param val the expression tree
 	 * @param ctx the compiler context (declared/raw double locals)
 	 * @return true only when val is guaranteed to evaluate to a double
@@ -5859,6 +5860,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (val instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
 				&& CONTAGIOUS_ARITHMETIC_FORMS.contains(head.name())) {
 			List<LispVal> parts = cons.toList();
+			for (LispVal operand : parts.subList(1, parts.size())) {
+				if (LispMacroExpander.containsComplex(operand)) {
+					return false;
+				}
+			}
 			for (LispVal operand : parts.subList(1, parts.size())) {
 				if (isDefinitelyDouble(operand, ctx)) {
 					return true;

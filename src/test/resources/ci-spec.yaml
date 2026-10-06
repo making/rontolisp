@@ -22044,6 +22044,48 @@ cases:
       "<: The value #C(1 2) is not of type REAL"
       "*: The value A is not of type NUMBER"
       :DIVISION-BY-ZERO
+  - name: complex-beside-a-float-literal
+    # A complex reaching an operation that spells a float literal -- the compiled
+    # backends' unboxed float path -- answers the complex, an operator that wants a real
+    # reports the complex the inner operation computed, and an operation's operands run
+    # before it signals. The rows are ComplexBesideAFloatLiteralFixture's.
+    source: |
+      (defvar *ci-cbf-z* (complex 1 2))
+      (defvar *ci-cbf-w* (complex 1.5 -2.0))
+      (defvar *ci-cbf-m* -1.0)
+      (defvar *ci-cbf-a* 'a)
+      (defun ci-cbf-poly (a) (+ (* 0.5 a a) (* -2.0 a) 1.0))
+      (print (+ *ci-cbf-z* 1.5))
+      (print (* 2.0 *ci-cbf-z*))
+      (print (- 0.5 *ci-cbf-z*))
+      (print (/ 2.0 *ci-cbf-z*))
+      (print (- (* 1.0 *ci-cbf-w*)))
+      (print (ci-cbf-poly *ci-cbf-z*))
+      (print (exp (* 1.0 *ci-cbf-z*)))
+      (print (abs (* 2.0 *ci-cbf-z*)))
+      (print (expt 2.0 *ci-cbf-z*))
+      (print (signum (* 2.0 *ci-cbf-z*)))
+      (print (= (* 2.0 *ci-cbf-z*) 1.0))
+      (print (+ 1.0 (log *ci-cbf-m*)))
+      (print (handler-case (< (* 2.0 *ci-cbf-z*) 1.0) (error (e) (princ-to-string e))))
+      (print (handler-case (+ (* 2.0 *ci-cbf-a*) 1.5) (error (e) (princ-to-string e))))
+      (print (handler-case (+ *ci-cbf-a* (progn (princ "z ") 1.5)) (error (e) (princ-to-string e))))
+    expected: |
+      #C(2.5 2.0)
+      #C(2.0 4.0)
+      #C(-0.5 -2.0)
+      #C(0.4 -0.8)
+      #C(-1.5 2.0)
+      #C(-2.5 -2.0)
+      #C(-1.1312043837568138 2.471726672004819)
+      4.47213595499958
+      #C(0.36691394948660344 1.9660554808224875)
+      #C(0.4472135954999579 0.8944271909999159)
+      NIL
+      #C(1.0 3.141592653589793)
+      "<: The value #C(2.0 4.0) is not of type REAL"
+      "*: The value A is not of type NUMBER"
+      z "+: The value A is not of type NUMBER"
   - name: complex-type-system
     source: |
       (print (typep #c(1 2) 'complex))

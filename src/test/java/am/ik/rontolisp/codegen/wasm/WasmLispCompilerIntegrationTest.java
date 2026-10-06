@@ -27497,6 +27497,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void complexBesideAFloatLiteral() throws Exception {
+		// The LispEvaluatorTest#complexBesideAFloatLiteral twin: a float literal routed
+		// (* 2.0 z) onto the f64 path, whose _as_f64 trapped on the TYPE_COMPLEX (the
+		// non-EH program) or reported it as a wrong-type operand (the EH one), and the
+		// printer cast what it took for a certain float. Every level, because the tests
+		// the guard adds live in bodies the type-test fold rewrites.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		List<LispVal> signals = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.WASM,
+				true, false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"cbf-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.EXPECTED);
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(signals),
+					"cbs-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(signals))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
 	void complexProductSignedZero() throws Exception {
 		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
 		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(

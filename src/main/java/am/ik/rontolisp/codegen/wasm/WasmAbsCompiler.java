@@ -17,6 +17,24 @@ final class WasmAbsCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		WasmComplexBlock complexBlock = ctx.complexBlock;
+		if (complexBlock != null && WasmLispCompiler.hasDoubleLiteral(args)
+				&& WasmFloatOperands.guards(args.subList(1, 2), ctx)) {
+			// The argument may hold a complex the form does not spell ((abs (* 2.0 z))):
+			// its modulus comes from the complex block, a real takes f64.abs.
+			WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(args.subList(1, 2), ctx);
+			operands.emitHoldsComplex(ctx);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			operands.pushBoxed(0, ctx);
+			complexBlock.emitCall(ctx, WasmComplexBlock.Fn.ABS);
+			ctx.writer.write(Instruction.ELSE);
+			operands.pushRaw(0, ctx);
+			ctx.writer.write(Instruction.F64_ABS);
+			WasmEmitHelper.boxF64(ctx);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			// Double path: f64.abs is a native WASM instruction
@@ -51,7 +69,6 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.ELSE);
-			WasmComplexBlock complexBlock = ctx.complexBlock;
 			if (complexBlock != null) {
 				// A program that may observe a complex: one arriving here answers its
 				// modulus through the complex block, ahead of _rat_cmp's landing.

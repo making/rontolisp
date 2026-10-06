@@ -128,8 +128,9 @@ REJECT a complex:
   site calling an entry records the fdlibm functions that body calls as its own, so they
   get real bodies exactly when a reachable site calls the entry.
 - Sites keep their real paths inline and test in front of them: `abs` on its non-float
-  arm; a unary function whose argument is a variable or a call
-  (`WasmComplexBlock.mayHoldComplex`), reading a float argument straight out of its box
+  arm; a unary function whose argument may hold a complex
+  (`ComplexCapability.mayYieldComplex`, the JVM's predicate: a variable or a call, or an
+  arithmetic operation over one), reading a float argument straight out of its box
   behind the test; `expt` on each path for exactly the operand that can be complex there
   (the base alone on the integer-exponent loop).
 - `=` calls the block's `=` (`WasmComparisonCompiler.emitGenericCompare`, the fused
@@ -142,8 +143,7 @@ REJECT a complex:
   most gated programs, where the one complex a `sqrt` can make never reaches the
   arithmetic, keep none of it.
 
-Not reached: an operator whose own form spells a float literal (`(+ z 1.5)`) takes the
-f64 path, whose `_as_f64` lands a complex in the REAL report -- `.todo/d57`.
+An operator whose own form spells a float literal (`(+ z 1.5)`) is the next section's.
 
 Measured 2026-10-06 (wasmtime 49, linux/amd64): the size-report and bench-report programs
 are byte-identical at every level, P1 and component. Where no complex can flow (the
@@ -158,6 +158,32 @@ float read, float `+`/`*` is 15% FASTER than before, `=` 11%, unary 5%. `expt` s
 +10-15% in that micro program only because the old fold had proved its operand never a
 float and deleted the float branch, which the reachable `_c_*` twins' float answers now
 keep. An n-body whose float arithmetic a complex can reach runs 6% faster.
+
+## A complex beside a float literal
+
+A float literal routes `(* 2.0 z)`, `(abs (* 2.0 z))` and `(= (* 2.0 z) 1.0)` onto the f64
+path, whose `_as_f64` lands a complex in the REAL report. In a module whose program may
+observe a complex, a site whose operands may hold one (`ComplexCapability.mayYieldComplex`)
+takes `WasmFloatOperands`; every other module, and every other site, is byte-identical.
+
+- Every operand is evaluated into a temporary first -- left to right, as the interpreter
+  evaluates an operation's arguments before applying it -- then `ref.test TYPE_COMPLEX`
+  over the ones a variable or a call produced picks the `_rat_*` fold (whose arms answer
+  the complex; `_c_neg` for a unary minus) or the f64 fold over the temporaries, where a
+  number literal is its `f64.const` rather than a box `_as_f64` opens again. An inner
+  float-literal operation is an operand like any call: it boxes its result, as it always
+  did, and signals before the outer one's later operands run.
+- Consumers: the arithmetic (`WasmArithCompiler`), the comparison on proven doubles
+  (`emitGenericCompare`: the block's `=`, `_rat_cmp_bits` for an ordering) and `abs` (the
+  block's `abs`). `min`/`max`, `atan`'s two-argument form, the rounding family and
+  `random` need nothing: their `_as_f64` already reports the complex an operand computed
+  as REAL under their own operator.
+- The printer's shortcut (`DoubleValuedForms.certainlyDouble`) answers false in such a
+  program for a form with an operand that may hold a complex: its `ref.cast` to
+  `TYPE_FLOAT` would trap on the complex.
+
+The order, the pairwise generic fold and the pins are the JVM twin's
+(`.kb/jvm-complex.md`, "A complex beside a float literal").
 
 ## Errors: the interpreter's texts, the backend's classes
 
@@ -290,9 +316,6 @@ implementations, changed together. What is this backend's alone:
 
 ## Known corners (documented, matching the JVM where stated)
 
-- A complex arriving only through a variable beside a float LITERAL in the same
-  operation takes the f64 path into the REAL report ("A complex through a
-  variable"); beside anything else it reaches the run-time arms.
 - A runtime-real value under a steered operator demotes exactly, but a float
   real answers a float-zero-imagined complex -- the JVM `_ccomplex` float path
   does the same (`_cneg` included: it always ends in `_ccomplex`).
@@ -306,7 +329,8 @@ implementations, changed together. What is this backend's alone:
 Pinning tests: `WasmLispCompilerIntegrationTest#compileAndRunComplex*`
 (mirrors `LispEvaluatorTest`'s `evalComplex*` case for case, plus a
 `--component` smoke leg); `NoGcWasmCompilerTest#rejectsComplexNumbers`;
-`WasmLispCompilerIntegrationTest#complexThroughAVariable` (every optimize
-level, P1 and component, outside and inside EH mode) with its
-`ComplexThroughAVariableFixture` twins and `ci-spec.yaml`'s
-`complex-arithmetic-through-a-variable`.
+`WasmLispCompilerIntegrationTest#complexThroughAVariable` and
+`#complexBesideAFloatLiteral` (every optimize level, P1 and component, outside
+and inside EH mode) with their `ComplexThroughAVariableFixture` /
+`ComplexBesideAFloatLiteralFixture` twins and `ci-spec.yaml`'s
+`complex-arithmetic-through-a-variable` / `complex-beside-a-float-literal`.

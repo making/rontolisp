@@ -20,7 +20,25 @@ final class WasmComparisonCompiler {
 		// float beside an exact number compares exact values, so coercing the
 		// exact side here would round a near tie to equality. Anything else goes
 		// through _rat_cmp_bits, whose float-vs-exact arm is exact.
-		if (WasmLispCompiler.isDefinitelyDouble(args.get(1)) && WasmLispCompiler.isDefinitelyDouble(args.get(2))) {
+		if (WasmLispCompiler.isDefinitelyDouble(args.get(1)) && WasmLispCompiler.isDefinitelyDouble(args.get(2))
+				&& WasmFloatOperands.guards(args.subList(1, 3), ctx)) {
+			// Proven doubles -- unless an operand holds a complex the form does not spell
+			// ((* 2.0 z)): then = compares part-wise and an ordering signals, through the
+			// generic comparison.
+			WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(args.subList(1, 3), ctx);
+			operands.emitHoldsComplex(ctx);
+			ctx.writer.write(am.ik.wasm.Instruction.IF);
+			ctx.writer.write(am.ik.wasm.Type.I32);
+			operands.pushBoxed(0, ctx);
+			operands.pushBoxed(1, ctx);
+			emitGenericCompare(ctx, maskFor(i32Opcode));
+			ctx.writer.write(am.ik.wasm.Instruction.ELSE);
+			operands.pushRaw(0, ctx);
+			operands.pushRaw(1, ctx);
+			ctx.writer.write(f64Opcode);
+			ctx.writer.write(am.ik.wasm.Instruction.END);
+		}
+		else if (WasmLispCompiler.isDefinitelyDouble(args.get(1)) && WasmLispCompiler.isDefinitelyDouble(args.get(2))) {
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);

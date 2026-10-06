@@ -20364,6 +20364,18 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 	}
 
+	// The reference for a complex reaching an operation that spells a float literal, the
+	// compiled backends' unboxed float path. The twins are
+	// JvmLispCompilerTest#compileAndRunComplexBesideAFloatLiteral and
+	// WasmLispCompilerIntegrationTest#complexBesideAFloatLiteral.
+	@Test
+	void complexBesideAFloatLiteral() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_EXPECTED);
+	}
+
 	// A product with a complex operand keeps a negative zero part (the fold seeded from
 	// 1+0i lost it). The twins are
 	// JvmLispCompilerTest#compileAndRunComplexProductSignedZero

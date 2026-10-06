@@ -28,6 +28,13 @@ final class JvmMinCompiler {
 		// double whichever one wins and reboxing it is exact.
 		if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)
 				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
+			if (JvmFloatOperands.guards(args.subList(1, 3), ctx)) {
+				// An operand may hold a complex the form does not spell, which the boxed
+				// helper reports as a REAL operand-type error.
+				JvmFloatOperands.compileCall(args.subList(1, 3), ctx.numOp(JvmNumericRuntimeBuilder.FMIN),
+						ctx.numOp(JvmNumericRuntimeBuilder.MIN), ctx, className);
+				return;
+			}
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMIN));
