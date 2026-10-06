@@ -1562,9 +1562,10 @@ public final class LispPreludeLibrary {
 		// types wider and narrower than one octet"). A backend's file descriptor moves
 		// octets whatever the element type, so the TYPE rides beside the stream: every
 		// literal binary open leaf is wrapped in %file-stream-register, keyed by the
-		// HANDLE -- the Gray dispatchers hand the built-ins a resolved handle, not the
-		// stream value -- and every close forgets its entry (%file-stream-forget), so a
-		// WASM descriptor reused after close never inherits one. An entry is
+		// HANDLE -- the Gray byte dispatchers hand the built-ins a resolved handle,
+		// not the stream value -- and every close forgets its entry
+		// (%file-stream-forget), so a WASM descriptor reused after close never
+		// inherits one. An entry is
 		// (octets signed spec). The backends call these only
 		// when the entry is spliced (ctx.functions), and selection keys on the SURFACE
 		// fact (referencedBySurfaceForm), because the calls are synthesized inside the

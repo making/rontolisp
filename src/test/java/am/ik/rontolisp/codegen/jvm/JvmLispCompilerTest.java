@@ -5337,6 +5337,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUnreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunObjSetCompilesWhereNoInstanceCanExist() throws Exception {
 		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
 		// pushback) without knowing whether the class builds instances: with the gate
@@ -13569,6 +13576,15 @@ class JvmLispCompilerTest {
 				am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
+		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
 	}
 
 	@Test

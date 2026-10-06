@@ -854,6 +854,12 @@ class LispEvaluatorTest {
 			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
 	}
 
+	@Test
+	void unreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() {
+		assertThat(printedOutput(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
 	private static String printedOutput(String program) {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
@@ -10486,6 +10492,19 @@ class LispEvaluatorTest {
 		}
 		assertThat(baos.toString().trim())
 			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharInAGrayProgramParksOnTheOpenStream() {
+		// Reads through the Gray dispatch helpers still park on the open stream value.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
 	}
 
 	@Test

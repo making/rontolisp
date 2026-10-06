@@ -6479,8 +6479,10 @@ public final class Environment implements Scope {
 			return LispNil.INSTANCE;
 		}));
 		// The handle-side pushback of unread-char (declared here, ahead of listen,
-		// which consults it): on the stream value itself, StreamPushback.
-		final StreamPushback pushback = new StreamPushback();
+		// which consults it): on the stream the designator denotes, StreamPushback --
+		// an omitted stream reaches the same cell as the *standard-input* it reads.
+		final StreamPushback pushback = new StreamPushback(
+				() -> env.defaultInput == null ? null : env.defaultInput.get());
 		// (listen &optional stream): whether input is immediately available without
 		// blocking -- InputStream.available() / Reader.ready() semantics. Sockets answer
 		// from the kernel receive buffer, which is what cl-postgres's

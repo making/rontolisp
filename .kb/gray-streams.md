@@ -266,8 +266,25 @@ one. A key that is not a stream value (`t`) shares ONE cell keyed by `eql`.
   `%gray-unread-char-dispatch`'s non-instance fallback IS the handle arm.
 
 Contract, identical on all four:
-- KEY = the stream argument AS GIVEN, an omitted stream and the nil designator folded onto `t`;
-  else `eql`.
+- KEY = the stream the designator DENOTES: an omitted stream and nil -> the current
+  `*standard-input*`, a synonym -> its target (recursively, NOT unwrapped to the handle), a nil
+  left over -> `t`; else `eql`. Interpreter `StreamPushback.key` (`Environment.defaultInput` +
+  `synonymTarget`), compile paths `%unread-key`. Until 2026-10-06 it was the argument AS GIVEN
+  (nil folded onto `t`): `(let ((*standard-input* s)) (unread-char (read-char)))` parked under
+  `t` and a later `(read-char s)` skipped it on all four (SBCL: `#\a`, all four: `#\b`), and a
+  synonym keyed on itself on the compile paths only (the interpreter's Gray wrap resolves it
+  first). Pinned by `StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM` in the three suites.
+- Naming `*standard-input*` in `%unread-key` does NOT switch the input redirect on: the redirect
+  activates on a BINDING (`.kb/standard-output-redirect.md`, "Activation rule"), and an unbound
+  read compiles to the constant `t` (checked 2026-10-06 with `javap`: an `unread-char` program
+  that binds nothing has no `*STANDARD-INPUT*` field). What it does add is the eval runtime's
+  mirror seed of the variable, in an `unread-char` program that also uses `eval`.
+- **gray.lisp's read-side helpers hand the fallback built-in the stream AS GIVEN** (`read-char`,
+  `-no-hang`, `peek-char`, `unread-char`, `read-line`, `listen`, `file-position` and its set),
+  testing `%obj-p` on the `%stream-target` result only. They handed the resolved HANDLE until
+  2026-10-06, so in a Gray-using program every open-stream read keyed the pushback on an integer
+  -- the shared cell: two string streams each unread once signalled on JVM, P1 and component.
+  Pinned by `GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM`.
 - `read-char`/`read-char-no-hang` DRAIN it; `%peek-char` LEAVES it; `peek-char`'s skipping
   peek-types drain it exactly when the char is one to skip (`%unread-peek-stops-p` runs
   built-in `peek-char` over a one-character string input stream rather than adding a FOURTH
@@ -366,9 +383,9 @@ splices the whole entry.
   unread-char method owning the pushback, the default parking on its instance, direction
   predicates, shim mixin + setf file-position, `grayStreamInstanceIsAStream`) and
   `#unreadChar*`, `#evalFlexiStream*`.
-- `JvmLispCompilerTest#compileAndRunGray*` (10) + `#compileAndRunUnreadCharOnAStreamHandleRoundTrips`,
+- `JvmLispCompilerTest#compileAndRunGray*` (10) + `#compileAndRunUnreadChar*`,
   `#grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
-- `WasmLispCompilerIntegrationTest#gray*` (8) + `#unreadCharOnAStreamHandleRoundTrips`.
+- `WasmLispCompilerIntegrationTest#gray*` (8) + `#unreadChar*`.
 - `GrayStreamsLibraryTest#programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront`;
   `FastIoCircularStreamsE2eTest`, the two `LackEcosystem*E2eTest` classes.
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,

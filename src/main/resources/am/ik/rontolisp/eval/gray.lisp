@@ -524,18 +524,23 @@
           (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
         (read-byte stream eof-error-p eof-value))))
 
+;; The character helpers below hand the built-in the stream AS GIVEN, not its
+;; resolved handle, like the sequence helpers further down: the built-in
+;; resolves the designator itself, and the unread-char pushback lives on the
+;; stream VALUE (unread-char.lisp) -- keyed by a bare handle, two string streams
+;; read through these helpers would share one cell.
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((c (rontolisp::%gray-read-char-1 stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((c (rontolisp::%gray-read-char-1 target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
         (read-char stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-read-char-no-hang-dispatch
     (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((c (rontolisp:stream-read-char-no-hang stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((c (rontolisp:stream-read-char-no-hang target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
         (read-char-no-hang stream eof-error-p eof-value))))
 
@@ -547,12 +552,12 @@
 ;; stream -- the same contract the handle-based built-in follows (CL 21.2).
 (defun rontolisp::%gray-peek-char-dispatch
     (peek-type stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
         (let ((result nil) (done nil))
           (do ()
               (done result)
-            (let ((c (rontolisp:stream-peek-char stream)))
+            (let ((c (rontolisp:stream-peek-char target)))
               (cond ((eq c :eof)
                      (if eof-error-p (error 'end-of-file) nil)
                      (setq result eof-value)
@@ -562,7 +567,7 @@
                      (setq done t))
                     ((eq peek-type t)
                      (if (rontolisp::%gray-whitespace-char-p c)
-                         (rontolisp::%gray-read-char-1 stream)
+                         (rontolisp::%gray-read-char-1 target)
                          (progn
                            (setq result c)
                            (setq done t))))
@@ -570,14 +575,14 @@
                            (progn
                              (setq result c)
                              (setq done t))
-                           (rontolisp::%gray-read-char-1 stream)))))))
+                           (rontolisp::%gray-read-char-1 target)))))))
         (peek-char peek-type stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-unread-char-dispatch (character stream)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
         (progn
-          (rontolisp:stream-unread-char stream character)
+          (rontolisp:stream-unread-char target character)
           nil)
         (unread-char character stream))))
 
@@ -640,16 +645,16 @@
         (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((l (rontolisp:stream-read-line stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((l (rontolisp:stream-read-line target)))
           (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (if (rontolisp:stream-listen stream) t nil)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (if (rontolisp:stream-listen target) t nil)
         (listen stream))))
 
 ;; The built-in gets the stream AS GIVEN, not its resolved handle: it resolves the
@@ -678,22 +683,23 @@
         (write-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((target (%stream-target stream)))
     ;; A broadcast stream answers for its last component, or 0 with none. The
     ;; components are slot 0 (the base classes hold no slots), read directly:
     ;; these helpers travel without the broadcast class entry, so the reader
     ;; may not be defined where they run.
-    (if (%obj-is stream '|%class-%BROADCAST-STREAM|)
-        (let ((cs (%obj-ref stream 0)))
+    (if (%obj-is target '|%class-%BROADCAST-STREAM|)
+        (let ((cs (%obj-ref target 0)))
           (if cs (rontolisp::%gray-file-position-dispatch (car (last cs))) 0))
-        (if (%obj-p stream)
-            (rontolisp:stream-file-position stream)
+        (if (%obj-p target)
+            (rontolisp:stream-file-position target)
+            ;; As given, like the character helpers: the parked character counts.
             (file-position stream)))))
 
 (defun rontolisp::%gray-file-position-set-dispatch (stream position)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (setf (rontolisp:stream-file-position stream) position)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (setf (rontolisp:stream-file-position target) position)
         (file-position stream position))))
 
 ;; A broadcast stream answers the file queries for its LAST component, or for

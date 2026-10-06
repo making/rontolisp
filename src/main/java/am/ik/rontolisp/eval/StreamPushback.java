@@ -1,11 +1,14 @@
 package am.ik.rontolisp.eval;
 
+import java.util.function.Supplier;
+
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's handle-side pushback of {@code unread-char}: the character parked for
@@ -15,13 +18,19 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * ({@code unread-char.lisp}), which is what keeps the four backends identical.
  *
  * <p>
- * WHERE the character lives: an open stream VALUE carries it in its own reserved cell
+ * WHERE the character lives: on the stream the designator DENOTES, so every designator of
+ * one stream reaches one cell. An omitted stream and {@code nil} denote the current
+ * {@code *standard-input*}, and a synonym stream the stream its variable holds now. An
+ * open stream VALUE carries the character in its own reserved cell
  * ({@link LispLayout#STREAM_PUSHBACK_CELL}), as CL keeps the pushback on the stream -- so
  * a stream closed or dropped with a character parked takes it along, and two streams can
- * each hold one. Anything else the reads accept (the {@code t} designator, which an
- * omitted stream and {@code nil} fold onto) shares ONE cell, keyed by the designator.
+ * each hold one. Anything else the reads accept (the {@code t} designator, the process
+ * standard input) shares ONE cell, keyed by the designator.
  */
 final class StreamPushback {
+
+	/** The current value of {@code *standard-input*}, null when none is installed. */
+	private final Supplier<@Nullable LispVal> standardInput;
 
 	/** The designator owning the shared cell, nil when the cell is empty. */
 	private LispVal sharedKey = LispNil.INSTANCE;
@@ -29,16 +38,20 @@ final class StreamPushback {
 	private LispVal sharedChar = LispNil.INSTANCE;
 
 	/**
+	 * @param standardInput the current value of {@code *standard-input*} (null when no
+	 * evaluator installed one), which an omitted stream and {@code nil} denote
+	 */
+	StreamPushback(Supplier<@Nullable LispVal> standardInput) {
+		this.standardInput = standardInput;
+	}
+
+	/**
 	 * The character parked for {@code stream}, LEFT in place, or nil when none is.
 	 * @param stream the stream argument as given (nil for an omitted one)
 	 * @return the parked character, or nil
 	 */
 	LispVal parked(LispVal stream) {
-		LispVal key = key(stream);
-		if (key instanceof LispInstance value && value.hasTag(LispLayout.STREAM_TAG)) {
-			return value.slot(LispLayout.STREAM_PUSHBACK_CELL);
-		}
-		return this.sharedKey.equals(key) ? this.sharedChar : LispNil.INSTANCE;
+		return parkedAt(key(stream));
 	}
 
 	/**
@@ -47,11 +60,19 @@ final class StreamPushback {
 	 * @return the parked character, or nil
 	 */
 	LispVal take(LispVal stream) {
-		LispVal parked = parked(stream);
+		LispVal key = key(stream);
+		LispVal parked = parkedAt(key);
 		if (!(parked instanceof LispNil)) {
-			store(key(stream), LispNil.INSTANCE);
+			store(key, LispNil.INSTANCE);
 		}
 		return parked;
+	}
+
+	private LispVal parkedAt(LispVal key) {
+		if (key instanceof LispInstance value && value.hasTag(LispLayout.STREAM_TAG)) {
+			return value.slot(LispLayout.STREAM_PUSHBACK_CELL);
+		}
+		return this.sharedKey.equals(key) ? this.sharedChar : LispNil.INSTANCE;
 	}
 
 	/**
@@ -82,10 +103,14 @@ final class StreamPushback {
 		this.sharedChar = character;
 	}
 
-	// An omitted stream and the nil designator both mean standard input, which the t
-	// designator names, so the three compare equal.
-	private static LispVal key(LispVal stream) {
-		return stream instanceof LispNil ? LispTrue.INSTANCE : stream;
+	// The stream the designator denotes: an omitted stream and nil mean the current
+	// *standard-input*, and a synonym stream the stream its variable holds now. A nil
+	// left over (no evaluator installed the variable) is the process standard input,
+	// the t designator.
+	private LispVal key(LispVal stream) {
+		LispVal designator = stream instanceof LispNil ? this.standardInput.get() : stream;
+		LispVal target = designator == null ? LispNil.INSTANCE : Environment.synonymTarget(designator);
+		return target instanceof LispNil ? LispTrue.INSTANCE : target;
 	}
 
 }

@@ -157,4 +157,38 @@ public final class GrayStreamCallFixture {
 	public static final String PER_INSTANCE_PUSHBACK_EXPECTED = String.join("\n", "(#\\a #\\x #\\b)",
 			"(#\\a #\\x #\\a \"xyz\" \"bc\")", "(:FOUND #\\p #\\q)", "(#\\u :TAGGED #\\v)");
 
+	/**
+	 * In a program that uses the Gray protocol, every character read goes through a Gray
+	 * dispatch helper whose fallback hands the built-in the stream: the pushback still
+	 * lands on the open stream VALUE, so two string streams hold one each, and a synonym
+	 * or {@code *standard-input*} parks on the stream it denotes.
+	 */
+	public static final String OPEN_STREAM_PUSHBACK_PROGRAM = """
+			(defclass gos-src (rontolisp:fundamental-character-input-stream)
+			  ((gos-text :initarg :text) (gos-pos :initform 0)))
+			(defmethod rontolisp:stream-read-char ((gos-s gos-src))
+			  (with-slots (gos-text gos-pos) gos-s
+			    (if (< gos-pos (length gos-text)) (prog1 (char gos-text gos-pos) (incf gos-pos)) :eof)))
+			(defvar *gos-x* nil)
+			(print (read-char (make-instance 'gos-src :text "g")))
+			(with-input-from-string (gos-a "12")
+			  (with-input-from-string (gos-b "34")
+			    (unread-char (read-char gos-a) gos-a)
+			    (unread-char (read-char gos-b) gos-b)
+			    (print (list (listen gos-a) (peek-char nil gos-a) (read-char gos-a) (read-line gos-b) (read-char gos-a)))))
+			(with-input-from-string (gos-s "abc")
+			  (setq *gos-x* gos-s)
+			  (let ((gos-y (make-synonym-stream '*gos-x*)))
+			    (unread-char (read-char gos-y) gos-y)
+			    (print (list (file-position gos-s) (read-char gos-s)))))
+			(with-input-from-string (gos-s "abc")
+			  (let ((*standard-input* gos-s))
+			    (unread-char (read-char))
+			    (print (read-char gos-s))))
+			""";
+
+	/** What {@link #OPEN_STREAM_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String OPEN_STREAM_PUSHBACK_EXPECTED = String.join("\n", "#\\g", "(T #\\1 #\\1 \"34\" #\\2)",
+			"(0 #\\a)", "#\\a");
+
 }

@@ -215,4 +215,56 @@ public final class StringStreamPrograms {
 			(T #\\a #\\x #\\b #\\y "yz" NIL)
 			(:FOUND #\\m)""";
 
+	/**
+	 * The {@code unread-char} pushback belongs to the stream a designator DENOTES, not to
+	 * the designator as written: an omitted stream and {@code nil} park on the stream
+	 * {@code *standard-input*} holds, and a synonym stream on its target, so a read
+	 * through any other designator of the same stream sees the character.
+	 */
+	public static final String DESIGNATOR_PUSHBACK_PROGRAM = """
+			(defvar *dpb-x* nil)
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char))) (read-char s)))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char s) s) (read-char))))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char nil) nil)) (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char y) y))
+			         (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char s) s) (read-char y))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((*standard-input* (make-synonym-stream '*dpb-x*))) (unread-char (read-char)))
+			         (read-char s)))
+			(print (with-input-from-string (s "xyz")
+			         (let ((*standard-input* s))
+			           (unread-char (read-char))
+			           (list (peek-char nil s) (read-line s) (progn (unread-char #\\z s) (listen)) (read-char) (listen)))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*)))
+			           (read-char s)
+			           (unread-char #\\a y)
+			           (list (file-position s) (file-position y) (read-char s)))))
+			(print (with-input-from-string (a "12")
+			         (with-input-from-string (b "34")
+			           (let ((*standard-input* a))
+			             (unread-char (read-char))
+			             (unread-char (read-char b) b)
+			             (list (read-char a) (read-char b))))))
+			""";
+
+	/** What {@link #DESIGNATOR_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String DESIGNATOR_PUSHBACK_EXPECTED = """
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			(#\\x "xyz" T #\\z NIL)
+			(0 0 #\\a)
+			(#\\1 #\\3)""";
+
 }

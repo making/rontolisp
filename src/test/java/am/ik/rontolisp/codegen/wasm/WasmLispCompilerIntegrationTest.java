@@ -14466,6 +14466,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void unreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void objSetCompilesWhereNoInstanceCanExist() throws Exception {
 		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
 		// pushback) without knowing whether the module builds instances: with the gate
@@ -14626,6 +14634,18 @@ class WasmLispCompilerIntegrationTest {
 			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
 					component))
 				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+		}
+	}
+
+	@Test
+	void unreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
 		}
 	}
 
