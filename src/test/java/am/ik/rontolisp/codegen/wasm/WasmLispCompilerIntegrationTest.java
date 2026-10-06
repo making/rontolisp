@@ -14449,6 +14449,14 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
 	}
 
+	@Test
+	void withInputFromStringIndexCountsAParkedCharacterAsUnread() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
 	/**
 	 * Runs a program the way the CLI builds it (the whole front end) under wasmtime with
 	 * the work directory preopened, as a Preview 1 module or a component.
@@ -14775,15 +14783,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void noWasiReadFromStringCountsItsIndexWithoutAFilePosition() throws Exception {
-		// A --no-wasi module answers file-position with the constant nil, so the prelude
-		// %read-from-string-full counts the characters still unread instead.
+	void noWasiStringStreamsAnswerFilePosition() throws Exception {
+		// A string stream needs no WASI, so a --no-wasi module answers its file-position
+		// too -- which read-from-string's stop index and with-input-from-string's :index
+		// are counted from (a file stream there still answers nil).
 		String program = """
 				(defun rfs-window () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 1 :end 6)))
 				(defun rfs-kept () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 4
 				                                                  :preserve-whitespace t)))
+				(defun fp-string () (with-input-from-string (s (copy-seq "héllo")) (read-char s) (read-char s)
+				                      (file-position s)))
+				(defun wifs-index () (let ((i 0))
+				                       (with-input-from-string (s (copy-seq "123  ") :index i :start 1)
+				                         (read-char s) (read-char s) (unread-char (read-char s) s))
+				                       i))
 				(rontolisp:wasm-export 'rfs-window :returns :s32)
 				(rontolisp:wasm-export 'rfs-kept :returns :s32)
+				(rontolisp:wasm-export 'fp-string :returns :s32)
+				(rontolisp:wasm-export 'wifs-index :returns :s32)
 				""";
 		byte[] wasmBytes = WasmLispCompiler.builder()
 			.noWasi(true)
@@ -14791,7 +14808,8 @@ class WasmLispCompilerIntegrationTest {
 			.compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program, am.ik.rontolisp.reader.Features.WASM,
 					true, true));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
-		for (String[] call : new String[][] { { "rfs-window", "4" }, { "rfs-kept", "7" } }) {
+		for (String[] call : new String[][] { { "rfs-window", "4" }, { "rfs-kept", "7" }, { "fp-string", "2" },
+				{ "wifs-index", "3" } }) {
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", call[0], "-W", "gc", "-W",
 					"exceptions=y", path("test.wasm"));
 			assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();

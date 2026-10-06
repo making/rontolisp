@@ -180,19 +180,17 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
   native one-argument read parses the collected text. So an input holding no datum (whitespace
   and comments only) answers `eof-value` or signals `end-of-file` as `eof-error-p` says, an
   incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error`.
-- The index is `:start` plus the window stream's `file-position`. A `--no-wasi` module answers
-  `file-position` with the constant nil ("Limits" under `file-position` below), and there the defun counts the characters a
-  `read-char` drain still finds (it trapped on `(+ start nil)` before the fallback; pinned by
-  `WasmLispCompilerIntegrationTest.noWasiReadFromStringCountsItsIndexWithoutAFilePosition`). The
-  scanner's terminator is TAKEN (read, never unread) and counted back when kept (a non-whitespace
+- The index is `:start` plus the window stream's `file-position`, on every target -- a
+  `--no-wasi` module answers it for a string stream too (pinned by
+  `WasmLispCompilerIntegrationTest.noWasiStringStreamsAnswerFilePosition`). Until it did, the
+  defun fell back there to counting what a `read-char` drain still found. The scanner's
+  terminator is TAKEN (read, never unread) and counted back when kept (a non-whitespace
   terminator, or any under `:preserve-whitespace`), so no pushed-back character outlives the
-  stream or is left for the drain to miss (`with-input-from-string`'s own `:index` drain misses
-  one on the compile paths, which is why the defun does not use it). It counts characters, so on
-  WASM it is right for non-ASCII text where the one-argument `%read-from-string-end` counts bytes.
-  The drain alone is O(rest of the string) in Lisp -- the successive-forms idiom `(read-from-string
-  text nil eof :start pos)` goes quadratic -- measured with it as the only count, 20K calls over
-  1,008 characters: JVM 370-484 ms, P1 1,631-1,667, interpreter (2K calls) 1,679-1,790; with
-  `file-position` 265-317 / 792-808 / 95-129.
+  stream. It counts characters, so on WASM it is right for non-ASCII text where the one-argument
+  `%read-from-string-end` counts bytes. A drain is O(rest of the string) in Lisp -- the
+  successive-forms idiom `(read-from-string text nil eof :start pos)` goes quadratic -- measured
+  with it as the only count, 20K calls over 1,008 characters: JVM 370-484 ms, P1 1,631-1,667,
+  interpreter (2K calls) 1,679-1,790; with `file-position` 265-317 / 792-808 / 95-129.
 - The bound check is the window's `subseq` (`.kb/sequence-bounding-keywords.md`).
 - Selection (`LispPreludeLibrary.referencedBySurfaceForm`): a `read-from-string` call with more
   than one argument anywhere, or a designator that may be called with more than one
@@ -514,12 +512,18 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
 - **The two macros take their full CL spec, as ONE expansion every backend shares** (2026-09-22).
   `with-input-from-string (var string &key index start end)`: `:start`/`:end` become the
   `subseq` above; `:index` binds string/start/end once (`let*`, source order) and, on a NORMAL exit
-  only (`multiple-value-prog1` inside the `unwind-protect`), stores `(- (or end (length string))
-  <chars still unread>)` -- counted by DRAINING the stream with `read-char` just before the close,
-  because a string input stream's `file-position` was believed to answer nil on all four. Measured
-  2026-10-06 it answers the position on all four (characters, a pushed-back one not counted, as
-  SBCL), and the drain misses a pushed-back character on the compile paths (it is synthesized
-  after `UnreadCharLibrary`'s rewrite). `with-output-to-string
+  only (`multiple-value-prog1` inside the `unwind-protect`), stores `(+ start (file-position s))`
+  -- characters, a character `unread-char` parked not counted, as SBCL. The query is synthesized
+  inside the expression compilers, after every surface pass, so two things key on the surface
+  form instead (`LispMacroExpander.indexesStringInput` / `isIndexedWithInputFromString`): both
+  compiled backends' `file-position` gate (otherwise WASM compiles the query to the nil constant
+  and the JVM lacks `_filePosition`), and `UnreadCharLibrary`, which expands an indexed form
+  ITSELF so the query is rewritten onto `%unread-file-position` (and splices that defun).
+  Before (measured 2026-10-06): the store counted what a `read-char` drain still found, and on the
+  compile paths the drain read past a parked character -- `"123  "`, three reads, then `(unread-char
+  (read-char s) s)`: SBCL and the interpreter 3, JVM / P1 / component 4. Pinned by
+  `StringStreamPrograms.INDEX_PUSHBACK_PROGRAM` in the three backend suites.
+  `with-output-to-string
   (var &optional string &key element-type)`: a non-nil string gets the body's output appended with
   `vector-push-extend` when the body exits (in the `unwind-protect` cleanup, so on every exit where
   it compiles), and the form answers the BODY's values -- which is why
@@ -609,18 +613,19 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   every string arm reads -1 as its own end: a string stream has no `file-length`, and the old
   fold handed the primitive nil -- a QUERY on the JVM. So a user's literal
   `(file-position s -1)` seeks a string stream's end on the compile paths where the interpreter
-  signals; nothing else passes -1. **Limits**: `--no-wasi` keeps `file-position` the nil
-  constant for every stream; a CLOSED string input stream still answers on both WASM backends
-  (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
+  signals; nothing else passes -1. **Limits**: under `--no-wasi` a string stream answers (the
+  string arms need no host) and a file stream nil -- the bodies are built without a host call
+  (`FilePositionAbi` null), and nothing is injected; a CLOSED string input stream still answers
+  on both WASM backends (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
   `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6`.
-- **`:index` keeps DRAINING -- measured, not assumed** (2026-09-22). The premise was that a real
-  position would make `:index` a read. Hand-written equivalents of the two lowerings, bytes
-  JVM / Preview 1 / component: drain 38,085 / 5,972 / 9,496, position 42,579 (2 files) / 4,618 /
-  8,226 -- the JVM grows +4.5 KB and gains the travelling class (plus the `_filePosition`
-  machinery) where WASM saves 1.3 KB, and `--no-wasi` has no position at all, so it would need
-  the drain anyway. Both answer the same index; the drain only consumes a stream that is closed
-  right after. (Every JVM string input stream has known its position without extra cost since
-  2026-09-23 -- see below -- so the trigger is gone; the numbers stand.)
+- **`:index` drained until 2026-10-06** (2026-09-22 measurement, kept as history). Hand-written
+  equivalents of the two lowerings, bytes JVM / Preview 1 / component: drain 38,085 / 5,972 /
+  9,496, position 42,579 (2 files) / 4,618 / 8,226 -- the JVM grew +4.5 KB and gained the
+  travelling class (plus the `_filePosition` machinery) where WASM saved 1.3 KB, and `--no-wasi`
+  had no position at all. "Both answer the same index" was wrong once `unread-char` parks a
+  character: the drain, synthesized after `UnreadCharLibrary`, read past it on the compile paths.
+  The position replaced it (bullet above); the JVM class travels with every string input stream
+  since 2026-09-23 anyway. Not re-measured.
 - **Write-through: measured, not built** (2026-09-22). A fill-pointer string that sees the output
   as it is written needs a stream kind of its own on every backend (a JVM `Writer` over the
   Lisp vector representation that travels, a WASM record kind every string-output write path

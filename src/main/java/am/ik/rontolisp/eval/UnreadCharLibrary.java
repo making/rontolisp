@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -81,9 +82,10 @@ public final class UnreadCharLibrary {
 
 	/**
 	 * The two {@code file-position} defuns, spliced only for a program that names
-	 * {@code file-position} itself: their bodies name it, and a backend gates its
-	 * position runtime on that name, so splicing them into every unread-char program
-	 * would grow each one by a runtime it never calls.
+	 * {@code file-position} itself or holds an indexed {@code with-input-from-string}
+	 * (whose expansion asks it): their bodies name it, and a backend gates its position
+	 * runtime on that name, so splicing them into every unread-char program would grow
+	 * each one by a runtime it never calls.
 	 */
 	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
 
@@ -127,7 +129,7 @@ public final class UnreadCharLibrary {
 		if (!usesUnreadChar(program)) {
 			return program;
 		}
-		boolean filePosition = namesFilePosition(program);
+		boolean filePosition = namesFilePosition(program) || LispMacroExpander.indexesStringInput(program);
 		List<LispVal> out = new ArrayList<>();
 		for (LispVal form : forms()) {
 			if (filePosition || !(form instanceof LispCons defun && defun.cdr() instanceof LispCons rest
@@ -202,6 +204,13 @@ public final class UnreadCharLibrary {
 			// built-ins their bodies name.
 			if (LispNames.QUOTE.equals(opName) || isLibraryDefun(cons, opName)) {
 				return form;
+			}
+			// An indexed with-input-from-string asks its stream's file-position in an
+			// expansion the expression compilers build after this pass, so it is
+			// expanded here and the query rewritten with the rest: a character parked
+			// on the stream then counts as unread.
+			if (LispMacroExpander.isIndexedWithInputFromString(cons)) {
+				return rewrite(SourceProvenance.inherit(cons, LispMacroExpander.expandWithInputFromString(cons, true)));
 			}
 			// A read passing the recursive-p it ignores is rewritten without it first,
 			// so the shapes below never meet the extra argument.

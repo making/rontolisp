@@ -5323,6 +5323,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWithInputFromStringIndexCountsAParkedCharacterAsUnread() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunStringStreamMacroOptions() throws Exception {
 		// with-input-from-string's :index/:start/:end and with-output-to-string's
 		// fill-pointer string and :element-type, which used to be refused at expansion.

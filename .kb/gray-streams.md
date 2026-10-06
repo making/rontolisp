@@ -266,7 +266,14 @@ Contract, identical on all four:
   splicing them into every `unread-char` program would grow each by a runtime it never
   calls. Interpreter: the outermost `file-position` wrapper in `Environment`.
 - `read-byte`, `read-sequence`, `read` do NOT consult it on any backend: their loops are
-  generated inside the expression compilers, after this pass could walk them.
+  generated inside the expression compilers, after this pass could walk them. The one such
+  expansion the pass DOES reach is an indexed `with-input-from-string`: it expands it itself
+  (`LispMacroExpander.isIndexedWithInputFromString`), so the `:index` store's `file-position`
+  becomes `%unread-file-position` (`.kb/read-load-streams.md`, "String streams").
+- **The cell outlives the stream it holds a character for**: nothing clears it on `close`, so a
+  stream closed (or dropped) with a parked character makes every later `unread-char` on ANY
+  stream signal -- `(with-input-from-string (s "abc") (unread-char (read-char s) s))` then the
+  same over `"xyz"`, all four (SBCL: fine).
 - **A `#'unread-char` FUNCTION VALUE still signals on the compile backends**
   (`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE`); the interpreter has no such limit.
   Callers: cl-json's decoder, local-time's parser, chunga's `unread-char*`.

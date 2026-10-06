@@ -1567,8 +1567,9 @@ final class WasmExprCompiler {
 			// to preview1's fd_seek, or to the adapter's tracked per-fd byte offset
 			// through the injected file_position_get / file_position_set imports
 			// (WasmFilePositionCompiler), so a binary file stream's position
-			// round-trips. A --no-wasi module has no filesystem, so it keeps the nil
-			// constant, and file-write-date answers nil everywhere -- "cannot be
+			// round-trips. A --no-wasi module has no filesystem, so there only a
+			// string stream answers, and file-write-date answers nil everywhere --
+			// "cannot be
 			// determined" being what Common Lisp prescribes for exactly that. The
 			// three write-side
 			// operators are REAL here -- %make-directories creates every missing

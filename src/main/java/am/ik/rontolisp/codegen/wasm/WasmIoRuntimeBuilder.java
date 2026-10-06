@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the WASM bodies of the file-stream runtime used by the {@code open},
@@ -1373,21 +1374,22 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the _file_position(stream) function body: the byte position of the file the
-	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the
-	 * position cannot be determined.
+	 * Builds the _file_position(stream) function body: a string stream's (a negative
+	 * handle's) character position, or the byte position of the file the stream is open
+	 * on, as an exact integer, or {@code ref.null eq} (nil) when the position cannot be
+	 * determined.
 	 *
 	 * <p>
-	 * The fd is already in hand, so the position is one host call away: preview1's
-	 * {@code fd_seek(fd, 0, cur)} reads the descriptor's own cursor, and on the
-	 * {@code --component} backend {@code file_position_get} reads the adapter's tracked
-	 * per-fd byte offset (the {@code fd_seek} stand-in, since WASI 0.3 reads are
+	 * For a file, the fd is already in hand, so the position is one host call away:
+	 * preview1's {@code fd_seek(fd, 0, cur)} reads the descriptor's own cursor, and on
+	 * the {@code --component} backend {@code file_position_get} reads the adapter's
+	 * tracked per-fd byte offset (the {@code fd_seek} stand-in, since WASI 0.3 reads are
 	 * offset-based and have no moveable cursor). The answer is REAL here exactly as it is
 	 * on the interpreter and the JVM. What still answers nil is what genuinely has no
 	 * position, the same set {@code _file_length} answers nil for: a non-handle
-	 * designator ({@code t}, nil, an unresolved synonym), a string stream (a negative
-	 * handle), a process standard stream (below {@code FIRST_USER_HANDLE}), and anything
-	 * the host cannot address as a file -- which the call answers as a non-zero errno.
+	 * designator ({@code t}, nil, an unresolved synonym), a process standard stream
+	 * (below {@code FIRST_USER_HANDLE}), and anything the host cannot address as a file
+	 * -- which the call answers as a non-zero errno.
 	 *
 	 * <p>
 	 * The 8-byte offset is staged at {@code HEAP_PTR}, advanced then popped back, exactly
@@ -1396,10 +1398,11 @@ final class WasmIoRuntimeBuilder {
 	 * while the call runs).
 	 * @param abi where the host call lives ({@link FilePositionAbi}); its function
 	 * indices are slot-encoded ({@code PLACEHOLDER_FUNC_BASE + ordinal}), resolved by the
-	 * {@code WasmImportInjector} post-pass
+	 * {@code WasmImportInjector} post-pass. Null under {@code --no-wasi}: only a string
+	 * stream answers, every descriptor nil.
 	 * @return the function body bytes
 	 */
-	static byte[] buildFilePositionBody(FilePositionAbi abi) {
+	static byte[] buildFilePositionBody(@Nullable FilePositionAbi abi) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3, then the string arm's
@@ -1427,6 +1430,11 @@ final class WasmIoRuntimeBuilder {
 		// A negative handle is a string stream, which answers its character position.
 		WasmStringStreamRuntimeBuilder.emitPositionQueryArm(w, FD,
 				new WasmStringStreamRuntimeBuilder.PositionLocals(4, 5, 6, 7, 8, 9));
+		if (abi == null) {
+			emitNil(w);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
 		// 0/1/2 are the process standard streams.
 		getLocal(w, FD);
 		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
@@ -1515,10 +1523,11 @@ final class WasmIoRuntimeBuilder {
 	 * {@code file_position_set(fd, ptr)} reads it out of the staged 8 bytes instead.
 	 * Either way the scratch uses the same advance-then-pop discipline as
 	 * {@link #buildFilePositionBody}.
-	 * @param abi where the host call lives ({@link FilePositionAbi})
+	 * @param abi where the host call lives ({@link FilePositionAbi}); null under
+	 * {@code --no-wasi}, where only a string stream can be repositioned
 	 * @return the function body bytes
 	 */
-	static byte[] buildFilePositionSetBody(FilePositionAbi abi) {
+	static byte[] buildFilePositionSetBody(@Nullable FilePositionAbi abi) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4, then the
@@ -1545,6 +1554,11 @@ final class WasmIoRuntimeBuilder {
 		// A negative handle is a string stream, which repositions by character.
 		WasmStringStreamRuntimeBuilder.emitPositionSetArm(w, POS, FD,
 				new WasmStringStreamRuntimeBuilder.PositionLocals(5, 6, 7, 8, 9, 10));
+		if (abi == null) {
+			emitNil(w);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
 		getLocal(w, FD);
 		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
 		w.write(Instruction.I32_LT_S);

@@ -1,9 +1,10 @@
 package am.ik.rontolisp.testsupport;
 
 /**
- * Two programs pinned identically on the interpreter, the JVM and both WASM backends: the
- * direction predicates answering a stream's REAL direction, and {@code file-position} on
- * a string stream ({@code .kb/read-load-streams.md}, "String streams").
+ * Three programs pinned identically on the interpreter, the JVM and both WASM backends:
+ * the direction predicates answering a stream's REAL direction, {@code file-position} on
+ * a string stream, and {@code with-input-from-string}'s {@code :index} over a character
+ * {@code unread-char} parked ({@code .kb/read-load-streams.md}, "String streams").
  *
  * <p>
  * One text per program, because the behavior must not differ between backends and a
@@ -149,5 +150,36 @@ public final class StringStreamPrograms {
 			"abé"
 			0
 			(#\\c 3)""";
+
+	/**
+	 * {@code with-input-from-string}'s {@code :index} in a program that uses
+	 * {@code unread-char} and never names {@code file-position}: a character parked on
+	 * the stream counts as unread, and the index counts characters from the string's
+	 * start. The last form leaves its character parked when the body exits -- the one
+	 * pushback cell then still holds it, so nothing after it may unread.
+	 */
+	public static final String INDEX_PUSHBACK_PROGRAM = """
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "xhéllo wörld" :index i :start 1 :end 9)
+			                 (read-char s) (read-char s) (unread-char (read-char s) s) (read-char s))
+			               i)))
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "αβγδ" :index i :start 1 :end 3) (read-char s)) i)))
+			(let ((i nil))
+			  (with-input-from-string (s "abc" :index i) (read-char s) (unread-char #\\a s) (read-char s) (read-char s))
+			  (print i))
+			(let ((i 0))
+			  (with-input-from-string (s "123  " :index i)
+			    (read-char s) (read-char s) (read-char s)
+			    (unread-char (read-char s) s))
+			  (print i))
+			""";
+
+	/** What {@link #INDEX_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String INDEX_PUSHBACK_EXPECTED = """
+			(#\\l 4)
+			(#\\β 2)
+			2
+			3""";
 
 }

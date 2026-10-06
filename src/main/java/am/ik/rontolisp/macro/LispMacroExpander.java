@@ -10926,8 +10926,16 @@ public final class LispMacroExpander {
 	/**
 	 * The {@code with-input-from-string} arm with an {@code :index} place: on a NORMAL
 	 * exit the place receives the index into the string of the first character the body
-	 * did not read: the bound end minus the characters still unread, counted by draining
-	 * the stream just before it is closed.
+	 * did not read -- the bound start plus the stream's {@code file-position}, which
+	 * counts characters and leaves a character {@code unread-char} parked unread on every
+	 * backend.
+	 *
+	 * <p>
+	 * The position query is synthesized here, inside the expression compilers, after the
+	 * passes that key on the program's surface: so a backend gates its string-stream
+	 * position runtime on {@link #indexesStringInput} as well as on the name
+	 * {@code file-position}, and the compile paths' pushback pass expands an indexed form
+	 * itself (so its query reaches the parked character).
 	 *
 	 * <pre>
 	 * (with-input-from-string (s str :index place :start a :end b) body...) ->
@@ -10935,9 +10943,7 @@ public final class LispMacroExpander {
 	 *     (let ((s (%make-string-input-stream (subseq __wifs_string __wifs_start __wifs_end))))
 	 *       (unwind-protect
 	 *           (multiple-value-prog1 (progn body...)
-	 *             (setf place (- (or __wifs_end (length __wifs_string))
-	 *                            (do ((__wifs_n 0 (+ __wifs_n 1)))
-	 *                                ((null (read-char s nil nil)) __wifs_n)))))
+	 *             (setf place (+ __wifs_start (file-position s))))
 	 *         (close s))))
 	 * </pre>
 	 */
@@ -10946,23 +10952,67 @@ public final class LispMacroExpander {
 		LispSymbol string = new LispSymbol(WIFS_STRING_VAR);
 		LispSymbol startVar = new LispSymbol(WIFS_START_VAR);
 		LispSymbol endVar = new LispSymbol(WIFS_END_VAR);
-		LispSymbol unread = new LispSymbol(WIFS_UNREAD_VAR);
 		LispVal bindings = listToCons(List.of(listToCons(List.of(string, stringForm)),
 				listToCons(List.of(startVar, start != null ? start : new LispInteger(0))),
 				listToCons(List.of(endVar, end != null ? end : LispNil.INSTANCE))));
-		LispVal drain = listToCons(List.of(new LispSymbol(LispNames.DO),
-				listToCons(List.of(listToCons(List.of(unread, new LispInteger(0),
-						listToCons(List.of(new LispSymbol(LispNames.ADD), unread, new LispInteger(1))))))),
-				listToCons(List.of(
-						callOf(LispNames.NULL, listToCons(
-								List.of(new LispSymbol(LispNames.READ_CHAR), var, LispNil.INSTANCE, LispNil.INSTANCE))),
-						unread))));
-		LispVal bound = listToCons(List.of(new LispSymbol(LispNames.OR), endVar, callOf(LispNames.LENGTH, string)));
 		LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), index,
-				listToCons(List.of(new LispSymbol(LispNames.SUB), bound, drain))));
+				listToCons(List.of(new LispSymbol(LispNames.ADD), startVar, callOf(LispNames.FILE_POSITION, var)))));
 		LispVal substring = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startVar, endVar));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
 				withInputStream(var, substring, bodyExpr, store, unwindProtect)));
+	}
+
+	/**
+	 * Whether the program holds a {@code with-input-from-string} with an {@code :index}
+	 * place, whose expansion asks the stream's {@code file-position}
+	 * ({@link #withInputFromStringIndexed}) although the program may never name it.
+	 * @param program the top-level forms, BEFORE expansion
+	 * @return whether an indexed {@code with-input-from-string} can run
+	 */
+	public static boolean indexesStringInput(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (indexesStringInput(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean indexesStringInput(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		if (isIndexedWithInputFromString(cons)) {
+			return true;
+		}
+		for (LispVal part : cons.toList()) {
+			if (indexesStringInput(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether {@code cons} is a {@code (with-input-from-string (var string ... :index
+	 * place ...) ...)} form -- the {@code :index} key in a key position of the spec.
+	 * @param cons a form
+	 * @return whether it is an indexed {@code with-input-from-string}
+	 */
+	public static boolean isIndexedWithInputFromString(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op)
+				|| !LispNames.WITH_INPUT_FROM_STRING.equals(unqualifiedClMember(op.name()))
+				|| !(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispCons spec)
+				|| !spec.isProperList()) {
+			return false;
+		}
+		List<LispVal> specParts = spec.toList();
+		for (int i = 2; i + 1 < specParts.size(); i += 2) {
+			if (specParts.get(i) instanceof LispSymbol key && ":INDEX".equals(key.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -10996,8 +11046,6 @@ public final class LispMacroExpander {
 	private static final String WIFS_START_VAR = "__wifs_start";
 
 	private static final String WIFS_END_VAR = "__wifs_end";
-
-	private static final String WIFS_UNREAD_VAR = "__wifs_n";
 
 	private static final String WIFS_RESULT_VAR = "__wifs_result";
 

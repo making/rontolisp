@@ -842,6 +842,12 @@ class LispEvaluatorTest {
 			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
 	}
 
+	@Test
+	void withInputFromStringIndexCountsAParkedCharacterAsUnread() {
+		assertThat(printedOutput(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
 	private static String printedOutput(String program) {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

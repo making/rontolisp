@@ -3621,6 +3621,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The file-metadata helpers ride the same rule, one gate each: file-length also
 		// grows _open and adds the _streamPaths side table, so a program that never asks
 		// for it must not pay for either.
+		// An indexed with-input-from-string asks its stream's position in an expansion
+		// built after this census, so it counts as asking file-position.
+		final boolean asksFilePosition = programUsesSymbol(program, LispNames.FILE_POSITION)
+				|| (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						&& LispMacroExpander.indexesStringInput(program));
 		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
 				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
@@ -3629,8 +3634,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				programUsesSymbol(program, LispNames.FILE_LENGTH)
 						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.FILE_POSITION),
+				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL), asksFilePosition,
 				// A character file stream's position is real only through the travelling
 				// positioned reader/writer, which a program whose every open is binary
 				// does not need.
@@ -3639,10 +3643,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				// A string INPUT stream answers file-position only as the travelling
 				// RontoStringInputStream, so both facts gate the position machinery
 				// (and the class file travels with any string input stream, below).
-				programUsesSymbol(program, LispNames.FILE_POSITION)
-						&& (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
-								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
-								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
+				asksFilePosition && (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
 				programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL));
