@@ -20080,6 +20080,51 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.LambdaListCongruenceFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.LambdaListCongruenceFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAnUncaughtLambdaListRefusalWarnsAndEndsTheProgramAtItsForm() throws Exception {
+		// A refusal the compile can see is a call-time program-error at the defmethod,
+		// warned about like any static program-error; the macro-time evaluator leaves the
+		// refused definition out instead of failing the compile.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_PROGRAM,
+						am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_REPORT },
+				{ am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_PROGRAM,
+						am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_REPORT } }) {
+			ByteArrayOutputStream err = new ByteArrayOutputStream();
+			Throwable cause;
+			try (var _ = ThreadStdio.err(err)) {
+				cause = catchThrowable(() -> compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+						am.ik.rontolisp.reader.Features.JVM, false, false)));
+			}
+			String report = program[1].substring("Unhandled condition: ".length());
+			assertThat(err.toString()).contains("warning: " + report + "; compiled as a call-time program-error")
+				.contains(program[1]);
+			assertThat(cause).isInstanceOf(InvocationTargetException.class);
+		}
+	}
+
+	@Test
+	void compileRefusesRedefiningAGenericWithADifferentRequiredCount() {
+		// The interpreter redefines in place (LispEvaluatorTest
+		// #aDefgenericAnExistingMethodIsNotCongruentWithIsRefused); a compiled program
+		// has one dispatcher per generic.
+		assertThatThrownBy(() -> compileAndRun("""
+				(defgeneric rd-g (a) (:method (a) (list :one a)))
+				(defgeneric rd-g (a b))
+				""")).hasMessageContaining(
+				"DEFGENERIC RD-G: redefining a generic function with a different number of required parameters");
+	}
+
+	@Test
 	void compileAndRunAnUncaughtWrongDefunCountWarnsAndReportsTheSameLine() throws Exception {
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		Throwable cause;

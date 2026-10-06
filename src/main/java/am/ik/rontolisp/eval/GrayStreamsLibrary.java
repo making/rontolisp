@@ -440,6 +440,17 @@ public final class GrayStreamsLibrary {
 		return program.stream().anyMatch(GrayStreamsLibrary::referencesProtocol);
 	}
 
+	/**
+	 * Whether a generic-function name is one of rontolisp's own Gray protocol generics,
+	 * which gray.lisp declares with the lambda list every method must be congruent with.
+	 * @param genericName the name as the registry holds it
+	 * @return whether it is a {@code rontolisp:} protocol generic
+	 */
+	static boolean isProtocolGeneric(String genericName) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(genericName);
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && PROTOCOL_NAMES.contains(qn.member());
+	}
+
 	private static boolean referencesProtocol(LispVal form) {
 		while (true) {
 			switch (form) {

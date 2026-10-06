@@ -21001,7 +21001,60 @@ class LispEvaluatorTest {
 	void defmethodLambdaListMustMatchTheGeneric() {
 		assertThatThrownBy(() -> evalMulti("(defgeneric g (x y)) (defmethod g (x) x)"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("does not match the generic function");
+			.hasMessage("DEFMETHOD G: the method has fewer required arguments than the generic function")
+			.extracting(ex -> ((LispEvalException) ex).conditionClassName())
+			.isEqualTo(ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
+	}
+
+	@Test
+	void aMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded() {
+		// CLHS 7.6.4, SBCL's refusals: the counts, the &rest/&key presence and a
+		// declared generic's keyword names, against a defgeneric, the first method, or
+		// a standard generic's lambda list; the refused method is never added.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(am.ik.rontolisp.LambdaListCongruenceFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.LambdaListCongruenceFixture.EXPECTED);
+	}
+
+	@Test
+	void anUncaughtLambdaListRefusalEndsTheProgramAtItsForm() {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		assertThatThrownBy(() -> {
+			for (LispVal expr : LispReader
+				.readAllFromString(am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_PROGRAM)) {
+				evaluator.eval(expr);
+			}
+		}).isInstanceOf(LispEvalException.class)
+			.hasMessage(am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_REPORT
+				.substring("Unhandled condition: ".length()));
+		assertThat(baos.toString().trim()).isEqualTo(":BEFORE");
+	}
+
+	@Test
+	void aDefgenericAnExistingMethodIsNotCongruentWithIsRefused() {
+		// The methods an earlier defgeneric's (:method ...) options defined are removed
+		// by the redefinition rather than judged (CLHS defgeneric, as SBCL does).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		assertThatThrownBy(() -> {
+			for (LispVal expr : LispReader
+				.readAllFromString(am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_PROGRAM)) {
+				evaluator.eval(expr);
+			}
+		}).isInstanceOf(LispEvalException.class)
+			.hasMessage(am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_REPORT
+				.substring("Unhandled condition: ".length()));
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_STDOUT);
+		assertThat(evalMulti("""
+				(defgeneric rd-g (a) (:method (a) (list :one a)))
+				(defgeneric rd-g (a b))
+				(defmethod rd-g (a b) (list :two a b))
+				(rd-g 1 2)
+				""").print()).isEqualTo("(:TWO 1 2)");
 	}
 
 	@Test

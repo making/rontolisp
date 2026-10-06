@@ -10936,6 +10936,35 @@ cases:
       (print (list (clos-decode-it 1 12) (clos-decode-it 1 :tag) (clos-decode-it 1 99)))
     expected: |
       ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
+  - name: clos-defmethod-lambda-list-congruence
+    source: |
+      ;; CLHS 7.6.4: a method whose lambda list is not congruent with its generic's
+      ;; is refused with a program-error where it is added (SBCL's refusals), and is
+      ;; never added; a defmethod under a top-level let reaches the compile paths in
+      ;; place, so the handler sees the refusal on every backend.
+      (defun clos-llc-try (thunk)
+        (handler-case (progn (funcall thunk) :added)
+          (program-error (c) (princ-to-string c))))
+      (defgeneric clos-llc-opt (a b &optional c))
+      (defmethod clos-llc-opt ((a integer) b &optional c) (list :int a b c))
+      (defgeneric clos-llc-key (a &key x))
+      (defmethod clos-llc-first ((a integer) b) (list :int a b))
+      (let ()
+        (print (clos-llc-try (lambda () (defmethod clos-llc-opt ((a string) b) a))))
+        (print (clos-llc-try (lambda () (defmethod clos-llc-first ((a string)) a))))
+        (print (clos-llc-try (lambda () (defmethod clos-llc-key ((a string)) a))))
+        (print (clos-llc-try (lambda () (defmethod clos-llc-key ((a string) &key y) a))))
+        (print (list (clos-llc-try (lambda () (defmethod clos-llc-key ((a integer) &rest r) (list :int a))))
+                     (clos-llc-try (lambda () (defmethod clos-llc-key ((a string) &key y &allow-other-keys) (list :str a)))))))
+      (print (list (clos-llc-opt 1 2) (handler-case (clos-llc-opt "s" 2) (error () :no-method))
+                   (clos-llc-first 1 2) (clos-llc-key 1 :x 2) (clos-llc-key "s" :x 2)))
+    expected: |
+      "DEFMETHOD CLOS-LLC-OPT: the method has fewer optional arguments than the generic function"
+      "DEFMETHOD CLOS-LLC-FIRST: the method has fewer required arguments than the generic function"
+      "DEFMETHOD CLOS-LLC-KEY: the method and generic function differ in whether they accept &REST or &KEY arguments"
+      "DEFMETHOD CLOS-LLC-KEY: the method does not accept each of the &KEY arguments (:X)"
+      (:ADDED :ADDED)
+      ((:INT 1 2 NIL) :NO-METHOD (:INT 1 2) (:INT 1) (:STR "s"))
   - name: clos-defclass-slots-inheritance-and-dispatch
     source: |
       (defclass clos-animal () ((name :initarg :name :accessor clos-animal-name)))
@@ -22553,6 +22582,19 @@ cases:
       5
       (7 . 1)
 standalone:
+  - name: uncaught-defmethod-lambda-list-refusal
+    source: |
+      ;; A handler-case anywhere puts the wasm module in EH mode, where an uncaught
+      ;; condition is reportable. The refusal ends the program at the defmethod.
+      (print (handler-case (error "caught") (error () :ok)))
+      (defgeneric llc-uncaught (a b &optional c))
+      (defmethod llc-uncaught ((a integer) b) (list a b))
+      (print :unreached)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: DEFMETHOD LLC-UNCAUGHT: the method has fewer optional arguments than the generic function
+    fails: true
   - name: uncaught-condition-report
     source: |
       ;; handler-case anywhere in the program puts the wasm module in EH mode,

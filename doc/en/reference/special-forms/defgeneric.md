@@ -2,9 +2,9 @@
 
 `(defgeneric name (param...) option...)`
 
-Defines a generic function and returns the name symbol. Methods are added with [`defmethod`](defmethod.md) — specializers may appear on **any** required parameter, and a call runs the most specific matching method (parameters ranked leftmost-first); calling the generic with no matching method signals an error. A `defgeneric` is optional — the first `defmethod` implicitly creates the generic — but declares the lambda list every method must match. The generic function is an ordinary function, so `#'name` and `funcall` work. `name` may also be a setf function name `(setf reader)` (see [defmethod](defmethod.md)).
+Defines a generic function and returns the name symbol. Methods are added with [`defmethod`](defmethod.md) — specializers may appear on **any** required parameter, and a call runs the most specific matching method (parameters ranked leftmost-first); calling the generic with no matching method signals an error. A `defgeneric` is optional — the first `defmethod` implicitly creates the generic — but declares the lambda list every method must be congruent with ([defmethod](defmethod.md#lambda-list-congruence)). A `defgeneric` that an existing method is not congruent with signals a `program-error` and leaves the generic as it was; evaluating a `defgeneric` again removes the methods its earlier `(:method ...)` clauses defined. On the compilation paths a second `defgeneric` of one name may not change the number of required parameters. The generic function is an ordinary function, so `#'name` and `funcall` work. `name` may also be a setf function name `(setf reader)` (see [defmethod](defmethod.md)).
 
-The lambda list may continue past the required parameters with `&optional`/`&rest` (the dispatcher forwards the tail to the selected method), and inline `(:method [qualifier] (param...) body...)` clauses define methods in the `defgeneric` itself. `(:documentation "...")` is recorded and ignored.
+The lambda list may continue past the required parameters with `&optional`/`&rest`/`&key` (the dispatcher forwards the tail to the selected method), and inline `(:method [qualifier] (param...) body...)` clauses define methods in the `defgeneric` itself. `(:documentation "...")` is recorded and ignored.
 
 `(:method-combination NAME [:most-specific-first | :most-specific-last])` selects one of the CLHS **short-form** combinations — `progn`, `and`, `or`, `+`, `list`, `nconc`, `append`, `max`, `min`. The effective method is then that operator applied to EVERY applicable method whose qualifier is the combination name, most specific first (`:most-specific-last` reverses the order); `:around` methods wrap the combined form as usual, while `:before`/`:after` are rejected, as CLHS requires. A primary method must carry the combination name as its qualifier: `(defmethod encode-slots progn ((o point)) ...)`.
 
@@ -17,7 +17,7 @@ The lambda list may continue past the required parameters with `&optional`/`&res
 (describe-parts (make-instance 'square)) ; => (SQUARE SHAPE)
 ```
 
-Lite subset: `&key` in the generic's lambda list, `define-method-combination` (the long form) and the remaining options are errors.
+Lite subset: `define-method-combination` (the long form) and the remaining options are errors.
 
 ```lisp
 (defgeneric area (shape)

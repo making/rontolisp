@@ -14628,6 +14628,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.LambdaListCongruenceFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.LambdaListCongruenceFixture.EXPECTED);
+		}
+	}
+
+	@Test
 	void grayDefaultUnreadCharParksOnItsInstance() throws Exception {
 		// The wasm twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance,
 		// Preview 1 and the component.

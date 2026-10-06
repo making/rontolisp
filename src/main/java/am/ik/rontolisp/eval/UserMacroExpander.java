@@ -6,9 +6,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -646,12 +648,12 @@ public final class UserMacroExpander {
 				}
 			}
 			if (allDefinitions) {
-				macroEval.evalResolved(form);
+				replayDefinition(form, macroEval);
 			}
 			return;
 		}
 		if (isDefinitionForm(form)) {
-			macroEval.evalResolved(form);
+			replayDefinition(form, macroEval);
 			return;
 		}
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
@@ -700,6 +702,25 @@ public final class UserMacroExpander {
 		}
 		catch (RuntimeException ex) {
 			System.err.println("WARNING: library top-level form failed at compile time (skipped): " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Replays a definition into the macro-time evaluator. A method or generic function
+	 * whose lambda list is not congruent with its generic's (CLHS 7.6.4) is refused with
+	 * a program-error where the form runs; the compiled program signals that same refusal
+	 * at the same form, so here it only leaves the definition out instead of failing the
+	 * compile.
+	 */
+	private static void replayDefinition(LispVal form, LispEvaluator macroEval) {
+		try {
+			macroEval.evalResolved(form);
+		}
+		catch (LispEvalException ex) {
+			if (!ClosRegistry.PROGRAM_ERROR_CLASS_NAME.equals(ex.conditionClassName())
+					|| !(MopEvalCapture.definesMethods(form) || isOperator(form, LispNames.DEFGENERIC))) {
+				throw ex;
+			}
 		}
 	}
 

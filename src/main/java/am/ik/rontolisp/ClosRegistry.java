@@ -1042,6 +1042,131 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * What CLHS 7.6.4 compares between a generic function's lambda list and a method's:
+	 * the required and optional counts, whether the list takes a {@code &rest} or
+	 * {@code &key} tail, the keyword names after {@code &key} and
+	 * {@code &allow-other-keys}. A method's specializers and {@code &aux} take no part.
+	 *
+	 * @param required the number of required parameters
+	 * @param optional the number of {@code &optional} parameters
+	 * @param rest whether the list has {@code &rest}/{@code &body} (or a dotted tail)
+	 * @param key whether the list mentions {@code &key}
+	 * @param keywords the keyword names {@code &key} accepts, spelled {@code :NAME}
+	 * @param allowOtherKeys whether the list mentions {@code &allow-other-keys}
+	 */
+	public record LambdaListShape(int required, int optional, boolean rest, boolean key, List<String> keywords,
+			boolean allowOtherKeys) {
+
+		/**
+		 * The shape of an ordinary or specialized lambda list as written.
+		 * @param lambdaList the lambda list ({@code nil} or a cons)
+		 * @return its shape
+		 */
+		public static LambdaListShape of(LispVal lambdaList) {
+			int required = 0;
+			int optional = 0;
+			boolean rest = false;
+			boolean key = false;
+			boolean allowOtherKeys = false;
+			List<String> keywords = new java.util.ArrayList<>();
+			String section = "";
+			LispVal cursor = lambdaList;
+			while (cursor instanceof LispCons cell) {
+				LispVal param = cell.car();
+				cursor = cell.cdr();
+				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+					switch (sym.name()) {
+						case LispNames.LAMBDA_REST, LispNames.LAMBDA_BODY -> rest = true;
+						case LispNames.LAMBDA_KEY -> key = true;
+						case LispNames.LAMBDA_ALLOW_OTHER_KEYS -> allowOtherKeys = true;
+						default -> {
+						}
+					}
+					section = sym.name();
+					continue;
+				}
+				switch (section) {
+					case "" -> required++;
+					case LispNames.LAMBDA_OPTIONAL -> optional++;
+					case LispNames.LAMBDA_KEY -> {
+						String keyword = keywordOf(param);
+						if (keyword != null) {
+							keywords.add(keyword);
+						}
+					}
+					default -> {
+					}
+				}
+			}
+			if (!(cursor instanceof LispNil)) {
+				rest = true;
+			}
+			return new LambdaListShape(required, optional, rest, key, List.copyOf(keywords), allowOtherKeys);
+		}
+
+		/**
+		 * The keyword a {@code &key} parameter specifier accepts: {@code var},
+		 * {@code (var init [supplied-p])} or {@code ((keyword var) init [supplied-p])}.
+		 */
+		private static @Nullable String keywordOf(LispVal param) {
+			LispVal named = param instanceof LispCons spec ? spec.car() : param;
+			if (named instanceof LispCons explicit && explicit.car() instanceof LispSymbol keyword) {
+				return keyword.isKeyword() ? keyword.name() : ":" + plainNameOf(keyword.name());
+			}
+			return named instanceof LispSymbol var ? ":" + plainNameOf(var.name()) : null;
+		}
+
+		/**
+		 * Why a method of this shape cannot join a generic function of the
+		 * {@code generic} shape (CLHS 7.6.4), as the end of SBCL's sentence, or null when
+		 * the two are congruent. The {@code &key} names are compared only when the
+		 * generic's lambda list was written by a {@code defgeneric}: one a
+		 * {@code defmethod} created mentions {@code &key} but no keyword names (CLHS
+		 * 7.6.5).
+		 * @param generic the generic function's shape
+		 * @param keywordsDeclared whether the generic's keyword names are its own
+		 * @return the reason, or null
+		 */
+		public @Nullable String incongruenceWith(LambdaListShape generic, boolean keywordsDeclared) {
+			if (this.required != generic.required) {
+				return "the method has " + (this.required < generic.required ? "fewer" : "more")
+						+ " required arguments than the generic function";
+			}
+			if (this.optional != generic.optional) {
+				return "the method has " + (this.optional < generic.optional ? "fewer" : "more")
+						+ " optional arguments than the generic function";
+			}
+			if ((this.rest || this.key) != (generic.rest || generic.key)) {
+				return "the method and generic function differ in whether they accept &REST or &KEY arguments";
+			}
+			if (keywordsDeclared && generic.key && !this.allowOtherKeys && !(this.rest && !this.key)) {
+				List<String> missing = generic.keywords.stream().filter(k -> !this.keywords.contains(k)).toList();
+				if (!missing.isEmpty()) {
+					return "the method does not accept each of the &KEY arguments (" + String.join(" ", missing) + ")";
+				}
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * The lambda-list shape CL gives a standard generic function the static subset
+	 * models, or null for any other name: the instance-initialization trio and
+	 * {@code print-object}.
+	 * @param plainName the generic's name without a package qualifier
+	 * @return the standard shape, or null
+	 */
+	public static @Nullable LambdaListShape standardGenericShape(String plainName) {
+		return switch (plainName) {
+			case "INITIALIZE-INSTANCE", "REINITIALIZE-INSTANCE" ->
+				new LambdaListShape(1, 0, true, true, List.of(), true);
+			case "SHARED-INITIALIZE" -> new LambdaListShape(2, 0, true, true, List.of(), true);
+			case LispNames.PRINT_OBJECT -> new LambdaListShape(2, 0, false, false, List.of(), false);
+			default -> null;
+		};
+	}
+
+	/**
 	 * One generic function: its canonical name, required parameter names (from the
 	 * {@code defgeneric} or the first {@code defmethod}), optional documentation, and its
 	 * methods keyed by a canonical specializer key so redefining the same specializer
@@ -1052,6 +1177,14 @@ public final class ClosRegistry {
 		private final String name;
 
 		private List<String> paramNames;
+
+		@Nullable private LambdaListShape lambdaListShape;
+
+		private boolean keywordsDeclared;
+
+		private final Map<String, LambdaListShape> methodShapes = new java.util.HashMap<>();
+
+		private final Set<String> inlineMethodKeys = new java.util.HashSet<>();
 
 		private boolean variadic;
 
@@ -1097,6 +1230,54 @@ public final class ClosRegistry {
 		 */
 		public void paramNames(List<String> paramNames) {
 			this.paramNames = List.copyOf(paramNames);
+		}
+
+		/**
+		 * The generic function's lambda-list shape: its {@code defgeneric}'s, else the
+		 * one its first method established, else null (a synthesized system generic whose
+		 * name has no standard shape).
+		 * @return the shape, or null
+		 */
+		@Nullable public LambdaListShape lambdaListShape() {
+			return this.lambdaListShape;
+		}
+
+		/**
+		 * Whether the shape's {@code &key} names were written by a {@code defgeneric}
+		 * (and so bind every method), see {@link LambdaListShape#incongruenceWith}.
+		 * @return true for a declared shape
+		 */
+		public boolean keywordsDeclared() {
+			return this.keywordsDeclared;
+		}
+
+		/**
+		 * Records the generic function's lambda-list shape.
+		 * @param shape the shape
+		 * @param declared whether a {@code defgeneric} wrote it
+		 */
+		public void lambdaListShape(LambdaListShape shape, boolean declared) {
+			this.lambdaListShape = shape;
+			this.keywordsDeclared = declared;
+		}
+
+		/**
+		 * The lambda-list shape of each method a {@code defmethod} added, keyed like
+		 * {@link #methods()}; a synthesized system default has none.
+		 * @return the method shapes
+		 */
+		public Map<String, LambdaListShape> methodShapes() {
+			return this.methodShapes;
+		}
+
+		/**
+		 * The keys of the methods the generic's {@code defgeneric} defined through
+		 * {@code (:method ...)} options, which a redefinition of the generic removes
+		 * (CLHS defgeneric).
+		 * @return the method keys
+		 */
+		public Set<String> inlineMethodKeys() {
+			return this.inlineMethodKeys;
 		}
 
 		/**

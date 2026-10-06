@@ -10,7 +10,7 @@
 - `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`pathname`、`package` など）にマッチ。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
 - `(var t)` または素の `var` — デフォルトメソッド
 
-呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
+呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられます（ディスパッチャは末尾を `apply` で転送します）。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
 
 ```lisp
 (defclass animal () ())
@@ -23,6 +23,16 @@
 (defmethod speak (x) "?")
 (list (speak (make-instance 'dog)) (speak (make-instance 'animal))
       (speak 42) (speak :cat) (speak "s")) ; => ("woof" "some sound" "a number" "meow" "?")
+```
+
+## ラムダリストの合同性
+
+各メソッドのラムダリストは総称関数のラムダリストと**合同**でなければなりません（CLHS 7.6.4）。必須引数の数と `&optional` 引数の数が等しく、`&rest` または `&key` を両方が持つか両方が持たず、`defgeneric` が `&key` の後に挙げたキーワードをすべてメソッドが受け付けること（自身の `&key` に書く、`&allow-other-keys` を書く、または `&key` なしの `&rest` を書く）が条件です。総称関数のラムダリストは `defgeneric` のもの、なければ最初のメソッドのものです。`initialize-instance`、`reinitialize-instance`、`shared-initialize`、`print-object` は標準のラムダリストを持ちます。合同でないメソッドは追加されず、`defmethod` はそれが実行される位置で `program-error` を通知します（全バックエンド共通）。
+
+```console
+(defgeneric scale (x factor &optional offset))
+(defmethod scale ((x integer) factor) (* x factor))
+;; Unhandled condition: DEFMETHOD SCALE: the method has fewer optional arguments than the generic function
 ```
 
 ## setf メソッド
@@ -60,7 +70,7 @@
 (describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
 ```
 
-ライトサブセット: `&key` はエラー、標準メソッド結合はクラスメソッドとデフォルトメソッドについてサポートされます（`eql` や組み込み型の specializer を持つ `:around`/`:before`/`:after` は、同じ specializer の基本メソッドとデフォルトメソッドのみと結合します）。コンパイルパスでは `defmethod` はトップレベルフォームとしてのみサポートされ、コンパイルされたプログラムのメソッド集合はコンパイル時に固定されます。
+ライトサブセット: 標準メソッド結合はクラスメソッドとデフォルトメソッドについてサポートされます（`eql` や組み込み型の specializer を持つ `:around`/`:before`/`:after` は、同じ specializer の基本メソッドとデフォルトメソッドのみと結合します）。コンパイルパスでは `defmethod` はトップレベルフォームとしてのみサポートされ、コンパイルされたプログラムのメソッド集合はコンパイル時に固定されます。
 
 ## 組み込み関数名へのメソッド定義
 
