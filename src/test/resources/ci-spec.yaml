@@ -1552,10 +1552,11 @@ cases:
       ((12 3) NIL)
       (:ERROR NIL)
       ((12 4) NIL)
-  # digit-char-p and parse-integer: a radix that is no integer in 2..36 is the type-error of
+  # digit-char, digit-char-p and parse-integer: a radix that is no integer in 2..36 is the type-error of
   # (INTEGER 2 36) before any character is read -- run-time and literal radixes, call position
-  # and first class. SBCL's answers (RadixRangeFixture.PROGRAM).
-  - name: digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36
+  # and first class; digit-char's weight is an unsigned-byte checked before its radix. SBCL's answers
+  # (RadixRangeFixture.PROGRAM).
+  - name: digit-char-digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36
     source: |
       (defvar *rr-37* (read-from-string "37"))
       (defvar *rr-36* (read-from-string "36"))
@@ -1568,6 +1569,8 @@ cases:
       (defvar *rr-nil* (read-from-string "nil"))
       (defvar *rr-big* (expt 2 64))
       (defvar *rr-9* (read-from-string "9"))
+      (defvar *rr-5* (read-from-string "5"))
+      (defvar *rr-35* (read-from-string "35"))
       (defun rr-probe (thunk)
         (handler-case (multiple-value-list (funcall thunk))
           (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))
@@ -1585,6 +1588,12 @@ cases:
               (apply #'parse-integer "12" (list :radix *rr-1*)) (funcall #'parse-integer "zz" :radix *rr-36*))
       (rr-row (digit-char-p #\2 37) (digit-char-p #\2 1) (parse-integer "12" :radix 37) (parse-integer "12" :radix 0))
       (rr-row (digit-char-p #\2 36) (parse-integer "12" :radix 2 :junk-allowed t) (parse-integer "12" :radix 36) (parse-integer "ff" :radix 16))
+      (rr-row (digit-char *rr-5* *rr-37*) (digit-char *rr-5* *rr-1*) (digit-char *rr-35* *rr-36*) (digit-char 36 *rr-37*))
+      (rr-row (digit-char *rr-5* *rr-big*) (digit-char *rr-5* *rr-f*) (digit-char *rr-5* *rr-nil*) (digit-char *rr-5* *rr-0*))
+      (rr-row (digit-char *rr-m1* *rr-37*) (digit-char *rr-f* *rr-10*) (digit-char *rr-nil* *rr-37*) (digit-char *rr-big* *rr-10*))
+      (rr-row (funcall #'digit-char *rr-5* *rr-37*) (apply #'digit-char (list *rr-5* *rr-1*)) (funcall #'digit-char *rr-m1* *rr-10*) (funcall #'digit-char *rr-35* *rr-36*))
+      (rr-row (digit-char 5 37) (digit-char 5 1) (digit-char -1 10) (digit-char 1.5 10))
+      (rr-row (digit-char 5) (digit-char 11 16) (digit-char 36 36) (digit-char 35 36))
     expected: |
       ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)) (:TYPE-ERROR -1 (INTEGER 2 36)))
       ((:TYPE-ERROR 18446744073709551616 (INTEGER 2 36)) (:TYPE-ERROR 10.5 (INTEGER 2 36)) (:TYPE-ERROR NIL (INTEGER 2 36)) (:TYPE-ERROR 1 CHARACTER))
@@ -1594,6 +1603,12 @@ cases:
       ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (1295 2))
       ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)))
       ((2) (1 1) (38 2) (255 2))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (#\Z) (:TYPE-ERROR 37 (INTEGER 2 36)))
+      ((:TYPE-ERROR 18446744073709551616 (INTEGER 2 36)) (:TYPE-ERROR 10.5 (INTEGER 2 36)) (:TYPE-ERROR NIL (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)))
+      ((:TYPE-ERROR -1 UNSIGNED-BYTE) (:TYPE-ERROR 10.5 UNSIGNED-BYTE) (:TYPE-ERROR NIL UNSIGNED-BYTE) (NIL))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR -1 UNSIGNED-BYTE) (#\Z))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR -1 UNSIGNED-BYTE) (:TYPE-ERROR 1.5 UNSIGNED-BYTE))
+      ((#\5) (#\B) (NIL) (#\Z))
   - name: parse-integer-signals-a-parse-error
     source: |
       (defvar *pis-1* (read-from-string "1"))

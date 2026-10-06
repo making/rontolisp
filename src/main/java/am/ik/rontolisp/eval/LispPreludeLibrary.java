@@ -2997,10 +2997,16 @@ public final class LispPreludeLibrary {
 		// when the bounded subsequences match. Lite: :from-end is accepted and the
 		// scan still runs forward (the returned index is then the forward one).
 		// digit-char: the inverse of digit-char-p -- the (upper-case) character
-		// denoting a weight in the radix, or nil when the weight is out of range.
+		// denoting a weight in the radix, or nil when the weight is out of range. As in
+		// sbcl the weight must be an unsigned-byte and the radix an (integer 2 36), the
+		// weight refused first, each as a type-error over the argument as given.
 		SOURCES.put(LispNames.DIGIT_CHAR, """
 				(defun digit-char (weight &optional (radix 10))
-				  (if (and (integerp weight) (>= weight 0) (< weight radix))
+				  (unless (and (integerp weight) (>= weight 0))
+				    (error 'type-error :datum weight :expected-type 'unsigned-byte))
+				  (unless (and (integerp radix) (<= 2 radix 36))
+				    (error 'type-error :datum radix :expected-type '(integer 2 36)))
+				  (if (< weight radix)
 				      (if (< weight 10)
 				          (code-char (+ (char-code #\\0) weight))
 				          (code-char (+ (char-code #\\A) (- weight 10))))
