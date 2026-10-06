@@ -32,8 +32,27 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
   (`(* #c(0.0 -0.0) 1)` is `#C(0.0 -0.0)`), two complexes take `(ac-bd, ad+bc)`, the
   fold is left to right from the first operand, and a step whose parts are all exact stays
   exact whatever float follows. `_cmul`, `_c_mul` and `Environment.mulComplexPair` are one
-  rule; `ComplexProductSignedZeroFixture` pins it. `expt` of a float complex by an integer
-  still folds through `exp(w*log z)` and loses the sign on every backend.
+  rule; `ComplexProductSignedZeroFixture` pins it.
+- A complex base to a RATIONAL power is SBCL's polar form, `(* (expt (abs z) p) (cis (* p
+  (phase z))))`, except an exact base to an int-range integer (squaring, exact). Measured
+  2026-10-06, SBCL 2.2.9 with `*read-default-float-format*` `double-float`: SBCL does NOT
+  multiply for an integer power -- `(expt #c(1.1d0 2.2d0) 1)` is `#C(1.1000000000000003 2.2)`,
+  `... 3` is `#C(-14.641000000000007 -2.661999999999997)` where the product is
+  `#C(-14.641000000000005 -2.662000000000001)` -- and every complex-float/ratio row tried
+  matched the polar form digit for digit, signs included (`(expt #c(0.0 -0.0) 2)` is
+  `#C(0.0 -0.0)`, `(expt #c(1.5 -0.0) -3)` `#C(0.2962962962962963 0.0)`, `(expt #c(-0.0 -0.0)
+  3)` `#C(-0.0 -0.0)`). Until that day all four backends took `exp(w*log z)` there: `-0.0`
+  parts came out `+0.0` and `(expt #c(1.1 2.2) 2)` was `#C(-3.630000000000001 ...)` against
+  SBCL's `-3.6300000000000003`. A float or complex power keeps `exp(w*log z)` (SBCL's own
+  dispatch), and ANY zero power answers `#C(1.0 0.0)` (SBCL's `(1+ (* base power))`; the
+  formula left `(expt #c(0.1 -0.2) 0)` at `#C(1.0 -0.0)`). The form runs on fdlibm `pow`,
+  so a row whose `pow` is not correctly rounded sits a ulp from SBCL's glibc one:
+  `(expt #c(1.0 2.0) 3)` is `#C(-11.000000000000002 -1.9999999999999971)` here and
+  `#C(-11.000000000000004 -1.9999999999999973)` in SBCL (`pow(sqrt 5, 3)`; the old formula
+  happened to land on SBCL's digits). `Environment.exptComplex`/`polar`, `_cpow`'s polar arm
+  (`emitPolarHolder`, shared with `_cpowr`) and `WasmComplexCompiler.emitExptFloat`
+  (`emitPolarOf`, shared with the real escape) are one rule; `ComplexRationalPowerFixture`
+  pins it.
 - Gated `GROUP_COMPLEX` (`JvmComplexRuntimeBuilder`, only when
   `mayCreateComplex`: a `#C` literal, a `complex`/`conjugate` call, a `sqrt`
   mention, or a `#'complex`/`#'conjugate`/`#'phase` designator -- plus
@@ -42,7 +61,8 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
   `_add`/`_sub`/`_mul`/`_div`/`_dbl`/`_cmp`, so funnels match real
   arithmetic), `_cneg` (separate from `_csub`-from-zero: `0.0 - 0.0` is
   `+0.0`, `-0.0` is not), `_csqrt` (negatives root into the plane),
-  `_cpow` (exact integer powers by squaring, else `exp(w*log z)`),
+  `_cpow` (exact integer powers by squaring, a zero power `#C(1.0 0.0)`, a rational power
+  over a holder the polar form, else `exp(w*log z)`),
   `_cpowr` (two REAL operands whose answer can still be complex: a negative
   base to a non-integer power, else a delegation to the ungated `_pow`),
   `_cu1` (the 15 unary math functions by int opcode: `asinh`, `acosh`, `atanh`
@@ -296,7 +316,7 @@ carry an anchor against the real functions
 four-backend leg `ci-spec.yaml`'s `complex-tan-tanh-are-quotients`, which pins
 the identity rather than digits the backends round differently).
 
-`_cpow`'s float path decides a zero base before `exp(w*log z)` (`emitZeroBasePow`; the rule and
+`_cpow`'s float path decides a zero base to a float or complex power before `exp(w*log z)` (`emitZeroBasePow`; the rule and
 its SBCL table: `.kb/error-handling.md`, "A zero base on the complex `expt` path").
 
 ## Real arguments that leave the real domain (`.todo/763`, 2026-09-11)
@@ -309,14 +329,17 @@ is defined twice and `(asin 2d0)` IS `(asin #c(2d0 0d0))`.
 
 **`expt` is the one exception, and deliberately.** A real base's phase is EXACTLY pi, so
 the answer is `StrictMath.pow(|x|, y)` turned through `y*pi` radians (`_cpowr`, the
-interpreter's `negativeBasePow`) -- not `_cpow`'s `exp(w*log z)`, which would have to
-recover that phase from a logarithm. Measured against SBCL 2.2.9 on 2026-09-11:
-`(expt -8d0 1/3)` is `#C(1.0000000000000002 1.7320508075688772)` by the rotation and
-`#C(1.0 1.732050807568877)` through the logarithm, and SBCL answers the FIRST for the
-real base and the SECOND for `(expt #c(-8d0 0d0) 1/3)` -- it splits the same way, for the
-same reason. The rotation also makes `(expt -2d0 0.5d0)`'s imaginary part exactly
-`(sqrt 2)`. So `(expt x y)` and `(expt (complex x 0) y)` disagree in the last bits by
-design; do not "fix" one to the other. `_cpowr` delegates every other operand pair to the
+interpreter's `negativeBasePow`) -- not `exp(w*log z)`, which would have to recover that
+phase from a logarithm. For a RATIONAL `y` that is the complex base's polar form over
+`(x, 0)` (`atan2(0, x)` is pi), so `(expt -8d0 1/3)` and `(expt #c(-8d0 0d0) 1/3)` are both
+`#C(1.0000000000000002 1.7320508075688772)` -- SBCL 2.2.9's answer for both, re-measured
+2026-10-06 (an entry here from 2026-09-11 said SBCL answered the complex base
+`#C(1.0 1.732050807568877)`; that is its answer for the FLOAT power `(/ 1d0 3)` only). For a
+FLOAT `y` the complex base takes `exp(w*log z)` and the two disagree in the last bits,
+which is SBCL's split too: `(expt -8d0 (/ 1d0 3))` is `#C(1.0000000000000002 ...)` and
+`(expt #c(-8d0 0d0) (/ 1d0 3))` `#C(1.0 1.732050807568877)`. The rotation also makes
+`(expt -2d0 0.5d0)`'s imaginary part exactly `(sqrt 2)`. Do not "fix" the float-power split.
+`_cpowr` delegates every other operand pair to the
 ungated `_pow`, so the exact rational path and its error funnels stay unduplicated.
 
 A NaN is outside every one of these domains under a naive comparison, and CL answers the

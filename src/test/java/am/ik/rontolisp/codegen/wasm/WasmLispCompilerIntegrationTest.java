@@ -27487,6 +27487,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void complexBaseToARationalPower() throws Exception {
+		// The LispEvaluatorTest#complexBaseToARationalPower twin: the inline expt took
+		// exp(p*log z) for a float complex to an integer and lost a -0.0 part.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexRationalPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(program)).isEqualTo(am.ik.rontolisp.ComplexRationalPowerFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexRationalPowerFixture.EXPECTED);
+	}
+
+	@Test
 	void complexThroughAVariable() throws Exception {
 		// The LispEvaluatorTest#complexThroughAVariable twin: a call site with no complex
 		// in its own text reached _rat_*/_as_f64 with a TYPE_COMPLEX and trapped (the

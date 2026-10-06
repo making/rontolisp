@@ -6091,7 +6091,7 @@ cases:
       5.408326913195984
       2.1587989303424644
       #C(-6.960664459571899 2.7296244647840076)
-      #C(-11.000000000000004 -1.9999999999999973)
+      #C(-11.000000000000002 -1.9999999999999971)
       0.0820849986238988
       0.9661051464753109
       -0.5984721441039564
@@ -21847,7 +21847,8 @@ cases:
   - name: a-zero-base-to-a-complex-power
     # A zero base on the complex expt path: a zero power answers one, a power whose
     # real part is positive answers zero (exact when both operands are), any other
-    # power the IEEE NaN parts of exp(w*log z). The rows are ZeroBaseComplexPowerFixture's.
+    # power the IEEE NaN parts of exp(w*log z) -- except a complex base to a rational
+    # power, which takes the polar form. The rows are ZeroBaseComplexPowerFixture's.
     source: |
       (defvar *ci-zb-zero* 0)
       (defvar *ci-zb-fzero* 0.0)
@@ -21878,7 +21879,7 @@ cases:
       #C(0.0 0.0)
       #C(0.0 0.0)
       #C(0.0 0.0)
-      #C(0.0 0.0)
+      #C(0.0 -0.0)
       #C(0.0 0.0)
       #C(0.0 0.0)
       #C(1.0 0.0)
@@ -21887,9 +21888,78 @@ cases:
       #C(NaN NaN)
       #C(NaN NaN)
       #C(NaN NaN)
-      #C(NaN NaN)
+      #C(Infinity NaN)
       #C(1.5384778027279442 1.2779225526272695)
       #C(1.0 0.0)
+  - name: a-complex-base-to-a-rational-power
+    # A complex base to a rational power is SBCL's polar form, |z|^p turned through
+    # p*phase(z): a -0.0 part survives and the digits are SBCL's; a zero power is
+    # #C(1.0 0.0). The rows are ComplexRationalPowerFixture's.
+    source: |
+      (defvar *ci-crp-nz* (complex 0.0 -0.0))
+      (defvar *ci-crp-z* (complex 1.1 2.2))
+      (defun ci-crp-expt (a b) (expt a b))
+      (print (expt #c(0.0 -0.0) 2))
+      (print (ci-crp-expt *ci-crp-nz* 2))
+      (print (expt #c(1.5 -0.0) 3))
+      (print (ci-crp-expt (complex 1.5 -0.0) 3))
+      (print (expt #c(1.5 -0.0) -3))
+      (print (expt #c(-0.0 -0.0) 3))
+      (print (expt #c(-2.0 -0.0) 3))
+      (print (expt #c(1.1 2.2) 2))
+      (print (ci-crp-expt *ci-crp-z* 2))
+      (print (expt #c(1.1 2.2) 1))
+      (print (expt #c(1.1 2.2) -3))
+      (print (ci-crp-expt *ci-crp-z* -3))
+      (print (expt #c(3.0 4.0) 2))
+      (print (expt #c(2.0 3.0) 10))
+      (print (expt #c(0.6 0.8) 100000000000000000001))
+      (print (ci-crp-expt (complex 0.6 0.8) 100000000000000000001))
+      (print (expt #c(-8.0 0.0) 1/3))
+      (print (ci-crp-expt (complex -8.0 0.0) 1/3))
+      (print (expt -8.0 1/3))
+      (print (expt #c(1.1 2.2) 1/2))
+      (print (expt #c(1.1 2.2) -1/2))
+      (print (expt #c(1.5 -0.0) 1/2))
+      (print (ci-crp-expt *ci-crp-nz* 5/2))
+      (print (expt #c(1 2) 1/3))
+      (print (expt #c(1.1 -2.2) 0))
+      (print (ci-crp-expt (complex 0.1 -0.2) 0))
+      (print (expt #c(0.1 -0.2) 0.0))
+      (print (expt #c(0.1 -0.2) #c(0.0 0.0)))
+      (print (expt #c(1 2) 3))
+      (print (expt #c(1/2 2) -2))
+    expected: |
+      #C(0.0 -0.0)
+      #C(0.0 -0.0)
+      #C(3.375 -0.0)
+      #C(3.375 -0.0)
+      #C(0.2962962962962963 0.0)
+      #C(-0.0 -0.0)
+      #C(-8.0 -2.9391523179536475e-15)
+      #C(-3.6300000000000003 4.8400000000000025)
+      #C(-3.6300000000000003 4.8400000000000025)
+      #C(1.1000000000000003 2.2)
+      #C(-0.06611570247933882 0.01202103681442522)
+      #C(-0.06611570247933882 0.01202103681442522)
+      #C(-6.999999999999998 24.000000000000004)
+      #C(-341524.9999999998 -145667.99999999994)
+      #C(0.9229746253726842 -0.38486080719937354)
+      #C(0.9229746253726842 -0.38486080719937354)
+      #C(1.0000000000000002 1.7320508075688772)
+      #C(1.0000000000000002 1.7320508075688772)
+      #C(1.0000000000000002 1.7320508075688772)
+      #C(1.3341054634566507 0.8245225209931408)
+      #C(0.542391000989624 -0.33521607380366547)
+      #C(1.224744871391589 -0.0)
+      #C(0.0 -0.0)
+      #C(1.2196165079717578 0.47171126778938893)
+      #C(1.0 0.0)
+      #C(1.0 0.0)
+      #C(1.0 0.0)
+      #C(1.0 0.0)
+      #C(-11 -2)
+      #C(-60/289 -32/289)
   - name: complex-asin-acos-branch-cut
     # asin/acos cut the real axis outside [-1, 1]: the value ON the cut is the one
     # continuous with quadrant IV above +1 and quadrant II below -1, and the sign of an

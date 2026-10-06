@@ -3446,7 +3446,7 @@ public final class Environment implements Scope {
 		// reciprocal, e.g. (expt 2 -1) -> 1/2); otherwise StrictMath.pow (double). A
 		// complex operand with an integer exponent stays exact by repeated
 		// multiplication (e.g. (expt #c(1 1) 2) -> #C(0 2)); any other complex
-		// exponentiation goes through exp(w*log(z)) in floats. A NEGATIVE real base
+		// exponentiation is exptComplex's float arms. A NEGATIVE real base
 		// to a non-integer power leaves the real line and answers the plane
 		// (negativeBasePow), where StrictMath.pow alone would answer NaN.
 		env.defineFunction(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
@@ -9847,10 +9847,12 @@ public final class Environment implements Scope {
 				&& compareNumeric(complexImag(a), complexImag(b)) == 0;
 	}
 
-	// z^w for a complex operand: an int-range integer exponent over rational parts
-	// stays exact by repeated squaring (a negative one through the exact
-	// reciprocal); a zero base takes zeroBasePow; anything else goes through
-	// exp(w*log(z)) in floats.
+	// z^w for a complex operand, SBCL's dispatch: an int-range integer exponent over
+	// rational parts stays exact by repeated squaring (a negative one through the
+	// exact reciprocal); a zero power is #C(1.0 0.0); any other rational power over a
+	// complex base is the polar form |z|^w turned through w*phase(z), which keeps a
+	// -0.0 part through the phase and rounds as SBCL does; a float or complex power
+	// takes zeroBasePow, then exp(w*log(z)) in floats.
 	private static LispVal exptComplex(LispVal base, LispVal exp) {
 		double[] z = complexDoubleParts(base);
 		boolean exactBase = !hasComplexDoublePart(List.of(base)) && !(base instanceof LispDouble);
@@ -9881,6 +9883,12 @@ public final class Environment implements Scope {
 			return LispComplex.valueOf(re, im);
 		}
 		double[] w = complexDoubleParts(exp);
+		if (isZeroNumber(exp)) {
+			return LispComplex.valueOf(new LispDouble(1.0), new LispDouble(0.0));
+		}
+		if (base instanceof LispComplex && isRationalValue(exp)) {
+			return polar(StrictMath.pow(StrictMath.hypot(z[0], z[1]), w[0]), w[0] * StrictMath.atan2(z[1], z[0]));
+		}
 		LispVal zero = zeroBasePow(base, z, exp, w);
 		if (zero != null) {
 			return zero;
@@ -9890,18 +9898,15 @@ public final class Environment implements Scope {
 		return LispComplex.valueOf(new LispDouble(e[0]), new LispDouble(e[1]));
 	}
 
-	// A zero base, decided before exp(w*log(z)) multiplies log 0 = -inf into NaN
-	// parts: a zero power answers one, a power whose real part is positive answers
-	// zero -- exact when both operands are, #C(0.0 0.0) otherwise (positive zeros for
-	// any zero's sign, like IEEE pow of a zero to a non-integer power) -- and any
-	// other power answers null, keeping the formula's IEEE NaN parts. A ratio whose
-	// double underflows to zero is not a zero.
+	// A zero base to a nonzero float or complex power, decided before exp(w*log(z))
+	// multiplies log 0 = -inf into NaN parts: a power whose real part is positive
+	// answers zero -- exact when both operands are, #C(0.0 0.0) otherwise (positive
+	// zeros for any zero's sign, like IEEE pow of a zero to a non-integer power) --
+	// and any other power answers null, keeping the formula's IEEE NaN parts. A ratio
+	// whose double underflows to zero is not a zero.
 	private static @Nullable LispVal zeroBasePow(LispVal base, double[] z, LispVal exp, double[] w) {
 		if (z[0] != 0.0 || z[1] != 0.0 || !isZeroNumber(base)) {
 			return null;
-		}
-		if (w[0] == 0.0 && w[1] == 0.0 && isZeroNumber(exp)) {
-			return LispComplex.valueOf(new LispDouble(1.0), new LispDouble(0.0));
 		}
 		if (!(w[0] > 0.0)) {
 			return null;
@@ -9914,6 +9919,17 @@ public final class Environment implements Scope {
 
 	private static boolean isZeroNumber(LispVal val) {
 		return isZeroReal(complexReal(val)) && isZeroReal(complexImag(val));
+	}
+
+	private static boolean isRationalValue(LispVal val) {
+		return val instanceof LispInteger || val instanceof LispBigInteger || val instanceof LispRatio;
+	}
+
+	// modulus * cis(theta): each part of the unit rotation multiplied by the real
+	// modulus, so a zero part keeps the sign its sine or cosine gives it.
+	private static LispVal polar(double modulus, double theta) {
+		return LispComplex.valueOf(new LispDouble(modulus * StrictMath.cos(theta)),
+				new LispDouble(modulus * StrictMath.sin(theta)));
 	}
 
 	/**
@@ -9931,17 +9947,16 @@ public final class Environment implements Scope {
 	}
 
 	// (expt x y) for a NEGATIVE real x and a non-integer y: the modulus |x|^y turned
-	// through y*pi radians. This is NOT exp(y*log x) and NOT exptComplex over (x, 0):
-	// a real base's phase is EXACTLY pi, so the modulus costs one pow instead of a log
-	// and an exp, and (expt -2d0 0.5d0)'s imaginary part comes out exactly (sqrt 2)
-	// where the logarithmic form loses a ulp. The two therefore disagree in the last
-	// bits -- (expt #c(-8d0 0d0) 1/3) is not (expt -8d0 1/3) -- which is SBCL's split
-	// too, and correct: the real base carries information the complex one does not.
+	// through y*pi radians. This is NOT exp(y*log x): a real base's phase is EXACTLY
+	// pi, so the modulus costs one pow instead of a log and an exp, and
+	// (expt -2d0 0.5d0)'s imaginary part comes out exactly (sqrt 2) where the
+	// logarithmic form loses a ulp. For a rational y it is exptComplex's polar form
+	// over (x, 0), so (expt -8d0 1/3) is (expt #c(-8d0 0d0) 1/3); for a float y the
+	// complex base takes exp(y*log z) and the two disagree in the last bits -- SBCL's
+	// split too, and correct: the real base carries information the complex one does
+	// not.
 	private static LispVal negativeBasePow(double base, double power) {
-		double modulus = StrictMath.pow(-base, power);
-		double theta = power * Math.PI;
-		return LispComplex.valueOf(new LispDouble(modulus * StrictMath.cos(theta)),
-				new LispDouble(modulus * StrictMath.sin(theta)));
+		return polar(StrictMath.pow(-base, power), power * Math.PI);
 	}
 
 	// The principal square root of (re, im) in floats.
