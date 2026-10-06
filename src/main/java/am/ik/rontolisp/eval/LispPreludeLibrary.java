@@ -126,7 +126,8 @@ import org.jspecify.annotations.Nullable;
  * {@code unread-char}, riding the same one-character pushback cell {@code unread-char}
  * uses); {@code read-from-string} parses the text it collected, so the datum syntax keeps
  * exactly one definition per backend. There is no {@code read} built-in on any backend --
- * {@code .kb/read-load-streams.md}.</li>
+ * {@code .kb/read-load-streams.md}. {@code %read-from-string-full} is
+ * {@code read-from-string}'s whole lambda list over the same scanner.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -3188,41 +3189,40 @@ public final class LispPreludeLibrary {
 		// (the same defect the replace list SOURCE arm and count-if-not already avoid).
 		// The cursor is the map-into shape with the advance folded into the read:
 		// (if (consp c) (prog1 (car c) (setq c (cdr c))) (elt seq i)). A NON-list
-		// operand pins a nil cursor and keeps indexing; a list whose cursor has run out
-		// -- past an out-of-range bound, or onto a dotted tail -- falls back to the very
-		// elt call the body used to make, answer and error alike. That fallback is what
-		// keeps an invalid bound answering exactly what it always did, which
-		// SequenceScanFast declines precisely so this body keeps owning it. Folding the
-		// advance into the read is worth the prog1: a SEPARATE (if (consp c) (cdr c) c)
-		// step costs a second consp call per element, which on the interpreter's
-		// declined path (a string, where the cursor never fires) measured +26%/+36%
-		// against +7%/+16% for this shape.
+		// operand pins a nil cursor and keeps indexing. Both ranges are checked once,
+		// before anything reads them (%check-bounds, subseq's type-error for a bad one,
+		// a nil start included), so a list's cursor never runs out inside its window.
+		// A range with no start supplied and no end is the whole sequence, inside it by
+		// construction, so only a call spelling a bound pays the check: checked always,
+		// a keyword-free mismatch of two short strings ran measurably slower on the JVM.
+		// Folding the advance into the read is worth the prog1: a SEPARATE
+		// (if (consp c) (cdr c) c) step costs a second consp call per element, which on
+		// the interpreter's declined path (a string, where the cursor never fires)
+		// measured +26%/+36% against +7%/+16% for this shape.
 		SOURCES.put(LispNames.MISMATCH, """
-				(defun mismatch (seq1 seq2 &key (test #'eql) key (start1 0) end1 (start2 0) end2 from-end)
-				  (let* ((seq1 (%check-sequence seq1 'mismatch))
-				         (seq2 (%check-sequence seq2 'mismatch))
-				         (e1 (or end1 (length seq1)))
-				         (e2 (or end2 (length seq2)))
-				         (i start1)
-				         (j start2)
-				         (c1 (if (and (listp seq1) (integerp start1) (>= start1 0))
-				                 (nthcdr start1 seq1)
-				                 nil))
-				         (c2 (if (and (listp seq2) (integerp start2) (>= start2 0))
-				                 (nthcdr start2 seq2)
-				                 nil))
-				         (result nil)
-				         (done nil))
-				    (while (not done)
-				      (cond ((and (>= i e1) (>= j e2)) (setq done t))
-				            ((or (>= i e1) (>= j e2)) (setq result i) (setq done t))
-				            (t (let ((a (if (consp c1) (prog1 (car c1) (setq c1 (cdr c1))) (elt seq1 i)))
-				                     (b (if (consp c2) (prog1 (car c2) (setq c2 (cdr c2))) (elt seq2 j))))
-				                 (if (funcall test (if key (funcall key a) a)
-				                              (if key (funcall key b) b))
-				                     (progn (setq i (+ i 1)) (setq j (+ j 1)))
-				                     (progn (setq result i) (setq done t)))))))
-				    result))
+				(defun mismatch (seq1 seq2 &key (test #'eql) key (start1 0 s1p) end1 (start2 0 s2p) end2 from-end)
+				  (let ((seq1 (%check-sequence seq1 'mismatch))
+				        (seq2 (%check-sequence seq2 'mismatch)))
+				    (when (or s1p end1) (%check-bounds seq1 start1 end1))
+				    (when (or s2p end2) (%check-bounds seq2 start2 end2))
+				    (let ((e1 (or end1 (length seq1)))
+				          (e2 (or end2 (length seq2)))
+				          (i start1)
+				          (j start2)
+				          (c1 (if (listp seq1) (nthcdr start1 seq1) nil))
+				          (c2 (if (listp seq2) (nthcdr start2 seq2) nil))
+				          (result nil)
+				          (done nil))
+				      (while (not done)
+				        (cond ((and (>= i e1) (>= j e2)) (setq done t))
+				              ((or (>= i e1) (>= j e2)) (setq result i) (setq done t))
+				              (t (let ((a (if (consp c1) (prog1 (car c1) (setq c1 (cdr c1))) (elt seq1 i)))
+				                       (b (if (consp c2) (prog1 (car c2) (setq c2 (cdr c2))) (elt seq2 j))))
+				                   (if (funcall test (if key (funcall key a) a)
+				                                (if key (funcall key b) b))
+				                       (progn (setq i (+ i 1)) (setq j (+ j 1)))
+				                       (progn (setq result i) (setq done t)))))))
+				      result)))
 				""");
 		// copy-tree walks the CDR direction with a loop like tree-equal below -- the
 		// recursive shape put one frame per element on the stack and a flat list of ten
@@ -3274,9 +3274,8 @@ public final class LispPreludeLibrary {
 		// never moves, so its cursor is seeded once (h1) and copied into the inner loop;
 		// the haystack's cursor advances one cdr per OUTER step (h2) and is likewise
 		// copied for the inner walk. Two lists are therefore O(n*m) rather than
-		// O(n^2*m). Everything the cursor cannot answer -- a non-list operand, a
-		// negative or non-integer start, a bound past the end -- pins a nil cursor and
-		// reads through the original elt call.
+		// O(n^2*m). A non-list operand pins a nil cursor and reads through elt. Both
+		// ranges are checked first when a bound is spelled, as mismatch's are.
 		// :test-not is spelled out here (not defaulted into :test) so the precedence CLHS
 		// leaves to the implementation matches every other scan in this codebase: a
 		// :test spelled alongside it wins, and only an ABSENT :test falls back to the
@@ -3285,38 +3284,35 @@ public final class LispPreludeLibrary {
 		// not recognize, so a :test-not call simply falls through to this body -- no
 		// change needed there.
 		SOURCES.put(LispNames.SEARCH, """
-				(defun search (seq1 seq2 &key (start1 0) end1 (start2 0) end2 test test-not key from-end)
-				  (let* ((seq1 (%check-sequence seq1 'search))
-				         (seq2 (%check-sequence seq2 'search))
-				         (e1 (or end1 (length seq1)))
-				         (e2 (or end2 (length seq2)))
-				         (w (- e1 start1))
-				         (h1 (if (and (listp seq1) (integerp start1) (>= start1 0))
-				                 (nthcdr start1 seq1)
-				                 nil))
-				         (h2 (if (and (listp seq2) (integerp start2) (>= start2 0))
-				                 (nthcdr start2 seq2)
-				                 nil))
-				         (result nil))
-				    (do ((pos start2 (+ pos 1)))
-				        ((or (> (+ pos w) e2) (and result (not from-end))) result)
-				      (let ((ok t) (c1 h1) (c2 h2))
-				        (do ((i 0 (+ i 1)))
-				            ((or (>= i w) (not ok)))
-				          (let ((a (if (consp c1)
-				                       (prog1 (car c1) (setq c1 (cdr c1)))
-				                       (elt seq1 (+ start1 i))))
-				                (b (if (consp c2)
-				                       (prog1 (car c2) (setq c2 (cdr c2)))
-				                       (elt seq2 (+ pos i)))))
-				            (let ((ka (if key (funcall key a) a))
-				                  (kb (if key (funcall key b) b)))
-				              (unless (if test
-				                          (funcall test ka kb)
-				                          (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
-				                (setq ok nil)))))
-				        (setq h2 (if (consp h2) (cdr h2) h2))
-				        (when ok (setq result pos))))))
+				(defun search (seq1 seq2 &key (start1 0 s1p) end1 (start2 0 s2p) end2 test test-not key from-end)
+				  (let ((seq1 (%check-sequence seq1 'search))
+				        (seq2 (%check-sequence seq2 'search)))
+				    (when (or s1p end1) (%check-bounds seq1 start1 end1))
+				    (when (or s2p end2) (%check-bounds seq2 start2 end2))
+				    (let* ((e2 (or end2 (length seq2)))
+				           (w (- (or end1 (length seq1)) start1))
+				           (h1 (if (listp seq1) (nthcdr start1 seq1) nil))
+				           (h2 (if (listp seq2) (nthcdr start2 seq2) nil))
+				           (result nil))
+				      (do ((pos start2 (+ pos 1)))
+				          ((or (> (+ pos w) e2) (and result (not from-end))) result)
+				        (let ((ok t) (c1 h1) (c2 h2))
+				          (do ((i 0 (+ i 1)))
+				              ((or (>= i w) (not ok)))
+				            (let ((a (if (consp c1)
+				                         (prog1 (car c1) (setq c1 (cdr c1)))
+				                         (elt seq1 (+ start1 i))))
+				                  (b (if (consp c2)
+				                         (prog1 (car c2) (setq c2 (cdr c2)))
+				                         (elt seq2 (+ pos i)))))
+				              (let ((ka (if key (funcall key a) a))
+				                    (kb (if key (funcall key b) b)))
+				                (unless (if test
+				                            (funcall test ka kb)
+				                            (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
+				                  (setq ok nil)))))
+				          (setq h2 (if (consp h2) (cdr h2) h2))
+				          (when ok (setq result pos)))))))
 				""");
 		// count-if-not is count-if over the complemented predicate: count-if now carries
 		// the whole keyword set itself (:key and CLHS 17.2.1's bounding keywords), so the
@@ -4253,6 +4249,42 @@ public final class LispPreludeLibrary {
 				      (char= %rd-c #\\") (char= %rd-c #\\;) (char= %rd-c #\\,)
 				      (char= %rd-c #\\`)))
 				""");
+		// read-from-string with more than the string: CL's whole lambda list over the
+		// read scanner above, so the window, the eof handling and the stop index are one
+		// definition on every backend (the one-argument call keeps the built-in). The
+		// window is the string stream's subseq -- the bounds refusal %check-bounds also
+		// answers, raised once before anything is read. The index is the start plus the
+		// stream's position; a --no-wasi module answers file-position with the constant
+		// nil, and there the characters still unread are counted instead. The terminator
+		// the scanner leaves is taken here rather than unread -- no pushed-back character
+		// outlives the stream, or is left for the count to miss -- and a kept one (not
+		// whitespace, or any under :preserve-whitespace) is counted back.
+		SOURCES.put(LispNames.READ_FROM_STRING_FULL_INTERNAL, """
+				(defun %read-from-string-full (%rfs-string &optional (%rfs-eof-error-p t) %rfs-eof-value
+				                               &key ((:start %rfs-start) 0) ((:end %rfs-end))
+				                               ((:preserve-whitespace %rfs-preserve)))
+				  (let ((%rfs-value nil) (%rfs-index 0))
+				    (with-input-from-string (%rfs-s %rfs-string :start %rfs-start :end %rfs-end)
+				      (let ((%rfs-out (make-string-output-stream)) (%rfs-kept 0))
+				        (setq %rfs-value
+				              (if (%rd-datum %rfs-s %rfs-out)
+				                  (let ((%rfs-text (get-output-stream-string %rfs-out))
+				                        (%rfs-c (read-char %rfs-s nil nil)))
+				                    (when (and %rfs-c (or %rfs-preserve (not (%rd-whitespace-p %rfs-c))))
+				                      (setq %rfs-kept 1))
+				                    (close %rfs-out)
+				                    (read-from-string %rfs-text))
+				                  (progn
+				                    (close %rfs-out)
+				                    (if %rfs-eof-error-p (error 'end-of-file :stream %rfs-s) %rfs-eof-value))))
+				        (setq %rfs-index
+				              (- (+ %rfs-start
+				                    (or (file-position %rfs-s)
+				                        (do ((%rfs-i (- (or %rfs-end (length %rfs-string)) %rfs-start) (- %rfs-i 1)))
+				                            ((null (read-char %rfs-s nil nil)) %rfs-i))))
+				                 %rfs-kept))))
+				    (values %rfs-value %rfs-index)))
+				""");
 	}
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
@@ -4469,6 +4501,19 @@ public final class LispPreludeLibrary {
 		// compilers inject after this pass, and needed only where that value can be
 		// handed a keyword -- which the surface shows as a designator spelling outside
 		// the exactly-one-argument positions (mayPassMoreThanOneArgument).
+		// %read-from-string-full: the read-from-string call carrying more than the
+		// string is rewritten onto it inside the expression compilers
+		// (LispMacroExpander.expandReadFromString), and #'read-from-string calls it
+		// where its value can be handed more than one argument.
+		if (LispNames.READ_FROM_STRING_FULL_INTERNAL.equals(entry)) {
+			for (LispVal form : program) {
+				if (callsWithSeveralArguments(form, LispNames.READ_FROM_STRING, canonical)
+						|| mayPassMoreThanOneArgument(form, LispNames.READ_FROM_STRING, canonical)) {
+					return true;
+				}
+			}
+			return false;
+		}
 		if (LispNames.WRITE_TO_STRING_KEYED_INTERNAL.equals(entry)) {
 			for (LispVal form : program) {
 				if (mayPassMoreThanOneArgument(form, LispNames.WRITE_TO_STRING, canonical)) {
@@ -4756,6 +4801,21 @@ public final class LispPreludeLibrary {
 				return true;
 			}
 			if (callsWithArguments(cons.car(), name, canonical)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/** Whether the form calls {@code name} with more than one argument anywhere. */
+	private static boolean callsWithSeveralArguments(LispVal form, String name, boolean canonical) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && matches(head.name(), name, canonical)
+					&& cons.cdr() instanceof LispCons first && first.cdr() instanceof LispCons) {
+				return true;
+			}
+			if (callsWithSeveralArguments(cons.car(), name, canonical)) {
 				return true;
 			}
 			form = cons.cdr();

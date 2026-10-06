@@ -6419,6 +6419,35 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * A {@code read-from-string} call carrying more than the string --
+	 * {@code eof-error-p}, {@code eof-value} or the keyword tail -- becomes a call of the
+	 * prelude {@code %read-from-string-full}, which takes CL's whole lambda list and
+	 * answers the datum and the stop index; the arguments keep their order and the
+	 * defun's lambda list judges them. A one-argument call is returned as it is: the
+	 * built-in, which the multiple-value lowering pairs with
+	 * {@code %read-from-string-end}.
+	 * @param cons the read-from-string expression
+	 * @return the call of the prelude defun, or {@code cons} itself
+	 */
+	public static LispVal expandReadFromString(LispCons cons) {
+		if (!isReadFromStringWithArguments(LispNames.READ_FROM_STRING, cons)) {
+			return cons;
+		}
+		return SourceProvenance.inherit(cons,
+				new LispCons(new LispSymbol(LispNames.READ_FROM_STRING_FULL_INTERNAL), cons.cdr()));
+	}
+
+	/**
+	 * Whether {@code (name ...)} is a {@code read-from-string} call passing more than the
+	 * string: the one {@link #expandReadFromString} sends to the prelude defun, whose
+	 * tail answers two values.
+	 */
+	private static boolean isReadFromStringWithArguments(String name, LispCons cons) {
+		return LispNames.READ_FROM_STRING.equals(name) && cons.cdr() instanceof LispCons first
+				&& first.cdr() instanceof LispCons;
+	}
+
+	/**
 	 * Expands {@code (parse-integer string &key start end radix junk-allowed)} into a
 	 * shared digit-accumulation scan over the {@code char}/{@code digit-char-p}
 	 * primitives, so every backend gets the full keyword set and BOTH return values (the
@@ -6426,7 +6455,9 @@ public final class LispMacroExpander {
 	 * multiple-value consumers and the {@code %mv-spill} channel pick up). Semantics:
 	 * leading/trailing whitespace is skipped, an optional sign is accepted; without
 	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
-	 * stops at the first non-digit and yields nil when no digits were seen.
+	 * stops at the first non-digit and yields nil when no digits were seen. A spelled
+	 * {@code :start} or {@code :end} is checked once, after every argument has run and
+	 * before the scan: a bad one is {@code subseq}'s bounds type-error.
 	 * @param cons the parse-integer expression
 	 * @return the expanded expression
 	 */
@@ -6439,6 +6470,13 @@ public final class LispMacroExpander {
 				LispNames.END_KEYWORD, LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
 		if (keywordError != null) {
 			return keywordError;
+		}
+		// The bindings below take the keyword values in PARSE_INTEGER_KEYWORDS' order; a
+		// call spelling them otherwise, or one twice, evaluates them in its own order
+		// first.
+		KeywordTail tail = keywordsInOrder(parts, PARSE_INTEGER_KEYWORDS) ? null : KeywordTail.of(parts, 2, "__pi");
+		if (tail != null) {
+			parts = tail.parts();
 		}
 		LispVal startForm = keywordValue(parts, 2, LispNames.START_KEYWORD);
 		LispVal endForm = keywordValue(parts, 2, LispNames.END_KEYWORD);
@@ -6490,12 +6528,38 @@ public final class LispMacroExpander {
 		expanded = makeLet(acc.name(), new LispInteger(0), expanded);
 		expanded = makeLet(sign.name(), new LispInteger(1), expanded);
 		expanded = makeLet(i.name(), start, expanded);
+		if (startForm != null || endForm != null) {
+			expanded = makeProgn(List.of(checkBoundsOf(str, start, endRaw), expanded));
+		}
 		expanded = makeLet(junk.name(), junkForm == null ? LispNil.INSTANCE : junkForm, expanded);
 		expanded = makeLet(radix.name(), radixForm == null ? new LispInteger(10) : radixForm, expanded);
 		expanded = makeLet(end.name(), makeIf(endRaw, endRaw, mvCall(LispNames.LENGTH, str)), expanded);
 		expanded = makeLet(endRaw.name(), endForm == null ? LispNil.INSTANCE : endForm, expanded);
 		expanded = makeLet(start.name(), startForm == null ? new LispInteger(0) : startForm, expanded);
-		return makeLet(str.name(), parts.get(1), expanded);
+		expanded = makeLet(str.name(), parts.get(1), expanded);
+		return tail == null ? expanded : tail.wrap(expanded);
+	}
+
+	/**
+	 * {@code parse-integer}'s keywords, in the order its expansion binds their values.
+	 */
+	private static final List<String> PARSE_INTEGER_KEYWORDS = List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+			LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
+
+	/**
+	 * Whether a call's keyword tail (from index 2) spells each keyword at most once and
+	 * in {@code order}, so binding the values in that order evaluates them in the call's.
+	 */
+	private static boolean keywordsInOrder(List<LispVal> parts, List<String> order) {
+		int previous = -1;
+		for (int k = 2; k + 1 < parts.size(); k += 2) {
+			int rank = parts.get(k) instanceof LispSymbol keyword ? order.indexOf(keyword.name()) : -1;
+			if (rank <= previous) {
+				return false;
+			}
+			previous = rank;
+		}
+		return true;
 	}
 
 	private static LispVal piSetq(LispSymbol var, LispVal value) {
@@ -6713,10 +6777,10 @@ public final class LispMacroExpander {
 	 * that -- so no scan in this family may accept it and scan forward anyway.
 	 */
 	private record SeqScanBounds(@Nullable LispVal start, @Nullable LispVal end, @Nullable LispVal count,
-			@Nullable LispVal fromEnd) {
+			@Nullable LispVal fromEnd, @Nullable String operator) {
 
 		/** None of them: the scan expands to the loop it always did. */
-		static final SeqScanBounds NONE = new SeqScanBounds(null, null, null, null);
+		static final SeqScanBounds NONE = new SeqScanBounds(null, null, null, null, null);
 
 		boolean absent() {
 			return this.start == null && this.end == null && this.count == null && this.fromEnd == null;
@@ -6741,7 +6805,8 @@ public final class LispMacroExpander {
 		return new SeqScanBounds(keywordValue(parts, start, LispNames.START_KEYWORD),
 				keywordValue(parts, start, LispNames.END_KEYWORD),
 				counted ? keywordValue(parts, start, LispNames.COUNT_KEYWORD) : null,
-				keywordValue(parts, start, LispNames.FROM_END_KEYWORD));
+				keywordValue(parts, start, LispNames.FROM_END_KEYWORD),
+				parts.get(0) instanceof LispSymbol head ? head.name() : null);
 	}
 
 	/**
@@ -6947,6 +7012,11 @@ public final class LispMacroExpander {
 						this.bounds.start() == null ? new LispInteger(0) : this.startv,
 						this.bounds.end() == null ? LispNil.INSTANCE : this.endv), result));
 			}
+			if (this.bounds.count() != null && !isLiteralCount(this.bounds.count())) {
+				// A count is an integer or nil (CLHS 17.2.1), refused once, before the
+				// bounds and the walk: SBCL checks it first.
+				result = makeProgn(List.of(checkCountOf(this.countv, this.bounds.operator()), result));
+			}
 			// The keyword VALUES bind outermost, each evaluated exactly once and before
 			// the walk they shape.
 			if (this.bounds.count() != null) {
@@ -6962,6 +7032,28 @@ public final class LispMacroExpander {
 				result = makeLet(this.startv.name(), this.bounds.start(), result);
 			}
 			return makeLet(this.seq.name(), this.listForm, result);
+		}
+
+		/**
+		 * Whether a {@code :count} form is an integer or nil as written, which no check
+		 * can refuse.
+		 */
+		private static boolean isLiteralCount(LispVal count) {
+			return count instanceof LispInteger || count instanceof LispNil;
+		}
+
+		/**
+		 * {@code (if (or (null c) (integerp c)) nil (%operand-type-error c 'operator
+		 * 'integer))}: nil when the {@code :count} value is an integer or nil, else the
+		 * operator's {@code INTEGER} type-error over it.
+		 */
+		private static LispVal checkCountOf(LispSymbol count, @Nullable String operator) {
+			LispVal integerOrNil = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, count),
+					callOf(LispNames.INTEGERP, count)));
+			LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), count,
+					operator == null ? LispNil.INSTANCE : callOf(LispNames.QUOTE, new LispSymbol(operator)),
+					callOf(LispNames.QUOTE, new LispSymbol("INTEGER"))));
+			return makeIf(integerOrNil, LispNil.INSTANCE, signal);
 		}
 
 		private boolean needsLo() {
@@ -7774,7 +7866,7 @@ public final class LispMacroExpander {
 		LispVal keyForm = keywordValue(call, 2, LispNames.KEY_KEYWORD);
 		LispVal fromEndForm = keywordValue(call, 2, LispNames.FROM_END_KEYWORD);
 		SeqScanBounds bounds = new SeqScanBounds(keywordValue(call, 2, LispNames.START_KEYWORD),
-				keywordValue(call, 2, LispNames.END_KEYWORD), null, null);
+				keywordValue(call, 2, LispNames.END_KEYWORD), null, null, null);
 		// The direction decides which side of the element the duplicate is looked for on,
 		// so a literal one is folded away and only a COMPUTED one costs a runtime branch.
 		boolean keepFirst = fromEndForm != null && isLiteralTrue(fromEndForm);
@@ -10745,10 +10837,8 @@ public final class LispMacroExpander {
 	/**
 	 * The {@code with-input-from-string} arm with an {@code :index} place: on a NORMAL
 	 * exit the place receives the index into the string of the first character the body
-	 * did not read. A string input stream has no position to ask (its
-	 * {@code file-position} answers nil on every backend), so the index is the bound end
-	 * minus the characters still unread, counted by draining the stream just before it is
-	 * closed.
+	 * did not read: the bound end minus the characters still unread, counted by draining
+	 * the stream just before it is closed.
 	 *
 	 * <pre>
 	 * (with-input-from-string (s str :index place :start a :end b) body...) ->
@@ -40374,9 +40464,12 @@ public final class LispMacroExpander {
 				if (callee != null) {
 					name = callee;
 				}
-				if (passesMultipleValues(name) || callee != null && isPublishingWrapperName(callee)) {
+				if (passesMultipleValues(name) || callee != null && isPublishingWrapperName(callee)
+						|| isReadFromStringWithArguments(name, cons)) {
 					// A producer through a designator runs its WRAPPER, which publishes
-					// the second value (settleWrapperLambdas).
+					// the second value (settleWrapperLambdas); a read-from-string call
+					// with more than the string is the prelude defun's
+					// (expandReadFromString).
 					yield new SettledTail(form, false);
 				}
 				if (!isSingleValuedOperator(name, parts)) {

@@ -20,6 +20,9 @@ import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
+import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -6498,17 +6501,21 @@ class LispEvaluatorTest {
 		// are not characters by construction, so the call goes back to the defun (and
 		// signals there, exactly as it always did).
 		assertThatThrownBy(() -> eval("(search '(1) '(0 1 2) :test #'char=)")).hasMessageContaining("CHAR=");
-		// A bounding index outside its sequence, and start > end: what the defun answers
-		// there depends on which elt call it reaches first, so the arm never guesses.
+		// A bounding index outside its sequence, and start > end: the arm declines and
+		// the defun refuses the range with subseq's type-error.
 		assertThat(evalMulti(both + """
-				(list (both :end2-past (search "ab" "xab" :end2 99) (funcall #'search "ab" "xab" :end2 99))
-				      (both :start2-past (search "ab" "xab" :start2 99) (funcall #'search "ab" "xab" :start2 99))
-				      (both :backwards (search "abcd" "xab" :start1 3 :end1 1)
-				            (funcall #'search "abcd" "xab" :start1 3 :end1 1)))
-				""").print()).isEqualTo("(1 NIL 0)");
+				(defmacro refused (form) `(handler-case ,form (type-error (c) (princ-to-string c))))
+				(list (both :end2-past (refused (search "ab" "xab" :end2 99))
+				            (refused (funcall #'search "ab" "xab" :end2 99)))
+				      (both :start2-past (refused (search "ab" "xab" :start2 99))
+				            (refused (funcall #'search "ab" "xab" :start2 99)))
+				      (both :backwards (refused (search "abcd" "xab" :start1 3 :end1 1))
+				            (refused (funcall #'search "abcd" "xab" :start1 3 :end1 1))))
+				""").print()).isEqualTo("(\"SUBSEQ: invalid bounds 0, 99 for string of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 99, 3 for string of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\")");
 		// An explicit nil START is not the default -- the defun's lambda list binds it
-		// and
-		// its arithmetic signals; an explicit nil END is.
+		// and its bounds check refuses it; an explicit nil END is the length.
 		assertThatThrownBy(() -> eval("(search \"ab\" \"xab\" :start1 nil)")).isInstanceOf(LispEvalException.class);
 		assertThat(eval("(search \"ab\" \"xab\" :end1 nil)").print()).isEqualTo("1");
 		// An unknown keyword stays the defun's lambda-list error.
@@ -6584,31 +6591,31 @@ class LispEvaluatorTest {
 				      (both :string-in-list (search "bc" '(#\\a #\\b #\\c #\\d))
 				            (funcall #'search "bc" '(#\\a #\\b #\\c #\\d))))
 				""").print()).isEqualTo("(2 NIL 4 2 NIL 1 1)");
-		// A bound the list does not reach, and a negative one: the cursor cannot answer
-		// either, so the read falls back to the elt call the body always made and the
-		// answer is the one it always gave -- or, where that elt indexes the list outside
-		// it (:start2 -1), ELT's type-error. SequenceScanFast DECLINES all of these
-		// (.kb/seq-coerce-runtime.md), which is why this body still has to own them.
+		// A bound the list does not reach, and a negative one: the body checks both
+		// ranges
+		// before the cursor is seeded, so each is subseq's type-error. SequenceScanFast
+		// DECLINES all of these (.kb/seq-coerce-runtime.md), so this body owns them.
 		assertThat(evalMulti(both + """
-				(list (both :end2-past (search '(1 2) '(1 2 3) :end2 99)
-				            (funcall #'search '(1 2) '(1 2 3) :end2 99))
-				      (both :start2-past (search '(1 2) '(1 2 3) :start2 99)
-				            (funcall #'search '(1 2) '(1 2 3) :start2 99))
-				      (both :start1-past (search '(1 2 3) '(1 2 3) :start1 99)
-				            (funcall #'search '(1 2 3) '(1 2 3) :start1 99))
-				      (both :end1-past (search '(1 2 3) '(1 2 3) :start1 1 :end1 99)
-				            (funcall #'search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-				      (both :start1-negative (search '(1 2 3) '(1 2 3) :start1 -1)
-				            (funcall #'search '(1 2 3) '(1 2 3) :start1 -1))
-				      (both :m-end1-past (mismatch '(1 2 3) '(1 2 3) :end1 99)
-				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end1 99))
-				      (both :m-end2-past (mismatch '(1 2 3) '(1 2 3) :end2 99)
-				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99)))
-				""").print()).isEqualTo("(0 NIL 0 NIL NIL 3 3)");
+				(defmacro refused (form) `(handler-case ,form (type-error (c) (princ-to-string c))))
+				(list (both :end2-past (refused (search '(1 2) '(1 2 3) :end2 99))
+				            (refused (funcall #'search '(1 2) '(1 2 3) :end2 99)))
+				      (both :start2-past (refused (search '(1 2) '(1 2 3) :start2 99))
+				            (refused (funcall #'search '(1 2) '(1 2 3) :start2 99)))
+				      (both :end1-past (refused (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
+				            (refused (funcall #'search '(1 2 3) '(1 2 3) :start1 1 :end1 99)))
+				      (both :start1-negative (refused (search '(1 2 3) '(1 2 3) :start1 -1))
+				            (refused (funcall #'search '(1 2 3) '(1 2 3) :start1 -1)))
+				      (both :m-end2-past (refused (mismatch '(1 2 3) '(1 2 3) :end2 99))
+				            (refused (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99))))
+				""").print()).isEqualTo("(\"SUBSEQ: invalid bounds 0, 99 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 1, 99 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\")");
 		assertThatThrownBy(() -> eval("(search '(1 2 3) '(1 2 3) :start2 -1)"))
-			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
+			.hasMessageContaining("SUBSEQ: invalid bounds -1, 3 for list of length 3");
 		assertThatThrownBy(() -> eval("(funcall #'search '(1 2 3) '(1 2 3) :start2 -1)"))
-			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
+			.hasMessageContaining("SUBSEQ: invalid bounds -1, 3 for list of length 3");
 		// The shapes the arm declines land in this body, so the cursor has to serve them.
 		assertThat(evalMulti("""
 				(list (funcall #'search '(3 4) '(1 2 3 4 5) :key #'identity)
@@ -10452,6 +10459,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void sequenceOperatorsRefuseANonIntegerCount() {
+		// A :count that is neither an integer nor nil is a type-error over the value,
+		// before the bounds and any designator, in call position and first class --
+		// sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.BAD_COUNT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
 	void aBadSequenceBoundReportsAsSubseqDoes() {
 		// The refusal's datum, expected type and text: subseq's, the same on all four
 		// backends.
@@ -10499,6 +10520,79 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void searchAndMismatchRefuseABadBound() {
+		// A negative, non-integer, past-the-length or crossed :start1/:end1/:start2/:end2
+		// is subseq's type-error for search and mismatch, in call position and first
+		// class -- sbcl's answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SearchMismatchBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SearchMismatchBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadSearchOrMismatchBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SearchMismatchBoundsFixture.REPORT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerRefusesABadBound() {
+		// A negative, non-integer, past-the-length or crossed :start/:end is subseq's
+		// type-error for parse-integer, in call position and first class -- sbcl's
+		// answers, pinned on all four backends.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.PROGRAM)).isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadParseIntegerBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerEvaluatesItsArgumentsInTheCallsOrder() {
+		// Every argument once, in the call's order, before the bounds are checked; the
+		// first of a repeated keyword is the one used. The first-class function reads a
+		// supplementary character as one and the call's whitespace only.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void readFromStringTakesItsWholeLambdaList() {
+		// eof-error-p, eof-value, :start, :end and :preserve-whitespace after the string,
+		// in call position and first class, with the stop index -- sbcl's answers, pinned
+		// on all four backends. They used to be ignored.
+		assertThat(evalPrinted(ReadFromStringLambdaListFixture.PROGRAM))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadReadFromStringBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		assertThat(evalPrinted(ReadFromStringLambdaListFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
+	}
+
+	private static String evalPrinted(String program) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
 	}
 
 	@Test

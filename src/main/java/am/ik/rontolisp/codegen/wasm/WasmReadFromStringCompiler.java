@@ -7,8 +7,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles {@code read-from-string}. Points the runtime reader's cursor/end at the string
- * argument's bytes (skipping the surrounding quotes) and calls the embedded
+ * Compiles the one-argument {@code read-from-string} (a call passing more than the string
+ * is the prelude {@code %read-from-string-full},
+ * {@code LispMacroExpander.expandReadFromString}). Points the runtime reader's cursor/end
+ * at the string argument's bytes (skipping the surrounding quotes) and calls the embedded
  * {@code _read_expr}, which itself skips leading whitespace. Subject to the same
  * integer/symbol limitation as the rest of the WASM reader; {@code #\} character literals
  * and floats parsed at runtime are out of scope.

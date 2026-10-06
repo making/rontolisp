@@ -278,7 +278,8 @@ signals a `type-error` for all five and its text names no operator either.
   position and first class, through one check of their own before the walk (`%check-bounds`,
   `.kb/sequence-bounding-keywords.md`, "Every bound is checked once"); so do the string
   comparisons (`%check-bounds` in `%string-compare`, `subseq` in the `string=` lowering,
-  `.kb/characters-code-points.md`, "String comparison family") and the `nstring-*` conversions.
+  `.kb/characters-code-points.md`, "String comparison family"), the `nstring-*` conversions and
+  `parse-integer`.
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,

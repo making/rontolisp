@@ -9,6 +9,9 @@ import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
+import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13518,6 +13521,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceOperatorsRefuseANonIntegerCount() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANonIntegerCount.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_COUNT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunABadSequenceBoundReportsAsSubseqDoes() throws Exception {
 		// The JVM twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BOUND_REPORT_PROGRAM))
@@ -13542,6 +13552,60 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadStringComparisonBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSearchAndMismatchRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#searchAndMismatchRefuseABadBound.
+		assertThat(compileAndRunExpanded(SearchMismatchBoundsFixture.PROGRAM))
+			.isEqualTo(SearchMismatchBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadSearchOrMismatchBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadSearchOrMismatchBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(SearchMismatchBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerRefusesABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#parseIntegerRefusesABadBound.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadParseIntegerBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadFromStringTakesItsWholeLambdaList() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringTakesItsWholeLambdaList,
+		// through the CLI's front end: the prelude defun reads through the pushback cell
+		// (UnreadCharLibrary).
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadReadFromStringBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadReadFromStringBoundReportsAsSubseqDoes.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.REPORT_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
 	}
 
 	@Test
@@ -18836,59 +18900,65 @@ class JvmLispCompilerTest {
 				(print (search "bc" "abcd" :test #'char=))
 				(print (search "BC" "abcd" :test #'char-equal))
 				(print (search "BC" "abcd" :key #'char-upcase))
-				(print (search "ab" "xab" :end2 99))
-				(print (search "abcd" "xab" :start1 3 :end1 1))
+				(print (handler-case (search "ab" "xab" :end2 99) (type-error (e) (princ-to-string e))))
+				(print (handler-case (search "abcd" "xab" :start1 3 :end1 1) (type-error (e) (princ-to-string e))))
 				(print (mismatch "abc" "abd"))
 				(print (mismatch "abc" "abc"))
 				(print (mismatch "abc" "ab"))
 				(print (mismatch '(1 2 3) '(1 2 4)))
 				(print (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
 				(print (mismatch "abcd" "xbcd" :from-end t))
-				"""))
-			.isEqualTo("1\nNIL\n0\n3\n4\n3\n2\n1\n1\n0\n1\n1\n(1 NIL)\n2\n1\n1\n1\n1\n0\n2\nNIL\n2\n2\nNIL\n0");
+				""")).isEqualTo("1\nNIL\n0\n3\n4\n3\n2\n1\n1\n0\n1\n1\n(1 NIL)\n2\n1\n1\n1\n"
+				+ "\"SUBSEQ: invalid bounds 0, 99 for string of length 3\"\n"
+				+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\"\n2\nNIL\n2\n2\nNIL\n0");
 	}
 
 	@Test
 	void compileSearchAndMismatchWalkAListWithACursor() throws Exception {
 		// This backend runs the prelude defun, which used to index a LIST operand with
 		// (elt seq i) -- an nth walk from the head, so O(n^2*m) for search and O(n^2)
-		// for mismatch. It reads a list through a cons cursor now; every answer here is
-		// the one the elt-indexed body gave, out-of-range and negative bounds included
-		// (the cursor cannot answer those, so the read falls back to the same elt call --
-		// which signals ELT's type-error for a list index outside it, as :start2 -1
-		// reaches).
-		assertThat(compileAndRun("""
-				(print (search '(3 4) '(1 2 3 4 5)))
-				(print (search '(3 4) '(1 2 3 4 5) :start2 3))
-				(print (search '(3 4) '(1 2 3 4 3 4) :from-end t))
-				(print (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
-				(print (search '(3 4) '(1 2 3 4 5) :end2 3))
-				(print (search '(#\\b #\\c) "abcd"))
-				(print (search "bc" '(#\\a #\\b #\\c #\\d)))
-				(print (search '(1 2) '(1 2 3) :end2 99))
-				(print (search '(1 2) '(1 2 3) :start2 99))
-				(print (search '(1 2 3) '(1 2 3) :start1 99))
-				(print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-				(print (handler-case (search '(1 2 3) '(1 2 3) :start2 -1) (type-error (e) (princ-to-string e))))
-				(print (search '(1 2 3) '(1 2 3) :start1 -1))
-				(print (handler-case (search '(1) '(1 2 . 3)) (type-error (e) (princ-to-string e))))
-				(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
-				(print (mismatch '(1 2 3) '(1 2 4)))
-				(print (mismatch '(1 2 3) '(1 2 3) :end1 99))
-				(print (mismatch '(1 2 3) '(1 2 3) :end2 99))
-				(print (mismatch '(1 2 3) "abc"))
-				(print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
-				(print (mismatch '(1 2 3) '(1 2 4) :from-end t))
-				(let ((long (let ((out nil))
-				              (dotimes (i 400) (setq out (cons (mod i 7) out)))
-				              (nreverse out))))
-				  (print (list (search '(3 5) long) (search '(5 6) long)
-				               (search '(5 6) long :from-end t) (mismatch long long)
-				               (mismatch long (append (butlast long) (list 99))))))
-				""")).isEqualTo(
-				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n\"ELT: The value -1 is not of type (INTEGER 0 (3))\"\nNIL\n"
-						+ "\"LENGTH: The value 3 is not of type SEQUENCE\"\n" + "2\n2\n3\n3\n0\nNIL\n2\n"
-						+ "(NIL 5 397 NIL 399)");
+		// for mismatch. It reads a list through a cons cursor now; every answer in range
+		// is the one the elt-indexed body gave, and an out-of-range or negative bound is
+		// subseq's type-error, checked before the cursor is seeded.
+		assertThat(compileAndRun(
+				"""
+						(print (search '(3 4) '(1 2 3 4 5)))
+						(print (search '(3 4) '(1 2 3 4 5) :start2 3))
+						(print (search '(3 4) '(1 2 3 4 3 4) :from-end t))
+						(print (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
+						(print (search '(3 4) '(1 2 3 4 5) :end2 3))
+						(print (search '(#\\b #\\c) "abcd"))
+						(print (search "bc" '(#\\a #\\b #\\c #\\d)))
+						(print (handler-case (search '(1 2) '(1 2 3) :end2 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2) '(1 2 3) :start2 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 1 :end1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start2 -1) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 -1) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1) '(1 2 . 3)) (type-error (e) (princ-to-string e))))
+						(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
+						(print (mismatch '(1 2 3) '(1 2 4)))
+						(print (handler-case (mismatch '(1 2 3) '(1 2 3) :end1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (mismatch '(1 2 3) '(1 2 3) :end2 99) (type-error (e) (princ-to-string e))))
+						(print (mismatch '(1 2 3) "abc"))
+						(print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
+						(print (mismatch '(1 2 3) '(1 2 4) :from-end t))
+						(let ((long (let ((out nil))
+						              (dotimes (i 400) (setq out (cons (mod i 7) out)))
+						              (nreverse out))))
+						  (print (list (search '(3 5) long) (search '(5 6) long)
+						               (search '(5 6) long :from-end t) (mismatch long long)
+						               (mismatch long (append (butlast long) (list 99))))))
+						"""))
+			.isEqualTo("2\nNIL\n4\n2\nNIL\n1\n1\n\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 1, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\"\n"
+					+ "\"LENGTH: The value 3 is not of type SEQUENCE\"\n" + "2\n2\n"
+					+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n0\nNIL\n2\n" + "(NIL 5 397 NIL 399)");
 	}
 
 	@Test

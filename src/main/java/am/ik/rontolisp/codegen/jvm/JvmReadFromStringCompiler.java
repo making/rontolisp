@@ -9,10 +9,11 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 
 /**
- * Compiles the {@code read-from-string} built-in. Parses one datum from the string
- * argument via the {@code _readFromString} runtime helper (which reuses the embedded
- * reader). The optional {@code eof-error-p}/{@code eof-value} and {@code :start}/
- * {@code :end} arguments of Common Lisp are not supported.
+ * Compiles the one-argument {@code read-from-string} built-in. Parses one datum from the
+ * string argument via the {@code _readFromString} runtime helper (which reuses the
+ * embedded reader). A call passing more than the string never reaches here: it is the
+ * prelude {@code %read-from-string-full}
+ * ({@code LispMacroExpander.expandReadFromString}).
  */
 final class JvmReadFromStringCompiler {
 

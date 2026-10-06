@@ -2300,11 +2300,11 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     call. The backends' own dispatch already knows. A syntactic scan of the repo's Lisp sources
     (2026-09-26) found ~240 such "wrong-count" conses; the ones inspected were binding lists,
     lambda lists and clauses, and the test suite's compiles warned on none of them.
-  - The SHAPE is the catalog wrapper's lambda list widened by `BuiltinCallArity.STANDARD_WIDER`
-    to the operator's standard lambda list wherever the wrapper is still narrower (keywords count
-    as unbounded; the keyword-tail check stays the operator's). A row that is not wider than its
-    wrapper fails the class initialization, so widening a wrapper retires its row. What is left
-    is the next bullet's.
+  - The SHAPE is the catalog wrapper's lambda list, which is the operator's standard one
+    (keywords count as unbounded; the keyword-tail check stays the operator's). Until every
+    wrapper took its standard lambda list, `BuiltinCallArity.STANDARD_WIDER` widened the narrower
+    ones; its last row, `read-from-string`, went with `%read-from-string-full`
+    ([read-load-streams.md](read-load-streams.md)), and the table with it.
   - A name the program defines itself (a `defun` of a cl name, a spliced library defun such as
     wait.lisp's `sleep`) keeps its own call path: `ctx.userDefunNames` on the compiled backends, a
     `LispLambda` global binding in the interpreter. The one exception is a NATIVE built-in's
@@ -2342,7 +2342,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   `LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
   `...BuiltinFunctionValuesTakeTheStandardLambdaList`. `STANDARD_WIDER` had 43 rows; 24 went
   with this, the 16 comparison and bitwise ones with the physical optionals (below), 2 with the
-  helper wrappers (below); 1 remains.
+  helper wrappers (below), the last (`read-from-string`) with its prelude defun.
   What it took:
   - An absent keyword gets the value the lowering would have used (`make-string`'s space,
     `adjust-array`'s old fill pointer and `%array-default-element`); where presence itself picks
@@ -2392,8 +2392,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     ci-spec `helper-wrapped-function-values` and the `HelperWrapperFixture` trio
     (`...HelperWrappedFunctionValues`). Sizes: [gray-streams.md](gray-streams.md),
     [pretty-printer.md](pretty-printer.md).
-  - Still a row: `read-from-string`'s optional and keyword arguments (unsupported in call
-    position too; `.todo/214`).
+  - `#'read-from-string` is a third helper wrapper (`(s &rest r)` -> `%read-from-string-full`),
+    selected the same way ([read-load-streams.md](read-load-streams.md)).
   - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
     255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
     registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,

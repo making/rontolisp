@@ -112,6 +112,11 @@ class BuiltinFunctionWrapperCatalogTest {
 		assertThat(
 				java.util.Objects.requireNonNull(BuiltinFunctionWrappers.lambdaFor(LispNames.WRITE_TO_STRING)).print())
 			.isEqualTo("(LAMBDA (|a| &REST |kw|) (IF |kw| (%WRITE-TO-STRING-KEYED |a| |kw|) (PRIN1-TO-STRING |a|)))");
+		assertThat(injected(LispNames.READ_FROM_STRING, Set.of()))
+			.isEqualTo("(SETQ READ-FROM-STRING (LAMBDA (|a|) (READ-FROM-STRING |a|)))");
+		assertThat(injected(LispNames.READ_FROM_STRING, Set.of(LispNames.READ_FROM_STRING_FULL_INTERNAL)))
+			.isEqualTo("(SETQ READ-FROM-STRING (LAMBDA (|s| &REST |r|)"
+					+ " (IF |r| (APPLY #'%READ-FROM-STRING-FULL |s| |r|) (READ-FROM-STRING |s|))))");
 	}
 
 	private static String injected(String name, Set<String> defined) {

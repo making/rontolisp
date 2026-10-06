@@ -1374,6 +1374,17 @@ cases:
       el
       ello
       (A B)
+  - name: index-of-reads-its-start-as-java-does
+    # A start past the end answers nil (the length for an empty match), a negative one
+    # is 0, a fractional one truncates -- where CL's search refuses a start outside
+    # the string.
+    source: |
+      (println (clojure.string/index-of "hihi" "i" 9) (clojure.string/index-of "hihi" "" 9)
+               (clojure.string/index-of "hihi" "i" -1) (clojure.string/index-of "hihi" "h" 1.5))
+      (println (.indexOf "hihi" "i" 9) (.indexOf "hihi" "" 9) (.indexOf "hihi" "i" -3) (.indexOf "hihi" "i" 2))
+    expected: |
+      nil 4 1 2
+      -1 4 1 3
   - name: try-catch-finally-and-throw
     # try guards handler-case inside unwind-protect; the catch clauses test their
     # classes in order. throw of a value that is no exception is the oracle's

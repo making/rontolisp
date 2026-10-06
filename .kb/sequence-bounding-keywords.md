@@ -47,9 +47,9 @@ resolves through the compilers' function-designator normalization).
   whole before looking at the first element.
 - The guard (`in range` and `budget left`) is evaluated BEFORE the match form, so a designator
   is never called outside `:start`/`:end` or past an exhausted `:count`.
-- A negative `:count` acts as zero, a nil one as no limit (CLHS 17.2.1); a nil `:end` is the
-  end. A nil `:key`/`:test` is the ABSENT designator, not a function to call --
-  `keyedForm`/`testSpec` read a literal nil that way (ANSI spells `(remove 'a x :key nil)`), and
+- A negative `:count` acts as zero, a nil one as no limit, anything but an integer or nil is
+  refused (CLHS 17.2.1, "A non-integer `:count`" below); a nil `:end` is the end. A nil
+  `:key`/`:test` is the ABSENT designator, not a function to call -- `keyedForm`/`testSpec` read a literal nil that way (ANSI spells `(remove 'a x :key nil)`), and
   the runtime twin reads a nil VALUE the same way.
 - **A nil `:start` is no bound**, only a nil `:end` (the length): every first-class surface
   passes a given nil on -- the wrappers read `:start` with `getfKwDefault` (`(getf kw :start 0)`,
@@ -70,8 +70,8 @@ the refused bound, expected type its range, the report `SUBSEQ: invalid bounds S
 length N` (`.kb/subseq-runtime.md`, "Bounds check") -- on every backend. A call spelling no
 bound carries no check.** SBCL signals the same class at the same point (its datum for a range
 is the pair of bounds, the divergence `subseq` already has). It covers the fifteen,
-`remove-duplicates`/`delete-duplicates`, `fill`, `replace` and the six `position`/`find`
-spellings (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
+`remove-duplicates`/`delete-duplicates`, `fill`, `replace`, the six `position`/`find`
+spellings, `search`/`mismatch` and `parse-integer` (`reduce` and `read-from-string`'s window are a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
 nil start was refused (by `lo`'s `(max start 0)`, gone): a negative start acted as 0, a float
 compared, a list `:end` past the length stopped there, `fill`/`replace` wrote nothing, and
 `position`/`find`, believed to check already, refused only a non-integer start (measured
@@ -81,7 +81,8 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   the refusal. Interpreter: `Environment.checkBoundingIndices`, also what every runtime twin
   calls (`sequenceScanValues`, `removeDuplicatesValues`, `positionScanValues`, the native
   `fill`/`replace`). The string comparisons' `%string-compare` calls it too, on every call
-  (`.kb/characters-code-points.md`, "String comparison family"). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
+  (`.kb/characters-code-points.md`, "String comparison family"), and so do the `search` /
+  `mismatch` prelude defuns, when a bound is spelled (below). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
   `_ck_bounds` (`FUNC_CK_BOUNDS` after `_subseq_bad`, shaken when nothing spells a bound;
   `WasmStringRuntimeBuilder.buildCheckBoundsBody`), refusing through `_subseq_bad` in EH mode
   and with a bare `unreachable` outside it, like `subseq`. A string or vector is measured by its
@@ -106,6 +107,76 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   1 2 3) :end 9)` answers 1 and `:start 9` nil, a vector refuses both) and its compiled
   transform of a CONSTANT bound checks nothing (`(position 2 (vector 1 2 3) :start 9)` -> nil).
   Here every representation is refused alike (`SequenceBoundsFixture.BOUND_REPORT_PROGRAM`).
+- `search`/`mismatch` are prelude defuns shared by every call, so the check is in the body,
+  after both `%check-sequence` lines and before the cursors are seeded: `(when (or s1p end1)
+  (%check-bounds seq1 start1 end1))`, `s1p` the start's supplied-p. A range with no start
+  given and a nil end is the whole sequence, inside it by construction. A list too short for
+  its bound is refused like every other representation; SBCL's `search` over a LITERAL
+  needle walks a list `sequence-2` lazily (`(search '(2) (list 1 2 3) :start2 9)` -> NIL),
+  over `(list 2)` it refuses. The interpreter's `SequenceScanFast` arm declines every bad
+  range and the defun refuses it. Before (measured 2026-10-06, four backends): only a
+  negative or nil start reached an error, as `elt`'s or the arithmetic's; a past-the-end
+  `:start1` answered 0 or 9, a crossed `:start2`/`:end2` NIL, `:end2 9` over a vector 1, and
+  `(mismatch s s :start1 -1)` over two strings trapped on both wasm legs (out-of-bounds array
+  access). Clojure's `index-of` / `.indexOf` lowerings passed a Java `fromIndex` straight
+  through; they clamp it now (`.kb/clojure-frontend.md`).
+- Guarded vs always checked (2026-10-06, the two candidates): speed, pinned, min of 15
+  steady-state reps, one loop shape per program (JVM 2M calls; P1 200K), base / always /
+  guarded -- keyword-free `search` (3 chars in 10) JVM 79-82 / 78-85 / 79-82 ms, P1
+  453-454 / 463 / 434-448; bounded `search :start2 1 :end2 9` JVM 137-176 / 155-176 /
+  146-166, P1 532 / 544-547 / 536-537; keyword-free `mismatch` (8 chars) JVM 57-62 / 71-76
+  / 59-61, P1 434-435 / 435-440 / 419-431. Under C2
+  (`-XX:-UseJVMCICompiler`) always-checked was flat alone but +20-45% in a program mixing
+  the three shapes. A guard on `(eql start1 0)` instead of a supplied-p measured slower than
+  either (JVM bounded 196-246, `mismatch` 75-79). Graal runs of the mixed-shape program are
+  bimodal on base too (fast ~80 ms / slow ~270 ms for the first loop): base 7/12 fast,
+  always-checked 2/12, guarded 3/8 vs base 5/8 in a second batch -- a lottery, not a
+  ranking. Bytes (JVM / P1 / component, 793 programs: every ci-spec case, the
+  `examples.yaml` examples, size-report, bench-report): 2,271 of 2,327 artifacts
+  byte-identical either way, the 56 that differ all calling `search`/`mismatch`. Always
+  checked: JVM sum -122 B (-151..+803), P1 -1,051 (-190..+544), component -1,031 (the
+  dropped `integerp`/`>=` cursor guards pay for the check on wasm). Guarded: JVM +4,751
+  (0..+1,046), P1 -109 (-128..+554), component -89. A one-site program
+  `(print (search "b" (copy-seq "abc")))`: base 31,462 / 7,966 / 9,146, always 31,702 /
+  7,967 / 9,147, guarded 31,945 / 7,977 / 9,157; with a `handler-case` 39,249 / 17,716 /
+  18,950 -> 39,732 / 17,797 / 19,034 guarded. The guard won: ~240 B JVM per program buys
+  the keyword-free JVM `mismatch` back (+20% checked always).
+- `parse-integer`: `expandParseInteger` (call position on every backend, and the compile
+  paths' first-class wrapper, which forwards both bounds) emits `(%check-bounds __pi_s
+  __pi_start __pi_endraw)` when `:start` or `:end` is spelled, after every argument has run
+  (the `:radix` and `:junk-allowed` forms included) and before the scan; the interpreter's
+  `#'parse-integer` calls `checkBoundingIndices` under the same condition. A fill-pointer
+  string is measured by its fill pointer. Before (measured 2026-10-06, four backends): `:start
+  9` and a crossed range were the scan's `simple-error` (no integer); `:end 9` the `char`
+  `type-error` on the interpreter and JVM and an out-of-bounds trap on both wasm legs over a
+  fresh string; `:start -1` the interpreter's `char` `type-error`, the JVM's, a trap on wasm
+  over a fresh string and `1123` over the LITERAL `"123"` (read before the string); a
+  fill-pointer string's `:end 4` read past the fill pointer (`1234`); the first-class
+  interpreter `:end nil` a `type-error`. Its first-class Java walk also indexed UTF-16 units
+  and skipped `Character.isWhitespace`; it walks code points over the expansion's five
+  whitespace characters now. Cost (JVM / P1 / component bytes, 795 programs: every ci-spec
+  case, the `examples.yaml` examples, size-report, bench-report): 2,253 of 2,333 artifacts
+  byte-identical; the 80 that differ call `parse-integer` with a bound themselves, through a
+  library (`tokenizers.lisp`, `objc.lisp`) or through the first-class wrapper (+24 JVM / +10
+  wasm on a program carrying the compiled `eval`'s wrapper table). JVM 30, sum +6,200 B (max
+  +2,238, the new ci-spec case); P1 25, +1,855 (max +456); component 25, +1,865. One site
+  `(print (parse-integer (copy-seq "x12") :start 1))`: 28,619 / 8,356 / 9,505 -> 29,196 /
+  8,444 / 9,593; with a `handler-case` +582 / +190 / +193. Speed (pinned, min/median of 15,
+  `(parse-integer s :start st)` over 12 characters): JVM 4 M calls 185-199/208-216 ->
+  189-191/214-218 ms, P1 400 K 512-520/522-531 -> 510-511/519-520, component 516-518/527-530
+  -> 511-516/523-528, interpreter 100 K 2,381-2,400 -> 2,423-2,446. ANSI `numbers`
+  (interpreter, suite `ca06bd9`): 1,273 -> 1,274 / 1,444 (`PARSE-INTEGER.ORDER.1`, the
+  evaluation order above), zero regressed; `strings` unchanged. Pinned by
+  `ParseIntegerBoundsFixture` (`.PROGRAM`, sbcl's answers, ci-spec
+  `parse-integer-refuses-a-bad-bound`; `.REPORT_PROGRAM`; `.ORDER_PROGRAM`) in the three
+  backend suites, the shape by
+  `LispMacroExpanderTest.aParseIntegerCallChecksASpelledBoundOnceAfterItsArguments`.
+- `read-from-string` given more than the string is the prelude `%read-from-string-full`
+  (`.kb/read-load-streams.md`), whose window is `with-input-from-string`'s `subseq` of the
+  string: that IS the check, raised once after every argument has run and before a character is
+  read, so the defun spells no `%check-bounds` (it would check twice). The refusal and its report
+  are `%check-bounds`' to the byte on all four backends (`ReadFromStringLambdaListFixture`
+  `.REPORT_PROGRAM`). Before, every bound was ignored: the read started at 0.
 - `count`/`count-if` bind their operand outside the scaffold when any bounding keyword is
   spelled: the scaffold binds the sequence outside the loop, so `(count (f) (g) :start 1)` ran
   `(g)` before `(f)` on the compile paths and the interpreter's call position (SBCL: item first).
@@ -141,6 +212,33 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` (P1 and
   component); the shapes by `LispMacroExpanderTest.aBoundedSequenceScanEmitsOnlyTheScaffoldingItsKeywordsAskFor`
   and `.aBoundedRemoveDuplicatesLooksForTheDuplicateInsideTheWindow`.
+
+## A non-integer `:count` is refused once, before the bounds
+
+**Invariant: a `:count` that is neither an integer nor nil is the operator's `INTEGER`
+`type-error` over the value (datum as given, report `OP: The value V is not of type INTEGER`),
+raised once, before the bounds are checked and before a designator runs, on every backend; nil,
+a negative and a bignum count answer as CLHS 17.2.1 reads them (no limit, zero, more than any
+list holds).** SBCL signals the same class and datum, and checks the count BEFORE the bounds
+(`(remove 2 l :start 9 :count 1.5)` -> datum 1.5) -- except on a `:from-end` walk, where its
+bound check comes first, so that order is not pinned.
+
+- Expansion: `SeqScanScaffold.wrap` emits `(if (or (null c) (integerp c)) nil
+  (%operand-type-error c 'op 'integer))` over the bound value `countv`, outermost of the checks
+  (`SeqScanBounds.operator` is the call's head). A literal integer or nil `:count` emits nothing,
+  and a call spelling no `:count` is unchanged. The first-class wrappers feed the same
+  expansion, so `apply` / `funcall` of `#'remove` etc. refuse alike.
+- Interpreter twin: `LispEvaluator.requireCount` throws `OperandTypeException.of(value, INTEGER,
+  name)`; a `LispBigInteger` is a budget of `Long.MAX_VALUE` (negative: zero).
+- Before (measured 2026-10-06, four backends): a float or ratio `:count` was a budget (`1.5` spent
+  on two matches, `1/2` on one) in call position and through the compiled wrappers, the
+  interpreter's `funcall` refused it with datum NIL (the message-only `type-error`) and also
+  refused a bignum; a symbol or string was already refused by `(max count 0)`, datum as given.
+- The delete / nsubstitute / substitute fresh-sequence paths expand through `remove`'s /
+  `substitute`'s lowering, so on the compile paths a bounded or counted `delete` reports under
+  `REMOVE` (a pre-existing wobble of every type-error there, not of this check).
+- Pinned by `SequenceBoundsFixture.BAD_COUNT_PROGRAM` (sbcl's answers) in the three backend
+  suites and `LispMacroExpanderTest.aRemoveCallChecksAComputedCountOnceBeforeTheBounds`.
 
 ## The destructive spellings
 
@@ -325,7 +423,10 @@ tests, which stop at `make-sequence` with a computed result type before any of t
 - The bounds check: `sequenceOperatorsRefuseABadBound` / `aBadSequenceBoundReportsAsSubseqDoes`
   in `LispEvaluatorTest`, `WasmLispCompilerIntegrationTest` (P1 and component) and,
   `compileAndRun`-prefixed, `JvmLispCompilerTest`, over `SequenceBoundsFixture`; ci-spec
-  `sequence-operators-refuse-a-bad-bound` (sbcl's answers).
+  `sequence-operators-refuse-a-bad-bound` (sbcl's answers). `search`/`mismatch`:
+  `searchAndMismatchRefuseABadBound` / `aBadSearchOrMismatchBoundReportsAsSubseqDoes` in the
+  same three classes over `SearchMismatchBoundsFixture`, ci-spec
+  `search-and-mismatch-refuse-a-bad-bound`.
 - The rejection text is part of the contract:
   `REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: X`
   (`.kb/error-handling.md`, "Argument-shape errors"), pinned in ci-spec and in the

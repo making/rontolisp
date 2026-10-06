@@ -116,17 +116,10 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   Measured: publishing on EVERY call was +219/-62 on the ANSI suite, the 62 being the
   discarded calls' indices surfacing as an enclosing form's second value; tail-only was
   +213/0 (`.todo/715`).
-- Not supported, and the six ANSI `READ-FROM-STRING.*` tests still on it: the real lambda
-  list (`eof-error-p`, `eof-value`, `:start`, `:end`, `:preserve-whitespace`). The
-  producer is recognized at ONE argument only, so a call carrying them keeps the old
-  single value rather than answering an index computed as if they were absent.
-  Measured 2026-10-05 on all four backends: a direct call IGNORES the extra arguments --
-  `(read-from-string " 12 34" t nil :start 3)` reads `12` (SBCL `34`), so a nil `:start`
-  (SBCL's `type-error`) reads from 0 too -- and `#'read-from-string` given them is a
-  `program-error` on the compiled paths. An input holding no datum (`""`, `"  "`) is
-  `end-of-file` in SBCL and the interpreter but answers nil on the compiled readers, which is
-  where `eof-error-p` has to land. The nil `:start` is part of this row (`.todo/214`), not a
-  separate defect.
+- The producer is recognized at ONE argument only. A call passing more is the next section's
+  prelude defun, whose own tail answers both values; `settleTail` lets such a call pass
+  (`isReadFromStringWithArguments`), since by name `read-from-string` is a single-valued cl
+  function there.
 
 Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `#aDiscardedReadFromStringLeavesNoSecondValueBehind`,
@@ -134,6 +127,67 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `JvmLispCompilerTest#compileReadFromStringStopIndex`,
 `WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
 `read-from-string-stop-index`.
+
+## `read-from-string`'s whole lambda list is ONE prelude defun
+**Invariant: a call passing more than the string -- `eof-error-p`, `eof-value`, `:start`,
+`:end`, `:preserve-whitespace` -- is `(%read-from-string-full ...)` on all four backends, in call
+position (`LispMacroExpander.expandReadFromString`, from both expression compilers and the
+interpreter's `rareOperatorExpansion`) and through `#'read-from-string`. The one-argument call
+keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a repeated keyword,
+`:allow-other-keys`, an unknown keyword and an odd tail behave as any defun's.
+- The body is `read`'s: `with-input-from-string` over the window, `%rd-datum` delimits, the
+  native one-argument read parses the collected text. So an input holding no datum (whitespace
+  and comments only) answers `eof-value` or signals `end-of-file` as `eof-error-p` says, an
+  incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error` -- on the
+  compiled backends too, where the one-argument read answers nil / the partial list for those.
+- The index is `:start` plus the window stream's `file-position`. A `--no-wasi` module answers
+  `file-position` with the constant nil ("Limits" under `file-position` below), and there the defun counts the characters a
+  `read-char` drain still finds (it trapped on `(+ start nil)` before the fallback; pinned by
+  `WasmLispCompilerIntegrationTest.noWasiReadFromStringCountsItsIndexWithoutAFilePosition`). The
+  scanner's terminator is TAKEN (read, never unread) and counted back when kept (a non-whitespace
+  terminator, or any under `:preserve-whitespace`), so no pushed-back character outlives the
+  stream or is left for the drain to miss (`with-input-from-string`'s own `:index` drain misses
+  one on the compile paths, which is why the defun does not use it). It counts characters, so on
+  WASM it is right for non-ASCII text where the one-argument `%read-from-string-end` counts bytes.
+  The drain alone is O(rest of the string) in Lisp -- the successive-forms idiom `(read-from-string
+  text nil eof :start pos)` goes quadratic -- measured with it as the only count, 20K calls over
+  1,008 characters: JVM 370-484 ms, P1 1,631-1,667, interpreter (2K calls) 1,679-1,790; with
+  `file-position` 265-317 / 792-808 / 95-129.
+- The bound check is the window's `subseq` (`.kb/sequence-bounding-keywords.md`).
+- Selection (`LispPreludeLibrary.referencedBySurfaceForm`): a `read-from-string` call with more
+  than one argument anywhere, or a designator that may be called with more than one
+  (`mayPassMoreThanOneArgument`); `LibraryDefunPruner` roots it by the same fact. Where it is
+  spliced, the compile paths inject the full `#'read-from-string` wrapper `(s &rest r)`, the
+  one-argument wrapper elsewhere (`BuiltinFunctionWrappers.HELPER_WRAPPERS`). The interpreter's
+  publishing function applies the defun when given more than the string.
+- Its `#+`/`#-` is `read`'s: on the interpreter a guard that fails in front of the datum ends the
+  read with `end-of-file` (the one-argument call reads the next datum, as SBCL does); the
+  compiled readers signal on any `#+`.
+- Before (measured on all four backends): every argument after the string was ignored (the read
+  started at 0, a bad bound read the whole string), and `#'read-from-string` given them was a
+  `program-error` on the compiled paths. ANSI `reader` (interpreter, suite `ca06bd9`): 369 ->
+  389 / 575, every `READ-FROM-STRING.*` test passing (fourteen value tests and six error tests
+  were failing, not the six once counted), zero regressed.
+- Cost (2026-10-06, JVM / P1 / component bytes, 796 programs: every ci-spec case, the
+  `examples.yaml` examples, size-report, bench-report): 2,311 of 2,336 artifacts byte-identical.
+  Differ: the new ci-spec case; `multiple-value-builtins-function-object`, which keeps
+  `#'read-from-string` in a variable and so splices the defun and the full wrapper, +57,037 /
+  +63,627 / +64,823; six programs that walk the package tables, +24/25 B (the internal name),
+  and `cffi-sqlite`'s JVM class +25. Measured before the `--no-wasi` drain fallback joined the
+  defun, which adds its loop to a program that splices it (not re-measured). What a program
+  spelling a call pays is `read`'s machinery (the scanner, string streams, the
+  `end-of-file`/`reader-error` classes, the pushback cell): `(print
+  (read-from-string (copy-seq "a b") nil nil))` 97,462 / 58,821 / 62,870 against the one-argument
+  call's 60,175 / 32,837 / 34,074 and a `read` over a string stream's 105,999 / 70,556 / 74,542.
+  Speed (pinned, 7 steady-state reps, ms; one-argument / `nil nil` / `nil nil :start 1` over
+  `"(a b c) d"`): JVM 200K calls 46-47 / 377-417 / 174-197, P1 98-112 / 755-779 / 429-437,
+  component 99-110 / 757-771 / 426-431, interpreter 20K 39-77 / 952-1,068 / 541-673 -- the
+  scanner walks in Lisp what the one-argument read does natively.
+
+Pinned by `ReadFromStringLambdaListFixture` (`.PROGRAM`, sbcl's answers, ci-spec
+`read-from-string-takes-its-whole-lambda-list`; `.REPORT_PROGRAM`) in the three backend suites,
+`LispMacroExpanderTest.aReadFromStringCallPassingMoreThanTheStringCallsThePreludeDefun`,
+`LispPreludeLibraryTest.theFullReadFromStringIsSplicedOnlyWhereACallCanPassMoreThanTheString`.
 
 ## `read-line`, `read-char`, `peek-char`
 - `read-line` strips one trailing CR everywhere (`BufferedReader.readLine`; WASM `_read_line` does an
@@ -422,7 +476,10 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   `subseq` above; `:index` binds string/start/end once (`let*`, source order) and, on a NORMAL exit
   only (`multiple-value-prog1` inside the `unwind-protect`), stores `(- (or end (length string))
   <chars still unread>)` -- counted by DRAINING the stream with `read-char` just before the close,
-  because a string input stream's `file-position` answers nil on all four. `with-output-to-string
+  because a string input stream's `file-position` was believed to answer nil on all four. Measured
+  2026-10-06 it answers the position on all four (characters, a pushed-back one not counted, as
+  SBCL), and the drain misses a pushed-back character on the compile paths (it is synthesized
+  after `UnreadCharLibrary`'s rewrite). `with-output-to-string
   (var &optional string &key element-type)`: a non-nil string gets the body's output appended with
   `vector-push-extend` when the body exits (in the `unwind-protect` cleanup, so on every exit where
   it compiles), and the form answers the BODY's values -- which is why

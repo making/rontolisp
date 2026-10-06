@@ -91,7 +91,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [seq-conversion-runtime.md](seq-conversion-runtime.md) -- the literal sequence conversions (`coerce` to `'list`/`'string`/`'vector`)
 - [seq-coerce-runtime.md](seq-coerce-runtime.md) -- the interpreter converts a sequence in Java, not through an interpreted `map`
 - [sequence-op-runtimes.md](sequence-op-runtimes.md) -- `replace`/`fill`/`map-into` as shared callees
-- [sequence-bounding-keywords.md](sequence-bounding-keywords.md) -- `:start`/`:end`/`:count`/`:from-end` across the count/remove/substitute family; every spelled bound checked once before the walk (`%check-bounds`, `subseq`'s refusal) for those, `remove-duplicates`, `fill`, `replace`, `position`/`find`
+- [sequence-bounding-keywords.md](sequence-bounding-keywords.md) -- `:start`/`:end`/`:count`/`:from-end` across the count/remove/substitute family; every spelled bound checked once before the walk (`%check-bounds`, `subseq`'s refusal) for those, `remove-duplicates`, `fill`, `replace`, `position`/`find`, `search`/`mismatch`, `parse-integer`
 - [sequence-designator-evaluation.md](sequence-designator-evaluation.md) -- a computed `:test`/`:test-not`/`:key` is evaluated once, in argument order
 - [cons-set-and-tree-operators.md](cons-set-and-tree-operators.md) -- the `n`-prefixed set/tree spellings are aliases, and the family's one first-class shape
 - [string-write-runtime.md](string-write-runtime.md) -- the shared string arm behind every rank-1 element write

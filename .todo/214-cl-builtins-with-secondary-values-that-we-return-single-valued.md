@@ -19,18 +19,7 @@ built-in, `%read-from-string-end`, emitted ONLY by the multiple-value lowering:
 the interpreter scans the datum's characters, the JVM reads `_readPos` after the
 parse, WASM the cursor delta. A plain `(read-from-string s)` pays nothing.
 
-**What is left of the row**: `read-from-string`'s real LAMBDA LIST. Six ANSI
-tests (`READ-FROM-STRING.10`, `.13`-`.17`) pass `eof-error-p`/`eof-value` and
-`:preserve-whitespace` / `:end` / `:allow-other-keys`, all of which the built-in
-ignores -- so the producer is recognized at ONE argument only and such a call
-keeps its old single value rather than answering an index computed as if the
-keywords were absent. `:start`/`:end` move the index; `:preserve-whitespace`
-decides whether the token's terminator is counted. Take the arguments and the
-index together or not at all. A nil `:start` must then be SBCL's `type-error`, and
-`eof-error-p` has to reach the compiled readers, which answer nil for an input
-holding no datum (`.kb/read-load-streams.md`, measured 2026-10-05).
-
-Also left: the `decode-universal-time` / `truncate`-on-ratio rows below.
+Left: the `decode-universal-time` / `truncate`-on-ratio rows below.
 
 ```console
 $ sbcl --noinform                  $ rontolisp
@@ -47,7 +36,7 @@ T                                             <- SBCL also echoes the expanded-p
 
 | operator | CL secondary value(s) | ours |
 | --- | --- | --- |
-| `read-from-string` | index after the object read | **done** (2026-09-13, `.todo/797`); the keyword/optional arguments are not |
+| `read-from-string` | index after the object read | **done** (2026-09-13, `.todo/797`; its whole lambda list 2026-10-06) |
 | `macroexpand-1` / `macroexpand` | expanded-p | **done** (2026-08-15, `.todo/378`) |
 | `intern` | `:internal` / `:external` / `:inherited` / nil | **done** (2026-08-12) |
 | `find-symbol` | same status keyword | **done** (2026-08-12) |

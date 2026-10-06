@@ -57,11 +57,15 @@ class BuiltinCallArityTest {
 	}
 
 	@Test
-	void theStandardLambdaListWidensAWrapperThatIsNarrowerThanItsOperator() {
-		// #'read-from-string does not forward its optional and keyword arguments yet;
-		// (read-from-string s nil :eof :start 1) is legal in call position.
-		assertThat(wrapperShape(lambdaList(LispNames.READ_FROM_STRING))).isEqualTo(new BuiltinCallArity.Shape(1, 1));
+	void theCountIsTheWrappersWholeLambdaList() {
+		// #'read-from-string takes (s &rest r): its optional and keyword arguments reach
+		// the prelude defun, so (read-from-string s nil :eof :start 1) is legal and a
+		// missing string is not.
+		assertThat(wrapperShape(lambdaList(LispNames.READ_FROM_STRING)))
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.READ_FROM_STRING, 5)).isNull();
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.READ_FROM_STRING, 0))
+			.isEqualTo("READ-FROM-STRING expects at least 1 argument, got 0");
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 3)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 4))
 			.isEqualTo("GETHASH expects at most 3 arguments, got 4");

@@ -107,6 +107,12 @@ plain program, prints exactly ANSI's expected values and evaluation-count tuple.
   possibly-nil-at-runtime) `:key` is defaulted to `#'identity` the way every other
   designator here is; a literal one, nil included, is decided statically as before, no
   wrapper paid.
+- **`parse-integer`** (2026-10-06): `expandParseInteger` binds its keyword values in one fixed
+  order (`:start`, `:end`, `:radix`, `:junk-allowed`), so `(parse-integer s :end (e) :start (s))`
+  ran `(s)` first and a repeated keyword's later value never ran (ANSI's `parse-integer.order.1`).
+  A call spelling the keywords in that order, each once, expands as before; any other tail goes
+  through `KeywordTail.of(parts, 2, "__pi")` first (`keywordsInOrder`). The interpreter's
+  first-class builtin kept the LAST of a repeated keyword; it keeps the first now.
 
 Each of the three fixes is `KeywordTail.of(parts, start, prefix)` plus `tail.parts()` plus
 `tail.wrap(...)`, same as every entry above, EXCEPT that `sort`/`stable-sort`'s existing

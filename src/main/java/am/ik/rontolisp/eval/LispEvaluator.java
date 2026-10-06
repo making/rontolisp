@@ -3635,45 +3635,51 @@ public final class LispEvaluator {
 			this.globalEnv.publishSpill(new LispCons(present ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE));
 			return present ? found : args.size() == 3 ? args.get(2) : LispNil.INSTANCE;
 		}, true));
-		publishSecondValue(LispNames.FIND_SYMBOL, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE);
-		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE, true);
-		publishSecondValue(LispNames.SUBTYPEP, LispNames.SUBTYPEP_VALID, Integer.MAX_VALUE);
-		// Only the one-argument read-from-string has its stop index (the keyword and
-		// optional arguments are not implemented, .kb/read-load-streams.md): with more,
-		// the function answers one value, as the call does.
-		publishSecondValue(LispNames.READ_FROM_STRING, LispNames.READ_FROM_STRING_END, 1);
-		publishSecondValue(LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_OFFSET, Integer.MAX_VALUE);
+		publishSecondValue(LispNames.FIND_SYMBOL, LispNames.FIND_SYMBOL_STATUS);
+		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, true);
+		publishSecondValue(LispNames.SUBTYPEP, LispNames.SUBTYPEP_VALID);
+		// read-from-string given more than the string is the prelude defun, which
+		// answers both values itself -- as the call position does
+		// (rareOperatorExpansion).
+		LispFunction readFromString = registeredBuiltin(LispNames.READ_FROM_STRING);
+		LispFunction readFromStringEnd = registeredBuiltin(LispNames.READ_FROM_STRING_END);
+		installValuePublishing(readFromString, new LispFunction(LispNames.READ_FROM_STRING, args -> {
+			if (args.size() > 1) {
+				return apply(resolveFunction(LispNames.READ_FROM_STRING_FULL_INTERNAL), args, this.globalEnv);
+			}
+			LispVal value = readFromString.body().apply(args);
+			this.globalEnv.publishSpill(new LispCons(readFromStringEnd.body().apply(args), LispNil.INSTANCE));
+			return value;
+		}, true));
+		publishSecondValue(LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_OFFSET);
 	}
 
 	/**
 	 * Rebinds {@code name} to a function that answers the one-value built-in's value and
-	 * publishes {@code secondName}'s answer over the same arguments as the second value
-	 * -- while it has at most {@code maxArgs} arguments; one value beyond that.
+	 * publishes {@code secondName}'s answer over the same arguments as the second value.
 	 */
-	private void publishSecondValue(String name, String secondName, int maxArgs) {
-		publishSecondValue(name, secondName, maxArgs, false);
+	private void publishSecondValue(String name, String secondName) {
+		publishSecondValue(name, secondName, false);
 	}
 
 	/**
-	 * As {@link #publishSecondValue(String, String, int)}, computing the second value
-	 * BEFORE the primary when {@code secondFirst} is set: {@code intern}'s status is the
+	 * As {@link #publishSecondValue(String, String)}, computing the second value BEFORE
+	 * the primary when {@code secondFirst} is set: {@code intern}'s status is the
 	 * accessibility the name had before the intern (nil for a fresh name, CL's answer),
 	 * and the intern itself records the name.
 	 */
-	private void publishSecondValue(String name, String secondName, int maxArgs, boolean secondFirst) {
+	private void publishSecondValue(String name, String secondName, boolean secondFirst) {
 		LispFunction primary = registeredBuiltin(name);
 		LispFunction second = registeredBuiltin(secondName);
 		installValuePublishing(primary, new LispFunction(name, args -> {
 			if (secondFirst) {
-				LispVal status = args.size() > maxArgs ? LispNil.INSTANCE : second.body().apply(args);
+				LispVal status = second.body().apply(args);
 				LispVal value = primary.body().apply(args);
-				this.globalEnv
-					.publishSpill(args.size() > maxArgs ? LispNil.INSTANCE : new LispCons(status, LispNil.INSTANCE));
+				this.globalEnv.publishSpill(new LispCons(status, LispNil.INSTANCE));
 				return value;
 			}
 			LispVal value = primary.body().apply(args);
-			this.globalEnv.publishSpill(args.size() > maxArgs ? LispNil.INSTANCE
-					: new LispCons(second.body().apply(args), LispNil.INSTANCE));
+			this.globalEnv.publishSpill(new LispCons(second.body().apply(args), LispNil.INSTANCE));
 			return value;
 		}, true));
 	}
@@ -7450,6 +7456,16 @@ public final class LispEvaluator {
 				// return value; the Environment function remains for first-class
 				// use (#'parse-integer).
 				return builtinMacroExpansion(cons, LispMacroExpander::expandParseInteger);
+			case LispNames.READ_FROM_STRING:
+				// More than the string is the prelude defun's whole lambda list, as on
+				// the compiled backends, while the name is still the built-in's; the
+				// one-argument call, and any call of a program's own definition, is
+				// evalPrimaryValueCall's (evalConsRareOperator).
+				if (cons.properLength() > 2 && resolveFunction(name) instanceof LispFunction bound
+						&& this.primaryValueBuiltins.containsKey(bound)) {
+					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString);
+				}
+				return null;
 			// read has no case here and no Environment function: it is a prelude defun
 			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
 			// an ordinary function resolution loads it and #'read is that same defun.
@@ -13983,13 +13999,18 @@ public final class LispEvaluator {
 	}
 
 	// The :count argument as an integer; CLHS 17.2.1 reads a negative one as zero, which
-	// the caller clamps.
+	// the caller clamps. Anything but an integer is the operator's INTEGER type-error
+	// over
+	// the value, as the expansion's check reports it; a bignum is a budget no list can
+	// spend.
 	private static long requireCount(String name, LispVal value) {
 		if (value instanceof LispInteger integer) {
 			return integer.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				name + " expects an integer :count, got: " + value.print());
+		if (value instanceof LispBigInteger big) {
+			return big.value().signum() < 0 ? -1L : Long.MAX_VALUE;
+		}
+		throw OperandTypeException.of(value, OperandTypes.Kind.INTEGER, name);
 	}
 
 	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
