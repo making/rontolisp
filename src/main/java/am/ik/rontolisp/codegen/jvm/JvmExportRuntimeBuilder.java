@@ -194,7 +194,7 @@ final class JvmExportRuntimeBuilder {
 	 */
 	static List<BuiltMethod> build(ConstantPool cp, ClassEntry thisClass, List<JvmExportDirective> decls,
 			Map<String, JvmLispCompiler.FunctionInfo> functions) {
-		return build(cp, thisClass, decls, functions, false);
+		return build(cp, thisClass, decls, functions, false, null);
 	}
 
 	/**
@@ -207,10 +207,13 @@ final class JvmExportRuntimeBuilder {
 	 * @param decls the export directives
 	 * @param functions the compiled function table
 	 * @param arrayRuntime whether the {@code _strv} normalizer is emitted
+	 * @param mvChannel the {@code %mv-spill} channel, whose owner a wrapper claims if no
+	 * thread has, or null when the program has no channel
 	 * @return the export bridge methods
 	 */
 	static List<BuiltMethod> build(ConstantPool cp, ClassEntry thisClass, List<JvmExportDirective> decls,
-			Map<String, JvmLispCompiler.FunctionInfo> functions, boolean arrayRuntime) {
+			Map<String, JvmLispCompiler.FunctionInfo> functions, boolean arrayRuntime,
+			@Nullable JvmMvChannel mvChannel) {
 		List<BuiltMethod> methods = new ArrayList<>();
 		Refs refs = new Refs(cp, thisClass, needsFloatArray(decls));
 		refs.strvRef = arrayRuntime
@@ -222,7 +225,7 @@ final class JvmExportRuntimeBuilder {
 		boolean needBytesOut = false;
 		for (JvmExportDirective decl : decls) {
 			JvmLispCompiler.FunctionInfo function = java.util.Objects.requireNonNull(functions.get(decl.name()));
-			methods.add(buildWrapper(cp, decl, function.methodref(), function.bounceVisible(), refs));
+			methods.add(buildWrapper(cp, decl, function.methodref(), function.bounceVisible(), refs, mvChannel));
 			for (BoundaryType t : decl.paramTypes()) {
 				needArgGuard |= t == BoundaryType.U8 || t == BoundaryType.U16 || t == BoundaryType.U32
 						|| t == BoundaryType.U64;
@@ -339,8 +342,13 @@ final class JvmExportRuntimeBuilder {
 	}
 
 	private static BuiltMethod buildWrapper(ConstantPool cp, JvmExportDirective decl, MethodRefEntry target,
-			boolean bounces, Refs refs) {
+			boolean bounces, Refs refs, @Nullable JvmMvChannel mvChannel) {
 		MethodCode asm = new MethodCode();
+		if (mvChannel != null) {
+			// A host's first calling thread owns the channel, so a host calling on one
+			// thread pays no ThreadLocal per write (JvmMvChannel).
+			mvChannel.emitClaimOwner(asm);
+		}
 		int slot = 0;
 		List<BoundaryType> params = decl.paramTypes();
 		for (int i = 0; i < params.size(); i++) {

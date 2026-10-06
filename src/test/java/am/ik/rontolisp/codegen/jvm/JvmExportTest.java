@@ -231,6 +231,45 @@ class JvmExportTest {
 		assertThat(crossedCalls(clazz.getMethod("mvCheck", long.class), own -> 0L)).isEmpty();
 	}
 
+	@Test
+	void theFirstThreadToCallAnExportOwnsTheChannelForGood() throws Exception {
+		// A host's thread owns the multiple-value channel once it calls an export, so a
+		// host calling on one thread pays no ThreadLocal per write; the claim never moves
+		// -- not to a later caller, not to a main run on another thread -- or the values
+		// the owner had just published would be read from the wrong register.
+		Class<?> clazz = compileToClass("""
+				(defun spread (n) (values n (* n n) (- n)))
+				(defun mv-check (n)
+				  (let ((bad 0))
+				    (dotimes (i 200)
+				      (multiple-value-bind (a b c) (spread (+ n i))
+				        (unless (and (eql a (+ n i)) (eql b (* (+ n i) (+ n i))) (eql c (- (+ n i))))
+				          (setq bad (1+ bad)))))
+				    bad))
+				(rontolisp:jvm-export 'mv-check :params '(:s64) :returns :s64 :as "mvCheck")
+				""");
+		Method export = clazz.getMethod("mvCheck", long.class);
+		java.lang.reflect.Field owner = clazz.getDeclaredField("_mvOwner");
+		owner.setAccessible(true);
+		assertThat(owner.get(null)).isNull();
+		Object[] answer = new Object[1];
+		Thread first = new Thread(() -> answer[0] = invokeOrThrowable(export, 1L), "first-caller");
+		first.start();
+		first.join();
+		assertThat(answer[0]).isEqualTo(0L);
+		assertThat(owner.get(null)).isSameAs(first);
+		Thread second = new Thread(() -> answer[0] = invokeOrThrowable(export, 2L), "second-caller");
+		second.start();
+		second.join();
+		assertThat(answer[0]).isEqualTo(0L);
+		Method main = clazz.getMethod("main", String[].class);
+		Thread mainRunner = new Thread(() -> answer[0] = invokeOrThrowable(main, (Object) new String[0]),
+				"main-runner");
+		mainRunner.start();
+		mainRunner.join();
+		assertThat(owner.get(null)).isSameAs(first);
+	}
+
 	// Calls an export on eight threads released at once, fifty times each with the
 	// thread's own number, and answers each call that answered other than expected:
 	// (number, answer).
