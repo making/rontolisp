@@ -352,13 +352,24 @@ cooperative and a suspension happens only at an `await`, which publishes afresh)
 - Interpreter: `ValueCountRegister`, shared by every scope of one global `Environment` (the
   `mvSpill` field). The thread that created the global environment keeps a plain field behind
   one `Thread.currentThread()` compare; every other thread a `ThreadLocal`.
-- JVM: `JvmMvChannel`. A program that can run Lisp on another thread (`%async-run`, an
-  http handler, a thread primitive: `usesAsyncSpawn || usesThreads`) reads and writes the
-  channel through `_mvGet`/`_mvSet`: the OWNER -- the thread whose `main` prologue claimed
-  `_mvOwner` -- keeps the `_g$` static field, every other thread the `_mvTl` ThreadLocal. A class
-  whose `main` never runs (a jvm-export library, a war) has no owner and every thread takes the
-  ThreadLocal. Every emission site goes through `ctx.mvChannel`, never `globalFields` directly.
-  Any other program keeps the plain `getstatic`/`putstatic`, byte-identical.
+- JVM: `JvmMvChannel`. A program that can run Lisp on another thread -- `lispOnOtherThreads`,
+  the one gate the special-binding representation also follows
+  (`.kb/dynamic-special-variables.md`, "One thread": a thread primitive, an async body, a served
+  request, a jvm-export, the java: bridge or a generated java: callback, objc:, ffi:) -- reads
+  and writes the channel through `_mvGet`/`_mvSet`: the OWNER -- the thread whose `main`
+  prologue claimed `_mvOwner` -- keeps the `_g$` static field, every other thread the `_mvTl`
+  ThreadLocal. A class whose `main` never runs (a jvm-export library, a war) has no owner and
+  every thread takes the ThreadLocal. Every emission site goes through `ctx.mvChannel`, never
+  `globalFields` directly. Any other program keeps the plain `getstatic`/`putstatic`,
+  byte-identical.
+- Until 2026-10-06 the gate was `usesAsyncSpawn || usesThreads`, which left out every thread a
+  host calls in on: an export running 20,000 `multiple-value-bind`s a call, called 50 times on
+  each of 8 Java threads at once, answered 13,041-15,173 of the 8M triples wrong per run.
+  Pinned by `JvmExportTest#anExportCalledOnSeveralThreadsKeepsEachCallsMultipleValues`. Such a
+  program had no `<clinit>` ThreadLocal constants of its own, so the per-thread channel now
+  makes them (`ensureThreadLocalInfra`). Cost there (same day, best of 7 rounds): one host
+  thread 35-54 -> 91-103 ms (no owner, a ThreadLocal per write); 8 threads 158-166 -> 40-42 ms
+  (the shared field's cache line, gone).
 - Cost (2026-09-26, x86-64 Linux, Java 25, 5 alternating process pairs). Interpreter, fib 27 +
   a 2M-call loop: 2,203-2,454 -> 2,256-2,487 ms, medians 2,352 -> 2,367, noise. JVM, fib 34
   (18M calls, each tail clears the channel) in a program with an async-defun and a consumer:

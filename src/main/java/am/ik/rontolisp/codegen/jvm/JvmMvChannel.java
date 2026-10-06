@@ -18,15 +18,17 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * A single-threaded program keeps it in its {@code _g$} static field. A program that runs
  * Lisp code on more than one thread (an async body's virtual thread, a
- * {@code make-thread}, a served request) keeps one register per THREAD, as a native
- * implementation does: through the one static field a thread's tail cleared or overwrote
- * the values another had just published, and a consumer read the wrong count -- an async
- * body's values most visibly, captured where the body completes while its caller and its
- * siblings run on. The thread that runs {@code main} (the OWNER, claimed in
- * {@code main}'s prologue) keeps the static field, behind one {@code currentThread}
- * compare in the {@code _mvGet}/{@code _mvSet} helpers; every other thread's register is
- * a {@link ThreadLocal}. The owner is the fast path because a hot loop runs there: a
- * {@code ThreadLocal.set} on every call of {@code fib} doubled its time.
+ * {@code make-thread}, a served request, a host calling a {@code jvm-export} or a
+ * callback in -- {@code JvmLispCompiler}'s {@code lispOnOtherThreads}) keeps one register
+ * per THREAD, as a native implementation does: through the one static field a thread's
+ * tail cleared or overwrote the values another had just published, and a consumer read
+ * the wrong count -- an async body's values most visibly, captured where the body
+ * completes while its caller and its siblings run on. The thread that runs {@code main}
+ * (the OWNER, claimed in {@code main}'s prologue) keeps the static field, behind one
+ * {@code currentThread} compare in the {@code _mvGet}/{@code _mvSet} helpers; every other
+ * thread's register is a {@link ThreadLocal}. The owner is the fast path because a hot
+ * loop runs there: a {@code ThreadLocal.set} on every call of {@code fib} doubled its
+ * time.
  *
  * @param field the {@code _g$} static field of the {@code %mv-spill} global
  * @param perThread the per-thread store, or null in a single-threaded program

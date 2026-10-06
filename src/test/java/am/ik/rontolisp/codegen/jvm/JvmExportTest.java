@@ -184,6 +184,27 @@ class JvmExportTest {
 		assertThat(clazz.getMethod("globalWho").invoke(null)).isEqualTo(-1L);
 	}
 
+	@Test
+	void anExportCalledOnSeveralThreadsKeepsEachCallsMultipleValues() throws Exception {
+		// A host calls an export on threads of its own, so the multiple-value channel is
+		// one register per thread there too (.kb/multiple-values.md, "One register per
+		// thread"): eight threads, released at once, each receive a callee's three
+		// values 20,000 times a call while the others do the same, and never a value
+		// another thread's callee published.
+		Class<?> clazz = compileToClass("""
+				(defun spread (n) (values n (* n n) (- n)))
+				(defun mv-check (n)
+				  (let ((bad 0))
+				    (dotimes (i 20000)
+				      (multiple-value-bind (a b c) (spread (+ n i))
+				        (unless (and (eql a (+ n i)) (eql b (* (+ n i) (+ n i))) (eql c (- (+ n i))))
+				          (setq bad (1+ bad)))))
+				    bad))
+				(rontolisp:jvm-export 'mv-check :params '(:s64) :returns :s64 :as "mvCheck")
+				""");
+		assertThat(crossedCalls(clazz.getMethod("mvCheck", long.class), own -> 0L)).isEmpty();
+	}
+
 	// Calls an export on eight threads released at once, fifty times each with the
 	// thread's own number, and answers each call that answered other than expected:
 	// (number, answer).

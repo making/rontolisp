@@ -309,9 +309,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * Lisp code runs on threads other than the program's own, so a special's dynamic
-	 * binding is thread-scoped ({@link JvmDynVarRuntimeBuilder}): forced on when the
-	 * attempt generated a {@code java:} implementation whose callbacks the source scan
-	 * did not predict -- a host calls them from a thread of its choosing.
+	 * binding is thread-scoped ({@link JvmDynVarRuntimeBuilder}) and the multiple-value
+	 * channel one register per thread ({@link JvmMvChannel}): forced on when the attempt
+	 * generated a {@code java:} implementation whose callbacks the source scan did not
+	 * predict -- a host calls them from a thread of its choosing.
 	 */
 	private static final String GROUP_OTHER_THREADS = "other-threads";
 
@@ -1952,11 +1953,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			globalFieldNameUtfs.add(fieldNameUtf);
 			globalFields.put(g, cp.fieldRef(thisClass, fieldNameUtf, globalFieldDescUtf));
 		}
-		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
-		// more than one thread -- one register per thread (JvmMvChannel).
-		FieldRefEntry mvSpillField = globalFields.get(LispNames.MV_SPILL);
-		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : usesAsyncSpawn || usesThreads
-				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
 		// Whether Lisp code of this program can run on a thread other than the one that
 		// runs the program: a thread primitive's, an async body's or a served request's
 		// (each a virtual thread of its own), and any thread a host or a library calls
@@ -1967,6 +1963,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// forms and checked against the callbacks the attempt made (GROUP_OTHER_THREADS).
 		boolean lispOnOtherThreads = usesThreads || usesAsyncSpawn || !exportDecls.isEmpty() || usesJavaBridge
 				|| javaCallsBack || usesObjc || usesFfi || forcedGroups.contains(GROUP_OTHER_THREADS);
+		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
+		// more than one thread -- one register per thread (JvmMvChannel).
+		FieldRefEntry mvSpillField = globalFields.get(LispNames.MV_SPILL);
+		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : lispOnOtherThreads
+				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
 		// A special that is DYNAMICALLY BOUND somewhere is, in a program that runs Lisp
 		// code on one thread only, a SHALLOW binding of its _g$ field -- saved, set, and
 		// restored on every exit -- so every read stays one getstatic, in a closure as in
@@ -4357,8 +4358,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			if (mvChannel != null && mvChannel.perThread() != null) {
 				// The per-thread %mv-spill store joins the same initializer: every
-				// thread's register starts null, nil.
+				// thread's register starts null, nil. A program no thread runtime
+				// brought the channel's ThreadLocal constants to (an export's, a
+				// callback's) makes them here.
 				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
+				channel.ensureThreadLocalInfra(cp);
 			}
 			if (javaSignals != null) {
 				// ... as does the record of what functions called back from Java raised.
@@ -4581,8 +4585,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.bridgeClassFiles.putAll(implementations.classFiles(this.writeTarget()));
 			if (!callbacks.isEmpty() && !lispOnOtherThreads) {
 				// Java calls these back from a thread of its choosing, so a special's
-				// binding must be thread-scoped after all: the attempt is redone with
-				// the gate forced on rather than shipped shallow-bound.
+				// binding and the multiple-value channel must be per thread after all:
+				// the attempt is redone with the gate forced on rather than shipped
+				// single-threaded.
 				throw new GateUnderpredicted(Set.of(GROUP_OTHER_THREADS));
 			}
 		}
