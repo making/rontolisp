@@ -10495,6 +10495,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGrayStandardStreamReceivesTheStreamlessFamilies() {
+		// *standard-input* / *standard-output* bound to a Gray instance: the stream-less
+		// read and print families reach its generics, as an explicit stream does.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_EXPECTED);
+	}
+
+	@Test
 	void unreadCharInAGrayProgramParksOnTheOpenStream() {
 		// Reads through the Gray dispatch helpers still park on the open stream value.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();

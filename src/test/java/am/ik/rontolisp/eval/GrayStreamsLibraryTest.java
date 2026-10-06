@@ -98,6 +98,33 @@ class GrayStreamsLibraryTest {
 		}
 	}
 
+	/**
+	 * A stream-less read or print reaches a Gray instance only through the current value
+	 * of the standard stream, which a program that never binds the variable cannot
+	 * change: its stream-less calls are left exactly as written.
+	 */
+	@Test
+	void aProgramBindingNoStandardStreamKeepsItsStreamlessCalls() {
+		String user = "(defun f () (princ \"x\") (format t \"~a\" 1) (read-char) (peek-char))";
+		List<LispVal> processed = GrayStreamsLibrary.process(LispReader
+			.readAllFromString("(defclass c (rontolisp:fundamental-character-output-stream) ()) " + user));
+		assertThat(processed.get(processed.size() - 1).print())
+			.isEqualTo(LispReader.readAllFromString(user).get(0).print());
+	}
+
+	/**
+	 * Each standard stream the program binds routes the stream-less calls of ITS family
+	 * through the dispatch helpers; the other family keeps its calls.
+	 */
+	@Test
+	void bindingAStandardStreamRoutesOnlyItsOwnFamily() {
+		List<LispVal> processed = GrayStreamsLibrary
+			.process(LispReader.readAllFromString("(defclass c (rontolisp:fundamental-character-output-stream) ()) "
+					+ "(defun f () (let ((*standard-output* (make-instance 'c))) (princ \"x\") (read-char)))"));
+		String f = processed.get(processed.size() - 1).print();
+		assertThat(f).contains("(RONTOLISP::%GRAY-PRINC-DISPATCH \"x\" NIL)").contains("(READ-CHAR)");
+	}
+
 	// The CLI pipeline's two splices, in its order: the server value model first, then
 	// the Gray placement + call-site rewrite.
 	private static List<LispVal> process(List<LispVal> program) {

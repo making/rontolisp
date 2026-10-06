@@ -37,6 +37,23 @@ leaves (all in the `rontolisp` package).
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics; a string goes to `stream-write-string` in one call) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
 
+An instance bound to `*standard-output*` or `*standard-input*` is the stream
+the stream-less calls designate, as in SBCL: `(princ x)`, `(read-char)`, a `nil`
+stream argument and `format t` reach its methods like an explicit stream does.
+
+```lisp
+(defclass shout-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod rontolisp:stream-write-char ((s shout-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string (char-upcase c))))
+  c)
+(let ((s (make-instance 'shout-stream)))
+  (let ((*standard-output* s))
+    (princ "hi ")
+    (format t "~a" 42))
+  (slot-value s 'acc)) ; => "HI 42"
+```
+
 A character output stream defines **`stream-write-char` or `stream-write-string`
 -- either one is enough**. Each has a default method written in terms of the
 other, so the rest of the output protocol composes out of whichever you wrote.

@@ -13579,6 +13579,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAGrayStandardStreamReceivesTheStreamlessFamilies() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aGrayStandardStreamReceivesTheStreamlessFamilies.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
 		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(

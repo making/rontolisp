@@ -22,6 +22,9 @@ from CALLED functions. `t` (the seeded default) means process standard output.
   omitted optional carries IS the standard-stream designator (the presence-dispatched
   `unaryOptionalSecond` shape would be wrong here). `#'listen` reaches the WASM compiler's
   call-time unsupported stub.
+- **A Gray instance bound to the variable** is reached by the stream-less families through the
+  Gray dispatch helpers, gated on this activation rule ([gray-streams.md](gray-streams.md),
+  "Stream-less calls").
 - **A SYNONYM stream is a value riding this seam, not a designator**:
   `StreamDesignators.throughSynonym` wraps the result in a `%STREAM-TARGET` call, gated on the
   program spelling `make-synonym-stream` (`.kb/read-load-streams.md`).

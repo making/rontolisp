@@ -1096,26 +1096,14 @@ public final class LispEvaluator {
 		// (let ((*standard-output* stream)) ...) redirects it (the t default keeps the
 		// process standard output). Environment holds no dynamic store, so the read is
 		// layered on here.
-		this.globalEnv.setDefaultOutput(() -> {
-			if ((!this.specialVars.isEmpty() || this.progvUsed)
-					&& this.dynamicBindings.isBound(LispNames.STANDARD_OUTPUT_VAR)) {
-				return this.dynamicBindings.get(LispNames.STANDARD_OUTPUT_VAR);
-			}
-			return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
-		});
+		this.globalEnv.setDefaultOutput(this::currentStandardOutput);
 		// warn resolves its destination through the current value of *error-output* (the
 		// seeded handle 2 = the process standard error unless the program rebound it),
 		// so (let ((*error-output* s)) (warn ...)) captures the report.
 		this.globalEnv.setDefaultError(this::currentErrorOutput);
 		// The same rule on the input side: the stream-argument-less read family resolves
 		// its source through the current value of *standard-input*.
-		this.globalEnv.setDefaultInput(() -> {
-			if ((!this.specialVars.isEmpty() || this.progvUsed)
-					&& this.dynamicBindings.isBound(LispNames.STANDARD_INPUT_VAR)) {
-				return this.dynamicBindings.get(LispNames.STANDARD_INPUT_VAR);
-			}
-			return this.globalEnv.lookupOrNull(LispNames.STANDARD_INPUT_VAR);
-		});
+		this.globalEnv.setDefaultInput(this::currentStandardInput);
 		// The runtime readers return DATA, and a #S(...) datum must be the instance it
 		// denotes exactly as a source literal is. Environment holds no registry, so the
 		// fold is layered on here, where this evaluator's registry is in scope; wrapping
@@ -1705,7 +1693,7 @@ public final class LispEvaluator {
 		// the core knows no third-party name.
 		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
 		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, false);
 			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
 				// A spelled :start / :end goes through the bounds-checking helper; either
 				// way the generic sees integer bounds. Anything else in the tail keeps
@@ -1737,7 +1725,7 @@ public final class LispEvaluator {
 		}));
 		LispVal baseReadChar = this.globalEnv.lookupFunction(LispNames.READ_CHAR);
 		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
 			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				return applyGrayDispatch(GRAY_READ_CHAR_DISPATCH,
 						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
@@ -1747,7 +1735,7 @@ public final class LispEvaluator {
 		}));
 		LispVal baseReadLine = this.globalEnv.lookupFunction(LispNames.READ_LINE);
 		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
 			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				// eof-error-p defaults to NIL, the read-line lite convention the
 				// handle-based built-in documents.
@@ -1760,7 +1748,7 @@ public final class LispEvaluator {
 		LispVal baseReadCharNoHang = this.globalEnv.lookupFunction(LispNames.READ_CHAR_NO_HANG);
 		this.globalEnv.defineFunction(LispNames.READ_CHAR_NO_HANG,
 				new LispFunction(LispNames.READ_CHAR_NO_HANG, rawArgs -> {
-					List<LispVal> args = resolveStreamArg(rawArgs, 0);
+					List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
 					if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 						return applyGrayDispatch(GRAY_READ_CHAR_NO_HANG_DISPATCH,
 								List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
@@ -1774,7 +1762,7 @@ public final class LispEvaluator {
 		// %peek-char loop, which cannot see an instance.
 		LispVal basePeekChar = this.globalEnv.lookupFunction(LispNames.PEEK_CHAR);
 		this.globalEnv.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, true);
 			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
 				return applyGrayDispatch(GRAY_PEEK_CHAR_DISPATCH,
 						List.of(args.get(0), args.get(1), args.size() >= 3 ? args.get(2) : LispTrue.INSTANCE,
@@ -1784,7 +1772,7 @@ public final class LispEvaluator {
 		}));
 		LispVal baseUnreadChar = this.globalEnv.lookupFunction(LispNames.UNREAD_CHAR);
 		this.globalEnv.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, true);
 			if (args.size() == 2 && dispatchesToGray(args.get(1))) {
 				return applyGrayDispatch(GRAY_UNREAD_CHAR_DISPATCH, List.of(args.get(0), args.get(1)));
 			}
@@ -1824,7 +1812,7 @@ public final class LispEvaluator {
 		}));
 		LispVal baseListen = this.globalEnv.lookupFunction(LispNames.LISTEN);
 		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
 			if (args.size() == 1 && dispatchesToGray(args.get(0))) {
 				return applyGrayDispatch(GRAY_LISTEN_DISPATCH, List.of(args.get(0)));
 			}
@@ -1874,7 +1862,7 @@ public final class LispEvaluator {
 		// the errors.
 		LispVal baseWriteLine = this.globalEnv.lookupFunction(LispNames.WRITE_LINE);
 		this.globalEnv.defineFunction(LispNames.WRITE_LINE, new LispFunction(LispNames.WRITE_LINE, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, false);
 			if (args.size() > 1 && !(args.get(1) instanceof LispSymbol kw && kw.name().startsWith(":"))
 					&& dispatchesToGray(args.get(1))) {
 				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
@@ -6054,7 +6042,7 @@ public final class LispEvaluator {
 	private void wrapGrayOutputOperator(String name, int streamIndex, String helperName) {
 		LispVal base = this.globalEnv.lookupFunction(name);
 		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
-			List<LispVal> args = resolveStreamArg(rawArgs, streamIndex);
+			List<LispVal> args = resolveDesignatorArg(rawArgs, streamIndex, false);
 			if (args.size() == streamIndex + 1 && dispatchesToGray(args.get(streamIndex))) {
 				List<LispVal> forwarded = streamIndex == 0 ? List.of(args.get(0)) : List.of(args.get(0), args.get(1));
 				return applyGrayDispatch(helperName, forwarded);
@@ -6226,17 +6214,20 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalWriteCharWithGrayDispatch(LispCons cons, Environment env) {
 		java.util.List<LispVal> parts = cons.toList();
-		if (parts.size() != 3) {
-			// Let the expansion handle the stream-less form and signal arity errors.
+		if (parts.size() != 2 && parts.size() != 3) {
+			// Let the expansion signal the arity errors.
 			return eval(LispMacroExpander.expandWriteChar(cons), env);
 		}
 		LispVal ch = eval(parts.get(1), env);
-		LispVal stream = Environment.streamTarget(eval(parts.get(2), env));
-		if (stream instanceof LispInstance) {
-			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, stream));
+		LispVal stream = parts.size() == 3 ? Environment.streamTarget(eval(parts.get(2), env)) : LispNil.INSTANCE;
+		// A stream-less or nil stream writes to the current *standard-output*, which may
+		// hold a Gray instance.
+		LispVal target = stream instanceof LispNil ? Environment.streamTargetOrNull(currentStandardOutput()) : stream;
+		if (target instanceof LispInstance) {
+			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, target));
 		}
-		LispCons rebuilt = new LispCons(parts.get(0),
-				new LispCons(quoteValue(ch), new LispCons(quoteValue(stream), LispNil.INSTANCE)));
+		LispVal rest = parts.size() == 3 ? new LispCons(quoteValue(stream), LispNil.INSTANCE) : LispNil.INSTANCE;
+		LispCons rebuilt = new LispCons(parts.get(0), new LispCons(quoteValue(ch), rest));
 		return eval(LispMacroExpander.expandWriteChar(rebuilt), env);
 	}
 
@@ -10030,6 +10021,65 @@ public final class LispEvaluator {
 			return this.dynamicBindings.get(LispNames.ERROR_OUTPUT_VAR);
 		}
 		return this.globalEnv.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
+	}
+
+	/**
+	 * The current -- dynamic-first -- value of {@code *standard-output*}: the seeded
+	 * {@code t} unless the program rebound it.
+	 */
+	private @Nullable LispVal currentStandardOutput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.STANDARD_OUTPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.STANDARD_OUTPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
+	}
+
+	/** The input twin of {@link #currentStandardOutput}. */
+	private @Nullable LispVal currentStandardInput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.STANDARD_INPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.STANDARD_INPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.STANDARD_INPUT_VAR);
+	}
+
+	/**
+	 * {@link #resolveStreamArg} for an argument where nil designates a standard stream:
+	 * an omitted or nil stream is the current {@code *standard-input*} /
+	 * {@code *standard-output*}, and when that is a Gray instance it takes the argument's
+	 * place (an omitted optional before it padded with nil), so the wrap dispatches on
+	 * it. Anything else leaves the arguments as given for the built-in, which resolves
+	 * the designator itself.
+	 * @param args the call arguments
+	 * @param index the position of the stream argument
+	 * @param input whether nil designates {@code *standard-input*} rather than
+	 * {@code *standard-output*}
+	 * @return the arguments, with the standard stream in place when it is a Gray instance
+	 */
+	private List<LispVal> resolveDesignatorArg(List<LispVal> args, int index, boolean input) {
+		if (index < args.size() && !(args.get(index) instanceof LispNil)) {
+			return resolveStreamArg(args, index);
+		}
+		LispVal standard = input ? currentStandardInput() : currentStandardOutput();
+		if (standard == null) {
+			return args;
+		}
+		standard = Environment.synonymTarget(standard);
+		if (!dispatchesToGray(standard)) {
+			return args;
+		}
+		List<LispVal> resolved = new java.util.ArrayList<>(args);
+		while (resolved.size() < index) {
+			resolved.add(LispNil.INSTANCE);
+		}
+		if (index < resolved.size()) {
+			resolved.set(index, standard);
+		}
+		else {
+			resolved.add(standard);
+		}
+		return resolved;
 	}
 
 	private static List<LispVal> resolveStreamArg(List<LispVal> args, int index) {

@@ -52,6 +52,40 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
 - `%gray-fresh-line-dispatch` answers **nil** like the handle-based `fresh-line`, not
   `stream-fresh-line`'s t/nil: an operator's value must not depend on stream kind.
 
+## Stream-less calls on a Gray `*standard-output*` / `*standard-input*`
+A nil (or omitted) stream designates the CURRENT standard stream, which may hold a Gray instance:
+`(let ((*standard-input* gray)) (read-char))` is SBCL's `stream-read-char` on it. Until
+2026-10-06 the dispatch decided on the argument as written -- interpreter "READ-CHAR expects an
+input stream" / "not an output stream", JVM read the process stdin, P1/component trapped, and
+the print family wrote PAST the instance to standard output on the compile paths.
+- Helpers: every output helper resolves `(or stream *standard-output*)`, every character-read
+  helper (read-char, -no-hang, peek-char, unread-char, read-line, listen) `(or stream
+  *standard-input*)`, before `%stream-target` and the instance test -- so a stream argument
+  that is nil at run time, and the function-value wrappers (`(funcall #'read-line)`), resolve
+  too. The read helpers' fallback still gets the stream as given. An unbound read is the
+  constant `t` on the compile paths, so a program that binds nothing is unaffected.
+- Compile-path gate (`GrayStreamsLibrary.binds`): the program binds the variable
+  (`SpecialVarCollector.collectDynamicallyBound`, the backends' activation rule) or names
+  `rontolisp:make-thread` (its bindings alist). Then the stream-less / literal-nil calls of
+  that family are rewritten with a nil stream, and `(format t ...)` is lowered here by
+  `LispMacroExpander.expandFormat` and the princ / terpri / fresh-line it yields rewritten in
+  turn (so `~&` asks the Gray stream; building the string first would lose `~&` on the real
+  stdout too). A Gray program that binds a standard stream -- the ci-spec corpus does --
+  sends EVERY stream-less print through the helpers.
+- `--component`: a gray.lisp `%gray-*` helper is a strict call head for the await hoist
+  (`WasmAwaitNormalizer.isStrictCallHead`, `LispNames.GRAY_HELPER_PREFIX`). Before, `(princ
+  (rontolisp:await f) gray-var)` was refused as a non-spine await, and the stream-less rewrite
+  would have refused the corpus's `(print (rontolisp:await ...))`.
+- Interpreter: `LispEvaluator.resolveDesignatorArg` puts the current standard stream in the
+  argument's place (padding an omitted peek-type) when it is a Gray instance;
+  `evalWriteCharWithGrayDispatch` does the same for `(write-char c)`.
+- `(read)` follows for free: it is written over the character reads (SBCL `((1 2) FOO :END)`
+  for three reads of `"(1 2) foo"`, all four alike).
+- Pinned by `GrayStreamCallFixture.STANDARD_STREAM_PROGRAM` (SBCL's answers) in the three
+  suites, `GrayStreamsLibraryTest#aProgramBindingNoStandardStreamKeepsItsStreamlessCalls` /
+  `#bindingAStandardStreamRoutesOnlyItsOwnFamily`,
+  `WasmLispCompilerIntegrationTest#anAwaitInAGrayDispatchArgumentIsHoistedOnTheComponent`.
+
 ## Ownable operators
 - OWNABLE: `close`, `open-stream-p`, `stream-element-type`
   (`GrayStreamsLibrary.OWNABLE_OPERATORS`, interpreter `wrapGrayOwnableOperator`); both seams
@@ -170,8 +204,9 @@ so `trivial-gray-streams:` counts; the match set is ALL-UPPERCASE).
 1. Splice gray.lisp PROTOCOL forms unless a load already did (guard: a `defclass` of
    `rontolisp:fundamental-character-output-stream`).
 2. Rewrite every stream-taking call with an explicit non-literal stream (not
-   `t`/`nil`/string literal) onto the helpers. The stream-LESS spelling is left alone, so a
-   program naming no stream stays byte-identical.
+   `t`/`nil`/string literal) onto the helpers. The stream-LESS and literal-nil spellings join
+   only when the program binds that family's standard stream (see "Stream-less calls"), so a
+   program naming no stream and binding none stays byte-identical.
 3. **Splice ONLY the dispatch defuns the rewrites referenced** (`SPLICE_ON_USE` via
    `dispatchSymbol`; `WRITE_CHAR_DISPATCH` pulls `WRITE_STRING_DISPATCH`). Load-bearing:
    `LibraryDefunPruner` covers neither this splice nor the shim systems, and

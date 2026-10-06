@@ -14638,6 +14638,38 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGrayStandardStreamReceivesTheStreamlessFamilies() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aGrayStandardStreamReceivesTheStreamlessFamilies, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_EXPECTED);
+		}
+	}
+
+	@Test
+	void anAwaitInAGrayDispatchArgumentIsHoistedOnTheComponent() throws Exception {
+		// The Gray rewrite turns a stream call into a gray.lisp helper call -- with an
+		// explicit stream, and the stream-less print family once the program binds
+		// *standard-output* -- so an await among its arguments has to be hoisted like
+		// any strict call's, not refused as a non-spine position.
+		String program = """
+				(defclass aw-sink (rontolisp:fundamental-character-output-stream) ((aw-acc :initform nil)))
+				(defmethod rontolisp:stream-write-char ((aw-s aw-sink) aw-c) (push aw-c (slot-value aw-s 'aw-acc)) aw-c)
+				(rontolisp:async-defun aw-add (aw-a aw-b) (+ aw-a aw-b))
+				(defun aw-capture () (with-output-to-string (*standard-output*) (princ "cap")))
+				(print (rontolisp:await (aw-add 20 22)))
+				(let ((aw-s (make-instance 'aw-sink)))
+				  (princ (rontolisp:await (aw-add 1 2)) aw-s)
+				  (print (coerce (reverse (slot-value aw-s 'aw-acc)) 'string)))
+				(print (aw-capture))
+				""";
+		assertThat(compileAndRunFrontEndWithDir(program, true)).isEqualTo("42\n\"3\"\n\"cap\"");
+	}
+
+	@Test
 	void unreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream,
