@@ -28,7 +28,7 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `read-char` | `rontolisp:stream-read-char` |
 | `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (デフォルトメソッドは `stream-read-char` そのもの) |
 | `peek-char` | `rontolisp:stream-peek-char` (デフォルトメソッドは 1 文字読んで `stream-unread-char` で押し戻す)。`peek-type` の読み飛ばし形式はこれをループします |
-| `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドはプロトコルが持つ 1 文字ぶんの押し戻しスロットに保管) |
+| `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドは文字をインスタンス自身に保管) |
 | `read-line` | `rontolisp:stream-read-line` (デフォルトメソッドは `stream-read-char` をループ) |
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
@@ -78,9 +78,8 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 `stream-read-line` と `stream-read-sequence` はそれをループし、
 `stream-read-char-no-hang` はそれ自体で、`stream-peek-char` は 1 文字読んでから
 `stream-unread-char` で押し戻します。`stream-unread-char` の既定メソッドは、その文字を
-プロトコルが持つ 1 文字ぶんの押し戻しスロットに保管します。自前でソースを巻き戻せる
-クラスは `stream-unread-char` を定義して押し戻しを自分で所有します — そのときスロットは
-一度も書かれません。
+インスタンス自身に保管します。自前でソースを巻き戻せるクラスは `stream-unread-char` を
+定義して押し戻しを自分で所有します — そのとき保管用のセルは一度も書かれません。
 
 読み取り側のメソッドはストリーム終端でキーワード `:eof` を返します。組み込みはそれを通常の
 `eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line`
@@ -203,8 +202,11 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 
 - `rontolisp:stream-advance-to-column` はプロトコル総称関数として存在しますが、
   どの組み込みもディスパッチしません (`format` の `~T` は桁位置を参照しません)。
-- プロトコルの押し戻しは 1 ストリームにつき 1 文字だけを保持します。これは CL が
-  `unread-char` に約束している範囲そのものです。プロトコル自身のデフォルトを通る読み取りは
+- プロトコルの押し戻しは 1 ストリームにつき 1 文字を、インスタンス自身に保持します。
+  これは CL が `unread-char` に約束している範囲そのものです。2 つのインスタンスはそれぞれ
+  1 文字ずつ保持でき、文字を保管したまま捨てたインスタンスは他に影響しません。保管用の
+  セルはスロットではないので、クラスのスロット一覧、プリンタ、`equal` からは見えません。
+  プロトコル自身のデフォルトを通る読み取りは
   すべてこれを消費しますが、`stream-read-line` や `stream-read-sequence` を丸ごと
   オーバーライドしたクラスは押し戻しを読み飛ばすので、そうしたクラスは
   `stream-unread-char` も定義してください。

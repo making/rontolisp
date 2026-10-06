@@ -138,16 +138,37 @@ final class WasmInstanceCompiler {
 		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
 		if (failure == null) {
 			pushSlots(ctx);
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			return;
 		}
 		emitChecked(ctx, failure, () -> {
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		});
+	}
+
+	/**
+	 * Over the slots array on the stack, pushes the i32 index of slot {@code k}:
+	 * {@code k} itself, or, for a negative {@code k}, counted back from the array's end
+	 * ({@link am.ik.rontolisp.LispLayout#TAIL_CELL}). Leaves {@code [slots, index]}.
+	 */
+	private static void pushCellIndex(WasmLispCompiler.Ctx ctx, int k) {
+		if (k >= 0) {
+			i32Const(ctx, k);
+			return;
+		}
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, k);
+		ctx.writer.write(Instruction.I32_ADD);
 	}
 
 	/**
@@ -304,7 +325,7 @@ final class WasmInstanceCompiler {
 		getLocal(ctx, objSlot);
 		int index = literalIndex(args.get(2), LispNames.OBJ_SET);
 		Runnable store = () -> {
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			getLocal(ctx, valSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);

@@ -117,4 +117,44 @@ public final class GrayStreamCallFixture {
 			"((:EOF :END) ((3 \"-ab\") \"\") (1 \"b\"))", "(1 2 :DONE)", "((NIL T) (T NIL) (CHARACTER CHARACTER))",
 			"(\"plain1\" #\\x)");
 
+	/**
+	 * The default {@code stream-unread-char} parks the character on ITS instance: two
+	 * instances each hold one at once, {@code peek-char}'s read-and-unread on one leaves
+	 * the other alone, an instance dropped with a character parked leaves no trace, the
+	 * parked character is no part of the instance's {@code equal} hash, and it survives a
+	 * {@code change-class} into a class with more slots. SBCL's sb-gray has no default
+	 * method, so its answers come from a per-instance {@code stream-unread-char} /
+	 * {@code :around stream-read-char} pair over the same program.
+	 */
+	public static final String PER_INSTANCE_PUSHBACK_PROGRAM = """
+			(defclass gpb-src (rontolisp:fundamental-character-input-stream)
+			  ((gpb-text :initarg :text) (gpb-pos :initform 0)))
+			(defmethod rontolisp:stream-read-char ((gpb-s gpb-src))
+			  (with-slots (gpb-text gpb-pos) gpb-s
+			    (if (< gpb-pos (length gpb-text)) (prog1 (char gpb-text gpb-pos) (incf gpb-pos)) :eof)))
+			(defclass gpb-tagged (gpb-src) ((gpb-tag :initform :tagged)))
+			(defun gpb-new (gpb-text) (make-instance 'gpb-src :text gpb-text))
+			(let ((gpb-a (gpb-new "abc")) (gpb-b (gpb-new "xyz")))
+			  (unread-char (read-char gpb-a) gpb-a)
+			  (unread-char (read-char gpb-b) gpb-b)
+			  (print (list (read-char gpb-a) (read-char gpb-b) (read-char gpb-a))))
+			(let ((gpb-a (gpb-new "abc")) (gpb-b (gpb-new "xyz")))
+			  (print (list (peek-char nil gpb-a) (peek-char nil gpb-b) (read-char gpb-a) (read-line gpb-b) (read-line gpb-a))))
+			(let ((gpb-a (gpb-new "dropped")))
+			  (unread-char (read-char gpb-a) gpb-a))
+			(let ((gpb-a (gpb-new "pqr")) (gpb-h (make-hash-table :test 'equal)))
+			  (let ((gpb-c (read-char gpb-a)))
+			    (setf (gethash gpb-a gpb-h) :found)
+			    (unread-char gpb-c gpb-a)
+			    (print (list (gethash gpb-a gpb-h) (read-char gpb-a) (read-char gpb-a)))))
+			(let ((gpb-a (gpb-new "uvw")))
+			  (unread-char (read-char gpb-a) gpb-a)
+			  (change-class gpb-a 'gpb-tagged)
+			  (print (list (read-char gpb-a) (slot-value gpb-a 'gpb-tag) (read-char gpb-a))))
+			""";
+
+	/** What {@link #PER_INSTANCE_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String PER_INSTANCE_PUSHBACK_EXPECTED = String.join("\n", "(#\\a #\\x #\\b)",
+			"(#\\a #\\x #\\a \"xyz\" \"bc\")", "(:FOUND #\\p #\\q)", "(#\\u :TAGGED #\\v)");
+
 }

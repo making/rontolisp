@@ -2370,8 +2370,20 @@ public final class ClosRegistry {
 		// the instance shape can never disagree with the slot list it was built from.
 		LispLayout layout = LispLayout.ofClass(info.name(), info.slots().stream().map(SlotSpec::baseName).toList(),
 				info.slots().stream().map(SlotSpec::initform).toList());
+		if (info.ancestors().contains(GRAY_INPUT_STREAM_KEY)) {
+			// The unread-char pushback cell (LispLayout.TAIL_CELL), past the declared
+			// slots so no printer, equal or slot listing sees it.
+			layout = layout.withCapacity(layout.slotCount() + 1);
+		}
 		this.layoutsByTag.put(layout.tag(), layout);
 	}
+
+	/**
+	 * The registry key of {@code rontolisp:fundamental-input-stream}: a class descending
+	 * from it reserves the {@link LispLayout#TAIL_CELL} its default
+	 * {@code stream-unread-char} parks a character in.
+	 */
+	private static final String GRAY_INPUT_STREAM_KEY = LispNames.RONTOLISP_PKG + "::" + LispNames.GRAY_INPUT_STREAM;
 
 	/**
 	 * The layout registered under an exact instance tag.
@@ -2463,7 +2475,9 @@ public final class ClosRegistry {
 
 	/**
 	 * Applies every recorded {@link #registerChangeClassTarget} reservation: each
-	 * target's ancestors (and the target itself) widen to the target's slot count.
+	 * target's ancestors (and the target itself) widen to the target's capacity -- its
+	 * slot count, plus the {@link LispLayout#TAIL_CELL} a Gray input stream keeps past
+	 * them, so a changed instance's last cell is past every slot of its new class too.
 	 * Idempotent, and a no-op for a program with no {@code change-class}.
 	 */
 	public void applyChangeClassCapacities() {
@@ -2472,7 +2486,8 @@ public final class ClosRegistry {
 			if (info == null) {
 				continue;
 			}
-			int reserved = info.slots().size();
+			LispLayout targetLayout = this.layoutsByTag.get(LispLayout.CLASS_TAG_PREFIX + info.name());
+			int reserved = targetLayout == null ? info.slots().size() : targetLayout.capacity();
 			for (String ancestor : info.ancestors()) {
 				ClassInfo owner = findClass(ancestor);
 				if (owner == null) {

@@ -595,9 +595,16 @@ final class JvmHashRuntimeBuilder {
 			MethodCode.Label slotTop = a.newLabel();
 			MethodCode.Label slotDone = a.newLabel();
 			a.labelBinding(slotTop);
+			// Up to the layout's slot count, as _equal compares: a reserved cell past
+			// the slots (a parked unread-char) must not move the key's bucket.
 			a.iload(4);
 			a.aload(3);
+			a.loadConstant(0);
+			a.aaload();
+			a.checkcast(stringArrayClass);
 			a.arraylength();
+			a.loadConstant(2);
+			a.isub();
 			a.if_icmpge(slotDone);
 			a.iload(5);
 			a.loadConstant(31);

@@ -10090,12 +10090,14 @@ public final class LispEvaluator {
 			throw new LispEvalException(name + " expects a slot index");
 		}
 		long k = idx.value();
-		// capacity, not slotCount: the addressable storage of an instance is what its
-		// layout RESERVED, which the compile paths index without a check of their own.
-		if (k < 0 || k >= inst.layout().capacity()) {
+		// The storage, not slotCount: the addressable cells of an instance are what its
+		// layout RESERVED, which the compile paths index without a check of their own. A
+		// negative index counts back from the end of the storage (LispLayout.TAIL_CELL).
+		long cell = k < 0 ? inst.cellCount() + k : k;
+		if (cell < 0 || cell >= inst.cellCount()) {
 			throw new LispEvalException(name + ": slot index " + k + " is outside " + inst.layout().tag());
 		}
-		return (int) k;
+		return (int) cell;
 	}
 
 	/**

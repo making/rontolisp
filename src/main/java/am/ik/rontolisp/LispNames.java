@@ -9161,13 +9161,15 @@ public final class LispNames {
 
 	/**
 	 * The internal slot reader: {@code (%obj-ref obj <k>)} reads slot {@code k} (0-based,
-	 * a literal integer) of an instance.
+	 * a literal integer) of an instance; a negative {@code k} counts back from the end of
+	 * the instance's storage ({@code LispLayout.TAIL_CELL}).
 	 */
 	public static final String OBJ_REF = "%OBJ-REF";
 
 	/**
 	 * The internal slot writer: {@code (%obj-set obj <k> v)} writes slot {@code k}
-	 * (0-based, a literal integer) of an instance and returns the value written.
+	 * (0-based, a literal integer; negative counts back from the end, as for
+	 * {@link #OBJ_REF}) of an instance and returns the value written.
 	 */
 	public static final String OBJ_SET = "%OBJ-SET";
 

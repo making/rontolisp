@@ -186,8 +186,8 @@ public final class StringStreamPrograms {
 	 * The {@code unread-char} pushback belongs to its stream: a stream closed or dropped
 	 * with a character parked leaves no trace on the next one (the closes
 	 * {@code with-input-from-string} synthesizes included), two streams each hold one at
-	 * once, and {@code listen} / {@code peek-char} / {@code read-line} see only their own
-	 * stream's.
+	 * once, {@code listen} / {@code peek-char} / {@code read-line} see only their own
+	 * stream's, and the parked character is no part of the stream's {@code equal} hash.
 	 */
 	public static final String PER_STREAM_PUSHBACK_PROGRAM = """
 			(with-input-from-string (s "abc") (unread-char (read-char s) s))
@@ -202,11 +202,17 @@ public final class StringStreamPrograms {
 			  (unread-char (read-char s2) s2)
 			  (print (list (listen s1) (read-char s1) (read-char s2) (read-char s1) (peek-char nil s2)
 			               (read-line s2) (listen s2))))
+			(let ((s (make-string-input-stream "mn")) (h (make-hash-table :test 'equal)))
+			  (let ((c (read-char s)))
+			    (setf (gethash s h) :found)
+			    (unread-char c s)
+			    (print (list (gethash s h) (read-char s)))))
 			""";
 
 	/** What {@link #PER_STREAM_PUSHBACK_PROGRAM} prints (SBCL's answers). */
 	public static final String PER_STREAM_PUSHBACK_EXPECTED = """
 			#\\x
-			(T #\\a #\\x #\\b #\\y "yz" NIL)""";
+			(T #\\a #\\x #\\b #\\y "yz" NIL)
+			(:FOUND #\\m)""";
 
 }

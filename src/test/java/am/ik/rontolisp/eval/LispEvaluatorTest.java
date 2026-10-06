@@ -10475,6 +10475,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void grayDefaultUnreadCharParksOnItsInstance() {
+		// The default stream-unread-char keeps the character on the instance it was
+		// unread onto: two instances hold one each, and it survives a change-class.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void streamOperatorsAsFunctionValuesReachAGrayStream() {
 		// #'write-string, 'write-line, (apply #'read-char ...) and the rest of the
 		// stream operators taken as values dispatch to a Gray instance like their calls.

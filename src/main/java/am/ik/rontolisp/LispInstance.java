@@ -78,16 +78,32 @@ public final class LispInstance implements LispVal {
 	 * adds start nil -- the {@code change-class} expansion fills them from the target's
 	 * initforms right after. The backing array grows when the reserved capacity was not
 	 * enough, which the interpreter can do (the LispInstance is the identity) and the JVM
-	 * backend cannot -- hence {@link LispLayout#capacity()}.
+	 * backend cannot -- hence {@link LispLayout#capacity()}. A grown array carries its
+	 * last cell to the new end, where {@link LispLayout#TAIL_CELL} reads it: a Gray input
+	 * stream's parked character outlives the change, as on the compile paths.
 	 * @param newLayout the layout to adopt
 	 */
 	public void becomeLayout(LispLayout newLayout) {
 		if (this.slots.length < newLayout.capacity()) {
 			LispVal[] grown = Arrays.copyOf(this.slots, newLayout.capacity());
 			Arrays.fill(grown, this.slots.length, grown.length, LispNil.INSTANCE);
+			if (this.slots.length > this.layout.slotCount()) {
+				grown[grown.length - 1] = this.slots[this.slots.length - 1];
+				grown[this.slots.length - 1] = LispNil.INSTANCE;
+			}
 			this.slots = grown;
 		}
 		this.layout = newLayout;
+	}
+
+	/**
+	 * The length of the backing storage: the declared slots plus the cells the layout
+	 * reserved past them ({@link LispLayout#capacity()}), which a negative index counts
+	 * back from ({@link LispLayout#TAIL_CELL}).
+	 * @return the storage length
+	 */
+	public int cellCount() {
+		return this.slots.length;
 	}
 
 	/**

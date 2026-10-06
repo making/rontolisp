@@ -169,7 +169,7 @@ final class JvmObjCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (failure == null) {
 			ctx.body.checkcast(ctx.objectArrayClass);
-			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+			emitCellIndex(ctx, literalIndex(args.get(2)));
 			ctx.body.aaload();
 			return;
 		}
@@ -177,9 +177,25 @@ final class JvmObjCompiler {
 		ctx.body.astore(objSlot);
 		emitChecked(ctx, className, objSlot, failure, () -> {
 			ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass);
-			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+			emitCellIndex(ctx, literalIndex(args.get(2)));
 			ctx.body.aaload();
 		});
+	}
+
+	/**
+	 * Over the instance array on the stack, pushes the array index of slot {@code k}:
+	 * {@code 1 + k} past the layout in element 0, or, for a negative {@code k}, counted
+	 * back from the array's end ({@link am.ik.rontolisp.LispLayout#TAIL_CELL}). Leaves
+	 * {@code [array, index]}.
+	 */
+	private static void emitCellIndex(JvmLispCompiler.Ctx ctx, int k) {
+		if (k >= 0) {
+			JvmEmitHelper.emitIntConst(ctx, 1 + k);
+			return;
+		}
+		ctx.body.dup().arraylength();
+		JvmEmitHelper.emitIntConst(ctx, k);
+		ctx.body.iadd();
 	}
 
 	/**
@@ -263,14 +279,14 @@ final class JvmObjCompiler {
 			ctx.body.astore(valSlot);
 			emitChecked(ctx, className, objSlot, args.get(4), () -> {
 				ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass);
-				JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+				emitCellIndex(ctx, literalIndex(args.get(2)));
 				ctx.body.aload(valSlot).aastore().aload(valSlot);
 			});
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.body.checkcast(ctx.objectArrayClass);
-		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+		emitCellIndex(ctx, literalIndex(args.get(2)));
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		// [arr, idx, v] -> [v, arr, idx, v]: keeps left-to-right evaluation without a
 		// temp, so the object is evaluated before the value as in the interpreter.

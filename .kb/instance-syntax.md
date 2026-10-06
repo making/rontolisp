@@ -102,8 +102,8 @@ knows nothing about `ClosRegistry`, so reading is split in two:
 | primitive | meaning |
 | --- | --- |
 | `(%obj-new '<tag> v...)` | build an instance of the registered layout; values past its `capacity` are evaluated and dropped, missing ones are nil |
-| `(%obj-ref obj <k>)` | read slot `k` (0-based) |
-| `(%obj-set obj <k> v)` | write slot `k`, returning `v` |
+| `(%obj-ref obj <k>)` | read slot `k` (0-based); a negative `k` counts back from the END of the storage (`LispLayout.TAIL_CELL`, the Gray pushback) |
+| `(%obj-set obj <k> v)` | write slot `k`, returning `v`; negative `k` as for `%obj-ref` |
 | `(%obj-is obj '<tag>...)` | t when `obj` is an instance of any of the tags |
 | `(%obj-tag obj)` | the instance tag symbol, nil for a non-instance |
 | `(%obj-p obj)` | t for any instance |
@@ -134,6 +134,11 @@ with `setf`/`incf`/`push` without their own case.
   to three fields: `{i32, i32, eqref}` with an immutable tail canonicalizes equal to `TYPE_VBLOCK`
   under `--simd` and `ref.test` could no longer tell an instance from a packed-array block.
   `--no-gc` has no instances at all.
+
+**A cell past the declared slots is storage, not value**: `%obj-slots`, the printers, `_equal` and
+the `equal` hash all stop at the LAYOUT's slot count (JVM: `String[]` length - 3; WASM: the record's
+`OFF_SLOT_COUNT`; interpreter: `slotCount()`), never at the storage length -- the reserved cells
+(change-class room, the synonym-stream reader, the stream and Gray-input pushback) hold machinery.
 
 **The layout sits at index 0 on the JVM, and NOT in the WASM slot array.** Any per-backend loop over
 slots must account for that: the JVM cursor stops at 1, the WASM one at 0. `%obj-slots` got this

@@ -34,10 +34,10 @@ import java.util.List;
  * @param capacity how many cells an instance RESERVES room for -- normally
  * {@code slotNames.size()}, but wider when {@code change-class} can turn an instance of
  * this type into one of a descendant (see {@link #withCapacity}), or when the type keeps
- * MACHINERY beside its declared slots ({@link #SYNONYM_STREAM}'s reader closure). The
- * cells past {@code slotNames.size()} are addressable by
- * {@code %obj-new}/{@code %obj-ref} / {@code %obj-set} and invisible to printing,
- * {@code equal} and slot introspection
+ * MACHINERY beside its declared slots ({@link #SYNONYM_STREAM}'s reader closure, a Gray
+ * input stream's pushback at {@link #TAIL_CELL}). The cells past {@code slotNames.size()}
+ * are addressable by {@code %obj-new}/{@code %obj-ref} / {@code %obj-set} and invisible
+ * to printing, {@code equal} and slot introspection
  */
 public record LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms,
 		int capacity) {
@@ -188,6 +188,19 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * {@code unread-char.lisp}, which writes the index as a literal.
 	 */
 	public static final int STREAM_PUSHBACK_CELL = 3;
+
+	/**
+	 * The literal {@code %obj-ref} / {@code %obj-set} index of an instance's LAST storage
+	 * cell: a negative index counts from the end of the storage, not from the declared
+	 * slots. Every class descending from {@code rontolisp:fundamental-input-stream}
+	 * reserves one cell past its declared slots ({@code ClosRegistry.registerClass}), and
+	 * {@code gray.lisp}'s default {@code stream-unread-char} parks the character there,
+	 * so the pushback lives on the instance it was unread onto. Counting from the end
+	 * keeps the index one literal across classes of different widths, and keeps it past
+	 * every declared slot of a {@code change-class} target, whose reservation widens the
+	 * storage to the target's capacity.
+	 */
+	public static final int TAIL_CELL = -1;
 
 	/**
 	 * The {@code KIND} slot values of {@link #STREAM}, one keyword per stream kind. They

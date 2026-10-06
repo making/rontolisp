@@ -28,7 +28,7 @@ leaves (all in the `rontolisp` package).
 | `read-char` | `rontolisp:stream-read-char` |
 | `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (default method IS `stream-read-char`) |
 | `peek-char` | `rontolisp:stream-peek-char` (default method: read one, hand it back through `stream-unread-char`); the `peek-type` skipping forms loop over it |
-| `unread-char` | `rontolisp:stream-unread-char` (default method parks the character in the protocol's one-slot pushback) |
+| `unread-char` | `rontolisp:stream-unread-char` (default method parks the character on the instance) |
 | `read-line` | `rontolisp:stream-read-line` (default method loops `stream-read-char`) |
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
 | `open-stream-p` | answers `t` -- like `close`, a name a program may own |
@@ -80,9 +80,9 @@ enough** (a binary one defines `stream-read-byte`). Everything else on the read
 side is written over it: `stream-read-line` and `stream-read-sequence` loop it,
 `stream-read-char-no-hang` is it, and `stream-peek-char` reads one character and
 hands it back through `stream-unread-char`, whose own default parks the
-character in the protocol's one-slot pushback. A class that can rewind its own
-source defines `stream-unread-char` and owns the pushback instead — the pushback
-cell is then never written.
+character on the instance itself. A class that can rewind its own source
+defines `stream-unread-char` and owns the pushback instead — the parking cell
+is then never written.
 
 On the read side the methods answer the keyword `:eof` at end of stream; the
 built-ins translate that through the usual `eof-error-p` / `eof-value`
@@ -206,8 +206,11 @@ rontolisp protocol has, so a portable class that defines only
 
 - `rontolisp:stream-advance-to-column` exists as a protocol generic but no
   built-in dispatches to it (`format`'s `~T` does not consult the column).
-- The protocol's pushback holds ONE character for ONE stream at a time, which is
-  what CL promises for `unread-char`. It is drained by every read that goes
+- The protocol's pushback holds ONE character per stream, on the instance
+  itself, which is what CL promises for `unread-char`: two instances each hold
+  one, and an instance dropped with one parked affects no other. The cell is no
+  slot: the class's slot list, the printers and `equal` do not see it. It is
+  drained by every read that goes
   through the protocol's own defaults; a class that overrides
   `stream-read-line` or `stream-read-sequence` outright reads past it, so such a
   class should define `stream-unread-char` too.

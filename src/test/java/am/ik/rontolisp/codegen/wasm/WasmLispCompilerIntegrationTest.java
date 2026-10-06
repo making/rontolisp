@@ -14619,6 +14619,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayDefaultUnreadCharParksOnItsInstance() throws Exception {
+		// The wasm twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+		}
+	}
+
+	@Test
 	void streamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream, Preview 1

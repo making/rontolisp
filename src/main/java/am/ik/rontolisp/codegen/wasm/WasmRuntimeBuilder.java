@@ -481,8 +481,7 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(2); // i = 0
-		instanceSlots(w, 0, instanceTypeIndex);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		pushLayoutSlotCount(w, 0, instanceTypeIndex);
 		emitKeyedSlotCount(w, 0, instanceTypeIndex, keyedLayout);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(3); // n = slot count (1 for the address-keyed layout)
@@ -567,6 +566,17 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(instanceTypeIndex);
 		w.writeUnsignedLeb128(field);
+	}
+
+	/**
+	 * Pushes the slot count the LAYOUT record of the instance in {@code local} declares,
+	 * not its slots array's length: the cells a layout reserves past its slots
+	 * (change-class room, a Gray input stream's parked {@code unread-char}) are no part
+	 * of the value {@code _equal} compares and {@code _hash} folds.
+	 */
+	private static void pushLayoutSlotCount(WasmWriter w, int local, int instanceTypeIndex) {
+		instanceField(w, local, instanceTypeIndex, 0);
+		w.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOT_COUNT);
 	}
 
 	/** Pushes the slot array of the instance in {@code local}, cast to $buckets. */
@@ -869,8 +879,7 @@ final class WasmRuntimeBuilder {
 			w.writeSignedLeb128(0);
 			w.write(Instruction.SET_LOCAL);
 			w.writeUnsignedLeb128(3); // idx = 0
-			instanceSlots(w, 0, instanceTypeIndex);
-			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			pushLayoutSlotCount(w, 0, instanceTypeIndex);
 			emitKeyedSlotCount(w, 0, instanceTypeIndex, keyedLayout);
 			w.write(Instruction.SET_LOCAL);
 			w.writeUnsignedLeb128(4); // end = slot count (1 for the address-keyed layout)

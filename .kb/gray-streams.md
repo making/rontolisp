@@ -21,10 +21,20 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
 - **ONE required read method: `stream-read-char`** (`stream-read-byte` binary);
   `-read-line`/`-read-sequence` loop it, `-read-char-no-hang` IS it, `-peek-char` = read +
   `stream-unread-char`.
-- `stream-unread-char` default cell: `rontolisp::*gray-unread-stream*` / `*gray-unread-char*`,
-  ONE char for ONE stream (WASM fd-pushback shape, `PEEK_FD_ADDR`/`PEEK_CP_ADDR`); full Gray
-  keeps it per CLASS. `%gray-read-char-1` is the ONE cell-draining entry. TRAP: overriding
-  `stream-read-line`/`-read-sequence` OUTRIGHT reads past a pushed-back char.
+- `stream-unread-char` default cell: ON THE INSTANCE, the one cell every
+  `fundamental-input-stream` descendant reserves past its declared slots
+  (`ClosRegistry.registerClass`, capacity + 1), addressed `(%obj-ref s -1)` -- a negative index
+  counts back from the end of the storage (`LispLayout.TAIL_CELL`), so it is one literal across
+  class widths and stays past every slot of a `change-class` target
+  (`applyChangeClassCapacities` reserves the target's CAPACITY; the interpreter's
+  `becomeLayout` carries the last cell when it grows). SBCL's sb-gray has no default method.
+  `%gray-read-char-1` is the ONE cell-draining entry; its `typep` guard is load-bearing: a
+  dispatch helper hands it ANY instance, whose last cell may be a declared slot. TRAP:
+  overriding `stream-read-line`/`-read-sequence` OUTRIGHT reads past a pushed-back char.
+- Until 2026-10-06 the cell was ONE program-wide pair (`*gray-unread-stream*` /
+  `*gray-unread-char*`) that overwrote unchecked: two instances each unread once lost the
+  first character (`(#\b #\x #\c)` for SBCL-per-instance `(#\a #\x #\b)`), all four.
+  Pinned by `GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM` in the three backend suites.
 - `stream-start-line-p` comes from `stream-line-column` (nil = no column, so `fresh-line`
   breaks unconditionally); flush trio, `stream-listen`, `stream-file-position` answer nil.
   Read generics answer `:eof`; dispatch maps it to `eof-error-p`/`eof-value`,
@@ -276,6 +286,13 @@ Contract, identical on all four:
   expansion the pass DOES reach is an indexed `with-input-from-string`: it expands it itself
   (`LispMacroExpander.isIndexedWithInputFromString`), so the `:index` store's `file-position`
   becomes `%unread-file-position` (`.kb/read-load-streams.md`, "String streams").
+- **A reserved cell is no part of `equal` or the `equal` hash** on any backend: the JVM
+  (`JvmNumericRuntimeBuilder.emitInstanceEqual`, `JvmHashRuntimeBuilder`) and WASM
+  (`WasmRuntimeBuilder.pushLayoutSlotCount`) loops are bounded by the LAYOUT's slot count, not
+  the storage length. They looped the storage until 2026-10-06, so a stream value (or Gray
+  instance) keyed in an `equal` hash table was lost once a character was parked on it -- JVM,
+  P1 and component (`:FOUND` on SBCL and the interpreter). Pinned by the last form of
+  `StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM` and the Gray fixture.
 - **Until 2026-10-06 the cell was ONE slot for the whole program**: a stream closed (or dropped)
   with a parked character made every later `unread-char` on ANY stream signal, and two streams
   could not hold one each -- all four (SBCL: fine). Pinned now by
@@ -344,13 +361,14 @@ splices the whole entry.
   `LackEcosystem*E2eTest` classes.
 
 ## Tests
-- `LispEvaluatorTest#gray*` (14 cases: instance dispatch, eager base-class load, binary
+- `LispEvaluatorTest#gray*` (15 cases: instance dispatch, eager base-class load, binary
   round trip + file-position, read-line/sequence defaults, peek/unread/no-hang, the
-  unread-char method owning the pushback, direction predicates, shim mixin + setf
-  file-position, `grayStreamInstanceIsAStream`) and `#unreadChar*`, `#evalFlexiStream*`.
-- `JvmLispCompilerTest#compileAndRunGray*` (7) + `#compileAndRunUnreadCharOnAStreamHandleRoundTrips`,
+  unread-char method owning the pushback, the default parking on its instance, direction
+  predicates, shim mixin + setf file-position, `grayStreamInstanceIsAStream`) and
+  `#unreadChar*`, `#evalFlexiStream*`.
+- `JvmLispCompilerTest#compileAndRunGray*` (10) + `#compileAndRunUnreadCharOnAStreamHandleRoundTrips`,
   `#grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
-- `WasmLispCompilerIntegrationTest#gray*` (6) + `#unreadCharOnAStreamHandleRoundTrips`.
+- `WasmLispCompilerIntegrationTest#gray*` (8) + `#unreadCharOnAStreamHandleRoundTrips`.
 - `GrayStreamsLibraryTest#programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront`;
   `FastIoCircularStreamsE2eTest`, the two `LackEcosystem*E2eTest` classes.
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,

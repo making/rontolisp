@@ -25,9 +25,9 @@
 ;; other read generic has a default written over it -- stream-read-line and
 ;; stream-read-sequence loop it, stream-read-char-no-hang IS it, and
 ;; stream-peek-char reads one and pushes it back through stream-unread-char,
-;; whose own default parks the character in the protocol's one-slot pushback
-;; cell. A class that can rewind its source defines stream-unread-char and owns
-;; the pushback instead; the cell is then never written.
+;; whose own default parks the character in a pushback cell on the instance. A
+;; class that can rewind its source defines stream-unread-char and owns the
+;; pushback instead; the cell is then never written.
 ;;
 ;; Read-side EOF convention: stream-read-byte / stream-read-char /
 ;; stream-read-line / stream-peek-char / stream-read-char-no-hang return the
@@ -128,31 +128,34 @@
 ;; read-line and the sequence built-ins. The loops are plain defuns so the
 ;; trivial-gray-streams shim can reuse them for its own defaults.
 
-;; The protocol's ONE-SLOT pushback: stream-unread-char's default method parks
-;; the character here and %gray-read-char-1 -- the single read-one-character
-;; entry every default and every read dispatch helper goes through -- drains it
-;; first. One character for one stream at a time, which is what CL promises for
-;; unread-char and exactly the shape the WASM backend's own fd pushback has.
+;; The protocol's pushback: stream-unread-char's default method parks the
+;; character ON THE INSTANCE, in the one cell every class descending from
+;; fundamental-input-stream reserves past its declared slots (index -1 counts back
+;; from the end of the instance's storage, so it is one literal across classes of
+;; any width, and no printer, equal or slot listing sees it). %gray-read-char-1 --
+;; the single read-one-character entry every default and every read dispatch
+;; helper goes through -- drains it first. One character per stream, as CL keeps
+;; it, so two streams each hold one and a dropped stream takes its own along.
 ;; A class that defines stream-unread-char itself never reaches this cell: its
 ;; method rewinds its own source and its stream-read-char answers the rewound
 ;; character.
 
-(defvar rontolisp::*gray-unread-stream* nil)
-
-(defvar rontolisp::*gray-unread-char* nil)
-
 (defun rontolisp::%gray-default-unread-char (stream character)
-  (setq rontolisp::*gray-unread-stream* stream)
-  (setq rontolisp::*gray-unread-char* character)
+  (%obj-set stream -1 character)
   nil)
 
+;; The typep keeps the cell read to the classes that reserve it: a dispatch helper
+;; hands any instance here, and another class's last cell is a declared slot.
 (defun rontolisp::%gray-read-char-1 (stream)
-  (if (eq rontolisp::*gray-unread-stream* stream)
-      (let ((c rontolisp::*gray-unread-char*))
-        (setq rontolisp::*gray-unread-stream* nil)
-        (setq rontolisp::*gray-unread-char* nil)
-        c)
-      (rontolisp:stream-read-char stream)))
+  (let ((c
+         (if (typep stream 'rontolisp:fundamental-input-stream)
+             (%obj-ref stream -1)
+             nil)))
+    (if c
+        (progn
+          (%obj-set stream -1 nil)
+          c)
+        (rontolisp:stream-read-char stream))))
 
 ;; The five characters CL's standard readtable calls whitespace -- the set
 ;; peek-char's t peek-type skips. Kept in step with Environment's
@@ -313,7 +316,7 @@
 ;; everything else is written over it. stream-read-char-no-hang IS
 ;; stream-read-char (rontolisp has no non-blocking source a class could not
 ;; wrap itself); stream-peek-char reads one and hands it back through
-;; stream-unread-char, whose default parks it in the protocol's pushback cell.
+;; stream-unread-char, whose default parks it in the instance's pushback cell.
 
 (defmethod rontolisp:stream-read-char-no-hang
     ((stream rontolisp:fundamental-input-stream))

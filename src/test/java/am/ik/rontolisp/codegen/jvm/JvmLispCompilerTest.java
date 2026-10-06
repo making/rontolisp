@@ -13563,6 +13563,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGrayDefaultUnreadCharParksOnItsInstance() throws Exception {
+		// The JVM twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunStreamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream: the
