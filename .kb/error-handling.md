@@ -1744,9 +1744,18 @@ on wasm.
   `:junk-allowed` -- so the class (and the report's operator) is `digit-char-p`'s; the scan's own
   per-character `digit-char-p` repeats the integer test, which the call-per-character shape cannot
   skip without a second unchecked primitive per backend. Pinned by `RadixRangeFixture` in the three
-  backend suites and ci-spec `digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36`; the old
+  backend suites and ci-spec `digit-char-digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36`; the old
   `DIGIT-CHAR-P ... INTEGER` row of `characterBuiltInsCheckTheirArgument` now says `(INTEGER 2 36)`.
-  `digit-char` has the same hole (a radix of 37 answers a character, 1 answers `NIL`).
+  `digit-char`, the prelude defun in `LispPreludeLibrary` (one definition on all four backends), had the
+  same hole -- measured 2026-10-06, a radix of 37 answered a character (`(digit-char 36 37)` was `#\[`),
+  1 and 0 answered `NIL`, a non-integer radix a `REAL` type-error from its `<` or `NIL`, a bignum radix a
+  character -- and a second one the first measurement missed: SBCL types the WEIGHT `unsigned-byte` and
+  refuses it BEFORE the radix (`(digit-char -1 37)`, `1.5`, `a`, `nil` are `(:type-error datum
+  UNSIGNED-BYTE)` even over a good radix; a bignum weight is `NIL`), where it answered `NIL` for all of
+  them. Now both are `(error 'type-error :datum .. :expected-type ..)` at the top of the defun, in
+  SBCL's order; the report is the prelude's usual unnamed `type-error` (datum and expected type as
+  SBCL, not the operator-named text of `digit-char-p`). Pinned by the `digit-char` rows of
+  `RadixRangeFixture` (ci-spec `digit-char-digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36`).
 - **Compiled**: `char-code`, the folds, `alpha-char-p`, `digit-char-p` and the two case predicates
   push the code point through the comparisons' `pushCheckedCode` (JVM `_ckChr` under the
   operator's wrapper; wasm `_chr_code` in EH mode, the cast outside it). The case predicates
