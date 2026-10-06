@@ -48,7 +48,7 @@ class SourceLanguageSeamTest {
 			Path.of("src", "web", "java"));
 
 	private static final Pattern DIRECT_READ = Pattern
-		.compile("LispReader\\s*\\.\\s*(readAll|readFromString|readFirstForm)\\w*|new\\s+LispLexer\\s*\\(");
+		.compile("LispReader\\s*\\.\\s*(readAll|readPrefix|readFromString|readFirstForm)\\w*|new\\s+LispLexer\\s*\\(");
 
 	/** Library source (or a self-synthesized form) that stays Common Lisp. */
 	private static final String SHIPPED_SOURCE = "reads Common Lisp the implementation ships or synthesizes itself"

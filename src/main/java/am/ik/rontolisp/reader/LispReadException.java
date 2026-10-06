@@ -25,6 +25,9 @@ public class LispReadException extends RuntimeException {
 	/** Whether the input ran out in the middle of a datum. */
 	private final boolean endOfFile;
 
+	/** The message without the position prefix. */
+	private final String reason;
+
 	/**
 	 * Create a new read exception with the given message and no position.
 	 * @param message the error message
@@ -55,6 +58,7 @@ public class LispReadException extends RuntimeException {
 		super(location == null ? message : location.prefix() + message);
 		this.location = location;
 		this.endOfFile = endOfFile;
+		this.reason = message;
 	}
 
 	/**
@@ -63,6 +67,15 @@ public class LispReadException extends RuntimeException {
 	 */
 	@Nullable public SourceLocation location() {
 		return this.location;
+	}
+
+	/**
+	 * The message without the {@code file:line:column: } prefix -- what a condition
+	 * reports when the position is the diagnostic's business, not the report's.
+	 * @return the bare message
+	 */
+	public String reason() {
+		return this.reason;
 	}
 
 	/**

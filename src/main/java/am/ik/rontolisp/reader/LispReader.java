@@ -325,7 +325,53 @@ public final class LispReader {
 		return LispNil.INSTANCE;
 	}
 
+	/**
+	 * The forms a read yields before its first error, and that error. A form-at-a-time
+	 * consumer -- the interpreter's {@code load} -- evaluates the forms and then signals
+	 * the error, which is the order CL's {@code load} gives; every other reader of a
+	 * whole source throws the error instead.
+	 *
+	 * @param forms the top-level forms read before the error, in source order
+	 * @param error the first read error, or {@code null} when the whole input read
+	 */
+	public record ReadPrefix(List<LispVal> forms, @Nullable LispReadException error) {
+	}
+
+	/**
+	 * {@link #readAllFromString(String, Features, String)} up to the first read error
+	 * rather than throwing it.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixFromString(String input, Features features, @Nullable String file) {
+		return readPrefix(input, features, LispLexer.ReadEvalMode.ERROR, file);
+	}
+
+	/**
+	 * {@link #readAllWithReadEvalMarkers(String, Features, String)} up to the first read
+	 * error rather than throwing it.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixWithReadEvalMarkers(String input, Features features, @Nullable String file) {
+		return readPrefix(input, features, LispLexer.ReadEvalMode.MARKER, file);
+	}
+
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file) {
+		ReadPrefix read = readPrefix(input, features, readEvalMode, file);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		return read.forms();
+	}
+
+	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file) {
 		// A source may announce features about ITSELF -- the header
 		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
@@ -333,13 +379,21 @@ public final class LispReader {
 		// makes the announcement instead, so every backend agrees without evaluating
 		// anything (FeaturePushes).
 		Features effective = FeaturePushes.widen(input, features, readEvalMode, file);
-		List<LocatedToken> tokens = new LispLexer(input, effective, readEvalMode, file).tokenizeWithPositions();
-		LispReader reader = new LispReader(tokens, effective, input, file, true);
+		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file).tokenizePrefix();
+		LispReader reader = new LispReader(lexed.tokens(), effective, input, file, true);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
-			result.add(reader.readExpr());
+			try {
+				result.add(reader.readExpr());
+			}
+			catch (LispReadException ex) {
+				// A form that ran past the last token was cut off by the lexer's error,
+				// which is the one to report; an error inside the tokens comes first.
+				LispReadException lexError = lexed.error();
+				return new ReadPrefix(result, lexError != null && reader.pos >= reader.tokens.size() ? lexError : ex);
+			}
 		}
-		return result;
+		return new ReadPrefix(result, lexed.error());
 	}
 
 	/**
@@ -499,10 +553,11 @@ public final class LispReader {
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
-			case Token.Unquote ignored -> throw err("Comma is illegal outside of backquote");
-			case Token.UnquoteSplicing ignored -> throw err(",@ is illegal outside of backquote");
-			case Token.RightParen ignored -> throw err("Unexpected ')'");
-			case Token.Dot ignored -> throw err("Unexpected '.'");
+			// The token is already consumed: the error names it, not the one after it.
+			case Token.Unquote ignored -> throw errAtToken(this.pos - 1, "Comma is illegal outside of backquote");
+			case Token.UnquoteSplicing ignored -> throw errAtToken(this.pos - 1, ",@ is illegal outside of backquote");
+			case Token.RightParen ignored -> throw errAtToken(this.pos - 1, "Unexpected ')'");
+			case Token.Dot ignored -> throw errAtToken(this.pos - 1, "Unexpected '.'");
 			case Token.Eof ignored -> throw eof("Unexpected end of input");
 			case Token.SharpL sharp -> readSharpL(sharp.nArgs());
 			case Token.SharpC ignored -> readSharpC();

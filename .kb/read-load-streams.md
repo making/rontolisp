@@ -171,8 +171,15 @@ interpreter's reader always did).
 - Runtime `load` (`_load`, both backends) reads the same record after each form and refuses the bad
   one before evaluating it: a catchable `simple-error` reporting `end of file` / `Unexpected ')'`,
   after the forms before it ran (SBCL's order). Before, a stray `)` evaluated as nil and an unfinished
-  form as its partial list; only an unterminated `#|` signalled. The interpreter's `load` parses the
-  whole file first, and that parse error escapes `handler-case`.
+  form as its partial list; only an unterminated `#|` signalled.
+- The interpreter's `load` (`LispEvaluator.loadFile`) reads through `SourceLanguage.readUntilError`
+  -> `LispReader.readPrefix*`: the forms before the first read error, and that error. The lexer stops
+  at its first error (`LispLexer.tokenizePrefix`), so a form it cuts off reports the LEXER's error
+  (`Unterminated block comment`), not its own end of input. The forms run, then `loadReadError`
+  signals `end-of-file` / `reader-error` (no stream) reporting the reader's bare message
+  (`LispReadException.reason`), while the Java message keeps `file:line:column:` for the uncaught
+  line. A Scheme / Clojure file is lowered whole: a read error there runs no form. Until 2026-10-06
+  the whole file was read first and the `LispReadException` escaped `handler-case`, no form ran.
 - Not covered (remain compiled-only leniencies): `( . a)` and `(a . b c)` read as lists (SBCL and the
   interpreter: `reader-error`), `#` alone reads as a symbol everywhere.
 - Before (measured 2026-10-06, SBCL 2.2.9 and the four backends): `")"` answered `(NIL 1)`, `""`
@@ -181,7 +188,9 @@ interpreter's reader always did).
 
 Pinned by `ReadFromStringMalformedFixture` (ci-spec `read-from-string-refuses-malformed-text`) in the
 three backend suites, `JvmLispCompilerTest.compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`,
-`WasmLispCompilerIntegrationTest.loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`.
+`WasmLispCompilerIntegrationTest.loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`,
+`LispEvaluatorTest.loadRunsTheFormsBeforeAMalformedOneThenSignalsACatchableCondition`,
+`LispReaderTest.aPrefixReadAnswersTheFormsBeforeTheFirstError`.
 
 ## `read-from-string`'s whole lambda list is ONE prelude defun
 **Invariant: a call passing more than the string -- `eof-error-p`, `eof-value`, `:start`,

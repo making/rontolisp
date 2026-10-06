@@ -166,6 +166,39 @@ public final class LispLexer {
 	 */
 	public List<LocatedToken> tokenizeWithPositions() {
 		List<LocatedToken> tokens = new ArrayList<>();
+		tokenizeInto(tokens);
+		return tokens;
+	}
+
+	/**
+	 * Tokenizes as far as the input lexes: the tokens before the first lexical error, and
+	 * that error. A token is added only once it is complete, so the tokens are the ones a
+	 * full tokenization would have started with.
+	 * @return the tokens and the error that stopped the scan, or {@code null} when the
+	 * whole input lexed
+	 */
+	Prefix tokenizePrefix() {
+		List<LocatedToken> tokens = new ArrayList<>();
+		try {
+			tokenizeInto(tokens);
+			return new Prefix(tokens, null);
+		}
+		catch (LispReadException ex) {
+			return new Prefix(tokens, ex);
+		}
+	}
+
+	/**
+	 * The tokens before the first lexical error, and that error.
+	 *
+	 * @param tokens the positioned tokens
+	 * @param error the error that stopped the scan, or {@code null} when the whole input
+	 * lexed
+	 */
+	record Prefix(List<LocatedToken> tokens, @Nullable LispReadException error) {
+	}
+
+	private void tokenizeInto(List<LocatedToken> tokens) {
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
 			// Whitespace, comments and feature conditionals produce no token; consuming
@@ -567,7 +600,6 @@ public final class LispLexer {
 				add(tokens, readSymbol(), tokenStart);
 			}
 		}
-		return tokens;
 	}
 
 	private void skipComment() {
