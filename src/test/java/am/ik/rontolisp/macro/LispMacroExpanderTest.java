@@ -950,6 +950,20 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aRemoveCallChecksAComputedCountOnceBeforeTheBounds() {
+		// No count, or one an integer or nil as written, carries no check.
+		assertThat(removeExpansionOf("(remove x l)")).doesNotContain("'INTEGER)");
+		assertThat(removeExpansionOf("(remove x l :count 2)")).doesNotContain("'INTEGER)");
+		assertThat(removeExpansionOf("(remove x l :count nil)")).doesNotContain("'INTEGER)");
+		// A computed count is refused once, under the operator's name, and before the
+		// bounds are checked.
+		String counted = removeExpansionOf("(remove x l :start 1 :count (n))");
+		assertThat(counted).contains("(%OPERAND-TYPE-ERROR |__remove_cv| 'REMOVE 'INTEGER)");
+		assertThat(counted.indexOf("'INTEGER)")).isEqualTo(counted.lastIndexOf("'INTEGER)"))
+			.isLessThan(counted.indexOf("%CHECK-BOUNDS"));
+	}
+
+	@Test
 	void aComputedSequenceDesignatorBindsOnceBeforeTheScan() {
 		// A LITERAL designator keeps being inlined into the loop body: evaluating it is
 		// not observable, and the compilers' function-designator normalization is what

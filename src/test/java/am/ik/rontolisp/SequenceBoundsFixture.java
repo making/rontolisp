@@ -21,6 +21,10 @@ package am.ik.rontolisp;
  * are a `type-error` for the count / remove / substitute family, `remove-duplicates`,
  * `fill`, `replace` and the position / find family, before any designator runs or any
  * element is written, while every range inside the sequence still answers.</li>
+ * <li>{@link #BAD_COUNT_PROGRAM}: a `:count` that is neither an integer nor nil is a
+ * `type-error` over the value for the remove / delete / substitute families, in call
+ * position and first class, before the bounds and any designator; nil, a negative and a
+ * bignum count still answer.</li>
  * <li>{@link #BOUND_REPORT_PROGRAM}: what that `type-error` carries -- the refused bound,
  * its range and {@code subseq}'s report, the same on every backend.</li>
  * </ul>
@@ -367,6 +371,91 @@ public final class SequenceBoundsFixture {
 			"((1 3 2 1) #(1 2 3 0 1) (1 0 0) (1 7 3))", "(3 #\\c (1 3 2 1) 3)",
 			"(:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR)", "(2 1 1 (:ITEM :SEQ :PRED :SEQ :ITEM :SEQ))",
 			"(:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR (1 2 3) #(1 2 3))");
+
+	/**
+	 * A {@code :count} read at run time, for the remove / delete / substitute families in
+	 * call position and first class: anything but an integer or nil -- a float, a ratio,
+	 * a symbol -- is a {@code type-error} over the value before the bounds are checked
+	 * and before a designator runs, while nil, a negative count and a bignum still read
+	 * as CLHS 17.2.1 has them (no limit, zero, more than any list holds). The answers are
+	 * sbcl's.
+	 */
+	public static final String BAD_COUNT_PROGRAM = """
+			(defvar *sbk-f* (read-from-string "1.5"))
+			(defvar *sbk-r* (read-from-string "1/2"))
+			(defvar *sbk-s* (read-from-string "x"))
+			(defvar *sbk-m1* (read-from-string "-1"))
+			(defvar *sbk-1* (read-from-string "1"))
+			(defvar *sbk-9* (read-from-string "9"))
+			(defvar *sbk-nil* nil)
+			(defvar *sbk-big* (expt 10 30))
+			(defun sbk-probe (thunk)
+			  (handler-case (funcall thunk)
+			    (type-error (c) (list :type-error (type-error-datum c)))
+			    (error () :other-error)))
+			(defmacro sbk-row (&rest forms)
+			  `(print (list ,@(mapcar (lambda (f) `(sbk-probe (lambda () ,f))) forms))))
+			(sbk-row (remove 2 (list 1 2 3 2) :count *sbk-f*)
+			         (remove-if #'evenp (list 1 2 3 2) :count *sbk-f*)
+			         (remove-if-not #'evenp (list 1 2 3 2) :count *sbk-f*)
+			         (delete 2 (list 1 2 3 2) :count *sbk-f*))
+			(sbk-row (delete-if #'evenp (list 1 2 3 2) :count *sbk-f*)
+			         (delete-if-not #'evenp (vector 1 2 3 2) :count *sbk-f*)
+			         (substitute 0 2 (list 1 2 3 2) :count *sbk-f*)
+			         (substitute-if 0 #'evenp (vector 1 2 3 2) :count *sbk-f*))
+			(sbk-row (substitute-if-not 0 #'evenp (list 1 2 3 2) :count *sbk-f*)
+			         (nsubstitute 0 2 (list 1 2 3 2) :count *sbk-f*)
+			         (nsubstitute-if 0 #'evenp (list 1 2 3 2) :count *sbk-f*)
+			         (nsubstitute-if-not 0 #'evenp (vector 1 2 3 2) :count *sbk-f*))
+			(sbk-row (remove 2 (list 1 2 3 2) :count *sbk-r*)
+			         (remove 2 (list 1 2 3 2) :count *sbk-s*)
+			         (remove #\\a "abca" :count *sbk-f*)
+			         (substitute 0 2 (list 1 2 3 2) :count *sbk-f* :from-end t))
+			(sbk-row (funcall #'remove 2 (list 1 2 3 2) :count *sbk-f*)
+			         (funcall #'remove-if #'evenp (list 1 2 3 2) :count *sbk-r*)
+			         (apply #'delete-if-not #'evenp (list 1 2 3 2) (list :count *sbk-f*))
+			         (funcall #'substitute 0 2 (list 1 2 3 2) :count *sbk-f*))
+			(sbk-row (funcall #'delete 2 (list 1 2 3 2) :count *sbk-s*)
+			         (funcall #'delete-if #'evenp (vector 1 2 3 2) :count *sbk-f*)
+			         (funcall #'nsubstitute 0 2 (list 1 2 3 2) :count *sbk-f*)
+			         (funcall #'substitute-if-not 0 #'evenp (list 1 2 3 2) :count *sbk-f*))
+			(sbk-row (remove 2 (list 1 2 3 2) :count *sbk-f* :start *sbk-9*)
+			         (remove 2 (list 1 2 3 2) :start *sbk-9* :count *sbk-f*)
+			         (funcall #'remove 2 (list 1 2 3 2) :start *sbk-9* :count *sbk-f*)
+			         (delete-if #'evenp (list 1 2 3 2) :count *sbk-f* :end *sbk-9* :from-end t))
+			(defvar *sbk-calls* 0)
+			(print (list (sbk-probe (lambda () (remove 2 (list 1 2 3 2) :count *sbk-f* :key (lambda (x) (incf *sbk-calls*) x))))
+			             (sbk-probe (lambda () (nsubstitute-if 0 (lambda (x) (incf *sbk-calls*) (evenp x)) (list 1 2) :count *sbk-f*)))
+			             *sbk-calls*))
+			(defvar *sbk-cells* (list 1 2 3 2))
+			(print (list (sbk-probe (lambda () (nsubstitute 0 2 *sbk-cells* :count *sbk-f*))) *sbk-cells*
+			             (sbk-probe (lambda () (delete 2 *sbk-cells* :count *sbk-f*))) *sbk-cells*))
+			(print (list (remove 2 (list 1 2 3 2) :count *sbk-nil*)
+			             (remove 2 (list 1 2 3 2) :count *sbk-m1*)
+			             (remove 2 (list 1 2 3 2) :count *sbk-big*)
+			             (remove 2 (list 1 2 3 2) :count *sbk-1*)))
+			(print (list (funcall #'remove 2 (list 1 2 3 2) :count *sbk-nil*)
+			             (funcall #'substitute 0 2 (list 1 2 3 2) :count *sbk-m1*)
+			             (funcall #'delete 2 (list 1 2 3 2) :count *sbk-big*)
+			             (funcall #'nsubstitute-if 0 #'evenp (list 1 2 3 2) :count *sbk-1* :from-end t)))
+			(print (list (remove 2 (list 1 2 3 2) :count 0)
+			             (remove 2 (list 1 2 3 2) :count nil)
+			             (substitute 0 2 (list 1 2 3 2) :count 1)
+			             (remove 2 (list 1 2 3 2) :count *sbk-big* :from-end t)))
+			""";
+
+	/** What {@link #BAD_COUNT_PROGRAM} prints (sbcl's answers). */
+	public static final String BAD_COUNT_EXPECTED = String.join("\n",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1/2) (:TYPE-ERROR X) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1/2) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR X) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5))",
+			"((:TYPE-ERROR 1.5) (:TYPE-ERROR 1.5) 0)", "((:TYPE-ERROR 1.5) (1 2 3 2) (:TYPE-ERROR 1.5) (1 2 3 2))",
+			"((1 3) (1 2 3 2) (1 3) (1 3 2))", "((1 3) (1 2 3 2) (1 3) (1 2 3 0))",
+			"((1 2 3 2) (1 3) (1 0 3 2) (1 3))");
 
 	/**
 	 * What a bad bound's {@code type-error} carries: its datum is the first bound outside

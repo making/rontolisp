@@ -10459,6 +10459,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void sequenceOperatorsRefuseANonIntegerCount() {
+		// A :count that is neither an integer nor nil is a type-error over the value,
+		// before the bounds and any designator, in call position and first class --
+		// sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.BAD_COUNT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
 	void aBadSequenceBoundReportsAsSubseqDoes() {
 		// The refusal's datum, expected type and text: subseq's, the same on all four
 		// backends.

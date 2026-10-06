@@ -13506,6 +13506,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceOperatorsRefuseANonIntegerCount() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANonIntegerCount.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_COUNT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunABadSequenceBoundReportsAsSubseqDoes() throws Exception {
 		// The JVM twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BOUND_REPORT_PROGRAM))

@@ -47,9 +47,9 @@ resolves through the compilers' function-designator normalization).
   whole before looking at the first element.
 - The guard (`in range` and `budget left`) is evaluated BEFORE the match form, so a designator
   is never called outside `:start`/`:end` or past an exhausted `:count`.
-- A negative `:count` acts as zero, a nil one as no limit (CLHS 17.2.1); a nil `:end` is the
-  end. A nil `:key`/`:test` is the ABSENT designator, not a function to call --
-  `keyedForm`/`testSpec` read a literal nil that way (ANSI spells `(remove 'a x :key nil)`), and
+- A negative `:count` acts as zero, a nil one as no limit, anything but an integer or nil is
+  refused (CLHS 17.2.1, "A non-integer `:count`" below); a nil `:end` is the end. A nil
+  `:key`/`:test` is the ABSENT designator, not a function to call -- `keyedForm`/`testSpec` read a literal nil that way (ANSI spells `(remove 'a x :key nil)`), and
   the runtime twin reads a nil VALUE the same way.
 - **A nil `:start` is no bound**, only a nil `:end` (the length): every first-class surface
   passes a given nil on -- the wrappers read `:start` with `getfKwDefault` (`(getf kw :start 0)`,
@@ -212,6 +212,33 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` (P1 and
   component); the shapes by `LispMacroExpanderTest.aBoundedSequenceScanEmitsOnlyTheScaffoldingItsKeywordsAskFor`
   and `.aBoundedRemoveDuplicatesLooksForTheDuplicateInsideTheWindow`.
+
+## A non-integer `:count` is refused once, before the bounds
+
+**Invariant: a `:count` that is neither an integer nor nil is the operator's `INTEGER`
+`type-error` over the value (datum as given, report `OP: The value V is not of type INTEGER`),
+raised once, before the bounds are checked and before a designator runs, on every backend; nil,
+a negative and a bignum count answer as CLHS 17.2.1 reads them (no limit, zero, more than any
+list holds).** SBCL signals the same class and datum, and checks the count BEFORE the bounds
+(`(remove 2 l :start 9 :count 1.5)` -> datum 1.5) -- except on a `:from-end` walk, where its
+bound check comes first, so that order is not pinned.
+
+- Expansion: `SeqScanScaffold.wrap` emits `(if (or (null c) (integerp c)) nil
+  (%operand-type-error c 'op 'integer))` over the bound value `countv`, outermost of the checks
+  (`SeqScanBounds.operator` is the call's head). A literal integer or nil `:count` emits nothing,
+  and a call spelling no `:count` is unchanged. The first-class wrappers feed the same
+  expansion, so `apply` / `funcall` of `#'remove` etc. refuse alike.
+- Interpreter twin: `LispEvaluator.requireCount` throws `OperandTypeException.of(value, INTEGER,
+  name)`; a `LispBigInteger` is a budget of `Long.MAX_VALUE` (negative: zero).
+- Before (measured 2026-10-06, four backends): a float or ratio `:count` was a budget (`1.5` spent
+  on two matches, `1/2` on one) in call position and through the compiled wrappers, the
+  interpreter's `funcall` refused it with datum NIL (the message-only `type-error`) and also
+  refused a bignum; a symbol or string was already refused by `(max count 0)`, datum as given.
+- The delete / nsubstitute / substitute fresh-sequence paths expand through `remove`'s /
+  `substitute`'s lowering, so on the compile paths a bounded or counted `delete` reports under
+  `REMOVE` (a pre-existing wobble of every type-error there, not of this check).
+- Pinned by `SequenceBoundsFixture.BAD_COUNT_PROGRAM` (sbcl's answers) in the three backend
+  suites and `LispMacroExpanderTest.aRemoveCallChecksAComputedCountOnceBeforeTheBounds`.
 
 ## The destructive spellings
 

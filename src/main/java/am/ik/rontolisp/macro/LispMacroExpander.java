@@ -6777,10 +6777,10 @@ public final class LispMacroExpander {
 	 * that -- so no scan in this family may accept it and scan forward anyway.
 	 */
 	private record SeqScanBounds(@Nullable LispVal start, @Nullable LispVal end, @Nullable LispVal count,
-			@Nullable LispVal fromEnd) {
+			@Nullable LispVal fromEnd, @Nullable String operator) {
 
 		/** None of them: the scan expands to the loop it always did. */
-		static final SeqScanBounds NONE = new SeqScanBounds(null, null, null, null);
+		static final SeqScanBounds NONE = new SeqScanBounds(null, null, null, null, null);
 
 		boolean absent() {
 			return this.start == null && this.end == null && this.count == null && this.fromEnd == null;
@@ -6805,7 +6805,8 @@ public final class LispMacroExpander {
 		return new SeqScanBounds(keywordValue(parts, start, LispNames.START_KEYWORD),
 				keywordValue(parts, start, LispNames.END_KEYWORD),
 				counted ? keywordValue(parts, start, LispNames.COUNT_KEYWORD) : null,
-				keywordValue(parts, start, LispNames.FROM_END_KEYWORD));
+				keywordValue(parts, start, LispNames.FROM_END_KEYWORD),
+				parts.get(0) instanceof LispSymbol head ? head.name() : null);
 	}
 
 	/**
@@ -7011,6 +7012,11 @@ public final class LispMacroExpander {
 						this.bounds.start() == null ? new LispInteger(0) : this.startv,
 						this.bounds.end() == null ? LispNil.INSTANCE : this.endv), result));
 			}
+			if (this.bounds.count() != null && !isLiteralCount(this.bounds.count())) {
+				// A count is an integer or nil (CLHS 17.2.1), refused once, before the
+				// bounds and the walk: SBCL checks it first.
+				result = makeProgn(List.of(checkCountOf(this.countv, this.bounds.operator()), result));
+			}
 			// The keyword VALUES bind outermost, each evaluated exactly once and before
 			// the walk they shape.
 			if (this.bounds.count() != null) {
@@ -7026,6 +7032,28 @@ public final class LispMacroExpander {
 				result = makeLet(this.startv.name(), this.bounds.start(), result);
 			}
 			return makeLet(this.seq.name(), this.listForm, result);
+		}
+
+		/**
+		 * Whether a {@code :count} form is an integer or nil as written, which no check
+		 * can refuse.
+		 */
+		private static boolean isLiteralCount(LispVal count) {
+			return count instanceof LispInteger || count instanceof LispNil;
+		}
+
+		/**
+		 * {@code (if (or (null c) (integerp c)) nil (%operand-type-error c 'operator
+		 * 'integer))}: nil when the {@code :count} value is an integer or nil, else the
+		 * operator's {@code INTEGER} type-error over it.
+		 */
+		private static LispVal checkCountOf(LispSymbol count, @Nullable String operator) {
+			LispVal integerOrNil = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NULL, count),
+					callOf(LispNames.INTEGERP, count)));
+			LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), count,
+					operator == null ? LispNil.INSTANCE : callOf(LispNames.QUOTE, new LispSymbol(operator)),
+					callOf(LispNames.QUOTE, new LispSymbol("INTEGER"))));
+			return makeIf(integerOrNil, LispNil.INSTANCE, signal);
 		}
 
 		private boolean needsLo() {
@@ -7838,7 +7866,7 @@ public final class LispMacroExpander {
 		LispVal keyForm = keywordValue(call, 2, LispNames.KEY_KEYWORD);
 		LispVal fromEndForm = keywordValue(call, 2, LispNames.FROM_END_KEYWORD);
 		SeqScanBounds bounds = new SeqScanBounds(keywordValue(call, 2, LispNames.START_KEYWORD),
-				keywordValue(call, 2, LispNames.END_KEYWORD), null, null);
+				keywordValue(call, 2, LispNames.END_KEYWORD), null, null, null);
 		// The direction decides which side of the element the duplicate is looked for on,
 		// so a literal one is folded away and only a COMPUTED one costs a runtime branch.
 		boolean keepFirst = fromEndForm != null && isLiteralTrue(fromEndForm);

@@ -14565,6 +14565,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sequenceOperatorsRefuseANonIntegerCount() throws Exception {
+		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseANonIntegerCount,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BAD_COUNT_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.BAD_COUNT_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
 	void aBadSequenceBoundReportsAsSubseqDoes() throws Exception {
 		// The wasm twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes,
 		// Preview 1 and the component.

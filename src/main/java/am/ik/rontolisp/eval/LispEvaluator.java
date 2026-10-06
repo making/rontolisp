@@ -13999,13 +13999,18 @@ public final class LispEvaluator {
 	}
 
 	// The :count argument as an integer; CLHS 17.2.1 reads a negative one as zero, which
-	// the caller clamps.
+	// the caller clamps. Anything but an integer is the operator's INTEGER type-error
+	// over
+	// the value, as the expansion's check reports it; a bignum is a budget no list can
+	// spend.
 	private static long requireCount(String name, LispVal value) {
 		if (value instanceof LispInteger integer) {
 			return integer.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				name + " expects an integer :count, got: " + value.print());
+		if (value instanceof LispBigInteger big) {
+			return big.value().signum() < 0 ? -1L : Long.MAX_VALUE;
+		}
+		throw OperandTypeException.of(value, OperandTypes.Kind.INTEGER, name);
 	}
 
 	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
