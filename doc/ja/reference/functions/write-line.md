@@ -2,7 +2,7 @@
 
 `(write-line string &optional stream &key start end)`
 
-指定された文字列に続けて改行を書き込み、その文字列を返します。stream 引数がない場合は標準出力に書き込みます。出力ストリームを指定すると、そちらに書き込みます。`open` や `with-open-file` で開いたファイルストリーム、ソケット、`with-output-to-string` の文字列ストリームが使えます。3 つすべてのバックエンドで動作します。`print`/`prin1` とは異なり、文字列の生の内容を周囲のクォートなしで書き込みます。`:start`/`:end` キーワードは書き込む部分文字列を制限します（`nil` の `:end` は文字列の末尾を意味します）。戻り値は依然として文字列全体です。文字列の範囲外 (`:start` が 0 未満、`:end` が長さを超える、`:start` が `:end` より後) と、`nil` 以外の整数でない境界は、どのバックエンドでも [`subseq`](subseq.md) と同じ `type-error` です。rontolisp の Gray 出力ストリーム基底クラスを継承した CLOS インスタンスも stream として使えます。その場合、境界は `rontolisp:stream-write-string` 独自の `start`/`end` に届きます。
+指定された文字列に続けて改行を書き込み、その文字列を返します。stream 引数がない場合は標準出力に書き込みます。出力ストリームを指定すると、そちらに書き込みます。`open` や `with-open-file` で開いたファイルストリーム、ソケット、`with-output-to-string` の文字列ストリームが使えます。3 つすべてのバックエンドで動作します。`print`/`prin1` とは異なり、文字列の生の内容を周囲のクォートなしで書き込みます。`:start`/`:end` キーワードは書き込む部分文字列を制限します（`nil` の `:end` は文字列の末尾を意味します）。戻り値は依然として文字列全体です。文字列の範囲外 (`:start` が 0 未満、`:end` が長さを超える、`:start` が `:end` より後) と、`nil` 以外の整数でない境界は、どのバックエンドでも [`subseq`](subseq.md) と同じ `type-error` です。rontolisp の Gray 出力ストリーム基底クラスを継承した CLOS インスタンスも stream として使えます。その場合、境界は先に検査され (`nil` の `:start` も他の不正な境界と同じく拒否されます)、整数として `rontolisp:stream-write-string` 独自の `start`/`end` に届きます。
 
 ```console
 (with-open-file (out "greeting.txt" :direction :output)

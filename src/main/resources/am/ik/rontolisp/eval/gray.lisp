@@ -427,29 +427,39 @@
           nil)
         (fresh-line stream))))
 
-(defun rontolisp::%gray-write-line-dispatch
-    (s stream &optional (start nil start-p) end)
-  ;; A nil bound is ABSENT for a Gray instance, never an explicit nil: user methods
-  ;; default start to 0 (the echo stream does), and an explicit nil would override that
-  ;; default. Any other stream gets the bounds as written -- a given nil :start is the
-  ;; bounds type-error there, which START-P tells from an omitted one. The no-bounds
-  ;; fallback keeps the exact old two-argument shape, which the component socket
-  ;; rewrite matches by arity.
+(defun rontolisp::%gray-write-line-dispatch (s stream)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (if start
-              (if end
-                  (rontolisp:stream-write-string stream s start end)
-                  (rontolisp:stream-write-string stream s start))
-              (if end
-                  (rontolisp:stream-write-string stream s 0 end)
-                  (rontolisp:stream-write-string stream s)))
+          (rontolisp:stream-write-string stream s)
           (rontolisp:stream-terpri stream)
           s)
-        (if (and (not start-p) (null end))
-            (write-line s stream)
-            (write-line s stream :start (if start-p start 0) :end end)))))
+        (write-line s stream))))
+
+;; write-line / write-string with a bounding keyword. A spelled bound is checked ONCE
+;; before the method runs -- a nil start, a negative or non-integer bound and a range
+;; outside the string are type-errors, as in SBCL -- and the method then sees integers,
+;; a nil end being the length. One helper per spelling, apart from the unbounded
+;; helpers above, so a call spelling no bound neither carries the check nor passes
+;; bounds the user method would rather default itself.
+(defun rontolisp::%gray-write-line-bounds-dispatch (s stream start end)
+  (let ((stream (%stream-target stream)))
+    (if (%obj-p stream)
+        (progn
+          (%check-sequence-bounds s start end)
+          (rontolisp:stream-write-string stream s start (if end end (length s)))
+          (rontolisp:stream-terpri stream)
+          s)
+        (write-line s stream :start start :end end))))
+
+(defun rontolisp::%gray-write-string-bounds-dispatch (s stream start end)
+  (let ((stream (%stream-target stream)))
+    (if (%obj-p stream)
+        (progn
+          (%check-sequence-bounds s start end)
+          (rontolisp:stream-write-string stream s start (if end end (length s)))
+          s)
+        (write-string s stream :start start :end end))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
   (let ((stream (%stream-target stream)))

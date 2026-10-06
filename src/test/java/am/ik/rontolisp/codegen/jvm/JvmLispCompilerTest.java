@@ -13477,6 +13477,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAGrayStreamWriteChecksItsBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayStreamWriteChecksItsBounds.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceOperatorsRefuseABadBound() throws Exception {
 		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_BOUND_PROGRAM))

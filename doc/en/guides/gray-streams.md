@@ -225,7 +225,10 @@ rontolisp protocol has, so a portable class that defines only
 - `listen` on a Gray instance works on the interpreter and the JVM; the
   Preview 1 WASM backend rejects any `listen` call at compile time (a
   pre-existing platform limit, Gray or not).
-- A `(write-string s instance :start ... :end ...)` call with bounding
-  keywords does not dispatch the bounds to the instance.
+- `write-string` and `write-line` with `:start` / `:end` check the bounds before the
+  method runs, as SBCL does: a `nil`, negative or non-integer `:start`, a bound past
+  the string's length and a `:start` after the `:end` are a `type-error` with nothing
+  written. The method then receives integer `start` and `end` (a `nil` or omitted
+  `:end` is the length). A call spelling no bound passes the method the string alone.
 - Dispatch happens at the built-in call sites: a first-class
   `(funcall #'read-byte instance)` does not dispatch on the compiled backends.

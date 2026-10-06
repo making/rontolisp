@@ -10425,6 +10425,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGrayStreamWriteChecksItsBounds() {
+		// write-line / write-string with a bound to a Gray instance: refused before the
+		// method runs (a nil :start included), integer bounds when it does -- sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+	}
+
+	@Test
 	void sequenceOperatorsRefuseABadBound() {
 		// A negative, non-integer or out-of-range bound and a start past its end are a
 		// type-error before anything is called or written, in call position and first

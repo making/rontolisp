@@ -14541,6 +14541,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGrayStreamWriteChecksItsBounds() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aGrayStreamWriteChecksItsBounds, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+	}
+
+	@Test
 	void sequenceOperatorsRefuseABadBound() throws Exception {
 		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound, Preview 1
 		// and the component.

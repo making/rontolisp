@@ -803,16 +803,13 @@ validator so the two cannot disagree on the rule or the text).
 - First class (`BuiltinFunctionWrappers.writeLineWrapper`, ungated): `(s &optional st
   &rest kw)` re-extracting the runtime keywords into one literal call, the
   `boundedSequenceIo` model with the stream still optional.
-- A Gray instance honors the bounds through the generic's own `&optional start end`.
-  On the compile paths the call-site rewrite forwards them onto the dispatch helper
-  (which carries them back into `write-line` for any other stream, so a variable
-  stream keeps them exactly as the lowering does); on the interpreter the wrappers
-  forward them to the generic. A nil bound is never passed explicitly -- user methods
-  default start to 0 (the echo stream does) and an explicit nil would override that
-  default, which is also what fixed `MAKE-ECHO-STREAM.20` as a side effect (it wrote
-  the whole string before). The `write-string` wrapper learned the same forwarding
-  for this; a keyword `write-string` to an instance on the compile paths is still the
-  handle path (its rewrite matches the plain shape only) -- a separate gap.
+- A Gray instance honors the bounds through the generic's own `&optional start end`,
+  after ONE check (`.kb/gray-streams.md`, "Bounds on `write-line` / `write-string`"):
+  a nil `:start` is refused like any bad bound, and the method sees integers. On the
+  compile paths the call-site rewrite of `write-line` AND `write-string` forwards them
+  onto a bounds dispatch helper (which carries them back into the built-in for any
+  other stream, so a variable stream keeps them exactly as the lowering does); on the
+  interpreter the wrappers forward them to the same helpers.
 - A socket keeps the DEDICATED path for the plain shape only: a bounded `write-line`
   to a socket rides the lowering and stops at `terpri`, which has no socket arm on
   any backend (interpreter: `not an output stream`; JVM: `Socket cannot be cast to
