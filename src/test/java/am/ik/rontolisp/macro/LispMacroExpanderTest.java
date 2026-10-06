@@ -933,6 +933,19 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aParseIntegerCallChecksARadixOnceBeforeTheBoundsAndTheScan() {
+		// A radix that is no integer in 2..36 is refused once, by the probe of a digit in
+		// it; a literal one inside the range, and no spelled radix, carry no probe.
+		assertThat(parseIntegerExpansionOf("(parse-integer s)")).doesNotContain("#\\0");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 16)")).doesNotContain("#\\0");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 37)")).contains("#\\0");
+		String probed = parseIntegerExpansionOf("(parse-integer s :start 1 :radix (r))");
+		assertThat(probed).contains("(DIGIT-CHAR-P #\\0 |__pi_radix|)");
+		assertThat(probed.indexOf("(DIGIT-CHAR-P #\\0")).isEqualTo(probed.lastIndexOf("(DIGIT-CHAR-P #\\0"))
+			.isLessThan(probed.indexOf("%CHECK-BOUNDS"));
+	}
+
+	@Test
 	void aBoundedStringEqualityCallRunsItsArgumentsInTheCallsOrder() {
 		// Variables and literals are cut in place, binding nothing.
 		assertThat(stringBoundsExpansionOf("(string= a \"xabc\" :start2 1 :end1 k)"))

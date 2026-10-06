@@ -11,6 +11,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
@@ -1457,7 +1458,7 @@ class JvmLispCompilerTest {
 					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-					("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+					("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
 					("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
@@ -13612,6 +13613,13 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunDigitCharPAndParseIntegerRefuseARadixOutside2To36() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#digitCharPAndParseIntegerRefuseARadixOutside2To36.
+		assertThat(compileAndRunExpanded(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
 	}
 
 	@Test

@@ -255,6 +255,73 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	private static boolean isRadix(long value) {
+		return value >= OperandTypes.RADIX_MIN && value <= OperandTypes.RADIX_MAX;
+	}
+
+	/**
+	 * A radix that is no fixnum in {@code [2, 36]} -- a non-integer, a bignum -- is
+	 * {@code DIGIT-CHAR-P}'s type-error of {@code (INTEGER 2 36)} in EH mode
+	 * ({@code _type_err_of}, the operator's register set first); outside it the cast or
+	 * the range test traps, as every failed check does there.
+	 */
+	private static void emitRadixCheck(WasmLispCompiler.Ctx ctx, int slot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			for (int bound : new int[] { OperandTypes.RADIX_MIN, OperandTypes.RADIX_MAX }) {
+				getI32(ctx, slot);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(bound);
+				ctx.writer.write(bound == OperandTypes.RADIX_MIN ? Instruction.I32_LT_S : Instruction.I32_GT_S);
+				ctx.writer.write(Instruction.IF, 0x40);
+				ctx.writer.write(Instruction.UNREACHABLE);
+				ctx.writer.write(Instruction.END);
+			}
+			return;
+		}
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		getI32(ctx, slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(OperandTypes.RADIX_MIN);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		getI32(ctx, slot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(OperandTypes.RADIX_MAX);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		ctx.writer.write(Instruction.BR, 1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		// (INTEGER 2 36)
+		WasmEmitHelper.compileUnspelledLiteral(OperandTypes.INTEGER_TYPE, ctx);
+		for (int bound : new int[] { OperandTypes.RADIX_MIN, OperandTypes.RADIX_MAX }) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(bound);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		}
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_OF);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+	}
+
 	/** {@code (digit-char-p ch [radix])}. */
 	static void compileDigitCharP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
@@ -267,11 +334,6 @@ final class WasmCharCompiler {
 		ctx.writer.writeUnsignedLeb128(c);
 		if (args.size() > 2) {
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			if (!(args.get(2) instanceof LispInteger)) {
-				// In EH mode a radix that is no integer is DIGIT-CHAR-P's INTEGER
-				// type-error.
-				WasmEmitHelper.emitIndexCheck(ctx);
-			}
 		}
 		else {
 			ctx.writer.write(Instruction.I32_CONST);
@@ -280,6 +342,9 @@ final class WasmCharCompiler {
 		}
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(r);
+		if (args.size() > 2 && !(args.get(2) instanceof LispInteger radix && isRadix(radix.value()))) {
+			emitRadixCheck(ctx, r);
+		}
 		// d = weight of c (digit / letter), or -1
 		inRange(ctx, c, '0', '9');
 		ctx.writer.write(Instruction.IF);

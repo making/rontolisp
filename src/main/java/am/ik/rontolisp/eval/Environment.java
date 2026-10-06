@@ -7697,12 +7697,13 @@ public final class Environment implements Scope {
 					default -> throw new LispEvalException(LispNames.PARSE_INTEGER + ": unsupported keyword " + key);
 				}
 			}
+			// The radix before the bounds, as the call's expansion checks it.
+			int radix = radixArg == null ? 10 : requireRadix(radixArg);
 			if (startArg != null || !(endArg instanceof LispNil)) {
 				checkBoundingIndices(str, startArg == null ? new LispInteger(0) : startArg, endArg);
 			}
 			int start = startArg == null ? 0 : (int) asLong(startArg);
 			int end = endArg instanceof LispNil ? str.length() : (int) asLong(endArg);
-			int radix = radixArg == null ? 10 : (int) asLong(radixArg);
 			LispVal[] valueAndPos = parseInteger(str, start, end, radix, !(junkArg instanceof LispNil));
 			// Publish the stop position as the second value through the spill, so a
 			// first-class #'parse-integer matches the call-position expansion.
@@ -8031,7 +8032,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.DIGIT_CHAR_P, new LispFunction(LispNames.DIGIT_CHAR_P, args -> {
 			requireMinArgCount(LispNames.DIGIT_CHAR_P, args, 1);
 			int code = requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint();
-			int radix = args.size() > 1 ? (int) asLong(args.get(1)) : 10;
+			int radix = args.size() > 1 ? requireRadix(args.get(1)) : 10;
 			int weight = Character.digit(code, radix);
 			return weight < 0 ? LispNil.INSTANCE : new LispInteger(weight);
 		}));
@@ -8377,6 +8378,19 @@ public final class Environment implements Scope {
 		// honour. Reading `value()` made this the fill pointer and left the
 		// interpreter the only backend that could not see an inactive slot.
 		return new LispChar(s.codePointAt(stringSlot(name, args.get(1), index, s.capacity())));
+	}
+
+	/**
+	 * A radix {@code digit-char-p} and {@code parse-integer} take: an integer in
+	 * {@code [2, 36]}, else the type-error of {@code (INTEGER 2 36)} -- a non-integer one
+	 * included -- named {@code DIGIT-CHAR-P}, whichever built-in or expansion reached it.
+	 */
+	private static int requireRadix(LispVal val) {
+		if (val instanceof LispInteger i && i.value() >= OperandTypes.RADIX_MIN
+				&& i.value() <= OperandTypes.RADIX_MAX) {
+			return (int) i.value();
+		}
+		throw OperandTypeException.notOfType(val, OperandTypes.RADIX_TYPE).named(LispNames.DIGIT_CHAR_P);
 	}
 
 	// A non-character is NAME's CHARACTER type-error, as the compiled backends' check

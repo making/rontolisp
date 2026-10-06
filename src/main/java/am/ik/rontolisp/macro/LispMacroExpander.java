@@ -6457,7 +6457,8 @@ public final class LispMacroExpander {
 	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
 	 * stops at the first non-digit and yields nil when no digits were seen. A spelled
 	 * {@code :start} or {@code :end} is checked once, after every argument has run and
-	 * before the scan: a bad one is {@code subseq}'s bounds type-error.
+	 * before the scan: a bad one is {@code subseq}'s bounds type-error. A radix that is
+	 * no integer in 2..36 is {@code digit-char-p}'s type-error, checked first.
 	 * @param cons the parse-integer expression
 	 * @return the expanded expression
 	 */
@@ -6531,6 +6532,12 @@ public final class LispMacroExpander {
 		if (startForm != null || endForm != null) {
 			expanded = makeProgn(List.of(checkBoundsOf(str, start, endRaw), expanded));
 		}
+		if (radixForm != null && !isValidLiteralRadix(radixForm)) {
+			// A radix that is no integer in 2..36 is refused once, before the bounds and
+			// the scan -- even over a string with no digit to read -- by the probe of a
+			// digit in that radix, digit-char-p's own check.
+			expanded = makeProgn(List.of(mvCall(LispNames.DIGIT_CHAR_P, new LispChar('0'), radix), expanded));
+		}
 		expanded = makeLet(junk.name(), junkForm == null ? LispNil.INSTANCE : junkForm, expanded);
 		expanded = makeLet(radix.name(), radixForm == null ? new LispInteger(10) : radixForm, expanded);
 		expanded = makeLet(end.name(), makeIf(endRaw, endRaw, mvCall(LispNames.LENGTH, str)), expanded);
@@ -6538,6 +6545,13 @@ public final class LispMacroExpander {
 		expanded = makeLet(start.name(), startForm == null ? new LispInteger(0) : startForm, expanded);
 		expanded = makeLet(str.name(), parts.get(1), expanded);
 		return tail == null ? expanded : tail.wrap(expanded);
+	}
+
+	/** Whether a {@code :radix} form is a literal integer in {@code [2, 36]}. */
+	private static boolean isValidLiteralRadix(LispVal form) {
+		// 2..36: the radixes digit-char-p takes (compiler.OperandTypes.RADIX_TYPE, which
+		// this package cannot import).
+		return form instanceof LispInteger radix && radix.value() >= 2 && radix.value() <= 36;
 	}
 
 	/**

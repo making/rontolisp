@@ -1677,7 +1677,8 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
 `alpha-char-p`, `digit-char-p`, `upper-case-p`, `lower-case-p`, `both-case-p`, `alphanumericp`,
 `char-name`, `graphic-char-p` or `standard-char-p` -- directly or through `#'` -- reports
 `OP: The value 1 is not of type CHARACTER` as a catchable `type-error`, byte-identical on all four
-backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer is its `INTEGER` one.**
+backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer in 2..36 is the type-error of
+`(INTEGER 2 36)`, named `DIGIT-CHAR-P` (below).**
 Before (measured 2026-09-27): a simple-error `CHAR-CODE expects a character, got: 1` interpreted
 (named after the helper a prelude defun or lowering called: `upper-case-p` said `CHAR-DOWNCASE`),
 the datum-less `ClassCastException` report on the JVM (`CHAR=` for the case predicates) and a trap
@@ -1691,11 +1692,31 @@ on wasm.
   (also `make-array`'s, `fill`'s and `vector-push`'s character checks). `digit-char-p` checks the
   character before the radix, as the compiled order does. `lower-case-p`/`upper-case-p` run the
   built-in; the shared `(not (char= c (char-upcase c)))` lowering is gone.
+- **The radix** (`digit-char-p`, and `parse-integer`'s `:radix`): CLHS and SBCL take `(integer 2 36)`
+  and refuse anything else -- a non-integer, a bignum, 0, 1, 37 -- with datum the radix and expected
+  type `(INTEGER 2 36)`, after the character's own check. Before (measured 2026-10-06, SBCL 2.2.9 and
+  the four backends): 37 answered `NIL` interpreted and on the JVM and weight 2 on both wasm legs
+  (the digit walk reads letters past `z`), 1 answered `NIL` everywhere, `parse-integer "12" :radix 37`
+  was a `simple-error` (interpreter, JVM) or 39 (wasm), a bignum radix a `NIL` datum on the JVM and a
+  cast trap on wasm. Now: interpreter `Environment.requireRadix` (`OperandTypes.RADIX_TYPE`, named
+  through `.named`, so the first-class `#'parse-integer` says `DIGIT-CHAR-P` as the compiled
+  expansion does); JVM `_ckRadix` (`JvmOperandTypeRuntime.CK_RADIX`, an `int`-returning helper that
+  throws `_teOf(x, (INTEGER 2 36))`, wrapped per operator like `_ckIdx`); wasm
+  `WasmCharCompiler.emitRadixCheck` (EH mode: `_type_err_of` under the operator register; outside it
+  `unreachable`). A literal radix inside 2..36 emits no check on any backend. `parse-integer`'s
+  expansion checks a spelled `:radix` that is not such a literal ONCE, before the bounds and the scan,
+  by the probe `(digit-char-p #\0 radix)` -- SBCL refuses it even over an empty string or with
+  `:junk-allowed` -- so the class (and the report's operator) is `digit-char-p`'s; the scan's own
+  per-character `digit-char-p` repeats the integer test, which the call-per-character shape cannot
+  skip without a second unchecked primitive per backend. Pinned by `RadixRangeFixture` in the three
+  backend suites and ci-spec `digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36`; the old
+  `DIGIT-CHAR-P ... INTEGER` row of `characterBuiltInsCheckTheirArgument` now says `(INTEGER 2 36)`.
+  `digit-char` has the same hole (a radix of 37 answers a character, 1 answers `NIL`).
 - **Compiled**: `char-code`, the folds, `alpha-char-p`, `digit-char-p` and the two case predicates
   push the code point through the comparisons' `pushCheckedCode` (JVM `_ckChr` under the
   operator's wrapper; wasm `_chr_code` in EH mode, the cast outside it). The case predicates
-  compile natively: code point vs. its fold. A non-literal radix goes through `_ckIdx` /
-  `_idx_chk`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
+  compile natively: code point vs. its fold. A non-literal radix goes through `_ckRadix` /
+  `emitRadixCheck`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
   `graphic-char-p`, `standard-char-p`) check first with `%check-character`.
 - Measured 2026-09-28: hello-clack Worker (`--no-wasi --optimize=size`) 680,279 -> 680,498 (code
   +139: string addresses and the operator ids after the three new rows crossing a LEB boundary,

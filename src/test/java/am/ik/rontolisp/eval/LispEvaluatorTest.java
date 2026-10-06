@@ -22,6 +22,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
@@ -10589,6 +10590,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void digitCharPAndParseIntegerRefuseARadixOutside2To36() {
+		// A radix that is no integer in 2..36 is the type-error of (INTEGER 2 36), before
+		// any character is read -- sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
 	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() {
 		// Every argument once, in the call's order; the first of a repeated keyword is
 		// the one used.
@@ -19732,7 +19740,7 @@ class LispEvaluatorTest {
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-				("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+				("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
 				("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
