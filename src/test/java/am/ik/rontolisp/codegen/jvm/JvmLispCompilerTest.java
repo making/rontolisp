@@ -20290,6 +20290,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfTNilAndAKeywordIsUnbound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfTNilAndAKeywordIsUnbound.
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
 		// _dbound exists only where boundp can see a binding of a special no definer
 		// gives a value; a literal probe of one calls it and never the mirror. A

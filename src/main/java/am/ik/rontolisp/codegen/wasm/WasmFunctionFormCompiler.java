@@ -76,12 +76,13 @@ final class WasmFunctionFormCompiler {
 		int bindTemp = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(symTemp);
-		// nil or a non-string names no function.
+		// nil or a non-string names no function: the arity-0 dispatcher, whose late
+		// binding this is, reports each as it reports a funcall of the same value.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(symTemp);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF, 0x40);
-		ctx.writer.write(Instruction.UNREACHABLE);
+		emitUnboundSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(symTemp);
@@ -89,7 +90,7 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.IF, 0x40);
-		ctx.writer.write(Instruction.UNREACHABLE);
+		emitUnboundSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.END);
 		// bind = _env_lookup(off, GLOBAL_FENV).
 		emitStringOffset(ctx, symTemp);
@@ -166,8 +167,24 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.writeHeapType(Type.EQ.code());
 		WasmEmitHelper.emitNewClosure(ctx);
 		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.UNREACHABLE);
+		emitUnboundSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Reports the value in {@code symTemp}, which names no function, through the arity-0
+	 * dispatcher: an {@code undefined-function} for a symbol (nil and {@code t} included)
+	 * and a {@code type-error} for anything else where the program can catch one, the
+	 * trap it always was where it cannot. Never returns.
+	 */
+	private static void emitUnboundSignal(WasmLispCompiler.Ctx ctx, int symTemp) {
+		ctx.indirectCallArities.add(0);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(symTemp);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.dispatchFuncIndex(0, ctx.extraDispatchFuncBase));
+		ctx.writer.write(Instruction.DROP);
+		ctx.writer.write(Instruction.UNREACHABLE);
 	}
 
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {

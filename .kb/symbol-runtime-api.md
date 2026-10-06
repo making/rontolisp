@@ -465,8 +465,12 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `Object[]{Integer funcId}`, WASM a `{funcId, null env}` closure struct -- exactly
   what `#'name` would have produced. `functionp` answers t, the value prints its
   registered name, `funcall` dispatches, and an undefined name signals at the
-  `symbol-function` itself (a trap on WASM, the `The function X is undefined`
-  condition elsewhere), matching the interpreter and SBCL. The eval runtime's
+  `symbol-function` itself as an `undefined-function` (WASM: the arity-0 dispatcher's
+  report, so a trap only where no handler can catch; the one exception is a name
+  `fmakunbound` retired, still a trap there), matching the interpreter and SBCL. `t`,
+  `nil` and keywords are such names: the interpreter's `fboundp` / `symbol-function` /
+  `fdefinition` / `funcall` accept the `t` and `nil` VALUES as the symbols they are, and the
+  JVM maps a null designator to `NIL` before the registry sees it. The eval runtime's
   function namespace (`_fenv` / `GLOBAL_FENV`, where `(setf (symbol-function ...))`
   installs and `fmakunbound` leaves its tombstone) is probed first and decides on
   its own; otherwise the compiled-function registry (`_lookup`) answers. Only the

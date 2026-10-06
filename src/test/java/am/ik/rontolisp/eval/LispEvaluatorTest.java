@@ -17722,6 +17722,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfTNilAndAKeywordIsUnbound() {
+		// fboundp answers nil and symbol-function / fdefinition / funcall / apply signal
+		// undefined-function for t, nil, a keyword and an undefined name -- sbcl's
+		// answers, pinned on all four backends.
+		assertThat(printedLines(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() {
 		// The reference answer for the compilers' searched name dispatch: reads, sets
 		// and progv bindings by name over more names than one segment holds, two pairs

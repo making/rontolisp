@@ -24290,6 +24290,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfTNilAndAKeywordIsUnbound() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfTNilAndAKeywordIsUnbound,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE, false))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE, true))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: a name dispatch searches the names' string-table offsets, shared

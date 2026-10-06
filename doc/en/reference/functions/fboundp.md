@@ -8,6 +8,8 @@ On the compiled backends a **literal** quoted argument is decided at compile tim
 
 As a function value (`#'fboundp`, as in `(mapcar #'fboundp names)`) it is a computed probe on every backend, with the run-time answers above; the eval runtime is pulled in only for a program that names `#'fboundp`.
 
+`t`, `nil` and keywords are symbols that name no function, so the answer is `nil` for them on every backend.
+
 A name retired by [`fmakunbound`](fmakunbound.md) answers `nil` again, at a literal call site too.
 
 ```lisp
