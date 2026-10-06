@@ -158,10 +158,13 @@ on the compile paths bypassed the dispatch and wrote to standard output.
 - `write-sequence` of a string: the default `stream-write-sequence` hands the range to
   `stream-write-string` in ONE call (SBCL: `("hello" 1 5)`); it looped `stream-write-char`.
 - **The arity break is accepted**: a method spelled `(stream string)` -- the shape the
-  guide, three ci cases and a dozen backend tests used -- now fails "Function expects 3
+  guide, three ci cases and a dozen backend tests used -- failed "Function expects 3
   arguments, got 5" at its first write. SBCL refuses that method at `defmethod` time
-  ("fewer optional arguments than the generic function"), so no portable program has it.
-  rontolisp checks no lambda-list congruence at all (a `.todo` item).
+  ("fewer optional arguments than the generic function"), so no portable program has it;
+  rontolisp now refuses it there too (lambda-list congruence, `.kb/clos.md`). A definition
+  on a `rontolisp:` protocol generic loads gray.lisp first on the interpreter
+  (`ensureGrayProtocolDeclared`), as the compile paths splice it for any program naming one,
+  so the method is judged against the declared lambda list, never one it established.
 - Cost (2026-10-06, 748 / 740 / 744 JVM / P1 / component artifacts of every ci-spec case,
   size-report, bench-report and the non-GUI examples, compiled by the base and the new jar):
   all byte-identical (bar the build timestamp) except the programs carrying the Gray protocol

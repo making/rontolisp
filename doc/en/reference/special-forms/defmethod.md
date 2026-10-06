@@ -10,7 +10,7 @@ Adds a method to the generic function `name` (creating it when no [`defgeneric`]
 - `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, `pathname`, `package`, ...). A `package` parameter matches exactly what [`typep`](../macros/typep.md) calls a package, and is tried BEFORE `keyword`/`symbol`, so the designator idiom "a `package` method plus an unspecialized method that calls [`find-package`](../functions/find-package.md) and recurses" terminates
 - `(var t)` or a plain `var` — the default method
 
-A call runs the most specific matching method: parameters are ranked leftmost-first, and per parameter `eql` methods win over class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`), then the default; with no match the call signals an error. Defining the same specializer combination again replaces the previous method. The lambda list may continue past the required parameters with `&optional`/`&rest` (the dispatcher forwards the tail via `apply`). The body may start with a docstring and `(declare ...)` (both are ignored).
+A call runs the most specific matching method: parameters are ranked leftmost-first, and per parameter `eql` methods win over class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`), then the default; with no match the call signals an error. Defining the same specializer combination again replaces the previous method. The lambda list may continue past the required parameters with `&optional`/`&rest`/`&key` (the dispatcher forwards the tail via `apply`). The body may start with a docstring and `(declare ...)` (both are ignored).
 
 ```lisp
 (defclass animal () ())
@@ -23,6 +23,16 @@ A call runs the most specific matching method: parameters are ranked leftmost-fi
 (defmethod speak (x) "?")
 (list (speak (make-instance 'dog)) (speak (make-instance 'animal))
       (speak 42) (speak :cat) (speak "s")) ; => ("woof" "some sound" "a number" "meow" "?")
+```
+
+## Lambda-list congruence
+
+Every method's lambda list must be **congruent** with the generic function's (CLHS 7.6.4): the same number of required parameters and of `&optional` parameters, `&rest` or `&key` in both or in neither, and every keyword a `defgeneric` names after `&key` accepted by the method (named in its `&key`, or through `&allow-other-keys`, or by `&rest` without `&key`). The generic's lambda list is its `defgeneric`'s, else the first method's; `initialize-instance`, `reinitialize-instance`, `shared-initialize` and `print-object` have their standard ones. A method that is not congruent is not added: the `defmethod` signals a `program-error` where it runs, on every backend.
+
+```console
+(defgeneric scale (x factor &optional offset))
+(defmethod scale ((x integer) factor) (* x factor))
+;; Unhandled condition: DEFMETHOD SCALE: the method has fewer optional arguments than the generic function
 ```
 
 ## Setf methods
@@ -60,7 +70,7 @@ Inside a primary or `:around` method, `(call-next-method)` invokes the next less
 (describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
 ```
 
-Lite subset: `&key` is an error, and standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.
+Lite subset: standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.
 
 ## A method on a built-in name
 

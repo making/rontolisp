@@ -31,7 +31,49 @@ name -> 1-based position, `-1` when unrelated classes disagree — `slot-value` 
   backend sees them; `(apply #'call-next-method ...)` / `(funcall #'call-next-method ...)`
   are rewritten too, not only head position. `MethodInfo.usesNext` records the mention.
 - `defgeneric` inline `(:method [qualifier] (params) body...)` clauses register like separate
-  defmethods.
+  defmethods. Their keys are `GenericInfo.inlineMethodKeys`: evaluating the `defgeneric` again
+  removes them first (CLHS defgeneric).
+
+## Lambda-list congruence (CLHS 7.6.4)
+`ClosRegistry.LambdaListShape` (required / optional counts, `&rest`, `&key`, keyword names,
+`&allow-other-keys`) is what is compared; `incongruenceWith` answers SBCL's sentence or null.
+`GenericInfo.lambdaListShape` is the `defgeneric`'s (keywords declared), else the first
+method's (CLHS 7.6.5: `&key` without names), else `standardGenericShape` for the init trio and
+`print-object`; `methodShapes` keeps each `defmethod`'s for the `defgeneric`-after check.
+- **The refusal is the EXPANSION**: `expandDefmethod` registers nothing and answers
+  `programErrorForm` (`DEFMETHOD G: the method has fewer optional arguments than the generic
+  function`), so it is a `program-error` where the form runs on all four backends, with the
+  static-program-error compile warning; a later call dispatches over what was added.
+  `registerDefgeneric` appends the same signal to `methodDefuns` (`DEFGENERIC G: the lambda
+  list is incompatible with an existing method: ...`), judging counts and `&rest`/`&key` only
+  (SBCL accepts `(defgeneric g (a &key x))` over a method `(a &key y)`).
+- Checked against the method's lambda list AS WRITTEN, before the lite `&allow-other-keys`
+  append and the `%method-args` injection.
+- The macro-time evaluator (`UserMacroExpander.replayDefinition`) swallows that program-error
+  from a defmethod/defgeneric replay: the compiled program signals it at the same form.
+- A `defmethod` under a top-level `let` (even inside a `lambda`/`handler-case` there) is
+  expanded in place on the compile paths, so a handler sees the refusal everywhere -- what the
+  pins use.
+- **Compile-path residual**: a second `defgeneric` changing the required count (legal once its
+  old methods are gone, the interpreter redefines in place) is a compile-time
+  `UnsupportedOperationException` -- one dispatcher per generic.
+- Deviation: SBCL signals a plain `error` (`find-method-length-mismatch`, or a `simple-error`
+  for `defgeneric`) when the required count differs from a generic that HAS methods, a
+  `program-error` otherwise; rontolisp signals `program-error` throughout. Measured
+  2026-10-06 on SBCL 2.2.9 over 30 `defmethod` and 8 `defgeneric` shapes: which definitions
+  are refused and which added agree on every one, all four backends byte-identical.
+- Before (2026-10-06): only a required-count mismatch was refused (interpreter: a
+  program-error; compile paths: the COMPILE failed); `(defgeneric g (a b &optional c))` +
+  `(defmethod g ((a integer) b))` was accepted everywhere and `(g 1 2 3)` failed "Function
+  expects 3 arguments, got 4" on the interpreter and JVM and silently dropped the argument on
+  both WASM backends. A redefinition `(defgeneric g (a))` -> `(defgeneric g (a b))` was refused
+  even with no methods.
+- Blast radius measured 2026-10-06 by a static scan (every `defgeneric`/`defmethod` form, any
+  depth, grouped per system directory, against gray.lisp's and the standard generics' lambda
+  lists) of `src/main/resources`, `src/test/resources`, `examples/`, `ci-spec.yaml`, the doc
+  fences, the Java test programs and the local Quicklisp cache (1356 files): no congruence
+  violation outside the pins (the hits were same-named generics in different packages and
+  usocket's iolib-only backend).
 
 ## `generateDispatcher(name, registry[, builtinFallback])`
 ONE dispatcher defun per generic: a nested-if chain, most specific first. An ordinary defun,
@@ -778,7 +820,10 @@ twins, `UserMacroExpanderTest#defmethodLambdaListStaysVerbatim*`/`defclassKeepsN
 the `applyAlignedVariadicTarget`, `PackageIsADefmethodSpecializer` and
 `defmethodEqlSpecializerNamingAConstant` pairs, plus
 `aCapturedGenericFunctionValueSeesLaterMethods` and
-`initProtocolGenericsAreSharedAcrossPackages`.
+`initProtocolGenericsAreSharedAcrossPackages`. Congruence: `LambdaListCongruenceFixture`
+(SBCL-classified) in `LispEvaluatorTest`, `JvmLispCompilerTest` and
+`WasmLispCompilerIntegrationTest` (P1 + component), ci-spec
+`clos-defmethod-lambda-list-congruence` and standalone `uncaught-defmethod-lambda-list-refusal`.
 
 Feature trios (interpreter + `JvmLispCompilerTest` + `WasmLispCompilerIntegrationTest`):
 multiple inheritance / diamond / inconsistent precedence, setf methods, `setfFindClass`,

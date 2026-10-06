@@ -23960,11 +23960,13 @@ public final class LispMacroExpander {
 	 * lambda list may continue past the required parameters ({@code &optional}/
 	 * {@code &rest}/{@code &key}): the dispatcher then forwards a {@code &rest} tail with
 	 * {@code apply}. A generic implicitly created by an earlier {@code defmethod} is
-	 * updated (congruence-checked) instead of redefined.
+	 * updated instead of redefined; when an existing method's lambda list is not
+	 * congruent with the new one (CLHS 7.6.4) nothing is registered and the refusal, a
+	 * {@code %program-error} form, is appended to {@code methodDefuns} instead.
 	 * @param cons the defgeneric expression
 	 * @param closRegistry mutated: the generic (and any inline methods) are registered
 	 * @param methodDefuns mutated: the generated method-body defuns of inline
-	 * {@code (:method ...)} clauses are appended
+	 * {@code (:method ...)} clauses are appended, or the refusal
 	 * @return the normalized generic-function name
 	 */
 	public static String registerDefgeneric(LispCons cons, ClosRegistry closRegistry, List<LispVal> methodDefuns) {
@@ -24037,14 +24039,32 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException(
 					LispNames.DEFGENERIC + " option is not supported: " + parts.get(i).print());
 		}
+		ClosRegistry.LambdaListShape shape = ClosRegistry.LambdaListShape.of(parts.get(2));
 		ClosRegistry.GenericInfo existing = closRegistry.findGeneric(nameSym.name());
 		ClosRegistry.GenericInfo info;
 		if (existing != null) {
-			if (existing.paramNames().size() != paramNames.size()) {
-				throw new IllegalArgumentException(
-						LispNames.DEFGENERIC + " " + nameSym.name() + ": lambda list does not match its methods ("
-								+ existing.paramNames().size() + " required parameters)");
+			// CLHS defgeneric: a lambda list some existing method is not congruent with
+			// is an error, and the generic keeps the lambda list and methods it had. The
+			// refusal is a program-error where the form stands, like defmethod's. The
+			// methods an earlier defgeneric's (:method ...) options defined are not
+			// judged: redefining the generic removes them. SBCL compares the counts and
+			// the &rest/&key presence here, not an existing method's keyword names.
+			for (java.util.Map.Entry<String, ClosRegistry.LambdaListShape> method : existing.methodShapes()
+				.entrySet()) {
+				String problem = existing.inlineMethodKeys().contains(method.getKey()) ? null
+						: method.getValue().incongruenceWith(shape, false);
+				if (problem != null) {
+					methodDefuns
+						.add(programErrorForm(cons, LispNames.DEFGENERIC + " " + genericDisplayName(nameSym.name())
+								+ ": the lambda list is incompatible with an existing method: " + problem));
+					return ClosRegistry.normalize(nameSym.name());
+				}
 			}
+			for (String inlineKey : existing.inlineMethodKeys()) {
+				existing.methods().remove(inlineKey);
+				existing.methodShapes().remove(inlineKey);
+			}
+			existing.inlineMethodKeys().clear();
 			existing.paramNames(paramNames);
 			existing.documentation(documentation);
 			info = existing;
@@ -24055,13 +24075,25 @@ public final class LispMacroExpander {
 			closRegistry.registerGeneric(info);
 		}
 		// Recorded BEFORE the inline (:method progn ...) clauses expand: expandDefmethod
-		// accepts the combination name as a qualifier only once the generic carries it.
+		// accepts the combination name as a qualifier only once the generic carries it,
+		// and checks each clause's lambda list against this one.
 		info.methodCombination(combination, mostSpecificLast);
+		info.lambdaListShape(shape, true);
 		if (ll.variadic()) {
 			info.markVariadic();
 		}
 		for (LispCons method : inlineMethods) {
+			java.util.Set<String> before = info.methods()
+				.values()
+				.stream()
+				.map(ClosRegistry.MethodInfo::functionName)
+				.collect(java.util.stream.Collectors.toSet());
 			methodDefuns.add(expandDefmethod(method, closRegistry));
+			info.methods().forEach((key, added) -> {
+				if (!before.contains(added.functionName())) {
+					info.inlineMethodKeys().add(key);
+				}
+			});
 		}
 		return ClosRegistry.normalize(nameSym.name());
 	}
@@ -24110,11 +24142,13 @@ public final class LispMacroExpander {
 	 * {@code apply} (a bare {@code call-next-method} then forwards the required arguments
 	 * only -- lite). Defining the same qualifier + specializers again replaces the
 	 * previous method. The caller regenerates the dispatcher with
-	 * {@link #generateDispatcher(String, ClosRegistry)}.
+	 * {@link #generateDispatcher(String, ClosRegistry)}. A lambda list not congruent with
+	 * the generic's (CLHS 7.6.4) registers nothing and expands to a
+	 * {@code %program-error} form instead.
 	 * @param cons the defmethod expression
 	 * @param closRegistry mutated: the method is registered (and the generic implicitly
 	 * created when no defgeneric preceded it)
-	 * @return the generated method-body defun
+	 * @return the generated method-body defun, or the refusal
 	 */
 	public static LispVal expandDefmethod(LispCons cons, ClosRegistry closRegistry) {
 		return expandDefmethod(cons, closRegistry, false);
@@ -24248,15 +24282,32 @@ public final class LispMacroExpander {
 		else if (!(parts.get(llIndex) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects a lambda list: " + cons.print());
 		}
+		// CLHS 7.6.4: a method whose lambda list is not congruent with its generic's is
+		// refused where it is added, as SBCL refuses it. The refusal is the expansion --
+		// a program-error at the defmethod's own position, the method never registered
+		// -- so every backend signals it when the form runs, and a later call keeps
+		// dispatching over the methods that were added.
+		ClosRegistry.LambdaListShape methodShape = ClosRegistry.LambdaListShape.of(parts.get(llIndex));
 		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(nameSym.name());
+		ClosRegistry.LambdaListShape genericShape = generic == null ? null : generic.lambdaListShape();
+		boolean keywordsDeclared = generic != null && generic.keywordsDeclared();
+		if (genericShape == null) {
+			genericShape = ClosRegistry.standardGenericShape(plainName(nameSym.name()));
+			keywordsDeclared = false;
+		}
+		if (genericShape != null) {
+			String problem = methodShape.incongruenceWith(genericShape, keywordsDeclared);
+			if (problem != null) {
+				return programErrorForm(cons,
+						LispNames.DEFMETHOD + " " + genericDisplayName(nameSym.name()) + ": " + problem);
+			}
+		}
 		if (generic == null) {
 			generic = new ClosRegistry.GenericInfo(nameSym.name(), paramNames);
 			closRegistry.registerGeneric(generic);
 		}
-		else if (generic.paramNames().size() != paramNames.size()) {
-			throw new IllegalArgumentException(
-					LispNames.DEFMETHOD + " " + nameSym.name() + ": lambda list does not match the generic function ("
-							+ generic.paramNames().size() + " required parameters)");
+		if (generic.lambdaListShape() == null) {
+			generic.lambdaListShape(genericShape == null ? methodShape : genericShape, false);
 		}
 		if (!tail.isEmpty()) {
 			generic.markVariadic();
@@ -24311,6 +24362,8 @@ public final class LispMacroExpander {
 		List<LispVal> body = methodBody;
 		generic.methods()
 			.put(key, new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
+		generic.methodShapes().put(key, methodShape);
+		generic.inlineMethodKeys().remove(key);
 		if (nested) {
 			// The method-body defun stays inside the let and compiles to a global-closure
 			// setq, so the dispatcher must skip this branch until the defmethod form
@@ -24547,6 +24600,15 @@ public final class LispMacroExpander {
 		}
 		out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName),
 				listToCons(defaultParams), body)));
+	}
+
+	/**
+	 * A generic function's name as a refusal reports it: a {@code %setf-} writer generic
+	 * as the {@code (setf name)} the program wrote.
+	 */
+	private static String genericDisplayName(String name) {
+		String writerPrefix = setfFunctionName("");
+		return name.startsWith(writerPrefix) ? "(SETF " + name.substring(writerPrefix.length()) + ")" : name;
 	}
 
 	/** Strips a package qualifier from a symbol name. */
@@ -26495,8 +26557,19 @@ public final class LispMacroExpander {
 			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				List<LispVal> methodDefuns = new java.util.ArrayList<>();
-				String generic = registerDefgeneric(normalizeSetfMethodForm((LispCons) form, structAccessors),
-						closRegistry, methodDefuns);
+				LispCons defgeneric = normalizeSetfMethodForm((LispCons) form, structAccessors);
+				ClosRegistry.GenericInfo prior = defgeneric.cdr() instanceof LispCons named
+						&& named.car() instanceof LispSymbol nameSym ? closRegistry.findGeneric(nameSym.name()) : null;
+				int priorRequired = prior == null ? -1 : prior.paramNames().size();
+				String generic = registerDefgeneric(defgeneric, closRegistry, methodDefuns);
+				if (prior != null && prior.paramNames().size() != priorRequired) {
+					// The interpreter redefines the generic in place (CLHS defgeneric); a
+					// compiled program has ONE dispatcher per generic, whose lambda list
+					// cannot be both.
+					throw new UnsupportedOperationException(LispNames.DEFGENERIC + " " + genericDisplayName(generic)
+							+ ": redefining a generic function with a different number of required parameters"
+							+ " is supported by the interpreter only");
+				}
 				out.addAll(methodDefuns);
 				if (placedDispatchers.add(generic)) {
 					dispatcherSlots.put(out.size(), generic);

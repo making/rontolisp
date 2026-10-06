@@ -8353,6 +8353,7 @@ public final class LispEvaluator {
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
 		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
+		ensureGrayProtocolDeclared(cons);
 		java.util.List<LispVal> methodDefuns = new java.util.ArrayList<>();
 		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry, methodDefuns);
 		for (LispVal defun : methodDefuns) {
@@ -8362,10 +8363,23 @@ public final class LispEvaluator {
 		return cons.toList().get(1);
 	}
 
+	/**
+	 * Loads gray.lisp before a definition on one of its protocol generics, as the compile
+	 * paths splice it ahead of any program naming one: the method is then checked against
+	 * the generic's declared lambda list, never against one it established itself.
+	 */
+	private void ensureGrayProtocolDeclared(LispCons definition) {
+		if (!this.grayStreamsLoaded && definition.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && GrayStreamsLibrary.isProtocolGeneric(name.name())) {
+			ensureGrayStreamsLoaded();
+		}
+	}
+
 	private LispVal evalDefmethod(LispCons cons, Environment env) {
 		// A (defmethod (setf name) ...) rides the %setf- writer-generic convention, so
 		// it merges with any defclass :accessor writer methods on the same place.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
+		ensureGrayProtocolDeclared(cons);
 		// Evaluate the generated method-body defun, then redefine the dispatcher so it
 		// sees the new method (calls by name always dispatch through the fresh one; a
 		// #'name captured earlier keeps the previous dispatcher).
