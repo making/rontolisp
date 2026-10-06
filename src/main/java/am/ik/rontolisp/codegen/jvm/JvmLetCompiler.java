@@ -25,19 +25,22 @@ import org.jspecify.annotations.Nullable;
  * Compiles the {@code let} special form.
  *
  * <p>
- * A binding whose name is a special (dynamically bound) variable establishes a
- * THREAD-SCOPED dynamic binding over the special's {@code _d$} ThreadLocal (interpreter
- * parity: two http-handler request threads binding the same special must not clobber each
- * other): {@code _dbind} installs a fresh cell holding the init value and answers the
- * previous cell, saved in a temp and put back with {@code ThreadLocal.set} on EVERY exit
- * from the body: the body is a protected region of the {@code unwind-protect} machinery
- * ({@link JvmUnwindProtectCompiler.Region}) whose cleanups are {@code %dyn-restore}
- * forms, so an error unwind, a cross-lambda exit and a
+ * A binding whose name is a special (dynamically bound) variable establishes a dynamic
+ * binding. In a program that runs Lisp code on one thread only it is a SHALLOW binding:
+ * the special's {@code _g$} field is saved in a temp and set to the init value, so every
+ * read stays one {@code getstatic}. Where another thread can run Lisp code it is
+ * THREAD-SCOPED over the special's {@code _d$} ThreadLocal (interpreter parity: two
+ * http-handler request threads binding the same special must not clobber each other):
+ * {@code _dbind} installs a fresh cell holding the init value and answers the previous
+ * cell, saved in a temp; the new value is visible (via the dynamic-first {@code _dget}
+ * read) to any function called during the body on THIS thread, and other threads keep
+ * reading the {@code _g$} global default ({@code Ctx.threadScopedSpecials}). Either way
+ * the saved state is put back on EVERY exit from the body: the body is a protected region
+ * of the {@code unwind-protect} machinery ({@link JvmUnwindProtectCompiler.Region}) whose
+ * cleanups are {@code %dyn-restore} forms, so an error unwind, a cross-lambda exit and a
  * {@code return}/{@code return-from}/ {@code go} escape all restore, in CL's
  * innermost-first order against any cleanup nested around or inside the binding -- the
- * interpreter's {@code finally}. The new value is visible (via the dynamic-first
- * {@code _dget} read) to any function called during the body on THIS thread; other
- * threads keep reading the {@code _g$} global default.
+ * interpreter's {@code finally}.
  */
 final class JvmLetCompiler {
 
@@ -114,7 +117,7 @@ final class JvmLetCompiler {
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
 				ctx.functions.keySet(), ctx.captureMemo);
 		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
-		// Each dynamic (special) binding established here: {tlFieldIndex, saveSlot}.
+		// Each dynamic (special) binding established here: {homeFieldIndex, saveSlot}.
 		// Restored (reverse order) after the body, before the scope is popped.
 		List<int[]> dynamicRestores = null;
 		Set<String> boundInThisLet = new HashSet<>();
@@ -124,30 +127,29 @@ final class JvmLetCompiler {
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
 				if (ctx.specialVars.contains(name)) {
-					// The thread's dynamic binding, pushed via _dbind: the binding every
-					// read of the name resolves through _dget while it is active -- the
-					// body's, a called function's and a closure's alike -- and a setq
-					// writes (JvmSetqCompiler.emitGlobalStore). No lexical slot: a
-					// closure that runs after this extent reads the binding active then.
-					JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-					FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
-					if (dyn == null || tlField == null) {
-						// The pre-pass promised every dynamically-bound special a
-						// ThreadLocal; a miss here must fail the compile loudly, never
-						// fall back to a silently process-global binding.
-						throw new IllegalStateException(
-								"special variable " + name + " is dynamically bound here but has no thread-local store"
-										+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
-					}
+					// The dynamic binding: the one every read of the name resolves to
+					// while it is active -- the body's, a called function's and a
+					// closure's alike -- and a setq writes
+					// (JvmSetqCompiler.emitGlobalStore). No lexical slot: a closure that
+					// runs after this extent reads the binding active then.
+					FieldRefEntry home = bindingHome(name, ctx);
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
-					ctx.body.getstatic(tlField).swap();
-					ctx.body.invokestatic(dyn.dbind());
 					int saveSlot = ctx.allocTemp();
-					ctx.body.astore(saveSlot);
+					if (ctx.threadScopedSpecials) {
+						// This thread's binding, pushed via _dbind, which answers the
+						// previous cell (null: no binding on this thread).
+						ctx.body.getstatic(home).swap();
+						ctx.body.invokestatic(Objects.requireNonNull(ctx.dynVars).dbind());
+						ctx.body.astore(saveSlot);
+					}
+					else {
+						// Shallow binding: the _g$ field saved, then set.
+						ctx.body.getstatic(home).astore(saveSlot).putstatic(home);
+					}
 					if (dynamicRestores == null) {
 						dynamicRestores = new ArrayList<>();
 					}
-					dynamicRestores.add(new int[] { tlField.index(), saveSlot });
+					dynamicRestores.add(new int[] { home.index(), saveSlot });
 					// A special is never a lexical: nothing of the name answers for the
 					// body but its dynamic binding.
 					ctx.locals.remove(name);
@@ -258,13 +260,14 @@ final class JvmLetCompiler {
 		}
 		ctx.declaredDoubles = bodyDeclaredDoubles;
 		// A body under dynamic bindings is a PROTECTED REGION whose cleanups restore
-		// each special to its saved previous cell (possibly null = no binding on this
-		// thread), innermost first: the unwind-protect machinery then restores on every
-		// exit channel -- normal completion, an error unwind (caught in this frame or
-		// across a callee's), a cross-lambda exit, and a return/return-from/go escape,
-		// which inlines the escaped scopes' cleanups in CL's innermost-first order
-		// (.kb/dynamic-special-variables.md). A body-less let has no region: nothing
-		// can exit it abnormally, and its restores run straight after the bindings.
+		// each special to its saved state (the previous value, or the previous cell --
+		// possibly null = no binding on this thread), innermost first: the unwind-protect
+		// machinery then restores on every exit channel -- normal completion, an error
+		// unwind (caught in this frame or across a callee's), a cross-lambda exit, and a
+		// return/return-from/go escape, which inlines the escaped scopes' cleanups in
+		// CL's innermost-first order (.kb/dynamic-special-variables.md). A body-less let
+		// has no region: nothing can exit it abnormally, and its restores run straight
+		// after the bindings.
 		boolean hasBody = parts.size() > 2;
 		JvmUnwindProtectCompiler.Region region = dynamicRestores == null || !hasBody ? null
 				: JvmUnwindProtectCompiler.Region.open(restoreForms(dynamicRestores), ctx, className, !forEffect);
@@ -337,9 +340,9 @@ final class JvmLetCompiler {
 	}
 
 	/**
-	 * The {@code (%dyn-restore tlFieldIndex saveSlot)} cleanup forms of a body under
+	 * The {@code (%dyn-restore homeFieldIndex saveSlot)} cleanup forms of a body under
 	 * dynamic bindings, innermost first -- the order the bindings must be undone in.
-	 * @param dynamicRestores {@code {tlFieldIndex, saveSlot}} per binding, in binding
+	 * @param dynamicRestores {@code {homeFieldIndex, saveSlot}} per binding, in binding
 	 * order
 	 * @return the cleanup forms
 	 */
@@ -354,14 +357,14 @@ final class JvmLetCompiler {
 	}
 
 	/**
-	 * Compiles the internal {@code (%dyn-restore tlFieldIndex saveSlot)} form
-	 * ({@link LispNames#DYN_RESTORE_INTERNAL}): restores the thread's binding of one
-	 * special to the previous cell saved at the binding site, and yields nil. Built by
-	 * {@link #restoreForms} only, as the cleanups of a special {@code let}'s protected
-	 * region, so it reaches the expression compiler on every exit path the region emits
-	 * (normal, handler, the copies inlined at a {@code return}/{@code go}). Statement
-	 * position ({@link JvmExprCompiler#compileForEffect}) calls {@link #emitRestore}
-	 * directly and skips the nil.
+	 * Compiles the internal {@code (%dyn-restore homeFieldIndex saveSlot)} form
+	 * ({@link LispNames#DYN_RESTORE_INTERNAL}): restores the binding of one special to
+	 * the state saved at the binding site, and yields nil. Built by {@link #restoreForms}
+	 * only, as the cleanups of a special {@code let}'s protected region, so it reaches
+	 * the expression compiler on every exit path the region emits (normal, handler, the
+	 * copies inlined at a {@code return}/{@code go}). Statement position
+	 * ({@link JvmExprCompiler#compileForEffect}) calls {@link #emitRestore} directly and
+	 * skips the nil.
 	 */
 	static void compileDynRestore(LispCons cons, JvmLispCompiler.Ctx ctx) {
 		emitRestoreForEffect(cons, ctx);
@@ -375,16 +378,54 @@ final class JvmLetCompiler {
 	}
 
 	/**
-	 * Emits one binding restore: {@code getstatic tl; aload cell; ThreadLocal.set} --
+	 * The field a special's binding lives in: its {@code _d$} ThreadLocal where a binding
+	 * is thread-scoped ({@code Ctx.threadScopedSpecials}), else its {@code _g$} global,
+	 * which the binding saves, sets and restores.
+	 * @param name the special
+	 * @param ctx the compilation context
+	 * @return the field
+	 */
+	static FieldRefEntry bindingHome(String name, JvmLispCompiler.Ctx ctx) {
+		if (ctx.threadScopedSpecials) {
+			JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+			FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
+			if (tlField == null) {
+				// The pre-pass promised every dynamically-bound special a ThreadLocal; a
+				// miss here must fail the compile loudly, never fall back to a silently
+				// process-global binding.
+				throw new IllegalStateException(
+						"special variable " + name + " is dynamically bound here but has no thread-local store"
+								+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
+			}
+			return tlField;
+		}
+		if (ctx.rawGlobals.containsKey(name)) {
+			// A raw global's value may sit in its unboxed field, which a save of _g$
+			// would not see; the pre-pass keeps every dynamically-bound special out of
+			// that representation (JvmRawGlobals).
+			throw new IllegalStateException("special variable " + name + " is dynamically bound here but carries the"
+					+ " unboxed global representation (SpecialVarCollector.collectDynamicallyBound missed this"
+					+ " binding form)");
+		}
+		return Objects.requireNonNull(ctx.globalFields.get(name));
+	}
+
+	/**
+	 * Emits one binding restore -- {@code getstatic tl; aload cell; ThreadLocal.set} for
+	 * a thread-scoped binding, {@code aload saved; putstatic global} for a shallow one --
 	 * stack-neutral, so it may run over a value the surrounding code keeps on the stack.
-	 * @param tlFieldIndex the special's {@code _d$} ThreadLocal field constant
-	 * @param saveSlot the local holding the previous cell (possibly null)
+	 * @param homeFieldIndex the special's {@link #bindingHome} field constant
+	 * @param saveSlot the local holding the previous cell (possibly null) or value
 	 * @param ctx the compilation context
 	 */
-	private static void emitRestore(int tlFieldIndex, int saveSlot, JvmLispCompiler.Ctx ctx) {
-		ctx.body.getstatic((FieldRefEntry) ctx.cp.entryAt(tlFieldIndex))
-			.aload(saveSlot)
-			.invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet());
+	private static void emitRestore(int homeFieldIndex, int saveSlot, JvmLispCompiler.Ctx ctx) {
+		FieldRefEntry home = (FieldRefEntry) ctx.cp.entryAt(homeFieldIndex);
+		if (ctx.threadScopedSpecials) {
+			ctx.body.getstatic(home).aload(saveSlot).invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet());
+		}
+		else {
+			ctx.body.aload(saveSlot).putstatic(home);
+		}
 	}
 
 	/**

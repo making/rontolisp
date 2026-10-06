@@ -20299,17 +20299,26 @@ class JvmLispCompilerTest {
 
 	@Test
 	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
-		// _dbound exists only where boundp can see a binding of a special no definer
-		// gives a value; a literal probe of one calls it and never the mirror. A
-		// never-bound one carries the marker in its plain field, and a valued or
-		// never-probed special keeps the plain representation, so such a program compiles
-		// as it did.
-		byte[] tracked = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader
-			.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))")));
+		// A literal probe of a bound special no definer gives a value reads its variable
+		// and never the mirror: on one thread its _g$ field, which the shallow binding
+		// sets, against the marker; where another thread can run Lisp code (here a host,
+		// through the export) _dbound over its ThreadLocal and global. A never-bound one
+		// carries the marker in its plain field, and a valued or never-probed special
+		// keeps the plain representation, so such a program compiles as it did.
+		String probe = "(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))";
+		byte[] tracked = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(probe)));
 		assertThat(declaredFieldNames(tracked)).contains("_unbound");
-		assertThat(declaredMethodNames(tracked)).contains("_dbound");
-		assertThat(ownCallsIn(tracked, "UB-P", "_dbound")).isOne();
-		assertThat(ownCallsIn(tracked, "UB-P", "_envLookup")).isZero();
+		assertThat(declaredMethodNames(tracked)).doesNotContain("_dbound", "_envLookup");
+		assertThat(fieldReadsIn(tracked, "UB-P", "_unbound")).isOne();
+		assertThat(runClass(tracked)).isEqualTo("T");
+		byte[] threaded = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(probe + " (rontolisp:jvm-export 'ub-p :params '() :returns :bool)")));
+		assertThat(declaredFieldNames(threaded)).contains("_unbound");
+		assertThat(declaredMethodNames(threaded)).contains("_dbound");
+		assertThat(ownCallsIn(threaded, "UB-P", "_dbound")).isOne();
+		assertThat(ownCallsIn(threaded, "UB-P", "_envLookup")).isZero();
+		assertThat(runClass(threaded)).isEqualTo("T");
 		byte[] neverBound = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p))")));
 		assertThat(declaredFieldNames(neverBound)).contains("_unbound");
@@ -20327,18 +20336,19 @@ class JvmLispCompilerTest {
 	@Test
 	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() throws Exception {
 		// A literal probe of a special whose variable carries its bound-ness reads that
-		// variable alone (_dbound), so a program whose every boundp is one carries
-		// neither the eval runtime nor its mirror writes. A literal probe of a global a
-		// definer gives a value, here from a function, still reads the mirror and brings
-		// both back.
+		// variable alone (its field against the UNBOUND marker), so a program whose
+		// every boundp is one carries neither the eval runtime nor its mirror writes. A
+		// literal probe of a global a definer gives a value, here from a function, still
+		// reads the mirror and brings both back.
 		byte[] literal = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE)));
-		assertThat(declaredMethodNames(literal)).contains("_dbound").doesNotContain("_eval", "_store", "_envLookup");
+		assertThat(declaredFieldNames(literal)).contains("_unbound");
+		assertThat(declaredMethodNames(literal)).doesNotContain("_eval", "_store", "_envLookup");
 		byte[] mixed = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb* 0)"
 					+ " (defun ub-p () (list (boundp '*ub*) (boundp '*nb*))) (print (let ((*ub* 1)) (ub-p)))")));
-		assertThat(declaredMethodNames(mixed)).contains("_dbound", "_envLookup");
-		assertThat(ownCallsIn(mixed, "UB-P", "_dbound")).isOne();
+		assertThat(declaredMethodNames(mixed)).contains("_envLookup");
+		assertThat(fieldReadsIn(mixed, "UB-P", "_unbound")).isOne();
 		assertThat(runClass(mixed)).isEqualTo("(T T)");
 	}
 
@@ -21391,6 +21401,50 @@ class JvmLispCompilerTest {
 				(:REBOUND T)
 				(:OUTER T)
 				(:GLOBAL NIL)""");
+	}
+
+	@Test
+	void aSpecialIsBoundShallowUnlessAnotherThreadCanRunLispCode() throws Exception {
+		// A program that runs Lisp code on one thread only binds a special by saving,
+		// setting and restoring its _g$ field, so a read is one getstatic -- in a closure
+		// built inside the binding as in a callee -- and the class carries no ThreadLocal
+		// for it (.kb/dynamic-special-variables.md, "JVM"). Every way another thread can
+		// run the program's Lisp code keeps the per-thread _d$ store and the _dget read.
+		String binding = """
+				(defvar *who* :global)
+				(defun who () *who*)
+				(defun bound () (let ((*who* :bound)) (list (who) (funcall (lambda () *who*)))))
+				""";
+		byte[] alone = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(binding + "(print (list (bound) (who)))")));
+		assertThat(declaredFieldNames(alone)).noneMatch(name -> name.startsWith("_d$"));
+		assertThat(declaredMethodNames(alone)).doesNotContain("_dget", "_dbind", "_dset");
+		assertThat(countOccurrences(alone, "java/lang/ThreadLocal")).isZero();
+		assertThat(fieldReadsIn(alone, "WHO", "_g$*WHO*")).isOne();
+		assertThat(runClass(alone)).isEqualTo("((:BOUND :BOUND) :GLOBAL)");
+		Map<String, String> entries = new java.util.LinkedHashMap<>();
+		entries.put("a thread primitive", "(print (rontolisp:join-thread (rontolisp:make-thread #'bound)))");
+		entries.put("an async body", "(rontolisp:async-defun job () (bound)) (print (rontolisp:await (job)))");
+		entries.put("a jvm-export wrapper",
+				"(defun bound-count () (length (bound))) (rontolisp:jvm-export 'bound-count :params '() :returns :s64)");
+		entries.put("a function Java calls back",
+				"(java:call (java:new \"java.lang.Thread\" (lambda (m) (print (bound)))) \"run\")");
+		entries.put("a java:proxy",
+				"(java:call (java:proxy \"java.lang.Runnable\" (lambda (m) (print (bound)))) \"run\")");
+		entries.put("the java: bridge", "(defun poke (o) (java:call o \"frobnicate\")) (print (bound))");
+		entries.put("an ffi: upcall", "(print (list (ffi:size :int) (bound)))");
+		for (Map.Entry<String, String> entry : entries.entrySet()) {
+			byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString(binding + entry.getValue())));
+			assertThat(declaredFieldNames(classBytes)).as(entry.getKey()).contains("_d$*WHO*");
+			assertThat(declaredMethodNames(classBytes)).as(entry.getKey()).contains("_dget", "_dbind");
+			assertThat(fieldReadsIn(classBytes, "WHO", "_g$*WHO*")).as(entry.getKey()).isOne();
+			assertThat(ownCallsIn(classBytes, "WHO", "_dget")).as(entry.getKey()).isOne();
+		}
+		byte[] objc = new JvmLispCompiler("Test").compile(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(binding + "(print (list (objc:objectp nil) (bound)))",
+						am.ik.rontolisp.reader.Features.JVM, false, false));
+		assertThat(declaredFieldNames(objc)).as("an objc: callback").contains("_d$*WHO*");
 	}
 
 	@Test
@@ -24737,6 +24791,23 @@ class JvmLispCompilerTest {
 		return reads;
 	}
 
+	/** The reads method {@code method} makes of the static field {@code field}. */
+	private static int fieldReadsIn(byte[] classBytes, String method, String field) {
+		int reads = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction read
+						&& read.opcode() == java.lang.classfile.Opcode.GETSTATIC && read.name().equalsString(field)) {
+					reads++;
+				}
+			}
+		}
+		return reads;
+	}
+
 	/** The writes method {@code method} makes to the static field {@code field}. */
 	private static int fieldWritesIn(byte[] classBytes, String method, String field) {
 		int writes = 0;
@@ -24918,9 +24989,13 @@ class JvmLispCompilerTest {
 	void compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable() throws Exception {
 		// A write-to-string keyword is the ONLY binding of *print-length* here: the
 		// Pass-2 lowering turns it into a let of the variable, which the dynamic-binding
-		// collector must see, or the JVM compile fails with "dynamically bound here but
-		// has no thread-local store".
+		// collector must see where the binding is thread-scoped -- here a host can call
+		// in through the export -- or the JVM compile fails with "dynamically bound here
+		// but has no thread-local store".
 		assertThat(compileAndRun("(print (write-to-string (list 'a 'b) :length 1))")).isEqualTo("\"(A ...)\"");
+		assertThat(compileAndRun("(defun ab () (write-to-string (list 'a 'b) :length 1))"
+				+ " (rontolisp:jvm-export 'ab :params '() :returns :string) (print (ab))"))
+			.isEqualTo("\"(A ...)\"");
 	}
 
 	@Test

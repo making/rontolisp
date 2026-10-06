@@ -26,9 +26,11 @@ round-trip are portable.
   `_dtl(name)` -> `_d$` ThreadLocal -> `_dbind`; `JvmLispCompiler` forces
   `*STANDARD-OUTPUT*`/`*STANDARD-INPUT*`/`*ERROR-OUTPUT*` into `specialVars` (clack binds them
   through the alist, invisible to `SpecialVarCollector`; `.kb/standard-output-redirect.md`) and
-  ALL specials into `boundSpecialVars`. A non-special name is a clear runtime error, not a silent
-  global write. A closure built inside a binding extent still reads its capture — pass `#'name`
-  for the global value.
+  ALL specials into `boundSpecialVars`, which the thread primitives make thread-scoped (the
+  program's specials are never bound shallow, `.kb/dynamic-special-variables.md` "One thread").
+  A non-special name is a clear runtime error, not a silent global write. A closure built inside
+  a binding extent captures no special: run on the new thread it reads that thread's binding,
+  else the global.
 - `join-thread` RE-SIGNALS the thread's error so `handler-case` dispatches by condition type. On
   the JVM the condition cannot ride `_condTl` across threads, so `call()` completes the FutureTask
   NORMALLY with `{EMARKER, throwable, condition}` and `_thread_join` records the condition under

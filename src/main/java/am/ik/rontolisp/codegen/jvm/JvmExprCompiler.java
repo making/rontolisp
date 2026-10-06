@@ -353,9 +353,9 @@ final class JvmExprCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
-		// A special is never a lexical (JvmLetCompiler binds it in its dynamic cell
-		// alone), so it reaches the globals arm below wherever it is read: the active
-		// binding through _dget, in a closure as in the binding method.
+		// A special is never a lexical (JvmLetCompiler binds it in its global field or
+		// its dynamic cell alone), so it reaches the globals arm below wherever it is
+		// read: the active binding, in a closure as in the binding method.
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			if (ctx.boxedVars.contains(name)) {
@@ -405,11 +405,12 @@ final class JvmExprCompiler {
 	}
 
 	/**
-	 * Reads a global variable. A special that is dynamically bound somewhere in the
-	 * program reads DYNAMIC-FIRST through {@code _dget} (this thread's binding when one
-	 * is active, else the {@code _g$} global default); every other global -- including a
-	 * special that is never {@code let}-bound -- stays a single {@code getstatic}, plus
-	 * the UNBOUND-marker test when its field carries its bound-ness
+	 * Reads a global variable. A special whose dynamic binding is thread-scoped
+	 * ({@code Ctx.threadScopedSpecials}) reads DYNAMIC-FIRST through {@code _dget} (this
+	 * thread's binding when one is active, else the {@code _g$} global default); every
+	 * other global -- a special a shallow binding sets, one that is never
+	 * {@code let}-bound -- stays a single {@code getstatic}, plus the UNBOUND-marker test
+	 * when its field carries its bound-ness
 	 * ({@link JvmDynVarRuntimeBuilder#unboundMarker}).
 	 */
 	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
