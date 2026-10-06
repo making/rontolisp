@@ -16,6 +16,7 @@ import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13709,6 +13710,14 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunScaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument.
+		assertThat(compileAndRunExpanded(ScaleFloatOperandsFixture.PROGRAM))
+			.isEqualTo(ScaleFloatOperandsFixture.EXPECTED);
 	}
 
 	@Test

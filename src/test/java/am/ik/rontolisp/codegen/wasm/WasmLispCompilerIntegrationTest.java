@@ -30,6 +30,7 @@ import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14816,6 +14817,17 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.REPORT_PROGRAM, true))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void scaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(ScaleFloatOperandsFixture.PROGRAM, false))
+			.isEqualTo(ScaleFloatOperandsFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ScaleFloatOperandsFixture.PROGRAM, true))
+			.isEqualTo(ScaleFloatOperandsFixture.EXPECTED);
 	}
 
 	@Test

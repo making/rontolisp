@@ -3139,8 +3139,19 @@ public final class Environment implements Scope {
 				Environment::insideUnit);
 		env.defineFunction(LispNames.SCALE_FLOAT, new LispFunction(LispNames.SCALE_FLOAT, args -> {
 			requireArgCount(LispNames.SCALE_FLOAT, args, 2);
-			// f * 2^n with exact IEEE semantics, including the subnormal range.
-			return new LispDouble(Math.scalb(asDouble(args.get(0)), (int) asLong(args.get(1))));
+			// f * 2^n with exact IEEE semantics, including the subnormal range. As in
+			// sbcl
+			// the float is refused before the exponent; an exponent beyond the int range
+			// (a bignum included) saturates the result, so it is clamped, not narrowed.
+			if (!(args.get(0) instanceof LispDouble f)) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.FLOAT, LispNames.SCALE_FLOAT);
+			}
+			int exponent = switch (args.get(1)) {
+				case LispInteger n -> (int) Math.max(-SCALE_FLOAT_CLAMP, Math.min(SCALE_FLOAT_CLAMP, n.value()));
+				case LispBigInteger n -> n.value().signum() < 0 ? -SCALE_FLOAT_CLAMP : SCALE_FLOAT_CLAMP;
+				default -> throw OperandTypeException.of(args.get(1), OperandTypes.Kind.INTEGER, LispNames.SCALE_FLOAT);
+			};
+			return new LispDouble(Math.scalb(f.value(), exponent));
 		}));
 		env.defineFunction(LispNames.FLOAT_RADIX, new LispFunction(LispNames.FLOAT_RADIX, args -> {
 			// The radix of the float representation: every float here is a binary
@@ -9362,6 +9373,12 @@ public final class Environment implements Scope {
 	 * involving NaN is false -- and {@code /=}, which expands to {@code (not (= ...))},
 	 * is true.
 	 */
+	/**
+	 * The magnitude {@code scale-float}'s exponent saturates at: beyond it every finite
+	 * double has overflowed or underflowed, so a larger one answers as this does.
+	 */
+	private static final int SCALE_FLOAT_CLAMP = 2200;
+
 	private static final int UNORDERED = 2;
 
 	/**

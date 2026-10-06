@@ -27,6 +27,7 @@ import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10661,6 +10662,15 @@ class LispEvaluatorTest {
 		// The refused bound, its range and subseq's report text.
 		assertThat(evalPrinted(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void scaleFloatRefusesANonFloatOrNonIntegerArgument() {
+		// A first argument that is no float and a second that is no integer are the
+		// type-error of FLOAT / INTEGER, the float refused first -- sbcl's answers,
+		// pinned
+		// on all four backends.
+		assertThat(evalPrinted(ScaleFloatOperandsFixture.PROGRAM)).isEqualTo(ScaleFloatOperandsFixture.EXPECTED);
 	}
 
 	@Test

@@ -150,9 +150,10 @@ final class WasmOperandTypes {
 	 * ({@link OperandTypes#sequenceOperators}), {@code ARRAY}'s and {@code HASH-TABLE}'s
 	 * when an array or a hash-table accessor's do and {@code CHARACTER}'s when a
 	 * character operator's do ({@link OperandTypes#characterOperators}) or the module
-	 * stores into strings ({@link #CHARACTER_CHECKED}): a landing selects among only the
-	 * types they can name, so a suffix no row can reach is never cited and drops with the
-	 * string blob's dead ranges
+	 * stores into strings ({@link #CHARACTER_CHECKED}) and {@code FLOAT}'s when
+	 * {@code scale-float}'s do ({@link OperandTypes#floatOperators}): a landing selects
+	 * among only the types they can name, so a suffix no row can reach is never cited and
+	 * drops with the string blob's dead ranges
 	 */
 	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes,
 			WasmLispCompiler.StringTable.@Nullable StringEntry indexPrefix,
@@ -234,6 +235,9 @@ final class WasmOperandTypes {
 				}
 				if (OperandTypes.characterOperators().contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.CHARACTER));
+				}
+				if (OperandTypes.floatOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.FLOAT));
 				}
 			}
 			if (spelled.test(CHARACTER_CHECKED)) {

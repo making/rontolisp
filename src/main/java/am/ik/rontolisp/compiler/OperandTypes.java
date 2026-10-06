@@ -85,7 +85,15 @@ public final class OperandTypes {
 		 * {@code (setf gethash)}, {@code remhash}, {@code maphash},
 		 * {@code hash-table-count}, {@code clrhash}).
 		 */
-		HASH_TABLE;
+		HASH_TABLE,
+
+		/**
+		 * A non-float reaching {@code scale-float}'s float argument (a complex, an
+		 * integer or a ratio is none): the type its lowering and the interpreter's
+		 * built-in signal, the argument refused before the exponent
+		 * ({@link OperandTypes#floatOperators}).
+		 */
+		FLOAT;
 
 		/**
 		 * The type's symbol name, as a report and an {@code expected-type} spell it:
@@ -242,6 +250,12 @@ public final class OperandTypes {
 			"HASH-TABLE-REHASH-THRESHOLD");
 
 	/**
+	 * {@code scale-float}, funnel-typed: its float argument lands {@code FLOAT}, its
+	 * exponent {@code INTEGER}. After {@link #ELT}.
+	 */
+	private static final List<String> FLOAT_OPERATORS = List.of("SCALE-FLOAT");
+
+	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
 	 * checked, the single one of a one-argument call included. Last in the table, after
 	 * the hash-table accessors.
@@ -362,6 +376,10 @@ public final class OperandTypes {
 		order.add(DIGIT_CHAR_P);
 		OPERATOR_TYPES.put(ELT, FUNNEL_TYPE);
 		order.add(ELT);
+		for (String op : FLOAT_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
+		}
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -450,6 +468,15 @@ public final class OperandTypes {
 	 */
 	public static List<String> characterOperators() {
 		return CHARACTER_OPERATORS_ALL;
+	}
+
+	/**
+	 * The operators whose checks land {@link Kind#FLOAT}, as {@link #sequenceOperators()}
+	 * is for {@code SEQUENCE}.
+	 * @return the operator names
+	 */
+	public static List<String> floatOperators() {
+		return FLOAT_OPERATORS;
 	}
 
 	/**
