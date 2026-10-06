@@ -45,7 +45,15 @@ class CtxBuilderSeedTest {
 			SymbolPrintTable.class,
 			() -> new SymbolPrintTable(new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>(), false),
 			ClosRegistry.class, ClosRegistry::new, am.ik.rontolisp.macro.BakedSymbolAccess.class,
-			() -> am.ik.rontolisp.macro.BakedSymbolAccess.of(new am.ik.rontolisp.PackageResolver()));
+			() -> am.ik.rontolisp.macro.BakedSymbolAccess.of(new am.ik.rontolisp.PackageResolver()),
+			WasmComplexBlock.class,
+			() -> new WasmComplexBlock(0,
+					(stream, uses) -> WasmLispCompiler.Ctx.builder()
+						.writer(new WasmWriter(stream))
+						.bodyStream(stream)
+						.stringTable(new WasmLispCompiler.StringTable(0, false, false))
+						.fdlibmUsed(uses)
+						.build()));
 
 	@Test
 	void aSeededBuilderCarriesEveryFieldOfItsPrototype() throws Exception {
