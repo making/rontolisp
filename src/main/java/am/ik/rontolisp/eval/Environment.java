@@ -9719,28 +9719,54 @@ public final class Environment implements Scope {
 		return LispComplex.valueOf(re, im);
 	}
 
+	// A left fold from the first operand, one pair at a time like SBCL: a real operand
+	// multiplies each part of the other (so a -0.0 part keeps its sign, which the
+	// textbook
+	// formula over (r, 0) loses), two complexes take (ac-bd, ad+bc), and a step whose
+	// parts
+	// are all exact stays exact whatever float follows. The compiled twins are
+	// JvmComplexRuntimeBuilder.buildMul and WasmComplexRuntimeBuilder.buildMulBody.
 	private static LispVal mulComplex(List<LispVal> args) {
-		if (hasDouble(args) || hasComplexDoublePart(args)) {
-			double re = 1.0;
-			double im = 0.0;
-			for (LispVal arg : args) {
-				double[] p = complexDoubleParts(arg);
-				double next = re * p[0] - im * p[1];
-				im = re * p[1] + im * p[0];
-				re = next;
+		LispVal acc = args.get(0);
+		for (int i = 1; i < args.size(); i++) {
+			acc = mulComplexPair(acc, args.get(i));
+		}
+		return acc;
+	}
+
+	private static LispVal mulComplexPair(LispVal x, LispVal y) {
+		if (!(x instanceof LispComplex) && !(y instanceof LispComplex)) {
+			if (x instanceof LispDouble || y instanceof LispDouble) {
+				return new LispDouble(realToDouble(x) * realToDouble(y));
 			}
-			return LispComplex.valueOf(new LispDouble(re), new LispDouble(im));
+			return exactMul(x, y);
 		}
-		LispVal re = new LispInteger(1);
-		LispVal im = new LispInteger(0);
-		for (LispVal arg : args) {
-			LispVal c = complexReal(arg);
-			LispVal d = complexImag(arg);
-			LispVal next = exactSub(exactMul(re, c), exactMul(im, d));
-			im = exactAdd(exactMul(re, d), exactMul(im, c));
-			re = next;
+		if (x instanceof LispComplex z && !(y instanceof LispComplex)) {
+			return mulComplexByReal(z, y);
 		}
+		if (y instanceof LispComplex z && !(x instanceof LispComplex)) {
+			return mulComplexByReal(z, x);
+		}
+		if (hasComplexDoublePart(List.of(x, y))) {
+			double[] p = complexDoubleParts(x);
+			double[] q = complexDoubleParts(y);
+			return LispComplex.valueOf(new LispDouble(p[0] * q[0] - p[1] * q[1]),
+					new LispDouble(p[0] * q[1] + p[1] * q[0]));
+		}
+		LispVal c = complexReal(y);
+		LispVal d = complexImag(y);
+		LispVal re = exactSub(exactMul(complexReal(x), c), exactMul(complexImag(x), d));
+		LispVal im = exactAdd(exactMul(complexReal(x), d), exactMul(complexImag(x), c));
 		return LispComplex.valueOf(re, im);
+	}
+
+	private static LispVal mulComplexByReal(LispComplex z, LispVal r) {
+		if (r instanceof LispDouble || z.real() instanceof LispDouble) {
+			double k = realToDouble(r);
+			return LispComplex.valueOf(new LispDouble(realToDouble(z.real()) * k),
+					new LispDouble(realToDouble(z.imag()) * k));
+		}
+		return LispComplex.valueOf(exactMul(z.real(), r), exactMul(z.imag(), r));
 	}
 
 	private static LispVal divComplex(List<LispVal> args) {

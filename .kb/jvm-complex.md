@@ -26,6 +26,14 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
   twin where the real body would reject it ("A complex through a variable"
   below). `_dbl`'s REAL arm sits after every real rung. `eql`/`equal`/`eq` need
   nothing (they fall through to the holder's `equals`).
+- A product keeps a `-0.0` part the way SBCL does (measured 2026-10-06, SBCL 2.2.9: the
+  interpreter lost it from its `(1, 0)` seed and the JVM and both WASM backends from
+  treating a real operand as `(r, 0)`): a REAL operand multiplies each part of the other
+  (`(* #c(0.0 -0.0) 1)` is `#C(0.0 -0.0)`), two complexes take `(ac-bd, ad+bc)`, the
+  fold is left to right from the first operand, and a step whose parts are all exact stays
+  exact whatever float follows. `_cmul`, `_c_mul` and `Environment.mulComplexPair` are one
+  rule; `ComplexProductSignedZeroFixture` pins it. `expt` of a float complex by an integer
+  still folds through `exp(w*log z)` and loses the sign on every backend.
 - Gated `GROUP_COMPLEX` (`JvmComplexRuntimeBuilder`, only when
   `mayCreateComplex`: a `#C` literal, a `complex`/`conjugate` call, a `sqrt`
   mention, or a `#'complex`/`#'conjugate`/`#'phase` designator -- plus

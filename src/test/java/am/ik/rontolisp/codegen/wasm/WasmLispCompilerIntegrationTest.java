@@ -27306,6 +27306,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void complexProductSignedZero() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"cpsz-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
+	@Test
 	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
 		// EH mode without a handler around the division: the entry landing pad reports
 		// it as the interpreter does. Outside EH mode it is still the bare trap.

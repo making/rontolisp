@@ -1991,6 +1991,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplexProductSignedZero() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

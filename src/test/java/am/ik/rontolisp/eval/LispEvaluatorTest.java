@@ -20205,6 +20205,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 	}
 
+	// A product with a complex operand keeps a negative zero part (the fold seeded from
+	// 1+0i lost it). The twins are
+	// JvmLispCompilerTest#compileAndRunComplexProductSignedZero
+	// and WasmLispCompilerIntegrationTest#complexProductSignedZero.
+	@Test
+	void complexProductSignedZero() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

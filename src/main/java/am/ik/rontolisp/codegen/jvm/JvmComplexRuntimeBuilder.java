@@ -548,10 +548,53 @@ final class JvmComplexRuntimeBuilder {
 		return refs.rDiv();
 	}
 
-	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc).
+	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc). A REAL operand
+	// multiplies each part of the other instead (SBCL's rule, and the only one that keeps
+	// a
+	// -0.0 part: the formula over (r, 0) turns it into +0.0), and two reals are a plain
+	// _mul. The interpreter twin is Environment.mulComplexPair.
 	// Slots: params 0-1, parts 2-5, boxed results 6-7, doubles 8-15.
 	private static ComplexMethod buildMul(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
+		MethodCode.Label firstIsHolder = c.newLabel();
+		MethodCode.Label general = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifne(firstIsHolder);
+		// First operand real.
+		MethodCode.Label secondIsHolder = c.newLabel();
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifne(secondIsHolder);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.areturn();
+		c.labelBinding(secondIsHolder);
+		emitExtractParts(c, refs, 1, 4, 5);
+		c.aload(0);
+		c.aload(4);
+		c.invokestatic(refs.rMul());
+		c.aload(0);
+		c.aload(5);
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+		// First operand a holder: a real second operand scales both parts.
+		c.labelBinding(firstIsHolder);
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifne(general);
+		emitExtractParts(c, refs, 0, 2, 3);
+		c.aload(2);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.aload(3);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+		c.labelBinding(general);
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
 		MethodCode.Label toFloat = c.newLabel();

@@ -163,7 +163,11 @@ final class WasmComplexRuntimeBuilder {
 	}
 
 	// _cmul((ref null eq) a, (ref null eq) b) -> (ref null eq): (ac-bd) + (ad+bc)i
-	// over the exact _rat_* helpers, canonicalized.
+	// over the exact _rat_* helpers, canonicalized. A REAL operand multiplies each part
+	// of the other instead (SBCL's rule, and the only one that keeps a -0.0 part: the
+	// formula over (r, 0) turns it into +0.0), and two reals are a plain _rat_mul. The
+	// interpreter twin is Environment.mulComplexPair, the JVM twin
+	// JvmComplexRuntimeBuilder.buildMul.
 	static byte[] buildMulBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -172,6 +176,32 @@ final class WasmComplexRuntimeBuilder {
 		w.write(1);
 		w.write(6);
 		w.writeRefType(true, Type.EQ.code());
+
+		// Neither operand a complex.
+		emitIsComplex(w, 0);
+		emitIsComplex(w, 1);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Exactly one a complex: the real scales both parts of the other.
+		emitIsComplex(w, 0);
+		emitIsComplex(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		emitIsComplex(w, 0);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		emitScaleParts(w, 0, 1);
+		w.write(Instruction.ELSE);
+		emitScaleParts(w, 1, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
 		emitComplexReal(w, 0);
 		w.write(Instruction.SET_LOCAL);
@@ -211,6 +241,18 @@ final class WasmComplexRuntimeBuilder {
 
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// Pushes the canonical complex whose parts are the parts of the complex in
+	// local[complexSlot] each multiplied by the real in local[realSlot].
+	private static void emitScaleParts(WasmWriter w, int complexSlot, int realSlot) {
+		emitComplexReal(w, complexSlot);
+		getLocal(w, realSlot);
+		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		emitComplexImag(w, complexSlot);
+		getLocal(w, realSlot);
+		call(w, WasmLispCompiler.FUNC_RAT_MUL);
+		call(w, WasmLispCompiler.FUNC_C_COMPLEX);
 	}
 
 	// _cdiv((ref null eq) a, (ref null eq) b) -> (ref null eq): (a+bi)/(c+di). The
