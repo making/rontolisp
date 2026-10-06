@@ -235,6 +235,11 @@ A program without `fmakunbound` is byte-identical to before.
 `fmakunbound` — eager compilation cannot be undone, so only LATE-bound references see the
 retirement. `symbol-function`/`fdefinition` of a LITERAL name are folded the same way and are
 likewise not tombstone-aware.
+**Measured 2026-10-06**: a COMPUTED `funcall` is not one of those late-bound references on the
+compilers -- the dispatchers resolve a symbol through `_lookup` alone, so `(funcall (intern
+"F"))` after `fmakunbound` still calls `F` on the JVM, P1 and the component, and a name only
+`eval`'s `defun` or a computed `(setf (symbol-function ...))` bound is undefined there
+(`.todo/d79`). A computed `symbol-function` / `fdefinition` / `apply` does see the tombstone.
 
 ### `(setf (symbol-function 'f) fn)` / `(setf (fdefinition 'f) fn)`
 `expandSetf` lowers both places to `(%set-symbol-function name value)` (the CL internals
@@ -466,8 +471,9 @@ symbol-to-function route (the interpreter resolves designators against the live 
   what `#'name` would have produced. `functionp` answers t, the value prints its
   registered name, `funcall` dispatches, and an undefined name signals at the
   `symbol-function` itself as an `undefined-function` (WASM: the arity-0 dispatcher's
-  report, so a trap only where no handler can catch; the one exception is a name
-  `fmakunbound` retired, still a trap there), matching the interpreter and SBCL. `t`,
+  report, so a trap only where no handler can catch; a name `fmakunbound` retired throws
+  through `_undefined_function` instead, since the dispatcher's registry lookup may still
+  answer it and call the retired function), matching the interpreter and SBCL. `t`,
   `nil` and keywords are such names: the interpreter's `fboundp` / `symbol-function` /
   `fdefinition` / `funcall` accept the `t` and `nil` VALUES as the symbols they are, and the
   JVM maps a null designator to `NIL` before the registry sees it. The eval runtime's

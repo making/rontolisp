@@ -579,12 +579,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The index of {@code _lit_stage}, right after {@code _arity_chk}, so adding it moves
-	 * no fixed index -- only {@link #userFuncBase()}, which every consumer already reads
-	 * dynamically. Only meaningful when {@link #emitsLitStage} is set.
+	 * The index of {@code _lit_stage}, right after {@code _undefined_function}, so adding
+	 * it moves no fixed index -- only {@link #userFuncBase()}, which every consumer
+	 * already reads dynamically. Only meaningful when {@link #emitsLitStage} is set.
 	 */
 	private int litStageFuncBase() {
+		return undefinedFunctionFuncBase() + (this.emitsUndefinedFunction ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code _undefined_function}, right after {@code _arity_opening}, so
+	 * adding it moves no fixed index -- only {@link #userFuncBase()}. Only meaningful
+	 * when {@link #emitsUndefinedFunction} is set.
+	 */
+	private int undefinedFunctionFuncBase() {
 		return arityOpeningFuncBase() + (this.emitsArityOpening ? 1 : 0);
+	}
+
+	/**
+	 * The module index of {@code _undefined_function}, the shared throw of the
+	 * {@code undefined-function} a name in hand reports
+	 * ({@code WasmRuntimeBuilder.buildUndefinedFunctionBody}), or {@code -1} when this
+	 * module carries none.
+	 * @return the function index, or -1
+	 */
+	int undefinedFunctionFuncIndex() {
+		return this.emitsUndefinedFunction ? undefinedFunctionFuncBase() : -1;
 	}
 
 	/**
@@ -856,6 +876,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * be built gets a stub.
 	 */
 	private boolean emitsArityOpening;
+
+	/**
+	 * Whether this module carries {@code _undefined_function}, the throw a computed
+	 * {@code symbol-function} reaches for a name {@code fmakunbound} retired: the arity-0
+	 * dispatcher every other unbound arm reports through cannot serve it, since the
+	 * retired name may still be in the compiled-function registry and the dispatcher
+	 * would call it. Gated like the dispatchers' own report (EH mode) and on the program
+	 * calling {@code fmakunbound}, the only writer of a tombstone; deliberately loose in
+	 * the {@link #emitsArityChk} direction -- the computed sites live in bodies not yet
+	 * compiled -- and decided in the pre-pass, because it shifts {@link #userFuncBase()}.
+	 */
+	private boolean emitsUndefinedFunction;
 
 	/**
 	 * Whether this module carries {@code _lit_stage}, the linear-to-linear staging helper
@@ -3698,6 +3730,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// is where a thrown program-error has both a representation and a catcher.
 		this.emitsArityChk = ehMode && hasLandingPad && this.usesInstances
 				&& (usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns);
+		this.emitsUndefinedFunction = ehMode && programUsesSymbol(program, LispNames.FMAKUNBOUND);
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -4677,6 +4710,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.arityChkFuncIndex(arityChkFuncIndex())
 			.namesArityOperators(this.emitsArityOpening)
 			.litStageFuncIndex(litStageFuncIndex())
+			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
 			.numDefuns(defuns.size())
@@ -5865,6 +5899,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
 						: null,
 				this.usesIdentityHashTables) : null;
+		// The undefined-function throw a name in hand reaches, built here beside the
+		// dispatchers so its texts are interned with theirs.
+		byte[] undefinedFunctionBody = this.emitsUndefinedFunction
+				? WasmRuntimeBuilder.buildUndefinedFunctionBody(notFunctionReport) : new byte[0];
 		// One dispatcher over a funcId set. Built here over every dispatchable funcId
 		// and,
 		// once the module is assembled, rebuilt over the ones a kept function makes
@@ -7614,6 +7652,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsArityOpening) {
 					fnDef.addFunction(TYPE_RAT_NEW);
 				}
+				// The undefined-function throw, right after it, over the arity-0
+				// callable signature.
+				if (this.emitsUndefinedFunction) {
+					fnDef.addFunction(TYPE_CALLABLE_BASE);
+				}
 				// The literal :string staging helper, right after it: reuses
 				// TYPE_RD_MEMEQ's (i32, i32, i32) -> i32 signature, so no module gains a
 				// type entry for it either.
@@ -8636,6 +8679,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The shared report opening body, in arityOpeningFuncBase() order.
 				if (this.emitsArityOpening) {
 					code.addFunction(arityOpeningBody);
+				}
+				// The undefined-function throw body, in undefinedFunctionFuncBase()
+				// order.
+				if (this.emitsUndefinedFunction) {
+					code.addFunction(undefinedFunctionBody);
 				}
 				// The literal :string staging helper, in litStageFuncBase() order.
 				if (this.emitsLitStage) {
@@ -11413,6 +11461,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int litStageFuncIndex = -1;
 
 		/**
+		 * The module index of {@code _undefined_function}, or {@code -1} when this module
+		 * carries none ({@code WasmLispCompiler.emitsUndefinedFunction}).
+		 */
+		int undefinedFunctionFuncIndex = -1;
+
+		/**
 		 * The complex block a site hands a complex arriving through a variable to, or
 		 * null in a module whose program cannot observe a complex
 		 * ({@link WasmLispCompiler#complexCapable}). Also what a site asks whether it
@@ -11587,6 +11641,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.namesArityOperators = builder.namesArityOperators;
 			this.arityNamedCallees = builder.arityNamedCallees;
 			this.litStageFuncIndex = builder.litStageFuncIndex;
+			this.undefinedFunctionFuncIndex = builder.undefinedFunctionFuncIndex;
 			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
 			this.importDecls = builder.importDecls;
@@ -11773,6 +11828,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int litStageFuncIndex = -1;
 
+			private int undefinedFunctionFuncIndex = -1;
+
 			private @Nullable WasmComplexBlock complexBlock;
 
 			private int[] litStageBytes = new int[1];
@@ -11918,6 +11975,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.namesArityOperators = proto.namesArityOperators;
 				this.arityNamedCallees = proto.arityNamedCallees;
 				this.litStageFuncIndex = proto.litStageFuncIndex;
+				this.undefinedFunctionFuncIndex = proto.undefinedFunctionFuncIndex;
 				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
 				this.importDecls = proto.importDecls;
@@ -12233,6 +12291,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder litStageFuncIndex(int litStageFuncIndex) {
 				this.litStageFuncIndex = litStageFuncIndex;
+				return this;
+			}
+
+			Builder undefinedFunctionFuncIndex(int undefinedFunctionFuncIndex) {
+				this.undefinedFunctionFuncIndex = undefinedFunctionFuncIndex;
 				return this;
 			}
 

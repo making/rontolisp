@@ -114,13 +114,14 @@ a site straight to the host call instead -- one `memory.copy` and no wrapper -- 
 - **The wrapper still exists** for `#'name`/`funcall`/`mapcar`/dispatch and for a RUNTIME
   string argument; the shaker drops it when no site needs it, and with it `_str_build` and
   `_str_to_mem` when nothing else in the module builds a string.
-- `_lit_stage` sits right after `_arity_chk` (`litStageFuncBase()`), so it shifts
-  `userFuncBase()` and no fixed index. Its presence is decided from the DIRECTIVES in front
-  of pass 2 (`canLowerLiteralCallSite`), deliberately loose in the same direction
-  `emitsArityChk` is: a module whose sites all turn out not to qualify pays one unreferenced
-  function, while a site emitted against an index the module never reserved cannot happen. A
-  site settles its import ordinal the same way, from the declarations alone, and `compile`
-  checks that answer against the core import slot list rather than trusting it.
+- `_lit_stage` sits after `_arity_chk`, `_arity_opening` and `_undefined_function`
+  (`litStageFuncBase()`), so it shifts `userFuncBase()` and no fixed index. Its presence is
+  decided from the DIRECTIVES in front of pass 2 (`canLowerLiteralCallSite`), deliberately
+  loose in the same direction `emitsArityChk` is: a module whose sites all turn out not to
+  qualify pays one unreferenced function, while a site emitted against an index the module
+  never reserved cannot happen. A site settles its import ordinal the same way, from the
+  declarations alone, and `compile` checks that answer against the core import slot list
+  rather than trusting it.
 - **Measured 2026-09-13** on the `789` reactor (`--no-wasi --optimize=size`): **1,654 ->
   1,308 bytes (-21%)**, `_str_build` 69 + `_str_to_mem` 113 + the two import wrappers gone,
   `_lit_stage` 24 in. For scale, `-Oz` over the OLD module stopped at 1,495
