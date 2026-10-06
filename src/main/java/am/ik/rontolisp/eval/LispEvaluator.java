@@ -67,6 +67,8 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import org.jspecify.annotations.Nullable;
@@ -3806,10 +3808,19 @@ public final class LispEvaluator {
 			// that file and line, exactly like the compile path's LoadInliner splice.
 			// Both the read and the #. question are the source-language seam's, picked
 			// by THIS file's extension, so one program may mix languages file by file.
+			// CL's load reads a form and evaluates it before reading the next, so the
+			// forms in front of a malformed one run and the read error is signalled
+			// after them, catchable like any other condition.
 			SourceLanguage language = SourceLanguage.forFile(resolved, null);
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			for (LispVal form : language.read(source, features, resolved, this.sourceStandards, this.sourceLoader)) {
+			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
+					this.sourceLoader);
+			for (LispVal form : read.forms()) {
 				eval(markers ? resolveReadTimeEvalInCode(form) : form);
+			}
+			LispReadException error = read.error();
+			if (error != null) {
+				throw loadReadError(error);
 			}
 		}
 		finally {
@@ -3818,6 +3829,21 @@ public final class LispEvaluator {
 			this.packageResolver.popPackage();
 			this.loadDirStack.removeLast();
 		}
+	}
+
+	/**
+	 * The condition a read error in a loaded file signals: {@code end-of-file} for text a
+	 * form ends inside of, {@code reader-error} otherwise (CLHS 23.1, as the runtime
+	 * {@code read} family classifies). The condition reports the reader's bare message --
+	 * what the compiled backends' {@code load} reports -- while the exception keeps the
+	 * {@code file:line:column:} prefix, so an uncaught one still names the bad spot.
+	 * @param error the read error
+	 * @return the catchable exception
+	 */
+	private static LispEvalException loadReadError(LispReadException error) {
+		String message = String.valueOf(error.getMessage());
+		return new LispEvalException(message, error.isEndOfFile() ? ClosRegistry.newEndOfFileCondition()
+				: ClosRegistry.newReaderErrorCondition(new LispString(error.reason()), LispNil.INSTANCE));
 	}
 
 	/**

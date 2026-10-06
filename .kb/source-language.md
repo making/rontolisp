@@ -7,6 +7,8 @@ on the compile path, `LispEvaluator` on the interpreter. One type owns "source t
 -> forms" (`eval/SourceLanguage.read`, which also owns the `#.` marker decision via
 `usesReadEvalMarkers`), and one method picks the language (`forFile`: the file's
 extension, with the `--source-language` CLI override winning for the entry source).
+`read` is `readUntilError` plus a throw: the forms before the first read error and that
+error, which the interpreter's `load` evaluates and then signals (`.kb/read-load-streams.md`).
 
 The pick is PER FILE: a `(load ...)`ed file is read in the language ITS extension
 names, so one program may mix languages file by file (`LoadInliner.spliceFile` on the

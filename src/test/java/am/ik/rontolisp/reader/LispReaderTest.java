@@ -212,6 +212,34 @@ class LispReaderTest {
 	}
 
 	@Test
+	void aStrayCloseParenReportsItsOwnPosition() {
+		// The token is consumed before the error is built, so the position must name the
+		// ')' itself, not the token after it (or the end of input).
+		assertThatThrownBy(() -> LispReader.readAllFromString("(a) )\n(b)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:1:5: Unexpected ')'");
+	}
+
+	@Test
+	void aPrefixReadAnswersTheFormsBeforeTheFirstError() {
+		// A form-at-a-time consumer evaluates what read before it signals the error.
+		LispReader.ReadPrefix stray = LispReader.readPrefixFromString("(a) (b) )\n(c)\n", Features.INTERPRETER,
+				"lib.lisp");
+		assertThat(stray.forms()).extracting(LispVal::print).containsExactly("(A)", "(B)");
+		assertThat(stray.error()).hasMessage("lib.lisp:1:9: Unexpected ')'");
+		assertThat(java.util.Objects.requireNonNull(stray.error()).reason()).isEqualTo("Unexpected ')'");
+		// A lexical error stops the scan: the form it cuts off is not read, and the
+		// lexer's error is the one reported, not the cut-off form's end of input.
+		LispReader.ReadPrefix comment = LispReader.readPrefixFromString("(a) (b #| x\n", Features.INTERPRETER, null);
+		assertThat(comment.forms()).extracting(LispVal::print).containsExactly("(A)");
+		assertThat(comment.error()).hasMessageContaining("Unterminated block comment");
+		assertThat(java.util.Objects.requireNonNull(comment.error()).isEndOfFile()).isTrue();
+		LispReader.ReadPrefix clean = LispReader.readPrefixFromString("(a) (b)", Features.INTERPRETER, null);
+		assertThat(clean.forms()).hasSize(2);
+		assertThat(clean.error()).isNull();
+	}
+
+	@Test
 	void readNil() {
 		LispVal result = LispReader.readFromString("nil");
 		assertThat(result).isSameAs(LispNil.INSTANCE);

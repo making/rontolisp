@@ -121,48 +121,80 @@ public enum SourceLanguage {
 	 */
 	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards,
 			@Nullable SourceLoader loader) {
+		LispReader.ReadPrefix read = readUntilError(source, features, file, standards, loader);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		return read.forms();
+	}
+
+	/**
+	 * Reads user source text into core forms up to its first read error rather than
+	 * throwing it -- what a form-at-a-time {@code load} evaluates before it signals. A
+	 * Common Lisp source answers every form before the bad one; a Scheme or Clojure
+	 * source is lowered as a whole, so a read error there answers no form.
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param file the origin file for diagnostics and for what the source's file names
+	 * are relative to, or {@code null} when unknown
+	 * @param standards what each language is read against ({@code --scheme-standard})
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @return the forms before the first read error, and that error ({@code null} when
+	 * the whole source read)
+	 */
+	public LispReader.ReadPrefix readUntilError(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader) {
 		// What the seam reads is the PROGRAM's source; a library a splice reads goes to
 		// the reader directly. The compile path tells the two apart by this mark
 		// (CompileWarnings counts only the program's warnings).
-		return SourceProvenance.readingProgramSource(() -> readProgram(source, features, file, standards, loader));
+		return SourceProvenance.readingProgramSource(
+				() -> refuseCircularLists(readProgram(source, features, file, standards, loader), source, file));
 	}
 
-	private List<LispVal> readProgram(String source, Features features, @Nullable String file,
+	private LispReader.ReadPrefix readProgram(String source, Features features, @Nullable String file,
 			SourceStandards standards, @Nullable SourceLoader loader) {
-		if (this == SCHEME) {
-			return refuseCircularLists(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)), source,
-					file);
+		if (this == COMMON_LISP) {
+			return usesReadEvalMarkers(source) ? LispReader.readPrefixWithReadEvalMarkers(source, features, file)
+					: LispReader.readPrefixFromString(source, features, file);
 		}
-		if (this == CLOJURE) {
+		try {
+			if (this == SCHEME) {
+				return new LispReader.ReadPrefix(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)),
+						null);
+			}
 			// The host is wherever the target is no wasm one: a java: member can throw
 			// and take an exception there.
-			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader),
-					!features.contains("rontolisp-wasm")), source, file);
+			return new LispReader.ReadPrefix(Clojure.read(source, file, ClojureMacroTime.create(), clojureFiles(loader),
+					!features.contains("rontolisp-wasm")), null);
 		}
-		return refuseCircularLists(
-				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
-						: LispReader.readAllFromString(source, features, file),
-				source, file);
+		catch (LispReadException ex) {
+			return new LispReader.ReadPrefix(List.of(), ex);
+		}
 	}
 
 	/**
 	 * Refuses a program whose source closes a list back into its own tail with a reader
-	 * label ({@code '#1=(a b . #1#)}). The passes walk a list's spine in a loop
-	 * ({@link LispTrees}), which on such a list would never end; a label that only shares
-	 * structure, or closes a cycle through a car, is left alone. Only a source that
-	 * defines a label pays for the check.
+	 * label ({@code '#1=(a b . #1#)}): the first such form is a read error, and the forms
+	 * before it stand. The passes walk a list's spine in a loop ({@link LispTrees}),
+	 * which on such a list would never end; a label that only shares structure, or closes
+	 * a cycle through a car, is left alone. Only a source that defines a label pays for
+	 * the check.
 	 */
-	private static List<LispVal> refuseCircularLists(List<LispVal> forms, String source, @Nullable String file) {
+	private static LispReader.ReadPrefix refuseCircularLists(LispReader.ReadPrefix read, String source,
+			@Nullable String file) {
 		if (!LABEL_DEFINITION.matcher(source).find()) {
-			return forms;
+			return read;
 		}
-		for (LispVal form : forms) {
-			if (LispTrees.circularSpine(form) != null) {
-				throw new LispReadException((file == null ? "" : file + ": ")
-						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source");
+		List<LispVal> forms = read.forms();
+		for (int i = 0; i < forms.size(); i++) {
+			if (LispTrees.circularSpine(forms.get(i)) != null) {
+				return new LispReader.ReadPrefix(forms.subList(0, i), new LispReadException((file == null ? ""
+						: file + ": ")
+						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source"));
 			}
 		}
-		return forms;
+		return read;
 	}
 
 	private static final Pattern LABEL_DEFINITION = Pattern.compile("#[0-9]+=");

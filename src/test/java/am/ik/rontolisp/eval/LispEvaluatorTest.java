@@ -11324,9 +11324,41 @@ class LispEvaluatorTest {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		evaluator.setLoadBaseDir(dir.toString());
 		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(load \"core.lisp\")")))
-			.isInstanceOf(LispReadException.class)
+			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("core.lisp:2:3: ")
 			.hasMessageContaining("Unknown character name: #\\Nope");
+	}
+
+	@Test
+	void loadRunsTheFormsBeforeAMalformedOneThenSignalsACatchableCondition(@TempDir Path tempDir) throws Exception {
+		// CL's load reads a form, evaluates it, reads the next: the forms before a bad
+		// one run, then the read signals -- end-of-file for text a form ends inside of,
+		// reader-error for a ')' that closes nothing -- and a handler catches it. The
+		// report is the reader's bare message, what the compiled backends' load reports.
+		String[][] cases = { { "(push 1 *seen*) )\n(push 9 *seen*)\n", "(:READER \"Unexpected ')'\")" },
+				{ "(push 1 *seen*) (push 2", "(:EOF \"end of file\")" },
+				{ "(push 1 *seen*) #| x", "(:EOF \"end of file\")" },
+				{ "(push 1 *seen*) (push (list 2 #| x", "(:EOF \"end of file\")" } };
+		for (int i = 0; i < cases.length; i++) {
+			Path lib = tempDir.resolve("bad" + i + ".lisp");
+			Files.writeString(lib, cases[i][0]);
+			LispVal result = evalMulti("""
+					(defvar *seen* nil)
+					(list (handler-case (load "%s")
+					        (end-of-file (c) (list :eof (princ-to-string c)))
+					        (reader-error (c) (list :reader (princ-to-string c))))
+					      *seen*)
+					""".formatted(lib.toString().replace("\\", "\\\\")));
+			assertThat(result.print()).isEqualTo("(" + cases[i][1] + " (1))");
+		}
+		// Uncaught, the failure still names the loaded file's line and column.
+		Path stray = tempDir.resolve("stray.lisp");
+		Files.writeString(stray, "(list 1) )\n");
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		String bad = stray.toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(load \"" + bad + "\")")))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("stray.lisp:1:10: Unexpected ')'");
 	}
 
 	@Test

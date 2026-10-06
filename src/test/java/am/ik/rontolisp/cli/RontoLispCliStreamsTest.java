@@ -14,6 +14,8 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import am.ik.rontolisp.compiler.UncaughtReport;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -666,12 +668,15 @@ class RontoLispCliStreamsTest {
 		Files.writeString(this.tempDir.resolve("lib.scm"), "(define (twice x) (* 2 x))\n");
 		Path program = this.tempDir.resolve("main.lisp");
 		Files.writeString(program, "(load \"lib.scm\")\n(print (|twice| 21))\n");
-		String expected = "error: " + this.tempDir.resolve("lib.scm")
-				+ ":1:1: an R7RS program begins with an import declaration";
-		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(expected);
+		String message = this.tempDir.resolve("lib.scm") + ":1:1: an R7RS program begins with an import declaration";
+		// The interpreter reads the file when the load runs, so the refusal is a
+		// condition that load signals; the compile path splices the file and refuses it
+		// as a compile error.
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(
+				UncaughtReport.line(message) + System.lineSeparator() + UncaughtReport.AT_PREFIX + program + ":1");
 		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs", "-o",
 				this.tempDir.resolve("Mixed.class").toString())[2]
-			.trim()).isEqualTo(expected);
+			.trim()).isEqualTo("error: " + message);
 	}
 
 	@Test
