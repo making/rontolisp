@@ -10,11 +10,11 @@ import am.ik.wasm.Instruction;
  * Compiles the {@code file-position} built-in on either WASI backend: the one-argument
  * query and the two-argument set. The stream argument is resolved down to its raw handle
  * and handed to the {@code _file_position} / {@code _file_position_set} runtime pair,
- * which reach the host through Preview 1's injected {@code fd_seek} or, under
- * {@code --component} (where WASI 0.3 reads are offset-based and no cursor exists), the
- * adapter's tracked per-fd byte offset behind the {@code file_position_get} /
- * {@code file_position_set} imports. A {@code --no-wasi} module has no filesystem and
- * keeps the constant-nil answer.
+ * which answer a string stream themselves and reach the host for a file stream through
+ * Preview 1's injected {@code fd_seek} or, under {@code --component} (where WASI 0.3
+ * reads are offset-based and no cursor exists), the adapter's tracked per-fd byte offset
+ * behind the {@code file_position_get} / {@code file_position_set} imports. A
+ * {@code --no-wasi} module has no filesystem, and a file stream answers nil there.
  */
 final class WasmFilePositionCompiler {
 

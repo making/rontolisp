@@ -145,7 +145,10 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   paths' first-class wrapper, which forwards both bounds) emits `(%check-bounds __pi_s
   __pi_start __pi_endraw)` when `:start` or `:end` is spelled, after every argument has run
   (the `:radix` and `:junk-allowed` forms included) and before the scan; the interpreter's
-  `#'parse-integer` calls `checkBoundingIndices` under the same condition. A fill-pointer
+  `#'parse-integer` calls `checkBoundingIndices` under the same condition. A `:radix` outside
+  2..36 is refused BEFORE the bounds (`.kb/error-handling.md`, "The radix"); a region that is
+  no integer is a `parse-error` (`.kb/error-handling.md`, "`parse-integer` signals a
+  `parse-error`"). A fill-pointer
   string is measured by its fill pointer. Before (measured 2026-10-06, four backends): `:start
   9` and a crossed range were the scan's `simple-error` (no integer); `:end 9` the `char`
   `type-error` on the interpreter and JVM and an out-of-bounds trap on both wasm legs over a

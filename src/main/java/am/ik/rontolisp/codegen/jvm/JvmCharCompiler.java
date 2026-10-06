@@ -299,21 +299,25 @@ final class JvmCharCompiler {
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
+	private static boolean isRadix(long value) {
+		return value >= OperandTypes.RADIX_MIN && value <= OperandTypes.RADIX_MAX;
+	}
+
 	/** {@code (digit-char-p ch [radix])}: the digit weight, or nil. */
 	static void compileDigitCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		pushCheckedCode(args.get(1), ctx, className, false);
-		if (args.size() > 2) {
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			if (!(args.get(2) instanceof LispInteger)) {
-				// A radix that is no integer is DIGIT-CHAR-P's INTEGER type-error.
-				ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
-			}
-			JvmEmitHelper.unboxLong(ctx);
-			ctx.body.l2i();
+		if (args.size() < 3) {
+			JvmEmitHelper.emitIntConst(ctx, 10);
+		}
+		else if (args.get(2) instanceof LispInteger radix && isRadix(radix.value())) {
+			JvmEmitHelper.emitIntConst(ctx, (int) radix.value());
 		}
 		else {
-			JvmEmitHelper.emitIntConst(ctx, 10);
+			// A radix that is no integer in 2..36 is DIGIT-CHAR-P's (INTEGER 2 36)
+			// type-error.
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_RADIX));
 		}
 		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I"));
 		// weight on stack: if weight < 0 return nil, else Long.valueOf(weight)

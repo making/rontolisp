@@ -1483,9 +1483,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(full, ctx, className);
 				}
 				else {
-					JvmReadFromStringCompiler.compile(cons, ctx, className);
+					// Malformed text signals (expandReadFromStringFailure).
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				}
 			}
+			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> JvmReadFromStringCompiler.compile(cons, ctx, className);
+			case LispNames.READ_FAILURE_INTERNAL -> JvmReadFromStringCompiler.compileFailure(ctx, className);
 			case LispNames.READ_FROM_STRING_END -> JvmReadFromStringCompiler.compileEnd(cons, ctx, className);
 			// A string=/string-equal call with the bounding-index keywords is lowered
 			// onto subseq first, so the intrinsic below always sees two strings.
@@ -2078,6 +2082,8 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,
 						ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			}
+			case LispNames.PARSE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.lowerParseError(cons, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
 			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);

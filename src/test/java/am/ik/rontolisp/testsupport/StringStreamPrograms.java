@@ -1,9 +1,10 @@
 package am.ik.rontolisp.testsupport;
 
 /**
- * Two programs pinned identically on the interpreter, the JVM and both WASM backends: the
- * direction predicates answering a stream's REAL direction, and {@code file-position} on
- * a string stream ({@code .kb/read-load-streams.md}, "String streams").
+ * Three programs pinned identically on the interpreter, the JVM and both WASM backends:
+ * the direction predicates answering a stream's REAL direction, {@code file-position} on
+ * a string stream, and {@code with-input-from-string}'s {@code :index} over a character
+ * {@code unread-char} parked ({@code .kb/read-load-streams.md}, "String streams").
  *
  * <p>
  * One text per program, because the behavior must not differ between backends and a
@@ -149,5 +150,121 @@ public final class StringStreamPrograms {
 			"abé"
 			0
 			(#\\c 3)""";
+
+	/**
+	 * {@code with-input-from-string}'s {@code :index} in a program that uses
+	 * {@code unread-char} and never names {@code file-position}: a character parked on
+	 * the stream counts as unread, and the index counts characters from the string's
+	 * start. The last form leaves its character parked when the body exits, on the stream
+	 * that goes with it.
+	 */
+	public static final String INDEX_PUSHBACK_PROGRAM = """
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "xhéllo wörld" :index i :start 1 :end 9)
+			                 (read-char s) (read-char s) (unread-char (read-char s) s) (read-char s))
+			               i)))
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "αβγδ" :index i :start 1 :end 3) (read-char s)) i)))
+			(let ((i nil))
+			  (with-input-from-string (s "abc" :index i) (read-char s) (unread-char #\\a s) (read-char s) (read-char s))
+			  (print i))
+			(let ((i 0))
+			  (with-input-from-string (s "123  " :index i)
+			    (read-char s) (read-char s) (read-char s)
+			    (unread-char (read-char s) s))
+			  (print i))
+			""";
+
+	/** What {@link #INDEX_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String INDEX_PUSHBACK_EXPECTED = """
+			(#\\l 4)
+			(#\\β 2)
+			2
+			3""";
+
+	/**
+	 * The {@code unread-char} pushback belongs to its stream: a stream closed or dropped
+	 * with a character parked leaves no trace on the next one (the closes
+	 * {@code with-input-from-string} synthesizes included), two streams each hold one at
+	 * once, {@code listen} / {@code peek-char} / {@code read-line} see only their own
+	 * stream's, and the parked character is no part of the stream's {@code equal} hash.
+	 */
+	public static final String PER_STREAM_PUSHBACK_PROGRAM = """
+			(with-input-from-string (s "abc") (unread-char (read-char s) s))
+			(print (with-input-from-string (s "xyz") (unread-char (read-char s) s) (read-char s)))
+			(let ((s (make-string-input-stream "pq")))
+			  (unread-char (read-char s) s)
+			  (close s))
+			(let ((s (make-string-input-stream "dropped")))
+			  (unread-char (read-char s) s))
+			(let ((s1 (make-string-input-stream "abc")) (s2 (make-string-input-stream "xyz")))
+			  (unread-char (read-char s1) s1)
+			  (unread-char (read-char s2) s2)
+			  (print (list (listen s1) (read-char s1) (read-char s2) (read-char s1) (peek-char nil s2)
+			               (read-line s2) (listen s2))))
+			(let ((s (make-string-input-stream "mn")) (h (make-hash-table :test 'equal)))
+			  (let ((c (read-char s)))
+			    (setf (gethash s h) :found)
+			    (unread-char c s)
+			    (print (list (gethash s h) (read-char s)))))
+			""";
+
+	/** What {@link #PER_STREAM_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String PER_STREAM_PUSHBACK_EXPECTED = """
+			#\\x
+			(T #\\a #\\x #\\b #\\y "yz" NIL)
+			(:FOUND #\\m)""";
+
+	/**
+	 * The {@code unread-char} pushback belongs to the stream a designator DENOTES, not to
+	 * the designator as written: an omitted stream and {@code nil} park on the stream
+	 * {@code *standard-input*} holds, and a synonym stream on its target, so a read
+	 * through any other designator of the same stream sees the character.
+	 */
+	public static final String DESIGNATOR_PUSHBACK_PROGRAM = """
+			(defvar *dpb-x* nil)
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char))) (read-char s)))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char s) s) (read-char))))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char nil) nil)) (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char y) y))
+			         (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char s) s) (read-char y))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((*standard-input* (make-synonym-stream '*dpb-x*))) (unread-char (read-char)))
+			         (read-char s)))
+			(print (with-input-from-string (s "xyz")
+			         (let ((*standard-input* s))
+			           (unread-char (read-char))
+			           (list (peek-char nil s) (read-line s) (progn (unread-char #\\z s) (listen)) (read-char) (listen)))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*)))
+			           (read-char s)
+			           (unread-char #\\a y)
+			           (list (file-position s) (file-position y) (read-char s)))))
+			(print (with-input-from-string (a "12")
+			         (with-input-from-string (b "34")
+			           (let ((*standard-input* a))
+			             (unread-char (read-char))
+			             (unread-char (read-char b) b)
+			             (list (read-char a) (read-char b))))))
+			""";
+
+	/** What {@link #DESIGNATOR_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String DESIGNATOR_PUSHBACK_EXPECTED = """
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			(#\\x "xyz" T #\\z NIL)
+			(0 0 #\\a)
+			(#\\1 #\\3)""";
 
 }

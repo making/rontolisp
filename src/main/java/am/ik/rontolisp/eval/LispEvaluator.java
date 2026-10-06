@@ -7835,6 +7835,15 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						message instanceof LispString s ? s.value() : message.display());
 			}
+			case LispNames.PARSE_ERROR_INTERNAL: {
+				// parse-integer's signal over a string that is no integer: the same
+				// class-named error the first-class built-in throws, its handler-bind
+				// handlers run here at the signal point as the built-in's are at the
+				// apply seam.
+				LispVal message = cons.cdr() instanceof LispCons rest ? eval(rest.car(), env) : LispNil.INSTANCE;
+				throw withHandlerBindHandlersRun(LispEvalException.ofClass(ClosRegistry.PARSE_ERROR_CLASS_NAME,
+						message instanceof LispString s ? s.value() : message.display()));
+			}
 			case LispNames.FILE_ERROR_INTERNAL: {
 				// (%file-error pathname message): the prelude file operations' signal, a
 				// file-error instance carrying the pathname as given.
@@ -10081,12 +10090,14 @@ public final class LispEvaluator {
 			throw new LispEvalException(name + " expects a slot index");
 		}
 		long k = idx.value();
-		// capacity, not slotCount: the addressable storage of an instance is what its
-		// layout RESERVED, which the compile paths index without a check of their own.
-		if (k < 0 || k >= inst.layout().capacity()) {
+		// The storage, not slotCount: the addressable cells of an instance are what its
+		// layout RESERVED, which the compile paths index without a check of their own. A
+		// negative index counts back from the end of the storage (LispLayout.TAIL_CELL).
+		long cell = k < 0 ? inst.cellCount() + k : k;
+		if (cell < 0 || cell >= inst.cellCount()) {
 			throw new LispEvalException(name + ": slot index " + k + " is outside " + inst.layout().tag());
 		}
-		return (int) k;
+		return (int) cell;
 	}
 
 	/**

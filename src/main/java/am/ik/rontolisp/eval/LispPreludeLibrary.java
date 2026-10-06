@@ -1562,9 +1562,10 @@ public final class LispPreludeLibrary {
 		// types wider and narrower than one octet"). A backend's file descriptor moves
 		// octets whatever the element type, so the TYPE rides beside the stream: every
 		// literal binary open leaf is wrapped in %file-stream-register, keyed by the
-		// HANDLE -- the Gray dispatchers hand the built-ins a resolved handle, not the
-		// stream value -- and every close forgets its entry (%file-stream-forget), so a
-		// WASM descriptor reused after close never inherits one. An entry is
+		// HANDLE -- the Gray byte dispatchers hand the built-ins a resolved handle,
+		// not the stream value -- and every close forgets its entry
+		// (%file-stream-forget), so a WASM descriptor reused after close never
+		// inherits one. An entry is
 		// (octets signed spec). The backends call these only
 		// when the entry is spliced (ctx.functions), and selection keys on the SURFACE
 		// fact (referencedBySurfaceForm), because the calls are synthesized inside the
@@ -4254,10 +4255,8 @@ public final class LispPreludeLibrary {
 		// definition on every backend (the one-argument call keeps the built-in). The
 		// window is the string stream's subseq -- the bounds refusal %check-bounds also
 		// answers, raised once before anything is read. The index is the start plus the
-		// stream's position; a --no-wasi module answers file-position with the constant
-		// nil, and there the characters still unread are counted instead. The terminator
-		// the scanner leaves is taken here rather than unread -- no pushed-back character
-		// outlives the stream, or is left for the count to miss -- and a kept one (not
+		// stream's position. The terminator the scanner leaves is taken here rather than
+		// unread -- no pushed-back character outlives the stream -- and a kept one (not
 		// whitespace, or any under :preserve-whitespace) is counted back.
 		SOURCES.put(LispNames.READ_FROM_STRING_FULL_INTERNAL, """
 				(defun %read-from-string-full (%rfs-string &optional (%rfs-eof-error-p t) %rfs-eof-value
@@ -4277,12 +4276,7 @@ public final class LispPreludeLibrary {
 				                  (progn
 				                    (close %rfs-out)
 				                    (if %rfs-eof-error-p (error 'end-of-file :stream %rfs-s) %rfs-eof-value))))
-				        (setq %rfs-index
-				              (- (+ %rfs-start
-				                    (or (file-position %rfs-s)
-				                        (do ((%rfs-i (- (or %rfs-end (length %rfs-string)) %rfs-start) (- %rfs-i 1)))
-				                            ((null (read-char %rfs-s nil nil)) %rfs-i))))
-				                 %rfs-kept))))
+				        (setq %rfs-index (- (+ %rfs-start (file-position %rfs-s)) %rfs-kept))))
 				    (values %rfs-value %rfs-index)))
 				""");
 	}

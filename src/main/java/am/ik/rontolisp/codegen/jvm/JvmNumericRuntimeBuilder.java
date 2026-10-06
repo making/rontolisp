@@ -226,6 +226,7 @@ final class JvmNumericRuntimeBuilder {
 			Map.entry(JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC),
+			Map.entry(JvmOperandTypeRuntime.CK_RADIX, JvmOperandTypeRuntime.CK_RADIX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC));
 
@@ -2845,14 +2846,19 @@ final class JvmNumericRuntimeBuilder {
 		emitArrayElement(c, 0, objArrClass, 0);
 		emitArrayElement(c, 1, objArrClass, 0);
 		c.if_acmpne(toFalse);
-		// for (int i = 1; i < a.length; i++) if (!_equal(a[i], b[i])) return 0;
+		// for (int i = 1; i < layout.length - 2; i++) if (!_equal(a[i], b[i])) return 0;
+		// The bound is the LAYOUT's slot count (its String[] is {tag, printName, kind,
+		// slot...}), not the array length: the cells a layout reserves past its slots
+		// (change-class room, a Gray input stream's pushback) are no part of the value.
 		c.iconst_1();
 		c.istore(2);
 		MethodCode.Label loopTop = c.newBoundLabel();
 		c.iload(2);
-		c.aload(0);
-		c.checkcast(objArrClass);
+		emitArrayElement(c, 0, objArrClass, 0);
+		c.checkcast(strArrClass);
 		c.arraylength();
+		c.iconst_2();
+		c.isub();
 		MethodCode.Label exitLoop = c.newLabel();
 		c.if_icmpge(exitLoop);
 		c.aload(0);

@@ -138,16 +138,37 @@ final class WasmInstanceCompiler {
 		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
 		if (failure == null) {
 			pushSlots(ctx);
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			return;
 		}
 		emitChecked(ctx, failure, () -> {
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		});
+	}
+
+	/**
+	 * Over the slots array on the stack, pushes the i32 index of slot {@code k}:
+	 * {@code k} itself, or, for a negative {@code k}, counted back from the array's end
+	 * ({@link am.ik.rontolisp.LispLayout#TAIL_CELL}). Leaves {@code [slots, index]}.
+	 */
+	private static void pushCellIndex(WasmLispCompiler.Ctx ctx, int k) {
+		if (k >= 0) {
+			i32Const(ctx, k);
+			return;
+		}
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, k);
+		ctx.writer.write(Instruction.I32_ADD);
 	}
 
 	/**
@@ -275,10 +296,24 @@ final class WasmInstanceCompiler {
 	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
 	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
 	 * follows the object AND the value.
+	 *
+	 * <p>
+	 * The unchecked store compiles with the gate off too: no operand can be an instance
+	 * then, so the operands are evaluated and the store traps, as the instance cast traps
+	 * on a non-instance with the gate on. A library may so write a reserved cell behind
+	 * an {@code %obj-is} test without knowing whether the module builds instances.
 	 */
 	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx) && args.size() <= 4) {
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.DROP);
+			WasmExprCompiler.compileExpr(args.get(3), ctx);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		requireGate(ctx, LispNames.OBJ_SET);
 		LispVal failure = checkedFailure(args, 4, ctx);
 		// The object is evaluated before the value, as in the interpreter.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -290,7 +325,7 @@ final class WasmInstanceCompiler {
 		getLocal(ctx, objSlot);
 		int index = literalIndex(args.get(2), LispNames.OBJ_SET);
 		Runnable store = () -> {
-			i32Const(ctx, index);
+			pushCellIndex(ctx, index);
 			getLocal(ctx, valSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);

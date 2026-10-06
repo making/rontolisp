@@ -3184,11 +3184,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * The message a SECOND {@code unread-char} answers while the handle-side pushback
-	 * still holds a character. CL calls two unreads without an intervening read an error,
-	 * and one slot is all the Gray protocol's own default keeps either. Shared verbatim
-	 * with {@code Environment}'s interpreter definition and with
-	 * {@code unread-char.lisp}'s {@code %unread-char-push}, so the four backends answer
-	 * alike.
+	 * still holds a character for that stream. CL calls two unreads without an
+	 * intervening read an error, and one slot is all the Gray protocol's own default
+	 * keeps either. Shared verbatim with the interpreter's {@code eval/StreamPushback}
+	 * and with {@code unread-char.lisp}'s {@code %unread-char-push}, so the four backends
+	 * answer alike.
 	 */
 	public static final String UNREAD_CHAR_TWICE_MESSAGE = "UNREAD-CHAR without an intervening READ-CHAR";
 
@@ -6447,6 +6447,56 @@ public final class LispMacroExpander {
 				&& first.cdr() instanceof LispCons;
 	}
 
+	/** Fixed temporaries of the one-argument read-from-string lowering. */
+	private static final String RFS_VALUE_VAR = "__rfs_value";
+
+	private static final String RFS_FAILURE_VAR = "__rfs_failure";
+
+	/**
+	 * Lowers the one-argument {@code read-from-string} for a compiled backend so that
+	 * text holding no complete datum SIGNALS as the interpreter's reader does: the
+	 * runtime reader parses without throwing and records how the parse ended
+	 * ({@link LispNames#READ_FAILURE_INTERNAL}), and the expansion turns a failure into
+	 * the condition.
+	 *
+	 * <pre>
+	 * (read-from-string s) ->
+	 *   (let ((__rfs_value (%read-from-string-raw s)))
+	 *     (let ((__rfs_failure (%read-failure)))
+	 *       (if (eql __rfs_failure 0) __rfs_value
+	 *           (if (eql __rfs_failure 1) (error 'end-of-file)
+	 *               (error 'reader-error :format-control (%text-control "Unexpected ')'"))))))
+	 * </pre>
+	 *
+	 * The {@link #lowerParseError} split: where a handler landing pad exists
+	 * ({@code typed}) the arms are typed signals compiled like any other, so in restart
+	 * mode the handlers run at the signal point; without one nothing can observe the
+	 * class and the plain {@code %error} channel prints the identical top-level line.
+	 * @param cons the one-argument read-from-string call
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal expandReadFromStringFailure(LispCons cons, boolean typed) {
+		LispVal text = cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+		LispSymbol failure = new LispSymbol(RFS_FAILURE_VAR);
+		LispVal endOfFile = typed ? endOfFileSignal()
+				: callOf(LispNames.ERROR_INTERNAL, new LispString(ClosRegistry.END_OF_FILE_MESSAGE));
+		LispVal readerError = typed
+				? listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.READER_ERROR_CLASS_NAME),
+						new LispSymbol(":FORMAT-CONTROL"),
+						callOf(LispNames.TEXT_CONTROL_INTERNAL, new LispString(UNMATCHED_CLOSE_MESSAGE))))
+				: callOf(LispNames.ERROR_INTERNAL, new LispString(UNMATCHED_CLOSE_MESSAGE));
+		LispVal dispatch = makeIf(callOf(LispNames.EQL, failure, new LispInteger(0)), new LispSymbol(RFS_VALUE_VAR),
+				makeIf(callOf(LispNames.EQL, failure, new LispInteger(1)), endOfFile, readerError));
+		LispVal inner = makeLet(RFS_FAILURE_VAR, listToCons(List.of(new LispSymbol(LispNames.READ_FAILURE_INTERNAL))),
+				dispatch);
+		return SourceProvenance.inherit(cons,
+				makeLet(RFS_VALUE_VAR, callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text), inner));
+	}
+
+	/** What a {@code )} that closes nothing reports -- the interpreter reader's text. */
+	private static final String UNMATCHED_CLOSE_MESSAGE = "Unexpected ')'";
+
 	/**
 	 * Expands {@code (parse-integer string &key start end radix junk-allowed)} into a
 	 * shared digit-accumulation scan over the {@code char}/{@code digit-char-p}
@@ -6454,10 +6504,12 @@ public final class LispMacroExpander {
 	 * integer and the position where parsing stopped, a literal {@code (values ...)} the
 	 * multiple-value consumers and the {@code %mv-spill} channel pick up). Semantics:
 	 * leading/trailing whitespace is skipped, an optional sign is accepted; without
-	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
+	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals a
+	 * {@code parse-error} ({@link LispNames#PARSE_ERROR_INTERNAL}), with it the scan
 	 * stops at the first non-digit and yields nil when no digits were seen. A spelled
 	 * {@code :start} or {@code :end} is checked once, after every argument has run and
-	 * before the scan: a bad one is {@code subseq}'s bounds type-error.
+	 * before the scan: a bad one is {@code subseq}'s bounds type-error. A radix that is
+	 * no integer in 2..36 is {@code digit-char-p}'s type-error, checked first.
 	 * @param cons the parse-integer expression
 	 * @return the expanded expression
 	 */
@@ -6514,10 +6566,10 @@ public final class LispMacroExpander {
 				List.of(piSetq(acc, mvCall(LispNames.ADD, mvCall(LispNames.MUL, acc, radix), digit)),
 						piSetq(saw, LispTrue.INSTANCE), advance));
 		LispVal result = mvCall(LispNames.VALUES, mvCall(LispNames.MUL, sign, acc), i);
-		LispVal junkError = listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), new LispString("parse-integer: junk in string ~s"), str));
-		LispVal emptyError = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("parse-integer: no integer in string ~s"), str));
+		LispVal junkError = callOf(LispNames.PARSE_ERROR_INTERNAL,
+				formatMessagePieces("parse-integer: junk in string ~s", List.of(str)));
+		LispVal emptyError = callOf(LispNames.PARSE_ERROR_INTERNAL,
+				formatMessagePieces("parse-integer: no integer in string ~s", List.of(str)));
 		LispVal strictTail = makeProgn(
 				List.of(skipWhitespace, makeIf(mvCall(LispNames.LT, i, end), junkError, LispNil.INSTANCE),
 						makeIf(saw, LispNil.INSTANCE, emptyError), result));
@@ -6531,6 +6583,12 @@ public final class LispMacroExpander {
 		if (startForm != null || endForm != null) {
 			expanded = makeProgn(List.of(checkBoundsOf(str, start, endRaw), expanded));
 		}
+		if (radixForm != null && !isValidLiteralRadix(radixForm)) {
+			// A radix that is no integer in 2..36 is refused once, before the bounds and
+			// the scan -- even over a string with no digit to read -- by the probe of a
+			// digit in that radix, digit-char-p's own check.
+			expanded = makeProgn(List.of(mvCall(LispNames.DIGIT_CHAR_P, new LispChar('0'), radix), expanded));
+		}
 		expanded = makeLet(junk.name(), junkForm == null ? LispNil.INSTANCE : junkForm, expanded);
 		expanded = makeLet(radix.name(), radixForm == null ? new LispInteger(10) : radixForm, expanded);
 		expanded = makeLet(end.name(), makeIf(endRaw, endRaw, mvCall(LispNames.LENGTH, str)), expanded);
@@ -6538,6 +6596,13 @@ public final class LispMacroExpander {
 		expanded = makeLet(start.name(), startForm == null ? new LispInteger(0) : startForm, expanded);
 		expanded = makeLet(str.name(), parts.get(1), expanded);
 		return tail == null ? expanded : tail.wrap(expanded);
+	}
+
+	/** Whether a {@code :radix} form is a literal integer in {@code [2, 36]}. */
+	private static boolean isValidLiteralRadix(LispVal form) {
+		// 2..36: the radixes digit-char-p takes (compiler.OperandTypes.RADIX_TYPE, which
+		// this package cannot import).
+		return form instanceof LispInteger radix && radix.value() >= 2 && radix.value() <= 36;
 	}
 
 	/**
@@ -7271,6 +7336,30 @@ public final class LispMacroExpander {
 		LispSymbol messageVar = new LispSymbol("__pe_msg");
 		return makeLet(messageVar.name(), message, listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL),
 				reportingConditionForm(closRegistry, ClosRegistry.PROGRAM_ERROR_CLASS_NAME, messageVar), messageVar)));
+	}
+
+	/**
+	 * Lowers {@code (%parse-error message)} for a compiled backend: the
+	 * {@link #lowerProgramError} split. Where a handler landing pad exists
+	 * ({@code typed}) it is the signal {@code (error 'parse-error :format-control
+	 * (%text-control message))}, compiled like any other: in restart mode its
+	 * {@code handler-bind} handlers then run at the signal point, with the restarts
+	 * around the {@code parse-integer} call still established, as they did when the
+	 * signal was a string datum's. Without a pad nothing can observe the class and the
+	 * plain {@code %error} channel prints the identical top-level line.
+	 * @param cons the {@code %parse-error} form
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal lowerParseError(LispCons cons, boolean typed) {
+		LispVal message = cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+		if (!typed) {
+			return callOf(LispNames.ERROR_INTERNAL, message);
+		}
+		LispSymbol messageVar = new LispSymbol("__pe_msg");
+		return makeLet(messageVar.name(), message,
+				listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.PARSE_ERROR_CLASS_NAME),
+						new LispSymbol(":FORMAT-CONTROL"), callOf(LispNames.TEXT_CONTROL_INTERNAL, messageVar))));
 	}
 
 	/**
@@ -10837,8 +10926,16 @@ public final class LispMacroExpander {
 	/**
 	 * The {@code with-input-from-string} arm with an {@code :index} place: on a NORMAL
 	 * exit the place receives the index into the string of the first character the body
-	 * did not read: the bound end minus the characters still unread, counted by draining
-	 * the stream just before it is closed.
+	 * did not read -- the bound start plus the stream's {@code file-position}, which
+	 * counts characters and leaves a character {@code unread-char} parked unread on every
+	 * backend.
+	 *
+	 * <p>
+	 * The position query is synthesized here, inside the expression compilers, after the
+	 * passes that key on the program's surface: so a backend gates its string-stream
+	 * position runtime on {@link #indexesStringInput} as well as on the name
+	 * {@code file-position}, and the compile paths' pushback pass expands an indexed form
+	 * itself (so its query reaches the parked character).
 	 *
 	 * <pre>
 	 * (with-input-from-string (s str :index place :start a :end b) body...) ->
@@ -10846,9 +10943,7 @@ public final class LispMacroExpander {
 	 *     (let ((s (%make-string-input-stream (subseq __wifs_string __wifs_start __wifs_end))))
 	 *       (unwind-protect
 	 *           (multiple-value-prog1 (progn body...)
-	 *             (setf place (- (or __wifs_end (length __wifs_string))
-	 *                            (do ((__wifs_n 0 (+ __wifs_n 1)))
-	 *                                ((null (read-char s nil nil)) __wifs_n)))))
+	 *             (setf place (+ __wifs_start (file-position s))))
 	 *         (close s))))
 	 * </pre>
 	 */
@@ -10857,23 +10952,67 @@ public final class LispMacroExpander {
 		LispSymbol string = new LispSymbol(WIFS_STRING_VAR);
 		LispSymbol startVar = new LispSymbol(WIFS_START_VAR);
 		LispSymbol endVar = new LispSymbol(WIFS_END_VAR);
-		LispSymbol unread = new LispSymbol(WIFS_UNREAD_VAR);
 		LispVal bindings = listToCons(List.of(listToCons(List.of(string, stringForm)),
 				listToCons(List.of(startVar, start != null ? start : new LispInteger(0))),
 				listToCons(List.of(endVar, end != null ? end : LispNil.INSTANCE))));
-		LispVal drain = listToCons(List.of(new LispSymbol(LispNames.DO),
-				listToCons(List.of(listToCons(List.of(unread, new LispInteger(0),
-						listToCons(List.of(new LispSymbol(LispNames.ADD), unread, new LispInteger(1))))))),
-				listToCons(List.of(
-						callOf(LispNames.NULL, listToCons(
-								List.of(new LispSymbol(LispNames.READ_CHAR), var, LispNil.INSTANCE, LispNil.INSTANCE))),
-						unread))));
-		LispVal bound = listToCons(List.of(new LispSymbol(LispNames.OR), endVar, callOf(LispNames.LENGTH, string)));
 		LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), index,
-				listToCons(List.of(new LispSymbol(LispNames.SUB), bound, drain))));
+				listToCons(List.of(new LispSymbol(LispNames.ADD), startVar, callOf(LispNames.FILE_POSITION, var)))));
 		LispVal substring = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startVar, endVar));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
 				withInputStream(var, substring, bodyExpr, store, unwindProtect)));
+	}
+
+	/**
+	 * Whether the program holds a {@code with-input-from-string} with an {@code :index}
+	 * place, whose expansion asks the stream's {@code file-position}
+	 * ({@link #withInputFromStringIndexed}) although the program may never name it.
+	 * @param program the top-level forms, BEFORE expansion
+	 * @return whether an indexed {@code with-input-from-string} can run
+	 */
+	public static boolean indexesStringInput(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (indexesStringInput(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean indexesStringInput(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		if (isIndexedWithInputFromString(cons)) {
+			return true;
+		}
+		for (LispVal part : cons.toList()) {
+			if (indexesStringInput(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether {@code cons} is a {@code (with-input-from-string (var string ... :index
+	 * place ...) ...)} form -- the {@code :index} key in a key position of the spec.
+	 * @param cons a form
+	 * @return whether it is an indexed {@code with-input-from-string}
+	 */
+	public static boolean isIndexedWithInputFromString(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op)
+				|| !LispNames.WITH_INPUT_FROM_STRING.equals(unqualifiedClMember(op.name()))
+				|| !(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispCons spec)
+				|| !spec.isProperList()) {
+			return false;
+		}
+		List<LispVal> specParts = spec.toList();
+		for (int i = 2; i + 1 < specParts.size(); i += 2) {
+			if (specParts.get(i) instanceof LispSymbol key && ":INDEX".equals(key.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -10907,8 +11046,6 @@ public final class LispMacroExpander {
 	private static final String WIFS_START_VAR = "__wifs_start";
 
 	private static final String WIFS_END_VAR = "__wifs_end";
-
-	private static final String WIFS_UNREAD_VAR = "__wifs_n";
 
 	private static final String WIFS_RESULT_VAR = "__wifs_result";
 
@@ -33507,6 +33644,16 @@ public final class LispMacroExpander {
 			if (scan.packageErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
 			}
+			// And the parse-error of a parse-integer over no integer (lowerParseError).
+			if (scan.parseErrorSite) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PARSE_ERROR_CLASS_NAME);
+			}
+			// And the end-of-file / reader-error of a read-from-string over malformed
+			// text (expandReadFromStringFailure).
+			if (scan.readFromStringFailureSite) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.END_OF_FILE_CLASS_NAME);
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.READER_ERROR_CLASS_NAME);
+			}
 			// And the java:java-exception of a java: member that threw, which a pad
 			// synthesizes from what _jfail recorded: registered exactly where a host
 			// call can be made.
@@ -33541,6 +33688,26 @@ public final class LispMacroExpander {
 	 */
 	public static final java.util.Set<String> PACKAGE_ERROR_SITES = java.util.Set.of(LispNames.INTERN,
 			LispNames.FIND_SYMBOL, LispNames.PACKAGE_ERROR_INTERNAL);
+
+	/**
+	 * The operators whose compiled form can construct a {@code parse-error} instance in a
+	 * lowering that runs after the whole-program scans ({@link #lowerParseError}, behind
+	 * a handler landing pad): the {@link #FILE_ERROR_SITES} situation. A
+	 * {@code #'parse-integer} spelling names the operator too, so the first-class
+	 * wrapper's expansion is covered.
+	 */
+	public static final java.util.Set<String> PARSE_ERROR_SITES = java.util.Set.of(LispNames.PARSE_INTEGER,
+			LispNames.PARSE_ERROR_INTERNAL);
+
+	/**
+	 * The operators whose compiled form can construct an {@code end-of-file} or a
+	 * {@code reader-error} instance in a lowering that runs after the whole-program scans
+	 * ({@link #expandReadFromStringFailure}, behind a handler landing pad): the
+	 * {@link #FILE_ERROR_SITES} situation. A {@code #'read-from-string} spelling names
+	 * the operator too, so the first-class wrapper's call is covered.
+	 */
+	public static final java.util.Set<String> READ_FROM_STRING_FAILURE_SITES = java.util.Set
+		.of(LispNames.READ_FROM_STRING);
 
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
@@ -33628,9 +33795,28 @@ public final class LispMacroExpander {
 		 */
 		boolean packageErrorSite;
 
+		/**
+		 * Whether a {@code parse-integer} occurs, whose expansion signals through a
+		 * {@code parse-error} construction lowered after this scan
+		 * ({@link #PARSE_ERROR_SITES}).
+		 */
+		boolean parseErrorSite;
+
+		/**
+		 * Whether a {@code read-from-string} occurs, whose one-argument call signals
+		 * through a lowering after this scan ({@link #READ_FROM_STRING_FAILURE_SITES}).
+		 */
+		boolean readFromStringFailureSite;
+
 		private void noteSite(String member) {
 			if (PACKAGE_ERROR_SITES.contains(member)) {
 				this.packageErrorSite = true;
+			}
+			if (PARSE_ERROR_SITES.contains(member)) {
+				this.parseErrorSite = true;
+			}
+			if (READ_FROM_STRING_FAILURE_SITES.contains(member)) {
+				this.readFromStringFailureSite = true;
 			}
 			if (FILE_ERROR_SITES.contains(member)) {
 				this.fileErrorSite = true;

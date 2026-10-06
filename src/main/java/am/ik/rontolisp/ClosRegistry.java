@@ -96,11 +96,19 @@ public final class ClosRegistry {
 	 * {@code 1/0}, {@code #:a:b}, {@code #<}) at runtime {@code read} time. Seeded under
 	 * {@code parse-error}, with {@code stream-error} as the second ancestor (CLHS 9.1.2
 	 * gives it both parents), so a {@code stream-error} clause catches it too. Its layout
-	 * is {@code [STREAM, FORMAT-CONTROL, FORMAT-ARGUMENTS]}: the stream slot
-	 * {@code stream-error-stream} reads back, plus the message-carrying pair every
-	 * built-in-signaled class has.
+	 * is {@code [FORMAT-CONTROL, FORMAT-ARGUMENTS, STREAM]}: the message-carrying pair
+	 * {@code parse-error} provides, plus the stream slot {@code stream-error-stream}
+	 * reads back.
 	 */
 	public static final String READER_ERROR_CLASS_NAME = "READER-ERROR";
+
+	/**
+	 * The condition class a string that is no integer syntax is signaled as by
+	 * {@code parse-integer} without {@code :junk-allowed} (CLHS {@code parse-integer}).
+	 * Its layout is {@code [FORMAT-CONTROL, FORMAT-ARGUMENTS]}, the message-carrying pair
+	 * every built-in-signaled class has.
+	 */
+	public static final String PARSE_ERROR_CLASS_NAME = "PARSE-ERROR";
 
 	/**
 	 * The condition class a failed file operation signals ({@code open},
@@ -369,20 +377,23 @@ public final class ClosRegistry {
 	 * <p>
 	 * Eight classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
 	 * slot lists ({@code type-error}, {@code arithmetic-error}, {@code program-error},
-	 * {@code package-error}, {@code reader-error}, {@code file-error} and the two
-	 * {@code cell-error} leaves): those are the classes a BUILT-IN error is synthesized
-	 * as, and the two slots are how the synthesized instance carries the message it
-	 * reports -- the same {@code simple-condition} report path every other message-
-	 * bearing condition uses, rather than a second message channel. {@code type-error}
-	 * gaining them is what leaves {@code simple-type-error} with the identical layout (it
-	 * adds nothing now), so the {@code %obj-ref} indexes of both are unchanged.
+	 * {@code package-error}, {@code parse-error} -- so {@code reader-error} --,
+	 * {@code file-error} and the two {@code cell-error} leaves): those are the classes a
+	 * BUILT-IN error is synthesized as, and the two slots are how the synthesized
+	 * instance carries the message it reports -- the same {@code simple-condition} report
+	 * path every other message- bearing condition uses, rather than a second message
+	 * channel. {@code type-error} gaining them is what leaves {@code simple-type-error}
+	 * with the identical layout (it adds nothing now), so the {@code %obj-ref} indexes of
+	 * both are unchanged.
 	 */
 	private static final List<ConditionSeed> CONDITION_SEEDS = List.of(seed("CONDITION", null),
 			seed("SERIOUS-CONDITION", "CONDITION"), seed("ERROR", "SERIOUS-CONDITION"),
 			seed("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"), seed("WARNING", "CONDITION"),
 			seed("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"), seed("STYLE-WARNING", "WARNING"),
-			seed("PARSE-ERROR", "ERROR"),
+			// parse-error carries the message-carrying pair because a built-in signals
+			// it (parse-integer); reader-error inherits the pair and adds its stream.
+			seed(PARSE_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(TYPE_ERROR_CLASS_NAME, "ERROR", "DATUM", "EXPECTED-TYPE", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			// simple-type-error carries BOTH the type-error slots and the
 			// simple-condition report slots -- CL's multiple inheritance flattened onto
@@ -393,7 +404,7 @@ public final class ClosRegistry {
 			// stream-error carries the offending stream (CLHS 9.1.2): end-of-file and
 			// reader-error inherit it, and stream-error-stream reads it back.
 			seed("STREAM-ERROR", "ERROR", "STREAM"), seed(END_OF_FILE_CLASS_NAME, "STREAM-ERROR"),
-			seed(READER_ERROR_CLASS_NAME, "PARSE-ERROR", "STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed(READER_ERROR_CLASS_NAME, PARSE_ERROR_CLASS_NAME, "STREAM"),
 			// file-error carries the pathname the failed operation was given
 			// (file-error-pathname) plus the message-carrying pair: a built-in signals it
 			// (open, delete-file, rename-file, truename), so it reports like the other
@@ -646,10 +657,10 @@ public final class ClosRegistry {
 	 * A fresh {@code reader-error} condition instance carrying the message and the
 	 * offending stream, for the interpreter's runtime {@code read} family -- which runs
 	 * inside {@code Environment}, where no registry is in scope. The class is SEEDED, so
-	 * its layout is the same {@code [STREAM, FORMAT-CONTROL,
-	 * FORMAT-ARGUMENTS]} shape in every registry and can be built without one (a unit
-	 * test pins it); the message rides {@code format-control}, so the instance reports
-	 * like the {@code simple-condition} family.
+	 * its layout is the same {@code [FORMAT-CONTROL, FORMAT-ARGUMENTS, STREAM]} shape in
+	 * every registry and can be built without one (a unit test pins it); the message
+	 * rides {@code format-control}, so the instance reports like the
+	 * {@code simple-condition} family.
 	 * @param message the reported message
 	 * @param stream the stream (or string-input stream over the text) the bad datum came
 	 * from
@@ -657,9 +668,9 @@ public final class ClosRegistry {
 	 */
 	public static LispVal newReaderErrorCondition(LispVal message, LispVal stream) {
 		return new LispInstance(
-				LispLayout.ofClass(READER_ERROR_CLASS_NAME, List.of("STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+				LispLayout.ofClass(READER_ERROR_CLASS_NAME, List.of("FORMAT-CONTROL", "FORMAT-ARGUMENTS", "STREAM"),
 						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
-				new LispVal[] { stream, textControl(message), LispNil.INSTANCE });
+				new LispVal[] { textControl(message), LispNil.INSTANCE, stream });
 	}
 
 	/**
@@ -2359,8 +2370,20 @@ public final class ClosRegistry {
 		// the instance shape can never disagree with the slot list it was built from.
 		LispLayout layout = LispLayout.ofClass(info.name(), info.slots().stream().map(SlotSpec::baseName).toList(),
 				info.slots().stream().map(SlotSpec::initform).toList());
+		if (info.ancestors().contains(GRAY_INPUT_STREAM_KEY)) {
+			// The unread-char pushback cell (LispLayout.TAIL_CELL), past the declared
+			// slots so no printer, equal or slot listing sees it.
+			layout = layout.withCapacity(layout.slotCount() + 1);
+		}
 		this.layoutsByTag.put(layout.tag(), layout);
 	}
+
+	/**
+	 * The registry key of {@code rontolisp:fundamental-input-stream}: a class descending
+	 * from it reserves the {@link LispLayout#TAIL_CELL} its default
+	 * {@code stream-unread-char} parks a character in.
+	 */
+	private static final String GRAY_INPUT_STREAM_KEY = LispNames.RONTOLISP_PKG + "::" + LispNames.GRAY_INPUT_STREAM;
 
 	/**
 	 * The layout registered under an exact instance tag.
@@ -2452,7 +2475,9 @@ public final class ClosRegistry {
 
 	/**
 	 * Applies every recorded {@link #registerChangeClassTarget} reservation: each
-	 * target's ancestors (and the target itself) widen to the target's slot count.
+	 * target's ancestors (and the target itself) widen to the target's capacity -- its
+	 * slot count, plus the {@link LispLayout#TAIL_CELL} a Gray input stream keeps past
+	 * them, so a changed instance's last cell is past every slot of its new class too.
 	 * Idempotent, and a no-op for a program with no {@code change-class}.
 	 */
 	public void applyChangeClassCapacities() {
@@ -2461,7 +2486,8 @@ public final class ClosRegistry {
 			if (info == null) {
 				continue;
 			}
-			int reserved = info.slots().size();
+			LispLayout targetLayout = this.layoutsByTag.get(LispLayout.CLASS_TAG_PREFIX + info.name());
+			int reserved = targetLayout == null ? info.slots().size() : targetLayout.capacity();
 			for (String ancestor : info.ancestors()) {
 				ClassInfo owner = findClass(ancestor);
 				if (owner == null) {

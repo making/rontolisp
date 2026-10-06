@@ -71,15 +71,17 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   `PackageRegistry.CL_CONDITION_TYPES` = `ClosRegistry.CONDITION_CLASS_NAMES`, which makes every
   seeded name a `cl` symbol ([packages.md](packages.md)).
 - Eight classes carry `format-control`/`format-arguments` beyond CLHS's slot lists -- `type-error`,
-  `arithmetic-error`, `program-error`, `reader-error`, `package-error` (which also carries its
-  `package` designator), `file-error` (`[PATHNAME, FORMAT-CONTROL, FORMAT-ARGUMENTS]`, the
-  pathname read by the prelude `file-error-pathname`) and the two `cell-error` leaves -- because
-  that pair is how a BUILT-IN error carries its message. `simple-type-error` therefore adds nothing, so both keep their old
-  `%obj-ref` indexes. `stream-error` carries the offending `stream` (read by the prelude
-  `stream-error-stream`); `end-of-file` inherits it, `reader-error` declares its own ahead of the
-  message pair (`[STREAM, FORMAT-CONTROL, FORMAT-ARGUMENTS]`) with `stream-error` as its second
-  ancestor -- the lite-multiple-parents rule applied to a seed (`reader-error` is both a
-  `parse-error` and a `stream-error`, CLHS 9.1.2). A seeded class's hand-built factory instance
+  `arithmetic-error`, `program-error`, `parse-error` (so `reader-error`), `package-error` (which
+  also carries its `package` designator), `file-error` (`[PATHNAME, FORMAT-CONTROL,
+  FORMAT-ARGUMENTS]`, the pathname read by the prelude `file-error-pathname`) and the two
+  `cell-error` leaves -- because that pair is how a BUILT-IN error carries its message. `simple-type-error` therefore adds nothing, so both keep their old
+  `%obj-ref` indexes. Every user subclass of these classes inherits the pair too, and a
+  report-less one prints it: `#<MY-PE :FORMAT-CONTROL NIL :FORMAT-ARGUMENTS NIL :POS 1>`.
+  `stream-error` carries the offending `stream` (read by the prelude
+  `stream-error-stream`); `end-of-file` inherits it, `reader-error` declares its own after the
+  message pair it inherits from `parse-error` (`[FORMAT-CONTROL, FORMAT-ARGUMENTS, STREAM]`) with
+  `stream-error` as its second ancestor -- the lite-multiple-parents rule applied to a seed
+  (`reader-error` is both a `parse-error` and a `stream-error`, CLHS 9.1.2). A seeded class's hand-built factory instance
   (`newEndOfFileCondition`, `newReaderErrorCondition`) must mirror its seed's slot order exactly;
   the report partition groups by slot position, so a drift reads the wrong slots instead of
   failing (2026-09-16: the seed without `STREAM` grouped `reader-error` with `simple-error` and
@@ -282,6 +284,34 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   trap at EOF. `WasmExprCompiler` lowers `%read-char-raw`/`%read-byte-raw`/`%read-line-raw` too.
 - **`read` is deliberately NOT in this family**, nor default `read-line`: both answer nil at end of
   input and `read`'s datum may legitimately BE nil.
+- The one-argument `read-from-string` signals `end-of-file` / `reader-error` through its own
+  call-site lowering over a parse RECORD rather than a nil test, since its datum may be nil
+  (`expandReadFromStringFailure`, [read-load-streams.md](read-load-streams.md)).
+
+## `parse-integer` signals a `parse-error`
+A string that is no integer syntax without `:junk-allowed` (junk, no digit, an empty region) is a
+`parse-error` reporting `parse-integer: junk in string "12a"` / `parse-integer: no integer in
+string ""` on all four backends, in call position and first class. SBCL's class is
+`sb-int:simple-parse-error` (a `simple-condition` too); here it is `parse-error` itself, which
+carries the message pair for that (Phase 2), so `type-of` answers `PARSE-ERROR`, and the report
+text keeps the operator prefix SBCL's lacks.
+
+- The expansion (`expandParseInteger`) signals `(%parse-error message)`, the `%program-error`
+  shape. Interpreter: `LispEvalException.ofClass` run through `withHandlerBindHandlersRun` at the
+  signal point; the first-class `Environment.parseInteger` throws the same class from the
+  built-in, whose apply seam runs the handlers. Compiled: `lowerParseError` -- behind a landing pad
+  the signal `(error 'parse-error :format-control (%text-control msg))`, compiled like any typed
+  signal, so in restart mode the handlers run at the signal point with the restarts around the
+  call still established, as they did for the string datum it replaced (`%program-error`'s bare
+  `%error-cond` would have lost them: on the compiled backends a built-in's handlers run at the
+  `handler-bind` boundary); without a pad the plain `%error`, the same output as before.
+- The instance is built after the scans, so `PARSE_ERROR_SITES` stands in for the tag in
+  `conditionNarrowing` and `usedLayoutTags`, behind a pad (the `FILE_ERROR_SITES` situation).
+- Before (measured 2026-10-06, SBCL 2.2.9 and the four backends): a `simple-error`, so a
+  `parse-error` clause missed it. ANSI `numbers` (interpreter, suite `ca06bd9`): 1,274 -> 1,287 /
+  1,444 (`PARSE-INTEGER.ERROR.4`-`.15`, `.5A`), zero regressed; `conditions` (553) and `reader`
+  (389) unchanged by the `reader-error` layout move. Pinned by `ParseIntegerSyntaxFixture` in the
+  three backend suites and ci-spec `parse-integer-signals-a-parse-error`.
 
 ## A condition's `:report` is what PRINTS it
 **Invariant: the text a condition REPORTS has exactly one implementation, `%condition-report-str`,
@@ -1677,7 +1707,8 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
 `alpha-char-p`, `digit-char-p`, `upper-case-p`, `lower-case-p`, `both-case-p`, `alphanumericp`,
 `char-name`, `graphic-char-p` or `standard-char-p` -- directly or through `#'` -- reports
 `OP: The value 1 is not of type CHARACTER` as a catchable `type-error`, byte-identical on all four
-backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer is its `INTEGER` one.**
+backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer in 2..36 is the type-error of
+`(INTEGER 2 36)`, named `DIGIT-CHAR-P` (below).**
 Before (measured 2026-09-27): a simple-error `CHAR-CODE expects a character, got: 1` interpreted
 (named after the helper a prelude defun or lowering called: `upper-case-p` said `CHAR-DOWNCASE`),
 the datum-less `ClassCastException` report on the JVM (`CHAR=` for the case predicates) and a trap
@@ -1691,11 +1722,31 @@ on wasm.
   (also `make-array`'s, `fill`'s and `vector-push`'s character checks). `digit-char-p` checks the
   character before the radix, as the compiled order does. `lower-case-p`/`upper-case-p` run the
   built-in; the shared `(not (char= c (char-upcase c)))` lowering is gone.
+- **The radix** (`digit-char-p`, and `parse-integer`'s `:radix`): CLHS and SBCL take `(integer 2 36)`
+  and refuse anything else -- a non-integer, a bignum, 0, 1, 37 -- with datum the radix and expected
+  type `(INTEGER 2 36)`, after the character's own check. Before (measured 2026-10-06, SBCL 2.2.9 and
+  the four backends): 37 answered `NIL` interpreted and on the JVM and weight 2 on both wasm legs
+  (the digit walk reads letters past `z`), 1 answered `NIL` everywhere, `parse-integer "12" :radix 37`
+  was a `simple-error` (interpreter, JVM) or 39 (wasm), a bignum radix a `NIL` datum on the JVM and a
+  cast trap on wasm. Now: interpreter `Environment.requireRadix` (`OperandTypes.RADIX_TYPE`, named
+  through `.named`, so the first-class `#'parse-integer` says `DIGIT-CHAR-P` as the compiled
+  expansion does); JVM `_ckRadix` (`JvmOperandTypeRuntime.CK_RADIX`, an `int`-returning helper that
+  throws `_teOf(x, (INTEGER 2 36))`, wrapped per operator like `_ckIdx`); wasm
+  `WasmCharCompiler.emitRadixCheck` (EH mode: `_type_err_of` under the operator register; outside it
+  `unreachable`). A literal radix inside 2..36 emits no check on any backend. `parse-integer`'s
+  expansion checks a spelled `:radix` that is not such a literal ONCE, before the bounds and the scan,
+  by the probe `(digit-char-p #\0 radix)` -- SBCL refuses it even over an empty string or with
+  `:junk-allowed` -- so the class (and the report's operator) is `digit-char-p`'s; the scan's own
+  per-character `digit-char-p` repeats the integer test, which the call-per-character shape cannot
+  skip without a second unchecked primitive per backend. Pinned by `RadixRangeFixture` in the three
+  backend suites and ci-spec `digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36`; the old
+  `DIGIT-CHAR-P ... INTEGER` row of `characterBuiltInsCheckTheirArgument` now says `(INTEGER 2 36)`.
+  `digit-char` has the same hole (a radix of 37 answers a character, 1 answers `NIL`).
 - **Compiled**: `char-code`, the folds, `alpha-char-p`, `digit-char-p` and the two case predicates
   push the code point through the comparisons' `pushCheckedCode` (JVM `_ckChr` under the
   operator's wrapper; wasm `_chr_code` in EH mode, the cast outside it). The case predicates
-  compile natively: code point vs. its fold. A non-literal radix goes through `_ckIdx` /
-  `_idx_chk`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
+  compile natively: code point vs. its fold. A non-literal radix goes through `_ckRadix` /
+  `emitRadixCheck`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
   `graphic-char-p`, `standard-char-p`) check first with `%check-character`.
 - Measured 2026-09-28: hello-clack Worker (`--no-wasi --optimize=size`) 680,279 -> 680,498 (code
   +139: string addresses and the operator ids after the three new rows crossing a LEB boundary,

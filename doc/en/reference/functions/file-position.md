@@ -8,7 +8,7 @@ A **string** stream has a position too, counted in characters. An input stream c
 
 Anything whose position cannot be determined answers `nil`, which is what Common Lisp prescribes for exactly that: a socket, one of the standard streams, and a handle that has already been closed. Portable callers guard the call with `ignore-errors` and take their non-seeking fallback path on `nil`.
 
-**All four backends answer for real.** The interpreter and the JVM count what the byte primitives move for a binary stream, read the channel offset of a character or bidirectional stream, and reopen or reposition the file for the set. Preview 1 WASM queries and moves the descriptor's own cursor through `fd_seek`; the component backend has no cursor — WASI 0.3 reads are offset-based — so it goes through a per-descriptor byte offset the adapter tracks.
+**All four backends answer for real.** The interpreter and the JVM count what the byte primitives move for a binary stream, read the channel offset of a character or bidirectional stream, and reopen or reposition the file for the set. Preview 1 WASM queries and moves the descriptor's own cursor through `fd_seek`; the component backend has no cursor — WASI 0.3 reads are offset-based — so it goes through a per-descriptor byte offset the adapter tracks. A `--no-wasi` module has no filesystem: there a string stream answers its position and a file stream nil.
 
 ```lisp
 (with-input-from-string (s "abcdef" :start 1)

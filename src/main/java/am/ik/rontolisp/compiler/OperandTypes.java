@@ -502,6 +502,19 @@ public final class OperandTypes {
 		return integerRange(0, dimension);
 	}
 
+	/** The least radix {@code digit-char-p} and {@code parse-integer} take. */
+	public static final int RADIX_MIN = 2;
+
+	/** The greatest radix {@code digit-char-p} and {@code parse-integer} take. */
+	public static final int RADIX_MAX = 36;
+
+	/**
+	 * The type a radix is not of when it is no integer in {@code [2, 36]}:
+	 * {@code (INTEGER 2 36)}, the expected type SBCL's check carries -- a non-integer
+	 * radix included.
+	 */
+	public static final List<Object> RADIX_TYPE = integerRange(RADIX_MIN, RADIX_MAX);
+
 	/**
 	 * The inclusive integer range {@code (INTEGER low high)}, nested lists like
 	 * {@link #FILL_POINTER_VECTOR_TYPE}.

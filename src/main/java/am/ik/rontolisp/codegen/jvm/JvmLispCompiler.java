@@ -2305,6 +2305,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC },
 				{ JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC },
+				{ JvmOperandTypeRuntime.CK_RADIX, JvmOperandTypeRuntime.CK_RADIX_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC } }) {
 			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));
@@ -3277,6 +3278,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry readSrcDesc = cp.utf8Entry("Ljava/lang/String;");
 		Utf8Entry readPosName = cp.utf8Entry("_readPos");
 		Utf8Entry readPosDesc = cp.utf8Entry("I");
+		@Nullable Utf8Entry readFailName = usesRead ? cp.utf8Entry(JvmReadRuntimeBuilder.FAIL_FIELD) : null;
 		Utf8Entry rdStructsName = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
 		Utf8Entry rdStructsDesc = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
@@ -3639,6 +3641,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The file-metadata helpers ride the same rule, one gate each: file-length also
 		// grows _open and adds the _streamPaths side table, so a program that never asks
 		// for it must not pay for either.
+		// An indexed with-input-from-string asks its stream's position in an expansion
+		// built after this census, so it counts as asking file-position.
+		final boolean asksFilePosition = programUsesSymbol(program, LispNames.FILE_POSITION)
+				|| (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						&& LispMacroExpander.indexesStringInput(program));
 		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
 				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
@@ -3647,8 +3654,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				programUsesSymbol(program, LispNames.FILE_LENGTH)
 						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.FILE_POSITION),
+				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL), asksFilePosition,
 				// A character file stream's position is real only through the travelling
 				// positioned reader/writer, which a program whose every open is binary
 				// does not need.
@@ -3657,10 +3663,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				// A string INPUT stream answers file-position only as the travelling
 				// RontoStringInputStream, so both facts gate the position machinery
 				// (and the class file travels with any string input stream, below).
-				programUsesSymbol(program, LispNames.FILE_POSITION)
-						&& (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
-								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
-								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
+				asksFilePosition && (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
 				programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
 						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL));
@@ -4163,6 +4168,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (usesRead) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readSrcName, readSrcDesc);
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readPosName, readPosDesc);
+			// How the last read-from-string parse ended
+			// (JvmReadRuntimeBuilder.FAIL_FIELD).
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, Objects.requireNonNull(readFailName),
+					readPosDesc);
 		}
 		if (structTableClinitFinal != null) {
 			// The runtime struct-layout directory for #S(...) read at run time.

@@ -28,7 +28,8 @@ nesting `#|...|#`.
   both carrying the stream `stream-error-stream` reads back -- converted from `LispReadException`
   (whose `isEndOfFile` flag is the distinction) in `LispEvaluator.foldStructLiteralsOf`. A
   `handler-case` for `error` catches both spellings everywhere, so the divergence only shows to
-  a clause naming the type.
+  a clause naming the type. Text that runs out and a stray `)` are the exception: typed on every
+  backend ("The one-argument `read-from-string` refuses malformed text" below).
 - `#S`: JVM bakes `_rdStructs` in `<clinit>` (`structTableClinit`, gated on
   `usesRead && mayUseInstances`); WASM appends a directory blob after the `WasmInstanceLayouts`
   records (`buildReadCtx`). An omitted slot takes a nil initform, re-reads a baked
@@ -49,8 +50,8 @@ nesting `#|...|#`.
 - `read-from-string` reads the FIRST datum only. The compiled readers always did; the interpreter parses the
   whole text first and, only when that signals, cuts it at `LispLexer.datumEnd` and reads the head, so
   `"5.)"`, `"abc)"`, `"1 (2"` answer the first datum like SBCL and a stray `)` ALONE or an unfinished datum
-  still signals. The compiled readers still read a lone `)` or an unterminated list leniently (nil / the
-  list), the divergence listed above. Pinned by ci-spec `runtime-read-stops-after-the-first-datum`.
+  still signals -- on all four backends (next section). Pinned by ci-spec
+  `runtime-read-stops-after-the-first-datum`.
 - Dotted pairs: `.` is a dot token only when the next byte is a delimiter (whitespace `( ) ' " ;`) or
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`).
 
@@ -89,8 +90,14 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   `(read-from-string s)` parses once and pays nothing. Interpreter: `LispLexer.datumEnd`,
   a RAW-CHARACTER scan (`skipDatum`, the `#+`/`#-` walk) rather than a second parse --
   which is what lets it answer for text the parse refuses. JVM: `_readFromString` then
-  `_readPos`. WASM: the cursor delta, the start value riding the OPERAND STACK across the
-  parse call rather than costing a scratch address.
+  `_readPos`. WASM: the cursor delta.
+- **The index counts CHARACTERS (code points)**, as SBCL does: `"日本 x"` -> 3, `"😀 x"` -> 2.
+  Each backend's cursor is in another unit, so each converts: the interpreter and JVM hold a
+  UTF-16 index (a supplementary-plane character is two) and answer
+  `codePointCount(0, index)`; the WASM reader walks UTF-8 bytes, so `compileEnd` keeps the start
+  in an i64 scratch local across the parse and counts the non-continuation bytes
+  (`(b & 0xC0) != 0x80`) between it and the cursor. Pinned by ci-spec
+  `read-from-string-stop-index-counts-characters`.
 - CLHS 23.2 decides the last character: a whitespace terminator is CONSUMED with the
   datum it terminates, a terminating macro character is given back -- and (SBCL-verified,
   2026-09-19, `.todo/903`) this holds for ANY datum, not only a token: a list, a string
@@ -128,6 +135,40 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
 `read-from-string-stop-index`.
 
+## The one-argument `read-from-string` refuses malformed text
+**Invariant: text holding no datum (empty, whitespace, comments) or ending inside one (a list, a
+string, a quote, a dotted tail, `#(`, `#S(`, `#|`, `#\`) is `end-of-file`, and a `)` where a datum is
+due is `reader-error` reporting `Unexpected ')'`, on all four backends** (SBCL's classes; the
+interpreter's reader always did).
+- The emitted readers never throw for these. They RECORD how the parse ended -- JVM static
+  `_readFail` (`JvmReadRuntimeBuilder.FAIL_FIELD`), WASM `READ_FAIL_ADDR`, which SHARES the
+  block-comment depth cell (no free word below `DATA_BASE_OFFSET`): 0 a datum, bit 0 the text ran out
+  (an OR, so a `)` recorded first survives), 2 a stray `)`, which also moves the cursor to the end so
+  every enclosing reader unwinds through its end-of-input path and no later `#|` can overwrite the
+  cell. Each `read-from-string` setup resets it.
+- The call site signals: `LispMacroExpander.expandReadFromStringFailure` lowers `(read-from-string s)`
+  to `%read-from-string-raw` + `(%read-failure)` and an `eql` dispatch, from both expression
+  compilers. Behind a landing pad the arms are `(error 'end-of-file)` / `(error 'reader-error
+  :format-control ...)` (restart-mode handlers run at the signal point); without one, plain `%error`
+  with the same text -- the `lowerParseError` split. `READ_FROM_STRING_FAILURE_SITES` stands in for
+  both tags in `conditionNarrowing` / `usedLayoutTags`.
+- The conditions carry no stream on the compiled backends (`stream-error-stream` is nil; the
+  interpreter's carries a string-input stream).
+- Runtime `load` (`_load`, both backends) reads the same record after each form and refuses the bad
+  one before evaluating it: a catchable `simple-error` reporting `end of file` / `Unexpected ')'`,
+  after the forms before it ran (SBCL's order). Before, a stray `)` evaluated as nil and an unfinished
+  form as its partial list; only an unterminated `#|` signalled. The interpreter's `load` parses the
+  whole file first, and that parse error escapes `handler-case`.
+- Not covered (remain compiled-only leniencies): `( . a)` and `(a . b c)` read as lists (SBCL and the
+  interpreter: `reader-error`), `#` alone reads as a symbol everywhere.
+- Before (measured 2026-10-06, SBCL 2.2.9 and the four backends): `")"` answered `(NIL 1)`, `""`
+  `(NIL 0)`, `"(a b"` `((A B) 4)`, `"\"ab"` `("ab" 3)`, `"'"` `('NIL 1)`; `#|x`, `#\` and an unfinished
+  `#S(` signalled `simple-error`.
+
+Pinned by `ReadFromStringMalformedFixture` (ci-spec `read-from-string-refuses-malformed-text`) in the
+three backend suites, `JvmLispCompilerTest.compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`,
+`WasmLispCompilerIntegrationTest.loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`.
+
 ## `read-from-string`'s whole lambda list is ONE prelude defun
 **Invariant: a call passing more than the string -- `eof-error-p`, `eof-value`, `:start`,
 `:end`, `:preserve-whitespace` -- is `(%read-from-string-full ...)` on all four backends, in call
@@ -138,21 +179,18 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
 - The body is `read`'s: `with-input-from-string` over the window, `%rd-datum` delimits, the
   native one-argument read parses the collected text. So an input holding no datum (whitespace
   and comments only) answers `eof-value` or signals `end-of-file` as `eof-error-p` says, an
-  incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error` -- on the
-  compiled backends too, where the one-argument read answers nil / the partial list for those.
-- The index is `:start` plus the window stream's `file-position`. A `--no-wasi` module answers
-  `file-position` with the constant nil ("Limits" under `file-position` below), and there the defun counts the characters a
-  `read-char` drain still finds (it trapped on `(+ start nil)` before the fallback; pinned by
-  `WasmLispCompilerIntegrationTest.noWasiReadFromStringCountsItsIndexWithoutAFilePosition`). The
-  scanner's terminator is TAKEN (read, never unread) and counted back when kept (a non-whitespace
+  incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error`.
+- The index is `:start` plus the window stream's `file-position`, on every target -- a
+  `--no-wasi` module answers it for a string stream too (pinned by
+  `WasmLispCompilerIntegrationTest.noWasiStringStreamsAnswerFilePosition`). Until it did, the
+  defun fell back there to counting what a `read-char` drain still found. The scanner's
+  terminator is TAKEN (read, never unread) and counted back when kept (a non-whitespace
   terminator, or any under `:preserve-whitespace`), so no pushed-back character outlives the
-  stream or is left for the drain to miss (`with-input-from-string`'s own `:index` drain misses
-  one on the compile paths, which is why the defun does not use it). It counts characters, so on
-  WASM it is right for non-ASCII text where the one-argument `%read-from-string-end` counts bytes.
-  The drain alone is O(rest of the string) in Lisp -- the successive-forms idiom `(read-from-string
-  text nil eof :start pos)` goes quadratic -- measured with it as the only count, 20K calls over
-  1,008 characters: JVM 370-484 ms, P1 1,631-1,667, interpreter (2K calls) 1,679-1,790; with
-  `file-position` 265-317 / 792-808 / 95-129.
+  stream. It counts characters, so on WASM it is right for non-ASCII text where the one-argument
+  `%read-from-string-end` counts bytes. A drain is O(rest of the string) in Lisp -- the
+  successive-forms idiom `(read-from-string text nil eof :start pos)` goes quadratic -- measured
+  with it as the only count, 20K calls over 1,008 characters: JVM 370-484 ms, P1 1,631-1,667,
+  interpreter (2K calls) 1,679-1,790; with `file-position` 265-317 / 792-808 / 95-129.
 - The bound check is the window's `subseq` (`.kb/sequence-bounding-keywords.md`).
 - Selection (`LispPreludeLibrary.referencedBySurfaceForm`): a `read-from-string` call with more
   than one argument anywhere, or a designator that may be called with more than one
@@ -474,12 +512,18 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
 - **The two macros take their full CL spec, as ONE expansion every backend shares** (2026-09-22).
   `with-input-from-string (var string &key index start end)`: `:start`/`:end` become the
   `subseq` above; `:index` binds string/start/end once (`let*`, source order) and, on a NORMAL exit
-  only (`multiple-value-prog1` inside the `unwind-protect`), stores `(- (or end (length string))
-  <chars still unread>)` -- counted by DRAINING the stream with `read-char` just before the close,
-  because a string input stream's `file-position` was believed to answer nil on all four. Measured
-  2026-10-06 it answers the position on all four (characters, a pushed-back one not counted, as
-  SBCL), and the drain misses a pushed-back character on the compile paths (it is synthesized
-  after `UnreadCharLibrary`'s rewrite). `with-output-to-string
+  only (`multiple-value-prog1` inside the `unwind-protect`), stores `(+ start (file-position s))`
+  -- characters, a character `unread-char` parked not counted, as SBCL. The query is synthesized
+  inside the expression compilers, after every surface pass, so two things key on the surface
+  form instead (`LispMacroExpander.indexesStringInput` / `isIndexedWithInputFromString`): both
+  compiled backends' `file-position` gate (otherwise WASM compiles the query to the nil constant
+  and the JVM lacks `_filePosition`), and `UnreadCharLibrary`, which expands an indexed form
+  ITSELF so the query is rewritten onto `%unread-file-position` (and splices that defun).
+  Before (measured 2026-10-06): the store counted what a `read-char` drain still found, and on the
+  compile paths the drain read past a parked character -- `"123  "`, three reads, then `(unread-char
+  (read-char s) s)`: SBCL and the interpreter 3, JVM / P1 / component 4. Pinned by
+  `StringStreamPrograms.INDEX_PUSHBACK_PROGRAM` in the three backend suites.
+  `with-output-to-string
   (var &optional string &key element-type)`: a non-nil string gets the body's output appended with
   `vector-push-extend` when the body exits (in the `unwind-protect` cleanup, so on every exit where
   it compiles), and the form answers the BODY's values -- which is why
@@ -569,18 +613,19 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   every string arm reads -1 as its own end: a string stream has no `file-length`, and the old
   fold handed the primitive nil -- a QUERY on the JVM. So a user's literal
   `(file-position s -1)` seeks a string stream's end on the compile paths where the interpreter
-  signals; nothing else passes -1. **Limits**: `--no-wasi` keeps `file-position` the nil
-  constant for every stream; a CLOSED string input stream still answers on both WASM backends
-  (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
+  signals; nothing else passes -1. **Limits**: under `--no-wasi` a string stream answers (the
+  string arms need no host) and a file stream nil -- the bodies are built without a host call
+  (`FilePositionAbi` null), and nothing is injected; a CLOSED string input stream still answers
+  on both WASM backends (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
   `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6`.
-- **`:index` keeps DRAINING -- measured, not assumed** (2026-09-22). The premise was that a real
-  position would make `:index` a read. Hand-written equivalents of the two lowerings, bytes
-  JVM / Preview 1 / component: drain 38,085 / 5,972 / 9,496, position 42,579 (2 files) / 4,618 /
-  8,226 -- the JVM grows +4.5 KB and gains the travelling class (plus the `_filePosition`
-  machinery) where WASM saves 1.3 KB, and `--no-wasi` has no position at all, so it would need
-  the drain anyway. Both answer the same index; the drain only consumes a stream that is closed
-  right after. (Every JVM string input stream has known its position without extra cost since
-  2026-09-23 -- see below -- so the trigger is gone; the numbers stand.)
+- **`:index` drained until 2026-10-06** (2026-09-22 measurement, kept as history). Hand-written
+  equivalents of the two lowerings, bytes JVM / Preview 1 / component: drain 38,085 / 5,972 /
+  9,496, position 42,579 (2 files) / 4,618 / 8,226 -- the JVM grew +4.5 KB and gained the
+  travelling class (plus the `_filePosition` machinery) where WASM saved 1.3 KB, and `--no-wasi`
+  had no position at all. "Both answer the same index" was wrong once `unread-char` parks a
+  character: the drain, synthesized after `UnreadCharLibrary`, read past it on the compile paths.
+  The position replaced it (bullet above); the JVM class travels with every string input stream
+  since 2026-09-23 anyway. Not re-measured.
 - **Write-through: measured, not built** (2026-09-22). A fill-pointer string that sees the output
   as it is written needs a stream kind of its own on every backend (a JVM `Writer` over the
   Lisp vector representation that travels, a WASM record kind every string-output write path
@@ -1382,6 +1427,9 @@ answer.
   `OPAQUE` and a stream PRINTS as the plain `#<STREAM>` on every backend — the handle never reaches
   the output (`.kb/emitted-output-determinism.md`, `.kb/instance-syntax.md`). A test that must tell
   two streams apart uses `equal` in-program (see `StreamHandleConcurrencySupport`), not the text.
+- **Two reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark) and
+  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`). The interpreter's
+  `StreamDesignators.streamValue` allocates the full capacity like `%obj-new`.
 - **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`, `:STRING-OUTPUT`,
   `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`, `:STANDARD-OUTPUT`, `:STANDARD-INPUT`.
   Compared with `equal`, not `eq`.

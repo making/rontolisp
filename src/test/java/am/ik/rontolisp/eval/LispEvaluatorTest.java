@@ -22,7 +22,10 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
+import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -837,6 +840,24 @@ class LispEvaluatorTest {
 	void filePositionOfAStringStreamQueriesAndSeeks() {
 		assertThat(printedOutput(StringStreamPrograms.POSITION_PROGRAM))
 			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	@Test
+	void withInputFromStringIndexCountsAParkedCharacterAsUnread() {
+		assertThat(printedOutput(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharPushbackBelongsToItsStream() {
+		assertThat(printedOutput(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() {
+		assertThat(printedOutput(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
 	}
 
 	private static String printedOutput(String program) {
@@ -10460,6 +10481,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void grayDefaultUnreadCharParksOnItsInstance() {
+		// The default stream-unread-char keeps the character on the instance it was
+		// unread onto: two instances hold one each, and it survives a change-class.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharInAGrayProgramParksOnTheOpenStream() {
+		// Reads through the Gray dispatch helpers still park on the open stream value.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim())
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void streamOperatorsAsFunctionValuesReachAGrayStream() {
 		// #'write-string, 'write-line, (apply #'read-char ...) and the rest of the
 		// stream operators taken as values dispatch to a Gray instance like their calls.
@@ -10586,6 +10634,36 @@ class LispEvaluatorTest {
 		// The refused bound, its range and subseq's report text.
 		assertThat(evalPrinted(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void digitCharPAndParseIntegerRefuseARadixOutside2To36() {
+		// A radix that is no integer in 2..36 is the type-error of (INTEGER 2 36), before
+		// any character is read -- sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void readFromStringRefusesMalformedText() {
+		// A stray ')' is a reader-error, no datum or an unfinished one an end-of-file --
+		// sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.RESTART_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerSignalsAParseErrorOverNoIntegerSyntax() {
+		// Junk, no digit or an empty region is a parse-error, not a simple-error --
+		// sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.PROGRAM)).isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.RESTART_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
 	}
 
 	@Test
@@ -11344,6 +11422,17 @@ class LispEvaluatorTest {
 		ClosRegistry.ClassInfo seeded = java.util.Objects.requireNonNull(new ClosRegistry().findClass("FILE-ERROR"));
 		LispInstance built = (LispInstance) ClosRegistry.newFileErrorCondition(new LispString("p"),
 				new LispString("m"));
+		assertThat(built.layout().slotNames())
+			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
+	}
+
+	@Test
+	void theInterpretersReaderErrorInstanceMirrorsTheSeededLayout() {
+		// The same for newReaderErrorCondition: parse-error's message pair first, then
+		// the stream.
+		ClosRegistry.ClassInfo seeded = java.util.Objects
+			.requireNonNull(new ClosRegistry().findClass(ClosRegistry.READER_ERROR_CLASS_NAME));
+		LispInstance built = (LispInstance) ClosRegistry.newReaderErrorCondition(new LispString("m"), LispNil.INSTANCE);
 		assertThat(built.layout().slotNames())
 			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
 	}
@@ -19732,7 +19821,7 @@ class LispEvaluatorTest {
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-				("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+				("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
 				("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
@@ -26399,6 +26488,16 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(ABCD 4)");
 		assertThat(evalMulti("(multiple-value-list (progn (let ((y 1)) y) (read-from-string \"ab\")))").print())
 			.isEqualTo("(AB 2)");
+	}
+
+	// The stop index counts characters, a supplementary-plane character as one (a Java
+	// String index counts it as two UTF-16 units).
+	@Test
+	void readFromStringStopIndexCountsCharacters() {
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"日本 x\"))").print()).isEqualTo("(日本 3)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(日本 a) x\"))").print()).isEqualTo("((日本 A) 7)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"😀 x\"))").print()).isEqualTo("(😀 2)");
+		assertThat(evalMulti("(nth-value 1 (read-from-string \"a😀b c\"))").print()).isEqualTo("4");
 	}
 
 	// A read-from-string whose value is DISCARDED contributes no second value to the

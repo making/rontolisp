@@ -11,7 +11,10 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
+import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -1457,7 +1460,7 @@ class JvmLispCompilerTest {
 					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-					("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+					("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
 					("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 					("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
@@ -5317,6 +5320,38 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(StringStreamPrograms.POSITION_PROGRAM,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWithInputFromStringIndexCountsAParkedCharacterAsUnread() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharPushbackBelongsToItsStream() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunObjSetCompilesWhereNoInstanceCanExist() throws Exception {
+		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
+		// pushback) without knowing whether the class builds instances: with the gate
+		// off the store still compiles, and only a call that reaches it fails.
+		assertThat(compileAndRun("""
+				(defun osg-store (x) (%obj-set x 3 1))
+				(print (if (> (length (list 1 2)) 5) (osg-store 1) :never-stored))
+				""")).isEqualTo(":NEVER-STORED");
 	}
 
 	@Test
@@ -13535,6 +13570,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGrayDefaultUnreadCharParksOnItsInstance() throws Exception {
+		// The JVM twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
+		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunStreamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream: the
@@ -13612,6 +13665,36 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunDigitCharPAndParseIntegerRefuseARadixOutside2To36() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#digitCharPAndParseIntegerRefuseARadixOutside2To36.
+		assertThat(compileAndRunExpanded(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadFromStringRefusesMalformedText() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringRefusesMalformedText.
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.RESTART_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax.
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.RESTART_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
 	}
 
 	@Test
@@ -15085,6 +15168,20 @@ class JvmLispCompilerTest {
 		Files.writeString(lib, "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n");
 		String code = "(load \"" + lib + "\") (print (eval '(dbl (inc 4))))";
 		assertThat(compileAndRun(code)).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen() throws Exception {
+		// The forms before the bad one are evaluated, then the load signals -- a ')' that
+		// closes nothing, an unfinished list, an unterminated block comment.
+		String[][] cases = { { "(print 1) )\n(print 9)\n", "Unexpected ')'" }, { "(print 1) (print 2", "end of file" },
+				{ "(print 1) #| x", "end of file" } };
+		for (int i = 0; i < cases.length; i++) {
+			Path lib = tempDir.resolve("bad" + i + ".lisp");
+			Files.writeString(lib, cases[i][0]);
+			String code = "(print (handler-case (load \"" + lib + "\") (error (c) (princ-to-string c))))";
+			assertThat(compileAndRun(code)).isEqualTo("1\n\"" + cases[i][1] + "\"");
+		}
 	}
 
 	// === dynamic mode (late binding) ===
@@ -16980,6 +17077,20 @@ class JvmLispCompilerTest {
 				(print (nth-value 1 (read-from-string "42")))
 				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
 				""")).isEqualTo("(ABC 3)\n((1 2) 6)\n2\n(A B)\n5");
+	}
+
+	// The stop index counts CHARACTERS: a supplementary-plane character is one, not two
+	// UTF-16 units. See .kb/read-load-streams.md.
+	@Test
+	void compileReadFromStringStopIndexCountsCharacters() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "日本 x")))
+				(print (multiple-value-list (read-from-string "\\"日本\\" x")))
+				(print (multiple-value-list (read-from-string "(日本 a) x")))
+				(print (multiple-value-list (read-from-string "   日本 x")))
+				(print (multiple-value-list (read-from-string "😀 x")))
+				(print (nth-value 1 (read-from-string "日本語")))
+				""")).isEqualTo("(日本 3)\n(\"日本\" 5)\n((日本 A) 7)\n(日本 6)\n(😀 2)\n3");
 	}
 
 	@Test

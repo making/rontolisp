@@ -2,7 +2,7 @@
 
 `(with-input-from-string (stream string &key index start end) body...)`
 
-Binds `stream` to an input stream reading from `string`, evaluates the body forms, and returns the value of the last one. `read-line` consumes the string line by line and returns nil at the end; `read` parses one datum and leaves the stream just after it, so successive calls walk the string datum by datum and the rest of a line after the first datum is not lost. Works in all three backends.
+Binds `stream` to an input stream reading from `string`, evaluates the body forms, and returns the value of the last one. `read-line` consumes the string line by line and returns nil at the end; `read` parses one datum and leaves the stream just after it, so successive calls walk the string datum by datum and the rest of a line after the first datum is not lost. Works in all four backends.
 
 ```lisp
 (with-input-from-string (s "(1 2 3)")
@@ -11,7 +11,8 @@ Binds `stream` to an input stream reading from `string`, evaluates the body form
 
 `:start` and `:end` bound the part of the string the stream reads. `:index` names a
 place that, when the body returns normally, receives the index in `string` of the first
-character the body did not read; a non-local exit leaves it untouched.
+character the body did not read -- a character given back with `unread-char` counts as
+not read; a non-local exit leaves it untouched.
 
 ```lisp
 (let ((i nil))

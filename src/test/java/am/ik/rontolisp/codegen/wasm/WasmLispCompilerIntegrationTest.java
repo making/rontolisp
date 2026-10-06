@@ -25,7 +25,10 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
+import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13776,6 +13779,20 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("(ABC 3)\n5\n((1 2) 6)\n(A B)\n5");
 	}
 
+	// The stop index counts CHARACTERS, not the UTF-8 bytes the emitted reader walks (a
+	// supplementary-plane character is one). See .kb/read-load-streams.md.
+	@Test
+	void readFromStringStopIndexCountsCharacters() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "日本 x")))
+				(print (multiple-value-list (read-from-string "\\"日本\\" x")))
+				(print (multiple-value-list (read-from-string "(日本 a) x")))
+				(print (multiple-value-list (read-from-string "   日本 x")))
+				(print (multiple-value-list (read-from-string "😀 x")))
+				(print (nth-value 1 (read-from-string "日本語")))
+				""")).isEqualTo("(日本 3)\n(\"日本\" 5)\n((日本 A) 7)\n(日本 6)\n(😀 2)\n3");
+	}
+
 	@Test
 	void readInteger() throws Exception {
 		assertThat(compileAndRunWithStdin("(print (read))", "42")).isEqualTo("42");
@@ -14432,6 +14449,43 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
 	}
 
+	@Test
+	void withInputFromStringIndexCountsAParkedCharacterAsUnread() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharPushbackBelongsToItsStream() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void unreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void objSetCompilesWhereNoInstanceCanExist() throws Exception {
+		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
+		// pushback) without knowing whether the module builds instances: with the gate
+		// off the store still compiles, and only a call that reaches it traps.
+		String program = """
+				(defun osg-store (x) (%obj-set x 3 1))
+				(print (if (> (length (list 1 2)) 5) (osg-store 1) :never-stored))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo(":NEVER-STORED");
+		assertThat(compileAndRunComponent(program)).isEqualTo(":NEVER-STORED");
+	}
+
 	/**
 	 * Runs a program the way the CLI builds it (the whole front end) under wasmtime with
 	 * the work directory preopened, as a Preview 1 module or a component.
@@ -14573,6 +14627,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayDefaultUnreadCharParksOnItsInstance() throws Exception {
+		// The wasm twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+		}
+	}
+
+	@Test
+	void unreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
+		}
+	}
+
+	@Test
 	void streamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream, Preview 1
@@ -14687,6 +14764,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void digitCharPAndParseIntegerRefuseARadixOutside2To36() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#digitCharPAndParseIntegerRefuseARadixOutside2To36, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(RadixRangeFixture.PROGRAM, false))
+			.isEqualTo(RadixRangeFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(RadixRangeFixture.PROGRAM, true)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void readFromStringRefusesMalformedText() throws Exception {
+		// The wasm twin of LispEvaluatorTest#readFromStringRefusesMalformedText,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.RESTART_PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.REPORT_PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+		}
+	}
+
+	@Test
+	void parseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.REPORT_PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.RESTART_PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
+		}
+	}
+
+	@Test
 	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#stringEqualityEvaluatesItsArgumentsInTheCallsOrder, Preview 1
@@ -14719,15 +14835,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void noWasiReadFromStringCountsItsIndexWithoutAFilePosition() throws Exception {
-		// A --no-wasi module answers file-position with the constant nil, so the prelude
-		// %read-from-string-full counts the characters still unread instead.
+	void noWasiStringStreamsAnswerFilePosition() throws Exception {
+		// A string stream needs no WASI, so a --no-wasi module answers its file-position
+		// too -- which read-from-string's stop index and with-input-from-string's :index
+		// are counted from (a file stream there still answers nil).
 		String program = """
 				(defun rfs-window () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 1 :end 6)))
 				(defun rfs-kept () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 4
 				                                                  :preserve-whitespace t)))
+				(defun fp-string () (with-input-from-string (s (copy-seq "héllo")) (read-char s) (read-char s)
+				                      (file-position s)))
+				(defun wifs-index () (let ((i 0))
+				                       (with-input-from-string (s (copy-seq "123  ") :index i :start 1)
+				                         (read-char s) (read-char s) (unread-char (read-char s) s))
+				                       i))
 				(rontolisp:wasm-export 'rfs-window :returns :s32)
 				(rontolisp:wasm-export 'rfs-kept :returns :s32)
+				(rontolisp:wasm-export 'fp-string :returns :s32)
+				(rontolisp:wasm-export 'wifs-index :returns :s32)
 				""";
 		byte[] wasmBytes = WasmLispCompiler.builder()
 			.noWasi(true)
@@ -14735,7 +14860,8 @@ class WasmLispCompilerIntegrationTest {
 			.compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program, am.ik.rontolisp.reader.Features.WASM,
 					true, true));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
-		for (String[] call : new String[][] { { "rfs-window", "4" }, { "rfs-kept", "7" } }) {
+		for (String[] call : new String[][] { { "rfs-window", "4" }, { "rfs-kept", "7" }, { "fp-string", "2" },
+				{ "wifs-index", "3" } }) {
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", call[0], "-W", "gc", "-W",
 					"exceptions=y", path("test.wasm"));
 			assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
@@ -16386,6 +16512,16 @@ class WasmLispCompilerIntegrationTest {
 		String lib = "(defun INC (x) (+ x 1))\n(defun DBL (x) (* x 2))\n";
 		String code = "(load \"lib.lisp\") (print (eval '(dbl (inc 4))))";
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
+	}
+
+	@Test
+	void loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen() throws Exception {
+		// The forms before the bad one are evaluated, then the load signals -- a ')' that
+		// closes nothing, an unfinished list, an unterminated block comment.
+		String code = "(print (handler-case (load \"lib.lisp\") (error (c) (princ-to-string c))))";
+		assertThat(compileAndRunLoad(code, "(print 1) )\n(print 9)\n")).isEqualTo("1\n\"Unexpected ')'\"");
+		assertThat(compileAndRunLoad(code, "(print 1) (print 2")).isEqualTo("1\n\"end of file\"");
+		assertThat(compileAndRunLoad(code, "(print 1) #| x")).isEqualTo("1\n\"end of file\"");
 	}
 
 	@Test
@@ -26876,7 +27012,7 @@ class WasmLispCompilerIntegrationTest {
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-				("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+				("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
 				("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)

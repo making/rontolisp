@@ -67,9 +67,9 @@ final class WasmReadRuntimeBuilder {
 	 */
 	record ReadCtx(int nilOffset, int quoteOffset, int functionOffset, boolean ehMode, boolean simd,
 			int instanceTypeIndex, boolean identityHash, int structDirBase, int structDirCount, int charNamesBase,
-			int charNamesCount, int aokBase, int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName,
-			Msg msgRadix, Msg msgRank, Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval,
-			Msg msgFeature, Msg msgLabels, Msg msgBlockComment, Msg msgStructType, Msg msgStructClassHint,
+			int charNamesCount, int aokBase, int pathnameLayoutAddr, Msg msgEndOfFile, Msg msgUnmatchedClose,
+			Msg msgCharName, Msg msgRadix, Msg msgRank, Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum,
+			Msg msgReadEval, Msg msgFeature, Msg msgLabels, Msg msgStructType, Msg msgStructClassHint,
 			Msg msgStructName, Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit,
 			Msg msgDivZero, Msg msgPathname) {
 	}
@@ -192,14 +192,14 @@ final class WasmReadRuntimeBuilder {
 		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, identityHash,
 				structDirBase, structDirCount, charNamesBase, CHAR_NAMES.length, aokBase,
 				instanceTypeIndex >= 0 && pathnameAddr != null ? pathnameAddr : -1,
-				msg(st, "Unexpected end of input, expected ')'"), msg(st, "Unexpected end of input after #\\"),
+				msg(st, ClosRegistry.END_OF_FILE_MESSAGE), msg(st, "Unexpected ')'"),
 				msg(st, "Unknown character name after #\\"), msg(st, "Invalid digits after #x/#o/#b"),
 				msg(st, "Invalid array rank"), msg(st, "ragged array contents"),
 				msg(st, "expected a nested list in array contents"), msg(st, "array contents must be proper lists"),
 				msg(st, "packed float array: expected a number"), msg(st, "#. read-time evaluation is not supported"),
 				msg(st, "#+/#- feature conditionals are not supported by the compiled runtime reader"),
 				msg(st, "reader labels (#N=/#N#) are not supported by the compiled runtime reader"),
-				msg(st, "Unterminated block comment"), msg(st, "#S: not a defined structure type"),
+				msg(st, "#S: not a defined structure type"),
 				msg(st, "#S: the name names a class; #S reads defstruct types only"),
 				msg(st, "#S: expected a structure type name"), msg(st, "#S(): a structure literal needs a type name"),
 				msg(st, "#S: odd number of slot name/value items in a structure literal"),
@@ -375,6 +375,30 @@ final class WasmReadRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
 
+	/**
+	 * Emits {@code fail |= 1} on the {@code READ_FAIL_ADDR} cell: the text ran out where
+	 * a datum (or the rest of one) was due. An OR, so a stray {@code )} recorded first
+	 * stays visible. The readers never trap for it: a {@code read-from-string} call reads
+	 * the cell after the parse ({@code %read-failure}) and signals the typed condition.
+	 */
+	private static void emitMarkEof(WasmWriter w) {
+		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> {
+			loadMem32(w, WasmLispCompiler.READ_FAIL_ADDR);
+			i32(w, 1);
+			w.write(Instruction.I32_OR);
+		});
+	}
+
+	/**
+	 * {@link #emitMarkEof}, then {@code return nil} from a reader function answering a
+	 * value: stack-polymorphic, like {@link #emitErr}.
+	 */
+	private static void emitEofReturn(WasmWriter w) {
+		emitMarkEof(w);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+	}
+
 	/** Pushes the byte at {@code cursor + offset} (caller guarantees bounds). */
 	private static void byteAtCursorPlus(WasmWriter w, int offset) {
 		loadMem32(w, CURSOR);
@@ -450,12 +474,14 @@ final class WasmReadRuntimeBuilder {
 		advanceCursor(w); // consume '|'
 		storeMem32(w, WasmLispCompiler.RD_DEPTH_ADDR, () -> i32(w, 1));
 		loop(w); // comment loop: depths here 0=this loop, 1=the if, 2=outer loop
-		// input exhausted inside the comment: unterminated
+		// input exhausted inside the comment: unterminated -- the end-of-file record
+		// replaces the depth in the shared cell, and the skip ends at the end of input
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgBlockComment());
+		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> i32(w, 1));
+		br(w, 4); // break the outer block
 		end(w);
 		// "|#" -> depth--, back to whitespace skipping at 0
 		curByte(w);
@@ -952,13 +978,12 @@ final class WasmReadRuntimeBuilder {
 				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22;
 
 		emitSkipWs(w, ctx);
-		// if cursor >= end: return null
+		// if cursor >= end: the text ran out where a datum is due
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		emitEofReturn(w);
 		end(w);
 
 		curByte(w);
@@ -1019,12 +1044,14 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		end(w);
 
-		// ')' -> unexpected, consume and return null
+		// ')' where a datum is due closes nothing: record it, end the parse (cursor =
+		// end) and return null
 		getLocal(w, BYTE);
 		i32(w, ')');
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
-		advanceCursor(w);
+		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> i32(w, 2));
+		storeMem32(w, CURSOR, () -> loadMem32(w, END_ADDR));
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
@@ -2169,11 +2196,14 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, POS);
 		block(w);
 		loop(w);
-		// if cursor >= end: stop (unterminated)
+		// if cursor >= end: stop (unterminated: the text ends before the closing quote)
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
-		brIf(w, 1);
+		ifVoid(w);
+		emitMarkEof(w);
+		br(w, 2); // break out of block
+		end(w);
 		curByte(w);
 		setLocal(w, BYTE);
 		// closing quote
@@ -2317,13 +2347,12 @@ final class WasmReadRuntimeBuilder {
 		final int CAR = 0, CDR = 1, ISDOT = 2, CH2 = 3;
 
 		emitSkipWs(w, ctx);
-		// if cursor >= end: return null
+		// if cursor >= end: the text ends before the list's ')'
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		emitEofReturn(w);
 		end(w);
 		// if byte == ')': consume, return null
 		curByte(w);
@@ -2411,6 +2440,9 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		advanceCursor(w);
 		end(w);
+		w.write(Instruction.ELSE);
+		// the text ends before the dotted list's ')'
+		emitMarkEof(w);
 		end(w);
 		end(w);
 		// else: cdr = _read_list
@@ -2771,16 +2803,21 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, TOTAL);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// parse + eval each top-level datum
+		// parse + eval each top-level datum; a form the text ends inside of (an
+		// unterminated #| included) or a ')' that closes nothing is refused before
+		// anything of it is evaluated
+		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> i32(w, 0));
 		block(w);
 		loop(w);
 		emitSkipWs(w, ctx);
+		emitLoadFailCheck(w, ctx);
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		brIf(w, 1);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		emitLoadFailCheck(w, ctx);
 		emitNull(w); // env = null (global)
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
@@ -2794,6 +2831,20 @@ final class WasmReadRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/** {@code _load}'s refusal of what the reader recorded in {@code READ_FAIL_ADDR}. */
+	private static void emitLoadFailCheck(WasmWriter w, ReadCtx ctx) {
+		loadMem32(w, WasmLispCompiler.READ_FAIL_ADDR);
+		ifVoid(w);
+		loadMem32(w, WasmLispCompiler.READ_FAIL_ADDR);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgEndOfFile());
+		end(w);
+		emitErr(w, ctx, ctx.msgUnmatchedClose());
+		end(w);
 	}
 
 	// === the # dispatch helper bodies ===
@@ -2922,7 +2973,7 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgCharEof());
+		emitEofReturn(w);
 		end(w);
 		loadMem32(w, CURSOR);
 		setLocal(w, START);
@@ -3972,7 +4023,7 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgEof());
+		emitEofReturn(w);
 		end(w);
 		curByte(w);
 		setLocal(w, bp);
@@ -3990,7 +4041,7 @@ final class WasmReadRuntimeBuilder {
 		cursorPlusLtEnd(w, 1);
 		w.write(Instruction.I32_EQZ);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgEof());
+		emitEofReturn(w);
 		end(w);
 		advanceCursor(w);
 		curByte(w);
@@ -4242,7 +4293,7 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgEof());
+		emitEofReturn(w);
 		end(w);
 		curByte(w);
 		i32(w, ')');
@@ -4517,7 +4568,7 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgEof());
+		emitEofReturn(w);
 		end(w);
 		curByte(w);
 		i32(w, ')');
@@ -4653,7 +4704,7 @@ final class WasmReadRuntimeBuilder {
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgEof());
+		emitEofReturn(w);
 		end(w);
 		curByte(w);
 		i32(w, ')');

@@ -25,9 +25,9 @@
 ;; other read generic has a default written over it -- stream-read-line and
 ;; stream-read-sequence loop it, stream-read-char-no-hang IS it, and
 ;; stream-peek-char reads one and pushes it back through stream-unread-char,
-;; whose own default parks the character in the protocol's one-slot pushback
-;; cell. A class that can rewind its source defines stream-unread-char and owns
-;; the pushback instead; the cell is then never written.
+;; whose own default parks the character in a pushback cell on the instance. A
+;; class that can rewind its source defines stream-unread-char and owns the
+;; pushback instead; the cell is then never written.
 ;;
 ;; Read-side EOF convention: stream-read-byte / stream-read-char /
 ;; stream-read-line / stream-peek-char / stream-read-char-no-hang return the
@@ -128,31 +128,34 @@
 ;; read-line and the sequence built-ins. The loops are plain defuns so the
 ;; trivial-gray-streams shim can reuse them for its own defaults.
 
-;; The protocol's ONE-SLOT pushback: stream-unread-char's default method parks
-;; the character here and %gray-read-char-1 -- the single read-one-character
-;; entry every default and every read dispatch helper goes through -- drains it
-;; first. One character for one stream at a time, which is what CL promises for
-;; unread-char and exactly the shape the WASM backend's own fd pushback has.
+;; The protocol's pushback: stream-unread-char's default method parks the
+;; character ON THE INSTANCE, in the one cell every class descending from
+;; fundamental-input-stream reserves past its declared slots (index -1 counts back
+;; from the end of the instance's storage, so it is one literal across classes of
+;; any width, and no printer, equal or slot listing sees it). %gray-read-char-1 --
+;; the single read-one-character entry every default and every read dispatch
+;; helper goes through -- drains it first. One character per stream, as CL keeps
+;; it, so two streams each hold one and a dropped stream takes its own along.
 ;; A class that defines stream-unread-char itself never reaches this cell: its
 ;; method rewinds its own source and its stream-read-char answers the rewound
 ;; character.
 
-(defvar rontolisp::*gray-unread-stream* nil)
-
-(defvar rontolisp::*gray-unread-char* nil)
-
 (defun rontolisp::%gray-default-unread-char (stream character)
-  (setq rontolisp::*gray-unread-stream* stream)
-  (setq rontolisp::*gray-unread-char* character)
+  (%obj-set stream -1 character)
   nil)
 
+;; The typep keeps the cell read to the classes that reserve it: a dispatch helper
+;; hands any instance here, and another class's last cell is a declared slot.
 (defun rontolisp::%gray-read-char-1 (stream)
-  (if (eq rontolisp::*gray-unread-stream* stream)
-      (let ((c rontolisp::*gray-unread-char*))
-        (setq rontolisp::*gray-unread-stream* nil)
-        (setq rontolisp::*gray-unread-char* nil)
-        c)
-      (rontolisp:stream-read-char stream)))
+  (let ((c
+         (if (typep stream 'rontolisp:fundamental-input-stream)
+             (%obj-ref stream -1)
+             nil)))
+    (if c
+        (progn
+          (%obj-set stream -1 nil)
+          c)
+        (rontolisp:stream-read-char stream))))
 
 ;; The five characters CL's standard readtable calls whitespace -- the set
 ;; peek-char's t peek-type skips. Kept in step with Environment's
@@ -313,7 +316,7 @@
 ;; everything else is written over it. stream-read-char-no-hang IS
 ;; stream-read-char (rontolisp has no non-blocking source a class could not
 ;; wrap itself); stream-peek-char reads one and hands it back through
-;; stream-unread-char, whose default parks it in the protocol's pushback cell.
+;; stream-unread-char, whose default parks it in the instance's pushback cell.
 
 (defmethod rontolisp:stream-read-char-no-hang
     ((stream rontolisp:fundamental-input-stream))
@@ -521,18 +524,23 @@
           (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
         (read-byte stream eof-error-p eof-value))))
 
+;; The character helpers below hand the built-in the stream AS GIVEN, not its
+;; resolved handle, like the sequence helpers further down: the built-in
+;; resolves the designator itself, and the unread-char pushback lives on the
+;; stream VALUE (unread-char.lisp) -- keyed by a bare handle, two string streams
+;; read through these helpers would share one cell.
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((c (rontolisp::%gray-read-char-1 stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((c (rontolisp::%gray-read-char-1 target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
         (read-char stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-read-char-no-hang-dispatch
     (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((c (rontolisp:stream-read-char-no-hang stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((c (rontolisp:stream-read-char-no-hang target)))
           (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
         (read-char-no-hang stream eof-error-p eof-value))))
 
@@ -544,12 +552,12 @@
 ;; stream -- the same contract the handle-based built-in follows (CL 21.2).
 (defun rontolisp::%gray-peek-char-dispatch
     (peek-type stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
         (let ((result nil) (done nil))
           (do ()
               (done result)
-            (let ((c (rontolisp:stream-peek-char stream)))
+            (let ((c (rontolisp:stream-peek-char target)))
               (cond ((eq c :eof)
                      (if eof-error-p (error 'end-of-file) nil)
                      (setq result eof-value)
@@ -559,7 +567,7 @@
                      (setq done t))
                     ((eq peek-type t)
                      (if (rontolisp::%gray-whitespace-char-p c)
-                         (rontolisp::%gray-read-char-1 stream)
+                         (rontolisp::%gray-read-char-1 target)
                          (progn
                            (setq result c)
                            (setq done t))))
@@ -567,14 +575,14 @@
                            (progn
                              (setq result c)
                              (setq done t))
-                           (rontolisp::%gray-read-char-1 stream)))))))
+                           (rontolisp::%gray-read-char-1 target)))))))
         (peek-char peek-type stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-unread-char-dispatch (character stream)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
         (progn
-          (rontolisp:stream-unread-char stream character)
+          (rontolisp:stream-unread-char target character)
           nil)
         (unread-char character stream))))
 
@@ -637,16 +645,16 @@
         (stream-element-type stream))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (let ((l (rontolisp:stream-read-line stream)))
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((l (rontolisp:stream-read-line target)))
           (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (if (rontolisp:stream-listen stream) t nil)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (if (rontolisp:stream-listen target) t nil)
         (listen stream))))
 
 ;; The built-in gets the stream AS GIVEN, not its resolved handle: it resolves the
@@ -675,22 +683,23 @@
         (write-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
-  (let ((stream (%stream-target stream)))
+  (let ((target (%stream-target stream)))
     ;; A broadcast stream answers for its last component, or 0 with none. The
     ;; components are slot 0 (the base classes hold no slots), read directly:
     ;; these helpers travel without the broadcast class entry, so the reader
     ;; may not be defined where they run.
-    (if (%obj-is stream '|%class-%BROADCAST-STREAM|)
-        (let ((cs (%obj-ref stream 0)))
+    (if (%obj-is target '|%class-%BROADCAST-STREAM|)
+        (let ((cs (%obj-ref target 0)))
           (if cs (rontolisp::%gray-file-position-dispatch (car (last cs))) 0))
-        (if (%obj-p stream)
-            (rontolisp:stream-file-position stream)
+        (if (%obj-p target)
+            (rontolisp:stream-file-position target)
+            ;; As given, like the character helpers: the parked character counts.
             (file-position stream)))))
 
 (defun rontolisp::%gray-file-position-set-dispatch (stream position)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (setf (rontolisp:stream-file-position stream) position)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (setf (rontolisp:stream-file-position target) position)
         (file-position stream position))))
 
 ;; A broadcast stream answers the file queries for its LAST component, or for

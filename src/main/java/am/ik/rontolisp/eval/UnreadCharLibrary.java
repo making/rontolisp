@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -26,7 +27,8 @@ import org.jspecify.annotations.Nullable;
  * The handle-side pushback of {@code unread-char} on the compile paths
  * ({@code unread-char.lisp}): the character-reading built-ins have no per-stream pushback
  * in any runtime -- a WASI fd, a socket and a string input stream can all be read but not
- * un-read -- so a program that uses {@code unread-char} gets ONE Lisp-level cell and has
+ * un-read -- so a program that uses {@code unread-char} parks the character in a
+ * Lisp-level cell on the stream value ({@code LispLayout.STREAM_PUSHBACK_CELL}) and has
  * its {@code read-char} / {@code read-char-no-hang} / {@code peek-char} /
  * {@code read-line} / {@code unread-char} call sites rewritten onto the defuns that
  * consult it. The compiled runtimes themselves know nothing; the pushback is ordinary
@@ -77,13 +79,15 @@ public final class UnreadCharLibrary {
 	 * rewriting those into the pushback defuns again would recurse forever.
 	 */
 	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
-			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-PARKED", "%UNREAD-STORE", "%UNREAD-CHAR-TAKE",
+			"%UNREAD-PEEK-STOPS-P");
 
 	/**
 	 * The two {@code file-position} defuns, spliced only for a program that names
-	 * {@code file-position} itself: their bodies name it, and a backend gates its
-	 * position runtime on that name, so splicing them into every unread-char program
-	 * would grow each one by a runtime it never calls.
+	 * {@code file-position} itself or holds an indexed {@code with-input-from-string}
+	 * (whose expansion asks it): their bodies name it, and a backend gates its position
+	 * runtime on that name, so splicing them into every unread-char program would grow
+	 * each one by a runtime it never calls.
 	 */
 	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
 
@@ -127,7 +131,7 @@ public final class UnreadCharLibrary {
 		if (!usesUnreadChar(program)) {
 			return program;
 		}
-		boolean filePosition = namesFilePosition(program);
+		boolean filePosition = namesFilePosition(program) || LispMacroExpander.indexesStringInput(program);
 		List<LispVal> out = new ArrayList<>();
 		for (LispVal form : forms()) {
 			if (filePosition || !(form instanceof LispCons defun && defun.cdr() instanceof LispCons rest
@@ -202,6 +206,13 @@ public final class UnreadCharLibrary {
 			// built-ins their bodies name.
 			if (LispNames.QUOTE.equals(opName) || isLibraryDefun(cons, opName)) {
 				return form;
+			}
+			// An indexed with-input-from-string asks its stream's file-position in an
+			// expansion the expression compilers build after this pass, so it is
+			// expanded here and the query rewritten with the rest: a character parked
+			// on the stream then counts as unread.
+			if (LispMacroExpander.isIndexedWithInputFromString(cons)) {
+				return rewrite(SourceProvenance.inherit(cons, LispMacroExpander.expandWithInputFromString(cons, true)));
 			}
 			// A read passing the recursive-p it ignores is rewritten without it first,
 			// so the shapes below never meet the extra argument.

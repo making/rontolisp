@@ -1,6 +1,4 @@
-;; The handle-side pushback of unread-char: ONE character for ONE stream at a
-;; time, the same shape the Gray protocol's own default method keeps for an
-;; instance (gray.lisp's *gray-unread-stream* / *gray-unread-char*) and exactly
+;; The handle-side pushback of unread-char: ONE character per stream, exactly
 ;; what CL promises for unread-char. No backend can un-read a file descriptor,
 ;; a socket or a string input stream, so the character is parked here and the
 ;; character-reading built-ins consult the cell before touching the stream:
@@ -20,34 +18,65 @@
 ;; What the cell does NOT reach, identically on all four backends: read-byte,
 ;; read-sequence and read. A character pushed back before a BYTE read has no
 ;; meaning, and the other two expand into their loops long after this pass.
+;;
+;; WHERE the character lives: on the stream the designator DENOTES (the KEY,
+;; %unread-key), so every designator of one stream reaches one cell. An open
+;; stream VALUE carries it in its own reserved cell
+;; (LispLayout.STREAM_PUSHBACK_CELL, the literal 3 below), as CL keeps the
+;; pushback on the stream -- so a stream closed or dropped with a character
+;; parked takes it along, and two streams each hold one. Anything else (the t
+;; designator, the process standard input) shares the ONE cell below, keyed by
+;; the designator.
 
 (defvar rontolisp::*unread-stream* nil)
 
 (defvar rontolisp::*unread-char* nil)
 
-;; The stream KEY. An omitted stream and the nil designator both mean standard
-;; input, which the t designator names, so the three compare equal; every other
-;; designator is its own value and compares with eql -- a stream value is one
-;; object per open stream, so eql identity is exactly "the same stream".
-(defun rontolisp::%unread-key (stream) (if stream stream t))
+;; The stream KEY: the stream the designator DENOTES. An omitted stream and the
+;; nil designator mean the current *standard-input* -- the stream the read
+;; reads -- and a synonym stream the stream its variable holds now,
+;; recursively, the resolution %stream-target makes without unwrapping an open
+;; stream to its handle. A nil left over is the process standard input, the t
+;; designator *standard-input* holds until a program binds it; every other key
+;; compares with eql.
+(defun rontolisp::%unread-key (stream)
+  (let ((s (if stream stream *standard-input*)))
+    (if (%obj-is s '%SYNONYM-STREAM)
+        (rontolisp::%unread-key (funcall (%obj-ref s 1)))
+        (if s s t))))
+
+;; The character parked under KEY, left in place -- nil when none is.
+(defun rontolisp::%unread-parked (key)
+  (if (%obj-is key '%STREAM)
+      (%obj-ref key 3)
+      (if (eql rontolisp::*unread-stream* key) rontolisp::*unread-char* nil)))
+
+;; Parks CHARACTER under KEY, or empties its cell when CHARACTER is nil. An
+;; empty shared cell is nil in both halves: %unread-key never answers nil, so
+;; no live key is ever nil.
+(defun rontolisp::%unread-store (key character)
+  (if (%obj-is key '%STREAM)
+      (%obj-set key 3 character)
+      (progn
+        (setq rontolisp::*unread-stream* (if character key nil))
+        (setq rontolisp::*unread-char* character))))
 
 (defun rontolisp::%unread-char-push (character stream)
-  (if rontolisp::*unread-stream*
-      (error "UNREAD-CHAR without an intervening READ-CHAR")
-      (progn
-        (setq rontolisp::*unread-char* character)
-        (setq rontolisp::*unread-stream* (rontolisp::%unread-key stream))
-        nil)))
+  (let ((key (rontolisp::%unread-key stream)))
+    (if (if (%obj-is key '%STREAM)
+            (rontolisp::%unread-parked key)
+            rontolisp::*unread-stream*)
+        (error "UNREAD-CHAR without an intervening READ-CHAR")
+        (progn
+          (rontolisp::%unread-store key character)
+          nil))))
 
-;; The parked character of STREAM, draining the cell -- nil when the cell is
-;; empty or holds another stream's character.
+;; The parked character of STREAM, draining its cell -- nil when none is.
 (defun rontolisp::%unread-char-take (stream)
-  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
-      (let ((c rontolisp::*unread-char*))
-        (setq rontolisp::*unread-stream* nil)
-        (setq rontolisp::*unread-char* nil)
-        c)
-      nil))
+  (let* ((key (rontolisp::%unread-key stream))
+         (c (rontolisp::%unread-parked key)))
+    (if c (rontolisp::%unread-store key nil))
+    c))
 
 (defun rontolisp::%unread-read-char (stream eof-error-p eof-value)
   (let ((c (rontolisp::%unread-char-take stream)))
@@ -92,20 +121,20 @@
 
 (defun rontolisp::%unread-listen (stream)
   ;; A parked character counts as one that remains; otherwise the stream itself.
-  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+  (if (rontolisp::%unread-parked (rontolisp::%unread-key stream))
       t
       (listen stream)))
 
 (defun rontolisp::%unread-file-position (stream)
-  (let ((position (file-position stream)))
-    (if (if position
-            (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
-            nil)
-        (let ((code (char-code rontolisp::*unread-char*)))
+  (let* ((key (rontolisp::%unread-key stream))
+         (position (file-position stream))
+         (parked (rontolisp::%unread-parked key)))
+    (if (if position parked nil)
+        (let ((code (char-code parked)))
           (- position
              ;; A STRING stream counts characters, a file stream octets.
-             (if (if (%obj-is stream '%STREAM)
-                     (equal (%obj-ref stream 1) :string-input)
+             (if (if (%obj-is key '%STREAM)
+                     (equal (%obj-ref key 1) :string-input)
                      nil)
                  1
                  (if (< code 128)
@@ -114,8 +143,5 @@
         position)))
 
 (defun rontolisp::%unread-file-position-set (stream position)
-  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
-      (progn
-        (setq rontolisp::*unread-stream* nil)
-        (setq rontolisp::*unread-char* nil)))
+  (rontolisp::%unread-char-take stream)
   (file-position stream position))

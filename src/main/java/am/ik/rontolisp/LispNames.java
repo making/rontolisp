@@ -2813,6 +2813,15 @@ public final class LispNames {
 	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
 
 	/**
+	 * Internal one-argument primitive {@code (%parse-error message)} that signals a
+	 * {@code parse-error} reporting the message: what {@code parse-integer}'s expansion
+	 * signals for a string that is no integer syntax
+	 * ({@code LispMacroExpander.expandParseInteger}). Lowered like
+	 * {@link #PROGRAM_ERROR_INTERNAL} ({@code LispMacroExpander.lowerParseError}).
+	 */
+	public static final String PARSE_ERROR_INTERNAL = "%PARSE-ERROR";
+
+	/**
 	 * Internal primitive {@code (%arity-surplus-message max required rest)}: the message
 	 * of the {@code &optional} surplus-argument check ({@code LambdaLists}),
 	 * {@code ClosRegistry.aritySurplusMessage(max, required + (length rest))}.
@@ -8720,6 +8729,22 @@ public final class LispNames {
 	public static final String READ_FROM_STRING_FULL_INTERNAL = "%READ-FROM-STRING-FULL";
 
 	/**
+	 * The one-argument {@code read-from-string} of the compiled backends' runtime reader
+	 * without the check that refuses malformed text: what
+	 * {@code LispMacroExpander.expandReadFromStringFailure} reads through before it asks
+	 * {@link #READ_FAILURE_INTERNAL}. Only that lowering emits it.
+	 */
+	public static final String READ_FROM_STRING_RAW_INTERNAL = "%READ-FROM-STRING-RAW";
+
+	/**
+	 * {@code (%read-failure)}: how the compiled backends' runtime reader's last
+	 * {@code read-from-string} parse ended -- 0 with a datum, 1 when the text ran out
+	 * before one was complete (or held none), 2 or more at a {@code )} that closed
+	 * nothing. Only {@code LispMacroExpander.expandReadFromStringFailure} emits it.
+	 */
+	public static final String READ_FAILURE_INTERNAL = "%READ-FAILURE";
+
+	/**
 	 * The shared runtime-{@code %subtypep-valid} dispatch defun the compilers inject once
 	 * per program when a multiple-value {@code subtypep} carries a non-literal type
 	 * specifier -- the valid-p twin of {@link #SUBTYPEP_RUNTIME}, which it calls.
@@ -9136,13 +9161,15 @@ public final class LispNames {
 
 	/**
 	 * The internal slot reader: {@code (%obj-ref obj <k>)} reads slot {@code k} (0-based,
-	 * a literal integer) of an instance.
+	 * a literal integer) of an instance; a negative {@code k} counts back from the end of
+	 * the instance's storage ({@code LispLayout.TAIL_CELL}).
 	 */
 	public static final String OBJ_REF = "%OBJ-REF";
 
 	/**
 	 * The internal slot writer: {@code (%obj-set obj <k> v)} writes slot {@code k}
-	 * (0-based, a literal integer) of an instance and returns the value written.
+	 * (0-based, a literal integer; negative counts back from the end, as for
+	 * {@link #OBJ_REF}) of an instance and returns the value written.
 	 */
 	public static final String OBJ_SET = "%OBJ-SET";
 

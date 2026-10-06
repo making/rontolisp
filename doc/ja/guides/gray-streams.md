@@ -28,7 +28,7 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `read-char` | `rontolisp:stream-read-char` |
 | `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (デフォルトメソッドは `stream-read-char` そのもの) |
 | `peek-char` | `rontolisp:stream-peek-char` (デフォルトメソッドは 1 文字読んで `stream-unread-char` で押し戻す)。`peek-type` の読み飛ばし形式はこれをループします |
-| `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドはプロトコルが持つ 1 文字ぶんの押し戻しスロットに保管) |
+| `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドは文字をインスタンス自身に保管) |
 | `read-line` | `rontolisp:stream-read-line` (デフォルトメソッドは `stream-read-char` をループ) |
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
@@ -78,9 +78,8 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 `stream-read-line` と `stream-read-sequence` はそれをループし、
 `stream-read-char-no-hang` はそれ自体で、`stream-peek-char` は 1 文字読んでから
 `stream-unread-char` で押し戻します。`stream-unread-char` の既定メソッドは、その文字を
-プロトコルが持つ 1 文字ぶんの押し戻しスロットに保管します。自前でソースを巻き戻せる
-クラスは `stream-unread-char` を定義して押し戻しを自分で所有します — そのときスロットは
-一度も書かれません。
+インスタンス自身に保管します。自前でソースを巻き戻せるクラスは `stream-unread-char` を
+定義して押し戻しを自分で所有します — そのとき保管用のセルは一度も書かれません。
 
 読み取り側のメソッドはストリーム終端でキーワード `:eof` を返します。組み込みはそれを通常の
 `eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line`
@@ -203,8 +202,11 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 
 - `rontolisp:stream-advance-to-column` はプロトコル総称関数として存在しますが、
   どの組み込みもディスパッチしません (`format` の `~T` は桁位置を参照しません)。
-- プロトコルの押し戻しは 1 ストリームにつき 1 文字だけを保持します。これは CL が
-  `unread-char` に約束している範囲そのものです。プロトコル自身のデフォルトを通る読み取りは
+- プロトコルの押し戻しは 1 ストリームにつき 1 文字を、インスタンス自身に保持します。
+  これは CL が `unread-char` に約束している範囲そのものです。2 つのインスタンスはそれぞれ
+  1 文字ずつ保持でき、文字を保管したまま捨てたインスタンスは他に影響しません。保管用の
+  セルはスロットではないので、クラスのスロット一覧、プリンタ、`equal` からは見えません。
+  プロトコル自身のデフォルトを通る読み取りは
   すべてこれを消費しますが、`stream-read-line` や `stream-read-sequence` を丸ごと
   オーバーライドしたクラスは押し戻しを読み飛ばすので、そうしたクラスは
   `stream-unread-char` も定義してください。
@@ -214,10 +216,11 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
   クラスはどちらにも `nil` を返します。どちらの名前にもメソッドを定義して
   答えを自分のものにできます。
 - ストリーム**ハンドル** — ファイル、文字列入力ストリーム、ソケット — への
-  `unread-char` は、ハンドル側の押し戻しに文字を保管し、`read-char` / `peek-char` /
-  `read-line` がそれを消費します。保持できるのはプロトコル側と同じく 1 ストリームに
-  つき 1 文字で、まだ埋まっている状態での 2 回目の `unread-char` は通知します。
-  `read-byte` / `read-sequence` / `read` はこのセルを参照しません。
+  `unread-char` は、文字をそのストリームに保管し、同じストリームへの `read-char` /
+  `peek-char` / `read-line` がそれを消費します。文字はストリームごとに保持されるので、
+  文字を保管したまま閉じたり捨てたりしたストリームは他のストリームに影響しません。
+  保管した文字が残っているストリームへの 2 回目の `unread-char` は通知します。
+  `read-byte` / `read-sequence` / `read` はこれを参照しません。
 - 読み取り総称関数はプライマリ値のみを返します: `stream-read-line` に
   `(values line missing-newline-p)` のペアはなく、`:eof` が EOF の唯一のシグナルです。
 - Gray インスタンスへの `listen` はインタープリタと JVM で動作します。Preview 1 WASM

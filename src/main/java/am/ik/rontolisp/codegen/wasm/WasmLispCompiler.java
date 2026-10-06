@@ -1759,20 +1759,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// after the last fixed helper so no index above shifts.
 	static final int FUNC_FILE_LENGTH = FUNC_EQUALP_KEY + 1;
 
-	// _file_position (stream) -> integer | nil: the tracked byte position of a file
-	// stream, answered by the injected file_position_get import (WasmIoRuntimeBuilder).
-	// Component mode only: under Preview 1 the host would need the fd_seek import (todo
-	// 876) for this, so that backend still answers nil and the FILE_POSITION operator
-	// compiles to the constant there (WasmExprCompiler). Reuses the ((ref null eq)) ->
+	// _file_position (stream) -> integer | nil: a string stream's character position,
+	// or the tracked byte position of a file stream, answered by the injected
+	// file_position_get / fd_seek import (WasmIoRuntimeBuilder; none under --no-wasi,
+	// where a file stream answers nil). A program that never asks file-position gets a
+	// nil stub and the FILE_POSITION operator compiles to the constant
+	// (WasmExprCompiler). Reuses the ((ref null eq)) ->
 	// (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no new type entry; appended
 	// after the last fixed helper so no index above shifts.
 	static final int FUNC_FILE_POSITION = FUNC_FILE_LENGTH + 1;
 
-	// _file_position_set (stream, position) -> t | nil: repositions a file stream through
-	// the injected file_position_set import, answering t on success and nil when the
-	// position cannot be set (a character stream, a standard stream, a non-file).
-	// Component
-	// mode only, for the same reason as _file_position. Reuses the binary
+	// _file_position_set (stream, position) -> t | nil: moves a string input stream's
+	// cursor, or repositions a file stream through the injected file_position_set /
+	// fd_seek import, answering t on success and nil when the position cannot be set (a
+	// standard stream, a non-file, any file stream under --no-wasi). Stubbed like
+	// _file_position. Reuses the binary
 	// ((ref null eq), (ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 1),
 	// so no new type entry; appended after the last fixed helper so no index above
 	// shifts.
@@ -2776,6 +2777,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// locals, so #| ... |# nesting counts through this cell instead).
 	static final int RD_DEPTH_ADDR = 192;
 
+	// How the reader's last read-from-string parse ended -- 0 with a datum, bit 0 set
+	// when the text ran out before a datum was complete (or held none), 2 at a ')' that
+	// closed nothing (WasmReadRuntimeBuilder.emitMarkEof / the _read_expr ')' arm). It
+	// SHARES the block-comment depth cell: a comment that closes leaves the cell at 0,
+	// one the text ends inside of overwrites it with the end-of-file 1, and after either
+	// failure the cursor sits at the end, so no later comment is entered to overwrite
+	// the record. Reset by every read-from-string setup and by _load.
+	static final int READ_FAIL_ADDR = RD_DEPTH_ADDR;
+
 	// Monotonic counter cell minting the dynamic block-instance id of the cross-lambda
 	// non-local-exit machinery ({@code %nlx-tag}, see WasmNlxCompiler): each catch
 	// activation gets the next integer as an i31 value, so throw/catch matching is
@@ -3562,17 +3572,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// command line at all -- the expression compiler answers nil there, the way it
 		// does for %host-getcwd.
 		boolean usesHostArgv = !this.component && !this.noWasi && programUsesSymbol(program, LispNames.HOST_ARGV);
-		// file-position rides one injected import on either WASI backend -- the
-		// adapter's file_position_get / file_position_set pair under --component, the
-		// real wasi_snapshot_preview1.fd_seek under Preview 1 -- gated on the program
-		// naming file-position, so a program that never calls it imports nothing new
-		// and keeps every byte where it was. A --no-wasi
-		// module has no filesystem at all, so the operator keeps answering the nil
-		// constant there.
-		boolean usesFilePosition = !this.noWasi && programUsesSymbol(program, LispNames.FILE_POSITION);
+		// file-position is gated on the program asking it -- naming file-position, or
+		// holding an indexed with-input-from-string, whose expansion asks it after this
+		// census -- so a program that never does keeps every byte where it was. A
+		// string stream answers on every target; a file stream's answer rides one
+		// injected import on either WASI backend -- the adapter's file_position_get /
+		// file_position_set pair under --component, the real
+		// wasi_snapshot_preview1.fd_seek under Preview 1. A --no-wasi module has no
+		// filesystem, so a file stream answers nil there and nothing is injected.
+		boolean usesFilePosition = programUsesSymbol(program, LispNames.FILE_POSITION)
+				|| (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						&& LispMacroExpander.indexesStringInput(program));
+		boolean hostFilePosition = usesFilePosition && !this.noWasi;
 		// Preview 1 answers through fd_seek; --component answers through the adapter,
 		// which owns the tracked offset.
-		boolean preview1FilePosition = usesFilePosition && !this.component;
+		boolean preview1FilePosition = hostFilePosition && !this.component;
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
 		// _open body -- gated on the surface fact so every other module keeps its bytes.
@@ -5692,9 +5706,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// above). Adding it here rather than as a SIXTEENTH index-pinned preview1 slot is
 		// what keeps IMPORT_FUNC_COUNT, every emitted function index, the --no-wasi stub
 		// block and both component adapter blobs untouched.
-		// Gated on the program using file-position (see usesFilePosition above); when
-		// absent the runtime bodies are nil stubs and nothing is injected.
-		final int @Nullable [] filePosOrdinals = usesFilePosition
+		// Gated on a WASI program asking file-position (see hostFilePosition above);
+		// otherwise nothing is injected.
+		final int @Nullable [] filePosOrdinals = hostFilePosition
 				? new int[] { hostImports.size(), hostImports.size() + (preview1FilePosition ? 0 : 1) } : null;
 		if (filePosOrdinals != null) {
 			if (preview1FilePosition) {
@@ -8267,7 +8281,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody(ostreamTableGlobalIndex));
 				// A program that asks file-position keeps each input record's START,
 				// which a character position counts from.
-				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody(filePosOrdinals != null));
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody(usesFilePosition));
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
 				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FMAKUNBOUND)
 				code.addFunction(makeSymbolBody);
@@ -8432,18 +8446,20 @@ public final class WasmLispCompiler implements LispCompiler {
 								this.charvecPossible, this.usesIdentityHashTables));
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
-				// file-position bodies (FUNC_FILE_POSITION / FUNC_FILE_POSITION_SET),
-				// over the injected preview1 fd_seek or the adapter's
-				// file_position_get / file_position_set pair; a nil double-stubbed pair
-				// unless the program calls file-position under WASI, since elsewhere the
-				// operator compiles to the nil constant and nothing calls them.
+				// file-position bodies (FUNC_FILE_POSITION / FUNC_FILE_POSITION_SET):
+				// the string-stream arms, then a file stream over the injected preview1
+				// fd_seek or the adapter's file_position_get / file_position_set pair (no
+				// host under --no-wasi, where a file stream answers nil); a nil
+				// double-stubbed pair unless the program asks file-position, since
+				// elsewhere the operator compiles to the nil constant and nothing calls
+				// them.
 				WasmIoRuntimeBuilder.@Nullable FilePositionAbi filePosAbi = filePosOrdinals == null ? null
 						: new WasmIoRuntimeBuilder.FilePositionAbi(preview1FilePosition,
 								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[0],
 								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1]);
-				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
+				code.addFunction(!usesFilePosition ? WasmEmitHelper.buildNilBody()
 						: WasmIoRuntimeBuilder.buildFilePositionBody(filePosAbi));
-				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
+				code.addFunction(!usesFilePosition ? WasmEmitHelper.buildNilBody()
 						: WasmIoRuntimeBuilder.buildFilePositionSetBody(filePosAbi));
 				// arithmetic non-number landing bodies (FUNC_TYPE_ERR_INT,
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
@@ -10749,10 +10765,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean component = false;
 
 		/**
-		 * True when the program is a WASI build (either backend) that calls
-		 * {@code file-position} at all -- the one fact {@code WasmOpenCompiler} needs to
-		 * start an APPENDING stream's position at the end of its file. False under
-		 * {@code --no-wasi}, where the operator compiles to the nil constant.
+		 * True when the program asks {@code file-position} at all (by name, or through an
+		 * indexed {@code with-input-from-string}): the operator compiles to the runtime
+		 * call rather than the nil constant, and {@code WasmOpenCompiler} starts an
+		 * APPENDING stream's position at the end of its file.
 		 */
 		boolean filePosition = false;
 
@@ -12639,6 +12655,22 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (String site : LispMacroExpander.PACKAGE_ERROR_SITES) {
 				if (symbols.contains(site)) {
 					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
+			// The same for a parse-integer's parse-error (lowerParseError).
+			for (String site : LispMacroExpander.PARSE_ERROR_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PARSE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
+			// The same for a read-from-string's end-of-file / reader-error
+			// (expandReadFromStringFailure).
+			for (String site : LispMacroExpander.READ_FROM_STRING_FAILURE_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.END_OF_FILE_CLASS_NAME);
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.READER_ERROR_CLASS_NAME);
 					break;
 				}
 			}

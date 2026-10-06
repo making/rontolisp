@@ -1552,6 +1552,79 @@ cases:
       ((12 3) NIL)
       (:ERROR NIL)
       ((12 4) NIL)
+  # digit-char-p and parse-integer: a radix that is no integer in 2..36 is the type-error of
+  # (INTEGER 2 36) before any character is read -- run-time and literal radixes, call position
+  # and first class. SBCL's answers (RadixRangeFixture.PROGRAM).
+  - name: digit-char-p-and-parse-integer-refuse-a-radix-outside-2-to-36
+    source: |
+      (defvar *rr-37* (read-from-string "37"))
+      (defvar *rr-36* (read-from-string "36"))
+      (defvar *rr-10* (read-from-string "10"))
+      (defvar *rr-2* (read-from-string "2"))
+      (defvar *rr-1* (read-from-string "1"))
+      (defvar *rr-0* (read-from-string "0"))
+      (defvar *rr-m1* (read-from-string "-1"))
+      (defvar *rr-f* (read-from-string "10.5"))
+      (defvar *rr-nil* (read-from-string "nil"))
+      (defvar *rr-big* (expt 2 64))
+      (defvar *rr-9* (read-from-string "9"))
+      (defun rr-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c)))
+          (error () :other-error)))
+      (defmacro rr-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(rr-probe (lambda () ,f))) forms))))
+      (rr-row (digit-char-p #\2 *rr-37*) (digit-char-p #\2 *rr-1*) (digit-char-p #\2 *rr-0*) (digit-char-p #\2 *rr-m1*))
+      (rr-row (digit-char-p #\2 *rr-big*) (digit-char-p #\2 *rr-f*) (digit-char-p #\2 *rr-nil*) (digit-char-p 1 *rr-37*))
+      (rr-row (digit-char-p #\1 *rr-2*) (digit-char-p #\2 *rr-2*) (digit-char-p #\z *rr-36*) (digit-char-p #\7 *rr-10*))
+      (rr-row (parse-integer "12" :radix *rr-37*) (parse-integer "12" :radix *rr-1*) (parse-integer "" :radix *rr-37*)
+              (parse-integer "12" :radix *rr-37* :junk-allowed t))
+      (rr-row (parse-integer "12" :radix *rr-nil*) (parse-integer "12" :radix *rr-f*) (parse-integer "12" :end *rr-9* :radix *rr-37*)
+              (parse-integer "zz" :radix *rr-36*))
+      (rr-row (funcall #'digit-char-p #\2 *rr-37*) (funcall #'parse-integer "12" :radix *rr-37*)
+              (apply #'parse-integer "12" (list :radix *rr-1*)) (funcall #'parse-integer "zz" :radix *rr-36*))
+      (rr-row (digit-char-p #\2 37) (digit-char-p #\2 1) (parse-integer "12" :radix 37) (parse-integer "12" :radix 0))
+      (rr-row (digit-char-p #\2 36) (parse-integer "12" :radix 2 :junk-allowed t) (parse-integer "12" :radix 36) (parse-integer "ff" :radix 16))
+    expected: |
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)) (:TYPE-ERROR -1 (INTEGER 2 36)))
+      ((:TYPE-ERROR 18446744073709551616 (INTEGER 2 36)) (:TYPE-ERROR 10.5 (INTEGER 2 36)) (:TYPE-ERROR NIL (INTEGER 2 36)) (:TYPE-ERROR 1 CHARACTER))
+      ((1) (NIL) (35) (7))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)))
+      ((:TYPE-ERROR NIL (INTEGER 2 36)) (:TYPE-ERROR 10.5 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (1295 2))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (1295 2))
+      ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)))
+      ((2) (1 1) (38 2) (255 2))
+  - name: parse-integer-signals-a-parse-error
+    source: |
+      (defvar *pis-1* (read-from-string "1"))
+      (defvar *pis-3* (read-from-string "3"))
+      (defun pis-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (simple-error () :simple-error)
+          (parse-error (c) (list :parse-error (typep c 'error) (typep c 'reader-error) (typep c 'stream-error)))
+          (error () :other-error)))
+      (defmacro pis-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(pis-probe (lambda () ,f))) forms))))
+      (pis-row (parse-integer (copy-seq "12a")) (parse-integer (copy-seq "")) (parse-integer (copy-seq " - "))
+               (parse-integer "x"))
+      (pis-row (parse-integer (copy-seq "12 3")) (parse-integer (copy-seq "123") :start *pis-3*)
+               (parse-integer (copy-seq "123") :start *pis-1* :end *pis-1*) (parse-integer (copy-seq "zz") :radix 10))
+      (pis-row (funcall #'parse-integer (copy-seq "12a")) (funcall #'parse-integer (copy-seq "  "))
+               (apply #'parse-integer (copy-seq "123") (list :start *pis-3*)) (funcall #'parse-integer (copy-seq "+")))
+      (print (block pis-hb
+               (handler-bind ((parse-error (lambda (c) (return-from pis-hb (list :handler-bind (typep c 'parse-error))))))
+                 (parse-integer (copy-seq "q")))))
+      (print (let ((c (nth-value 1 (ignore-errors (parse-integer (copy-seq "q"))))))
+               (list :ignore-errors (typep c 'parse-error))))
+      (pis-row (parse-integer (copy-seq "12a") :junk-allowed t) (parse-integer (copy-seq " - ") :junk-allowed t)
+               (funcall #'parse-integer (copy-seq "") :junk-allowed t) (parse-integer (copy-seq " 12 ")))
+    expected: |
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      (:HANDLER-BIND T)
+      (:IGNORE-ERRORS T)
+      ((12 2) (NIL 2) (NIL 0) (12 4))
   # The cons set / tree family (.kb/cons-set-and-tree-operators.md). Three rules meet
   # here: every n-prefixed spelling but nbutlast answers the NON-destructive result
   # (CLHS makes the destructive promise a licence, so each is an alias and nothing is
@@ -6283,6 +6356,44 @@ cases:
       1
       X
       1
+  # A one-argument read-from-string over text holding no complete datum signals: a ')'
+  # that closes nothing is a reader-error, no datum or an unfinished one an end-of-file
+  # (sbcl's answers; .kb/read-load-streams.md).
+  - name: read-from-string-refuses-malformed-text
+    source: |
+      (defun rfm-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (end-of-file (c) (list :eof (typep c 'stream-error) (typep c 'parse-error)))
+          (reader-error (c) (list :reader-error (typep c 'parse-error) (typep c 'stream-error)))
+          (error (c) (list :other-error (type-of c)))))
+      (defmacro rfm-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(rfm-probe (lambda () ,f))) forms))))
+      (rfm-row (read-from-string ")") (read-from-string (copy-seq " ) a")) (read-from-string (copy-seq "')"))
+               (read-from-string (copy-seq "(a ')")))
+      (rfm-row (read-from-string "") (read-from-string (copy-seq "   ")) (read-from-string (copy-seq "; c"))
+               (read-from-string (copy-seq "#| x |#")))
+      (rfm-row (read-from-string (copy-seq "(a b")) (read-from-string (copy-seq "\"ab"))
+               (read-from-string (copy-seq "'")) (read-from-string (copy-seq "(a . b")))
+      (rfm-row (read-from-string (copy-seq "#(1 2")) (read-from-string (copy-seq "#|x"))
+               (read-from-string (copy-seq "#\\")) (read-from-string (copy-seq "#2A((1 2)")))
+      (rfm-row (funcall #'read-from-string (copy-seq ")")) (funcall #'read-from-string (copy-seq "(a"))
+               (apply #'read-from-string (list (copy-seq ""))) (values (read-from-string (copy-seq "(a . )"))))
+      (print (block rfm-hb
+               (handler-bind ((reader-error (lambda (c) (return-from rfm-hb (list :handler-bind (typep c 'reader-error))))))
+                 (read-from-string (copy-seq ")")))))
+      (print (let ((c (nth-value 1 (ignore-errors (read-from-string (copy-seq "(a"))))))
+               (list :ignore-errors (typep c 'end-of-file))))
+      (rfm-row (read-from-string (copy-seq "a)")) (read-from-string (copy-seq "(a) )"))
+               (read-from-string (copy-seq "#| c |# x")) (read-from-string (copy-seq " \"a\\\\\" ")))
+    expected: |
+      ((:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:READER-ERROR T T) (:EOF T NIL) (:EOF T NIL) (:READER-ERROR T T))
+      (:HANDLER-BIND T)
+      (:IGNORE-ERRORS T)
+      ((A 1) ((A) 4) (X 9) ("a\\" 7))
   - name: read-from-string-upcase
     source: |
       (print (read-from-string "foo"))
@@ -6309,6 +6420,25 @@ cases:
       (ABC 4)
       (ABC 3)
       ((A) 3)
+  # The stop index counts characters: neither the UTF-8 bytes the WASM reader walks nor
+  # the UTF-16 units a supplementary-plane character takes on the JVM (sbcl's answers).
+  - name: read-from-string-stop-index-counts-characters
+    source: |
+      (print (multiple-value-list (read-from-string "日本 x")))
+      (print (multiple-value-list (read-from-string "\"日本\" x")))
+      (print (multiple-value-list (read-from-string "(日本 a) x")))
+      (print (multiple-value-list (read-from-string "   日本 x")))
+      (print (multiple-value-list (read-from-string "😀 x")))
+      (print (nth-value 1 (read-from-string "a😀b c")))
+      (print (nth-value 1 (read-from-string "日本語")))
+    expected: |
+      (日本 3)
+      ("日本" 5)
+      ((日本 A) 7)
+      (日本 6)
+      (😀 2)
+      4
+      3
   # read-from-string's whole lambda list -- eof-error-p, eof-value, :start, :end,
   # :preserve-whitespace -- with the stop index, the eof-value of an empty window, a bad
   # bound's type-error and the argument order (ReadFromStringLambdaListFixture.PROGRAM,
@@ -12097,8 +12227,6 @@ cases:
       llo
   # listen answers whether a character remains on a string input stream (an
   # unread character counts), and an echo stream echoes only what is read.
-  # The unread is re-read at the end: cases share global state, and a parked
-  # character left behind would fail a later unread elsewhere.
   - name: listen-at-the-end-of-a-string-stream-and-echo-peek
     source: |
       (print (with-input-from-string (s "") (listen s)))
@@ -15147,10 +15275,10 @@ cases:
         (print (list (input-stream-p gip-in) (output-stream-p gip-in)))
         (print (list (input-stream-p (make-instance 'gip-bytes))
                      (output-stream-p (make-instance 'gip-bytes)))))
-      ; The handle arm of unread-char parks the character in the
-      ; handle-side pushback (unread-char.lisp) that read-char, peek-char and
-      ; read-line all drain -- a file, a string input stream and a socket alike.
-      ; A second unread with the cell still full signals, on every backend.
+      ; The handle arm of unread-char parks the character on the stream
+      ; (unread-char.lisp), where read-char, peek-char and read-line all drain
+      ; it -- a file, a string input stream and a socket alike. A second unread
+      ; with that stream's character still parked signals, on every backend.
       (let ((gip-h (make-string-input-stream (format nil "ab~%cd"))))
         (print (read-char gip-h))
         (print (unread-char #\a gip-h))
@@ -15163,8 +15291,6 @@ cases:
         (unread-char #\a gip-h2)
         (print (handler-case (unread-char #\a gip-h2)
                  (error (gip-e) (princ-to-string gip-e))))
-        ; The cell is ONE slot for the whole program, and the cases that follow
-        ; share it: drain what the failed second unread left parked.
         (read-char gip-h2))
       (print (list (input-stream-p (make-string-input-stream "z"))
                    (output-stream-p (make-string-input-stream "z"))))
@@ -20157,7 +20283,7 @@ cases:
       ("CHAR-CODE: The value 1 is not of type CHARACTER" CHARACTER)
       ("CHAR-INT: The value 1 is not of type CHARACTER" CHARACTER)
       ("UPPER-CASE-P: The value 1 is not of type CHARACTER" CHARACTER)
-      ("DIGIT-CHAR-P: The value CI-CHK-SYM is not of type INTEGER" INTEGER)
+      ("DIGIT-CHAR-P: The value CI-CHK-SYM is not of type (INTEGER 2 36)" (INTEGER 2 36))
       ("ALPHANUMERICP: The value 1 is not of type CHARACTER" CHARACTER)
       ("CHAR-NAME: The value 1 is not of type CHARACTER" CHARACTER)
       (97 97 T 15 "Space")

@@ -21,10 +21,20 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
 - **ONE required read method: `stream-read-char`** (`stream-read-byte` binary);
   `-read-line`/`-read-sequence` loop it, `-read-char-no-hang` IS it, `-peek-char` = read +
   `stream-unread-char`.
-- `stream-unread-char` default cell: `rontolisp::*gray-unread-stream*` / `*gray-unread-char*`,
-  ONE char for ONE stream (WASM fd-pushback shape, `PEEK_FD_ADDR`/`PEEK_CP_ADDR`); full Gray
-  keeps it per CLASS. `%gray-read-char-1` is the ONE cell-draining entry. TRAP: overriding
-  `stream-read-line`/`-read-sequence` OUTRIGHT reads past a pushed-back char.
+- `stream-unread-char` default cell: ON THE INSTANCE, the one cell every
+  `fundamental-input-stream` descendant reserves past its declared slots
+  (`ClosRegistry.registerClass`, capacity + 1), addressed `(%obj-ref s -1)` -- a negative index
+  counts back from the end of the storage (`LispLayout.TAIL_CELL`), so it is one literal across
+  class widths and stays past every slot of a `change-class` target
+  (`applyChangeClassCapacities` reserves the target's CAPACITY; the interpreter's
+  `becomeLayout` carries the last cell when it grows). SBCL's sb-gray has no default method.
+  `%gray-read-char-1` is the ONE cell-draining entry; its `typep` guard is load-bearing: a
+  dispatch helper hands it ANY instance, whose last cell may be a declared slot. TRAP:
+  overriding `stream-read-line`/`-read-sequence` OUTRIGHT reads past a pushed-back char.
+- Until 2026-10-06 the cell was ONE program-wide pair (`*gray-unread-stream*` /
+  `*gray-unread-char*`) that overwrote unchecked: two instances each unread once lost the
+  first character (`(#\b #\x #\c)` for SBCL-per-instance `(#\a #\x #\b)`), all four.
+  Pinned by `GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM` in the three backend suites.
 - `stream-start-line-p` comes from `stream-line-column` (nil = no column, so `fresh-line`
   breaks unconditionally); flush trio, `stream-listen`, `stream-file-position` answer nil.
   Read generics answer `:eof`; dispatch maps it to `eof-error-p`/`eof-value`,
@@ -240,25 +250,48 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
 
 ## Handle-side pushback of `unread-char`
 Nothing a runtime holds can be un-read (WASI fd, socket, `BufferedReader`), so the character
-parks in a one-slot cell the character reads consult.
-- Interpreter: Java, in `Environment.createGlobal` — a `pushbackStream`/`pushbackChar` pair the
-  read definitions close over (its built-ins are FUNCTION VALUES, not rewritable call sites).
+parks in a cell the character reads consult. **The cell lives ON the stream value**: the
+reserved `LispLayout.STREAM_PUSHBACK_CELL` (capacity 4), as CL keeps the pushback on the stream,
+so it dies with the value -- no close hook, no table to prune (the closes `with-input-from-string`
+/ `with-open-file` synthesize are invisible to the call-site rewrite), and two streams each hold
+one. A key that is not a stream value (`t`) shares ONE cell keyed by `eql`.
+- Interpreter: Java, `eval/StreamPushback`, which `Environment.createGlobal`'s read definitions
+  close over (its built-ins are FUNCTION VALUES, not rewritable call sites).
 - Both compile paths: ORDINARY LISP — `unread-char.lisp`, spliced by `eval/UnreadCharLibrary`,
   which also rewrites the `read-char`/`read-char-no-hang`/`peek-char`/`read-line`/`unread-char`
   call sites onto its defuns. Trigger: the program names `unread-char`; else byte-identical.
+  The cell write is `(%obj-set key 3 c)` behind `(%obj-is key '%STREAM)`, which compiles with the
+  instance gate off too (`.kb/instance-syntax.md`, "The emit gate").
   **Runs LAST, over `GrayStreamsLibrary.process`'s output**, because
   `%gray-unread-char-dispatch`'s non-instance fallback IS the handle arm.
 
 Contract, identical on all four:
-- KEY = the stream argument AS GIVEN, an omitted stream and the nil designator folded onto `t`;
-  else `eql`.
+- KEY = the stream the designator DENOTES: an omitted stream and nil -> the current
+  `*standard-input*`, a synonym -> its target (recursively, NOT unwrapped to the handle), a nil
+  left over -> `t`; else `eql`. Interpreter `StreamPushback.key` (`Environment.defaultInput` +
+  `synonymTarget`), compile paths `%unread-key`. Until 2026-10-06 it was the argument AS GIVEN
+  (nil folded onto `t`): `(let ((*standard-input* s)) (unread-char (read-char)))` parked under
+  `t` and a later `(read-char s)` skipped it on all four (SBCL: `#\a`, all four: `#\b`), and a
+  synonym keyed on itself on the compile paths only (the interpreter's Gray wrap resolves it
+  first). Pinned by `StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM` in the three suites.
+- Naming `*standard-input*` in `%unread-key` does NOT switch the input redirect on: the redirect
+  activates on a BINDING (`.kb/standard-output-redirect.md`, "Activation rule"), and an unbound
+  read compiles to the constant `t` (checked 2026-10-06 with `javap`: an `unread-char` program
+  that binds nothing has no `*STANDARD-INPUT*` field). What it does add is the eval runtime's
+  mirror seed of the variable, in an `unread-char` program that also uses `eval`.
+- **gray.lisp's read-side helpers hand the fallback built-in the stream AS GIVEN** (`read-char`,
+  `-no-hang`, `peek-char`, `unread-char`, `read-line`, `listen`, `file-position` and its set),
+  testing `%obj-p` on the `%stream-target` result only. They handed the resolved HANDLE until
+  2026-10-06, so in a Gray-using program every open-stream read keyed the pushback on an integer
+  -- the shared cell: two string streams each unread once signalled on JVM, P1 and component.
+  Pinned by `GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM`.
 - `read-char`/`read-char-no-hang` DRAIN it; `%peek-char` LEAVES it; `peek-char`'s skipping
   peek-types drain it exactly when the char is one to skip (`%unread-peek-stops-p` runs
   built-in `peek-char` over a one-character string input stream rather than adding a FOURTH
   whitespace-set copy). `read-line` DRAINS it and prepends it to the line.
-- A second `unread-char` with the cell full SIGNALS
+- A second `unread-char` with THAT stream's cell full SIGNALS
   (`LispMacroExpander.UNREAD_CHAR_TWICE_MESSAGE`, shared verbatim with `unread-char.lisp` and
-  `Environment`).
+  `StreamPushback`). SBCL answers nil there for a string input stream (measured 2026-10-06).
 - `file-position` counts a parked character as NOT consumed (sbcl): the query subtracts its
   UTF-8 length, the set drops it. Compile paths: `%unread-file-position` /
   `%unread-file-position-set`, spliced only when the program also names `file-position` --
@@ -266,7 +299,23 @@ Contract, identical on all four:
   splicing them into every `unread-char` program would grow each by a runtime it never
   calls. Interpreter: the outermost `file-position` wrapper in `Environment`.
 - `read-byte`, `read-sequence`, `read` do NOT consult it on any backend: their loops are
-  generated inside the expression compilers, after this pass could walk them.
+  generated inside the expression compilers, after this pass could walk them. The one such
+  expansion the pass DOES reach is an indexed `with-input-from-string`: it expands it itself
+  (`LispMacroExpander.isIndexedWithInputFromString`), so the `:index` store's `file-position`
+  becomes `%unread-file-position` (`.kb/read-load-streams.md`, "String streams").
+- **A reserved cell is no part of `equal` or the `equal` hash** on any backend: the JVM
+  (`JvmNumericRuntimeBuilder.emitInstanceEqual`, `JvmHashRuntimeBuilder`) and WASM
+  (`WasmRuntimeBuilder.pushLayoutSlotCount`) loops are bounded by the LAYOUT's slot count, not
+  the storage length. They looped the storage until 2026-10-06, so a stream value (or Gray
+  instance) keyed in an `equal` hash table was lost once a character was parked on it -- JVM,
+  P1 and component (`:FOUND` on SBCL and the interpreter). Pinned by the last form of
+  `StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM` and the Gray fixture.
+- **Until 2026-10-06 the cell was ONE slot for the whole program**: a stream closed (or dropped)
+  with a parked character made every later `unread-char` on ANY stream signal, and two streams
+  could not hold one each -- all four (SBCL: fine). Pinned now by
+  `StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM` in the three backend suites.
+- A parked character survives `close` on its value: a read of the closed stream answers it
+  where SBCL signals (unmeasured edge, all four alike).
 - **A `#'unread-char` FUNCTION VALUE still signals on the compile backends**
   (`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE`); the interpreter has no such limit.
   Callers: cl-json's decoder, local-time's parser, chunga's `unread-char*`.
@@ -329,13 +378,14 @@ splices the whole entry.
   `LackEcosystem*E2eTest` classes.
 
 ## Tests
-- `LispEvaluatorTest#gray*` (14 cases: instance dispatch, eager base-class load, binary
+- `LispEvaluatorTest#gray*` (15 cases: instance dispatch, eager base-class load, binary
   round trip + file-position, read-line/sequence defaults, peek/unread/no-hang, the
-  unread-char method owning the pushback, direction predicates, shim mixin + setf
-  file-position, `grayStreamInstanceIsAStream`) and `#unreadChar*`, `#evalFlexiStream*`.
-- `JvmLispCompilerTest#compileAndRunGray*` (7) + `#compileAndRunUnreadCharOnAStreamHandleRoundTrips`,
+  unread-char method owning the pushback, the default parking on its instance, direction
+  predicates, shim mixin + setf file-position, `grayStreamInstanceIsAStream`) and
+  `#unreadChar*`, `#evalFlexiStream*`.
+- `JvmLispCompilerTest#compileAndRunGray*` (10) + `#compileAndRunUnreadChar*`,
   `#grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
-- `WasmLispCompilerIntegrationTest#gray*` (6) + `#unreadCharOnAStreamHandleRoundTrips`.
+- `WasmLispCompilerIntegrationTest#gray*` (8) + `#unreadChar*`.
 - `GrayStreamsLibraryTest#programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront`;
   `FastIoCircularStreamsE2eTest`, the two `LackEcosystem*E2eTest` classes.
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,

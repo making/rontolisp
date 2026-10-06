@@ -107,6 +107,16 @@ final class JvmOperandTypeRuntime {
 	static final String CK_RAT_DESC = CK_IDX_DESC;
 
 	/**
+	 * {@code digit-char-p}'s radix check, {@code _ckRadix(radix)}: the radix as an
+	 * {@code int} when it is an integer in {@code [2, 36]}, else it throws the unnamed
+	 * report of {@code (INTEGER 2 36)} ({@link OperandTypes#RADIX_TYPE}) through
+	 * {@link #TE_OF}, a non-integer included, for the operator's wrapper to name.
+	 */
+	static final String CK_RADIX = "_ckRadix";
+
+	static final String CK_RADIX_DESC = "(Ljava/lang/Object;)I";
+
+	/**
 	 * A character comparison's operand check: a character (an {@code int[]}) answers
 	 * itself, anything else throws the unnamed {@code CHARACTER} report for the
 	 * comparison's wrapper to name. Descriptor {@link #CK_IDX_DESC}.
@@ -456,6 +466,58 @@ final class JvmOperandTypeRuntime {
 		j.exceptionCatch(tryStart, tryEnd, handler, ioobe);
 		methods.add(
 				new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(CK_BOUND_J), cp.utf8Entry(CK_BOUND_J_DESC), j));
+
+		// _ckRadix(Object radix): (int) radix for a Long in [2, 36], else
+		// throw _teOf(radix, (INTEGER 2 36)) -- a non-integer and a BigInteger included.
+		MethodRefEntry teOfRef = self(cp, thisClass, TE_OF, TE_OF_DESC);
+		MethodCode r = new MethodCode();
+		r.aload(0);
+		r.instanceOf(longClass);
+		MethodCode.Label radixIfNotLong = r.newLabel();
+		r.ifeq(radixIfNotLong);
+		r.aload(0);
+		r.checkcast(longClass);
+		r.invokevirtual(longLongValue);
+		r.lstore(1);
+		r.lload(1);
+		r.loadConstant(OperandTypes.RADIX_MIN);
+		r.i2l();
+		r.lcmp();
+		MethodCode.Label radixIfLow = r.newLabel();
+		r.iflt(radixIfLow);
+		r.lload(1);
+		r.loadConstant(OperandTypes.RADIX_MAX);
+		r.i2l();
+		r.lcmp();
+		MethodCode.Label radixIfHigh = r.newLabel();
+		r.ifgt(radixIfHigh);
+		r.lload(1);
+		r.l2i();
+		r.ireturn();
+		r.labelBinding(radixIfNotLong);
+		r.labelBinding(radixIfLow);
+		r.labelBinding(radixIfHigh);
+		r.aload(0);
+		// (INTEGER 2 36): {"INTEGER", {2L, {36L, nil}}}
+		StringEntry radixIntegerKind = cp.stringEntry(OperandTypes.Kind.INTEGER.name());
+		emitConsHead(r, object, () -> r.ldc(radixIntegerKind));
+		emitConsHead(r, object, () -> {
+			r.loadConstant(OperandTypes.RADIX_MIN);
+			r.i2l();
+			r.invokestatic(longValueOf);
+		});
+		emitConsHead(r, object, () -> {
+			r.loadConstant(OperandTypes.RADIX_MAX);
+			r.i2l();
+			r.invokestatic(longValueOf);
+		});
+		r.aconst_null();
+		emitConsTail(r);
+		emitConsTail(r);
+		emitConsTail(r);
+		r.invokestatic(teOfRef);
+		r.athrow();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(CK_RADIX), cp.utf8Entry(CK_RADIX_DESC), r));
 
 		// _opTypeErr(Throwable e, String op, String opType): an unnamed report renamed
 		// "OP: The value X is not of type T" (T = opType, narrowed NUMBER -> REAL when
