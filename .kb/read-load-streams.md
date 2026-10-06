@@ -1427,6 +1427,9 @@ answer.
   `OPAQUE` and a stream PRINTS as the plain `#<STREAM>` on every backend — the handle never reaches
   the output (`.kb/emitted-output-determinism.md`, `.kb/instance-syntax.md`). A test that must tell
   two streams apart uses `equal` in-program (see `StreamHandleConcurrencySupport`), not the text.
+- **Two reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark) and
+  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`). The interpreter's
+  `StreamDesignators.streamValue` allocates the full capacity like `%obj-new`.
 - **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`, `:STRING-OUTPUT`,
   `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`, `:STANDARD-OUTPUT`, `:STANDARD-INPUT`.
   Compared with `equal`, not `eq`.

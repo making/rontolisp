@@ -121,7 +121,10 @@ public final class StreamDesignators {
 	 * @return the stream instance
 	 */
 	public static LispInstance streamValue(long handle, String kind) {
-		return new LispInstance(LispLayout.STREAM, new LispVal[] { new LispInteger(handle), new LispSymbol(kind) });
+		LispInstance stream = LispInstance.ofNilSlots(LispLayout.STREAM);
+		stream.setSlot(0, new LispInteger(handle));
+		stream.setSlot(1, new LispSymbol(kind));
+		return stream;
 	}
 
 	/**

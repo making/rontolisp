@@ -5330,6 +5330,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUnreadCharPushbackBelongsToItsStream() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunObjSetCompilesWhereNoInstanceCanExist() throws Exception {
+		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
+		// pushback) without knowing whether the class builds instances: with the gate
+		// off the store still compiles, and only a call that reaches it fails.
+		assertThat(compileAndRun("""
+				(defun osg-store (x) (%obj-set x 3 1))
+				(print (if (> (length (list 1 2)) 5) (osg-store 1) :never-stored))
+				""")).isEqualTo(":NEVER-STORED");
+	}
+
+	@Test
 	void compileAndRunStringStreamMacroOptions() throws Exception {
 		// with-input-from-string's :index/:start/:end and with-output-to-string's
 		// fill-pointer string and :element-type, which used to be refused at expansion.

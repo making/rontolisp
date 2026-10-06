@@ -155,8 +155,8 @@ public final class StringStreamPrograms {
 	 * {@code with-input-from-string}'s {@code :index} in a program that uses
 	 * {@code unread-char} and never names {@code file-position}: a character parked on
 	 * the stream counts as unread, and the index counts characters from the string's
-	 * start. The last form leaves its character parked when the body exits -- the one
-	 * pushback cell then still holds it, so nothing after it may unread.
+	 * start. The last form leaves its character parked when the body exits, on the stream
+	 * that goes with it.
 	 */
 	public static final String INDEX_PUSHBACK_PROGRAM = """
 			(let ((i nil))
@@ -181,5 +181,32 @@ public final class StringStreamPrograms {
 			(#\\β 2)
 			2
 			3""";
+
+	/**
+	 * The {@code unread-char} pushback belongs to its stream: a stream closed or dropped
+	 * with a character parked leaves no trace on the next one (the closes
+	 * {@code with-input-from-string} synthesizes included), two streams each hold one at
+	 * once, and {@code listen} / {@code peek-char} / {@code read-line} see only their own
+	 * stream's.
+	 */
+	public static final String PER_STREAM_PUSHBACK_PROGRAM = """
+			(with-input-from-string (s "abc") (unread-char (read-char s) s))
+			(print (with-input-from-string (s "xyz") (unread-char (read-char s) s) (read-char s)))
+			(let ((s (make-string-input-stream "pq")))
+			  (unread-char (read-char s) s)
+			  (close s))
+			(let ((s (make-string-input-stream "dropped")))
+			  (unread-char (read-char s) s))
+			(let ((s1 (make-string-input-stream "abc")) (s2 (make-string-input-stream "xyz")))
+			  (unread-char (read-char s1) s1)
+			  (unread-char (read-char s2) s2)
+			  (print (list (listen s1) (read-char s1) (read-char s2) (read-char s1) (peek-char nil s2)
+			               (read-line s2) (listen s2))))
+			""";
+
+	/** What {@link #PER_STREAM_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String PER_STREAM_PUSHBACK_EXPECTED = """
+			#\\x
+			(T #\\a #\\x #\\b #\\y "yz" NIL)""";
 
 }

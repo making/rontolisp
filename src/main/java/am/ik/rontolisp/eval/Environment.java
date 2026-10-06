@@ -6478,14 +6478,9 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
-		// The handle-side one-slot pushback of unread-char: ONE character for ONE
-		// stream at a time (declared here, ahead of listen, which consults it).
-		// An EMPTY cell is nil in both slots: the KEY nil folds onto t, so no live
-		// key is ever nil and the two states cannot be confused.
-		final LispVal[] pushbackStream = { LispNil.INSTANCE };
-		final LispVal[] pushbackChar = { LispNil.INSTANCE };
-		java.util.function.UnaryOperator<LispVal> pushbackKey = stream -> stream instanceof LispNil ? LispTrue.INSTANCE
-				: stream;
+		// The handle-side pushback of unread-char (declared here, ahead of listen,
+		// which consults it): on the stream value itself, StreamPushback.
+		final StreamPushback pushback = new StreamPushback();
 		// (listen &optional stream): whether input is immediately available without
 		// blocking -- InputStream.available() / Reader.ready() semantics. Sockets answer
 		// from the kernel receive buffer, which is what cl-postgres's
@@ -6502,8 +6497,7 @@ public final class Environment implements Scope {
 				}
 				// A parked unread-char counts as a character that remains, whatever
 				// the stream itself says.
-				LispVal listenKey = pushbackKey.apply(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
-				if (pushbackStream[0].equals(listenKey)) {
+				if (!(pushback.parked(args.isEmpty() ? LispNil.INSTANCE : args.get(0)) instanceof LispNil)) {
 					return LispTrue.INSTANCE;
 				}
 				Closeable entry = streams.get(handle.value());
@@ -6620,37 +6614,17 @@ public final class Environment implements Scope {
 			}
 			return str;
 		}));
-		// The handle-side one-slot pushback of unread-char: ONE character for ONE
-		// stream at a time, the same shape the Gray protocol keeps for an instance and
-		// exactly what CL promises. No stream this table holds can be un-read -- a
-		// BufferedReader's mark budget is the peek's, not a cell -- so the character is
-		// parked here and read-char / %peek-char / read-line consult it before touching
-		// the stream. The compile paths answer the same contract in Lisp
-		// (eval/UnreadCharLibrary rewrites their call sites onto unread-char.lisp's
-		// defuns), which is what keeps the four backends identical.
-		//
-		// The KEY is the stream argument AS GIVEN, with an omitted stream and the nil
-		// designator both folded onto t -- the value *standard-input* holds by default,
-		// so the three spellings of standard input compare equal. read-byte,
-		// read-sequence and read deliberately do NOT consult the cell (a character
-		// pushed back before a BYTE read has no meaning, and the other two expand into
-		// their loops long after the compile paths' rewrite), so all four backends
-		// agree about that too.
-		// An EMPTY cell is nil in both slots: the KEY nil folds onto t, so no live key
-		// is ever nil and the two states cannot be confused. (The cells themselves
-		// are declared ahead of listen, which consults them.)
-		// The parked character of this stream, draining the cell -- nil when the cell is
-		// empty or holds another stream's character.
-		java.util.function.Function<List<LispVal>, LispVal> pushbackTake = args -> {
-			LispVal key = pushbackKey.apply(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
-			if (pushbackStream[0].equals(key)) {
-				LispVal parked = pushbackChar[0];
-				pushbackStream[0] = LispNil.INSTANCE;
-				pushbackChar[0] = LispNil.INSTANCE;
-				return parked;
-			}
-			return LispNil.INSTANCE;
-		};
+		// The handle-side pushback of unread-char (StreamPushback): read-char /
+		// %peek-char / read-line consult it before touching the stream. The compile
+		// paths answer the same contract in Lisp (eval/UnreadCharLibrary rewrites their
+		// call sites onto unread-char.lisp's defuns), which is what keeps the four
+		// backends identical. read-byte, read-sequence and read deliberately do NOT
+		// consult it (a character pushed back before a BYTE read has no meaning, and
+		// the other two expand into their loops long after the compile paths'
+		// rewrite), so all four backends agree about that too.
+		// The parked character of this stream, drained -- nil when none is parked.
+		java.util.function.Function<List<LispVal>, LispVal> pushbackTake = args -> pushback
+			.take(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
 		// The stream an end-of-file condition carries: the designator as passed, or t
 		// for the standard input an absent/nil designator means -- so
 		// stream-error-stream answers what the suite checks streamp of.
@@ -6830,9 +6804,9 @@ public final class Environment implements Scope {
 			// A peek LEAVES the character in the stream, so the cell is read, not
 			// drained; the peek-type loop above drains it through read-char when the
 			// character is one to skip.
-			LispVal peekKey = pushbackKey.apply(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
-			if (pushbackStream[0].equals(peekKey)) {
-				return pushbackChar[0];
+			LispVal peeked = pushback.parked(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
+			if (!(peeked instanceof LispNil)) {
+				return peeked;
 			}
 			HttpRequestBodyStream bufferedBody = bufferedBodyArg.apply(args);
 			if (bufferedBody != null) {
@@ -6877,19 +6851,16 @@ public final class Environment implements Scope {
 		}));
 		// unread-char: the Gray protocol's own one-slot pushback carries it for an
 		// INSTANCE stream (LispEvaluator's wrap); a stream HANDLE parks the character in
-		// the cell above, which the character reads drain. A second unread with the cell
-		// still full SIGNALS -- CL calls two unreads without an intervening read an
-		// error, and one slot is all the protocol's own default keeps either.
+		// the pushback above, which the character reads drain. A second unread with the
+		// stream's cell still full SIGNALS -- CL calls two unreads without an
+		// intervening read an error, and one slot is all the protocol's own default
+		// keeps either.
 		env.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, args -> {
 			requireArgCountBetween(LispNames.UNREAD_CHAR, args, 1, 2);
 			if (!(args.get(0) instanceof LispChar parked)) {
 				throw new LispEvalException(LispNames.UNREAD_CHAR + " expects a character");
 			}
-			if (!(pushbackStream[0] instanceof LispNil)) {
-				throw new LispEvalException(LispMacroExpander.UNREAD_CHAR_TWICE_MESSAGE);
-			}
-			pushbackChar[0] = parked;
-			pushbackStream[0] = pushbackKey.apply(args.size() >= 2 ? args.get(1) : LispNil.INSTANCE);
+			pushback.push(args.size() >= 2 ? args.get(1) : LispNil.INSTANCE, parked);
 			return LispNil.INSTANCE;
 		}));
 		// (peek-char [peek-type [stream [eof-error-p [eof-value]]]]): the peek-type
@@ -7257,16 +7228,15 @@ public final class Environment implements Scope {
 		java.util.function.Function<List<LispVal>, LispVal> unparkedFilePosition = ((LispFunction) env
 			.lookupFunction(LispNames.FILE_POSITION)).body();
 		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
-			if (args.isEmpty() || !pushbackStream[0].equals(pushbackKey.apply(args.get(0)))) {
+			if (args.isEmpty() || !(pushback.parked(args.get(0)) instanceof LispChar parked)) {
 				return unparkedFilePosition.apply(args);
 			}
 			if (args.size() >= 2) {
-				pushbackStream[0] = LispNil.INSTANCE;
-				pushbackChar[0] = LispNil.INSTANCE;
+				pushback.take(args.get(0));
 				return unparkedFilePosition.apply(args);
 			}
 			LispVal position = unparkedFilePosition.apply(args);
-			if (position instanceof LispInteger n && pushbackChar[0] instanceof LispChar parked) {
+			if (position instanceof LispInteger n) {
 				int cp = parked.codePoint();
 				boolean characters = streamTarget(args.get(0)) instanceof LispInteger handle
 						&& streams.get(handle.value()) instanceof RontoStringInputStream;

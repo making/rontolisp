@@ -240,12 +240,18 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
 
 ## Handle-side pushback of `unread-char`
 Nothing a runtime holds can be un-read (WASI fd, socket, `BufferedReader`), so the character
-parks in a one-slot cell the character reads consult.
-- Interpreter: Java, in `Environment.createGlobal` — a `pushbackStream`/`pushbackChar` pair the
-  read definitions close over (its built-ins are FUNCTION VALUES, not rewritable call sites).
+parks in a cell the character reads consult. **The cell lives ON the stream value**: the
+reserved `LispLayout.STREAM_PUSHBACK_CELL` (capacity 4), as CL keeps the pushback on the stream,
+so it dies with the value -- no close hook, no table to prune (the closes `with-input-from-string`
+/ `with-open-file` synthesize are invisible to the call-site rewrite), and two streams each hold
+one. A key that is not a stream value (`t`) shares ONE cell keyed by `eql`.
+- Interpreter: Java, `eval/StreamPushback`, which `Environment.createGlobal`'s read definitions
+  close over (its built-ins are FUNCTION VALUES, not rewritable call sites).
 - Both compile paths: ORDINARY LISP — `unread-char.lisp`, spliced by `eval/UnreadCharLibrary`,
   which also rewrites the `read-char`/`read-char-no-hang`/`peek-char`/`read-line`/`unread-char`
   call sites onto its defuns. Trigger: the program names `unread-char`; else byte-identical.
+  The cell write is `(%obj-set key 3 c)` behind `(%obj-is key '%STREAM)`, which compiles with the
+  instance gate off too (`.kb/instance-syntax.md`, "The emit gate").
   **Runs LAST, over `GrayStreamsLibrary.process`'s output**, because
   `%gray-unread-char-dispatch`'s non-instance fallback IS the handle arm.
 
@@ -256,9 +262,9 @@ Contract, identical on all four:
   peek-types drain it exactly when the char is one to skip (`%unread-peek-stops-p` runs
   built-in `peek-char` over a one-character string input stream rather than adding a FOURTH
   whitespace-set copy). `read-line` DRAINS it and prepends it to the line.
-- A second `unread-char` with the cell full SIGNALS
+- A second `unread-char` with THAT stream's cell full SIGNALS
   (`LispMacroExpander.UNREAD_CHAR_TWICE_MESSAGE`, shared verbatim with `unread-char.lisp` and
-  `Environment`).
+  `StreamPushback`). SBCL answers nil there for a string input stream (measured 2026-10-06).
 - `file-position` counts a parked character as NOT consumed (sbcl): the query subtracts its
   UTF-8 length, the set drops it. Compile paths: `%unread-file-position` /
   `%unread-file-position-set`, spliced only when the program also names `file-position` --
@@ -270,10 +276,12 @@ Contract, identical on all four:
   expansion the pass DOES reach is an indexed `with-input-from-string`: it expands it itself
   (`LispMacroExpander.isIndexedWithInputFromString`), so the `:index` store's `file-position`
   becomes `%unread-file-position` (`.kb/read-load-streams.md`, "String streams").
-- **The cell outlives the stream it holds a character for**: nothing clears it on `close`, so a
-  stream closed (or dropped) with a parked character makes every later `unread-char` on ANY
-  stream signal -- `(with-input-from-string (s "abc") (unread-char (read-char s) s))` then the
-  same over `"xyz"`, all four (SBCL: fine).
+- **Until 2026-10-06 the cell was ONE slot for the whole program**: a stream closed (or dropped)
+  with a parked character made every later `unread-char` on ANY stream signal, and two streams
+  could not hold one each -- all four (SBCL: fine). Pinned now by
+  `StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM` in the three backend suites.
+- A parked character survives `close` on its value: a read of the closed stream answers it
+  where SBCL signals (unmeasured edge, all four alike).
 - **A `#'unread-char` FUNCTION VALUE still signals on the compile backends**
   (`LispMacroExpander.UNREAD_CHAR_NOT_A_VALUE_MESSAGE`); the interpreter has no such limit.
   Callers: cl-json's decoder, local-time's parser, chunga's `unread-char*`.

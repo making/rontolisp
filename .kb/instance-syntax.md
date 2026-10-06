@@ -155,7 +155,11 @@ fixes `instanceTypeIndex`) and the JVM predicates' instance exclusion + `_equal`
 (`Ctx.mayUseInstances`); with the gate off, an instance-free program is byte-identical to a build
 that never knew about instances. Only CONSTRUCTION needs it on -- the reading primitives compile to a
 constant nil when it is off, so an over-approximation costs one unused type entry and an
-under-approximation is a loud compile error, never wrong output.
+under-approximation is a loud compile error, never wrong output. The UNCHECKED `%obj-set` compiles
+gate-off too, failing as a non-instance fails gate-on (JVM `checkcast`, WASM `unreachable`): no
+operand can be an instance then, and a library writes a reserved cell behind an `%obj-is` test
+without knowing the gate (`unread-char.lisp`'s pushback). The checked (defstruct) store still
+requires it.
 
 - Most of the answer is a scan for `%obj-new`, already spliced by `expandTopLevelDefinitions`. The
   rest are condition sites expanding during BODY compilation, after the gate must be fixed:

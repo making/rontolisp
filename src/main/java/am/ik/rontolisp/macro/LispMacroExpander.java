@@ -3184,11 +3184,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * The message a SECOND {@code unread-char} answers while the handle-side pushback
-	 * still holds a character. CL calls two unreads without an intervening read an error,
-	 * and one slot is all the Gray protocol's own default keeps either. Shared verbatim
-	 * with {@code Environment}'s interpreter definition and with
-	 * {@code unread-char.lisp}'s {@code %unread-char-push}, so the four backends answer
-	 * alike.
+	 * still holds a character for that stream. CL calls two unreads without an
+	 * intervening read an error, and one slot is all the Gray protocol's own default
+	 * keeps either. Shared verbatim with the interpreter's {@code eval/StreamPushback}
+	 * and with {@code unread-char.lisp}'s {@code %unread-char-push}, so the four backends
+	 * answer alike.
 	 */
 	public static final String UNREAD_CHAR_TWICE_MESSAGE = "UNREAD-CHAR without an intervening READ-CHAR";
 

@@ -848,6 +848,12 @@ class LispEvaluatorTest {
 			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
 	}
 
+	@Test
+	void unreadCharPushbackBelongsToItsStream() {
+		assertThat(printedOutput(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
 	private static String printedOutput(String program) {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

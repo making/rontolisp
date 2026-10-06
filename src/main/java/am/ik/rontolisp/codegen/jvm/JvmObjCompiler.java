@@ -244,11 +244,17 @@ final class JvmObjCompiler {
 	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
 	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
 	 * follows the object AND the value.
+	 *
+	 * <p>
+	 * The unchecked store compiles with the gate off too: no operand can be an instance
+	 * then, and the code below meets a non-instance the same way whatever the gate says
+	 * (the {@code checkcast} fails). A library may so write a reserved cell behind an
+	 * {@code %obj-is} test without knowing whether the artifact builds instances.
 	 */
 	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
 		if (args.size() > 4) {
+			requireGate(ctx, LispNames.OBJ_SET);
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			int objSlot = ctx.allocTemp();
 			ctx.body.astore(objSlot);

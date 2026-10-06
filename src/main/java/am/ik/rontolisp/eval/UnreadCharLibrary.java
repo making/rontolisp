@@ -27,7 +27,8 @@ import org.jspecify.annotations.Nullable;
  * The handle-side pushback of {@code unread-char} on the compile paths
  * ({@code unread-char.lisp}): the character-reading built-ins have no per-stream pushback
  * in any runtime -- a WASI fd, a socket and a string input stream can all be read but not
- * un-read -- so a program that uses {@code unread-char} gets ONE Lisp-level cell and has
+ * un-read -- so a program that uses {@code unread-char} parks the character in a
+ * Lisp-level cell on the stream value ({@code LispLayout.STREAM_PUSHBACK_CELL}) and has
  * its {@code read-char} / {@code read-char-no-hang} / {@code peek-char} /
  * {@code read-line} / {@code unread-char} call sites rewritten onto the defuns that
  * consult it. The compiled runtimes themselves know nothing; the pushback is ordinary
@@ -78,7 +79,8 @@ public final class UnreadCharLibrary {
 	 * rewriting those into the pushback defuns again would recurse forever.
 	 */
 	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
-			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-PARKED", "%UNREAD-STORE", "%UNREAD-CHAR-TAKE",
+			"%UNREAD-PEEK-STOPS-P");
 
 	/**
 	 * The two {@code file-position} defuns, spliced only for a program that names

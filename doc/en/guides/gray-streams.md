@@ -217,9 +217,10 @@ rontolisp protocol has, so a portable class that defines only
   the second, and a subclass of the bare `fundamental-stream` answers `nil` to
   both. A class may still define a method on either name and own the answer.
 - `unread-char` on a stream HANDLE — a file, a string input stream, a socket —
-  parks the character in a handle-side pushback of its own, which `read-char`,
-  `peek-char` and `read-line` drain. It holds one character for one stream, like
-  the protocol's; a second `unread-char` with the cell still full signals.
+  parks the character on that stream, and `read-char`, `peek-char` and
+  `read-line` on it drain it. Every stream holds its own character, so a stream
+  closed or dropped with one parked does not affect any other; a second
+  `unread-char` on a stream whose character is still parked signals.
   `read-byte`, `read-sequence` and `read` do not consult it.
 - The read generics return primary values only: `stream-read-line` has no
   `(values line missing-newline-p)` pair — `:eof` is the whole EOF signal.

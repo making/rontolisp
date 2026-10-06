@@ -14457,6 +14457,27 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
 	}
 
+	@Test
+	void unreadCharPushbackBelongsToItsStream() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void objSetCompilesWhereNoInstanceCanExist() throws Exception {
+		// A library writes a reserved cell behind an %obj-is test (unread-char.lisp's
+		// pushback) without knowing whether the module builds instances: with the gate
+		// off the store still compiles, and only a call that reaches it traps.
+		String program = """
+				(defun osg-store (x) (%obj-set x 3 1))
+				(print (if (> (length (list 1 2)) 5) (osg-store 1) :never-stored))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo(":NEVER-STORED");
+		assertThat(compileAndRunComponent(program)).isEqualTo(":NEVER-STORED");
+	}
+
 	/**
 	 * Runs a program the way the CLI builds it (the whole front end) under wasmtime with
 	 * the work directory preopened, as a Preview 1 module or a component.

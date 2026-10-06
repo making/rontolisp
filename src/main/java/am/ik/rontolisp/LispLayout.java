@@ -163,13 +163,14 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * {@code %class-slot-defs} answer.
 	 *
 	 * <p>
-	 * ONE reserved cell past the declared slots ({@link #STREAM_CLOSED_CELL}, hence
-	 * capacity 3) is the wasm backends' CLOSED mark: a WASI descriptor has no stream
-	 * table behind it and is reused by the next {@code open}, so whether a stream is
-	 * still open is a fact about the VALUE there, not the handle.
+	 * TWO reserved cells past the declared slots, hence capacity 4:
+	 * {@link #STREAM_CLOSED_CELL}, the wasm backends' CLOSED mark (a WASI descriptor has
+	 * no stream table behind it and is reused by the next {@code open}, so whether a
+	 * stream is still open is a fact about the VALUE there, not the handle), and
+	 * {@link #STREAM_PUSHBACK_CELL}, the character {@code unread-char} parked.
 	 */
 	public static final LispLayout STREAM = new LispLayout(STREAM_TAG, "STREAM", Kind.OPAQUE, List.of("HANDLE", "KIND"),
-			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 3);
+			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 4);
 
 	/**
 	 * The reserved {@link #STREAM} cell the wasm backends' {@code close} sets to t, and
@@ -178,6 +179,15 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * interpreter and the JVM answer from their stream table and never touch it.
 	 */
 	public static final int STREAM_CLOSED_CELL = 2;
+
+	/**
+	 * The reserved {@link #STREAM} cell holding the character {@code unread-char} pushed
+	 * back onto this stream, nil when none is: the pushback lives on the stream it
+	 * belongs to, as in CL, so it dies with the value and never blocks another stream.
+	 * Shared verbatim by the interpreter ({@code Environment}) and the compile paths'
+	 * {@code unread-char.lisp}, which writes the index as a literal.
+	 */
+	public static final int STREAM_PUSHBACK_CELL = 3;
 
 	/**
 	 * The {@code KIND} slot values of {@link #STREAM}, one keyword per stream kind. They

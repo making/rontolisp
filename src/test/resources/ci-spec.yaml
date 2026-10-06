@@ -12227,8 +12227,6 @@ cases:
       llo
   # listen answers whether a character remains on a string input stream (an
   # unread character counts), and an echo stream echoes only what is read.
-  # The unread is re-read at the end: cases share global state, and a parked
-  # character left behind would fail a later unread elsewhere.
   - name: listen-at-the-end-of-a-string-stream-and-echo-peek
     source: |
       (print (with-input-from-string (s "") (listen s)))
@@ -15277,10 +15275,10 @@ cases:
         (print (list (input-stream-p gip-in) (output-stream-p gip-in)))
         (print (list (input-stream-p (make-instance 'gip-bytes))
                      (output-stream-p (make-instance 'gip-bytes)))))
-      ; The handle arm of unread-char parks the character in the
-      ; handle-side pushback (unread-char.lisp) that read-char, peek-char and
-      ; read-line all drain -- a file, a string input stream and a socket alike.
-      ; A second unread with the cell still full signals, on every backend.
+      ; The handle arm of unread-char parks the character on the stream
+      ; (unread-char.lisp), where read-char, peek-char and read-line all drain
+      ; it -- a file, a string input stream and a socket alike. A second unread
+      ; with that stream's character still parked signals, on every backend.
       (let ((gip-h (make-string-input-stream (format nil "ab~%cd"))))
         (print (read-char gip-h))
         (print (unread-char #\a gip-h))
@@ -15293,8 +15291,6 @@ cases:
         (unread-char #\a gip-h2)
         (print (handler-case (unread-char #\a gip-h2)
                  (error (gip-e) (princ-to-string gip-e))))
-        ; The cell is ONE slot for the whole program, and the cases that follow
-        ; share it: drain what the failed second unread left parked.
         (read-char gip-h2))
       (print (list (input-stream-p (make-string-input-stream "z"))
                    (output-stream-p (make-string-input-stream "z"))))

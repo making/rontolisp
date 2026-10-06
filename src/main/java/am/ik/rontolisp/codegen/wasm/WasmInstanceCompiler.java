@@ -275,10 +275,24 @@ final class WasmInstanceCompiler {
 	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
 	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
 	 * follows the object AND the value.
+	 *
+	 * <p>
+	 * The unchecked store compiles with the gate off too: no operand can be an instance
+	 * then, so the operands are evaluated and the store traps, as the instance cast traps
+	 * on a non-instance with the gate on. A library may so write a reserved cell behind
+	 * an {@code %obj-is} test without knowing whether the module builds instances.
 	 */
 	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
+		if (gateOff(ctx) && args.size() <= 4) {
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.DROP);
+			WasmExprCompiler.compileExpr(args.get(3), ctx);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		requireGate(ctx, LispNames.OBJ_SET);
 		LispVal failure = checkedFailure(args, 4, ctx);
 		// The object is evaluated before the value, as in the interpreter.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
