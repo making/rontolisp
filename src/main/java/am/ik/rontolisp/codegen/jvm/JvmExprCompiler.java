@@ -2078,6 +2078,8 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,
 						ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			}
+			case LispNames.PARSE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.lowerParseError(cons, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
 			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);

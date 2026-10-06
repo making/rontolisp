@@ -12642,6 +12642,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					break;
 				}
 			}
+			// The same for a parse-integer's parse-error (lowerParseError).
+			for (String site : LispMacroExpander.PARSE_ERROR_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PARSE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
 		}
 		for (String tag : closRegistry.layouts().keySet()) {
 			String bare = tag.startsWith(LispLayout.CLASS_TAG_PREFIX)

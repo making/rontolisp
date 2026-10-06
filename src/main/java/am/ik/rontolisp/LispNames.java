@@ -2813,6 +2813,15 @@ public final class LispNames {
 	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
 
 	/**
+	 * Internal one-argument primitive {@code (%parse-error message)} that signals a
+	 * {@code parse-error} reporting the message: what {@code parse-integer}'s expansion
+	 * signals for a string that is no integer syntax
+	 * ({@code LispMacroExpander.expandParseInteger}). Lowered like
+	 * {@link #PROGRAM_ERROR_INTERNAL} ({@code LispMacroExpander.lowerParseError}).
+	 */
+	public static final String PARSE_ERROR_INTERNAL = "%PARSE-ERROR";
+
+	/**
 	 * Internal primitive {@code (%arity-surplus-message max required rest)}: the message
 	 * of the {@code &optional} surplus-argument check ({@code LambdaLists}),
 	 * {@code ClosRegistry.aritySurplusMessage(max, required + (length rest))}.

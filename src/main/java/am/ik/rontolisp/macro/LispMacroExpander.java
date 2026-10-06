@@ -6454,7 +6454,8 @@ public final class LispMacroExpander {
 	 * integer and the position where parsing stopped, a literal {@code (values ...)} the
 	 * multiple-value consumers and the {@code %mv-spill} channel pick up). Semantics:
 	 * leading/trailing whitespace is skipped, an optional sign is accepted; without
-	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
+	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals a
+	 * {@code parse-error} ({@link LispNames#PARSE_ERROR_INTERNAL}), with it the scan
 	 * stops at the first non-digit and yields nil when no digits were seen. A spelled
 	 * {@code :start} or {@code :end} is checked once, after every argument has run and
 	 * before the scan: a bad one is {@code subseq}'s bounds type-error. A radix that is
@@ -6515,10 +6516,10 @@ public final class LispMacroExpander {
 				List.of(piSetq(acc, mvCall(LispNames.ADD, mvCall(LispNames.MUL, acc, radix), digit)),
 						piSetq(saw, LispTrue.INSTANCE), advance));
 		LispVal result = mvCall(LispNames.VALUES, mvCall(LispNames.MUL, sign, acc), i);
-		LispVal junkError = listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), new LispString("parse-integer: junk in string ~s"), str));
-		LispVal emptyError = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("parse-integer: no integer in string ~s"), str));
+		LispVal junkError = callOf(LispNames.PARSE_ERROR_INTERNAL,
+				formatMessagePieces("parse-integer: junk in string ~s", List.of(str)));
+		LispVal emptyError = callOf(LispNames.PARSE_ERROR_INTERNAL,
+				formatMessagePieces("parse-integer: no integer in string ~s", List.of(str)));
 		LispVal strictTail = makeProgn(
 				List.of(skipWhitespace, makeIf(mvCall(LispNames.LT, i, end), junkError, LispNil.INSTANCE),
 						makeIf(saw, LispNil.INSTANCE, emptyError), result));
@@ -7285,6 +7286,30 @@ public final class LispMacroExpander {
 		LispSymbol messageVar = new LispSymbol("__pe_msg");
 		return makeLet(messageVar.name(), message, listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL),
 				reportingConditionForm(closRegistry, ClosRegistry.PROGRAM_ERROR_CLASS_NAME, messageVar), messageVar)));
+	}
+
+	/**
+	 * Lowers {@code (%parse-error message)} for a compiled backend: the
+	 * {@link #lowerProgramError} split. Where a handler landing pad exists
+	 * ({@code typed}) it is the signal {@code (error 'parse-error :format-control
+	 * (%text-control message))}, compiled like any other: in restart mode its
+	 * {@code handler-bind} handlers then run at the signal point, with the restarts
+	 * around the {@code parse-integer} call still established, as they did when the
+	 * signal was a string datum's. Without a pad nothing can observe the class and the
+	 * plain {@code %error} channel prints the identical top-level line.
+	 * @param cons the {@code %parse-error} form
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal lowerParseError(LispCons cons, boolean typed) {
+		LispVal message = cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+		if (!typed) {
+			return callOf(LispNames.ERROR_INTERNAL, message);
+		}
+		LispSymbol messageVar = new LispSymbol("__pe_msg");
+		return makeLet(messageVar.name(), message,
+				listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.PARSE_ERROR_CLASS_NAME),
+						new LispSymbol(":FORMAT-CONTROL"), callOf(LispNames.TEXT_CONTROL_INTERNAL, messageVar))));
 	}
 
 	/**
@@ -33521,6 +33546,10 @@ public final class LispMacroExpander {
 			if (scan.packageErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
 			}
+			// And the parse-error of a parse-integer over no integer (lowerParseError).
+			if (scan.parseErrorSite) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PARSE_ERROR_CLASS_NAME);
+			}
 			// And the java:java-exception of a java: member that threw, which a pad
 			// synthesizes from what _jfail recorded: registered exactly where a host
 			// call can be made.
@@ -33555,6 +33584,16 @@ public final class LispMacroExpander {
 	 */
 	public static final java.util.Set<String> PACKAGE_ERROR_SITES = java.util.Set.of(LispNames.INTERN,
 			LispNames.FIND_SYMBOL, LispNames.PACKAGE_ERROR_INTERNAL);
+
+	/**
+	 * The operators whose compiled form can construct a {@code parse-error} instance in a
+	 * lowering that runs after the whole-program scans ({@link #lowerParseError}, behind
+	 * a handler landing pad): the {@link #FILE_ERROR_SITES} situation. A
+	 * {@code #'parse-integer} spelling names the operator too, so the first-class
+	 * wrapper's expansion is covered.
+	 */
+	public static final java.util.Set<String> PARSE_ERROR_SITES = java.util.Set.of(LispNames.PARSE_INTEGER,
+			LispNames.PARSE_ERROR_INTERNAL);
 
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
@@ -33642,9 +33681,19 @@ public final class LispMacroExpander {
 		 */
 		boolean packageErrorSite;
 
+		/**
+		 * Whether a {@code parse-integer} occurs, whose expansion signals through a
+		 * {@code parse-error} construction lowered after this scan
+		 * ({@link #PARSE_ERROR_SITES}).
+		 */
+		boolean parseErrorSite;
+
 		private void noteSite(String member) {
 			if (PACKAGE_ERROR_SITES.contains(member)) {
 				this.packageErrorSite = true;
+			}
+			if (PARSE_ERROR_SITES.contains(member)) {
+				this.parseErrorSite = true;
 			}
 			if (FILE_ERROR_SITES.contains(member)) {
 				this.fileErrorSite = true;

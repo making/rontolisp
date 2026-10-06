@@ -22,6 +22,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
@@ -10597,6 +10598,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void parseIntegerSignalsAParseErrorOverNoIntegerSyntax() {
+		// Junk, no digit or an empty region is a parse-error, not a simple-error --
+		// sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.PROGRAM)).isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+		assertThat(evalPrinted(ParseIntegerSyntaxFixture.RESTART_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
+	}
+
+	@Test
 	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() {
 		// Every argument once, in the call's order; the first of a repeated keyword is
 		// the one used.
@@ -11352,6 +11364,17 @@ class LispEvaluatorTest {
 		ClosRegistry.ClassInfo seeded = java.util.Objects.requireNonNull(new ClosRegistry().findClass("FILE-ERROR"));
 		LispInstance built = (LispInstance) ClosRegistry.newFileErrorCondition(new LispString("p"),
 				new LispString("m"));
+		assertThat(built.layout().slotNames())
+			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
+	}
+
+	@Test
+	void theInterpretersReaderErrorInstanceMirrorsTheSeededLayout() {
+		// The same for newReaderErrorCondition: parse-error's message pair first, then
+		// the stream.
+		ClosRegistry.ClassInfo seeded = java.util.Objects
+			.requireNonNull(new ClosRegistry().findClass(ClosRegistry.READER_ERROR_CLASS_NAME));
+		LispInstance built = (LispInstance) ClosRegistry.newReaderErrorCondition(new LispString("m"), LispNil.INSTANCE);
 		assertThat(built.layout().slotNames())
 			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
 	}

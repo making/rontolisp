@@ -25,6 +25,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
@@ -14695,6 +14696,21 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunFrontEndWithDir(RadixRangeFixture.PROGRAM, false))
 			.isEqualTo(RadixRangeFixture.EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(RadixRangeFixture.PROGRAM, true)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void parseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.REPORT_PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ParseIntegerSyntaxFixture.RESTART_PROGRAM, component))
+				.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
+		}
 	}
 
 	@Test

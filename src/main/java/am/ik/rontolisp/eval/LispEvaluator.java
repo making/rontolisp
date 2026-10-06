@@ -7835,6 +7835,15 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						message instanceof LispString s ? s.value() : message.display());
 			}
+			case LispNames.PARSE_ERROR_INTERNAL: {
+				// parse-integer's signal over a string that is no integer: the same
+				// class-named error the first-class built-in throws, its handler-bind
+				// handlers run here at the signal point as the built-in's are at the
+				// apply seam.
+				LispVal message = cons.cdr() instanceof LispCons rest ? eval(rest.car(), env) : LispNil.INSTANCE;
+				throw withHandlerBindHandlersRun(LispEvalException.ofClass(ClosRegistry.PARSE_ERROR_CLASS_NAME,
+						message instanceof LispString s ? s.value() : message.display()));
+			}
 			case LispNames.FILE_ERROR_INTERNAL: {
 				// (%file-error pathname message): the prelude file operations' signal, a
 				// file-error instance carrying the pathname as given.

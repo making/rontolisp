@@ -1594,6 +1594,37 @@ cases:
       ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (1295 2))
       ((:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 1 (INTEGER 2 36)) (:TYPE-ERROR 37 (INTEGER 2 36)) (:TYPE-ERROR 0 (INTEGER 2 36)))
       ((2) (1 1) (38 2) (255 2))
+  - name: parse-integer-signals-a-parse-error
+    source: |
+      (defvar *pis-1* (read-from-string "1"))
+      (defvar *pis-3* (read-from-string "3"))
+      (defun pis-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (simple-error () :simple-error)
+          (parse-error (c) (list :parse-error (typep c 'error) (typep c 'reader-error) (typep c 'stream-error)))
+          (error () :other-error)))
+      (defmacro pis-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(pis-probe (lambda () ,f))) forms))))
+      (pis-row (parse-integer (copy-seq "12a")) (parse-integer (copy-seq "")) (parse-integer (copy-seq " - "))
+               (parse-integer "x"))
+      (pis-row (parse-integer (copy-seq "12 3")) (parse-integer (copy-seq "123") :start *pis-3*)
+               (parse-integer (copy-seq "123") :start *pis-1* :end *pis-1*) (parse-integer (copy-seq "zz") :radix 10))
+      (pis-row (funcall #'parse-integer (copy-seq "12a")) (funcall #'parse-integer (copy-seq "  "))
+               (apply #'parse-integer (copy-seq "123") (list :start *pis-3*)) (funcall #'parse-integer (copy-seq "+")))
+      (print (block pis-hb
+               (handler-bind ((parse-error (lambda (c) (return-from pis-hb (list :handler-bind (typep c 'parse-error))))))
+                 (parse-integer (copy-seq "q")))))
+      (print (let ((c (nth-value 1 (ignore-errors (parse-integer (copy-seq "q"))))))
+               (list :ignore-errors (typep c 'parse-error))))
+      (pis-row (parse-integer (copy-seq "12a") :junk-allowed t) (parse-integer (copy-seq " - ") :junk-allowed t)
+               (funcall #'parse-integer (copy-seq "") :junk-allowed t) (parse-integer (copy-seq " 12 ")))
+    expected: |
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      ((:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL) (:PARSE-ERROR T NIL NIL))
+      (:HANDLER-BIND T)
+      (:IGNORE-ERRORS T)
+      ((12 2) (NIL 2) (NIL 0) (12 4))
   # The cons set / tree family (.kb/cons-set-and-tree-operators.md). Three rules meet
   # here: every n-prefixed spelling but nbutlast answers the NON-destructive result
   # (CLHS makes the destructive promise a licence, so each is an alias and nothing is
