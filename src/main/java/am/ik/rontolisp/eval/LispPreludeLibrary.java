@@ -4121,10 +4121,10 @@ public final class LispPreludeLibrary {
 				               (t (unread-char %rd-e %rd-s) t)))))))
 				""");
 		// #+ / #- resolved by the scanner itself, against the live *features*: a guard
-		// that fails skips the form behind it and the scan goes on to the next datum (CLHS
-		// 2.4.8.17), so read answers what follows instead of ending at the guard. The
-		// skip is the scanner's own walk, which delimits and parses nothing, so a nested
-		// guard inside the skipped form is evaluated like any other (the
+		// that fails skips the form behind it and the scan goes on to the next datum
+		// (CLHS 2.4.8.17), so read answers what follows instead of ending at the guard.
+		// The skip is the scanner's own walk, which delimits and parses nothing, so a
+		// nested guard inside the skipped form is evaluated like any other (the
 		// #+f #+f A B idiom skips both forms when f is absent). Answers whether the
 		// guard held; the form behind a holding one is the caller's to scan.
 		SOURCES.put(LispNames.RD_GUARD, """

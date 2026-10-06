@@ -1,16 +1,16 @@
 package am.ik.rontolisp;
 
 /**
- * A {@code #+}/{@code #-} guard in front of the datum {@code read} and the
- * multi-argument {@code read-from-string} scan, shared by the backend suites and
- * mirrored by the `read-skips-a-failed-feature-guard` ci-spec case. The guard is tested
- * against the live {@code *features*}; a failed one skips the form behind it and the
- * read answers the next datum, at top level and inside a list or vector. Covered: the
- * stop index and the stream position after the skip, an end of input behind a skipped
- * form ({@code eof-value}), compound expressions, stacked guards (a nested guard inside a
- * skipped form is evaluated too), the keyword reading of an unqualified feature name
- * against a qualified one, and the errors: a missing guarded form, a {@code )} where it
- * is due, a malformed feature expression.
+ * A {@code #+}/{@code #-} guard in front of the datum {@code read} and the multi-argument
+ * {@code read-from-string} scan, shared by the backend suites and mirrored by the
+ * `read-skips-a-failed-feature-guard` ci-spec case. The guard is tested against the live
+ * {@code *features*}; a failed one skips the form behind it and the read answers the next
+ * datum, at top level and inside a list or vector. Covered: the stop index and the stream
+ * position after the skip, an end of input behind a skipped form ({@code eof-value}),
+ * compound expressions, stacked guards (a nested guard inside a skipped form is evaluated
+ * too), the keyword reading of an unqualified feature name against a qualified one, and
+ * the errors: a missing guarded form, a {@code )} where it is due, a malformed feature
+ * expression.
  */
 public final class ReadFeatureGuardFixture {
 
@@ -68,6 +68,9 @@ public final class ReadFeatureGuardFixture {
 			""";
 
 	/** What {@link #PROGRAM} prints (sbcl's answers). */
-	public static final String EXPECTED = String.join("\n", "((C) ((B C :EOF)) ((:EOF)) (((X Z) #(1 3))))", "((C 15) (:EOF 8) ((A B D) 23) (C 28))", "((X 25) (Y 18) (X 9) ((X) 20))", "((C 19) (B 20) (C 21) (B 20))", "((((C))) (((B C) E)) ((1 2)) ((2)))", "(((1)) ((1)) ((2)) ((1)))", "(:READER-ERROR :END-OF-FILE :OTHER-ERROR :OTHER-ERROR)", "(((B 32 C)) (B 10) ((B) 13) ((D)))");
+	public static final String EXPECTED = String.join("\n", "((C) ((B C :EOF)) ((:EOF)) (((X Z) #(1 3))))",
+			"((C 15) (:EOF 8) ((A B D) 23) (C 28))", "((X 25) (Y 18) (X 9) ((X) 20))", "((C 19) (B 20) (C 21) (B 20))",
+			"((((C))) (((B C) E)) ((1 2)) ((2)))", "(((1)) ((1)) ((2)) ((1)))",
+			"(:READER-ERROR :END-OF-FILE :OTHER-ERROR :OTHER-ERROR)", "(((B 32 C)) (B 10) ((B) 13) ((D)))");
 
 }

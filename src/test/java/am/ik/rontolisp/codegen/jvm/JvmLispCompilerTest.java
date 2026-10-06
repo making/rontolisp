@@ -13739,8 +13739,8 @@ class JvmLispCompilerTest {
 		// The JVM twin of
 		// LispEvaluatorTest#readSkipsAFailedFeatureGuardInFrontOfTheDatum: the emitted
 		// reader knows no #+, so the prelude scanner resolving the guard is what reads.
-		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
-			.corpus(ReadFeatureGuardFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadFeatureGuardFixture.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(ReadFeatureGuardFixture.EXPECTED);
 	}
 

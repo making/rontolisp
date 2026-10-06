@@ -1232,12 +1232,12 @@ public final class LispLexer {
 			if (next == '+' || next == '-') {
 				// The guard is evaluated exactly as a real read evaluates it, inside a
 				// form a failed guard covers too (as SBCL does: the feature expression is
-				// read and tested even under *read-suppress*). When it holds, the form behind it
-				// IS the datum and the scan stops there; when it fails, the form is
-				// skipped and the scan keeps looking. That is the read's own behavior,
-				// the only way read-from-string's second value can answer for either
-				// branch, and what makes the #+f #+f A B idiom skip both forms when f is
-				// absent.
+				// read and tested even under *read-suppress*). When it holds, the form
+				// behind it IS the datum and the scan stops there; when it fails, the
+				// form is skipped and the scan keeps looking. That is the read's own
+				// behavior, the only way read-from-string's second value can answer for
+				// either branch, and what makes the #+f #+f A B idiom skip both forms
+				// when f is absent.
 				boolean negated = next == '-';
 				this.pos += 2;
 				LispVal expr = readFeatureExpr();
