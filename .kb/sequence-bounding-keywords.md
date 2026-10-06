@@ -71,7 +71,7 @@ length N` (`.kb/subseq-runtime.md`, "Bounds check") -- on every backend. A call 
 bound carries no check.** SBCL signals the same class at the same point (its datum for a range
 is the pair of bounds, the divergence `subseq` already has). It covers the fifteen,
 `remove-duplicates`/`delete-duplicates`, `fill`, `replace`, the six `position`/`find`
-spellings and `search`/`mismatch` (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
+spellings, `search`/`mismatch` and `parse-integer` (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
 nil start was refused (by `lo`'s `(max start 0)`, gone): a negative start acted as 0, a float
 compared, a list `:end` past the length stopped there, `fill`/`replace` wrote nothing, and
 `position`/`find`, believed to check already, refused only a non-integer start (measured
@@ -141,6 +141,36 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   7,967 / 9,147, guarded 31,945 / 7,977 / 9,157; with a `handler-case` 39,249 / 17,716 /
   18,950 -> 39,732 / 17,797 / 19,034 guarded. The guard won: ~240 B JVM per program buys
   the keyword-free JVM `mismatch` back (+20% checked always).
+- `parse-integer`: `expandParseInteger` (call position on every backend, and the compile
+  paths' first-class wrapper, which forwards both bounds) emits `(%check-bounds __pi_s
+  __pi_start __pi_endraw)` when `:start` or `:end` is spelled, after every argument has run
+  (the `:radix` and `:junk-allowed` forms included) and before the scan; the interpreter's
+  `#'parse-integer` calls `checkBoundingIndices` under the same condition. A fill-pointer
+  string is measured by its fill pointer. Before (measured 2026-10-06, four backends): `:start
+  9` and a crossed range were the scan's `simple-error` (no integer); `:end 9` the `char`
+  `type-error` on the interpreter and JVM and an out-of-bounds trap on both wasm legs over a
+  fresh string; `:start -1` the interpreter's `char` `type-error`, the JVM's, a trap on wasm
+  over a fresh string and `1123` over the LITERAL `"123"` (read before the string); a
+  fill-pointer string's `:end 4` read past the fill pointer (`1234`); the first-class
+  interpreter `:end nil` a `type-error`. Its first-class Java walk also indexed UTF-16 units
+  and skipped `Character.isWhitespace`; it walks code points over the expansion's five
+  whitespace characters now. Cost (JVM / P1 / component bytes, 795 programs: every ci-spec
+  case, the `examples.yaml` examples, size-report, bench-report): 2,253 of 2,333 artifacts
+  byte-identical; the 80 that differ call `parse-integer` with a bound themselves, through a
+  library (`tokenizers.lisp`, `objc.lisp`) or through the first-class wrapper (+24 JVM / +10
+  wasm on a program carrying the compiled `eval`'s wrapper table). JVM 30, sum +6,200 B (max
+  +2,238, the new ci-spec case); P1 25, +1,855 (max +456); component 25, +1,865. One site
+  `(print (parse-integer (copy-seq "x12") :start 1))`: 28,619 / 8,356 / 9,505 -> 29,196 /
+  8,444 / 9,593; with a `handler-case` +582 / +190 / +193. Speed (pinned, min/median of 15,
+  `(parse-integer s :start st)` over 12 characters): JVM 4 M calls 185-199/208-216 ->
+  189-191/214-218 ms, P1 400 K 512-520/522-531 -> 510-511/519-520, component 516-518/527-530
+  -> 511-516/523-528, interpreter 100 K 2,381-2,400 -> 2,423-2,446. ANSI `numbers`
+  (interpreter, suite `ca06bd9`): 1,273 -> 1,274 / 1,444 (`PARSE-INTEGER.ORDER.1`, the
+  evaluation order above), zero regressed; `strings` unchanged. Pinned by
+  `ParseIntegerBoundsFixture` (`.PROGRAM`, sbcl's answers, ci-spec
+  `parse-integer-refuses-a-bad-bound`; `.REPORT_PROGRAM`; `.ORDER_PROGRAM`) in the three
+  backend suites, the shape by
+  `LispMacroExpanderTest.aParseIntegerCallChecksASpelledBoundOnceAfterItsArguments`.
 - `count`/`count-if` bind their operand outside the scaffold when any bounding keyword is
   spelled: the scaffold binds the sequence outside the loop, so `(count (f) (g) :start 1)` ran
   `(g)` before `(f)` on the compile paths and the interpreter's call position (SBCL: item first).

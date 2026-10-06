@@ -7672,28 +7672,36 @@ public final class Environment implements Scope {
 			return readDatumStop(str.value(), env.currentReadFeatures());
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
-		// :junk-allowed, :start and :end keywords.
+		// :junk-allowed, :start and :end keywords. A spelled bound is checked as the
+		// call's expansion checks it (LispMacroExpander.expandParseInteger).
 		env.defineFunction(LispNames.PARSE_INTEGER, new LispFunction(LispNames.PARSE_INTEGER, args -> {
 			requireMinArgCount(LispNames.PARSE_INTEGER, args, 1);
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.PARSE_INTEGER + " expects a string");
 			}
-			int radix = 10;
-			boolean junkAllowed = false;
-			int start = 0;
-			int end = str.value().length();
-			for (int i = 1; i + 1 < args.size(); i += 2) {
+			LispVal radixArg = null;
+			LispVal junkArg = LispNil.INSTANCE;
+			LispVal startArg = null;
+			LispVal endArg = LispNil.INSTANCE;
+			// Walked from the last pair, so the first of a repeated keyword is the one kept.
+			for (int i = (args.size() % 2 == 0 ? args.size() - 3 : args.size() - 2); i >= 1; i -= 2) {
 				String key = (args.get(i) instanceof LispSymbol kw) ? kw.name() : "";
 				LispVal value = args.get(i + 1);
 				switch (key) {
-					case LispNames.RADIX_KEYWORD -> radix = (int) asLong(value);
-					case LispNames.JUNK_ALLOWED_KEYWORD -> junkAllowed = !(value instanceof LispNil);
-					case LispNames.START_KEYWORD -> start = (int) asLong(value);
-					case LispNames.END_KEYWORD -> end = (int) asLong(value);
+					case LispNames.RADIX_KEYWORD -> radixArg = value;
+					case LispNames.JUNK_ALLOWED_KEYWORD -> junkArg = value;
+					case LispNames.START_KEYWORD -> startArg = value;
+					case LispNames.END_KEYWORD -> endArg = value;
 					default -> throw new LispEvalException(LispNames.PARSE_INTEGER + ": unsupported keyword " + key);
 				}
 			}
-			LispVal[] valueAndPos = parseInteger(str.value(), start, end, radix, junkAllowed);
+			if (startArg != null || !(endArg instanceof LispNil)) {
+				checkBoundingIndices(str, startArg == null ? new LispInteger(0) : startArg, endArg);
+			}
+			int start = startArg == null ? 0 : (int) asLong(startArg);
+			int end = endArg instanceof LispNil ? str.length() : (int) asLong(endArg);
+			int radix = radixArg == null ? 10 : (int) asLong(radixArg);
+			LispVal[] valueAndPos = parseInteger(str, start, end, radix, !(junkArg instanceof LispNil));
 			// Publish the stop position as the second value through the spill, so a
 			// first-class #'parse-integer matches the call-position expansion.
 			env.publishSpill(new LispCons(valueAndPos[1], LispNil.INSTANCE));
@@ -7724,10 +7732,12 @@ public final class Environment implements Scope {
 	// accumulates digits in the given radix. With junkAllowed, stops at the first
 	// non-digit and returns nil when no digits were seen; otherwise signals on junk --
 	// the text a call's expansion signals (LispMacroExpander.expandParseInteger: ~s of
-	// the string), which every compiled backend prints for #'parse-integer too.
-	private static LispVal[] parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
+	// the string), which every compiled backend prints for #'parse-integer too. The
+	// walk is the expansion's: by character index, over the same five whitespace
+	// characters, between bounds already checked.
+	private static LispVal[] parseInteger(LispString s, int start, int end, int radix, boolean junkAllowed) {
 		int i = start;
-		while (i < end && Character.isWhitespace(s.charAt(i))) {
+		while (i < end && isParseIntegerWhitespace(s.charAt(i))) {
 			i++;
 		}
 		int sign = 1;
@@ -7748,20 +7758,25 @@ public final class Environment implements Scope {
 			i++;
 		}
 		if (!junkAllowed) {
-			while (i < end && Character.isWhitespace(s.charAt(i))) {
+			while (i < end && isParseIntegerWhitespace(s.charAt(i))) {
 				i++;
 			}
 			if (i != end) {
-				throw new LispEvalException("parse-integer: junk in string " + new LispString(s).print());
+				throw new LispEvalException("parse-integer: junk in string " + s.print());
 			}
 		}
 		if (!sawDigit) {
 			if (junkAllowed) {
 				return new LispVal[] { LispNil.INSTANCE, new LispInteger(i) };
 			}
-			throw new LispEvalException("parse-integer: no integer in string " + new LispString(s).print());
+			throw new LispEvalException("parse-integer: no integer in string " + s.print());
 		}
 		return new LispVal[] { normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign))), new LispInteger(i) };
+	}
+
+	// Space, tab, newline, return and page: what the call's expansion skips.
+	private static boolean isParseIntegerWhitespace(int codePoint) {
+		return codePoint == ' ' || codePoint == '\t' || codePoint == '\n' || codePoint == '\r' || codePoint == '\f';
 	}
 
 	/**

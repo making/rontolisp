@@ -21,6 +21,7 @@ import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10528,6 +10529,39 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerRefusesABadBound() {
+		// A negative, non-integer, past-the-length or crossed :start/:end is subseq's
+		// type-error for parse-integer, in call position and first class -- sbcl's
+		// answers, pinned on all four backends.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.PROGRAM)).isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadParseIntegerBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerEvaluatesItsArgumentsInTheCallsOrder() {
+		// Every argument once, in the call's order, before the bounds are checked; the
+		// first of a repeated keyword is the one used. The first-class function reads a
+		// supplementary character as one and the call's whitespace only.
+		assertThat(evalPrinted(ParseIntegerBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	private static String evalPrinted(String program) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
 	}
 
 	@Test

@@ -24,6 +24,7 @@ import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14622,6 +14623,37 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(SearchMismatchBoundsFixture.REPORT_PROGRAM, true))
 			.isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerRefusesABadBound() throws Exception {
+		// The wasm twin of LispEvaluatorTest#parseIntegerRefusesABadBound, Preview 1 and
+		// the component. A negative start used to read before the string.
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.PROGRAM, false))
+			.isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.PROGRAM, true))
+			.isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadParseIntegerBoundReportsAsSubseqDoes() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.REPORT_PROGRAM, false))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.REPORT_PROGRAM, true))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void parseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.ORDER_PROGRAM, false))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.ORDER_PROGRAM, true))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
 	}
 
 	/**

@@ -10,6 +10,7 @@ import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13542,6 +13543,26 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadSearchOrMismatchBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(SearchMismatchBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerRefusesABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#parseIntegerRefusesABadBound.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.PROGRAM)).isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadParseIntegerBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The JVM twin of LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
 	}
 
 	@Test

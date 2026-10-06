@@ -6426,7 +6426,9 @@ public final class LispMacroExpander {
 	 * multiple-value consumers and the {@code %mv-spill} channel pick up). Semantics:
 	 * leading/trailing whitespace is skipped, an optional sign is accepted; without
 	 * {@code :junk-allowed} a non-digit (or an empty digit run) signals, with it the scan
-	 * stops at the first non-digit and yields nil when no digits were seen.
+	 * stops at the first non-digit and yields nil when no digits were seen. A spelled
+	 * {@code :start} or {@code :end} is checked once, after every argument has run and
+	 * before the scan: a bad one is {@code subseq}'s bounds type-error.
 	 * @param cons the parse-integer expression
 	 * @return the expanded expression
 	 */
@@ -6439,6 +6441,12 @@ public final class LispMacroExpander {
 				LispNames.END_KEYWORD, LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
 		if (keywordError != null) {
 			return keywordError;
+		}
+		// The bindings below take the keyword values in PARSE_INTEGER_KEYWORDS' order; a
+		// call spelling them otherwise, or one twice, evaluates them in its own order first.
+		KeywordTail tail = keywordsInOrder(parts, PARSE_INTEGER_KEYWORDS) ? null : KeywordTail.of(parts, 2, "__pi");
+		if (tail != null) {
+			parts = tail.parts();
 		}
 		LispVal startForm = keywordValue(parts, 2, LispNames.START_KEYWORD);
 		LispVal endForm = keywordValue(parts, 2, LispNames.END_KEYWORD);
@@ -6490,12 +6498,36 @@ public final class LispMacroExpander {
 		expanded = makeLet(acc.name(), new LispInteger(0), expanded);
 		expanded = makeLet(sign.name(), new LispInteger(1), expanded);
 		expanded = makeLet(i.name(), start, expanded);
+		if (startForm != null || endForm != null) {
+			expanded = makeProgn(List.of(checkBoundsOf(str, start, endRaw), expanded));
+		}
 		expanded = makeLet(junk.name(), junkForm == null ? LispNil.INSTANCE : junkForm, expanded);
 		expanded = makeLet(radix.name(), radixForm == null ? new LispInteger(10) : radixForm, expanded);
 		expanded = makeLet(end.name(), makeIf(endRaw, endRaw, mvCall(LispNames.LENGTH, str)), expanded);
 		expanded = makeLet(endRaw.name(), endForm == null ? LispNil.INSTANCE : endForm, expanded);
 		expanded = makeLet(start.name(), startForm == null ? new LispInteger(0) : startForm, expanded);
-		return makeLet(str.name(), parts.get(1), expanded);
+		expanded = makeLet(str.name(), parts.get(1), expanded);
+		return tail == null ? expanded : tail.wrap(expanded);
+	}
+
+	/** {@code parse-integer}'s keywords, in the order its expansion binds their values. */
+	private static final List<String> PARSE_INTEGER_KEYWORDS = List.of(LispNames.START_KEYWORD,
+			LispNames.END_KEYWORD, LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
+
+	/**
+	 * Whether a call's keyword tail (from index 2) spells each keyword at most once and in
+	 * {@code order}, so binding the values in that order evaluates them in the call's.
+	 */
+	private static boolean keywordsInOrder(List<LispVal> parts, List<String> order) {
+		int previous = -1;
+		for (int k = 2; k + 1 < parts.size(); k += 2) {
+			int rank = parts.get(k) instanceof LispSymbol keyword ? order.indexOf(keyword.name()) : -1;
+			if (rank <= previous) {
+				return false;
+			}
+			previous = rank;
+		}
+		return true;
 	}
 
 	private static LispVal piSetq(LispSymbol var, LispVal value) {

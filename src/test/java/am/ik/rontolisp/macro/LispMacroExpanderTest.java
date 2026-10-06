@@ -909,6 +909,34 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aParseIntegerCallChecksASpelledBoundOnceAfterItsArguments() {
+		// A call spelling no bound carries no check, so it expands as it always did.
+		assertThat(parseIntegerExpansionOf("(parse-integer s)")).doesNotContain("%CHECK-BOUNDS");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 16 :junk-allowed t)"))
+			.doesNotContain("%CHECK-BOUNDS");
+		// A spelled bound is checked once, against the string as passed and the end as
+		// given, after every argument (the radix and junk-allowed forms too) has run.
+		String bounded = parseIntegerExpansionOf("(parse-integer s :start 1 :radix (r))");
+		assertThat(bounded).contains("(%CHECK-BOUNDS |__pi_s| |__pi_start| |__pi_endraw|)");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"))
+			.isGreaterThan(bounded.indexOf("(R)"));
+		// The bindings take the keywords in the order start, end, radix, junk-allowed: a
+		// call spelling them so binds nothing more, any other order (or a repeated
+		// keyword) evaluates its values in the call's order first.
+		assertThat(parseIntegerExpansionOf("(parse-integer s :start (f) :end (g))"))
+			.startsWith("(LET ((|__pi_s| S)) (LET ((|__pi_start| (F))) (LET ((|__pi_endraw| (G)))");
+		String reordered = parseIntegerExpansionOf("(parse-integer s :end (g) :start (f))");
+		assertThat(reordered.indexOf("(G)")).isLessThan(reordered.indexOf("(F)"));
+		String repeated = parseIntegerExpansionOf("(parse-integer s :start (f) :start (h))");
+		assertThat(repeated).contains("(H)");
+		assertThat(repeated.indexOf("(F)")).isLessThan(repeated.indexOf("(H)"));
+	}
+
+	private static String parseIntegerExpansionOf(String source) {
+		return LispMacroExpander.expandParseInteger((LispCons) LispReader.readAllFromString(source).get(0)).print();
+	}
+
+	@Test
 	void aComputedSequenceDesignatorBindsOnceBeforeTheScan() {
 		// A LITERAL designator keeps being inlined into the loop body: evaluating it is
 		// not observable, and the compilers' function-designator normalization is what
