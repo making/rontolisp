@@ -16566,6 +16566,11 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunLoad(code, "(print 1) )\n(print 9)\n")).isEqualTo("1\n\"Unexpected ')'\"");
 		assertThat(compileAndRunLoad(code, "(print 1) (print 2")).isEqualTo("1\n\"end of file\"");
 		assertThat(compileAndRunLoad(code, "(print 1) #| x")).isEqualTo("1\n\"end of file\"");
+		// A dotted list with nothing before the dot, or more than one object after it.
+		assertThat(compileAndRunLoad(code, "(print 1) ( . a) (print 9)"))
+			.isEqualTo("1\n\"Nothing appears before '.' in list\"");
+		assertThat(compileAndRunLoad(code, "(print 1) (a . b c) (print 9)"))
+			.isEqualTo("1\n\"More than one object follows '.' in list\"");
 	}
 
 	@Test

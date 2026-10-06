@@ -15,6 +15,7 @@ import am.ik.rontolisp.EmittedReaderInitforms;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.ReadFailure;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -49,12 +50,14 @@ final class JvmReadRuntimeBuilder {
 	static final String STRUCT_TABLE_FIELD = "_rdStructs";
 
 	/**
-	 * The static int field recording how the last {@code _readFromString} parse ended: 0
-	 * with a datum; bit 0 set when the text ran out before a datum was complete (or held
-	 * none); 2 at a {@code )} that closed nothing, which also ends the parse by moving
-	 * {@code _readPos} to the end. The readers never throw for either: a
-	 * {@code read-from-string} call reads the field after the parse
-	 * ({@code %read-failure}) and signals the typed condition, and {@code _load} throws.
+	 * The static int field recording how the last {@code _readFromString} parse ended
+	 * ({@link ReadFailure}): 0 with a datum; bit 0 set when the text ran out before a
+	 * datum was complete (or held none); an error otherwise -- a {@code )} that closed
+	 * nothing, a {@code .} with nothing before it in its list, a dotted tail followed by
+	 * more than one object -- which also ends the parse by moving {@code _readPos} to the
+	 * end. The readers never throw for any of them: a {@code read-from-string} call reads
+	 * the field after the parse ({@code %read-failure}) and signals the typed condition,
+	 * and {@code _load} throws.
 	 */
 	static final String FAIL_FIELD = "_readFail";
 
@@ -569,6 +572,17 @@ final class JvmReadRuntimeBuilder {
 		a.putstatic(this.readFail);
 	}
 
+	/**
+	 * Emits the record of an error: {@code _readFail = failure}, and the cursor moved to
+	 * the end so every enclosing reader unwinds through its end-of-input path.
+	 */
+	private void recordError(MethodCode a, int failure) {
+		a.loadConstant(failure);
+		a.putstatic(this.readFail);
+		srcLen(a);
+		a.putstatic(this.readPos);
+	}
+
 	private MethodCode buildSkipWs() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
@@ -742,10 +756,7 @@ final class JvmReadRuntimeBuilder {
 		a.loadConstant(')');
 		a.if_icmpne(atom);
 		// a ')' where a datum is due closes nothing: record it and end the parse
-		a.loadConstant(2);
-		a.putstatic(this.readFail);
-		srcLen(a);
-		a.putstatic(this.readPos);
+		recordError(a, ReadFailure.UNMATCHED_CLOSE);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(atom);
@@ -785,32 +796,14 @@ final class JvmReadRuntimeBuilder {
 		a.aastore();
 	}
 
-	private MethodCode buildReadList() {
-		MethodCode a = new MethodCode();
-		MethodCode.Label retNull = a.newLabel();
-		MethodCode.Label cont = a.newLabel();
-		MethodCode.Label notDot = a.newLabel();
-		MethodCode.Label isDot = a.newLabel();
-		MethodCode.Label tailEof = a.newLabel();
-		MethodCode.Label build = a.newLabel();
-		a.invokestatic(this.readSkipWs);
-		pos(a);
-		srcLen(a);
-		a.if_icmpge(retNull);
-		charAtPos(a);
-		a.loadConstant(')');
-		a.if_icmpne(cont);
-		advance(a);
-		a.aconst_null();
-		a.areturn();
-		a.labelBinding(cont);
-		a.invokestatic(this.readExpr);
-		a.astore(0); // car
-		// Dotted pair: a standalone '.' token puts the next datum directly in the
-		// final cdr, mirroring the compile-time reader: (a . b). The '.' counts as a
-		// token of its own only when followed by a delimiter or the end of input, so
-		// symbols and floats containing '.' are untouched.
-		a.invokestatic(this.readSkipWs);
+	/**
+	 * Emits the test for a {@code .} token at the cursor, which the caller has moved to a
+	 * non-whitespace character: the {@code .} counts as a token of its own only when
+	 * followed by a delimiter or the end of input, so symbols and floats containing
+	 * {@code .} are untouched. Jumps to {@code isDot} or {@code notDot}; neither label is
+	 * bound here. Local 1 is the scratch.
+	 */
+	private void emitDotTokenTest(MethodCode a, MethodCode.Label isDot, MethodCode.Label notDot) {
 		pos(a);
 		srcLen(a);
 		a.if_icmpge(notDot);
@@ -827,7 +820,7 @@ final class JvmReadRuntimeBuilder {
 		a.loadConstant(1);
 		a.iadd();
 		a.invokevirtual(this.stringCharAt);
-		a.istore(1); // ch2 (slot reused; overwritten by the cdr below)
+		a.istore(1);
 		a.iload(1);
 		a.invokestatic(this.isWhitespace);
 		a.ifne(isDot);
@@ -847,6 +840,43 @@ final class JvmReadRuntimeBuilder {
 		a.loadConstant(';');
 		a.if_icmpeq(isDot);
 		a.goto_(notDot);
+	}
+
+	private MethodCode buildReadList() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label retNull = a.newLabel();
+		MethodCode.Label cont = a.newLabel();
+		MethodCode.Label firstIsDot = a.newLabel();
+		MethodCode.Label firstNotDot = a.newLabel();
+		MethodCode.Label notDot = a.newLabel();
+		MethodCode.Label isDot = a.newLabel();
+		MethodCode.Label tailEof = a.newLabel();
+		MethodCode.Label tooMany = a.newLabel();
+		MethodCode.Label build = a.newLabel();
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.if_icmpge(retNull);
+		charAtPos(a);
+		a.loadConstant(')');
+		a.if_icmpne(cont);
+		advance(a);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(cont);
+		// A '.' token ahead of every element has no car to be the cdr of.
+		emitDotTokenTest(a, firstIsDot, firstNotDot);
+		a.labelBinding(firstIsDot);
+		recordError(a, ReadFailure.NOTHING_BEFORE_DOT);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(firstNotDot);
+		a.invokestatic(this.readExpr);
+		a.astore(0); // car
+		// Dotted pair: a standalone '.' token puts the next datum directly in the
+		// final cdr, mirroring the compile-time reader: (a . b).
+		a.invokestatic(this.readSkipWs);
+		emitDotTokenTest(a, isDot, notDot);
 		a.labelBinding(isDot);
 		advance(a); // consume '.'
 		a.invokestatic(this.readExpr);
@@ -857,8 +887,12 @@ final class JvmReadRuntimeBuilder {
 		a.if_icmpge(tailEof);
 		charAtPos(a);
 		a.loadConstant(')');
-		a.if_icmpne(build);
+		a.if_icmpne(tooMany);
 		advance(a); // consume ')'
+		a.goto_(build);
+		a.labelBinding(tooMany);
+		// a second object where the dotted list's ')' was due
+		recordError(a, ReadFailure.MORE_THAN_ONE_AFTER_DOT);
 		a.goto_(build);
 		a.labelBinding(tailEof);
 		// the text ends before the dotted list's ')'
@@ -3551,6 +3585,8 @@ final class JvmReadRuntimeBuilder {
 		MethodCode.Label done = a.newLabel();
 		MethodCode.Label bad = a.newLabel();
 		MethodCode.Label unmatched = a.newLabel();
+		MethodCode.Label notBefore = a.newLabel();
+		MethodCode.Label stray = a.newLabel();
 		MethodRefEntry eval = java.util.Objects.requireNonNull(this.evalRef);
 		MethodRefEntry paths = java.util.Objects.requireNonNull(this.pathsGet);
 		MethodRefEntry files = java.util.Objects.requireNonNull(this.filesReadString);
@@ -3603,7 +3639,25 @@ final class JvmReadRuntimeBuilder {
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(unmatched);
-		err(a, "Unexpected ')'");
+		a.getstatic(this.readFail);
+		a.loadConstant(ReadFailure.ERROR_MASK);
+		a.iand();
+		a.loadConstant(ReadFailure.NOTHING_BEFORE_DOT);
+		a.if_icmpne(notBefore);
+		err(a, ReadFailure.NOTHING_BEFORE_DOT_MESSAGE);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(notBefore);
+		a.getstatic(this.readFail);
+		a.loadConstant(ReadFailure.ERROR_MASK);
+		a.iand();
+		a.loadConstant(ReadFailure.MORE_THAN_ONE_AFTER_DOT);
+		a.if_icmpne(stray);
+		err(a, ReadFailure.MORE_THAN_ONE_AFTER_DOT_MESSAGE);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(stray);
+		err(a, ReadFailure.UNMATCHED_CLOSE_MESSAGE);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(done);

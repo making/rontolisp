@@ -10,6 +10,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.EmittedReaderInitforms;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.ReadFailure;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -68,10 +69,10 @@ final class WasmReadRuntimeBuilder {
 	record ReadCtx(int nilOffset, int quoteOffset, int functionOffset, boolean ehMode, boolean simd,
 			int instanceTypeIndex, boolean identityHash, int structDirBase, int structDirCount, int charNamesBase,
 			int charNamesCount, int aokBase, int pathnameLayoutAddr, Msg msgEndOfFile, Msg msgUnmatchedClose,
-			Msg msgCharName, Msg msgRadix, Msg msgRank, Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum,
-			Msg msgReadEval, Msg msgFeature, Msg msgLabels, Msg msgStructType, Msg msgStructClassHint,
-			Msg msgStructName, Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit,
-			Msg msgDivZero, Msg msgPathname) {
+			Msg msgNothingBeforeDot, Msg msgMoreThanOneAfterDot, Msg msgCharName, Msg msgRadix, Msg msgRank,
+			Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
+			Msg msgLabels, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName, Msg msgStructEmpty,
+			Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero, Msg msgPathname) {
 	}
 
 	/**
@@ -192,7 +193,8 @@ final class WasmReadRuntimeBuilder {
 		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, identityHash,
 				structDirBase, structDirCount, charNamesBase, CHAR_NAMES.length, aokBase,
 				instanceTypeIndex >= 0 && pathnameAddr != null ? pathnameAddr : -1,
-				msg(st, ClosRegistry.END_OF_FILE_MESSAGE), msg(st, "Unexpected ')'"),
+				msg(st, ClosRegistry.END_OF_FILE_MESSAGE), msg(st, ReadFailure.UNMATCHED_CLOSE_MESSAGE),
+				msg(st, ReadFailure.NOTHING_BEFORE_DOT_MESSAGE), msg(st, ReadFailure.MORE_THAN_ONE_AFTER_DOT_MESSAGE),
 				msg(st, "Unknown character name after #\\"), msg(st, "Invalid digits after #x/#o/#b"),
 				msg(st, "Invalid array rank"), msg(st, "ragged array contents"),
 				msg(st, "expected a nested list in array contents"), msg(st, "array contents must be proper lists"),
@@ -387,6 +389,16 @@ final class WasmReadRuntimeBuilder {
 			i32(w, 1);
 			w.write(Instruction.I32_OR);
 		});
+	}
+
+	/**
+	 * Emits the record of an error ({@link ReadFailure}): the {@code READ_FAIL_ADDR} cell
+	 * takes {@code failure} and the cursor moves to the end of the text, so every
+	 * enclosing reader unwinds through its end-of-input path.
+	 */
+	private static void emitRecordError(WasmWriter w, int failure) {
+		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> i32(w, failure));
+		storeMem32(w, CURSOR, () -> loadMem32(w, END_ADDR));
 	}
 
 	/**
@@ -1050,8 +1062,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, ')');
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
-		storeMem32(w, WasmLispCompiler.READ_FAIL_ADDR, () -> i32(w, 2));
-		storeMem32(w, CURSOR, () -> loadMem32(w, END_ADDR));
+		emitRecordError(w, ReadFailure.UNMATCHED_CLOSE);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
@@ -2333,6 +2344,51 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, POS);
 	}
 
+	/**
+	 * Sets {@code isDot} to whether the cursor, which the caller has moved past
+	 * whitespace, is at a {@code .} token: followed by a delimiter or the end of input,
+	 * so a symbol or float containing {@code .} is not one. Leaves {@code isDot} alone (0
+	 * from the function's entry) when it is not.
+	 */
+	private static void emitDotTokenTest(WasmWriter w, ReadCtx ctx, int ch2, int isDot) {
+		loadMem32(w, CURSOR);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		curByte(w);
+		i32(w, '.');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		// ch2 = the byte after '.', with end-of-input treated as a delimiter
+		i32(w, 32);
+		setLocal(w, ch2);
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, ch2);
+		end(w);
+		// isdot = ch2 <= 32 || ch2 in { ')' '(' '\'' '"' ';' }
+		getLocal(w, ch2);
+		i32(w, 32);
+		w.write(Instruction.I32_LE_S);
+		for (char delimiter : new char[] { ')', '(', '\'', '"', ';' }) {
+			getLocal(w, ch2);
+			i32(w, delimiter);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_OR);
+		}
+		setLocal(w, isDot);
+		end(w);
+		end(w);
+	}
+
 	// === _read_list() -> value ===
 
 	static byte[] buildReadListBody(ReadCtx ctx) {
@@ -2363,6 +2419,14 @@ final class WasmReadRuntimeBuilder {
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
+		// A '.' token ahead of every element has no car to be the cdr of.
+		emitDotTokenTest(w, ctx, CH2, ISDOT);
+		getLocal(w, ISDOT);
+		ifVoid(w);
+		emitRecordError(w, ReadFailure.NOTHING_BEFORE_DOT);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		end(w);
 		// car = _read_expr
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
@@ -2372,56 +2436,7 @@ final class WasmReadRuntimeBuilder {
 		// compile-time reader: (a . b). Symbols and floats containing '.' are
 		// untouched.
 		emitSkipWs(w, ctx);
-		loadMem32(w, CURSOR);
-		loadMem32(w, END_ADDR);
-		w.write(Instruction.I32_LT_S);
-		ifVoid(w);
-		curByte(w);
-		i32(w, '.');
-		w.write(Instruction.I32_EQ);
-		ifVoid(w);
-		// ch2 = the byte after '.', with end-of-input treated as a delimiter
-		i32(w, 32);
-		setLocal(w, CH2);
-		loadMem32(w, CURSOR);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, END_ADDR);
-		w.write(Instruction.I32_LT_S);
-		ifVoid(w);
-		loadMem32(w, CURSOR);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		setLocal(w, CH2);
-		end(w);
-		// isdot = ch2 <= 32 || ch2 in { ')' '(' '\'' '"' ';' }
-		getLocal(w, CH2);
-		i32(w, 32);
-		w.write(Instruction.I32_LE_S);
-		getLocal(w, CH2);
-		i32(w, ')');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		getLocal(w, CH2);
-		i32(w, '(');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		getLocal(w, CH2);
-		i32(w, '\'');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		getLocal(w, CH2);
-		i32(w, '"');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		getLocal(w, CH2);
-		i32(w, ';');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		setLocal(w, ISDOT);
-		end(w);
-		end(w);
+		emitDotTokenTest(w, ctx, CH2, ISDOT);
 		// if isdot: consume '.', cdr = _read_expr, then consume the closing ')'
 		getLocal(w, ISDOT);
 		ifVoid(w);
@@ -2439,6 +2454,9 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
 		advanceCursor(w);
+		w.write(Instruction.ELSE);
+		// a second object where the dotted list's ')' was due
+		emitRecordError(w, ReadFailure.MORE_THAN_ONE_AFTER_DOT);
 		end(w);
 		w.write(Instruction.ELSE);
 		// the text ends before the dotted list's ')'
@@ -2842,6 +2860,22 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
 		emitErr(w, ctx, ctx.msgEndOfFile());
+		end(w);
+		loadMem32(w, WasmLispCompiler.READ_FAIL_ADDR);
+		i32(w, ReadFailure.ERROR_MASK);
+		w.write(Instruction.I32_AND);
+		i32(w, ReadFailure.NOTHING_BEFORE_DOT);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgNothingBeforeDot());
+		end(w);
+		loadMem32(w, WasmLispCompiler.READ_FAIL_ADDR);
+		i32(w, ReadFailure.ERROR_MASK);
+		w.write(Instruction.I32_AND);
+		i32(w, ReadFailure.MORE_THAN_ONE_AFTER_DOT);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgMoreThanOneAfterDot());
 		end(w);
 		emitErr(w, ctx, ctx.msgUnmatchedClose());
 		end(w);

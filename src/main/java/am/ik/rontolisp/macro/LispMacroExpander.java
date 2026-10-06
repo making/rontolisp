@@ -25,6 +25,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.ReadFailure;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.SpecialDeclarations;
 import am.ik.rontolisp.StructLiteralFolder;
@@ -6456,8 +6457,8 @@ public final class LispMacroExpander {
 	 * Lowers the one-argument {@code read-from-string} for a compiled backend so that
 	 * text holding no complete datum SIGNALS as the interpreter's reader does: the
 	 * runtime reader parses without throwing and records how the parse ended
-	 * ({@link LispNames#READ_FAILURE_INTERNAL}), and the expansion turns a failure into
-	 * the condition.
+	 * ({@link LispNames#READ_FAILURE_INTERNAL}, {@link ReadFailure}), and the expansion
+	 * turns a failure into the condition.
 	 *
 	 * <pre>
 	 * (read-from-string s) ->
@@ -6465,7 +6466,11 @@ public final class LispMacroExpander {
 	 *     (let ((__rfs_failure (%read-failure)))
 	 *       (if (eql __rfs_failure 0) __rfs_value
 	 *           (if (eql __rfs_failure 1) (error 'end-of-file)
-	 *               (error 'reader-error :format-control (%text-control "Unexpected ')'"))))))
+	 *               (if (eql (logand __rfs_failure 6) 4)
+	 *                   (error 'reader-error :format-control (%text-control "Nothing appears before '.' in list"))
+	 *                   (if (eql (logand __rfs_failure 6) 6)
+	 *                       (error 'reader-error :format-control (%text-control "More than one object follows '.' in list"))
+	 *                       (error 'reader-error :format-control (%text-control "Unexpected ')'"))))))))
 	 * </pre>
 	 *
 	 * The {@link #lowerParseError} split: where a handler landing pad exists
@@ -6481,21 +6486,28 @@ public final class LispMacroExpander {
 		LispSymbol failure = new LispSymbol(RFS_FAILURE_VAR);
 		LispVal endOfFile = typed ? endOfFileSignal()
 				: callOf(LispNames.ERROR_INTERNAL, new LispString(ClosRegistry.END_OF_FILE_MESSAGE));
-		LispVal readerError = typed
-				? listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.READER_ERROR_CLASS_NAME),
-						new LispSymbol(":FORMAT-CONTROL"),
-						callOf(LispNames.TEXT_CONTROL_INTERNAL, new LispString(UNMATCHED_CLOSE_MESSAGE))))
-				: callOf(LispNames.ERROR_INTERNAL, new LispString(UNMATCHED_CLOSE_MESSAGE));
+		LispVal errorBits = callOf(LispNames.LOGAND, failure, new LispInteger(ReadFailure.ERROR_MASK));
 		LispVal dispatch = makeIf(callOf(LispNames.EQL, failure, new LispInteger(0)), new LispSymbol(RFS_VALUE_VAR),
-				makeIf(callOf(LispNames.EQL, failure, new LispInteger(1)), endOfFile, readerError));
+				makeIf(callOf(LispNames.EQL, failure, new LispInteger(ReadFailure.END_OF_INPUT)), endOfFile, makeIf(
+						callOf(LispNames.EQL, errorBits, new LispInteger(ReadFailure.NOTHING_BEFORE_DOT)),
+						readerError(ReadFailure.NOTHING_BEFORE_DOT_MESSAGE, typed),
+						makeIf(callOf(LispNames.EQL, errorBits, new LispInteger(ReadFailure.MORE_THAN_ONE_AFTER_DOT)),
+								readerError(ReadFailure.MORE_THAN_ONE_AFTER_DOT_MESSAGE, typed),
+								readerError(ReadFailure.UNMATCHED_CLOSE_MESSAGE, typed)))));
 		LispVal inner = makeLet(RFS_FAILURE_VAR, listToCons(List.of(new LispSymbol(LispNames.READ_FAILURE_INTERNAL))),
 				dispatch);
 		return SourceProvenance.inherit(cons,
 				makeLet(RFS_VALUE_VAR, callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text), inner));
 	}
 
-	/** What a {@code )} that closes nothing reports -- the interpreter reader's text. */
-	private static final String UNMATCHED_CLOSE_MESSAGE = "Unexpected ')'";
+	/** The {@code reader-error} arm of {@link #expandReadFromStringFailure}. */
+	private static LispVal readerError(String message, boolean typed) {
+		return typed
+				? listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.READER_ERROR_CLASS_NAME),
+						new LispSymbol(":FORMAT-CONTROL"),
+						callOf(LispNames.TEXT_CONTROL_INTERNAL, new LispString(message))))
+				: callOf(LispNames.ERROR_INTERNAL, new LispString(message));
+	}
 
 	/**
 	 * Expands {@code (parse-integer string &key start end radix junk-allowed)} into a

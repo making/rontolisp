@@ -8,9 +8,10 @@ package am.ik.rontolisp;
  * case): a {@code )} that closes nothing is a {@code reader-error}; text holding no datum
  * (empty, whitespace, comments) and text that ends inside a datum (a list, a string, a
  * quote, a dotted tail, a vector, a block comment, a character literal, an array) are an
- * {@code end-of-file} -- in call position, first class, under {@code handler-case},
- * {@code handler-bind} and {@code ignore-errors}. The last row is text whose first datum
- * is complete, whatever follows it.</li>
+ * {@code end-of-file}, and a dotted list with nothing before the dot or more than one
+ * object after it is a {@code reader-error} -- in call position, first class, under
+ * {@code handler-case}, {@code handler-bind} and {@code ignore-errors}. The last row is
+ * text whose first datum is complete, whatever follows it.</li>
  * <li>{@link #RESTART_PROGRAM}: a {@code handler-bind} handler runs at the signal point,
  * where the restarts around the call are still established.</li>
  * <li>{@link #REPORT_PROGRAM}: what the two conditions report.</li>
@@ -46,6 +47,12 @@ public final class ReadFromStringMalformedFixture {
 			           (read-from-string (copy-seq ")")))))
 			(print (let ((c (nth-value 1 (ignore-errors (read-from-string (copy-seq "(a"))))))
 			         (list :ignore-errors (typep c 'end-of-file))))
+			(rfm-row (read-from-string (copy-seq "( . a)")) (read-from-string (copy-seq "(a . b c)"))
+			         (read-from-string (copy-seq "(. a)")) (read-from-string (copy-seq "(a . b . c)")))
+			(rfm-row (read-from-string (copy-seq "(1 ( . a))")) (read-from-string (copy-seq "'(a . b c)"))
+			         (read-from-string (copy-seq "(a . b c")) (read-from-string (copy-seq "#( . a)")))
+			(rfm-row (read-from-string (copy-seq "(a . b)")) (read-from-string (copy-seq "(a b . c)"))
+			         (read-from-string (copy-seq "(a .b)")) (read-from-string (copy-seq "(a . (b) )")))
 			(rfm-row (read-from-string (copy-seq "a)")) (read-from-string (copy-seq "(a) )"))
 			         (read-from-string (copy-seq "#| c |# x")) (read-from-string (copy-seq " \\"a\\\\\\\\\\" ")))
 			""";
@@ -57,7 +64,9 @@ public final class ReadFromStringMalformedFixture {
 			"((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))",
 			"((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))",
 			"((:READER-ERROR T T) (:EOF T NIL) (:EOF T NIL) (:READER-ERROR T T))", "(:HANDLER-BIND T)",
-			"(:IGNORE-ERRORS T)", "((A 1) ((A) 4) (X 9) (\"a\\\\\" 7))");
+			"(:IGNORE-ERRORS T)", "((:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T))",
+			"((:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T))",
+			"(((A . B) 7) ((A B . C) 9) ((A .B) 6) ((A B) 10))", "((A 1) ((A) 4) (X 9) (\"a\\\\\" 7))");
 
 	/** One line per probe. */
 	public static final String RESTART_PROGRAM = """
@@ -80,10 +89,13 @@ public final class ReadFromStringMalformedFixture {
 			(print (rfr-probe (lambda () (read-from-string (copy-seq ")")))))
 			(print (rfr-probe (lambda () (read-from-string (copy-seq "(a")))))
 			(print (rfr-probe (lambda () (funcall #'read-from-string (copy-seq "")))))
+			(print (rfr-probe (lambda () (read-from-string (copy-seq "( . a)")))))
+			(print (rfr-probe (lambda () (read-from-string (copy-seq "(a . b c)")))))
 			""";
 
 	/** What {@link #REPORT_PROGRAM} prints. */
 	public static final String REPORT_EXPECTED = String.join("\n", "\"Unexpected ')'\"", "\"end of file\"",
-			"\"end of file\"");
+			"\"end of file\"", "\"Nothing appears before '.' in list\"",
+			"\"More than one object follows '.' in list\"");
 
 }

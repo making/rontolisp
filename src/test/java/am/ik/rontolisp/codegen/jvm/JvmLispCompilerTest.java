@@ -15196,7 +15196,9 @@ class JvmLispCompilerTest {
 		// The forms before the bad one are evaluated, then the load signals -- a ')' that
 		// closes nothing, an unfinished list, an unterminated block comment.
 		String[][] cases = { { "(print 1) )\n(print 9)\n", "Unexpected ')'" }, { "(print 1) (print 2", "end of file" },
-				{ "(print 1) #| x", "end of file" } };
+				{ "(print 1) #| x", "end of file" },
+				{ "(print 1) ( . a) (print 9)", "Nothing appears before '.' in list" },
+				{ "(print 1) (a . b c) (print 9)", "More than one object follows '.' in list" } };
 		for (int i = 0; i < cases.length; i++) {
 			Path lib = tempDir.resolve("bad" + i + ".lisp");
 			Files.writeString(lib, cases[i][0]);
