@@ -175,8 +175,7 @@ final class JvmGeomKernelCompiler {
 		MethodCode.Label taken = ctx.body.newLabel();
 		emitAttempt(ctx, ops, qualified, slots, arity, taken);
 		loadAll(ctx, slots, arity);
-		ctx.body.invokestatic(defun.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+		JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 		ctx.body.labelBinding(taken);
 	}
 
@@ -223,14 +222,14 @@ final class JvmGeomKernelCompiler {
 		// %solid-of-vertices(scan[0], scan[1], rest)
 		emitScanElement(ctx, scanSlot, 0);
 		emitScanElement(ctx, scanSlot, 1);
-		ctx.body.aload(restSlot).invokestatic(builder.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(builder, null, ctx, className);
+		ctx.body.aload(restSlot);
+		JvmTailBounce.emitDirectCall(builder, null, ctx, className);
 		MethodCode.Label takenPos = ctx.body.newLabel();
 		ctx.body.goto_(takenPos);
 		ctx.body.labelBinding(skipPos);
 		ctx.body.labelBinding(declinedPos);
-		ctx.body.aload(slots[0]).aload(restSlot).invokestatic(defun.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+		ctx.body.aload(slots[0]).aload(restSlot);
+		JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 		ctx.body.labelBinding(takenPos);
 	}
 

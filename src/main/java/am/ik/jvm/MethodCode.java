@@ -1112,6 +1112,20 @@ public final class MethodCode {
 		return this;
 	}
 
+	/**
+	 * Re-points what {@link #makesValueOf} recorded for the method {@code name}: its
+	 * descriptor was settled after this body made the value.
+	 * @param name the method's name
+	 * @param from the descriptor recorded
+	 * @param to the method's descriptor
+	 * @return this
+	 */
+	public MethodCode retargetValueOf(String name, String from, String to) {
+		this.values.replaceAll(member -> member.name().equals(name) && member.descriptor().equals(from)
+				? new OwnCallGraph.Member(name, to) : member);
+		return this;
+	}
+
 	public MethodCode invokevirtual(MethodRefEntry method) {
 		return this.emit(Opcode.INVOKEVIRTUAL, 0, method);
 	}

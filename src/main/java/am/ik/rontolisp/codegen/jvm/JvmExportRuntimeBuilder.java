@@ -415,6 +415,10 @@ final class JvmExportRuntimeBuilder {
 				case VOID -> throw new IllegalStateException(":void parameter survived parsing: " + decl);
 			}
 		}
+		if (bounces) {
+			// An ordinary call: the defun's value tails count from 0 (JvmTailBounce).
+			asm.iconst_0();
+		}
 		asm.invokestatic(target);
 		// A defun whose tail goes through a value answers a bounce: the wrapper is a
 		// caller of its result like any other, so the trampoline makes that call before

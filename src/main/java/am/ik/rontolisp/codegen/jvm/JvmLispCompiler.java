@@ -2017,29 +2017,26 @@ public final class JvmLispCompiler implements LispCompiler {
 								unboundSpecials.isEmpty() ? null : Objects.requireNonNull(unboundMarker).field());
 
 		// Assign funcIds and register in CP
+		// The defuns whose tail calls to each other cycle: each such set is a tail group,
+		// whose calls among themselves are jumps (JvmTailGroup).
+		List<JvmTailGroup> defunGroups = JvmTailGroup.ofDefuns(defuns, specialVars);
+		// The defuns whose method may answer a bounce, every caller of which checks the
+		// result: a tail through a value, a direct tail call of such a defun, or a tail
+		// group with one among its members -- a member's method may run any member's code
+		// (JvmTailBounce). Each takes the value-tail depth after its parameters.
+		Set<String> bouncingDefuns = JvmTailBounce.bouncingDefuns(defuns, defunGroups, specialVars);
 		int[] nextFuncId = { 0 };
 		Map<String, FunctionInfo> functions = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
-			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + ")Ljava/lang/Object;";
+			boolean bounces = bouncingDefuns.contains(defun.name);
+			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + (bounces ? "I" : "")
+					+ ")Ljava/lang/Object;";
 			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(defun.name));
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
-					false, methodref, nameUtf8, descUtf8, false));
-		}
-
-		// The defuns whose tail calls to each other cycle: each such set is a tail group,
-		// whose calls among themselves are jumps (JvmTailGroup).
-		List<JvmTailGroup> defunGroups = JvmTailGroup.ofDefuns(defuns, functions, specialVars);
-		// The defuns whose method may answer a bounce, every caller of which checks the
-		// result: a tail through a value, a direct tail call of such a defun, or a tail
-		// group with one among its members -- a member's method may run any member's code
-		// (JvmTailBounce).
-		for (String name : JvmTailBounce.bouncingDefuns(defuns, defunGroups, specialVars)) {
-			FunctionInfo own = Objects.requireNonNull(functions.get(name));
-			functions.put(name, new FunctionInfo(own.funcId(), own.paramCount(), own.variadic(), own.optionals(),
-					own.isClosure(), own.methodref(), own.nameUtf8(), own.descUtf8(), true));
+					false, methodref, nameUtf8, descUtf8, bounces));
 		}
 		Map<String, JvmTailGroup.Member> defunMembers = new HashMap<>();
 		for (JvmTailGroup group : defunGroups) {
@@ -2594,10 +2591,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			funcCtx.passesBounces = bounces;
 			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), null, defun.bodyExprs);
 			funcCtx.nextLocal = defun.paramNames.size();
-			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
 				funcCtx.locals.put(defun.paramNames.get(i), i);
 			}
+			if (bounces) {
+				// The value-tail depth, after the parameters (JvmTailBounce).
+				funcCtx.depthSlot = funcCtx.nextLocal++;
+			}
+			funcCtx.maxLocals = funcCtx.nextLocal;
 			// Determine which params are captured by nested lambdas
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
 					new HashSet<>(defun.paramNames), functions.keySet(), funcCtx.captureMemo);
@@ -2825,8 +2826,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		int lambdaIdx = 0;
 		while (lambdaIdx < lambdaDecls.size()) {
 			LambdaInfo lambda = lambdaDecls.get(lambdaIdx);
-			// Register lambda in CP: first param is Object[] env, rest are lambda params
-			String descriptor = lambdaDescriptor(lambda.paramNames.size());
+			// Register lambda in CP: first param is Object[] env, rest are lambda params,
+			// then the value-tail depth until the body shows it reads none (below).
+			String descriptor = lambdaDescriptor(lambda.paramNames.size(), true);
 			Utf8Entry nameUtf8 = cp.utf8Entry(lambda.methodName);
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
@@ -2852,6 +2854,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				lambdaCtx.locals.put(lambda.paramNames.get(i), i + 1);
 			}
 			lambdaCtx.nextLocal = lambda.paramNames.size() + 1; // +1 for env
+			// The value-tail depth, after the parameters (JvmTailBounce).
+			lambdaCtx.depthSlot = lambdaCtx.nextLocal++;
 			lambdaCtx.maxLocals = lambdaCtx.nextLocal;
 			// Set up captures mapping
 			Map<String, Integer> captures = new HashMap<>();
@@ -2908,6 +2912,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				lambdaCtx.body.aconst_null();
 			}
 			lambdaCtx.body.areturn();
+			if (!lambdaCtx.depthRead && tailMember == null) {
+				// A body that never read the depth -- no value tail, no named callee's
+				// bounce handed on, no continuation it goes to -- answers no bounce: the
+				// method takes no depth, and its slot stays an unused local. Only the
+				// dispatchers and the body making the value name the method, both settled
+				// after this (a tail group's member keeps the depth its siblings' jumps
+				// store).
+				String plain = lambdaDescriptor(lambda.paramNames.size(), false);
+				Utf8Entry plainUtf8 = cp.utf8Entry(plain);
+				lambdaFuncInfos.set(lambdaIdx,
+						new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic, lambda.optionals,
+								true, cp.methodRef(thisClass, nameUtf8, plainUtf8), nameUtf8, plainUtf8, false));
+				lambda.madeIn().retargetValueOf(lambda.methodName, descriptor, plain);
+			}
 			lambdaCtxs.add(lambdaCtx);
 			lambdaIdx++;
 			if (tailMember != null) {
@@ -3047,8 +3065,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry evalDesc = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 		Utf8Entry applyName = cp.utf8Entry("_apply");
 		// The raw apply the trampoline re-enters; _apply is its answer checked
-		// (JvmTailBounce).
+		// (JvmTailBounce). It takes the value-tail depth, which it hands the spread
+		// dispatcher.
 		Utf8Entry applyRawName = cp.utf8Entry(JvmTailBounce.APPLY_RAW_NAME);
+		Utf8Entry applyRawDesc = cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(0, true));
 		Utf8Entry storeName = cp.utf8Entry("_store");
 		Utf8Entry storeDesc = cp
 			.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -3113,14 +3133,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodRefEntry lookupRef = cp.methodRef(thisClass, lookupName, lookupDesc);
 			MethodRefEntry[] invoke = new MethodRefEntry[JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY + 1];
 			for (int n = 0; n <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; n++) {
-				Utf8Entry invName = cp.utf8Entry("_invoke_" + n);
-				Utf8Entry invDesc = cp.utf8Entry("(" + "Ljava/lang/Object;".repeat(n + 1) + ")Ljava/lang/Object;");
-				invoke[n] = cp.methodRef(thisClass, invName, invDesc);
+				invoke[n] = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(n, false),
+						JvmRuntimeBuilder.dispatcherDesc(n, false));
 			}
-			// _invoke_v(funcval, argList): the spread dispatcher _apply hands the whole
-			// argument list to (see JvmRuntimeBuilder.buildDispatchMethods).
+			// _invoke_v(funcval, argList, depth): the spread dispatcher _apply hands the
+			// whole argument list to (see JvmRuntimeBuilder.buildDispatchMethods).
 			MethodRefEntry invokeSpread = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, true),
-					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+					JvmRuntimeBuilder.dispatcherDesc(0, true));
 			MethodRefEntry stringLengthRef = cp.methodRef(stringClass, "length", "()I");
 			JvmEvalRuntimeBuilder.EvalConstants ec = JvmEvalRuntimeBuilder.EvalConstants.builder()
 				.cp(cp)
@@ -3139,7 +3158,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.objectEquals(objectEquals)
 				.evalRef(evalRef)
 				.applyRef(applyRef)
-				.applyRawRef(cp.methodRef(thisClass, applyRawName, evalDesc))
+				.applyRawRef(cp.methodRef(thisClass, applyRawName, applyRawDesc))
 				.storeRef(storeRef)
 				.envLookupRef(envLookupRef)
 				.lookupRef(lookupRef)
@@ -3236,7 +3255,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					built.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos,
 							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 							applyRefForDispatch, lookupRefForDispatch, false,
-							JvmTailBounce.valueTailDispatcherName(arity), funcIds, arityReporting, mainCtx.unsupplied));
+							JvmTailBounce.valueTailDispatcherName(arity), true, funcIds, arityReporting,
+							mainCtx.unsupplied));
 					valueTailCopies.add(arity);
 				}
 			}
@@ -3247,7 +3267,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp,
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 						applyRefForDispatch, lookupRefForDispatch, true, JvmRuntimeBuilder.dispatcherName(0, true),
-						funcIds, arityReporting, mainCtx.unsupplied));
+						false, funcIds, arityReporting, mainCtx.unsupplied));
 			}
 			return built;
 		};
@@ -4297,34 +4317,29 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the shake keeps can bounce, and answers its argument otherwise -- _tramp, then
 		// reached from nothing, is shaken away with everything only it reached.
 		MethodCode unwCode = new MethodCode();
-		// A tail call through a value calls _vtc<n> (_vtcv for an apply): a real call
-		// while the owner thread's value-tail frames stay under the limit, a bounce
-		// otherwise. _tramp holds the owner's count at the limit while it drives a chain.
-		// Only the value tails' bodies reach these, so the shake drops them -- and the
-		// count's fields -- with _tramp.
-		boolean valueTails = !mainCtx.valueTailArities.isEmpty() || mainCtx.spreadBounces[0];
+		// A tail call through a value calls _vtc<n> (_vtcv for an apply) with its
+		// method's depth: a real call while the depth stays under the limit, a bounce
+		// otherwise -- _vtcb<n> makes it. _tramp re-enters with the limit as the depth,
+		// so the chain it drives keeps bouncing. Only the value tails' bodies reach
+		// these, so the shake drops them with _tramp.
 		definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainCtx.trampName(), mainCtx.trampDesc(),
-				JvmTailBounce.trampBody(indirectCallArities, mainCtx.spreadBounces[0], valueTails, cp, thisClass));
+				JvmTailBounce.trampBody(indirectCallArities, mainCtx.spreadBounces[0], cp, thisClass));
 		definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.UNW_NAME),
 				cp.utf8Entry(JvmTailBounce.UNW_DESC), unwCode);
 		for (int arity : mainCtx.valueTailArities) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
 					cp.utf8Entry(JvmTailBounce.valueTailName(arity)), cp.utf8Entry(JvmTailBounce.valueTailDesc(arity)),
 					JvmTailBounce.valueTailBody(arity, false, valueTailCopies.contains(arity), cp, thisClass));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmTailBounce.valueTailBounceName(arity)),
+					cp.utf8Entry(JvmTailBounce.valueTailBounceDesc(arity)),
+					JvmTailBounce.valueTailBounceBody(arity, cp));
 		}
 		if (mainCtx.spreadBounces[0]) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
-					cp.utf8Entry(JvmTailBounce.VALUE_TAIL_SPREAD_NAME), cp.utf8Entry(JvmTailBounce.valueTailDesc(1)),
+					cp.utf8Entry(JvmTailBounce.VALUE_TAIL_SPREAD_NAME),
+					cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(0, true)),
 					JvmTailBounce.valueTailBody(1, true, false, cp, thisClass));
-		}
-		if (valueTails) {
-			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.OWNER_FIELD),
-					cp.utf8Entry(JvmTailBounce.OWNER_DESC));
-			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.DEPTH_FIELD),
-					cp.utf8Entry("I"));
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					cp.utf8Entry(JvmTailBounce.CLAIM_NAME), cp.utf8Entry("()V"),
-					JvmTailBounce.claimBody(cp, thisClass));
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
@@ -4820,7 +4835,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (usesApplyRuntime) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc, applyEntryBody);
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyRawName, evalDesc, applyBody);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyRawName, applyRawDesc, applyBody);
 		}
 		if (usesEval) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
@@ -5062,12 +5077,17 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The descriptor of a lambda's method: its closure environment, then its parameters.
+	 * The descriptor of a lambda's method: its closure environment, then its parameters,
+	 * then -- when its body may answer a bounce -- the value-tail depth
+	 * ({@link JvmTailBounce}). Every lambda is compiled with the depth's slot; one whose
+	 * body never reads it is written without the parameter.
 	 * @param params the lambda's physical parameter count
+	 * @param depth whether it takes the value-tail depth
 	 * @return the descriptor
 	 */
-	static String lambdaDescriptor(int params) {
-		return "([Ljava/lang/Object;" + "Ljava/lang/Object;".repeat(params) + ")Ljava/lang/Object;";
+	static String lambdaDescriptor(int params, boolean depth) {
+		return "([Ljava/lang/Object;" + "Ljava/lang/Object;".repeat(params) + (depth ? "I" : "")
+				+ ")Ljava/lang/Object;";
 	}
 
 	/**
@@ -5301,7 +5321,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (fi == null) {
 			return null;
 		}
-		if (fi.paramCount() != 4 || fi.variadic() || fi.optionals() != 0 || fi.isClosure()) {
+		// A method that may bounce takes the value-tail depth too, which the eval
+		// runtime's call does not pass.
+		if (fi.paramCount() != 4 || fi.variadic() || fi.optionals() != 0 || fi.isClosure() || fi.bounceVisible()) {
 			throw new IllegalStateException(
 					LispNames.GLOBAL_ACCESS_RUNTIME + " is not the accessor the eval runtime calls");
 		}
@@ -5948,11 +5970,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Registry entry for a compiled function. {@code paramCount} is the physical JVM
+	 * Registry entry for a compiled function. {@code paramCount} is the physical Lisp
 	 * parameter count; when {@code variadic}, the last parameter is the rest list, the
 	 * {@code optionals} before it are physical optionals (an argument or the UNSUPPLIED
 	 * marker, {@link JvmPhysicalArgs}), and the callable minimum is {@link #required()}
-	 * arguments.
+	 * arguments. A function whose method may answer a trampoline bounce
+	 * ({@code bounceVisible}: the defuns {@link JvmTailBounce} finds, a lambda whose body
+	 * reads its depth) takes one {@code int} more after them, the value-tail depth.
 	 */
 	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
 			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8, boolean bounceVisible) {
@@ -6000,10 +6024,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * which a call is a self call ({@link JvmSelfTailCall}), or {@code null}
 	 * @param tailMember the tail group this {@code labels} function is a member of
 	 * ({@link JvmTailGroup}), or {@code null}
+	 * @param madeIn the body that makes the lambda's value, whose record of it
+	 * ({@link MethodCode#makesValueOf}) names the method by the descriptor it gets in the
+	 * end: with the value-tail depth, unless its body never reads it
 	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
 			List<LispVal> bodyExprs, List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
-			@Nullable String writtenIn, @Nullable String selfVar, JvmTailGroup.@Nullable Member tailMember) {
+			@Nullable String writtenIn, @Nullable String selfVar, JvmTailGroup.@Nullable Member tailMember,
+			MethodCode madeIn) {
 	}
 
 	record DispatchMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
@@ -6988,6 +7016,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * continuation's (the method it was split from checks it).
 		 */
 		boolean passesBounces;
+
+		/**
+		 * The slot of the value-tail depth, or -1: the last parameter of every method
+		 * that may bounce -- a lambda, a {@link FunctionInfo#bounceVisible} defun, a
+		 * continuation split from either -- which counts the value tails between this
+		 * method and the nearest ordinary call ({@link JvmTailBounce}). A value tail
+		 * passes it on plus one, a call that hands its callee's bounce on passes it as it
+		 * is.
+		 */
+		int depthSlot = -1;
+
+		/**
+		 * Whether the body read {@link #depthSlot} ({@link JvmTailBounce#depthSlot}): a
+		 * lambda that never does is written without the parameter.
+		 */
+		boolean depthRead;
 
 		int nextLocal = 1;
 

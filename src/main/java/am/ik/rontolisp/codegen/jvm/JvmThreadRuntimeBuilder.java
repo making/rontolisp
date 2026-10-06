@@ -138,7 +138,8 @@ final class JvmThreadRuntimeBuilder {
 		MethodRefEntry stringEquals = cp.methodRef(stringClass, "equals", "(Ljava/lang/Object;)Z");
 		FieldRefEntry fnField = cp.fieldRef(thisClass, FN_FIELD, "Ljava/lang/Object;");
 		FieldRefEntry bindingsField = cp.fieldRef(thisClass, BINDINGS_FIELD, "Ljava/lang/Object;");
-		MethodRefEntry invoke0 = cp.methodRef(thisClass, "_invoke_0", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry invoke0 = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, false),
+				JvmRuntimeBuilder.dispatcherDesc(0, false));
 		MethodRefEntry dtl = cp.methodRef(thisClass, DTL_METHOD, DTL_DESC);
 		java.lang.classfile.constantpool.MethodRefEntry condTake = java.util.Objects.requireNonNull(channel.condTake);
 		java.lang.classfile.constantpool.MethodRefEntry condPut = java.util.Objects.requireNonNull(channel.condPut);
@@ -425,6 +426,7 @@ final class JvmThreadRuntimeBuilder {
 			a.labelBinding(loopEnd);
 			a.aload(0);
 			a.getfield(fnField);
+			a.iconst_0();
 			a.invokestatic(invoke0);
 			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.areturn();

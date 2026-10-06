@@ -256,7 +256,8 @@ final class JvmAsyncRuntimeBuilder {
 		FieldRefEntry futureField = cp.fieldRef(thisClass, FUTURE_FIELD, "Ljava/lang/Object;");
 		FieldRefEntry latchField = cp.fieldRef(thisClass, LATCH_FIELD, "Ljava/lang/Object;");
 
-		MethodRefEntry invoke0 = cp.methodRef(thisClass, "_invoke_0", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry invoke0 = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, false),
+				JvmRuntimeBuilder.dispatcherDesc(0, false));
 		MethodRefEntry releaseHandoff = cp.methodRef(thisClass, RELEASE_HANDOFF_METHOD, RELEASE_HANDOFF_DESC);
 		// Self-references: a pull stream's read resolves the thunk's answer through the
 		// generic _await (a thunk may answer a future), and _drain_body reads through
@@ -363,6 +364,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(futureClass);
 			a.aload(0);
 			a.getfield(fnField);
+			a.iconst_0();
 			a.invokestatic(invoke0); // [future, v]
 			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			if (mvChannel != null && vMarker != null) {
@@ -737,10 +739,11 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(2);
 			a.invokevirtual(atomicIntGet);
 			a.ifne(drained);
-			// chunk (slot 3) = _await(_invoke_0(readFn))
+			// chunk (slot 3) = _await(_invoke_0(readFn, 0))
 			a.aload(1);
 			a.loadConstant(0);
 			a.aaload();
+			a.iconst_0();
 			a.invokestatic(invoke0);
 			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.invokestatic(awaitSelf);
@@ -754,7 +757,11 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(1);
 			a.loadConstant(1);
 			a.aaload();
+			a.iconst_0();
 			a.invokestatic(invoke0);
+			// The close thunk's answer is dropped, but a bounce in it is a call still to
+			// make (JvmTailBounce).
+			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.pop();
 			a.labelBinding(settle);
 			a.aload(3);
@@ -853,7 +860,9 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
+			a.iconst_0();
 			a.invokestatic(invoke0);
+			JvmTailBounce.unwrapRaw(a, cp, thisClass);
 			a.pop();
 			a.labelBinding(already);
 			a.aconst_null();

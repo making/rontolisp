@@ -56,8 +56,7 @@ final class JvmApplyCompiler {
 					emitArityGuard(ctx, className, tailSlot, 0, true, null);
 					ctx.body.aload(tailSlot);
 				}
-				ctx.body.invokestatic(fi.methodref());
-				JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
+				JvmTailBounce.emitDirectCall(fi, cons, ctx, className);
 				return;
 			}
 			if (fi != null) {
@@ -75,8 +74,7 @@ final class JvmApplyCompiler {
 				// The parameters out of the list: an optional past its end is the
 				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
 				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
-				ctx.body.invokestatic(fi.methodref());
-				JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
+				JvmTailBounce.emitDirectCall(fi, cons, ctx, className);
 				return;
 			}
 		}

@@ -5,31 +5,36 @@
 computed designator -- in a `defun`'s or a lambda's body (a closure, an `flet`/`labels`
 function, a continuation, a split-off `_k$N`) is a VALUE TAIL: a call of the class's
 `_vtc<n>` (`_vtcv` for an `apply`), which makes it a real call, its answer passed on
-unchecked, while fewer than 64 value-tail frames are on the stack of the thread that owns the
-count, and answers a BOUNCE otherwise -- past the limit, and on every other thread. Every
-caller of a compiled function's result checks it for one, and a tail call the compiler can
-name hands its callee's bounce on.** A chain of tail calls through values -- a closure calling
-itself through its variable, two closures in variables, a continuation handed to a defun that
-calls it, a state machine of closures in a table, a function applying itself -- runs in
-constant stack, as on the interpreter ([interpreter-tail-calls.md](interpreter-tail-calls.md))
-and wasm ([wasm-tail-calls.md](wasm-tail-calls.md)), and a shallow one -- an adapter, a
-composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns bounce since
+unchecked, while fewer than 64 value tails have run since the nearest ordinary call -- the
+DEPTH, an argument every method that may bounce takes last -- and answers a BOUNCE past it, on
+every thread. Every caller of a compiled function's result checks it for one, and a tail call
+the compiler can name hands its callee's bounce on.** A chain of tail calls through values --
+a closure calling itself through its variable, two closures in variables, a continuation
+handed to a defun that calls it, a state machine of closures in a table, a function applying
+itself -- runs in constant stack, as on the interpreter
+([interpreter-tail-calls.md](interpreter-tail-calls.md)) and wasm
+([wasm-tail-calls.md](wasm-tail-calls.md)), and a shallow one -- an adapter, a composition, a
+`reduce` step -- is an ordinary call the JIT can inline. Defuns bounce since
 2026-10-03 (`.todo/b69`), lambdas, `apply` and the pass-through since the same day
-(`.todo/c08`). Self and mutual tail calls the compiler can name are jumps instead
+(`.todo/c08`); the count is an argument since 2026-10-06 (`.todo/d52`), a static field
+before. Self and mutual tail calls the compiler can name are jumps instead
 ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)).
 
 ## Mechanics (`JvmTailBounce`)
 
 - **The value tail** (`emitValueTail`, `emitSpreadValueTail`): the designator and the
-  arguments evaluate onto the stack, left to right, and the site calls `_vtc<n>(fn, a1..an)`
-  -- `_vtcv(fn, argList)` for an `apply`, which calls the raw apply `_applyRaw`. The site
-  builds no array, so it is smaller than the inline bounce it replaced.
-- **`_vtc<n>`** (`valueTailBody`): `d = _vtcDepth; if (d < 64) { if (currentThread() ==
-  _vtcOwner) { _vtcDepth = d + 1; r = _vtcd_n(fn, ..); _vtcDepth = d; return r; } if
-  (_vtcOwner == null) _vtcClaim(); } return bounce`. A catch-all handler around the call
-  restores `d` and rethrows, so a `throw`, a `return-from` out of a closure or an error that
-  leaves a chain leaves no count behind; the answer is never checked here, so a bounce from
-  deeper in the chain reaches the nearest frame that checks.
+  arguments evaluate onto the stack, left to right, then the method's depth, and the site
+  calls `_vtc<n>(fn, a1..an, depth)` -- `_vtcv(fn, argList, depth)` for an `apply`, which
+  calls the raw apply `_applyRaw`. The site builds no array, so it is smaller than the inline
+  bounce it replaced.
+- **`_vtc<n>`** (`valueTailBody`): with the arity's copy (below) a forwarder, `return
+  _vtcd_n(fn, .., depth + 1)`, six instructions Graal inlines while it parses the caller, the
+  copy checking the depth at its entry; without one (a routed arity, `--optimize=size`) `depth
+  < 64 ? _invoke_n(fn, .., depth + 1) : _vtcb_n(fn, ..)`. `_vtcv`: `depth < 64 ?
+  _applyRaw(fn, list, depth + 1) : Object[]{FALSE, fn, list}`. `_vtcb<n>` makes the bounce. The
+  answer is never checked here, so a bounce from deeper in the chain reaches the nearest frame
+  that checks. A `throw`, a `return-from` or an error that leaves a chain leaves nothing
+  behind: the count is an argument.
 - **The value tails' own dispatcher** `_vtcd<n>` (`valueTailDispatcherName`): a copy of
   `_invoke_<n>`, same cases, that only `_vtc<n>` calls. A dispatcher's branch profile is one
   per method, so through the shared one a JIT inlining a chain hop by hop inlines every
@@ -40,37 +45,60 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
   a routed arity's value tails call `_invoke_<n>`, since its copy would double the largest
   dispatchers, and so does every arity at `--optimize=size`, which declines speed-for-size
   trades. The trampoline re-enters the shared one. `_vtcv` calls the raw apply as before.
-  Measurements: "the value tails' own dispatcher" below.
-- **The owner and the count** are two private statics, `_vtcOwner` and `_vtcDepth`. Only the
-  owner writes the count, so no thread can make it drift: another thread reads it at most and
-  bounces every value tail, the behavior before the limit. `_vtcClaim` (synchronized) makes
-  the first thread to make a value tail the owner, once, for the class's life; that call
-  bounces. The compiled `main`'s worker claims it in a program, the first caller in a
-  `--no-main` library. Not a `ThreadLocal`: its lookup per hop cost more than the owner
-  check everywhere and more than the bounce it saves where one closure type runs
-  (Measurements); not a shared static: a racing thread drifts it, and a negative drift lets a
-  chain grow unbounded; not a depth parameter: it changes every lambda's and bouncing defun's
-  descriptor and bounds the frames per non-tail nesting level instead of per thread.
-- **The bound** is the owner's whole stack's, nested non-tail calls included: at most 64
-  frame groups (`_vtc<n>`, the dispatcher -- the copy, or the router and segment when
-  routed --, the callee, and any named tail call the callee hands on between), a constant a
-  program pays at most once. `-Drontolisp.jvm.value-tail-limit=N` at compile time (clamped
-  to 0..32767) replaces 64; 0 makes every value tail bounce, for measuring.
+  The copy answers a depth past 64 with `_vtcb<n>`'s bounce at its entry
+  (`emitCopyEntryCheck`) and keeps the fast path alone: a value that is no function value --
+  a symbol, an interpreted closure, a count no case takes -- goes to the shared dispatcher,
+  which handles it as an ordinary call, so the copy is smaller than the dispatcher it copies.
+  Measurements: "the value tails' own dispatcher" and "the count as an argument" below.
+- **The depth** is an `int`, the last parameter of every method that may answer a bounce: a
+  `bounceVisible` defun (its descriptor minted with it before Pass 2), a lambda whose body
+  reads it, a continuation split from either -- and of every dispatcher (`_invoke_<n>` and
+  its segments, `_vtcd<n>`, `_invoke_v`) and of `_applyRaw`, whose cases pass it to a target
+  that takes it (`JvmRuntimeBuilder.dispatcherDesc`). An ordinary call passes 0
+  (`emitDispatchCall`, a direct call of a bouncing defun that checks its result, `_apply`,
+  the thread, async and HTTP entries, a `jvm-export` wrapper, the eval runtime's calls); a
+  named tail call that hands the bounce on passes its own (`emitDirectCall`), as do a tail
+  group's jump (into the sibling's slot, `Member.depthSlot`) and epilogue and a
+  continuation's call; a value tail passes its own plus one; the trampoline the limit. Every
+  lambda compiles with the depth's slot after its parameters; one that never reads it
+  (`Ctx.depthRead`: no value tail, no named callee's bounce handed on, no continuation,
+  not a tail group's member) is written without the parameter, `bounceVisible` false, and the
+  body that made its value is re-pointed at that descriptor (`MethodCode.retargetValueOf`) --
+  a lambda is named only by the dispatchers and that body, both settled after Pass 2c. No
+  field, no owner: every thread makes real calls. Inlined, the depth is a constant per hop
+  and the checks fold; the count in a static field cost two stores and three loads a hop no
+  JIT folded. The dispatcher keeps its search-tree id and the funcval cast in one-byte
+  slots (the cast over the funcval parameter): an arity-1 dispatcher near C2's hot-inlining
+  size (325 bytes) stays where it was.
+- **The bound** is per ordinary call: at most 64 frame groups (`_vtc<n>`, the dispatcher --
+  the copy, or the router and segment when routed --, the callee, and any named tail call
+  the callee hands on between) since the nearest call that passed 0, on any thread. A
+  non-tail recursion whose every level runs a chain keeps up to 64 groups a level -- the
+  static count bounded the owner thread's whole stack. `-Drontolisp.jvm.value-tail-limit=N`
+  at compile time (clamped to 0..32767) replaces 64; 0 makes every value tail bounce, for
+  measuring.
 - **The bounce** is the value tail's answer past the limit: `Object[]{Boolean.TRUE,
   designator, arg...}`, or for an `apply` `Object[]{Boolean.FALSE, designator, argList}`. No
   Lisp value is an `Object[]` with a `java.lang.Boolean` in slot 0.
 - **The check** is `invokestatic _unw` after every call whose callee may answer one: every
   dispatcher call site, a direct call of a `bounceVisible` defun, `_apply`'s exit
-  (`buildApplyEntry`), the async/thread/http entries, a `jvm-export` wrapper of a bouncing
-  defun, the linalg/geom/simd scalar fallbacks and `%check-sequence-runtime`'s call. On a
+  (`buildApplyEntry`), the async/thread/http entries, a pull stream's close thunk (its answer
+  dropped after the check; unchecked until 2026-10-06, a close whose tail ran a chain past the
+  limit stopped at the bounce -- and while the count was one thread's, a close of one hop
+  stopped on every other: a stream an async body drained skipped a close shaped like
+  http.lisp's `(lambda () (funcall release nil))`,
+  `JvmAsyncCompilerTest#aPullStreamsCloseThunkMakesTheCallsItsTailMakesThroughAValue`), a
+  `jvm-export` wrapper of a bouncing defun, the linalg/geom/simd scalar fallbacks and
+  `%check-sequence-runtime`'s call. On a
   bounce `_unw` hands it to `_tramp`, which re-enters `_invoke_<n>` -- or the raw apply
   `_applyRaw` for a spread bounce, so a chain of applies keeps no frame -- in a loop until a
   real value comes back: the deferred call runs in the checking frame.
-- **The trampoline holds the count at the limit.** On the owner, `_tramp` saves `_vtcDepth`,
-  sets it to 64 while it loops and restores it on every exit (a catch-all handler): the chain
-  it drives filled the limit once, so it keeps bouncing instead of refilling 64 real calls a
-  round, which measured up to 2.8x slower on Graal (Measurements). Emitted only in a class
-  with value tails; a class without them mints none of the count's pool entries.
+- **The trampoline re-enters at the limit.** `_tramp` passes 64 as the depth to the
+  dispatcher (or `_applyRaw`) it re-enters: the chain it drives filled the limit once, so its
+  value tails keep bouncing instead of refilling 64 real calls a round, which measured up to
+  2.8x slower on Graal (Measurements). An ordinary call the re-entered callee makes starts
+  at 0; under the static count, held at the limit for the whole thread, a chain nested in a
+  trampolined one bounced at every hop too.
 - **The tail mark** is the self jump's (`Ctx.tailMark`, [jvm-self-tail-calls.md](jvm-self-tail-calls.md)):
   only a call whose value is the method's result with no dynamic extent in between is a value
   tail.
@@ -83,9 +111,12 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
 - **Which defuns may answer one** (`bouncingDefuns`, before Pass 2): a value call on the
   tail walk (`JvmTailGroup.tailCalls`, the mark's own relays), a direct tail call of such a
   defun, or a member of a tail group with one. Its `FunctionInfo.bounceVisible` decides the
-  defun's `tailBounce`, so a walk that misses a relay only keeps that call a call. Every
-  lambda may (`bounceVisible` true: only dispatchers, `_apply` and the runtime entries call
-  it, and each checks).
+  defun's `tailBounce`, so a walk that misses a relay only keeps that call a call. A defun's
+  descriptor is needed at its callers before its body is compiled, hence the walk; a lambda
+  is named only by the dispatchers and the body that makes its value, so every lambda
+  compiles as one that may bounce (only dispatchers, `_apply` and the runtime entries call
+  it, and each checks) and its own body settles it: one that never read its depth is written
+  without it and is not `bounceVisible` (The depth, above).
 - **The gate is decided after the shake.** `_tramp` and `_unw` are always declared; `_unw`'s
   body is written once the class is assembled (`trampolineLive`): with its body still empty
   `_tramp` is reachable from nothing, so `JvmClassSplitter.reachable` from the shake roots
@@ -96,7 +127,7 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
   case included (`.kb/optimize-dead-code-elimination.md`, "A dispatcher case lives while a
   kept body makes its value"): `reduce :from-end`'s argument-swapping lambdas in a wrapper
   body nothing calls held `_tramp` in `clos`/`sort`/`string` (below) until they stopped
-  counting. The `_vtc<n>` helpers, `_vtcClaim` and the count's two fields are reached only
+  counting. The `_vtc<n>` helpers and the `_vtcb<n>` that make their bounces are reached only
   from the bodies that make value tails, so they go with `_tramp`. The dispatchers are
   rebuilt over the values kept bodies make AFTER `_unw` is written, so every caller of a
   dispatcher counts, the trampoline's re-entries among them.
@@ -110,8 +141,8 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
   and a self call in a split-off `_k$N`. The body of an inline `((lambda ...) args)` hands the
   mark on since 2026-10-04 ([jvm-self-tail-calls.md](jvm-self-tail-calls.md)); a value call
   there is a value tail.
-- A value tail while shallow, by design: up to 64 frame groups on the owner thread, which a
-  stack trace shows.
+- A value tail while shallow, by design: up to 64 frame groups since the nearest ordinary
+  call, on any thread, which a stack trace shows.
 
 ## Measurements (2026-10-03, x86-64 Linux, Xeon E5-2697A v4, Oracle GraalVM 25.0.4, `java Prog`)
 
@@ -240,8 +271,9 @@ The one-type forwarder now inlines whole on both JITs, its bounce 7x slower on G
 chain of several hops still pays is the count and the copy's one profile, which every hop of
 the chain shares. The count: a prototype with none (unbounded, a measurement only) runs chains
 of 3 / 5 in Graal 147 -> 85 / 241 -> 168, C2 199 -> 136 / 315 -> 246, two forwarders Graal
-73 -> 64, C2 124 -> 85 -- 20-42% of a hop (`.todo/d52`); with the owner check or the
-exception handler left out instead, nothing moves (Graal chain of 3: 143 -> 141 / 145).
+73 -> 64, C2 124 -> 85 -- 20-42% of a hop (`.todo/d52`, an argument since: "the count as an
+argument" below); with the owner check or the exception handler left out instead, nothing
+moves (Graal chain of 3: 143 -> 141 / 145).
 The shared profile: the megamorphic composition and the 8-state chains of 10 lose 13% on
 Graal, 11% / 3% on C2, while on Graal the adapter and the forwarder of the composition's
 program win 17-18%.
@@ -284,15 +316,84 @@ identical (every arity their value tails use is routed: ci-spec 7,644,257 B, sch
 (+0.13%): 52 identical, 64 larger by 147-5,274 B (`net/httpbin-jzon` +0.92%), each copy at
 most one segment; the cl-ppcre loop's class 692,679 -> 696,354. WASM output identical.
 
+## Measurements: the count as an argument (2026-10-06, `.todo/d52`)
+
+Same box and method (rounds started under a 1-minute load of 10, most at 3-8); best / median
+of 5 alternating runs (7-9 where noted), each the best of 5 in-process rounds; ms for 10M
+calls unless noted. Columns: the count in a static field (before) -> the depth argument.
+
+**The premise, measured first** (prototypes, Graal / C2, a chain of 3 through globals): count
+151 / 204, none at all (unbounded) 87 / 142, the depth checked in `_vtc<n>` 126-140 (one run
+89) / 156, the depth checked in the copy's entry 87-97 / 151; a chain of 5 Graal 253 -> 176 /
+190 / 191, C2 328 -> 245 / 223 / 246. Checked in `_vtc<n>`, the method is no longer six
+instructions: `-Djdk.graal.TraceInlining=true` shows the cost-benefit phase weighing it at
+every hop like the copy, and the chain's last hop stays a call ("the reason for not inlining
+is unspecified"); as a forwarder Graal inlines it while it parses the caller.
+
+| shape | Graal | C2 |
+| --- | --- | --- |
+| one forwarder through a global, alone | 4 / 5 -> 3 / 4 (7 runs) | 77 / 80 -> 46 / 53 |
+| two forwarders through globals | 77 / 80 -> 62 / 68 | 129 / 132 -> 87 / 98 |
+| chains of 3 / 5 through globals, each alone | 150 / 155 -> 84 / 92; 211 / 265 -> 190 / 221 (7 runs) | 200 / 208 -> 160 / 164; 325 / 385 -> 263 / 286 |
+| chains of 1 / 3 / 5 in one program | 5 / 5 -> 4 / 4; 154 / 169 -> 121 / 128; 283 / 328 -> 212 / 221 | 81 / 92 -> 45 / 56; 219 / 237 -> 148 / 183; 324 / 346 -> 245 / 371 |
+| a chain of 1 / 3 with 400 arity-1 lambdas (routed) | 68 / 77 -> 52 / 63; 155 / 193 -> 137 / 143 | 88 / 100 -> 72 / 75; 232 / 243 -> 169 / 187 |
+| two forwarders made in the caller / made by a defun | 0 -> 0; 0 -> 0 | 42 / 44 -> 77 / 78; 49 / 50 -> 76 / 78 |
+| a `compose`d closure | 0 -> 0 | 157 / 173 -> 133 / 139 |
+| an adapter; a defun `(funcall f x)`; an `apply` forwarder | 4 -> 3; 4 -> 0; 16 / 17 -> 15 / 15 | 43 / 45 -> 37 / 39; 34 / 38 -> 30 / 32; 32 / 33 -> 29 / 33 |
+| `reduce :from-end` with a lambda, 1,000 elements x 10,000 | 61 / 69 -> 62 / 69 | 139 / 161 -> 118 / 201 (bimodal) |
+| 8 closure types per site: `apply-to`, composition, adapter, forwarder, two forwarders, leaf | 97 / 102 -> 85 / 91; 206 / 223 -> 192 / 201; 155 / 158 -> 147 / 154; 131 / 135 -> 81 / 86; 182 / 188 -> 157 / 162; 35 / 40 -> 37 / 58 (bimodal) | 135 / 149 -> 114 / 122; 257 / 267 -> 234 / 250; 231 / 249 -> 195 / 198; 183 / 211 -> 140 / 167; 211 / 236 -> 175 / 192; 102 / 109 -> 100 / 111 |
+| a tree evaluator, depth 20 / 40 / 80 / 160 in one program | 232 / 236 -> 223 / 226; 235 / 240 -> 221 / 224; 333 / 337 -> 221 / 225; 318 / 331 -> 222 / 230 | 266 / 279 -> 181 / 235; 191 / 205 -> 163 / 189; 248 / 288 -> 196 / 206; 277 / 281 -> 190 / 208 |
+| 8 state lambdas: 3M hops; 300,000 chains of 10 | 49 / 56 -> 46 / 77 (bimodal); 54 / 57 -> 59 / 60 | 63 / 70 -> 76 / 85; 74 / 77 -> 68 / 73 (9 runs) |
+| 3M hops of 8 instances of one state lambda, beside 10 CPS sums; the sums | 80 / 86 -> 35 / 76 (bimodal); 25 / 27 -> 24 / 26 | 129 / 135 -> 120 / 126; 27 / 28 -> 27 / 28 |
+| the same state machine alone (bimodal) | 45 / 53 -> 55 / 57 | 60 / 66 -> 61 / 61 |
+| 3M-hop chains: a closure through its variable, a pair, a continuation | 49 / 50 -> 45 / 51; 25 / 26 -> 24 / 25; 25 / 26 -> 24 / 25 | 41 / 78 -> 38 / 118 (bimodal, 9 runs); 31 / 33 -> 35 / 37; 28 / 29 -> 27 / 28 |
+| the cl-ppcre scan loop: best of 5 rounds; of 20; 200,000 scans a round | 804 / 906 -> 853 / 901; 776 / 801 -> 735 / 778; 3,112 / 3,584 -> 3,163 / 3,642 | 985 / 1,152 -> 979 / 1,042 |
+| bench-report's ten programs (no value tail) | equal within noise | equal within noise |
+
+What it loses, all on C2. Two forwarders made in the function that calls them: C2's escape
+analysis sees every closure, and its `AggressiveUnboxing` misfires once no store is left in
+the chain -- under `-XX:-AggressiveUnboxing` the count runs 38 / 42 and the depth 31 / 33,
+under `-XX:-EliminateAutoBox` both 42-43, the unbounded prototype without a count 78 / 87
+like the depth, and the depth with one `putstatic` of it per hop 33 / 34. A store a hop is
+the cost this change removes, so none is added. The 3M-hop state machine of 8 lambdas
+(+20%) and the pair (+12%) run on the trampoline past the limit; the closure through its own
+variable is bimodal on both (28-45 or 105-122 ms a run), the depth landing on the slow mode
+more often.
+
+The recursion depth the bound per ordinary call costs, 16 MiB worker, the largest n a
+non-tail recursion through a defun survives (cold start, binary search to 1%): with no value
+tail -- each level calls a closure through the dispatcher -- 113,275-114,252 -> 102,536; with
+one value tail a level 68,365 -> 46,398; with a chain of three a level 68,365 -> 26,627. The
+static count bounded the whole stack, so its chains bounced from the 65th value tail on and a
+level kept the trampoline's frames; the depth keeps a level's chain as real calls.
+
+Rejected, measured the same way:
+- Every lambda taking the depth, read or not: the no-value-tail recursion 93,261 (C1 frames
+  only, `-XX:TieredStopAtLevel=1`: 114,252 -> 93,749; interpreted 49,327 -> 47,130); Graal's
+  tree evaluator at depth 40 266 / 274, against 214 / 235 when only a lambda that reads it
+  takes it (the count: 223 / 241) -- the `:add` handler's first `ev` call left out of the
+  inlining; and every closure's case in the dispatchers a byte larger.
+- The dispatcher's id and funcval after the depth's slot: an arity-1 `_invoke_1` loads the id
+  with a two-byte `iload` at every node of its search tree, the 8-type program's 318 B -> 347
+  B, past C2's `FreqInlineSize` (325): its leaf calls 97 / 114 -> 133 / 137. With the id in
+  the first free slot and the funcval cast over its parameter, 322 B; the copy, delegating
+  everything but a function value to the shared dispatcher, 310 B (the count's: 319 / 319).
+- The bounce array built in the copy instead of `_vtcb<n>`: no different (Graal tree depth 40
+  274 / 279 against 269 / 278, chain of 3 95 / 98 against 93 / 98).
+- A catch-all handler around `_vtc<n>`'s call, for C2's two forwarders: 69 / 80, no
+  different.
+
 ## Tests
 
 `JvmLispCompilerTest#aShallowValueTailIsACallAndAChainPastTheLimitBouncesIntoTheTrampoline`
-(every chain length around the limit, the count zero after, the worker the owner),
+(every chain length around the limit, `_vtc<n>` a forwarder, the copy's bounce through
+`_vtcb<n>`, the trampoline passing the limit, a lambda that reads no depth taking none, no
+field),
 `#aValueTailCallsThroughADispatcherOfItsOwnWhileItsArityFitsOneSegment` (the copy, the
 trampoline on the shared one, none at `--optimize=size` or for a routed arity, a copy the
 shake's rebuild brings),
-`#theValueTailCountComesBackWhenANonLocalExitLeavesAChain` (`throw`, `return-from`, an error,
-from past and under the limit), `#aLambdasTailCallThroughAValueRunsInConstantStack`,
+`#aNonLocalExitLeavesAChainOfValueTailsFromEitherSideOfTheLimit` (`throw`, `return-from`, an
+error, from past and under the limit), `#aLambdasTailCallThroughAValueRunsInConstantStack`,
 `#everyFormTheTailMarkPassesHandsABounceOnAndAPlainTailNeedsNoCheck` (every relay, the
 pass-through through RB-HOP, a plain tail's callers carry no check),
 `#aTailApplyThroughAValueBouncesWithItsArgumentListUnspread` (with the Clojure call),
@@ -303,8 +404,11 @@ pass-through through RB-HOP, a plain tail's callers carry no check),
 `#theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue`,
 `#theUnwrapCheckAtACallSiteIsOneCallToASharedHelper`;
 `JvmExportTest#anExportedDefunWhoseTailCallsThroughAValueAnswersThatCallsValue`,
-`#aChainThroughValuesRunsOnASmallStackOnEveryThreadAndOnlyTheFirstOwnsTheCount` (the owner's
-1,000,000-deep chain on a 256 KB stack, four other threads at once); ci-spec
+`#aChainThroughValuesRunsOnASmallStackOnEveryThread` (five threads with 256 KB stacks, a
+1,000,000-deep chain each, at once),
+`#aShallowValueTailIsARealCallOnEveryThreadAndTheTrampolineDrivesTheRest` (the closure frames
+on the stack when a chain's end signals: one per hop under the limit, on two threads, one in
+all past it); ci-spec
 `closures-calling-through-a-value-in-tail-position-run-in-constant-stack`,
 `tail-calls-through-a-value-answer-alike-at-every-depth` (adapters, compositions, `apply`
 forwarders, `reduce :from-end`, chain lengths around the limit, exits, multiple values,

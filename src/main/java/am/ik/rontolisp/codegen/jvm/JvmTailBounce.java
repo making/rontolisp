@@ -11,7 +11,6 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import java.lang.classfile.constantpool.ClassEntry;
-import java.lang.classfile.constantpool.FieldRefEntry;
 
 import am.ik.jvm.MethodCode;
 import am.ik.jvm.ConstantPool;
@@ -32,19 +31,28 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * {@code (expr arg...)} -- in a defun's or a lambda's body is a VALUE TAIL: the
  * designator and the arguments are evaluated and handed to the class's {@code _vtc<n>},
  * whose answer is the method's result. {@code _vtc<n>} makes the call a real one, its
- * answer passed on unchecked, while the value-tail frames on the stack of the thread that
- * owns the count stay under {@link #VALUE_TAIL_LIMIT}; past it, and on any other thread,
- * it answers a BOUNCE instead: one {@code Object[]{marker, designatorValue, arg...}}.
- * Every caller that receives a compiled function's result checks for the array and, on
- * the bounce shape, drives the call it names in ITS OWN frame -- the trampoline loop of
- * the shared helper {@code _tramp}, which re-enters the per-arity dispatchers and loops
- * while the answer is again a bounce, the owner's count held at the limit meanwhile so
- * the chain it drives keeps bouncing. A shallow chain -- an adapter, a composition, a
- * reduce step -- is a plain call the JIT can inline; a deep one unwinds to the nearest
- * checking frame once per limit's worth of frames and then runs in that frame's
- * trampoline, so a state machine calling through values runs on constant stack, while
- * every call the existing analyses already prove direct (the named-let/do loops, the self
- * and mutual tail-call groups) keeps its direct {@code invokestatic}.
+ * answer passed on unchecked, while fewer than {@link #VALUE_TAIL_LIMIT} value tails have
+ * run since the nearest ordinary call; past it, it answers a BOUNCE instead: one
+ * {@code Object[]{marker, designatorValue, arg...}}. Every caller that receives a
+ * compiled function's result checks for the array and, on the bounce shape, drives the
+ * call it names in ITS OWN frame -- the trampoline loop of the shared helper
+ * {@code _tramp}, which re-enters the per-arity dispatchers and loops while the answer is
+ * again a bounce. A shallow chain -- an adapter, a composition, a reduce step -- is a
+ * plain call the JIT can inline; a deep one unwinds to the nearest checking frame once
+ * per limit's worth of frames and then runs in that frame's trampoline, so a state
+ * machine calling through values runs on constant stack, while every call the existing
+ * analyses already prove direct (the named-let/do loops, the self and mutual tail-call
+ * groups) keeps its direct {@code invokestatic}.
+ *
+ * <p>
+ * The count is an argument, THE DEPTH: the last parameter of every method that may answer
+ * a bounce -- a {@code bounceVisible} defun, a lambda whose body reads it, a continuation
+ * split from either -- and of every dispatcher. A value tail passes its method's depth
+ * plus one, a named tail call that hands its callee's bounce on passes it unchanged,
+ * every other call passes 0, and the trampoline passes the limit, so the chain it drives
+ * keeps bouncing. Inlined, the depth is a constant per hop and its check folds; a count
+ * in a field could not, its stores and loads staying at every hop. The bound is per
+ * ordinary call, on every thread.
  *
  * <p>
  * The real call goes through {@code _vtcd<n>}, a copy of the arity's dispatcher that only
@@ -52,9 +60,10 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * ({@link #valueTailDispatcherName}). A dispatcher's branch profile is one per method, so
  * a JIT inlining a chain through the shared dispatcher inlines it again at every hop with
  * every target the program's indirect calls reach; through the copy, a hop sees only the
- * targets value tails reach. A routed dispatcher keeps the shared one: the copy would
- * double the largest dispatchers. The copy spends bytes on speed, so
- * {@code --optimize=size} declines it.
+ * targets value tails reach. The copy checks the depth at its entry, so {@code _vtc<n>}
+ * stays a forwarder a JIT inlines while it parses the caller. A routed dispatcher keeps
+ * the shared one: the copy would double the largest dispatchers. The copy spends bytes on
+ * speed, so {@code --optimize=size} declines it.
  *
  * <p>
  * A tail call the compiler CAN name -- a defun by name or through a literal
@@ -209,30 +218,17 @@ final class JvmTailBounce {
 	}
 
 	/**
-	 * How many value-tail frames the owner thread keeps on its stack before
-	 * {@code _vtc<n>} bounces instead of calling: 64 real calls then a bounce, and
-	 * {@code _tramp} drives the rest of the chain. A chain shorter than this never
-	 * allocates; a deep one bounces once per trampoline entry. The bound is the thread's
-	 * whole stack's, nested non-tail calls included, so it costs any program at most this
-	 * many extra frame groups. {@code -Drontolisp.jvm.value-tail-limit=0} at compile time
-	 * makes every value tail bounce, for measuring what the real calls buy.
+	 * How many value tails in a row run as real calls before {@code _vtc<n>} bounces
+	 * instead: the depth a method receives counts the value tails between it and the
+	 * nearest ordinary call, so 64 real calls, then a bounce, and {@code _tramp} drives
+	 * the rest of the chain. A chain shorter than this never allocates; a deep one
+	 * bounces once per trampoline entry. The bound is per ordinary call: a non-tail
+	 * recursion whose every level runs a chain stacks up to this many frame groups a
+	 * level. {@code -Drontolisp.jvm.value-tail-limit=0} at compile time makes every value
+	 * tail bounce, for measuring what the real calls buy.
 	 */
 	static final int VALUE_TAIL_LIMIT = Math.clamp(Integer.getInteger("rontolisp.jvm.value-tail-limit", 64), 0,
 			Short.MAX_VALUE);
-
-	/** The static {@code Thread} whose value-tail frames {@link #DEPTH_FIELD} counts. */
-	static final String OWNER_FIELD = "_vtcOwner";
-
-	static final String OWNER_DESC = "Ljava/lang/Thread;";
-
-	/**
-	 * The static {@code int} count of the owner's value-tail frames, or the limit while
-	 * its trampoline drives a chain.
-	 */
-	static final String DEPTH_FIELD = "_vtcDepth";
-
-	/** The synchronized claim of the count by the first thread to make a value tail. */
-	static final String CLAIM_NAME = "_vtcClaim";
 
 	/** The spread value tail an {@code apply} through a value calls. */
 	static final String VALUE_TAIL_SPREAD_NAME = "_vtcv";
@@ -262,17 +258,52 @@ final class JvmTailBounce {
 
 	/**
 	 * {@return the descriptor of a value tail -- or of the dispatcher it calls -- of
-	 * {@code arity} arguments}
+	 * {@code arity} arguments} The designator, the arguments, then the depth.
 	 * @param arity the call's argument count
 	 */
 	static String valueTailDesc(int arity) {
+		return JvmRuntimeBuilder.dispatcherDesc(arity, false);
+	}
+
+	/**
+	 * {@return the name of the bounce of a value tail of {@code arity} arguments} The
+	 * method that makes the array, for the dispatcher copy's entry check and a checking
+	 * {@code _vtc<n>}: kept out of both so neither grows by the allocation.
+	 * @param arity the call's argument count
+	 */
+	static String valueTailBounceName(int arity) {
+		return "_vtcb" + arity;
+	}
+
+	/**
+	 * {@return the descriptor of the bounce of a value tail of {@code arity} arguments}
+	 * The designator and the arguments: the bounce carries no depth.
+	 * @param arity the call's argument count
+	 */
+	static String valueTailBounceDesc(int arity) {
 		return "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
+	}
+
+	/**
+	 * {@return the slot of the method's depth, for a read of it} Every method that makes
+	 * a value tail or hands a callee's bounce on has one ({@code Ctx.tailBounce}: a
+	 * lambda, a {@code bounceVisible} defun, a continuation of either). A lambda whose
+	 * body reads it nowhere is written without the parameter ({@code Ctx.depthRead}).
+	 * @param ctx the method being emitted
+	 */
+	static int depthSlot(JvmLispCompiler.Ctx ctx) {
+		if (ctx.depthSlot < 0) {
+			throw new IllegalStateException("a value tail in a method without the value-tail depth");
+		}
+		ctx.depthRead = true;
+		return ctx.depthSlot;
 	}
 
 	/**
 	 * Emits the tail call through a value: the designator and each argument evaluate
 	 * once, left to right, and {@code _vtc<n>} makes the call or answers its bounce --
-	 * the value that reaches the method's result either way.
+	 * the value that reaches the method's result either way. The method's depth goes with
+	 * them: {@code _vtc<n>} hands the callee one more.
 	 * @param fnForm the designator, unevaluated -- its VALUE is what the dispatcher takes
 	 * as the function, so the same value a {@code funcall} would pass
 	 * @param args the call's arguments, the first {@code from} of them designators head
@@ -295,17 +326,18 @@ final class JvmTailBounce {
 		for (int i = 0; i < count; i++) {
 			JvmExprCompiler.compileExpr(args.get(from + i), ctx, className);
 		}
+		ctx.body.iload(depthSlot(ctx));
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), ctx.cp.utf8Entry(valueTailName(count)),
 				ctx.cp.utf8Entry(valueTailDesc(count))));
 	}
 
 	/**
 	 * Emits a tail {@code apply} through a value: {@code _vtcv(designatorValue,
-	 * argumentList)}, the list as the apply would spread it. The call is the raw apply
-	 * ({@link #APPLY_RAW_NAME}); its bounce is {@code Object[]{FALSE, designatorValue,
-	 * argumentList}}, which the trampoline re-enters the raw apply with, so a chain of
-	 * applies through values -- the Clojure front end's every call through a value --
-	 * keeps no frame per hop past the limit either.
+	 * argumentList, depth)}, the list as the apply would spread it. The call is the raw
+	 * apply ({@link #APPLY_RAW_NAME}); its bounce is {@code Object[]{FALSE,
+	 * designatorValue, argumentList}}, which the trampoline re-enters the raw apply with,
+	 * so a chain of applies through values -- the Clojure front end's every call through
+	 * a value -- keeps no frame per hop past the limit either.
 	 * @param ctx the method being emitted, its tail mark on the apply
 	 * @param fnSlot the local holding the designator's value
 	 * @param listSlot the local holding the argument list
@@ -316,83 +348,123 @@ final class JvmTailBounce {
 		ctx.spreadBounces[0] = true;
 		ctx.body.aload(fnSlot);
 		ctx.body.aload(listSlot);
+		ctx.body.iload(depthSlot(ctx));
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), ctx.cp.utf8Entry(VALUE_TAIL_SPREAD_NAME),
-				ctx.cp.utf8Entry(valueTailDesc(1))));
+				ctx.cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(0, true))));
 	}
 
 	/**
-	 * The body of {@code _vtc<n>(fn, a1..an)}, or of the spread {@code _vtcv(fn, list)}.
-	 * The count is one static field only the owner thread writes, so no other thread can
-	 * make it drift: another thread reads it at most, and bounces whatever it reads. The
-	 * owner restores it on every exit, a non-local one included, so a chain left by a
-	 * {@code throw} leaves no count behind. The call's answer passes on unchecked: a
-	 * bounce from deeper in the chain reaches the nearest frame that checks.
+	 * The body of {@code _vtc<n>(fn, a1..an, depth)}, or of the spread
+	 * {@code _vtcv(fn, list, depth)}. The call's answer passes on unchecked: a bounce
+	 * from deeper in the chain reaches the nearest frame that checks.
 	 *
 	 * <pre>
-	 * int d = _vtcDepth;
-	 * if (d &lt; LIMIT) {
-	 *   if (Thread.currentThread() == _vtcOwner) {
-	 *     _vtcDepth = d + 1;
-	 *     try { r = _vtcd_n(fn, a1..an); } catch (Throwable t) { _vtcDepth = d; throw t; }
-	 *     _vtcDepth = d;
-	 *     return r;
-	 *   }
-	 *   if (_vtcOwner == null) _vtcClaim();
-	 * }
-	 * return new Object[]{TRUE, fn, a1..an};
+	 * return _vtcd_n(fn, a1..an, depth + 1);                  // the copy checks the depth
+	 * if (depth &lt; LIMIT) return _invoke_n(fn, a1..an, depth + 1); // a routed arity
+	 * return _vtcb_n(fn, a1..an);
+	 * if (depth &lt; LIMIT) return _applyRaw(fn, list, depth + 1);  // the spread one
+	 * return new Object[]{FALSE, fn, list};
 	 * </pre>
+	 *
+	 * The first is a forwarder of six instructions, which Graal inlines while it parses
+	 * the caller; with the check in it, Graal weighs it against its inlining budget like
+	 * the copy, and a chain of three hops kept its last hop a call
+	 * ({@code .kb/jvm-tail-bounce.md}).
 	 * @param arity the argument count, ignored for the spread value tail
 	 * @param spread whether to build {@code _vtcv}, which calls the raw apply
 	 * @param ownDispatcher whether the arity has the dispatcher copy only value tails
 	 * call ({@link #valueTailDispatcherName}), which the real call then goes through
 	 * instead of {@code _invoke_n}; ignored for the spread value tail
 	 * @param cp the class's constant pool
-	 * @param thisClass the class carrying the dispatchers and the count
+	 * @param thisClass the class carrying the dispatchers
 	 * @return the method body
 	 */
 	static MethodCode valueTailBody(int arity, boolean spread, boolean ownDispatcher, ConstantPool cp,
 			ClassEntry thisClass) {
 		int params = spread ? 2 : arity + 1;
-		int saved = params;
-		var depth = cp.fieldRef(thisClass, cp.utf8Entry(DEPTH_FIELD), cp.utf8Entry("I"));
-		var owner = cp.fieldRef(thisClass, cp.utf8Entry(OWNER_FIELD), cp.utf8Entry(OWNER_DESC));
+		int depth = params;
 		String callee = spread ? APPLY_RAW_NAME
 				: ownDispatcher ? valueTailDispatcherName(arity) : JvmRuntimeBuilder.dispatcherName(arity, false);
-		var target = cp.methodRef(thisClass, cp.utf8Entry(callee), cp.utf8Entry(valueTailDesc(params - 1)));
+		var target = cp.methodRef(thisClass, cp.utf8Entry(callee),
+				cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(arity, spread)));
 		MethodCode code = new MethodCode();
 		MethodCode.Label bounce = code.newLabel();
-		MethodCode.Label notOwner = code.newLabel();
-		code.getstatic(depth);
-		code.istore(saved);
-		code.iload(saved);
-		code.loadConstant(VALUE_TAIL_LIMIT);
-		code.if_icmpge(bounce);
-		emitCurrentThread(code, cp);
-		code.getstatic(owner);
-		code.if_acmpne(notOwner);
-		code.iload(saved);
-		code.iconst_1();
-		code.iadd();
-		code.putstatic(depth);
-		MethodCode.Label tryStart = code.newBoundLabel();
+		boolean checks = spread || !ownDispatcher;
+		if (checks) {
+			code.iload(depth);
+			code.loadConstant(VALUE_TAIL_LIMIT);
+			code.if_icmpge(bounce);
+		}
 		for (int i = 0; i < params; i++) {
 			code.aload(i);
 		}
+		code.iload(depth);
+		code.iconst_1();
+		code.iadd();
 		code.invokestatic(target);
-		MethodCode.Label tryEnd = code.newBoundLabel();
-		code.iload(saved);
-		code.putstatic(depth);
 		code.areturn();
-		MethodCode.Label restore = code.newBoundLabel();
-		code.iload(saved);
-		code.putstatic(depth);
-		code.athrow();
-		code.exceptionCatch(tryStart, tryEnd, restore, null);
-		code.labelBinding(notOwner);
-		code.getstatic(owner);
-		code.ifnonnull(bounce);
-		code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(CLAIM_NAME), cp.utf8Entry("()V")));
+		if (!checks) {
+			return code;
+		}
 		code.labelBinding(bounce);
+		if (spread) {
+			emitBounceArray(code, cp, params, true);
+		}
+		else {
+			for (int i = 0; i < params; i++) {
+				code.aload(i);
+			}
+			code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(valueTailBounceName(arity)),
+					cp.utf8Entry(valueTailBounceDesc(arity))));
+		}
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * The body of {@code _vtcb<n>(fn, a1..an)}: {@code new Object[]{TRUE, fn, a1..an}},
+	 * the bounce of a value tail past the limit.
+	 * @param arity the argument count
+	 * @param cp the class's constant pool
+	 * @return the method body
+	 */
+	static MethodCode valueTailBounceBody(int arity, ConstantPool cp) {
+		MethodCode code = new MethodCode();
+		emitBounceArray(code, cp, arity + 1, false);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * Emits the entry check of the dispatcher copy only value tails call
+	 * ({@link #valueTailDispatcherName}): a depth past the limit answers the call's
+	 * bounce ({@code _vtcb<n>}) instead of dispatching it. The depth it receives is the
+	 * calling value tail's plus one, so this is {@code _vtc<n>}'s check, moved where a
+	 * JIT inlining a chain finds it folded at every hop.
+	 * @param code the copy's code, empty
+	 * @param arity the copy's argument count
+	 * @param cp the class's constant pool
+	 * @param thisClass the class carrying the bounce
+	 */
+	static void emitCopyEntryCheck(MethodCode code, int arity, ConstantPool cp, ClassEntry thisClass) {
+		MethodCode.Label within = code.newLabel();
+		code.iload(arity + 1);
+		code.loadConstant(VALUE_TAIL_LIMIT);
+		code.if_icmple(within);
+		for (int i = 0; i <= arity; i++) {
+			code.aload(i);
+		}
+		code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(valueTailBounceName(arity)),
+				cp.utf8Entry(valueTailBounceDesc(arity))));
+		code.areturn();
+		code.labelBinding(within);
+	}
+
+	/**
+	 * Leaves {@code Object[]{marker, local0..}} on the stack: the bounce of the
+	 * designator and arguments in the first {@code params} locals.
+	 */
+	private static void emitBounceArray(MethodCode code, ConstantPool cp, int params, boolean spread) {
 		code.loadConstant(params + 1);
 		code.anewarray(cp.classEntry("java/lang/Object"));
 		code.dup();
@@ -406,33 +478,6 @@ final class JvmTailBounce {
 			code.aload(i);
 			code.aastore();
 		}
-		code.areturn();
-		return code;
-	}
-
-	/**
-	 * The body of the synchronized {@code _vtcClaim()}: the calling thread owns the count
-	 * when no thread does yet. Claimed once and kept: the thread that runs a program's
-	 * top level makes its first value tail first, and every other thread bounces.
-	 * @param cp the class's constant pool
-	 * @param thisClass the class carrying the count
-	 * @return the method body
-	 */
-	static MethodCode claimBody(ConstantPool cp, ClassEntry thisClass) {
-		var owner = cp.fieldRef(thisClass, cp.utf8Entry(OWNER_FIELD), cp.utf8Entry(OWNER_DESC));
-		MethodCode code = new MethodCode();
-		MethodCode.Label done = code.newLabel();
-		code.getstatic(owner);
-		code.ifnonnull(done);
-		emitCurrentThread(code, cp);
-		code.putstatic(owner);
-		code.labelBinding(done);
-		code.return_();
-		return code;
-	}
-
-	private static void emitCurrentThread(MethodCode code, ConstantPool cp) {
-		code.invokestatic(cp.methodRef(cp.classEntry("java/lang/Thread"), "currentThread", "()Ljava/lang/Thread;"));
 	}
 
 	/**
@@ -459,17 +504,30 @@ final class JvmTailBounce {
 	}
 
 	/**
-	 * Emits the check a direct call of {@code callee} owes its result, the call just
-	 * emitted: none when the callee never answers a bounce, or when the call is this
-	 * method's tail and the bounce passes on ({@link #passesThrough}).
+	 * Emits a direct call of {@code callee}, its physical arguments on the stack, and the
+	 * check it owes its result. A callee that may answer a bounce takes the depth: this
+	 * method's when the call is its tail and the bounce passes on
+	 * ({@link #passesThrough}) -- a named tail call adds no value tail to the chain --
+	 * and 0 otherwise, whose result is then checked here. A callee that never bounces
+	 * takes neither.
 	 * @param callee the function called
 	 * @param cons the call form, or null for a call no form stands for (never a tail)
 	 * @param ctx the method being emitted
 	 * @param className the class being generated
 	 */
-	static void emitDirectCallUnwrap(JvmLispCompiler.FunctionInfo callee, @Nullable LispCons cons,
-			JvmLispCompiler.Ctx ctx, String className) {
-		if (callee.bounceVisible() && (cons == null || !passesThrough(cons, ctx))) {
+	static void emitDirectCall(JvmLispCompiler.FunctionInfo callee, @Nullable LispCons cons, JvmLispCompiler.Ctx ctx,
+			String className) {
+		boolean passes = cons != null && passesThrough(cons, ctx);
+		if (callee.bounceVisible()) {
+			if (passes) {
+				ctx.body.iload(depthSlot(ctx));
+			}
+			else {
+				ctx.body.iconst_0();
+			}
+		}
+		ctx.body.invokestatic(callee.methodref());
+		if (callee.bounceVisible() && !passes) {
 			emitUnwrap(ctx, className);
 		}
 	}
@@ -544,46 +602,21 @@ final class JvmTailBounce {
 	 * goes through) with its designator and arguments -- or, for an apply's bounce, the
 	 * raw apply with its argument list -- so the call the bounce deferred runs HERE, in
 	 * this frame, and the next bounce comes back to this loop instead of stacking a
-	 * frame. A real value returns as the answer. On the thread that owns the value-tail
-	 * count the loop holds the count at the limit while it runs, so the chain it drives
-	 * -- one that already filled the limit with real calls -- keeps bouncing rather than
-	 * refilling it every round, and restores the count on every exit.
+	 * frame. A real value returns as the answer. Each re-entry passes the limit as the
+	 * depth, so the chain it drives -- one that already filled the limit with real calls
+	 * -- keeps bouncing rather than refilling it every round.
 	 * @param arities the registered dispatch arities, one {@code _invoke_<n>} each; a
 	 * count outside them cannot arise (every bounce site registers its own)
 	 * @param spread whether an apply bounced anywhere, so the raw apply is re-entered too
-	 * @param pins whether the class has value tails, so the owner's count is held
 	 * @param cp the class's constant pool
 	 * @param thisClass the class whose dispatchers re-enter
 	 * @return the method body
 	 */
-	static MethodCode trampBody(Set<Integer> arities, boolean spread, boolean pins, ConstantPool cp,
-			ClassEntry thisClass) {
+	static MethodCode trampBody(Set<Integer> arities, boolean spread, ConstantPool cp, ClassEntry thisClass) {
 		ClassEntry objectArray = cp.classEntry("[Ljava/lang/Object;");
 		ClassEntry booleanClass = cp.classEntry("java/lang/Boolean");
 		List<Integer> sorted = arities.stream().sorted().toList();
 		MethodCode code = new MethodCode();
-		// The owner's count, saved in local 2 while the loop holds it at the limit; -1 on
-		// any other thread, whose count this is not. A class without value tails mints
-		// none of these entries: its pool, and every ldc width the size budgets read,
-		// stays as it was.
-		int saved = 2;
-		@Nullable FieldRefEntry depth = null;
-		MethodCode.@Nullable Label pinned = null;
-		if (pins) {
-			depth = cp.fieldRef(thisClass, cp.utf8Entry(DEPTH_FIELD), cp.utf8Entry("I"));
-			MethodCode.Label notOwner = code.newLabel();
-			code.iconst_m1();
-			code.istore(saved);
-			emitCurrentThread(code, cp);
-			code.getstatic(cp.fieldRef(thisClass, cp.utf8Entry(OWNER_FIELD), cp.utf8Entry(OWNER_DESC)));
-			code.if_acmpne(notOwner);
-			code.getstatic(depth);
-			code.istore(saved);
-			code.loadConstant(VALUE_TAIL_LIMIT);
-			code.putstatic(depth);
-			code.labelBinding(notOwner);
-			pinned = code.newBoundLabel();
-		}
 		MethodCode.Label top = code.newLabel();
 		code.labelBinding(top);
 		MethodCode.Label plain = code.newLabel();
@@ -615,8 +648,9 @@ final class JvmTailBounce {
 			code.aload(1);
 			code.iconst_2();
 			code.aaload();
+			code.loadConstant(VALUE_TAIL_LIMIT);
 			code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(APPLY_RAW_NAME),
-					cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+					cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(0, true))));
 			code.astore(0);
 			code.goto_(top);
 			code.labelBinding(call);
@@ -637,8 +671,9 @@ final class JvmTailBounce {
 				code.loadConstant(j + 2);
 				code.aaload();
 			}
-			code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry("_invoke_" + arity),
-					cp.utf8Entry("(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;")));
+			code.loadConstant(VALUE_TAIL_LIMIT);
+			code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(JvmRuntimeBuilder.dispatcherName(arity, false)),
+					cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(arity, false))));
 			code.astore(0);
 			code.goto_(top);
 			if (more) {
@@ -646,28 +681,6 @@ final class JvmTailBounce {
 			}
 		}
 		code.labelBinding(plain);
-		if (pinned != null && depth != null) {
-			// The count back to what it was, on the way out and on a non-local exit.
-			MethodCode.Label unpinned = code.newBoundLabel();
-			MethodCode.Label done = code.newLabel();
-			code.iload(saved);
-			code.iflt(done);
-			code.iload(saved);
-			code.putstatic(depth);
-			code.labelBinding(done);
-			code.aload(0);
-			code.areturn();
-			MethodCode.Label restore = code.newBoundLabel();
-			MethodCode.Label rethrow = code.newLabel();
-			code.iload(saved);
-			code.iflt(rethrow);
-			code.iload(saved);
-			code.putstatic(depth);
-			code.labelBinding(rethrow);
-			code.athrow();
-			code.exceptionCatch(pinned, unpinned, restore, null);
-			return code;
-		}
 		code.aload(0);
 		code.areturn();
 		return code;
