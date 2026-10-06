@@ -19,6 +19,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10474,6 +10475,30 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(StringNilStartFixture.EXPECTED);
+	}
+
+	@Test
+	void stringComparisonsRefuseABadBound() {
+		// A negative, non-integer, past-the-length or crossed :start1/:end1/:start2/:end2
+		// is subseq's type-error for string=/string-equal and the string< family, in
+		// call position and first class -- sbcl's answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(StringComparisonBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(StringComparisonBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadStringComparisonBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(StringComparisonBoundsFixture.REPORT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
 	}
 
 	@Test

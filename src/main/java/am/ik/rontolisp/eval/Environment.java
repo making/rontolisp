@@ -4655,15 +4655,9 @@ public final class Environment implements Scope {
 				endArg = args.get(i + 1);
 			}
 		}
-		LispVal startBound = startArg == null ? new LispInteger(0) : startArg;
-		LispVal endBound = endArg == null || endArg instanceof LispNil ? null : endArg;
-		int start = subseqBound(startBound);
-		int end = endBound == null ? cpLen : subseqBound(endBound);
-		if (start < 0 || start > end || end > cpLen) {
-			throw subseqBoundsError("string", startBound, endBound, cpLen);
-		}
-		int from = full.offsetByCodePoints(0, start);
-		int to = full.offsetByCodePoints(0, end);
+		int[] window = stringWindow(startArg, endArg, cpLen);
+		int from = full.offsetByCodePoints(0, window[0]);
+		int to = full.offsetByCodePoints(0, window[1]);
 		return new LispString(full.substring(0, from) + convert.apply(full.substring(from, to)) + full.substring(to));
 	}
 
@@ -5075,35 +5069,32 @@ public final class Environment implements Scope {
 	// paths lower the same call shape onto subseq
 	// (LispMacroExpander.expandStringComparisonBounds), and the ordering predicates
 	// (string</string-lessp/...) take their bounds through the shared %string-compare
-	// walk. Indices are CHARACTER positions (code points), like subseq's.
+	// walk. Indices are CHARACTER positions (code points), like subseq's, and a bad
+	// range is subseq's type-error (subseqBoundsError), as on the compile paths.
 	private static String boundedStringArg(String name, List<LispVal> args, int which) {
 		requireMinArgCount(name, args, 2);
 		String s = stringDesignator(name, args.get(which));
 		int cpLen = s.codePointCount(0, s.length());
-		int start = 0;
-		int end = cpLen;
 		String startKey = (which == 0) ? LispNames.START1_KEYWORD : LispNames.START2_KEYWORD;
 		String endKey = (which == 0) ? LispNames.END1_KEYWORD : LispNames.END2_KEYWORD;
-		boolean startSeen = false;
-		boolean endSeen = false;
+		LispVal startArg = null;
+		LispVal endArg = null;
 		for (int i = 2; i + 1 < args.size(); i += 2) {
 			if (args.get(i) instanceof LispSymbol key) {
-				// A nil :start is no bound (requireIndex's INTEGER type-error, datum
-				// NIL); a nil :end is the string's length. The FIRST occurrence of a
-				// keyword is the one that counts (CLHS 3.4.1.4). The two keywords
-				// addressing the OTHER argument are this call's business too, so they
-				// are accepted and skipped rather than rejected.
+				// A nil :start is no bound (refused below, datum NIL); a nil :end is the
+				// string's length. The FIRST occurrence of a keyword is the one that
+				// counts (CLHS 3.4.1.4). The two keywords addressing the OTHER argument
+				// are this call's business too, so they are accepted and skipped rather
+				// than rejected.
 				if (startKey.equals(key.name())) {
-					if (!startSeen) {
-						start = requireIndex(name, args.get(i + 1));
-						startSeen = true;
+					if (startArg == null) {
+						startArg = args.get(i + 1);
 					}
 				}
 				else if (endKey.equals(key.name())) {
-					if (!endSeen && !(args.get(i + 1) instanceof LispNil)) {
-						end = requireIndex(name, args.get(i + 1));
+					if (endArg == null) {
+						endArg = args.get(i + 1);
 					}
-					endSeen = true;
 				}
 				else if (!LispNames.START1_KEYWORD.equals(key.name()) && !LispNames.END1_KEYWORD.equals(key.name())
 						&& !LispNames.START2_KEYWORD.equals(key.name()) && !LispNames.END2_KEYWORD.equals(key.name())) {
@@ -5111,14 +5102,32 @@ public final class Environment implements Scope {
 				}
 			}
 		}
-		if (start < 0 || end > cpLen || start > end) {
-			throw new LispEvalException(
-					name + ": invalid bounds " + start + ", " + end + " for string of length " + cpLen);
-		}
-		if (start == 0 && end == cpLen) {
+		int[] window = stringWindow(startArg, endArg, cpLen);
+		if (window[0] == 0 && window[1] == cpLen) {
 			return s;
 		}
-		return s.substring(s.offsetByCodePoints(0, start), s.offsetByCodePoints(0, end));
+		return s.substring(s.offsetByCodePoints(0, window[0]), s.offsetByCodePoints(0, window[1]));
+	}
+
+	/**
+	 * A string operator's {@code :start} / {@code :end} as the character window they
+	 * designate, refused as {@code subseq} refuses its range
+	 * ({@link #subseqBoundsError}): an absent start is 0, an absent or nil end the
+	 * length, and a nil start is no bound.
+	 * @param startArg the start as given, or null when absent
+	 * @param endArg the end as given, or null when absent
+	 * @param cpLen the string's length in characters
+	 * @return {@code {start, end}}
+	 */
+	private static int[] stringWindow(@Nullable LispVal startArg, @Nullable LispVal endArg, int cpLen) {
+		LispVal startBound = startArg == null ? new LispInteger(0) : startArg;
+		LispVal endBound = endArg == null || endArg instanceof LispNil ? null : endArg;
+		int start = subseqBound(startBound);
+		int end = endBound == null ? cpLen : subseqBound(endBound);
+		if (start < 0 || start > end || end > cpLen) {
+			throw subseqBoundsError("string", startBound, endBound, cpLen);
+		}
+		return new int[] { start, end };
 	}
 
 	/**

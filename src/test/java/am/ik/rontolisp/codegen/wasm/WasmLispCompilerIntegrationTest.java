@@ -22,6 +22,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14578,6 +14579,27 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(StringNilStartFixture.EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(StringNilStartFixture.PROGRAM, true))
 			.isEqualTo(StringNilStartFixture.EXPECTED);
+	}
+
+	@Test
+	void stringComparisonsRefuseABadBound() throws Exception {
+		// The wasm twin of LispEvaluatorTest#stringComparisonsRefuseABadBound, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.PROGRAM, false))
+			.isEqualTo(StringComparisonBoundsFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.PROGRAM, true))
+			.isEqualTo(StringComparisonBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadStringComparisonBoundReportsAsSubseqDoes() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aBadStringComparisonBoundReportsAsSubseqDoes,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.REPORT_PROGRAM, false))
+			.isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.REPORT_PROGRAM, true))
+			.isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
 	}
 
 	/**

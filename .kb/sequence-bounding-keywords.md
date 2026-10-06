@@ -80,7 +80,8 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
 - ONE primitive, `(%check-bounds seq start end)` (`LispNames.CHECK_BOUNDS_INTERNAL`), nil or
   the refusal. Interpreter: `Environment.checkBoundingIndices`, also what every runtime twin
   calls (`sequenceScanValues`, `removeDuplicatesValues`, `positionScanValues`, the native
-  `fill`/`replace`). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
+  `fill`/`replace`). The string comparisons' `%string-compare` calls it too, on every call
+  (`.kb/characters-code-points.md`, "String comparison family"). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
   `_ck_bounds` (`FUNC_CK_BOUNDS` after `_subseq_bad`, shaken when nothing spells a bound;
   `WasmStringRuntimeBuilder.buildCheckBoundsBody`), refusing through `_subseq_bad` in EH mode
   and with a bare `unreachable` outside it, like `subseq`. A string or vector is measured by its

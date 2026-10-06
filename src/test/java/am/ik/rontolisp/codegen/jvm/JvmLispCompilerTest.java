@@ -8,6 +8,7 @@ import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13512,6 +13513,20 @@ class JvmLispCompilerTest {
 	void compileAndRunStringOperatorsRefuseANilStart() throws Exception {
 		// The JVM twin of LispEvaluatorTest#stringOperatorsRefuseANilStart.
 		assertThat(compileAndRunExpanded(StringNilStartFixture.PROGRAM)).isEqualTo(StringNilStartFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringComparisonsRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#stringComparisonsRefuseABadBound.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadStringComparisonBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadStringComparisonBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
 	}
 
 	@Test

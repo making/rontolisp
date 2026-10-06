@@ -276,9 +276,9 @@ signals a `type-error` for all five and its text names no operator either.
   P1 40,879 -> 40,129, component 42,117 -> 41,363.
 - The sequence operators refuse every bad bound with this same `type-error` and text, call
   position and first class, through one check of their own before the walk (`%check-bounds`,
-  `.kb/sequence-bounding-keywords.md`, "Every bound is checked once"); the string comparisons and
-  the `nstring-*` conversions refuse a nil `:start` the same way (`.kb/characters-code-points.md`,
-  "String comparison family").
+  `.kb/sequence-bounding-keywords.md`, "Every bound is checked once"); so do the string
+  comparisons (`%check-bounds` in `%string-compare`, `subseq` in the `string=` lowering,
+  `.kb/characters-code-points.md`, "String comparison family") and the `nstring-*` conversions.
 
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,
