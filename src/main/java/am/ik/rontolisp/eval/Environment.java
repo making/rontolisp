@@ -7683,7 +7683,8 @@ public final class Environment implements Scope {
 			LispVal junkArg = LispNil.INSTANCE;
 			LispVal startArg = null;
 			LispVal endArg = LispNil.INSTANCE;
-			// Walked from the last pair, so the first of a repeated keyword is the one kept.
+			// Walked from the last pair, so the first of a repeated keyword is the one
+			// kept.
 			for (int i = (args.size() % 2 == 0 ? args.size() - 3 : args.size() - 2); i >= 1; i -= 2) {
 				String key = (args.get(i) instanceof LispSymbol kw) ? kw.name() : "";
 				LispVal value = args.get(i + 1);

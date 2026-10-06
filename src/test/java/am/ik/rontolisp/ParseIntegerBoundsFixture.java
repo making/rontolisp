@@ -5,8 +5,8 @@ package am.ik.rontolisp;
  * arguments are evaluated in, shared by the backend suites.
  * <ul>
  * <li>{@link #PROGRAM} (mirrored by the `parse-integer-refuses-a-bad-bound` ci-spec
- * case): a negative, non-integer (a nil start included) or past-int-range bound, one
- * past the string's length (a fill pointer's) and a start past its end are a
+ * case): a negative, non-integer (a nil start included) or past-int-range bound, one past
+ * the string's length (a fill pointer's) and a start past its end are a
  * {@code type-error} -- over a fresh string, a literal and a fill-pointer string, with
  * {@code :junk-allowed} or {@code :radix}, in call position and first class. The datum is
  * printed only where it is the bound itself (a range is a cons in sbcl's report and the
@@ -149,7 +149,7 @@ public final class ParseIntegerBoundsFixture {
 
 	/** What {@link #ORDER_PROGRAM} prints (sbcl's answers). */
 	public static final String ORDER_EXPECTED = String.join("\n", "((234 4) (:S :E :ST :R))", "((2345 5) (:S :A :B))",
-			"((2345 5) (:S :J :A))", "((234 4) (:S :E :ST :B))", "(:ERROR (:S :E :ST))", "((12 3) NIL)",
-			"((12 3) NIL)", "(:ERROR NIL)", "((12 4) NIL)");
+			"((2345 5) (:S :J :A))", "((234 4) (:S :E :ST :B))", "(:ERROR (:S :E :ST))", "((12 3) NIL)", "((12 3) NIL)",
+			"(:ERROR NIL)", "((12 4) NIL)");
 
 }

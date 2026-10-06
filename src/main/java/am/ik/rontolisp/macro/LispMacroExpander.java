@@ -6443,7 +6443,8 @@ public final class LispMacroExpander {
 			return keywordError;
 		}
 		// The bindings below take the keyword values in PARSE_INTEGER_KEYWORDS' order; a
-		// call spelling them otherwise, or one twice, evaluates them in its own order first.
+		// call spelling them otherwise, or one twice, evaluates them in its own order
+		// first.
 		KeywordTail tail = keywordsInOrder(parts, PARSE_INTEGER_KEYWORDS) ? null : KeywordTail.of(parts, 2, "__pi");
 		if (tail != null) {
 			parts = tail.parts();
@@ -6510,13 +6511,15 @@ public final class LispMacroExpander {
 		return tail == null ? expanded : tail.wrap(expanded);
 	}
 
-	/** {@code parse-integer}'s keywords, in the order its expansion binds their values. */
-	private static final List<String> PARSE_INTEGER_KEYWORDS = List.of(LispNames.START_KEYWORD,
-			LispNames.END_KEYWORD, LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
+	/**
+	 * {@code parse-integer}'s keywords, in the order its expansion binds their values.
+	 */
+	private static final List<String> PARSE_INTEGER_KEYWORDS = List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+			LispNames.RADIX_KEYWORD, LispNames.JUNK_ALLOWED_KEYWORD);
 
 	/**
-	 * Whether a call's keyword tail (from index 2) spells each keyword at most once and in
-	 * {@code order}, so binding the values in that order evaluates them in the call's.
+	 * Whether a call's keyword tail (from index 2) spells each keyword at most once and
+	 * in {@code order}, so binding the values in that order evaluates them in the call's.
 	 */
 	private static boolean keywordsInOrder(List<LispVal> parts, List<String> order) {
 		int previous = -1;

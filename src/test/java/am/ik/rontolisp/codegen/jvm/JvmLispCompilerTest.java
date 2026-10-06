@@ -13548,7 +13548,8 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunParseIntegerRefusesABadBound() throws Exception {
 		// The JVM twin of LispEvaluatorTest#parseIntegerRefusesABadBound.
-		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.PROGRAM)).isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
 	}
 
 	@Test
@@ -13560,7 +13561,8 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunParseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
-		// The JVM twin of LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
+		// The JVM twin of
+		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.ORDER_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
 	}
