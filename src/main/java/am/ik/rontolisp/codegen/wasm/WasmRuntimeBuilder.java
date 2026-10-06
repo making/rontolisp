@@ -3354,6 +3354,42 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _undefined_function(name) -> (ref null eq)}: throws the
+	 * {@code undefined-function} the dispatchers' {@code $undefined} arm throws for
+	 * {@code name}, without their registry lookup -- for a caller that already knows the
+	 * name names no function although the registry may still answer it (a name
+	 * {@code fmakunbound} retired). Never returns; a bare {@code unreachable} where no
+	 * report exists.
+	 * @param notFunction the dispatchers' report, or null outside EH mode
+	 * @return the function body
+	 */
+	static byte[] buildUndefinedFunctionBody(@Nullable NotFunctionReport notFunction) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		if (notFunction == null) {
+			w.write(0);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// Locals after the name: one i32 (the name's first byte) and one (ref null eq)
+		// (the message), the two the dispatcher's arms are handed.
+		int byteLocal = 1;
+		int msgLocal = 2;
+		w.write(2);
+		w.write(1);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, 0x40); // $notFunction
+		notFunction.emitUndefinedThrow(w, msgLocal, byteLocal);
+		w.write(Instruction.END); // $notFunction
+		notFunction.emitNotFunctionThrow(w, msgLocal);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Closes a dispatcher the prologue opened in EH mode, ahead of the function's own
 	 * {@code end}: the dispatch's value is returned, and the two arms its non-function
 	 * branches land in follow it. Nothing outside EH mode.

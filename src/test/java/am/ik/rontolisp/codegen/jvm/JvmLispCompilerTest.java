@@ -20571,6 +20571,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound.
+		assertThat(compileAndRun(am.ik.rontolisp.RetiredFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RetiredFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
 		// A literal probe of a bound special no definer gives a value reads its variable
 		// and never the mirror: on one thread its _g$ field, which the shallow binding

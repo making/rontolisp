@@ -24549,6 +24549,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound, on
+		// Preview 1 and the component: the tombstone fmakunbound leaves throws an
+		// undefined-function a handler catches instead of trapping.
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.RetiredFunctionDesignatorFixture.SOURCE, false))
+			.isEqualTo(am.ik.rontolisp.RetiredFunctionDesignatorFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.RetiredFunctionDesignatorFixture.SOURCE, true))
+			.isEqualTo(am.ik.rontolisp.RetiredFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component: a name dispatch searches the names' string-table offsets, shared

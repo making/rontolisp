@@ -108,8 +108,8 @@ final class WasmFunctionFormCompiler {
 		// No binding: resolve through the registry and box.
 		emitRegistryBox(ctx, symTemp);
 		ctx.writer.write(Instruction.ELSE);
-		// A binding decides on its own: the value cell, trapping on fmakunbound's
-		// tombstone (cdr nil) which shadows the registry.
+		// A binding decides on its own: the value cell, or -- for fmakunbound's
+		// tombstone (cdr nil), which shadows the registry -- an undefined-function.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bindTemp);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -124,7 +124,7 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
-		ctx.writer.write(Instruction.UNREACHABLE);
+		emitRetiredSignal(ctx, symTemp);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bindTemp);
@@ -183,6 +183,26 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.writeUnsignedLeb128(symTemp);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.dispatchFuncIndex(0, ctx.extraDispatchFuncBase));
+		ctx.writer.write(Instruction.DROP);
+		ctx.writer.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Reports the symbol in {@code symTemp}, a name {@code fmakunbound} retired, as an
+	 * {@code undefined-function} through {@code _undefined_function}: not through the
+	 * dispatcher {@link #emitUnboundSignal} uses, whose registry lookup may still answer
+	 * the retired name and call it. A trap where the module carries no report (outside EH
+	 * mode, where nothing could catch one). Never returns.
+	 */
+	private static void emitRetiredSignal(WasmLispCompiler.Ctx ctx, int symTemp) {
+		if (ctx.undefinedFunctionFuncIndex < 0) {
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(symTemp);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
 		ctx.writer.write(Instruction.DROP);
 		ctx.writer.write(Instruction.UNREACHABLE);
 	}
