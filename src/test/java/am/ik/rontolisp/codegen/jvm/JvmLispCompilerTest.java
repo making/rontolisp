@@ -22703,9 +22703,10 @@ class JvmLispCompilerTest {
 	void theSizeLevelChangesNothingWithoutASpeedForSizeTrade() {
 		// --optimize=size is accepted everywhere so a build script need not be
 		// backend-specific. The emissions it declines on this backend are the typed
-		// numeric loop (JvmTypedLoopCompiler) and integer expression-tree fusion
-		// (JvmIntFusionCompiler); a program with neither shape compiles to the same
-		// class at both levels, which the docs say -- this is what makes that
+		// numeric loop (JvmTypedLoopCompiler), integer expression-tree fusion
+		// (JvmIntFusionCompiler) and the value tails' dispatcher copy (JvmTailBounce);
+		// a program with none of those shapes compiles to the same class at both
+		// levels, which the docs say -- this is what makes that
 		// statement checkable, and what fails the day someone gives the JVM backend
 		// another speed-for-size trade without saying so.
 		List<LispVal> program = LispReader.readAllFromString("""
@@ -24049,7 +24050,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void aShallowValueTailIsACallAndAChainPastTheLimitBouncesIntoTheTrampoline() throws Exception {
-		// _vtc<n> calls through the dispatcher while the value-tail frames on the owner
+		// _vtc<n> calls through its dispatcher while the value-tail frames on the owner
 		// thread's stack stay under the limit, and bounces past it; _tramp then holds the
 		// count at the limit while it drives the rest of the chain (JvmTailBounce). Every
 		// chain length around the limit answers, the count is back at zero once the top
@@ -24062,7 +24063,7 @@ class JvmLispCompilerTest {
 				(print (mapcar (lambda (n) (second (funcall (vtl-chain n) 0))) '(0 1 63 64 65 128 129 100000)))
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
-		assertThat(ownCallsIn(classBytes, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "_vtc1", "_vtcd1")).isEqualTo(1);
 		assertThat(markerReadsIn(classBytes, "_vtc1")).as("the bounce it answers past the limit").isEqualTo(1);
 		assertThat(fieldWritesIn(classBytes, "_tramp", JvmTailBounce.DEPTH_FIELD)).as("hold and restore")
 			.isGreaterThanOrEqualTo(2);
@@ -24071,6 +24072,53 @@ class JvmLispCompilerTest {
 		assertThat(statics.get(JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
 		assertThat(statics.get(JvmTailBounce.OWNER_FIELD)).isInstanceOf(Thread.class)
 			.isNotSameAs(Thread.currentThread());
+	}
+
+	@Test
+	void aValueTailCallsThroughADispatcherOfItsOwnWhileItsArityFitsOneSegment() throws Exception {
+		// A value tail's real call goes through _vtcd<n>, a copy of the arity's
+		// dispatcher only value tails call (JvmTailBounce): a JIT inlining the call
+		// sees the functions value tails reach, not every function the program's
+		// other indirect calls reach too. The trampoline re-enters the shared
+		// dispatcher. An arity whose dispatcher is routed past one segment keeps the
+		// shared one -- the copy would double the largest dispatchers -- and the
+		// segments are counted after the shake: 300 lambdas in a defun nothing calls
+		// leave the copy in place.
+		String chain = """
+				(defparameter *vtd-g* (lambda (x) (+ x 1)))
+				(defparameter *vtd-f* (lambda (x) (funcall *vtd-g* x)))
+				(defun vtd-run (n h) (let ((acc 0)) (dotimes (i n acc) (setq acc (funcall h acc)))))
+				(print (vtd-run 1000 *vtd-f*))
+				""";
+		StringBuilder lambdas = new StringBuilder();
+		for (int k = 0; k < 300; k++) {
+			lambdas.append(" (lambda (x) (+ x ").append(k).append("))");
+		}
+		byte[] own = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(chain));
+		assertThat(ownCallsIn(own, "_vtc1", "_vtcd1")).isEqualTo(1);
+		assertThat(ownCallsIn(own, "_vtc1", "_invoke_1")).isZero();
+		assertThat(ownCallsIn(own, "_tramp", "_invoke_1")).isEqualTo(1);
+		assertThat(ownCallsIn(own, "_tramp", "_vtcd1")).isZero();
+		assertThat(runClass(own)).isEqualTo("1000");
+		// The copy spends bytes on speed: --optimize=size declines it.
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(LispReader.readAllFromString(chain));
+		assertThat(declaredMethodNames(small)).doesNotContain("_vtcd1");
+		assertThat(ownCallsIn(small, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(runClass(small)).isEqualTo("1000");
+		byte[] routed = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(
+				chain + "(defvar *vtd-many* (list" + lambdas + "))\n(print (funcall (nth 299 *vtd-many*) 1))\n"));
+		assertThat(declaredMethodNames(routed)).contains("_invoke_1$0").doesNotContain("_vtcd1");
+		assertThat(ownCallsIn(routed, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(runClass(routed)).isEqualTo("1000\n300");
+		byte[] shaken = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString(chain + "(defun vtd-unused () (list" + lambdas + "))\n"));
+		assertThat(declaredMethodNames(shaken)).doesNotContain("_invoke_1$0");
+		assertThat(ownCallsIn(shaken, "_vtc1", "_vtcd1")).isEqualTo(1);
+		assertThat(runClass(shaken)).isEqualTo("1000");
 	}
 
 	@Test

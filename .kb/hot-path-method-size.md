@@ -27,6 +27,8 @@ operator table is three methods").
 - Within a segment a **binary search tree** over sorted funcIds (`emitDispatchTree`) replaces the
   linear chain; past one segment `_invoke_<arity>` becomes a router bisecting segment boundaries
   and tail-calling `_invoke_<arity>$<k>` (`emitSegmentRouter`).
+- The value tails' copy `_vtcd<arity>` exists only beside a one-segment `_invoke_<arity>`, so it
+  is under the budget by construction ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
 - A `tableswitch`/`lookupswitch` is not used: the byte emitters would have had to measure a
   variable-length instruction whose padding depends on its absolute position. Since `MethodCode`
   stores records and the writer lays the code out, that obstacle is gone

@@ -31,9 +31,10 @@ On by default in the CLI (`--optimize[=LEVEL]`). `WasmLispCompiler` / `JvmLispCo
 Speed-for-size trades, on at `off` and `default` alike. **wasm-GC**: integer expression-tree fusion
 (`.kb/wasm-int-fusion.md`) and unboxed dual-representation locals (`.kb/wasm-unboxed-locals.md`),
 both switched by `WasmIntFusionCompiler.speedTradesEnabled(ctx)` (the three fusion entry points and
-`WasmLetCompiler`'s eligibility scan). **JVM**: typed numeric loops (`.kb/jvm-typed-loops.md`) and
+`WasmLetCompiler`'s eligibility scan). **JVM**: typed numeric loops (`.kb/jvm-typed-loops.md`),
 integer fusion + unboxed locals (`.kb/jvm-int-fusion.md`) -- `Ctx.typedLoops`, `Ctx.intFusion`,
-both `!prefersSizeOverSpeed()`. **`--no-gc`** accepts the level and emits byte-identical output
+both `!prefersSizeOverSpeed()` -- and the value tails' dispatcher copy `_vtcd<n>`
+(`.kb/jvm-tail-bounce.md`). **`--no-gc`** accepts the level and emits byte-identical output
 (`NoGcWasmCompilerTest.theSizeLevelIsADocumentedNoOpOnThisBackend`), as does any program without
 those shapes (`JvmLispCompilerTest.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`).
 
@@ -1181,8 +1182,10 @@ the `ldc` widths the size budgets read.
 
 Then `JvmLispCompiler.rebuildDispatchers` asks `JvmClassSplitter.reach` and, when some
 dispatchable funcId has no value a kept body makes, rebuilds the dispatch methods
-(`_invoke_<n>`, `_invoke_v`, `_arityErr`'s table, `_notFn`) over the rest and swaps them in
-(`ClassDefinition.withMethods`): the dead case's code goes, not only its target. **It is asked
+(`_invoke_<n>`, the value tails' copies `_vtcd<n>`, `_invoke_v`, `_arityErr`'s table, `_notFn`)
+over the rest and swaps them in (`ClassDefinition.withMethods`): the dead case's code goes, not
+only its target. An arity the fewer cases bring under one segment gains its copy there, and
+`retargetValueTails` points its `_vtc<n>` at it ([jvm-tail-bounce.md](jvm-tail-bounce.md)). **It is asked
 after `_unw` is written**, so every caller of a dispatcher counts: when every call through a
 value is a tail call, the value tails' `_vtc<n>` and the trampoline's re-entries are the only
 ones, and a closure made only behind them must keep its case or the call that lands on it

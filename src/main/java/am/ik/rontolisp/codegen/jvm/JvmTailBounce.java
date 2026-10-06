@@ -47,6 +47,16 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * and mutual tail-call groups) keeps its direct {@code invokestatic}.
  *
  * <p>
+ * The real call goes through {@code _vtcd<n>}, a copy of the arity's dispatcher that only
+ * value tails call, while the arity's dispatcher fits one segment
+ * ({@link #valueTailDispatcherName}). A dispatcher's branch profile is one per method, so
+ * a JIT inlining a chain through the shared dispatcher inlines it again at every hop with
+ * every target the program's indirect calls reach; through the copy, a hop sees only the
+ * targets value tails reach. A routed dispatcher keeps the shared one: the copy would
+ * double the largest dispatchers. The copy spends bytes on speed, so
+ * {@code --optimize=size} declines it.
+ *
+ * <p>
  * A tail call the compiler CAN name -- a defun by name or through a literal
  * {@code #'name} -- stays that direct call, and when the callee may itself answer a
  * bounce and every caller of this method checks for one ({@code Ctx.passesBounces}) the
@@ -228,6 +238,21 @@ final class JvmTailBounce {
 	static final String VALUE_TAIL_SPREAD_NAME = "_vtcv";
 
 	/**
+	 * {@return the name of the dispatcher copy {@code _vtc<n>} calls} A value tail of
+	 * {@code arity} arguments makes its real call through it when the arity's dispatcher
+	 * fits one segment: the copy has the same cases, so its branch profile -- one per
+	 * method -- holds only the functions value tails reach, and a chain the JIT inlines
+	 * hop by hop is not inlined with the cases of every function the program calls
+	 * through values ({@code .kb/jvm-tail-bounce.md}). An arity routed past one segment
+	 * keeps the shared dispatcher, whose copy would cost a program its largest
+	 * dispatchers twice, and so does every arity at {@code --optimize=size}.
+	 * @param arity the call's argument count
+	 */
+	static String valueTailDispatcherName(int arity) {
+		return "_vtcd" + arity;
+	}
+
+	/**
 	 * {@return the name of the value tail of {@code arity} arguments}
 	 * @param arity the call's argument count
 	 */
@@ -308,7 +333,7 @@ final class JvmTailBounce {
 	 * if (d &lt; LIMIT) {
 	 *   if (Thread.currentThread() == _vtcOwner) {
 	 *     _vtcDepth = d + 1;
-	 *     try { r = _invoke_n(fn, a1..an); } catch (Throwable t) { _vtcDepth = d; throw t; }
+	 *     try { r = _vtcd_n(fn, a1..an); } catch (Throwable t) { _vtcDepth = d; throw t; }
 	 *     _vtcDepth = d;
 	 *     return r;
 	 *   }
@@ -318,17 +343,22 @@ final class JvmTailBounce {
 	 * </pre>
 	 * @param arity the argument count, ignored for the spread value tail
 	 * @param spread whether to build {@code _vtcv}, which calls the raw apply
+	 * @param ownDispatcher whether the arity has the dispatcher copy only value tails
+	 * call ({@link #valueTailDispatcherName}), which the real call then goes through
+	 * instead of {@code _invoke_n}; ignored for the spread value tail
 	 * @param cp the class's constant pool
 	 * @param thisClass the class carrying the dispatchers and the count
 	 * @return the method body
 	 */
-	static MethodCode valueTailBody(int arity, boolean spread, ConstantPool cp, ClassEntry thisClass) {
+	static MethodCode valueTailBody(int arity, boolean spread, boolean ownDispatcher, ConstantPool cp,
+			ClassEntry thisClass) {
 		int params = spread ? 2 : arity + 1;
 		int saved = params;
 		var depth = cp.fieldRef(thisClass, cp.utf8Entry(DEPTH_FIELD), cp.utf8Entry("I"));
 		var owner = cp.fieldRef(thisClass, cp.utf8Entry(OWNER_FIELD), cp.utf8Entry(OWNER_DESC));
-		var target = cp.methodRef(thisClass, cp.utf8Entry(spread ? APPLY_RAW_NAME : "_invoke_" + arity),
-				cp.utf8Entry(valueTailDesc(params - 1)));
+		String callee = spread ? APPLY_RAW_NAME
+				: ownDispatcher ? valueTailDispatcherName(arity) : JvmRuntimeBuilder.dispatcherName(arity, false);
+		var target = cp.methodRef(thisClass, cp.utf8Entry(callee), cp.utf8Entry(valueTailDesc(params - 1)));
 		MethodCode code = new MethodCode();
 		MethodCode.Label bounce = code.newLabel();
 		MethodCode.Label notOwner = code.newLabel();
@@ -509,14 +539,15 @@ final class JvmTailBounce {
 
 	/**
 	 * The body of the shared trampoline loop {@code _tramp}: takes the result an unwrap
-	 * check found to be a bounce array, and while it is one, re-enters the dispatcher of
-	 * the array's argument count with its designator and arguments -- or, for an apply's
-	 * bounce, the raw apply with its argument list -- so the call the bounce deferred
-	 * runs HERE, in this frame, and the next bounce comes back to this loop instead of
-	 * stacking a frame. A real value returns as the answer. On the thread that owns the
-	 * value-tail count the loop holds the count at the limit while it runs, so the chain
-	 * it drives -- one that already filled the limit with real calls -- keeps bouncing
-	 * rather than refilling it every round, and restores the count on every exit.
+	 * check found to be a bounce array, and while it is one, re-enters the shared
+	 * dispatcher of the array's argument count (not the copy a value tail's real call
+	 * goes through) with its designator and arguments -- or, for an apply's bounce, the
+	 * raw apply with its argument list -- so the call the bounce deferred runs HERE, in
+	 * this frame, and the next bounce comes back to this loop instead of stacking a
+	 * frame. A real value returns as the answer. On the thread that owns the value-tail
+	 * count the loop holds the count at the limit while it runs, so the chain it drives
+	 * -- one that already filled the limit with real calls -- keeps bouncing rather than
+	 * refilling it every round, and restores the count on every exit.
 	 * @param arities the registered dispatch arities, one {@code _invoke_<n>} each; a
 	 * count outside them cannot arise (every bounce site registers its own)
 	 * @param spread whether an apply bounced anywhere, so the raw apply is re-entered too

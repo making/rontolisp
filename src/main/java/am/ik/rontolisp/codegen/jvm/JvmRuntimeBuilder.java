@@ -76,8 +76,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
 			JvmUnsupplied unsupplied) {
 		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
-				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false, dispatchable,
-				arityReporting, unsupplied);
+				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false,
+				dispatcherName(arity, false), dispatchable, arityReporting, unsupplied);
 	}
 
 	/**
@@ -179,6 +179,9 @@ final class JvmRuntimeBuilder {
 	 * pair, since a variadic function matches every arity at or above its required count.
 	 * @param arity ignored when {@code spread} is true
 	 * @param spread whether to build the spread dispatcher instead of an arity one
+	 * @param name the dispatcher's name, and its segments' prefix:
+	 * {@link #dispatcherName}, or the copy only value tails call
+	 * ({@link JvmTailBounce#valueTailDispatcherName})
 	 * @return the dispatcher method(s): one, or a router plus segments
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
@@ -186,7 +189,7 @@ final class JvmRuntimeBuilder {
 			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassEntry thisClass,
 			ClassEntry objectArrayClass, ClassEntry integerClass, MethodRefEntry integerValue, ClassEntry objectClass,
 			ClassEntry stringClass, @org.jspecify.annotations.Nullable MethodRefEntry applyRef,
-			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef, boolean spread,
+			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef, boolean spread, String name,
 			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
 			JvmUnsupplied unsupplied) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object, or
@@ -255,15 +258,12 @@ final class JvmRuntimeBuilder {
 		List<MethodRefEntry> segmentRefs = new ArrayList<>();
 		if (routed) {
 			for (int k = 0; k < ranges.size(); k++) {
-				segmentRefs
-					.add(cp.methodRef(thisClass, cp.utf8Entry(dispatcherName(arity, spread) + "$" + k), descUtf8));
+				segmentRefs.add(cp.methodRef(thisClass, cp.utf8Entry(name + "$" + k), descUtf8));
 			}
 		}
 		List<JvmLispCompiler.DispatchMethod> segments = new ArrayList<>();
 		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
-			String name = segment == 0 ? dispatcherName(arity, spread)
-					: dispatcherName(arity, spread) + "$" + (segment - 1);
-			Utf8Entry nameUtf8 = cp.utf8Entry(name);
+			Utf8Entry nameUtf8 = cp.utf8Entry(segment == 0 ? name : name + "$" + (segment - 1));
 			MethodCode code = new MethodCode();
 			if (segment == 0) {
 				// The callee's representation decides, on the path every indirect call
