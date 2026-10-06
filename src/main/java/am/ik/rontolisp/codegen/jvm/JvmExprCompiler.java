@@ -1475,7 +1475,16 @@ final class JvmExprCompiler {
 			case LispNames.COMPLEX -> JvmComplexCompiler.compileComplex(cons, ctx, className);
 			case LispNames.NE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);
-			case LispNames.READ_FROM_STRING -> JvmReadFromStringCompiler.compile(cons, ctx, className);
+			case LispNames.READ_FROM_STRING -> {
+				// More than the string: the prelude defun's whole lambda list.
+				LispVal full = LispMacroExpander.expandReadFromString(cons);
+				if (full != cons) {
+					JvmExprCompiler.compileExpr(full, ctx, className);
+				}
+				else {
+					JvmReadFromStringCompiler.compile(cons, ctx, className);
+				}
+			}
 			case LispNames.READ_FROM_STRING_END -> JvmReadFromStringCompiler.compileEnd(cons, ctx, className);
 			// A string=/string-equal call with the bounding-index keywords is lowered
 			// onto subseq first, so the intrinsic below always sees two strings.

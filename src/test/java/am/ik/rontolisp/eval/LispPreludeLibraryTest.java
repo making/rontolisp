@@ -61,6 +61,24 @@ class LispPreludeLibraryTest {
 		}
 	}
 
+	// %read-from-string-full is read-from-string's whole lambda list: a call passing
+	// more than the string is rewritten onto it inside the expression compilers, and
+	// #'read-from-string calls it where the value can be handed more than one argument.
+	@Test
+	void theFullReadFromStringIsSplicedOnlyWhereACallCanPassMoreThanTheString() {
+		String helper = "%READ-FROM-STRING-FULL";
+		for (String oneArgument : List.of("(print (read-from-string \"a\"))",
+				"(print (mapcar #'read-from-string '(\"a\")))", "(print (funcall #'read-from-string \"a\"))")) {
+			assertThat(splicedNames(oneArgument)).as(oneArgument).doesNotContain(helper);
+		}
+		for (String more : List.of("(print (read-from-string \"a\" nil))",
+				"(print (read-from-string \"a b\" t nil :start 1))",
+				"(let ((f #'read-from-string)) (print (funcall f \"a\" nil :e)))",
+				"(print (apply #'read-from-string \"a\" '(nil :e)))")) {
+			assertThat(splicedNames(more)).as(more).contains(helper, "%RD-DATUM", "%RD-WHITESPACE-P");
+		}
+	}
+
 	// The two %make-array-et* helpers turn a RUNTIME :element-type designator back into
 	// literal spellings, one arm per specialized code, because every backend but the
 	// interpreter decides an array's representation from the literal designator at the

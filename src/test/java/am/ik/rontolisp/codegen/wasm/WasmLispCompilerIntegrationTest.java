@@ -25,6 +25,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14654,6 +14655,51 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.ORDER_PROGRAM, true))
 			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void readFromStringTakesItsWholeLambdaList() throws Exception {
+		// The wasm twin of LispEvaluatorTest#readFromStringTakesItsWholeLambdaList,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(ReadFromStringLambdaListFixture.PROGRAM, false))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ReadFromStringLambdaListFixture.PROGRAM, true))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void noWasiReadFromStringCountsItsIndexWithoutAFilePosition() throws Exception {
+		// A --no-wasi module answers file-position with the constant nil, so the prelude
+		// %read-from-string-full counts the characters still unread instead.
+		String program = """
+				(defun rfs-window () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 1 :end 6)))
+				(defun rfs-kept () (nth-value 1 (read-from-string (copy-seq "abc def  ") nil nil :start 4
+				                                                  :preserve-whitespace t)))
+				(rontolisp:wasm-export 'rfs-window :returns :s32)
+				(rontolisp:wasm-export 'rfs-kept :returns :s32)
+				""";
+		byte[] wasmBytes = WasmLispCompiler.builder()
+			.noWasi(true)
+			.build()
+			.compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program, am.ik.rontolisp.reader.Features.WASM,
+					true, true));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		for (String[] call : new String[][] { { "rfs-window", "4" }, { "rfs-kept", "7" } }) {
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", call[0], "-W", "gc", "-W",
+					"exceptions=y", path("test.wasm"));
+			assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+			assertThat(result.getStdout().trim()).isEqualTo(call[1]);
+		}
+	}
+
+	@Test
+	void aBadReadFromStringBoundReportsAsSubseqDoes() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aBadReadFromStringBoundReportsAsSubseqDoes,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(ReadFromStringLambdaListFixture.REPORT_PROGRAM, false))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ReadFromStringLambdaListFixture.REPORT_PROGRAM, true))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
 	}
 
 	/**

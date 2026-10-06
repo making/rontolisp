@@ -28,10 +28,10 @@ import org.jspecify.annotations.Nullable;
  * surplus is dropped, a shortfall indexes past the form -- so the count is judged ONCE,
  * where each backend decides a form is a built-in call, and a wrong one never reaches a
  * lowering. The shape is the catalog wrapper's lambda list
- * ({@link BuiltinFunctionWrappers}, the function VALUE every backend hands out), widened
- * where the operator's standard lambda list takes more than the wrapper spells. A count
- * this class accepts is left to the lowering exactly as before; only a count the standard
- * lambda list rules out is rejected.
+ * ({@link BuiltinFunctionWrappers}, the function VALUE every backend hands out), which
+ * takes the operator's standard lambda list. A count this class accepts is left to the
+ * lowering exactly as before; only a count the standard lambda list rules out is
+ * rejected.
  *
  * <p>
  * The built-ins outside the catalog that the interpreter implements natively take their
@@ -42,16 +42,6 @@ public final class BuiltinCallArity {
 
 	/** {@link Shape#max} of an operator that takes any number past its minimum. */
 	public static final int UNBOUNDED = -1;
-
-	/**
-	 * The call-position shapes that are WIDER than the catalog wrapper's lambda list:
-	 * name, minimum, maximum. Each is the operator's standard lambda list (the CLHS);
-	 * keyword arguments count as unbounded (the keyword-tail check is the operator's
-	 * own). A row that is not wider than its wrapper fails the class's initialization, so
-	 * widening a wrapper retires its row here. What is left: {@code read-from-string}'s
-	 * optional and keyword arguments, which its function value does not forward yet.
-	 */
-	private static final Object[][] STANDARD_WIDER = { { LispNames.READ_FROM_STRING, 1, UNBOUNDED } };
 
 	private static final Map<String, Shape> SHAPES = buildShapes();
 
@@ -300,20 +290,6 @@ public final class BuiltinCallArity {
 			if (lambda instanceof LispCons lambdaCons && lambdaCons.cdr() instanceof LispCons rest) {
 				shapes.put(name, lambdaListShape(rest.car()));
 			}
-		}
-		for (Object[] row : STANDARD_WIDER) {
-			String name = (String) row[0];
-			if (!shapes.containsKey(name)) {
-				throw new IllegalStateException(name + " is no wrapped built-in; drop it from STANDARD_WIDER");
-			}
-			Shape wrapper = shapes.get(name);
-			Shape standard = new Shape((Integer) row[1], (Integer) row[2]);
-			if (standard.equals(wrapper) || standard.min() > wrapper.min()
-					|| standard.max() != UNBOUNDED && (wrapper.max() == UNBOUNDED || standard.max() < wrapper.max())) {
-				throw new IllegalStateException(name + "'s standard shape " + standard
-						+ " is not wider than its wrapper's " + wrapper + "; drop it from STANDARD_WIDER");
-			}
-			shapes.put(name, standard);
 		}
 		for (String name : NativeCallShapes.names()) {
 			NativeCallShapes.Row row = java.util.Objects.requireNonNull(NativeCallShapes.of(name));

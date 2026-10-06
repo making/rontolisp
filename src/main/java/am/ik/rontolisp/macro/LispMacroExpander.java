@@ -6419,6 +6419,35 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * A {@code read-from-string} call carrying more than the string --
+	 * {@code eof-error-p}, {@code eof-value} or the keyword tail -- becomes a call of the
+	 * prelude {@code %read-from-string-full}, which takes CL's whole lambda list and
+	 * answers the datum and the stop index; the arguments keep their order and the
+	 * defun's lambda list judges them. A one-argument call is returned as it is: the
+	 * built-in, which the multiple-value lowering pairs with
+	 * {@code %read-from-string-end}.
+	 * @param cons the read-from-string expression
+	 * @return the call of the prelude defun, or {@code cons} itself
+	 */
+	public static LispVal expandReadFromString(LispCons cons) {
+		if (!isReadFromStringWithArguments(LispNames.READ_FROM_STRING, cons)) {
+			return cons;
+		}
+		return SourceProvenance.inherit(cons,
+				new LispCons(new LispSymbol(LispNames.READ_FROM_STRING_FULL_INTERNAL), cons.cdr()));
+	}
+
+	/**
+	 * Whether {@code (name ...)} is a {@code read-from-string} call passing more than the
+	 * string: the one {@link #expandReadFromString} sends to the prelude defun, whose
+	 * tail answers two values.
+	 */
+	private static boolean isReadFromStringWithArguments(String name, LispCons cons) {
+		return LispNames.READ_FROM_STRING.equals(name) && cons.cdr() instanceof LispCons first
+				&& first.cdr() instanceof LispCons;
+	}
+
+	/**
 	 * Expands {@code (parse-integer string &key start end radix junk-allowed)} into a
 	 * shared digit-accumulation scan over the {@code char}/{@code digit-char-p}
 	 * primitives, so every backend gets the full keyword set and BOTH return values (the
@@ -10780,10 +10809,8 @@ public final class LispMacroExpander {
 	/**
 	 * The {@code with-input-from-string} arm with an {@code :index} place: on a NORMAL
 	 * exit the place receives the index into the string of the first character the body
-	 * did not read. A string input stream has no position to ask (its
-	 * {@code file-position} answers nil on every backend), so the index is the bound end
-	 * minus the characters still unread, counted by draining the stream just before it is
-	 * closed.
+	 * did not read: the bound end minus the characters still unread, counted by draining
+	 * the stream just before it is closed.
 	 *
 	 * <pre>
 	 * (with-input-from-string (s str :index place :start a :end b) body...) ->
@@ -40409,9 +40436,12 @@ public final class LispMacroExpander {
 				if (callee != null) {
 					name = callee;
 				}
-				if (passesMultipleValues(name) || callee != null && isPublishingWrapperName(callee)) {
+				if (passesMultipleValues(name) || callee != null && isPublishingWrapperName(callee)
+						|| isReadFromStringWithArguments(name, cons)) {
 					// A producer through a designator runs its WRAPPER, which publishes
-					// the second value (settleWrapperLambdas).
+					// the second value (settleWrapperLambdas); a read-from-string call
+					// with more than the string is the prelude defun's
+					// (expandReadFromString).
 					yield new SettledTail(form, false);
 				}
 				if (!isSingleValuedOperator(name, parts)) {

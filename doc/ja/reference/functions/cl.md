@@ -87,7 +87,7 @@
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | 入力ストリームからベクタを埋めます。バッファが文字ベクタなら文字、パックド浮動小数点配列（任意ランク）やパックド整数ベクタなら生のリトルエンディアン要素を一括で、それ以外はバイトです。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | シーケンスをストリームに書き込み、それを返します。文字列は（`write-string` と同様に）文字として、パックド浮動小数点配列／整数ベクタは生のリトルエンディアン要素として一括で、バイト(0-255)のベクタはバイナリ出力ストリームに書き込まれます。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `read` | `(read)`, `(read stream)`, `(read stream eof-error-p eof-value)` | 標準入力(または入力ストリーム)からS式を1つ読み込み、そのデータム分の文字だけを消費します(3つのバックエンドすべて)。EOFでは `eof-value`(既定は `nil`) |
-| `read-from-string` | `(read-from-string "(+ 1 2)")` | 文字列からデータを1つパースします(3つのバックエンドすべて)。省略可能な `eof-error-p`/`eof-value` および `:start`/`:end` 引数はサポートされません |
+| `read-from-string` | `(read-from-string "(+ 1 2)")`, `(read-from-string s nil :eof :start 3)` | 文字列からデータを1つパースし(4つのバックエンドすべて)、停止インデックスを 2 番目の値として返します。`eof-error-p`/`eof-value` と `:start`/`:end`/`:preserve-whitespace` を受け付けます |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
 | `copy-readtable` | `(copy-readtable nil)` | ライト版スタブ: 常に `nil` -- リーダーはリードテーブル駆動ではないため、リードテーブルオブジェクトは存在しません (`*readtable*` は存在しますが `nil` に初期化されています) |
 | `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | ライト版スタブ: 受け付けますが無視し、`t` を返します (ユーザーのディスパッチマクロでリーダーを拡張することはできません) |

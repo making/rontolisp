@@ -1,8 +1,8 @@
 # read-from-string
 
-`(read-from-string string)`
+`(read-from-string string &optional (eof-error-p t) eof-value &key (start 0) end preserve-whitespace)`
 
-与えられた文字列から 1 つのデータム（datum）を解析して返します。[`read`](read.md) と同じリーダーを再利用するため、コンパイル系バックエンドでもフロントエンドと同等の構文を受け付けます（`#S(...)`、`#(...)`、`#\a`、比、基数付き整数など。`#.`、`#+`/`#-`、リーダーラベルはシグナルします）。`(read-from-string (prin1-to-string x))` は往復します。インタプリタは `#.` データムをその場で評価します（標準に従い、`*read-eval*` を `nil` に束縛するとシグナルします）。データムを含まない入力は `end-of-file` を、不正な形式のデータムは `reader-error` をシグナルします。どちらも問題のテキスト上の文字列入力ストリームを運びます（`stream-error-stream`）。コンパイル系バックエンドでは、不正な形式のデータムは捕捉可能な `simple-error` をシグナルし、データムを含まない入力は `nil` を返します。オプションの `eof-error-p`/`eof-value` および `:start`/`:end`/`:preserve-whitespace` キーワード引数はサポートされていません。直接呼び出しではこれらを無視し (`:start` の値にかかわらず常に 0 から読みます)、`#'read-from-string` は文字列だけを受け取ります。4 バックエンドすべてで動作し、第一級の値として利用できます（`#'read-from-string`）。
+与えられた文字列から 1 つのデータム（datum）を解析して返します。[`read`](read.md) と同じリーダーを再利用するため、コンパイル系バックエンドでもフロントエンドと同等の構文を受け付けます（`#S(...)`、`#(...)`、`#\a`、比、基数付き整数など。`#.`、`#+`/`#-`、リーダーラベルはシグナルします）。`(read-from-string (prin1-to-string x))` は往復します。インタプリタは `#.` データムをその場で評価します（標準に従い、`*read-eval*` を `nil` に束縛するとシグナルします）。データムを含まない入力は `end-of-file` を、不正な形式のデータムは `reader-error` をシグナルします。どちらも問題のテキスト上の文字列入力ストリームを運びます（`stream-error-stream`）。コンパイル系バックエンドでは、不正な形式のデータムは捕捉可能な `simple-error` をシグナルし、引数 1 つの呼び出しはデータムを含まない入力に `nil` を返します。4 バックエンドすべてで動作し、第一級の値として利用できます（`#'read-from-string`）。
 
 ```lisp
 (read-from-string "(+ 1 2)") ; => (+ 1 2)
@@ -16,6 +16,23 @@
 (read-from-string "foo") ; => FOO
 ```
 
+
+## 省略可能引数とキーワード引数
+
+文字列の後ろの引数は Common Lisp のものです。4 バックエンドすべてで、呼び出し位置でも `#'read-from-string` 経由でも同じです。
+
+- `:start` / `:end` は読むテキストの範囲を決めます。停止インデックスは文字列全体の先頭から数えます。不正な範囲（負、整数でない、`nil` の start、長さやフィルポインタを超える、start が end より後ろ）は、何も読む前に [`subseq`](subseq.md) と同じ `type-error` をシグナルします。
+- データムを含まない入力（または範囲）、つまり空白とコメントだけのものは、`eof-error-p` が真なら `end-of-file` をシグナルし、偽なら `eof-value` を返します。このときの停止インデックスは範囲の終端です。データムの途中でテキストが終わる場合は `eof-error-p` にかかわらず `end-of-file` を、何も閉じない `)` は `reader-error` をシグナルします。
+- `:preserve-whitespace` が真なら終端の空白を読まずに残し、停止インデックスはその空白を指します。
+- 未知のキーワードや奇数個のキーワード引数は `program-error` をシグナルします。`:allow-other-keys` と、同じキーワードの繰り返し（最初のものが使われる）は Common Lisp と同じです。
+
+```lisp
+(multiple-value-list (read-from-string " 12 34" t nil :start 3)) ; => (34 6)
+(multiple-value-list (read-from-string "   " nil :none)) ; => (:NONE 3)
+(multiple-value-list (read-from-string "123  " t nil :preserve-whitespace t)) ; => (123 3)
+```
+
+このような呼び出しは [`read`](read.md) と同じ方法でデータムを読むため、`read` の制限も共有します。データムの前にあるフィーチャーが成り立たない `#+`/`#-` ガードは、読み取りを `end-of-file` で終わらせます（インタプリタの場合。コンパイル系のリーダーはどの `#+`/`#-` でもシグナルします）。
 
 ## 停止インデックスと `*read-suppress*`
 

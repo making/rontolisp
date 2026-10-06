@@ -8710,6 +8710,16 @@ public final class LispNames {
 	public static final String READ_FROM_STRING_END = "%READ-FROM-STRING-END";
 
 	/**
+	 * The prelude defun behind a {@code read-from-string} call that passes more than the
+	 * string: CL's whole lambda list ({@code eof-error-p}, {@code eof-value},
+	 * {@code :start}, {@code :end}, {@code :preserve-whitespace}) over the {@code read}
+	 * scanner, answering the datum and the stop index. The call position and the function
+	 * value route such a call here on every backend; the one-argument call keeps the
+	 * built-in.
+	 */
+	public static final String READ_FROM_STRING_FULL_INTERNAL = "%READ-FROM-STRING-FULL";
+
+	/**
 	 * The shared runtime-{@code %subtypep-valid} dispatch defun the compilers inject once
 	 * per program when a multiple-value {@code subtypep} carries a non-literal type
 	 * specifier -- the valid-p twin of {@link #SUBTYPEP_RUNTIME}, which it calls.

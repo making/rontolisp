@@ -31,7 +31,8 @@ moment two threads ran Lisp code.
 stored nil from a missing key -- a `(gensym)` until 2026-09-19, which advanced the program's gensym
 counter on every lookup and cost more than the lookup), `subtypep`
 (answer + valid-p, [[declarations-type-checks]]), one-argument `read-from-string` (datum + stop
-index, [[read-load-streams]]), else one temp. A producer the form is NOT recognized as goes through
+index, [[read-load-streams]]; a call passing more is the prelude `%read-from-string-full`, whose
+tail answers both, and `settleTail` lets it pass), else one temp. A producer the form is NOT recognized as goes through
 `spillEscapingMvProducers` FIRST, so a recognized producer in the TAIL of the `(let ...)`/`(progn
 ...)` the consumer was handed publishes -- the tier boundary is otherwise visible through a wrapper
 nobody wrote for that purpose. Consumers: `expandMultipleValueBind` (missing -> nil, surplus evaluated and dropped),
@@ -182,8 +183,8 @@ the optional divisor and answer both values, through a `funcall`, an `apply`, a 
 
 ## The other producers as function objects
 **Invariant (2026-09-19): `#'gethash` (with its optional default), `#'find-symbol`, `#'intern`
-(optional package), `#'subtypep` (optional environment, ignored), `#'read-from-string` (one
-argument) and `#'array-displacement` answer both values through a `funcall`, an `apply`, a
+(optional package), `#'subtypep` (optional environment, ignored), `#'read-from-string` (its whole
+lambda list: more than the string goes to `%read-from-string-full`, [[read-load-streams]]) and `#'array-displacement` answer both values through a `funcall`, an `apply`, a
 variable, a `mapcar` and a function return, on every backend.** Pinned by the
 `multiple-value-builtins-function-object` ci-spec case and its three backend-test copies.
 - Interpreter: `LispEvaluator.installValuePublishingFunctions` rebinds each name, last in

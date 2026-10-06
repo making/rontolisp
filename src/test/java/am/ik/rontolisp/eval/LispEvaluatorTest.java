@@ -22,6 +22,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10553,6 +10554,22 @@ class LispEvaluatorTest {
 		// supplementary character as one and the call's whitespace only.
 		assertThat(evalPrinted(ParseIntegerBoundsFixture.ORDER_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void readFromStringTakesItsWholeLambdaList() {
+		// eof-error-p, eof-value, :start, :end and :preserve-whitespace after the string,
+		// in call position and first class, with the stop index -- sbcl's answers, pinned
+		// on all four backends. They used to be ignored.
+		assertThat(evalPrinted(ReadFromStringLambdaListFixture.PROGRAM))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void aBadReadFromStringBoundReportsAsSubseqDoes() {
+		// The refused bound, its range and subseq's report text.
+		assertThat(evalPrinted(ReadFromStringLambdaListFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
 	}
 
 	private static String evalPrinted(String program) {

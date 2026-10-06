@@ -932,6 +932,19 @@ class LispMacroExpanderTest {
 		assertThat(repeated.indexOf("(F)")).isLessThan(repeated.indexOf("(H)"));
 	}
 
+	@Test
+	void aReadFromStringCallPassingMoreThanTheStringCallsThePreludeDefun() {
+		// The one-argument call stays the built-in (the multiple-value lowering pairs it
+		// with %read-from-string-end); any more, and the arguments go to the defun as
+		// written, for its lambda list to judge.
+		LispCons one = (LispCons) LispReader.readAllFromString("(read-from-string s)").get(0);
+		assertThat(LispMacroExpander.expandReadFromString(one)).isSameAs(one);
+		assertThat(LispMacroExpander
+			.expandReadFromString(
+					(LispCons) LispReader.readAllFromString("(read-from-string s nil (f) :start 1)").get(0))
+			.print()).isEqualTo("(%READ-FROM-STRING-FULL S NIL (F) :START 1)");
+	}
+
 	private static String parseIntegerExpansionOf(String source) {
 		return LispMacroExpander.expandParseInteger((LispCons) LispReader.readAllFromString(source).get(0)).print();
 	}

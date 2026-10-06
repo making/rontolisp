@@ -71,7 +71,7 @@ length N` (`.kb/subseq-runtime.md`, "Bounds check") -- on every backend. A call 
 bound carries no check.** SBCL signals the same class at the same point (its datum for a range
 is the pair of bounds, the divergence `subseq` already has). It covers the fifteen,
 `remove-duplicates`/`delete-duplicates`, `fill`, `replace`, the six `position`/`find`
-spellings, `search`/`mismatch` and `parse-integer` (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
+spellings, `search`/`mismatch` and `parse-integer` (`reduce` and `read-from-string`'s window are a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
 nil start was refused (by `lo`'s `(max start 0)`, gone): a negative start acted as 0, a float
 compared, a list `:end` past the length stopped there, `fill`/`replace` wrote nothing, and
 `position`/`find`, believed to check already, refused only a non-integer start (measured
@@ -171,6 +171,12 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   `parse-integer-refuses-a-bad-bound`; `.REPORT_PROGRAM`; `.ORDER_PROGRAM`) in the three
   backend suites, the shape by
   `LispMacroExpanderTest.aParseIntegerCallChecksASpelledBoundOnceAfterItsArguments`.
+- `read-from-string` given more than the string is the prelude `%read-from-string-full`
+  (`.kb/read-load-streams.md`), whose window is `with-input-from-string`'s `subseq` of the
+  string: that IS the check, raised once after every argument has run and before a character is
+  read, so the defun spells no `%check-bounds` (it would check twice). The refusal and its report
+  are `%check-bounds`' to the byte on all four backends (`ReadFromStringLambdaListFixture`
+  `.REPORT_PROGRAM`). Before, every bound was ignored: the read started at 0.
 - `count`/`count-if` bind their operand outside the scaffold when any bounding keyword is
   spelled: the scaffold binds the sequence outside the loop, so `(count (f) (g) :start 1)` ran
   `(g)` before `(f)` on the compile paths and the interpreter's call position (SBCL: item first).

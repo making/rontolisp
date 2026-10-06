@@ -7639,9 +7639,10 @@ public final class Environment implements Scope {
 		// unread-char / read-from-string (LispPreludeLibrary), so one definition
 		// consumes exactly one datum's characters on all four backends and leaves the
 		// stream positioned after them. See .kb/read-load-streams.md.
-		// read-from-string: parse the first datum from a string (the optional
-		// eof-error-p/eof-value and :start/:end keywords of Common Lisp are not
-		// supported).
+		// read-from-string: parse the first datum from a string. This is the
+		// one-argument call; one passing more than the string is the prelude
+		// %read-from-string-full on every backend, where LispEvaluator routes both the
+		// call position and the function value.
 		env.defineFunction(LispNames.READ_FROM_STRING, new LispFunction(LispNames.READ_FROM_STRING, args -> {
 			requireMinArgCount(LispNames.READ_FROM_STRING, args, 1);
 			if (!(args.get(0) instanceof LispString str)) {

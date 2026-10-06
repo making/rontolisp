@@ -593,15 +593,37 @@ public final class BuiltinFunctionWrappers {
 	 * discarding sink otherwise. {@code #'write-to-string} binds the printer variables
 	 * its keyword tail names where {@code %write-to-string-keyed} is spliced -- a program
 	 * that can hand the value more than one argument -- and is the one-argument
-	 * {@code prin1-to-string} alias otherwise.
+	 * {@code prin1-to-string} alias otherwise. {@code #'read-from-string} takes CL's
+	 * whole lambda list through {@code %read-from-string-full} under the same condition,
+	 * and the one-argument read otherwise.
 	 */
-	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map.of(LispNames.MAKE_BROADCAST_STREAM,
-			new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
-					new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
-							List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
-			LispNames.WRITE_TO_STRING,
-			new HelperWrapper(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, new WrapperDef(LispNames.WRITE_TO_STRING,
-					List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a")))));
+	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map
+		.of(LispNames.MAKE_BROADCAST_STREAM,
+				new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
+						new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
+								List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
+				LispNames.WRITE_TO_STRING,
+				new HelperWrapper(LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
+						new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"),
+								List.of(call(LispNames.PRIN1_TO_STRING, "a")))),
+				LispNames.READ_FROM_STRING,
+				new HelperWrapper(LispNames.READ_FROM_STRING_FULL_INTERNAL, unary(LispNames.READ_FROM_STRING)));
+
+	/**
+	 * {@code #'read-from-string}: {@code (lambda (s &rest r) (if r (apply
+	 * #'%read-from-string-full s r) (read-from-string s)))} -- more than the string is
+	 * the prelude defun's whole lambda list, as in call position
+	 * ({@code LispMacroExpander.expandReadFromString}).
+	 */
+	private static WrapperDef readFromStringWrapper() {
+		LispVal full = callV(LispNames.APPLY,
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+						new LispSymbol(LispNames.READ_FROM_STRING_FULL_INTERNAL))),
+				new LispSymbol("s"), new LispSymbol("r"));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), full,
+				call(LispNames.READ_FROM_STRING, "s")));
+		return new WrapperDef(LispNames.READ_FROM_STRING, List.of("s", LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
 
 	/**
 	 * {@code #'write-to-string}: {@code (lambda (a &rest kw) (if kw
@@ -2591,7 +2613,7 @@ public final class BuiltinFunctionWrappers {
 			// excludes these wrappers (via excludedNames) unless the program references
 			// the
 			// symbol -- keeping the wrapper and its helper gated together.
-			parseIntegerWrapper(), unary(LispNames.READ_FROM_STRING),
+			parseIntegerWrapper(), readFromStringWrapper(),
 			// Hash-table operators: gated like parse-integer/read-from-string (see
 			// HASH_FUNCTIONS). %puthash is internal and omitted.
 			// #'make-hash-table

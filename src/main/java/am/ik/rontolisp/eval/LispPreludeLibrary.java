@@ -126,7 +126,8 @@ import org.jspecify.annotations.Nullable;
  * {@code unread-char}, riding the same one-character pushback cell {@code unread-char}
  * uses); {@code read-from-string} parses the text it collected, so the datum syntax keeps
  * exactly one definition per backend. There is no {@code read} built-in on any backend --
- * {@code .kb/read-load-streams.md}.</li>
+ * {@code .kb/read-load-streams.md}. {@code %read-from-string-full} is
+ * {@code read-from-string}'s whole lambda list over the same scanner.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -4248,6 +4249,42 @@ public final class LispPreludeLibrary {
 				      (char= %rd-c #\\") (char= %rd-c #\\;) (char= %rd-c #\\,)
 				      (char= %rd-c #\\`)))
 				""");
+		// read-from-string with more than the string: CL's whole lambda list over the
+		// read scanner above, so the window, the eof handling and the stop index are one
+		// definition on every backend (the one-argument call keeps the built-in). The
+		// window is the string stream's subseq -- the bounds refusal %check-bounds also
+		// answers, raised once before anything is read. The index is the start plus the
+		// stream's position; a --no-wasi module answers file-position with the constant
+		// nil, and there the characters still unread are counted instead. The terminator
+		// the scanner leaves is taken here rather than unread -- no pushed-back character
+		// outlives the stream, or is left for the count to miss -- and a kept one (not
+		// whitespace, or any under :preserve-whitespace) is counted back.
+		SOURCES.put(LispNames.READ_FROM_STRING_FULL_INTERNAL, """
+				(defun %read-from-string-full (%rfs-string &optional (%rfs-eof-error-p t) %rfs-eof-value
+				                               &key ((:start %rfs-start) 0) ((:end %rfs-end))
+				                               ((:preserve-whitespace %rfs-preserve)))
+				  (let ((%rfs-value nil) (%rfs-index 0))
+				    (with-input-from-string (%rfs-s %rfs-string :start %rfs-start :end %rfs-end)
+				      (let ((%rfs-out (make-string-output-stream)) (%rfs-kept 0))
+				        (setq %rfs-value
+				              (if (%rd-datum %rfs-s %rfs-out)
+				                  (let ((%rfs-text (get-output-stream-string %rfs-out))
+				                        (%rfs-c (read-char %rfs-s nil nil)))
+				                    (when (and %rfs-c (or %rfs-preserve (not (%rd-whitespace-p %rfs-c))))
+				                      (setq %rfs-kept 1))
+				                    (close %rfs-out)
+				                    (read-from-string %rfs-text))
+				                  (progn
+				                    (close %rfs-out)
+				                    (if %rfs-eof-error-p (error 'end-of-file :stream %rfs-s) %rfs-eof-value))))
+				        (setq %rfs-index
+				              (- (+ %rfs-start
+				                    (or (file-position %rfs-s)
+				                        (do ((%rfs-i (- (or %rfs-end (length %rfs-string)) %rfs-start) (- %rfs-i 1)))
+				                            ((null (read-char %rfs-s nil nil)) %rfs-i))))
+				                 %rfs-kept))))
+				    (values %rfs-value %rfs-index)))
+				""");
 	}
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
@@ -4464,6 +4501,19 @@ public final class LispPreludeLibrary {
 		// compilers inject after this pass, and needed only where that value can be
 		// handed a keyword -- which the surface shows as a designator spelling outside
 		// the exactly-one-argument positions (mayPassMoreThanOneArgument).
+		// %read-from-string-full: the read-from-string call carrying more than the
+		// string is rewritten onto it inside the expression compilers
+		// (LispMacroExpander.expandReadFromString), and #'read-from-string calls it
+		// where its value can be handed more than one argument.
+		if (LispNames.READ_FROM_STRING_FULL_INTERNAL.equals(entry)) {
+			for (LispVal form : program) {
+				if (callsWithSeveralArguments(form, LispNames.READ_FROM_STRING, canonical)
+						|| mayPassMoreThanOneArgument(form, LispNames.READ_FROM_STRING, canonical)) {
+					return true;
+				}
+			}
+			return false;
+		}
 		if (LispNames.WRITE_TO_STRING_KEYED_INTERNAL.equals(entry)) {
 			for (LispVal form : program) {
 				if (mayPassMoreThanOneArgument(form, LispNames.WRITE_TO_STRING, canonical)) {
@@ -4751,6 +4801,21 @@ public final class LispPreludeLibrary {
 				return true;
 			}
 			if (callsWithArguments(cons.car(), name, canonical)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/** Whether the form calls {@code name} with more than one argument anywhere. */
+	private static boolean callsWithSeveralArguments(LispVal form, String name, boolean canonical) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && matches(head.name(), name, canonical)
+					&& cons.cdr() instanceof LispCons first && first.cdr() instanceof LispCons) {
+				return true;
+			}
+			if (callsWithSeveralArguments(cons.car(), name, canonical)) {
 				return true;
 			}
 			form = cons.cdr();

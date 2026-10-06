@@ -1770,7 +1770,16 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx);
 				}
 			}
-			case LispNames.READ_FROM_STRING -> WasmReadFromStringCompiler.compile(cons, ctx);
+			case LispNames.READ_FROM_STRING -> {
+				// More than the string: the prelude defun's whole lambda list.
+				LispVal full = LispMacroExpander.expandReadFromString(cons);
+				if (full != cons) {
+					compileExpansion(full, ctx, tail);
+				}
+				else {
+					WasmReadFromStringCompiler.compile(cons, ctx);
+				}
+			}
 			case LispNames.READ_FROM_STRING_END -> WasmReadFromStringCompiler.compileEnd(cons, ctx);
 			// A string=/string-equal call with the bounding-index keywords is lowered
 			// onto subseq first, so the intrinsic below always sees two strings.

@@ -11,6 +11,7 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.StringComparisonBoundsFixture;
 import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13565,6 +13566,24 @@ class JvmLispCompilerTest {
 		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.ORDER_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadFromStringTakesItsWholeLambdaList() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringTakesItsWholeLambdaList,
+		// through the CLI's front end: the prelude defun reads through the pushback cell
+		// (UnreadCharLibrary).
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadReadFromStringBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadReadFromStringBoundReportsAsSubseqDoes.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.REPORT_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
 	}
 
 	@Test
