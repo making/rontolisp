@@ -3943,6 +3943,15 @@ public final class LispNames {
 	/** The {@code %rd-sharp} internal helper: the {@code #} dispatch. */
 	public static final String RD_SHARP = "%RD-SHARP";
 
+	/** The {@code %rd-guard} internal helper: a {@code #+}/{@code #-} guard. */
+	public static final String RD_GUARD = "%RD-GUARD";
+
+	/** The {@code %rd-feature} internal helper: a feature expression off the stream. */
+	public static final String RD_FEATURE = "%RD-FEATURE";
+
+	/** The {@code %rd-featurep} internal helper: a feature expression's truth. */
+	public static final String RD_FEATUREP = "%RD-FEATUREP";
+
 	/** The {@code %rd-whitespace-p} internal helper: the whitespace set. */
 	public static final String RD_WHITESPACE_P = "%RD-WHITESPACE-P";
 

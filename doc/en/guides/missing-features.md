@@ -121,7 +121,8 @@ child's layout while it keeps its inherited index, so the parent's accessors
 still read it. An instance prints in the standard `#S(...)` syntax, and
 a `#S(...)` literal reads back into an instance -- in source and through the
 runtime `read` / `read-from-string` on every backend (a compiled program's
-reader has frontend parity; only `#.`, `#+`/`#-` and `#n=`/`#n#` signal there).
+reader has frontend parity; only `#.`, `#n=`/`#n#` and the one-argument
+`read-from-string`'s `#+`/`#-` signal there).
 A structure that carries a `(:print-object fn)` / `(:print-function fn)` option
 prints through that function instead; both options are supported.
 

@@ -879,6 +879,17 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readFeatureConditionalStackedUnderAFailedGuardIsEvaluated() {
+		// Inside the form a failed guard skips, a nested guard is still evaluated (as
+		// SBCL does): a holding one makes the form behind it the skipped datum, a failing
+		// one yields nothing and the skip goes on.
+		assertThat(LispReader.readAllFromString("#+sbcl #+rontolisp 1 2 3")).containsExactly(new LispInteger(2),
+				new LispInteger(3));
+		assertThat(LispReader.readAllFromString("#+sbcl #-rontolisp 1 2 3")).containsExactly(new LispInteger(3));
+		assertThat(LispReader.readAllFromString("#+sbcl #+sbcl 1 2 3")).containsExactly(new LispInteger(3));
+	}
+
+	@Test
 	void readFeatureConditionalAtEndOfInputFails() {
 		assertThatThrownBy(() -> LispReader.readAllFromString("#+sbcl")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("expected a form to skip");

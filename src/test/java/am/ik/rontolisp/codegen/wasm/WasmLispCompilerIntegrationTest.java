@@ -27,6 +27,7 @@ import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
+import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
@@ -14864,6 +14865,17 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(ReadFromStringLambdaListFixture.PROGRAM, true))
 			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void readSkipsAFailedFeatureGuardInFrontOfTheDatum() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#readSkipsAFailedFeatureGuardInFrontOfTheDatum, Preview 1 and
+		// the component.
+		assertThat(compileAndRunFrontEndWithDir(ReadFeatureGuardFixture.PROGRAM, false))
+			.isEqualTo(ReadFeatureGuardFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(ReadFeatureGuardFixture.PROGRAM, true))
+			.isEqualTo(ReadFeatureGuardFixture.EXPECTED);
 	}
 
 	@Test

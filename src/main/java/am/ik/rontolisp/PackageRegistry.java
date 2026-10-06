@@ -313,7 +313,7 @@ public final class PackageRegistry {
 			LispNames.CHAR_FOLD_CHAIN, LispNames.SET_XOR_MATCH, LispNames.SUBST_WALK, LispNames.LL_KEY_CELL,
 			LispNames.LL_CHECK_KEYS, LispNames.RD_DATUM, LispNames.RD_DISPATCH, LispNames.RD_SKIP,
 			LispNames.RD_SKIP_LINE, LispNames.RD_BLOCK_COMMENT, LispNames.RD_LIST, LispNames.RD_STRING,
-			LispNames.RD_BARS, LispNames.RD_TOKEN_REST, LispNames.RD_CHAR_LITERAL, LispNames.RD_SHARP,
+			LispNames.RD_BARS, LispNames.RD_TOKEN_REST, LispNames.RD_CHAR_LITERAL, LispNames.RD_SHARP, LispNames.RD_GUARD, LispNames.RD_FEATURE, LispNames.RD_FEATUREP,
 			LispNames.RD_WHITESPACE_P, LispNames.RD_TERMINATING_P, LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW,
 			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
 			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HB_GUARD_INTERNAL,

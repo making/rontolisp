@@ -24,6 +24,7 @@ import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
+import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
@@ -10706,6 +10707,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readSkipsAFailedFeatureGuardInFrontOfTheDatum() {
+		// read and the multi-argument read-from-string resolve a #+/#- guard in their
+		// own scanner, against the live *features*: a failed one used to end the read
+		// with end-of-file instead of answering the datum behind the skipped form.
+		assertThat(evalPrinted(ReadFeatureGuardFixture.PROGRAM)).isEqualTo(ReadFeatureGuardFixture.EXPECTED);
+	}
+
+	@Test
 	void aBadReadFromStringBoundReportsAsSubseqDoes() {
 		// The refused bound, its range and subseq's report text.
 		assertThat(evalPrinted(ReadFromStringLambdaListFixture.REPORT_PROGRAM))
@@ -15109,6 +15118,14 @@ class LispEvaluatorTest {
 				(let ((*features* '(x)))
 				  (list (read-from-string "#+X :bad :good")
 				        (read-from-string "#+CL-USER::X :good :bad")))""").print()).isEqualTo("(:GOOD :GOOD)");
+		// A guard inside a form a failed guard skips is evaluated too (as SBCL does),
+		// so a holding one makes the form behind it the skipped datum and the read
+		// answers the next one; only a failing one yields nothing.
+		assertThat(eval("""
+				(let ((*features* '(:x)))
+				  (list (multiple-value-list (read-from-string "#+nope #+x a b c"))
+				        (multiple-value-list (read-from-string "#+nope #-x a b c"))))""").print())
+			.isEqualTo("((B 15) (C 16))");
 	}
 
 	@Test
