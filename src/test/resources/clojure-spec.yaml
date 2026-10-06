@@ -1385,6 +1385,29 @@ cases:
     expected: |
       nil 4 1 2
       -1 4 1 3
+  - name: index-of-and-last-index-of-are-function-values
+    # Both take two or three arguments, so a bare reference dispatches on the argument
+    # count like the other clojure.string verbs, with the same start clamp.
+    source: |
+      (println (map clojure.string/index-of ["hi"] ["z"]))
+      (println (map clojure.string/index-of ["hihi" "ab"] ["i" "b"] [2 0]))
+      (println (map clojure.string/last-index-of ["hihi" "ab"] ["i" "b"] [2 0]))
+      (println (map clojure.string/last-index-of ["hihi" "ab"] ["i" "b"]))
+      (println (apply clojure.string/index-of ["hihi" "i" 9]))
+      (println (apply clojure.string/last-index-of ["hihi" "i" -1]))
+      (println (apply clojure.string/last-index-of ["hihi" "i" 99]))
+      (println (try (apply clojure.string/index-of ["hihi"]) (catch Exception e "arity")))
+      (println (try (apply clojure.string/last-index-of ["hihi" "i" 1 2]) (catch Exception e "arity")))
+    expected: |
+      (nil)
+      (3 1)
+      (1 nil)
+      (3 1)
+      nil
+      nil
+      3
+      arity
+      arity
   - name: try-catch-finally-and-throw
     # try guards handler-case inside unwind-protect; the catch clauses test their
     # classes in order. throw of a value that is no exception is the oracle's

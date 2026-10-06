@@ -259,7 +259,8 @@ final class ClojureStringLowering {
 
 	static List<Integer> stringArities(String var) {
 		return switch (var) {
-			case "join", "index-of", "last-index-of" -> List.of(1, 2);
+			case "join" -> List.of(1, 2);
+			case "index-of", "last-index-of" -> List.of(2, 3);
 			case "split" -> List.of(2, 3);
 			case "starts-with?", "ends-with?", "includes?", "escape" -> List.of(2);
 			case "replace", "replace-first" -> List.of(3);
