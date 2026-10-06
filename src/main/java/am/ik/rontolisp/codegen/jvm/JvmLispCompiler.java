@@ -2232,15 +2232,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// previous run whose scan under-predicted this gate (see compile(List)); it
 		// never turns the gate OFF. The holder travels exactly then
 		// (needsComplexRuntime below), so a complex-free program keeps its
-		// single-file output.
-		boolean usesComplex = LispMacroExpander.mayCreateComplex(program, closRegistry)
-				|| LispMacroExpander.mayEscapeToComplex(program, closRegistry)
-				|| programUsesSymbol(program, LispNames.SQRT) || programUsesSymbol(program, LispNames.CIS)
-				|| programUsesSymbol(program, LispNames.ASINH) || programUsesSymbol(program, LispNames.ACOSH)
-				|| programUsesSymbol(program, LispNames.ATANH)
-				|| referencesFunctionDesignator(program, closRegistry, LispNames.COMPLEX)
-				|| referencesFunctionDesignator(program, closRegistry, LispNames.CONJUGATE)
-				|| referencesFunctionDesignator(program, closRegistry, LispNames.PHASE)
+		// single-file output. The scan is the one the WASM backend gates its holder
+		// arms on (compiler/ComplexCapability).
+		boolean usesComplex = am.ik.rontolisp.compiler.ComplexCapability.mayObserveComplex(program, closRegistry)
 				|| forcedGroups.contains(GROUP_COMPLEX);
 		this.needsComplexRuntime = usesComplex;
 		// The holder-presence probe (.todo/757): a class the gate opened can still

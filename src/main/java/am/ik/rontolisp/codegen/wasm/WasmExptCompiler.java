@@ -8,6 +8,8 @@ import am.ik.rontolisp.codegen.wasm.WasmFdlibmRuntimeBuilder.Fn;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Compiles the {@code expt} built-in, dispatching on the RUNTIME types of both operands
  * exactly as the interpreter does.
@@ -64,6 +66,15 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(pSlot);
 
+		// A program that may observe a complex, and an operand a variable or a call
+		// produces: a TYPE_COMPLEX goes to the complex block's power, tested on each path
+		// for exactly the operand that can be one there (`.kb/wasm-complex.md`, "A
+		// complex through a variable").
+		WasmComplexBlock complexBlock = ctx.complexBlock;
+		WasmComplexBlock guard = complexBlock != null
+				&& (WasmComplexBlock.mayHoldComplex(args.get(1)) || WasmComplexBlock.mayHoldComplex(args.get(2)))
+						? complexBlock : null;
+
 		// if (base is a float || p is a float || p is a ratio) { the float path }
 		// else { the exact loop over an integer exponent }
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -81,9 +92,9 @@ final class WasmExptCompiler {
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF, 0x40);
-		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape);
+		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape, guard);
 		ctx.writer.write(Instruction.ELSE);
-		emitIntegerExponent(ctx, baseSlot, pSlot, rSlot, complexEscape);
+		emitIntegerExponent(ctx, baseSlot, pSlot, rSlot, complexEscape, guard);
 		ctx.writer.write(Instruction.END);
 
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -91,18 +102,49 @@ final class WasmExptCompiler {
 	}
 
 	// The exact path: r = base^p by repeated _rat_mul, p an i31 integer. A bignum
-	// exponent of any tier takes the float path instead (see the class comment).
+	// exponent of any tier takes the float path instead (see the class comment). With a
+	// guard, only the base can be a complex on the loop's side.
 	private static void emitIntegerExponent(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot,
-			boolean complexEscape) {
+			boolean complexEscape, @Nullable WasmComplexBlock guard) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(pSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.IF, 0x40);
+		if (guard != null) {
+			emitComplexPowerGuard(ctx, guard, baseSlot, pSlot, rSlot, new int[] { baseSlot });
+		}
 		emitIntegerLoop(ctx, baseSlot, pSlot, rSlot);
+		if (guard != null) {
+			ctx.writer.write(Instruction.END);
+		}
 		ctx.writer.write(Instruction.ELSE);
-		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape);
+		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape, guard);
 		ctx.writer.write(Instruction.END);
+	}
+
+	// Opens `if (any of tested is a TYPE_COMPLEX) { r = the complex block's power }
+	// else`, whose arm the caller closes with an END after the real path it guards.
+	private static void emitComplexPowerGuard(WasmLispCompiler.Ctx ctx, WasmComplexBlock guard, int baseSlot, int pSlot,
+			int rSlot, int[] tested) {
+		for (int slot : tested) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+		}
+		for (int i = 1; i < tested.length; i++) {
+			ctx.writer.write(Instruction.I32_OR);
+		}
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(baseSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(pSlot);
+		guard.emitCall(ctx, WasmComplexBlock.Fn.EXPT);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(rSlot);
+		ctx.writer.write(Instruction.ELSE);
 	}
 
 	private static void emitIntegerLoop(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot) {
@@ -159,7 +201,15 @@ final class WasmExptCompiler {
 	// negative and the power a finite non-integer (the interpreter's escapesToPlane),
 	// pow(x, y) otherwise. Leaves the result in rSlot.
 	private static void emitFloatPath(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot,
-			boolean complexEscape) {
+			boolean complexEscape, @Nullable WasmComplexBlock guard) {
+		if (guard != null) {
+			// Either operand can be the complex here: a float beside it is what sent
+			// the pair down this path.
+			emitComplexPowerGuard(ctx, guard, baseSlot, pSlot, rSlot, new int[] { baseSlot, pSlot });
+			emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape, null);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(baseSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);

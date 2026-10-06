@@ -51,6 +51,21 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.ELSE);
+			WasmComplexBlock complexBlock = ctx.complexBlock;
+			if (complexBlock != null) {
+				// A program that may observe a complex: one arriving here answers its
+				// modulus through the complex block, ahead of _rat_cmp's landing.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.writeRefType(true, Type.EQ.code());
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				complexBlock.emitCall(ctx, WasmComplexBlock.Fn.ABS);
+				ctx.writer.write(Instruction.ELSE);
+			}
 			// Integer/ratio path: x < 0 (via _rat_cmp against 0) ? 0 - x : x
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
@@ -75,6 +90,9 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			ctx.writer.write(Instruction.END);
+			if (complexBlock != null) {
+				ctx.writer.write(Instruction.END);
+			}
 			ctx.writer.write(Instruction.END);
 		}
 	}

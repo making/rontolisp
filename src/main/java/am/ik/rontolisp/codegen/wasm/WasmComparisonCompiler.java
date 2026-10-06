@@ -38,12 +38,32 @@ final class WasmComparisonCompiler {
 			// signum _rat_cmp against zero answered "equal" for NaN.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
-			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(maskFor(i32Opcode));
-			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
+			emitGenericCompare(ctx, maskFor(i32Opcode));
 		}
 		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * The generic comparison of the two operands on the stack, as the i32 truth of the
+	 * operator: {@code _rat_cmp_bits} masked -- or, for {@code =} in a module whose
+	 * program may observe a complex, the complex block's {@code =}, which compares a
+	 * complex arriving through a variable part-wise ({@link WasmComplexBlock}). An
+	 * ordering keeps {@code _rat_cmp_bits}, where a complex lands in the REAL report the
+	 * interpreter gives.
+	 * @param ctx the compile context
+	 * @param mask the operator's {@code _rat_cmp_bits} mask ({@link #maskFor})
+	 */
+	static void emitGenericCompare(WasmLispCompiler.Ctx ctx, int mask) {
+		WasmComplexBlock complexBlock = ctx.complexBlock;
+		if (complexBlock != null && mask == maskFor(am.ik.wasm.Instruction.I32_EQ)) {
+			// Answers 2 or 0: already the mask's bit.
+			complexBlock.emitCall(ctx, WasmComplexBlock.Fn.NUM_EQ);
+			return;
+		}
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
+		ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(mask);
+		ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
 	}
 
 	/**
@@ -108,10 +128,7 @@ final class WasmComparisonCompiler {
 			// Not a speed-for-size trade, so it holds at every optimize level.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
-			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(maskFor(i32Opcode));
-			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
+			emitGenericCompare(ctx, maskFor(i32Opcode));
 		}
 	}
 

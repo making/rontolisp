@@ -1973,6 +1973,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplexThroughAVariable() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexThroughAVariable: a call site
+		// with no complex in its own text reached _add/_mul/_pow/StrictMath with a holder
+		// and reported it as a wrong-type operand, and an ordering answered nil.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

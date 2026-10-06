@@ -391,6 +391,17 @@ final class WasmComplexCompiler {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
+		emitAbsOf(ctx, slot);
+	}
+
+	/**
+	 * The float modulus of the number in {@code slot}, left on the stack ({@code slot} is
+	 * reused for it) -- the body of {@link #compileAbs} and of the complex block's
+	 * {@code abs} ({@link WasmComplexBlock}).
+	 * @param ctx the compile context
+	 * @param slot the local holding the operand
+	 */
+	static void emitAbsOf(WasmLispCompiler.Ctx ctx, int slot) {
 		int[] parts = emitPartsF64(ctx, slot);
 		emitHypotInto(ctx, parts[0], parts[1], slot);
 		getLocal(ctx, slot);
@@ -468,6 +479,18 @@ final class WasmComplexCompiler {
 		int expSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(expSlot);
+		emitExptOf(ctx, baseSlot, expSlot);
+	}
+
+	/**
+	 * The complex power of the numbers in {@code baseSlot} and {@code expSlot}, left on
+	 * the stack -- the body of {@link #compileExpt} and of the complex block's
+	 * {@code expt} ({@link WasmComplexBlock}).
+	 * @param ctx the compile context
+	 * @param baseSlot the local holding the base
+	 * @param expSlot the local holding the power (rewritten by the exact loop)
+	 */
+	static void emitExptOf(WasmLispCompiler.Ctx ctx, int baseSlot, int expSlot) {
 		int rSlot = ctx.allocTemp();
 		// The exact loop takes an i31 exponent over an EXACT base -- the interpreter's
 		// exptComplex: a float part anywhere in the base goes through exp(w*log(z)) like
@@ -942,6 +965,19 @@ final class WasmComplexCompiler {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
+		emitUnaryMathOf(ctx, slot, name);
+	}
+
+	/**
+	 * One of the eleven float unary functions of the number in {@code slot} as the
+	 * complex formula, the complex left on the stack -- the body of
+	 * {@link #compileUnaryMath} and of the complex block's unary entries
+	 * ({@link WasmComplexBlock}).
+	 * @param ctx the compile context
+	 * @param slot the local holding the operand
+	 * @param name the function's (uppercase-canonical) Lisp name
+	 */
+	static void emitUnaryMathOf(WasmLispCompiler.Ctx ctx, int slot, String name) {
 		int[] parts = emitPartsF64(ctx, slot);
 		int reOut = ctx.allocTemp();
 		int imOut = ctx.allocTemp();
@@ -1076,8 +1112,10 @@ final class WasmComplexCompiler {
 
 	// One = pair: part-wise _rat_cmp_bits equality when a complex is present at
 	// run time, _rat_cmp_bits equality otherwise (it handles every real tier,
-	// floats included). Leaves an i32.
-	private static void emitEqPair(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
+	// floats included). Leaves an i32, 2 for equal and 0 otherwise -- _rat_cmp_bits's
+	// own bit, so the complex block's = entry (WasmComplexBlock) is that function's
+	// stand-in at an = site.
+	static void emitEqPair(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
 		emitTestComplex(ctx, aSlot);
 		emitTestComplex(ctx, bSlot);
 		ctx.writer.write(Instruction.I32_OR);

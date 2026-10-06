@@ -27106,6 +27106,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void complexThroughAVariable() throws Exception {
+		// The LispEvaluatorTest#complexThroughAVariable twin: a call site with no complex
+		// in its own text reached _rat_*/_as_f64 with a TYPE_COMPLEX and trapped (the
+		// non-EH program) or reported it as a wrong-type operand (the EH one). Every
+		// level, because the arms live in bodies the type-test fold rewrites.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"ctv-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		List<LispVal> signals = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.WASM,
+				true, false);
+		assertThat(compileAndRunProgram(signals))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+		assertThat(compileComponentAndRunProgram(signals))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
 	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
 		// EH mode without a handler around the division: the entry landing pad reports
 		// it as the interpreter does. Outside EH mode it is still the bare trap.

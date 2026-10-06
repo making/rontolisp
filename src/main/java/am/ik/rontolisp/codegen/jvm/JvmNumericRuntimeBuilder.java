@@ -274,6 +274,156 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	/**
+	 * What the generic helpers' holder arms need, in a program that may observe a complex
+	 * (null in every other): a complex reaching {@code _add}/{@code _sub}/{@code _mul}/
+	 * {@code _div}/{@code _neg}/{@code _pow} through a variable is handed to its gated
+	 * {@code _c*} twin at the point where the real-only body would have rejected it, so
+	 * the paths a real operand takes are the ones it always took (`.kb/jvm-complex.md`,
+	 * "A complex through a variable").
+	 *
+	 * @param rcClass the travelling holder's class
+	 * @param hasComplex the holder-presence probe every holder test consults first
+	 * @param cAdd {@code _cadd}
+	 * @param cSub {@code _csub}
+	 * @param cMul {@code _cmul}
+	 * @param cDiv {@code _cdiv}
+	 * @param cNeg {@code _cneg}
+	 * @param cPow {@code _cpow}
+	 */
+	record HolderArms(ClassEntry rcClass, FieldRefEntry hasComplex, MethodRefEntry cAdd, MethodRefEntry cSub,
+			MethodRefEntry cMul, MethodRefEntry cDiv, MethodRefEntry cNeg, MethodRefEntry cPow) {
+
+		static HolderArms of(ConstantPool cp, ClassEntry thisClass, ClassEntry rcClass, FieldRefEntry hasComplex) {
+			return new HolderArms(rcClass, hasComplex, twin(cp, thisClass, JvmComplexRuntimeBuilder.ADD),
+					twin(cp, thisClass, JvmComplexRuntimeBuilder.SUB),
+					twin(cp, thisClass, JvmComplexRuntimeBuilder.MUL),
+					twin(cp, thisClass, JvmComplexRuntimeBuilder.DIV),
+					twin(cp, thisClass, JvmComplexRuntimeBuilder.NEG),
+					twin(cp, thisClass, JvmComplexRuntimeBuilder.POW));
+		}
+
+		private static MethodRefEntry twin(ConstantPool cp, ClassEntry thisClass, String name) {
+			return cp.methodRef(thisClass, name, JvmComplexRuntimeBuilder.descFor(name));
+		}
+
+		/**
+		 * Jumps to {@code toComplex} when one of the locals in {@code slots} holds a
+		 * holder, and falls through otherwise. The presence probe first: a lone class run
+		 * without the travelling file resolves no holder class here, and no holder can
+		 * exist there to be missed.
+		 */
+		void emitJump(MethodCode c, MethodCode.Label toComplex, int... slots) {
+			c.getstatic(this.hasComplex);
+			MethodCode.Label noHolder = c.newLabel();
+			c.ifeq(noHolder);
+			for (int slot : slots) {
+				c.aload(slot);
+				c.instanceOf(this.rcClass);
+				c.ifne(toComplex);
+			}
+			c.labelBinding(noHolder);
+		}
+
+		/**
+		 * Binds {@code toComplex} and emits the delegation to {@code twin} over the
+		 * method's own parameters, locals 0 (and 1 for a binary twin).
+		 */
+		static void emitDelegation(MethodCode c, MethodCode.Label toComplex, MethodRefEntry twin, boolean binary) {
+			c.labelBinding(toComplex);
+			c.aload(0);
+			if (binary) {
+				c.aload(1);
+			}
+			c.invokestatic(twin);
+			c.areturn();
+		}
+
+	}
+
+	/**
+	 * The suffix of a split helper's tail ({@code _addx} behind {@code _add}): what the
+	 * helper hands every operand pair but its two fast ones, in a program that may
+	 * observe a complex.
+	 */
+	static final String TAIL_SUFFIX = "x";
+
+	/**
+	 * One of {@code _add}/{@code _sub}/{@code _mul} as a head and a tail.
+	 *
+	 * @param name the helper's name constant
+	 * @param key the helper's name, the tail's prefix
+	 * @param exact its {@code Math.*Exact}
+	 * @param biOp its {@code BigInteger} operation
+	 * @param ratioCross the cross operation of its rational path, null for {@code _mul}
+	 * @param doubleOp its double opcode
+	 * @param twin its gated {@code _c*} twin
+	 */
+	private record HeadAndTail(Utf8Entry name, String key, MethodRefEntry exact, MethodRefEntry biOp,
+			@Nullable MethodRefEntry ratioCross, Consumer<MethodCode> doubleOp, MethodRefEntry twin) {
+	}
+
+	/**
+	 * The head of a split helper: a Double pair answers inline, a Long pair through
+	 * {@code Math.*Exact} when {@code exact} is given ({@code _div} has no Long arm), and
+	 * every other pair -- an overflow included -- returns the tail's answer. Exactly what
+	 * the one-piece body computes for each pair, the Double pair without its two
+	 * {@code _dbl} calls ({@code _dbl} answers a Double as-is).
+	 */
+	private static NumericMethod buildHead(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			Consumer<MethodCode> doubleOp, @Nullable ClassEntry longClass, @Nullable MethodRefEntry longValue,
+			@Nullable MethodRefEntry longValueOf, @Nullable MethodRefEntry exact, @Nullable ClassEntry arithEx,
+			MethodRefEntry tail) {
+		MethodCode c = new MethodCode();
+		MethodCode.Label toTail = c.newLabel();
+		c.aload(0);
+		c.instanceOf(doubleClass);
+		MethodCode.Label aNotDouble = c.newLabel();
+		c.ifeq(aNotDouble);
+		c.aload(1);
+		c.instanceOf(doubleClass);
+		c.ifeq(toTail);
+		for (int slot = 0; slot < 2; slot++) {
+			c.aload(slot);
+			c.checkcast(numberClass);
+			c.invokevirtual(numDoubleValue);
+		}
+		doubleOp.accept(c);
+		c.invokestatic(doubleValueOf);
+		c.areturn();
+		c.labelBinding(aNotDouble);
+		MethodCode.@Nullable Label tryStart = null;
+		MethodCode.@Nullable Label handler = null;
+		if (exact != null) {
+			ClassEntry longs = Objects.requireNonNull(longClass);
+			MethodRefEntry unbox = Objects.requireNonNull(longValue);
+			c.aload(0);
+			c.instanceOf(longs);
+			c.ifeq(toTail);
+			c.aload(1);
+			c.instanceOf(longs);
+			c.ifeq(toTail);
+			tryStart = c.newBoundLabel();
+			emitUnboxLong(c, 0, longs, unbox);
+			emitUnboxLong(c, 1, longs, unbox);
+			c.invokestatic(exact);
+			c.invokestatic(Objects.requireNonNull(longValueOf));
+			c.areturn();
+			handler = c.newBoundLabel();
+			c.pop();
+		}
+		c.labelBinding(toTail);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(tail);
+		c.areturn();
+		if (tryStart != null && handler != null) {
+			c.exceptionCatch(tryStart, handler, handler, Objects.requireNonNull(arithEx));
+		}
+		return new NumericMethod(name, desc, c);
+	}
+
+	/**
 	 * Emits {@code throw _teRaw(local0, kind)}. Peak operand stack: 2.
 	 * @param c the bytecode sink
 	 * @param refs the shared references
@@ -383,6 +533,11 @@ final class JvmNumericRuntimeBuilder {
 		// lone class run without the file beside it takes the holder-less shape.
 		// Null exactly when the gate is off, like rcClass.
 		FieldRefEntry hasComplex = usesComplex ? cp.fieldRef(thisClass, "_hasComplex", "Z") : null;
+		// The generic helpers' holder arms and the gated twins they hand a complex to,
+		// null exactly when the gate is off, like rcClass.
+		HolderArms holderArms = usesComplex
+				? HolderArms.of(cp, thisClass, Objects.requireNonNull(rcClass), Objects.requireNonNull(hasComplex))
+				: null;
 		MethodRefEntry biShiftLeft = cp.methodRef(bigClass, "shiftLeft", "(I)" + BIG);
 		MethodRefEntry biTestBit = cp.methodRef(bigClass, "testBit", "(I)Z");
 		MethodRefEntry biAnd = cp.methodRef(bigClass, "and", "(" + BIG + ")" + BIG);
@@ -536,19 +691,52 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildRatDen(nRatDen, dBig, ratArrClass, biOne));
 		methods.add(buildRat(nRat, dRat, bigClass, arithEx, aeInit, divZeroStr, biSignum, biNeg, biGcd, biDiv, biOne,
 				objEquals, rNorm));
-		methods.add(buildExactBinary(nAdd, dBinary, longClass, addExact, longValue, longValueOf, rBig, rNorm, biAdd,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biAdd, doubleClass, rDbl, numberClass,
-				numDoubleValue, doubleValueOf, MethodCode::dadd));
-		methods.add(buildExactBinary(nSub, dBinary, longClass, subExact, longValue, longValueOf, rBig, rNorm, biSub,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biSub, doubleClass, rDbl, numberClass,
-				numDoubleValue, doubleValueOf, MethodCode::dsub));
-		methods.add(buildExactBinary(nMul, dBinary, longClass, mulExact, longValue, longValueOf, rBig, rNorm, biMul,
-				arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, null, doubleClass, rDbl, numberClass,
-				numDoubleValue, doubleValueOf, MethodCode::dmul));
+		if (holderArms == null) {
+			methods.add(buildExactBinary(nAdd, dBinary, longClass, addExact, longValue, longValueOf, rBig, rNorm, biAdd,
+					arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biAdd, doubleClass, rDbl, numberClass,
+					numDoubleValue, doubleValueOf, MethodCode::dadd, null, null));
+			methods.add(buildExactBinary(nSub, dBinary, longClass, subExact, longValue, longValueOf, rBig, rNorm, biSub,
+					arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, biSub, doubleClass, rDbl, numberClass,
+					numDoubleValue, doubleValueOf, MethodCode::dsub, null, null));
+			methods.add(buildExactBinary(nMul, dBinary, longClass, mulExact, longValue, longValueOf, rBig, rNorm, biMul,
+					arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, null, doubleClass, rDbl, numberClass,
+					numDoubleValue, doubleValueOf, MethodCode::dmul, null, null));
+		}
+		else {
+			// A program that may observe a complex splits each helper in two: the
+			// helper keeps the Double pair and the Long pair, and every other operand
+			// shape -- a mixed float pair, a ratio, a bignum, an overflow, a holder --
+			// takes its tail, where the holder arms are. The helper is then SMALLER
+			// than the one-piece body, which is what keeps Graal inlining it into a
+			// float loop and eliminating the boxes there: the arms inside the helper
+			// itself doubled n-body's allocation (HeadAndTail).
+			for (HeadAndTail op : List.of(
+					new HeadAndTail(nAdd, ADD, addExact, biAdd, biAdd, MethodCode::dadd, holderArms.cAdd()),
+					new HeadAndTail(nSub, SUB, subExact, biSub, biSub, MethodCode::dsub, holderArms.cSub()),
+					new HeadAndTail(nMul, MUL, mulExact, biMul, null, MethodCode::dmul, holderArms.cMul()))) {
+				Utf8Entry nTail = cp.utf8Entry(op.key() + TAIL_SUFFIX);
+				methods.add(buildHead(op.name(), dBinary, doubleClass, numberClass, numDoubleValue, doubleValueOf,
+						op.doubleOp(), longClass, longValue, longValueOf, op.exact(), arithEx,
+						cp.methodRef(thisClass, nTail, dBinary)));
+				methods.add(buildExactBinary(nTail, dBinary, longClass, op.exact(), longValue, longValueOf, rBig, rNorm,
+						op.biOp(), arithEx, ratArrClass, rRatNum, rRatDen, rRat, biMul, op.ratioCross(), doubleClass,
+						rDbl, numberClass, numDoubleValue, doubleValueOf, op.doubleOp(), holderArms, op.twin()));
+			}
+		}
 		methods.add(buildNeg(nNeg, dUnary, longClass, negExact, longValue, longValueOf, rBig, rNorm, biNeg, arithEx,
-				ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf));
-		methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
-				numDoubleValue, doubleValueOf));
+				ratArrClass, rRatNum, rRatDen, rRat, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
+				holderArms));
+		if (holderArms == null) {
+			methods.add(buildDiv(nDiv, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
+					numDoubleValue, doubleValueOf, null));
+		}
+		else {
+			Utf8Entry nDivTail = cp.utf8Entry(DIV + TAIL_SUFFIX);
+			methods.add(buildHead(nDiv, dBinary, doubleClass, numberClass, numDoubleValue, doubleValueOf,
+					MethodCode::ddiv, null, null, null, null, null, cp.methodRef(thisClass, nDivTail, dBinary)));
+			methods.add(buildDiv(nDivTail, dBinary, rRatNum, rRatDen, rRat, biMul, doubleClass, rDbl, numberClass,
+					numDoubleValue, doubleValueOf, holderArms));
+		}
 		DivZeroRefs divZero = new DivZeroRefs(arithEx, aeInit, divZeroStr, biSignum);
 		methods.add(buildMod(nMod, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biRem, floorModLong,
 				biSignum, biAdd, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, rFmod, ratArrClass,
@@ -580,7 +768,7 @@ final class JvmNumericRuntimeBuilder {
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
 				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl, cp.entries().longEntry(Integer.MAX_VALUE),
-				cp.entries().longEntry(-(long) Integer.MAX_VALUE)));
+				cp.entries().longEntry(-(long) Integer.MAX_VALUE), holderArms));
 		ClassEntry listClass = cp.classEntry("java/util/List");
 		StringRefs stringRefs = new StringRefs(stringClass, listClass, cp.methodRef(stringClass, "isEmpty", "()Z"),
 				cp.methodRef(stringClass, "charAt", "(I)C"));
@@ -820,15 +1008,22 @@ final class JvmNumericRuntimeBuilder {
 
 	// _add/_sub/_mul(Object a, Object b): rational path when either operand is a ratio;
 	// otherwise long fast path via Math.*Exact, promoting to BigInteger on overflow
-	// (caught) or when an operand is already a BigInteger.
+	// (caught) or when an operand is already a BigInteger. In a program that may
+	// observe a complex this body is the split helper's TAIL (buildHead), and a holder
+	// operand is handed to the gated twin where the real body would have rejected it:
+	// beside a Double in the prologue, beside a ratio on the rational path, and ahead
+	// of _big's funnel on the slow path.
 	private static NumericMethod buildExactBinary(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
 			MethodRefEntry exact, MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig,
 			MethodRefEntry rNorm, MethodRefEntry biOp, ClassEntry arithEx, ClassEntry ratArrClass,
 			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul,
 			@Nullable MethodRefEntry ratioCross, ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass,
-			MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf, Consumer<MethodCode> doubleOp) {
+			MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf, Consumer<MethodCode> doubleOp,
+			@Nullable HolderArms holderArms, @Nullable MethodRefEntry complexTwin) {
 		MethodCode c = new MethodCode();
-		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOp);
+		MethodCode.Label toComplex = c.newLabel();
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOp, null,
+				holderArms, toComplex);
 		MethodCode.Label toRatio = c.newLabel();
 		emitRatioGuard(c, ratArrClass, toRatio);
 		c.aload(0);
@@ -849,21 +1044,35 @@ final class JvmNumericRuntimeBuilder {
 		c.pop();
 		c.labelBinding(ifSlow1);
 		c.labelBinding(ifSlow2);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0, 1);
+		}
 		emitBigBinary(c, rBig, biOp, rNorm);
 		c.labelBinding(toRatio);
+		if (holderArms != null) {
+			// One ratio operand sends the pair here, and the other may be a holder.
+			holderArms.emitJump(c, toComplex, 0, 1);
+		}
 		emitRatioBinary(c, rRatNum, rRatDen, rRat, biMul, ratioCross);
+		if (holderArms != null) {
+			HolderArms.emitDelegation(c, toComplex, Objects.requireNonNull(complexTwin), true);
+		}
 		c.exceptionCatch(tryStart, handler, handler, arithEx);
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _neg(Object a): negate via Math.negateExact, promoting to BigInteger on overflow;
-	// a ratio negates its numerator.
+	// a ratio negates its numerator. A holder (a program that may observe a complex) is
+	// handed to _cneg ahead of _big's funnel -- not to _csub from zero, whose 0.0 - 0.0
+	// would lose a negative zero part.
 	private static NumericMethod buildNeg(Utf8Entry name, Utf8Entry desc, ClassEntry longClass, MethodRefEntry negExact,
 			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
 			MethodRefEntry biNeg, ClassEntry arithEx, ClassEntry ratArrClass, MethodRefEntry rRatNum,
 			MethodRefEntry rRatDen, MethodRefEntry rRat, ClassEntry doubleClass, MethodRefEntry rDbl,
-			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf) {
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			@Nullable HolderArms holderArms) {
 		MethodCode c = new MethodCode();
+		MethodCode.Label toComplex = c.newLabel();
 		emitDoubleUnaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, MethodCode::dneg);
 		c.aload(0);
 		c.instanceOf(ratArrClass);
@@ -881,6 +1090,9 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label handler = c.newBoundLabel();
 		c.pop();
 		c.labelBinding(ifSlow);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0);
+		}
 		c.aload(0);
 		c.invokestatic(rBig);
 		c.invokevirtual(biNeg);
@@ -894,18 +1106,29 @@ final class JvmNumericRuntimeBuilder {
 		c.invokestatic(rRatDen);
 		c.invokestatic(rRat);
 		c.areturn();
+		if (holderArms != null) {
+			HolderArms.emitDelegation(c, toComplex, holderArms.cNeg(), false);
+		}
 		c.exceptionCatch(tryStart, handler, handler, arithEx);
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _div(Object a, Object b): Common Lisp exact rational division for any mix of
 	// integers and ratios: _rat(num(a)*den(b), den(a)*num(b)). The result demotes to an
-	// integer when the division is exact; division by zero throws inside _rat.
+	// integer when the division is exact; division by zero throws inside _rat. A holder
+	// (a program that may observe a complex) is handed to _cdiv beside a Double in the
+	// prologue and ahead of the exact path's _ratnum funnel.
 	private static NumericMethod buildDiv(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
 			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul, ClassEntry doubleClass,
-			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf) {
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			@Nullable HolderArms holderArms) {
 		MethodCode c = new MethodCode();
-		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, MethodCode::ddiv);
+		MethodCode.Label toComplex = c.newLabel();
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, MethodCode::ddiv,
+				null, holderArms, toComplex);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0, 1);
+		}
 		c.aload(0);
 		c.invokestatic(rRatNum);
 		c.aload(1);
@@ -918,6 +1141,9 @@ final class JvmNumericRuntimeBuilder {
 		c.invokevirtual(biMul);
 		c.invokestatic(rRat);
 		c.areturn();
+		if (holderArms != null) {
+			HolderArms.emitDelegation(c, toComplex, holderArms.cDiv(), true);
+		}
 		return new NumericMethod(name, desc, c);
 	}
 
@@ -1845,22 +2071,6 @@ final class JvmNumericRuntimeBuilder {
 			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRatToDouble, TypeErrRefs typeErrRefs,
 			@Nullable ClassEntry rcClass, @Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
-		if (rcClass != null) {
-			// A complex reaching the f64 coercion is not silently reduced to its
-			// real part: it throws the interpreter's REAL operand-type report text.
-			// Emitted only for a complex-capable program, so the holder class stays
-			// out of every other constant pool (the _abs arm pattern). The presence
-			// probe first, so a lone class without the file never resolves it
-			// (.todo/757).
-			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
-			c.aload(0);
-			c.instanceOf(rcClass);
-			MethodCode.Label ifNotComplex = c.newLabel();
-			c.ifeq(ifNotComplex);
-			emitRealErrThrow(c, typeErrRefs);
-			c.labelBinding(ifNotComplex);
-			c.labelBinding(noHolder);
-		}
 		c.aload(0);
 		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
@@ -1895,6 +2105,21 @@ final class JvmNumericRuntimeBuilder {
 		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotNumber);
+		if (rcClass != null) {
+			// A complex reaching the f64 coercion is not silently reduced to its
+			// real part: it throws the interpreter's REAL operand-type report text.
+			// Emitted only for a complex-capable program, so the holder class stays
+			// out of every other constant pool (the _abs arm pattern), and only where
+			// every real has already answered -- a holder is none of the three shapes
+			// above, so the arm costs the float path nothing. The presence probe
+			// first, so a lone class without the file never resolves it.
+			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
+			c.aload(0);
+			c.instanceOf(rcClass);
+			c.ifeq(noHolder);
+			emitRealErrThrow(c, typeErrRefs);
+			c.labelBinding(noHolder);
+		}
 		emitTypeErrThrow(c, typeErrRefs, true);
 		return new NumericMethod(name, desc, c);
 	}
@@ -2211,17 +2436,25 @@ final class JvmNumericRuntimeBuilder {
 	// Long exponent beyond [-Integer.MAX_VALUE, Integer.MAX_VALUE] takes the same
 	// Math.pow path: narrowing it with L2I would silently answer base^(e mod 2^32)
 	// ((expt 2 4294967297) is Infinity, not 2), the interpreter's rule (.todo/849).
+	//
+	// In a program that may observe a complex, a holder base or exponent is handed to
+	// _cpow on each arm ahead of the funnel that would reject it (_dbl, _ratnum), so the
+	// arms a real pair takes test nothing more than they did.
 	private static NumericMethod buildPow(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
 			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biPow, ClassEntry doubleClass,
 			ClassEntry longClass, MethodRefEntry longValue, ClassEntry numberClass, MethodRefEntry numDoubleValue,
 			MethodRefEntry doubleValueOf, MethodRefEntry mathPow, MethodRefEntry rDbl, LongEntry cPowMax,
-			LongEntry cPowMin) {
+			LongEntry cPowMin, @Nullable HolderArms holderArms) {
 		MethodCode c = new MethodCode();
+		MethodCode.Label toComplex = c.newLabel();
 		// if (!(e instanceof Long)) return Double.valueOf(Math.pow(_dbl(base), _dbl(e)))
 		c.aload(1);
 		c.instanceOf(longClass);
 		MethodCode.Label ifLongExp = c.newLabel();
 		c.ifne(ifLongExp);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0, 1);
+		}
 		c.aload(0);
 		c.invokestatic(rDbl);
 		c.checkcast(numberClass);
@@ -2270,6 +2503,9 @@ final class JvmNumericRuntimeBuilder {
 		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifExact);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0);
+		}
 		c.iload(2);
 		MethodCode.Label ifNeg = c.newLabel();
 		c.iflt(ifNeg);
@@ -2300,6 +2536,9 @@ final class JvmNumericRuntimeBuilder {
 		// the same shape as the non-Long arm above.
 		c.labelBinding(ifTooBig);
 		c.labelBinding(ifTooSmall);
+		if (holderArms != null) {
+			holderArms.emitJump(c, toComplex, 0);
+		}
 		c.aload(0);
 		c.invokestatic(rDbl);
 		c.checkcast(numberClass);
@@ -2311,6 +2550,9 @@ final class JvmNumericRuntimeBuilder {
 		c.invokestatic(mathPow);
 		c.invokestatic(doubleValueOf);
 		c.areturn();
+		if (holderArms != null) {
+			HolderArms.emitDelegation(c, toComplex, holderArms.cPow(), true);
+		}
 		return new NumericMethod(name, desc, c);
 	}
 
@@ -3754,6 +3996,18 @@ final class JvmNumericRuntimeBuilder {
 	private static void emitDoubleBinaryPrologue(MethodCode c, ClassEntry doubleClass, MethodRefEntry rDbl,
 			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
 			Consumer<MethodCode> doubleOp, @Nullable MethodRefEntry doubleHelper) {
+		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOp,
+				doubleHelper, null, null);
+	}
+
+	// The same, with the holder arm of a program that may observe a complex: once one
+	// operand is known to be a Double, the OTHER one may be a holder, which _dbl would
+	// reject -- it is handed to toComplex instead (HolderArms). One holder test on the
+	// float path, against the one _dbl's own arm no longer makes at its top.
+	private static void emitDoubleBinaryPrologue(MethodCode c, ClassEntry doubleClass, MethodRefEntry rDbl,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			Consumer<MethodCode> doubleOp, @Nullable MethodRefEntry doubleHelper, @Nullable HolderArms holderArms,
+			MethodCode.@Nullable Label toComplex) {
 		c.aload(0);
 		c.instanceOf(doubleClass);
 		MethodCode.Label ifADouble = c.newLabel();
@@ -3762,7 +4016,17 @@ final class JvmNumericRuntimeBuilder {
 		c.instanceOf(doubleClass);
 		MethodCode.Label ifBNotDouble = c.newLabel();
 		c.ifeq(ifBNotDouble);
-		c.labelBinding(ifADouble);
+		if (holderArms != null) {
+			MethodCode.Label toDouble = c.newLabel();
+			holderArms.emitJump(c, Objects.requireNonNull(toComplex), 0);
+			c.goto_(toDouble);
+			c.labelBinding(ifADouble);
+			holderArms.emitJump(c, Objects.requireNonNull(toComplex), 1);
+			c.labelBinding(toDouble);
+		}
+		else {
+			c.labelBinding(ifADouble);
+		}
 		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
 		emitToDouble(c, 1, rDbl, numberClass, numDoubleValue);
 		if (doubleHelper != null) {

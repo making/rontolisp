@@ -2135,7 +2135,22 @@ final class JvmIntFusionCompiler {
 			emitFallback(root.args().get(0), ctx, className);
 			emitFallback(root.args().get(1), ctx, className);
 			ctx.restoreSite(root.site());
-			ctx.body.invokestatic(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx));
+			// An ordering of a program that may observe a complex signals for one
+			// (JvmComparisonCompiler.orderingOrEquality), so its bail must too.
+			String operator = compareOperator(pending.cmpMask());
+			if (ctx.usesComplex && !LispNames.EQ.equals(operator)) {
+				@Nullable String outer = ctx.operator;
+				ctx.operator = operator;
+				try {
+					ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB));
+				}
+				finally {
+					ctx.operator = outer;
+				}
+			}
+			else {
+				ctx.body.invokestatic(numOpFor(operator, JvmNumericRuntimeBuilder.CMPB, ctx));
+			}
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
 			ctx.body.iand().ireturn();
 		}

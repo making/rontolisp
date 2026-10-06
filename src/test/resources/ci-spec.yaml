@@ -21383,6 +21383,56 @@ cases:
       #C(2 2)
       #C(2 2)
       #C(0 2)
+  - name: complex-arithmetic-through-a-variable
+    # A complex reaching an operator through a parameter, a global or a designator's
+    # argument -- no complex in the call's own text -- answers the complex, and an
+    # ordering over one signals REAL. The rows are ComplexThroughAVariableFixture's.
+    source: |
+      (defvar *ci-ctv-z* (complex 1 2))
+      (defvar *ci-ctv-w* (complex 1.5 -2.0))
+      (defun ci-ctv-add (a b) (+ a b))
+      (defun ci-ctv-mul (a b) (* a b))
+      (defun ci-ctv-div (a b) (/ a b))
+      (defun ci-ctv-neg (a) (- a))
+      (defun ci-ctv-num= (a b) (= a b))
+      (defun ci-ctv-abs (a) (abs a))
+      (defun ci-ctv-expt (a b) (expt a b))
+      (defun ci-ctv-lt (a b) (< a b))
+      (print (ci-ctv-mul (complex 1 1) 2))
+      (print (ci-ctv-add 1.5 *ci-ctv-z*))
+      (print (ci-ctv-add *ci-ctv-z* (complex 0 -2)))
+      (print (ci-ctv-div 3 *ci-ctv-z*))
+      (print (ci-ctv-div *ci-ctv-z* *ci-ctv-w*))
+      (print (ci-ctv-neg *ci-ctv-w*))
+      (print (ci-ctv-num= *ci-ctv-w* (complex 1.5 -2)))
+      (print (ci-ctv-abs *ci-ctv-z*))
+      (print (exp *ci-ctv-z*))
+      (print (tan *ci-ctv-z*))
+      (print (ci-ctv-expt *ci-ctv-z* -2))
+      (print (ci-ctv-expt 3 *ci-ctv-z*))
+      (print (funcall #'expt 2 (complex 1 1)))
+      (print (reduce #'* (list *ci-ctv-z* *ci-ctv-z* *ci-ctv-z*)))
+      (print (handler-case (ci-ctv-lt *ci-ctv-z* 1) (error (e) (princ-to-string e))))
+      (print (handler-case (ci-ctv-mul *ci-ctv-z* 'a) (error (e) (princ-to-string e))))
+      (print (handler-case (ci-ctv-div *ci-ctv-z* 0) (division-by-zero () :division-by-zero)))
+    expected: |
+      #C(2 2)
+      #C(2.5 2.0)
+      1
+      #C(3/5 -6/5)
+      #C(-0.4 0.8)
+      #C(-1.5 2.0)
+      T
+      2.23606797749979
+      #C(-1.1312043837568138 2.471726672004819)
+      #C(0.0338128260798966 1.0147936161466335)
+      #C(-3/25 -4/25)
+      #C(-1.7587648028740555 2.4303798814529762)
+      #C(1.5384778027279442 1.2779225526272695)
+      #C(-11 -2)
+      "<: The value #C(1 2) is not of type REAL"
+      "*: The value A is not of type NUMBER"
+      :DIVISION-BY-ZERO
   - name: complex-type-system
     source: |
       (print (typep #c(1 2) 'complex))

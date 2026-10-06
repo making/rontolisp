@@ -44,7 +44,54 @@ final class WasmTranscendentalCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException(name + " expects 1 argument, got " + (args.size() - 1));
 		}
+		WasmComplexBlock complexBlock = ctx.complexBlock;
+		WasmComplexBlock.Fn entry = complexBlock == null ? null : WasmComplexBlock.unary(name);
+		if (complexBlock != null && entry != null && WasmComplexBlock.mayHoldComplex(args.get(1))) {
+			compileHolderAware(args.get(1), ctx, fn, complexBlock, entry);
+			return;
+		}
 		compileArg(args.get(1), ctx, fn);
+	}
+
+	/**
+	 * A program that may observe a complex, and an argument a variable or a call
+	 * produces: a {@code TYPE_COMPLEX} goes to the complex block's formula, every real to
+	 * the call it always took -- one test in front of the {@code _as_f64} that would
+	 * reject a complex (`.kb/wasm-complex.md`, "A complex through a variable").
+	 */
+	private static void compileHolderAware(LispVal arg, WasmLispCompiler.Ctx ctx, Fn fn, WasmComplexBlock complexBlock,
+			WasmComplexBlock.Fn entry) {
+		WasmExprCompiler.compileExpr(arg, ctx);
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		complexBlock.emitCall(ctx, entry);
+		ctx.writer.write(Instruction.ELSE);
+		// A float argument is read straight out of its box -- _as_f64's first rung,
+		// without the call -- which pays for the test in front of it.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(am.ik.wasm.Type.F64);
+		WasmEmitHelper.unboxF64Local(ctx, slot);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		ctx.writer.write(Instruction.END);
+		call(ctx, fn);
+		WasmEmitHelper.boxF64(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

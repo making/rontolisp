@@ -21,7 +21,10 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
 - Unconditional numeric helpers gain holder arms that are emitted only for a
   complex-capable program: `_abs` (float modulus), `_cmpb` (part-wise numeric:
   `=` and `zerop` over holders compare, ordering never reaches it),
-  `_min`/`_max` (throw a REAL operand-type report). `eql`/`equal`/`eq` need
+  `_min`/`_max` (throw a REAL operand-type report), and the generic
+  `_add`/`_sub`/`_mul`/`_div`/`_neg`/`_pow`, which hand a holder to their `_c*`
+  twin where the real body would reject it ("A complex through a variable"
+  below). `_dbl`'s REAL arm sits after every real rung. `eql`/`equal`/`eq` need
   nothing (they fall through to the holder's `equals`).
 - Gated `GROUP_COMPLEX` (`JvmComplexRuntimeBuilder`, only when
   `mayCreateComplex`: a `#C` literal, a `complex`/`conjugate` call, a `sqrt`
@@ -39,8 +42,9 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
   and `log`/`asin`/`acos`/`acosh`/`atanh` cross a real argument outside their
   domain into the complex arm at `(x, +0.0)`, the way `cis` always answers the
   arm), `_cconjugate`,
-  `_ccmpb` (throw-on-holder then delegate), `_cphase`, and the `#C(re im)`
-  printer arms (parts recurse through the same renderer).
+  `_ccmpb` (throw-on-holder then delegate; every ordering of the program calls
+  it), `_cphase`, and the `#C(re im)` printer arms (parts recurse through the
+  same renderer).
   The holder class file travels exactly then (`needsComplexRuntime`).
 
 The hard rule: no `am/ik/rontolisp/runtime/RontoComplex` reference -- class
@@ -60,7 +64,9 @@ open, and callers the dispatchers keep alive defeat a reachability re-check,
 so a gate-on class can still run where its `RontoComplex.class` file is
 absent. Every holder TEST (the `numberp`/`complexp`/`realpart`/`imagpart`
 inline shapes, the `_cmpb`/`_abs`/`_signum`/`_min`/`_max`/`_dbl` arms, the
-printer dispatch, the `_eval` self-eval arm) therefore consults the `static
+`_add`/`_sub`/`_mul`/`_div`/`_neg`/`_pow` arms, the unary math sites' test,
+`_ccmpb` and `_cpowr` -- the two gated helpers a program reaches without building
+a holder -- the printer dispatch, the `_eval` self-eval arm) therefore consults the `static
 final boolean _hasComplex` probe first -- set once in `<clinit>` by a
 `Class.forName` that catches `ClassNotFoundException` -- and takes its
 holder-less shape when the class did not load. Exact, not heuristic: no
@@ -87,12 +93,75 @@ genuinely missing file. Pinning test:
   uses `_ccmpb`. `min`/`max` need no gate (`isDefinitelyDouble` never fires
   on complex). Int-fusion, typed loops and raw stores decline a tree
   containing complex (the fused bail would answer `_add`'s error, not the
-  complex value).
+  complex value). A complex the tree does not show is the run-time arms' job
+  (next section).
 - `#'complex`/`#'conjugate`/`#'sqrt`/`#'phase` wrappers are reference-gated on
   the JVM (their bodies call gated helpers; an ungated wrapper would force the
   group into every program), and so are `#'log`/`#'asin`/`#'acos`/`#'expt`
   since the real-domain escape below. `fboundp` still answers from the static
   registry.
+
+## A complex through a variable (2026-10-06)
+
+The steering above is syntactic, so a complex reaching an operator through a parameter, a
+global, a list element or a designator's argument -- nothing complex in the call's own
+text -- landed in the real-only body: `(defun m (a b) (* a b)) (m #c(1 1) 2)` reported
+`*: The value #C(1 1) is not of type NUMBER`, `exp`/`sin`/`expt` through a parameter the
+same, and `(< z 1)` answered `nil` (`_cmpb`'s holder arm is `=`'s part-wise test). In a
+program `compiler/ComplexCapability` gates -- the `usesComplex` scan, one predicate with
+the WASM backend's -- the generic entries find the holder at run time. The rule: **an arm
+sits where the real body would REJECT a holder, never on a path a real takes**, so every
+complex-free class is byte-identical and the Long fast path tests nothing new.
+
+- `_add`/`_sub`/`_mul`/`_div` SPLIT in such a program (`HeadAndTail`): the helper keeps the
+  `Double` pair (read straight out of the boxes) and, but for `_div`, the `Long` pair, and
+  hands every other pair -- mixed float, ratio, bignum, an overflow, a holder -- to its
+  tail `_addx`/`_subx`/`_mulx`/`_divx`, the one-piece body plus the holder arms
+  (`HolderArms`): beside a `Double` in the prologue (once one side is known to be a
+  `Double`, the other is tested), at the rational path's head and ahead of `_big`'s funnel
+  (for `_divx`, the exact path's head), each a delegation to `_cadd`/`_csub`/`_cmul`/
+  `_cdiv`. **The arms must not sit in the helper itself**: measured 2026-10-06 on an n-body
+  (a `sqrt` gates it, and a complex can reach its float arithmetic through the body
+  vectors), the arms inside `_add` & co. (143 -> 218 bytecodes) DOUBLED its allocation under
+  Graal -- 111 -> 228 young collections with an 8 MB young generation, 160 -> ~450 ms --
+  and arms on the cold paths alone still 164; the split head (74 bytecodes) is back at 110
+  and at the base time. C2, which eliminates none of those boxes, ran both alike. `_neg`
+  keeps its arm ahead of `_big`, to `_cneg` -- never `_csub` from zero, which turns a
+  `-0.0` part into `+0.0`. `_pow` on each of its three arms ahead of `_dbl`/`_ratnum`, to
+  `_cpow`; `_cpowr`, which a site with a variable operand reaches, at its head. `_cdiv`'s
+  no-holder delegation back to `_div` cannot loop: each side delegates on the other
+  answer.
+- `_dbl`'s REAL arm moved from its first instruction to after the `Double`, ratio and
+  `Number` rungs -- the same answer, and no holder test on the float path.
+- A unary math site (`exp sin cos tan atan sinh cosh tanh`; `log`/`asin`/`acos` with a
+  variable already reach `_cu1` through the escape gate) whose argument is not unboxed
+  directly (`JvmArithCompiler.unboxesDirectly`: a literal, a declared float, an inlined
+  double-literal tree) stores it and tests it: a holder takes `_cu1`, a real the inline
+  `StrictMath` call (`JvmMathFnCompiler.compileHolderAware`).
+- Every ordering of such a program calls `_ccmpb` (`JvmComparisonCompiler.orderingOrEquality`,
+  and the fused compare's bail), `=` keeps `_cmpb`.
+- Every holder test is behind the presence probe: `_ccmpb` and `_cpowr` gained it, since
+  they now run in programs that never build a holder.
+
+Not reached: an operation whose own form spells a float literal (`(+ z 1.5)`,
+`(exp (* 1.0 z))`) takes the unboxed double path, whose `_dbl` still signals REAL (the
+WASM twin's f64 path the same) -- `.todo/d57`.
+
+Measured 2026-10-06 (linux/amd64, GraalVM 25): the size-report and bench-report programs
+compile to the same JVM class and jar bytes (and, for the WASM twin, the same modules at
+every level). A gated program pays for the twins its helpers now reach, which the JVM's
+name-reachability shake keeps whether or not a complex can flow there -- measured with
+the arms still inside the helpers, before the split added its four small heads: `+`
+alone +1.3 KB class / +0.7 KB jar, all four operators +2.8 / +1.0 KB, `exp` or `sin`
+(`_cu1`) +4.7 / +1.5 KB, `expt` (`_cpow`) +5.0 / +1.9 KB;
+`examples/ml/linear-regression.lisp` +3.5 / +1.7 KB. The generic float, ordering, `=`,
+unary and `expt` loops of such a program ran unchanged within noise.
+
+Pinned by `ComplexThroughAVariableFixture` (`LispEvaluatorTest#complexThroughAVariable`,
+`JvmLispCompilerTest#compileAndRunComplexThroughAVariable`,
+`WasmLispCompilerIntegrationTest#complexThroughAVariable`: the answers outside EH mode, the
+REAL signals and the reported culprit under handlers) and `ci-spec.yaml`'s
+`complex-arithmetic-through-a-variable`.
 
 ## The asin/acos branch cut, and their exact real axis (`.todo/764`, 2026-09-11)
 
@@ -335,10 +404,10 @@ carries the four shapes.
 ## Known corners (documented, not fixed here)
 
 A complex arriving only through a variable beside a double literal takes the
-unboxed path into `_dbl`'s NUMBER operand-type landing (catchable, correctly
-rendered) instead of the complex answer; ordering there answers `nil` instead
-of signalling. The embedded runtime reader has no `#C` arm yet. `signum` of a
-complex is 754's audit.
+unboxed path into `_dbl`'s REAL operand-type landing (catchable, correctly
+rendered) instead of the complex answer ("A complex through a variable" above).
+The embedded runtime reader has no `#C` arm yet. `signum` of a complex is 754's
+audit.
 
 The `_cu1` real path and the interpreter's unary math are both
 `StrictMath.<fn>` (fdlibm, `.kb/transcendentals.md`), one number on every

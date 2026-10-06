@@ -20063,6 +20063,18 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
 	}
 
+	// The reference the compiled backends are held to for a complex reaching arithmetic
+	// through a parameter, a global or a designator's argument rather than a literal in
+	// the call. The twins are JvmLispCompilerTest#compileAndRunComplexThroughAVariable
+	// and WasmLispCompilerIntegrationTest#complexThroughAVariable.
+	@Test
+	void complexThroughAVariable() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The
