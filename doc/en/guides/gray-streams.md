@@ -34,14 +34,16 @@ leaves (all in the `rontolisp` package).
 | `open-stream-p` | answers `t` -- like `close`, a name a program may own |
 | `streamp`, `(typep x 'stream)` | answer `t` -- a Gray stream IS a stream, so a library that dispatches on the type routes it to its Lisp-stream arm |
 | `stream-element-type` | `character`, or `(unsigned-byte 8)` for a binary base class -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
-| `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics) |
+| `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics; a string goes to `stream-write-string` in one call) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
 
 A character output stream defines **`stream-write-char` or `stream-write-string`
 -- either one is enough**. Each has a default method written in terms of the
 other, so the rest of the output protocol composes out of whichever you wrote.
 (Defining neither is the one broken shape: the two defaults then call each
-other.)
+other.) As in SBCL, `stream-write-string` is always called with integer `start`
+and `end`, so a method takes `(stream string &optional start end)` and writes
+that range.
 
 Two more generics have no built-in of their own but are what the line-oriented
 operators consult: `rontolisp:stream-line-column` answers the stream's current
@@ -90,9 +92,9 @@ means "no characters left at all".
 ```lisp
 (defclass upcase-stream (rontolisp:fundamental-character-output-stream)
   ((acc :initform "")))
-(defmethod rontolisp:stream-write-string ((s upcase-stream) str)
+(defmethod rontolisp:stream-write-string ((s upcase-stream) str &optional (start 0) end)
   (setf (slot-value s 'acc)
-        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
   str)
 (let ((s (make-instance 'upcase-stream)))
   (write-string "hello" s)
@@ -187,13 +189,12 @@ rontolisp protocol has, so a portable class that defines only
 (defclass upcase-stream (trivial-gray-streams:fundamental-character-output-stream)
   ((acc :initform "")))
 (defmethod trivial-gray-streams:stream-write-string
-    ((s upcase-stream) str &optional start end)
-  (declare (ignore start end))
+    ((s upcase-stream) str &optional (start 0) end)
   (setf (slot-value s 'acc)
-        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
   str)
 (defmethod trivial-gray-streams:stream-write-char ((s upcase-stream) c)
-  (trivial-gray-streams:stream-write-string s (string c))
+  (trivial-gray-streams:stream-write-string s (string c) 0 1)
   c)
 (let ((s (make-instance 'upcase-stream)))
   (write-string "hello" s)
@@ -229,6 +230,7 @@ rontolisp protocol has, so a portable class that defines only
   method runs, as SBCL does: a `nil`, negative or non-integer `:start`, a bound past
   the string's length and a `:start` after the `:end` are a `type-error` with nothing
   written. The method then receives integer `start` and `end` (a `nil` or omitted
-  `:end` is the length). A call spelling no bound passes the method the string alone.
-- Dispatch happens at the built-in call sites: a first-class
-  `(funcall #'read-byte instance)` does not dispatch on the compiled backends.
+  `:end` is the length).
+- The operators above dispatch as function values too (`(funcall #'read-byte
+  instance)`, `(apply #'write-line args)`). `write-char`, `write-byte` and
+  `unread-char` have no function value on the compiled backends.

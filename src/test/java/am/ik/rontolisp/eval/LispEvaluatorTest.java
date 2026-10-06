@@ -10446,6 +10446,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGrayStreamWriteWithoutABoundPassesIntegerBounds() {
+		// stream-write-string sees start and end as integers when the call spells no
+		// bound, and write-sequence of a string reaches it with the range -- sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_EXPECTED);
+	}
+
+	@Test
+	void streamOperatorsAsFunctionValuesReachAGrayStream() {
+		// #'write-string, 'write-line, (apply #'read-char ...) and the rest of the
+		// stream operators taken as values dispatch to a Gray instance like their calls.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_EXPECTED);
+	}
+
+	@Test
 	void sequenceOperatorsRefuseABadBound() {
 		// A negative, non-integer or out-of-range bound and a start past its end are a
 		// type-error before anything is called or written, in call position and first
@@ -24400,8 +24427,8 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defclass gs-count (rontolisp:fundamental-character-output-stream)
 				  ((n :initform 0)))
-				(defmethod rontolisp:stream-write-string ((s gs-count) str)
-				  (setf (slot-value s 'n) (+ (slot-value s 'n) (length str)))
+				(defmethod rontolisp:stream-write-string ((s gs-count) str &optional (start 0) end)
+				  (setf (slot-value s 'n) (+ (slot-value s 'n) (length (subseq str start end))))
 				  str)
 				(let ((s (make-instance 'gs-count)))
 				  (write-string "hello" s)
@@ -24603,7 +24630,7 @@ class LispEvaluatorTest {
 				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
 				(defclass gdp-plain (rontolisp:fundamental-stream) ())
 				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-				(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
+				(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
 				(list (input-stream-p (make-instance 'gdp-in))
 				      (output-stream-p (make-instance 'gdp-in))
 				      (input-stream-p (make-instance 'gdp-out))
@@ -24627,7 +24654,7 @@ class LispEvaluatorTest {
 				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
 				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
 				(defclass gsp-other () ())
-				(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
+				(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
 				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
 				(defun gsp-typep (x ty) (typep x ty))
 				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))

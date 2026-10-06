@@ -34,13 +34,15 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
 | `streamp`, `(typep x 'stream)` | `t` を返します -- Gray ストリームはストリームそのものなので、型で分岐するライブラリは Lisp ストリーム側の枝を選びます |
 | `stream-element-type` | `character`、バイナリ基底クラスなら `(unsigned-byte 8)`。両方を継承したクラス (バイバレントなストリーム) は `character` を返します。この答えはどちらのバッファを確保すべきかを示すものだからです。プログラムが所有できる名前です |
-| `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ) |
+| `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ。文字列は 1 回の `stream-write-string` に渡す) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |
 
 文字出力ストリームは **`stream-write-char` か `stream-write-string` のどちらか一方を
 定義すれば十分です**。それぞれ他方を使ったデフォルトメソッドを持つため、書いたほうから
 残りの出力プロトコルが組み上がります (どちらも定義しないのが唯一の壊れた形で、2 つの
-デフォルトが互いを呼び合います)。
+デフォルトが互いを呼び合います)。SBCL と同じく `stream-write-string` は常に整数の `start` と
+`end` 付きで呼ばれるので、メソッドは `(stream string &optional start end)` を受け取り、
+その範囲を書き込みます。
 
 さらに 2 つ、対応する組み込みは持たないものの行単位の演算子が参照する総称関数があります:
 `rontolisp:stream-line-column` はストリームの現在の桁位置を返し、桁位置を追跡しない
@@ -87,9 +89,9 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 ```lisp
 (defclass upcase-stream (rontolisp:fundamental-character-output-stream)
   ((acc :initform "")))
-(defmethod rontolisp:stream-write-string ((s upcase-stream) str)
+(defmethod rontolisp:stream-write-string ((s upcase-stream) str &optional (start 0) end)
   (setf (slot-value s 'acc)
-        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
   str)
 (let ((s (make-instance 'upcase-stream)))
   (write-string "hello" s)
@@ -184,13 +186,12 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 (defclass upcase-stream (trivial-gray-streams:fundamental-character-output-stream)
   ((acc :initform "")))
 (defmethod trivial-gray-streams:stream-write-string
-    ((s upcase-stream) str &optional start end)
-  (declare (ignore start end))
+    ((s upcase-stream) str &optional (start 0) end)
   (setf (slot-value s 'acc)
-        (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
   str)
 (defmethod trivial-gray-streams:stream-write-char ((s upcase-stream) c)
-  (trivial-gray-streams:stream-write-string s (string c))
+  (trivial-gray-streams:stream-write-string s (string c) 0 1)
   c)
 (let ((s (make-instance 'upcase-stream)))
   (write-string "hello" s)
@@ -225,6 +226,7 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 - `:start` / `:end` 付きの `write-string` と `write-line` は、SBCL と同じくメソッドを呼ぶ前に境界を検査します。
   `nil`・負数・整数でない `:start`、文字列の長さを超える境界、`:end` より後の `:start` は
   `type-error` になり、何も書き込まれません。メソッドには整数の `start` と `end` が渡されます
-  (`:end` が `nil` または省略なら文字列の長さ)。境界を書かない呼び出しでは、メソッドに文字列だけが渡されます。
-- ディスパッチは組み込みの呼び出しサイトで起きます: 第一級値経由の
-  `(funcall #'read-byte instance)` はコンパイルバックエンドではディスパッチしません。
+  (`:end` が `nil` または省略なら文字列の長さ)。
+- 上の演算子は関数値として呼んでもディスパッチします (`(funcall #'read-byte instance)`、
+  `(apply #'write-line args)`)。`write-char`、`write-byte`、`unread-char` は
+  コンパイルバックエンドでは関数値を持ちません。

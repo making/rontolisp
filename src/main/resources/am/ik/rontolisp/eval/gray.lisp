@@ -17,7 +17,8 @@
 ;; other, so exactly one is enough and the rest of the output protocol
 ;; (terpri, fresh-line, write-line, the print family) composes out of them.
 ;; Defining NEITHER is the one broken shape: the two defaults then call each
-;; other.
+;; other. stream-write-string is always called with integer start and end, as
+;; SBCL does, so a method takes (stream string &optional start end).
 ;;
 ;; Read-side requirement: a character input stream defines stream-read-char and
 ;; nothing else is mandatory (a binary one defines stream-read-byte). Every
@@ -195,14 +196,18 @@
               (setf (aref sequence i) elt)
               (setq i (+ i 1))))))))
 
+;; A string goes to stream-write-string in one call, as in SBCL, so a class that
+;; defines only that method receives the range; bytes go one at a time.
 (defun rontolisp::%gray-default-write-sequence (stream sequence start end)
-  (let ((i start) (chars (stringp sequence)))
-    (do ()
-        ((>= i end) sequence)
-      (if chars
-          (rontolisp:stream-write-char stream (aref sequence i))
-          (rontolisp:stream-write-byte stream (aref sequence i)))
-      (setq i (+ i 1)))))
+  (if (stringp sequence)
+      (progn
+        (rontolisp:stream-write-string stream sequence start end)
+        sequence)
+      (let ((i start))
+        (do ()
+            ((>= i end) sequence)
+          (rontolisp:stream-write-byte stream (aref sequence i))
+          (setq i (+ i 1))))))
 
 (defun rontolisp::%gray-default-write-string (stream string start end)
   (let ((i (if start start 0)) (n (if end end (length string))))
@@ -212,7 +217,7 @@
       (setq i (+ i 1)))))
 
 (defun rontolisp::%gray-default-write-char (stream character)
-  (rontolisp:stream-write-string stream (string character))
+  (rontolisp:stream-write-string stream (string character) 0 1)
   character)
 
 (defun rontolisp::%gray-default-terpri (stream)
@@ -359,7 +364,7 @@
 (defun rontolisp::%gray-write-string-dispatch (s stream)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
-        (rontolisp:stream-write-string stream s)
+        (rontolisp:stream-write-string stream s 0 (length s))
         (write-string s stream))))
 
 (defun rontolisp::%gray-write-char-dispatch (c stream)
@@ -385,24 +390,24 @@
 (defun rontolisp::%gray-princ-dispatch (value stream)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
-        (progn
-          (rontolisp:stream-write-string stream (%princ-piece value))
+        (let ((text (%princ-piece value)))
+          (rontolisp:stream-write-string stream text 0 (length text))
           value)
         (princ value stream))))
 
 (defun rontolisp::%gray-prin1-dispatch (value stream)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
-        (progn
-          (rontolisp:stream-write-string stream (%prin1-piece value))
+        (let ((text (%prin1-piece value)))
+          (rontolisp:stream-write-string stream text 0 (length text))
           value)
         (prin1 value stream))))
 
 (defun rontolisp::%gray-print-dispatch (value stream)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
-        (progn
-          (rontolisp:stream-write-string stream (%prin1-piece value))
+        (let ((text (%prin1-piece value)))
+          (rontolisp:stream-write-string stream text 0 (length text))
           (rontolisp:stream-terpri stream)
           value)
         (print value stream))))
@@ -431,7 +436,7 @@
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (rontolisp:stream-write-string stream s)
+          (rontolisp:stream-write-string stream s 0 (length s))
           (rontolisp:stream-terpri stream)
           s)
         (write-line s stream))))
@@ -439,9 +444,8 @@
 ;; write-line / write-string with a bounding keyword. A spelled bound is checked ONCE
 ;; before the method runs -- a nil start, a negative or non-integer bound and a range
 ;; outside the string are type-errors, as in SBCL -- and the method then sees integers,
-;; a nil end being the length. One helper per spelling, apart from the unbounded
-;; helpers above, so a call spelling no bound neither carries the check nor passes
-;; bounds the user method would rather default itself.
+;; a nil end being the length. Apart from the unbounded helpers above, so a call
+;; spelling no bound does not carry the check.
 (defun rontolisp::%gray-write-line-bounds-dispatch (s stream start end)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)

@@ -9,6 +9,7 @@ import java.util.List;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -206,6 +207,7 @@ public final class GrayStreamsLibrary {
 		for (LispVal form : program) {
 			rewritten.add(rewrite(form, ctx));
 		}
+		markFunctionValueHelpers(program, ctx);
 		java.util.Set<String> usedHelpers = ctx.used();
 		java.util.List<LispVal> out = new java.util.ArrayList<>();
 		java.util.List<LispVal> body = rewritten;
@@ -227,6 +229,24 @@ public final class GrayStreamsLibrary {
 		}
 		out.addAll(body);
 		return out;
+	}
+
+	/**
+	 * Splices the dispatch helpers of every stream operator the program designates as a
+	 * function value ({@code #'write-string}, {@code 'read-char}), so the backends inject
+	 * that operator's Gray wrapper ({@code BuiltinFunctionWrappers.grayDispatchHelpers}),
+	 * which calls them: a function value has no call site for {@link #rewrite} to see.
+	 * An operator the program owns keeps its own method, as at a call site.
+	 */
+	private static void markFunctionValueHelpers(List<LispVal> program, RewriteContext ctx) {
+		java.util.Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);
+		for (String op : new java.util.TreeSet<>(designated)) {
+			if (!ctx.owned().contains(op)) {
+				for (String helper : BuiltinFunctionWrappers.grayDispatchHelpers(op)) {
+					ctx.used().add(member(helper));
+				}
+			}
+		}
 	}
 
 	/**

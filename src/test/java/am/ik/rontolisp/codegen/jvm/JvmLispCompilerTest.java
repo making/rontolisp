@@ -7278,8 +7278,8 @@ class JvmLispCompilerTest {
 				(defvar *syn* (make-synonym-stream '*port*))
 				(defclass upcaser (rontolisp:fundamental-character-output-stream)
 				  ((target :initarg :target :reader upcaser-target)))
-				(defmethod rontolisp:stream-write-string ((s upcaser) str)
-				  (write-string (string-upcase str) (upcaser-target s))
+				(defmethod rontolisp:stream-write-string ((s upcaser) str &optional (start 0) end)
+				  (write-string (string-upcase (subseq str start end)) (upcaser-target s))
 				  str)
 				(princ (with-output-to-string (s) (let ((*port* s)) (write-string "user" *syn*))))
 				(princ "|")
@@ -7585,7 +7585,7 @@ class JvmLispCompilerTest {
 	void compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers() throws Exception {
 		assertThat(compileAndRunGray("""
 				(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
-				(defmethod rontolisp:stream-write-string ((s upcaser) str) str)
+				(defmethod rontolisp:stream-write-string ((s upcaser) str &optional start end) (declare (ignore start end)) str)
 				(print (let ((l (make-list 3)))
 				         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
 				(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
@@ -13514,6 +13514,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAGrayStreamWriteWithoutABoundPassesIntegerBounds() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aGrayStreamWriteWithoutABoundPassesIntegerBounds.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStreamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream: the
+		// injected wrappers call the Gray dispatch helpers.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceOperatorsRefuseABadBound() throws Exception {
 		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_BOUND_PROGRAM))
@@ -13795,8 +13816,8 @@ class JvmLispCompilerTest {
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
 					  ((acc :initform "")))
-					(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
-					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+					(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
 					  str)
 					(let ((s (make-instance 'gs-upcase)))
 					  (write-string "hello" s)
@@ -13900,8 +13921,8 @@ class JvmLispCompilerTest {
 					(defclass gs-sink (rontolisp:fundamental-character-output-stream)
 					  ((format :initarg :format :reader sink-format)
 					   (acc :initform "")))
-					(defmethod rontolisp:stream-write-string ((s gs-sink) str)
-					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) str))
+					(defmethod rontolisp:stream-write-string ((s gs-sink) str &optional (start 0) end)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (subseq str start end)))
 					  str)
 					(define-condition bad-format (error)
 					  ((format :initarg :format :reader bad-format-name))
@@ -14028,7 +14049,7 @@ class JvmLispCompilerTest {
 				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
 				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
 				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-				(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
+				(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
 				(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
 				      (handle (make-string-input-stream "z")))
 				  (print (list (input-stream-p in) (output-stream-p in)))
@@ -14052,7 +14073,7 @@ class JvmLispCompilerTest {
 				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
 				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
 				(defclass gsp-other () ())
-				(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
+				(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
 				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
 				(defun gsp-typep (x ty) (typep x ty))
 				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))

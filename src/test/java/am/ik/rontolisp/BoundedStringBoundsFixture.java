@@ -21,7 +21,7 @@ public final class BoundedStringBoundsFixture {
 	/** The program: one row per operator, one cell per refused range. */
 	public static final String PROGRAM = """
 			(defclass bsb-gray (rontolisp:fundamental-character-output-stream) ())
-			(defmethod rontolisp:stream-write-string ((s bsb-gray) str) str)
+			(defmethod rontolisp:stream-write-string ((s bsb-gray) str &optional start end) (declare (ignore start end)) str)
 			(defun bsb-probe (thunk)
 			  (handler-case (progn (funcall thunk) :ok)
 			    (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))
