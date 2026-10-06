@@ -33,17 +33,17 @@ import org.jspecify.annotations.Nullable;
  * The owner's register is the middle slot of an array of its own rather than a static
  * field: every other thread reads {@code _mvOwner} on every access, and a static field
  * shares the class's cache lines with it, so the owner's writes to a register there made
- * those reads miss -- the cost of one shared register, back ({@code .kb/multiple-values.md},
- * "One register per thread"). The slots around the register fill the cache-line pair it
- * sits in, so nothing else lives there.
+ * those reads miss -- the cost of one shared register, back
+ * ({@code .kb/multiple-values.md}, "One register per thread"). The slots around the
+ * register fill the cache-line pair it sits in, so nothing else lives there.
  *
  * <p>
  * The owner is the first thread to enter the class through {@code main}'s prologue or a
  * jvm-export wrapper, claimed ONCE under the class's lock ({@code _mvClaim}) and never
  * moved: a claim that moved would strand the values the old owner had just published in
  * the box, its consumer then reading its ThreadLocal. So a library's host thread owns the
- * box as a program's {@code main} thread does, and a {@code main} run after a
- * host already called an export leaves the owner where it is.
+ * box as a program's {@code main} thread does, and a {@code main} run after a host
+ * already called an export leaves the owner where it is.
  *
  * @param field the {@code _g$} static field of the {@code %mv-spill} global, the channel
  * of a single-threaded program
@@ -185,8 +185,8 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 		return new JvmMvChannel(field, new PerThread(tlName, tlDesc, cp.fieldRef(thisClass, tlName, tlDesc), ownerName,
 				ownerDesc, cp.fieldRef(thisClass, ownerName, ownerDesc), getName, getDesc,
 				cp.methodRef(thisClass, getName, getDesc), setName, setDesc, cp.methodRef(thisClass, setName, setDesc),
-				boxName, boxDesc, cp.fieldRef(thisClass, boxName, boxDesc), cp.classEntry("java/lang/Object"), claimName,
-				claimDesc, cp.methodRef(thisClass, claimName, claimDesc),
+				boxName, boxDesc, cp.fieldRef(thisClass, boxName, boxDesc), cp.classEntry("java/lang/Object"),
+				claimName, claimDesc, cp.methodRef(thisClass, claimName, claimDesc),
 				cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;"),
 				cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;"),
 				cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V")));
