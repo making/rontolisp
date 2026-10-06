@@ -172,17 +172,8 @@ public final class StringComparisonBoundsFixture {
 			""";
 
 	/** What {@link #ORDER_PROGRAM} prints (sbcl's answers). */
-	public static final String ORDER_EXPECTED = String.join("\n",
-			"(T (:S1 :S2 :E1 :ST1))",
-			"(NIL (:A :B))",
-			"(NIL NIL)",
-			"(T NIL)",
-			"(T (:S1 :S2 :E2 :ST2 :E1))",
-			"(NIL (:A :B))",
-			"(T (:S1 :S2 :E2 :ST1 :ST2 :E1))",
-			"(T (:S2 :ST2 :E1))",
-			"(T (:S1 :S2 :ST2 :ST1))",
-			"(NIL (:S1 :S2 :A :B))",
-			"(:ERROR (:S1 :S2 :E1 :ST1))");
+	public static final String ORDER_EXPECTED = String.join("\n", "(T (:S1 :S2 :E1 :ST1))", "(NIL (:A :B))",
+			"(NIL NIL)", "(T NIL)", "(T (:S1 :S2 :E2 :ST2 :E1))", "(NIL (:A :B))", "(T (:S1 :S2 :E2 :ST1 :ST2 :E1))",
+			"(T (:S2 :ST2 :E1))", "(T (:S1 :S2 :ST2 :ST1))", "(NIL (:S1 :S2 :A :B))", "(:ERROR (:S1 :S2 :E1 :ST1))");
 
 }

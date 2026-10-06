@@ -32471,13 +32471,15 @@ public final class LispMacroExpander {
 			}
 			switch (key.name()) {
 				case LispNames.START1_KEYWORD, LispNames.END1_KEYWORD, LispNames.START2_KEYWORD,
-						LispNames.END2_KEYWORD -> {
-				}
+						LispNames.END2_KEYWORD ->
+					{
+					}
 				default -> throw new IllegalArgumentException(name + ": unsupported keyword " + key.name());
 			}
 		}
 		// A computed form is evaluated where the lowering below puts it, each operand
-		// beside its own bounds: when that is not the call's order, hoist the operands and
+		// beside its own bounds: when that is not the call's order, hoist the operands
+		// and
 		// every computed bound in the call's order first. A repeated keyword takes its
 		// FIRST value (CLHS 3.4.1.4), the later one still evaluated.
 		KeywordTail tail = stringBoundsInCallOrder(parts) ? null : KeywordTail.of(parts, 3, "__sc");
