@@ -566,6 +566,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return complexBlockFuncBase() + (this.complexCapable ? WasmComplexBlock.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of the complex block's first function ({@link WasmComplexBlock}), right
+	 * after {@code _lit_stage}, so adding it moves no fixed index -- only
+	 * {@link #userFuncBase()}. Only meaningful when {@link #complexCapable} is set.
+	 */
+	private int complexBlockFuncBase() {
 		return litStageFuncBase() + (this.emitsLitStage ? 1 : 0);
 	}
 
@@ -860,6 +869,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * site emitted against an index the module never reserved -- cannot happen.
 	 */
 	private boolean emitsLitStage;
+
+	/**
+	 * Whether the program may observe a complex value
+	 * ({@link am.ik.rontolisp.compiler.ComplexCapability}): what gates the holder arms of
+	 * the generic {@code _rat_*} helpers and the complex block a call site hands a
+	 * complex arriving through a variable to ({@link WasmComplexBlock}). Decided in the
+	 * pre-pass, because the block shifts {@link #userFuncBase()}; a program that cannot
+	 * observe one compiles byte-identically to a build that never knew about either.
+	 */
+	private boolean complexCapable;
 
 	/**
 	 * The widest call this module can make through a per-arity dispatcher -- a
@@ -3446,6 +3465,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode forces it on: the signal hook synthesizes simple-* instances for plain
 		// string signals.
 		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		// The complex gate, decided on the same snapshot and for the same reason: the
+		// complex block shifts userFuncBase(), which every body compiled from here on
+		// reads.
+		this.complexCapable = am.ik.rontolisp.compiler.ComplexCapability.mayObserveComplex(program, closRegistry);
 		// The equalp key fold, decided on the same snapshot: a table whose keys are
 		// folded carries a flag in its header count, so every count read in the module
 		// has to agree about whether the flag is there. One program-wide answer is what
@@ -4688,6 +4711,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			.dynSlots(dynSlots)
 			.reentrantTaskGlobalIndex(reentrantTaskGlobalIndex)
 			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
+		// The complex block, built before any body compiles: a site that calls one of
+		// its functions records that body's fdlibm calls as its own (WasmComplexBlock).
+		// Each body gets a set of its own, so the block alone gives no fdlibm function a
+		// real body.
+		WasmComplexBlock complexBlock = this.complexCapable ? new WasmComplexBlock(complexBlockFuncBase(),
+				(stream, uses) -> ctxBuilder.writer(new WasmWriter(stream)).bodyStream(stream).fdlibmUsed(uses).build())
+				: null;
+		ctxBuilder.fdlibmUsed(fdlibmUsed).complexBlock(complexBlock);
 
 		// Passes 2a-2c emit function BODIES, and a body is the only consumer of a string
 		// it interns (an i32.const the tree shaker can see). Everything interned outside
@@ -7575,6 +7606,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsLitStage) {
 					fnDef.addFunction(TYPE_RD_MEMEQ);
 				}
+				// The complex block, right after it, over fixed signatures only.
+				if (complexBlock != null) {
+					for (WasmComplexBlock.Fn fn : WasmComplexBlock.Fn.values()) {
+						fnDef.addFunction(fn.typeIndex);
+					}
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -8169,12 +8206,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD,
-							!this.optimize.prefersSizeOverSpeed()))
+							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_ADD : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB, Instruction.F64_SUB,
-							!this.optimize.prefersSizeOverSpeed()))
+							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_SUB : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL, Instruction.F64_MUL,
-							!this.optimize.prefersSizeOverSpeed()))
-					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody())
+							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_MUL : -1))
+					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody(this.complexCapable ? FUNC_C_DIV : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBitsBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatRoundingBody(0))
@@ -8587,6 +8624,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The literal :string staging helper, in litStageFuncBase() order.
 				if (this.emitsLitStage) {
 					code.addFunction(WasmStringRuntimeBuilder.buildLitStageBody(litStageBase));
+				}
+				// The complex block's bodies, in complexBlockFuncBase() order.
+				if (complexBlock != null) {
+					for (WasmComplexBlock.Fn fn : WasmComplexBlock.Fn.values()) {
+						code.addFunction(complexBlock.body(fn));
+					}
 				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
@@ -11354,6 +11397,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		int litStageFuncIndex = -1;
 
 		/**
+		 * The complex block a site hands a complex arriving through a variable to, or
+		 * null in a module whose program cannot observe a complex
+		 * ({@link WasmLispCompiler#complexCapable}). Also what a site asks whether it
+		 * must test for one at all.
+		 */
+		@Nullable WasmComplexBlock complexBlock;
+
+		/**
 		 * The widest literal {@code :string} call site's total staged byte count -- the
 		 * size of the reserved block {@code _lit_stage} copies into. A one-element holder
 		 * because every context of a compilation shares the answer, like
@@ -11520,6 +11571,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.namesArityOperators = builder.namesArityOperators;
 			this.arityNamedCallees = builder.arityNamedCallees;
 			this.litStageFuncIndex = builder.litStageFuncIndex;
+			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
 			this.importDecls = builder.importDecls;
 			this.numDefuns = builder.numDefuns;
@@ -11705,6 +11757,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int litStageFuncIndex = -1;
 
+			private @Nullable WasmComplexBlock complexBlock;
+
 			private int[] litStageBytes = new int[1];
 
 			private Map<String, WasmImportCompiler.Decl> importDecls = Map.of();
@@ -11848,6 +11902,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.namesArityOperators = proto.namesArityOperators;
 				this.arityNamedCallees = proto.arityNamedCallees;
 				this.litStageFuncIndex = proto.litStageFuncIndex;
+				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
 				this.importDecls = proto.importDecls;
 				this.numDefuns = proto.numDefuns;
@@ -12162,6 +12217,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder litStageFuncIndex(int litStageFuncIndex) {
 				this.litStageFuncIndex = litStageFuncIndex;
+				return this;
+			}
+
+			Builder complexBlock(@Nullable WasmComplexBlock complexBlock) {
+				this.complexBlock = complexBlock;
 				return this;
 			}
 

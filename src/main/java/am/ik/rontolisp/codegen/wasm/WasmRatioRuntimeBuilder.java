@@ -287,6 +287,17 @@ final class WasmRatioRuntimeBuilder {
 	// keeps the dispatch-only body, which the type-test fold can still reduce to a pure
 	// forwarder of _big_* in an integer-only module (.kb/wasm-ref-type-fold.md).
 	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head) {
+		return buildRatBinaryBody(i32Opcode, f64Opcode, i31Head, -1);
+	}
+
+	// The same, with the holder arm of a program that may observe a complex
+	// (complexFunc the _c_* twin, -1 elsewhere): a TYPE_COMPLEX operand is handed to the
+	// twin where the real body would reject it -- beside a float, before _as_f64's
+	// landing, and once the two exact integers are ruled out, before the ratio arm's
+	// _rat_num and the non-rational landing (emitComplexArm) -- so the i31 head and
+	// the exact-integer path test nothing new. Two floats, which cannot be the pair the
+	// arm is for, answer ahead of it (emitFloatPairArm).
+	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head, int complexFunc) {
 		int i64Opcode = i32Opcode == Instruction.I32_ADD ? Instruction.I64_ADD
 				: i32Opcode == Instruction.I32_SUB ? Instruction.I64_SUB : Instruction.I64_MUL;
 		int bigFunc = i64Opcode == Instruction.I64_ADD ? WasmLispCompiler.FUNC_BIG_ADD
@@ -315,6 +326,8 @@ final class WasmRatioRuntimeBuilder {
 		// and box the result. Mirrors the JVM _add/_sub/_mul Double prologue.
 		emitEitherFloat(w);
 		ifRefNullEq(w);
+		emitFloatPairArm(w, complexFunc, f64Opcode);
+		emitComplexArm(w, complexFunc);
 		emitLocalToF64(w, 0);
 		emitLocalToF64(w, 1);
 		w.write(f64Opcode);
@@ -328,6 +341,7 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 1);
 		call(w, bigFunc);
 		w.write(Instruction.ELSE);
+		emitComplexArm(w, complexFunc);
 		emitEitherRatio(w);
 		ifRefNullEq(w);
 		if (i64Opcode == Instruction.I64_MUL) {
@@ -362,6 +376,12 @@ final class WasmRatioRuntimeBuilder {
 	// denominator _rat_new normalizes (an even division demotes to the quotient, so
 	// (/ #x100000000 2) stays exact); otherwise _rat_new(num(a)*den(b), den(a)*num(b)).
 	static byte[] buildRatDivBody() {
+		return buildRatDivBody(-1);
+	}
+
+	// The same, with the holder arm buildRatBinaryBody's complexFunc describes: _c_div
+	// is the twin.
+	static byte[] buildRatDivBody(int complexFunc) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -370,6 +390,8 @@ final class WasmRatioRuntimeBuilder {
 		// Float fast path: f64 division when either operand is a float.
 		emitEitherFloat(w);
 		ifRefNullEq(w);
+		emitFloatPairArm(w, complexFunc, Instruction.F64_DIV);
+		emitComplexArm(w, complexFunc);
 		emitLocalToF64(w, 0);
 		emitLocalToF64(w, 1);
 		w.write(Instruction.F64_DIV);
@@ -383,6 +405,7 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 1);
 		call(w, WasmLispCompiler.FUNC_RAT_NEW);
 		w.write(Instruction.ELSE);
+		emitComplexArm(w, complexFunc);
 		emitEitherRatio(w);
 		ifRefNullEq(w);
 		emitCrossProduct(w, 0, 1);
@@ -413,6 +436,54 @@ final class WasmRatioRuntimeBuilder {
 	private static void emitComponent(WasmWriter w, int slot, int componentFunc) {
 		getLocal(w, slot);
 		call(w, componentFunc);
+	}
+
+	// The float branch's head in a program that may observe a complex (complexFunc the
+	// _c_* twin; nothing at all for -1): two floats answer here, read straight out of
+	// their boxes, so the complex arm after it -- which only a mixed pair can need --
+	// costs the float pair nothing, and the pair skips the two _as_f64 calls besides.
+	// The value is the one _as_f64's float rung would have read.
+	private static void emitFloatPairArm(WasmWriter w, int complexFunc, int f64Opcode) {
+		if (complexFunc < 0) {
+			return;
+		}
+		emitBothFloat(w);
+		w.write(Instruction.IF, 0x40);
+		for (int slot = 0; slot < 2; slot++) {
+			getLocal(w, slot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			w.writeUnsignedLeb128(0);
+		}
+		w.write(f64Opcode);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	// The holder arm of a program that may observe a complex: when local 0 or 1 is a
+	// TYPE_COMPLEX, return complexFunc(a, b); fall through otherwise. Nothing at all for
+	// complexFunc -1, so every other module's body is the one it always was. A ref.test
+	// the module's constructors decide folds away with its call
+	// (.kb/wasm-ref-type-fold.md).
+	private static void emitComplexArm(WasmWriter w, int complexFunc) {
+		if (complexFunc < 0) {
+			return;
+		}
+		getLocal(w, 0);
+		refTestType(w, WasmLispCompiler.TYPE_COMPLEX);
+		getLocal(w, 1);
+		refTestType(w, WasmLispCompiler.TYPE_COMPLEX);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		call(w, complexFunc);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	// Pushes `(a is a ratio) | (b is a ratio)` over locals 0 and 1: the guard of every

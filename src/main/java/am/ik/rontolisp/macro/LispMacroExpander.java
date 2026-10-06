@@ -32454,7 +32454,9 @@ public final class LispMacroExpander {
 	 * {@code string-equal} shape -- into (string= (subseq (string s1) a b) (subseq
 	 * (string s2) c d)), the coercion left out for a literal string, so the compile
 	 * backends keep their two-argument string-equality intrinsic and the bounding indices
-	 * cost nothing when absent. The ordering predicates ({@code string<} and its nine
+	 * cost nothing when absent. A call whose computed forms the lowering would reorder
+	 * binds its operands and bounds in the call's order first, and a repeated keyword
+	 * takes its first value. The ordering predicates ({@code string<} and its nine
 	 * siblings) need no such lowering: they are ordinary {@code defun}s taking the four
 	 * keywords in their lambda list.
 	 * @param cons the string= / string-equal expression
@@ -32462,25 +32464,72 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandStringComparisonBounds(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		LispVal start1 = null;
-		LispVal end1 = null;
-		LispVal start2 = null;
-		LispVal end2 = null;
 		String name = ((LispSymbol) parts.get(0)).name();
 		for (int i = 3; i < parts.size(); i += 2) {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key)) {
 				throw new IllegalArgumentException(name + " expects :start1/:end1/:start2/:end2 keyword pairs");
 			}
 			switch (key.name()) {
-				case LispNames.START1_KEYWORD -> start1 = parts.get(i + 1);
-				case LispNames.END1_KEYWORD -> end1 = parts.get(i + 1);
-				case LispNames.START2_KEYWORD -> start2 = parts.get(i + 1);
-				case LispNames.END2_KEYWORD -> end2 = parts.get(i + 1);
+				case LispNames.START1_KEYWORD, LispNames.END1_KEYWORD, LispNames.START2_KEYWORD,
+						LispNames.END2_KEYWORD ->
+					{
+					}
 				default -> throw new IllegalArgumentException(name + ": unsupported keyword " + key.name());
 			}
 		}
-		return listToCons(List.of(parts.get(0), boundedSubstringForm(parts.get(1), start1, end1),
+		// A computed form is evaluated where the lowering below puts it, each operand
+		// beside its own bounds: when that is not the call's order, hoist the operands
+		// and
+		// every computed bound in the call's order first. A repeated keyword takes its
+		// FIRST value (CLHS 3.4.1.4), the later one still evaluated.
+		KeywordTail tail = stringBoundsInCallOrder(parts) ? null : KeywordTail.of(parts, 3, "__sc");
+		if (tail != null) {
+			parts = tail.parts();
+		}
+		LispVal start1 = keywordValue(parts, 3, LispNames.START1_KEYWORD);
+		LispVal end1 = keywordValue(parts, 3, LispNames.END1_KEYWORD);
+		LispVal start2 = keywordValue(parts, 3, LispNames.START2_KEYWORD);
+		LispVal end2 = keywordValue(parts, 3, LispNames.END2_KEYWORD);
+		LispVal lowered = listToCons(List.of(parts.get(0), boundedSubstringForm(parts.get(1), start1, end1),
 				boundedSubstringForm(parts.get(2), start2, end2)));
+		return tail == null ? lowered : tail.wrap(lowered);
+	}
+
+	/**
+	 * Whether the lowering evaluates a bounded string comparison's forms in the call's
+	 * order: string1, its bounds, string2, its bounds, first occurrence of each keyword.
+	 * A literal is unobservable wherever it runs and a repeated one that is not computed
+	 * is too, so only the forms a lowering could reorder observably are compared; a call
+	 * with no computed form at all is in order whatever its keywords.
+	 */
+	private static boolean stringBoundsInCallOrder(List<LispVal> parts) {
+		List<LispVal> called = new ArrayList<>(List.of(parts.get(1), parts.get(2)));
+		for (int i = 4; i < parts.size(); i += 2) {
+			called.add(parts.get(i));
+		}
+		called.removeIf(KeywordTail::isInertValue);
+		if (called.stream().noneMatch(form -> form instanceof LispCons)) {
+			return true;
+		}
+		List<LispVal> lowered = new ArrayList<>();
+		lowered.add(parts.get(1));
+		for (String keyword : List.of(LispNames.START1_KEYWORD, LispNames.END1_KEYWORD)) {
+			lowered.add(keywordValue(parts, 3, keyword));
+		}
+		lowered.add(parts.get(2));
+		for (String keyword : List.of(LispNames.START2_KEYWORD, LispNames.END2_KEYWORD)) {
+			lowered.add(keywordValue(parts, 3, keyword));
+		}
+		lowered.removeIf(form -> form == null || KeywordTail.isInertValue(form));
+		if (called.size() != lowered.size()) {
+			return false;
+		}
+		for (int i = 0; i < called.size(); i++) {
+			if (called.get(i) != lowered.get(i)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// (subseq (string s) start end) for the bounds actually given -- the string itself

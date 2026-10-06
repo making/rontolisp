@@ -119,6 +119,22 @@ class BuiltinFunctionWrapperCatalogTest {
 					+ " (IF |r| (APPLY #'%READ-FROM-STRING-FULL |s| |r|) (READ-FROM-STRING |s|))))");
 	}
 
+	@Test
+	void aStreamOperatorsWrapperCallsTheGrayDispatchOnlyBesideIt() {
+		// A program carrying the Gray dispatch helper gets the wrapper that calls it, so
+		// #'read-char handed a Gray instance reaches stream-read-char; any other program
+		// keeps the catalog wrapper.
+		assertThat(injected(LispNames.READ_CHAR, Set.of()))
+			.isEqualTo("(SETQ READ-CHAR (LAMBDA (&OPTIONAL |s| (|e| T) |v| |r|) (READ-CHAR |s| |e| |v|)))");
+		assertThat(injected(LispNames.READ_CHAR, Set.of("RONTOLISP::%GRAY-READ-CHAR-DISPATCH")))
+			.isEqualTo("(SETQ READ-CHAR (LAMBDA (&OPTIONAL |s| (|e| T) |v| |r|)"
+					+ " (RONTOLISP::%GRAY-READ-CHAR-DISPATCH |s| |e| |v|)))");
+		assertThat(injected(LispNames.WRITE_STRING, Set.of("RONTOLISP::%GRAY-WRITE-STRING-BOUNDS-DISPATCH")))
+			.isEqualTo("(SETQ WRITE-STRING (LAMBDA (|s| &OPTIONAL |st| &REST |kw|)"
+					+ " (RONTOLISP::%GRAY-WRITE-STRING-BOUNDS-DISPATCH |s| |st| (GETF |kw| :START 0) (GETF |kw| :END))))");
+		assertThat(BuiltinFunctionWrappers.grayDispatchHelpers(LispNames.CAR)).isEmpty();
+	}
+
 	private static String injected(String name, Set<String> defined) {
 		return BuiltinFunctionWrappers.generate(defined)
 			.stream()

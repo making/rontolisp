@@ -7,7 +7,8 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
 ## Protocol
 - Classes: `rontolisp:fundamental-stream`; `-input-stream`/`-output-stream`; leaves
   `-character-input/-output-stream`, `-binary-input/-output-stream`.
-- Generics: `stream-write-char`, `stream-write-string (stream string &optional start end)`,
+- Generics: `stream-write-char`, `stream-write-string (stream string &optional start end)` (ALWAYS
+  called with integer start/end, see "Bounds on `write-line` / `write-string`"),
   `stream-write-byte`; `stream-line-column`, `stream-start-line-p`, `stream-terpri`,
   `stream-fresh-line`, `stream-advance-to-column`; `stream-force-output`/`-finish-output`/
   `-clear-output`; `stream-read-byte`, `stream-read-char`, `-read-char-no-hang`,
@@ -104,9 +105,19 @@ on the compile paths bypassed the dispatch and wrote to standard output.
   `write-string` wrappers hand `grayStreamBounds` to the same helpers, so first-class use
   on the interpreter agrees. A tail the rewrite cannot read (a non-literal keyword,
   `:allow-other-keys`) keeps the lowering.
-- A call spelling NO bound is unchanged: the method receives the string alone, so a method
-  keeps its own defaults and `end` arrives as nil (SBCL passes the length -- not changed
-  here).
+- A call spelling NO bound passes `0` and `(length s)` too (SBCL does; measured 2026-10-06:
+  `write-string`, `write-line`, `princ`, `format` all `("hello" 0 5)` on SBCL 2.2.9, `0 NIL`
+  here before): the unbounded helpers (`%gray-write-string-dispatch`,
+  `%gray-write-line-dispatch`, the print family, so the `format` rewrite too) and the
+  interpreter's `write-string` wrapper. `%gray-default-write-char` passes `0 1`. The
+  unbounded helpers keep their own name only to skip the bounds check.
+- `write-sequence` of a string: the default `stream-write-sequence` hands the range to
+  `stream-write-string` in ONE call (SBCL: `("hello" 1 5)`); it looped `stream-write-char`.
+- **The arity break is accepted**: a method spelled `(stream string)` -- the shape the
+  guide, three ci cases and a dozen backend tests used -- now fails "Function expects 3
+  arguments, got 5" at its first write. SBCL refuses that method at `defmethod` time
+  ("fewer optional arguments than the generic function"), so no portable program has it.
+  rontolisp checks no lambda-list congruence at all (a `.todo` item).
 - Cost (2026-10-06, 748 / 740 / 744 JVM / P1 / component artifacts of every ci-spec case,
   size-report, bench-report and the non-GUI examples, compiled by the base and the new jar):
   all byte-identical (bar the build timestamp) except the programs carrying the Gray protocol
@@ -121,6 +132,27 @@ on the compile paths bypassed the dispatch and wrote to standard output.
   `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` (P1 and
   component) and ci-spec `gray-stream-bounds-are-checked`. The ci-spec case is part of the
   corpus program, which is what carries the Gray library for every case after it.
+
+## Function values
+A function value has no call site for the rewrite. Before: on JVM / P1 / component every
+stream operator taken as a value (`#'write-string`, `#'read-char`, `(apply #'write-line
+...)`, ...) went PAST a Gray instance (output to standard output, reads at EOF); the
+interpreter's Java wrappers already dispatched.
+- `BuiltinFunctionWrappers.GRAY_WRAPPERS`: per operator, a twin of the catalog wrapper (same
+  lambda list) whose body calls the dispatch helpers. `generate` picks it when EVERY helper
+  it names is a defun of the program (the `HelperWrapper` idea: one fact read after the
+  splice); `lambdaFor` (the interpreter) never sees it.
+- `GrayStreamsLibrary.process` splices those helpers for each operator the program
+  designates (`functionDesignatorNames`: `#'op` or `'op`), except an OWNED one. The helper
+  names live in the wrapper table only; `dispatchDefun` throws if gray.lisp lacks one.
+- Covered: write-string/write-line (the BOUNDS helpers), read/write-sequence, princ/prin1/
+  print, terpri, fresh-line, force/finish/clear-output, listen, read-char(-no-hang),
+  read-line, peek-char, read-byte, input/output-stream-p, stream-element-type, file-length,
+  file-position, format.
+- Pinned by `GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM` (SBCL's answers) on all four,
+  ci-spec `gray-stream-operators-as-function-values`, `GrayStreamsLibraryTest
+  #aStreamOperatorTakenAsAValueSplicesItsDispatchHelpers`,
+  `BuiltinFunctionWrapperCatalogTest#aStreamOperatorsWrapperCallsTheGrayDispatchOnlyBesideIt`.
 
 ## Compile path: `GrayStreamsLibrary.process`
 Runs after `UserMacroExpander`; triggered by any protocol name (`splitQualified` member match,
@@ -185,9 +217,8 @@ over the WHOLE program once ANY part uses the protocol. Walker rules (no positio
 ## Limits
 - `listen` on an instance works interpreter/JVM; Preview 1 WASM rejects ANY `listen` at
   compile time.
-- Not rewritten on the compile paths: first-class `(funcall #'read-byte instance)`, and
-  `write-string` / `write-line` as function values (they write PAST the instance, to standard
-  output).
+- `#'write-char`, `#'write-byte`, `#'unread-char` have no function value on the compile
+  paths at all (a compile error / a signal), Gray or not.
 - `input-stream-p`/`output-stream-p` = `typep` against the two DIRECTION base classes,
   ownable like `open-stream-p`, deliberately not full Gray's per-base-class generics.
 
@@ -308,7 +339,9 @@ splices the whole entry.
 - `GrayStreamsLibraryTest#programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront`;
   `FastIoCircularStreamsE2eTest`, the two `LackEcosystem*E2eTest` classes.
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,
-  `gray-stream-input-protocol-widening`, `gray-stream-is-a-stream`.
+  `gray-stream-input-protocol-widening`, `gray-stream-is-a-stream`,
+  `gray-stream-unbounded-write-passes-integer-bounds` (`GrayStreamCallFixture
+  .UNBOUNDED_WRITE_PROGRAM` in the three backend suites), `gray-stream-operators-as-function-values`.
 
 ## The composite stream classes as CL type names, and the zero-component broadcast stream (2026-09-23, `.todo/927`)
 

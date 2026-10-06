@@ -933,6 +933,34 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aBoundedStringEqualityCallRunsItsArgumentsInTheCallsOrder() {
+		// Variables and literals are cut in place, binding nothing.
+		assertThat(stringBoundsExpansionOf("(string= a \"xabc\" :start2 1 :end1 k)"))
+			.isEqualTo("(STRING= (SUBSEQ (STRING A) 0 K) (SUBSEQ \"xabc\" 1))");
+		// So is a computed form the lowering already runs in the call's order.
+		assertThat(stringBoundsExpansionOf("(string= (s1) b :start2 (st2))"))
+			.isEqualTo("(STRING= (S1) (SUBSEQ (STRING B) (ST2)))");
+		// A computed bound runs in the call's order, operands first, not beside its own
+		// operand -- a bare variable among them is read in its turn too.
+		assertThat(stringBoundsExpansionOf("(string= a (s2) :start1 (st1))")).startsWith("(LET ");
+		String reordered = stringBoundsExpansionOf("(string= (s1) (s2) :end1 (e1) :start1 (st1))");
+		assertThat(reordered).startsWith("(LET ");
+		assertThat(reordered.indexOf("(S1)")).isLessThan(reordered.indexOf("(S2)"));
+		assertThat(reordered.indexOf("(S2)")).isLessThan(reordered.indexOf("(E1)"));
+		assertThat(reordered.indexOf("(E1)")).isLessThan(reordered.indexOf("(ST1)"));
+		// A repeated keyword runs both values and uses the first; so does a literal one.
+		String repeated = stringBoundsExpansionOf("(string= \"abc\" \"abc\" :start1 (f) :start1 (h))");
+		assertThat(repeated.indexOf("(F)")).isLessThan(repeated.indexOf("(H)"));
+		assertThat(stringBoundsExpansionOf("(string= \"abc\" \"abc\" :start1 1 :start1 0)"))
+			.isEqualTo("(STRING= (SUBSEQ \"abc\" 1) \"abc\")");
+	}
+
+	private static String stringBoundsExpansionOf(String source) {
+		return LispMacroExpander.expandStringComparisonBounds((LispCons) LispReader.readAllFromString(source).get(0))
+			.print();
+	}
+
+	@Test
 	void aReadFromStringCallPassingMoreThanTheStringCallsThePreludeDefun() {
 		// The one-argument call stays the built-in (the multiple-value lowering pairs it
 		// with %read-from-string-end); any more, and the arguments go to the defun as

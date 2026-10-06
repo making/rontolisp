@@ -50,6 +50,9 @@ emitted unconditionally, like the ratio block -- the limb-block precedent
   fifteen unary math functions. Literals emit inline in code position and
   under `quote` (the reader already canonicalized them, so parts plus tag plus
   `struct.new` is the value).
+- Complex block (`WasmComplexBlock`, only in a program that may observe a
+  complex): the same formulas emitted ONCE as functions, for a site whose complex
+  arrives through a variable ("A complex through a variable" below).
 
 ## Steering: `containsComplex`, before everything else
 
@@ -95,6 +98,66 @@ implicit `__poN_v` let once condition reports route -- because the raw-store
 fusion has no caller-side steering gate to hide behind. Refusing costs nothing
 observable: a complex leaf can never take the integer fast path, so fusion
 over one is a guaranteed bail plus a trap.
+
+## A complex through a variable (2026-10-06)
+
+The steering is syntactic, so a complex reaching an operator through a parameter, a
+global, a list element or a designator's argument landed in the real-only funnels:
+`_as_f64`'s complex arm or `_rat_num`'s landing, a trap outside EH mode and a wrong-type
+report inside it (`=` and `abs` included, which the JVM's `_cmpb`/`_abs` arms already
+answered). In a module whose program may observe a complex (`compiler/ComplexCapability`,
+the JVM's gate scan) the generic entries find it at run time; every other module is
+byte-identical at every level. As on the JVM, an arm sits where the real body would
+REJECT a complex:
+
+- `_rat_add`/`_rat_sub`/`_rat_mul`/`_rat_div` (`WasmRatioRuntimeBuilder.emitComplexArm`,
+  to `_c_add`/`_c_sub`/`_c_mul`/`_c_div`): on the float branch, and once the two exact
+  integers are ruled out (ahead of the ratio arm's `_rat_num` and the non-rational
+  landing). The float branch first answers two floats straight out of their boxes
+  (`emitFloatPairArm`, no `_as_f64` call), so the arm is a mixed pair's cost only; the
+  i31 head and the exact-integer path are untouched.
+- Unary `-` of a non-float tests for a complex and negates it through `_c_neg`
+  (`WasmArithCompiler.compileUnaryNegate`) -- `_rat_sub(0, x)` would turn a `-0.0` part
+  into `+0.0`.
+- The complex block (`WasmComplexBlock`): one function each for `=`, `abs`, the eight
+  float unary functions without a real-domain escape, and `expt`, appended right before
+  the user functions (`complexBlockFuncBase()`, the `_lit_stage` precedent: no fixed index
+  moves). A body is the formula a literal-steered site emits inline, emitted once over
+  the parameters by the same `WasmComplexCompiler` emitter (`emitEqPair`, `emitAbsOf`,
+  `emitUnaryMathOf`, `emitExptOf`). The block is built before any body compiles, and a
+  site calling an entry records the fdlibm functions that body calls as its own, so they
+  get real bodies exactly when a reachable site calls the entry.
+- Sites keep their real paths inline and test in front of them: `abs` on its non-float
+  arm; a unary function whose argument is a variable or a call
+  (`WasmComplexBlock.mayHoldComplex`), reading a float argument straight out of its box
+  behind the test; `expt` on each path for exactly the operand that can be complex there
+  (the base alone on the integer-exponent loop).
+- `=` calls the block's `=` (`WasmComparisonCompiler.emitGenericCompare`, the fused
+  compare's bail too) instead of `_rat_cmp_bits`, which every ordering shares: there a
+  complex already lands in the REAL report an ordering must give, so the part-wise `=`
+  cannot be that function's arm. The entry answers an i31 pair and a float pair before
+  its complex test.
+- The type-test fold (`.kb/wasm-ref-type-fold.md`) deletes every arm and test whose
+  operand set holds no `TYPE_COMPLEX`, and the shake the entries no site still calls --
+  most gated programs, where the one complex a `sqrt` can make never reaches the
+  arithmetic, keep none of it.
+
+Not reached: an operator whose own form spells a float literal (`(+ z 1.5)`) takes the
+f64 path, whose `_as_f64` lands a complex in the REAL report -- `.todo/d57`.
+
+Measured 2026-10-06 (wasmtime 49, linux/amd64): the size-report and bench-report programs
+are byte-identical at every level, P1 and component. Where no complex can flow (the
+micro programs: a `sqrt` beside a `+`, `=`, `abs`, `sin`, `expt` over parameters) the fold
+leaves the module within 10 B of its old size; where one can,
+`examples/ml/linear-regression.lisp` grew 74,550 -> 80,203 B at the default level (the
+block's `expt`, the `_c_*` twins). Speed where a complex CAN reach the measured function
+(it is handed one once, statically, so the fold keeps every arm): the first shapes cost
+float `+`/`*` +13%, `=` +7%, unary +8%, `expt` +10%; with the float pair answered ahead
+of the `_rat_*` arm, the `=` entry's i31 and float pairs, and the unary site's inline
+float read, float `+`/`*` is 15% FASTER than before, `=` 11%, unary 5%. `expt` stays
++10-15% in that micro program only because the old fold had proved its operand never a
+float and deleted the float branch, which the reachable `_c_*` twins' float answers now
+keep. An n-body whose float arithmetic a complex can reach runs 6% faster.
 
 ## Errors: the interpreter's texts, the backend's classes
 
@@ -227,9 +290,9 @@ implementations, changed together. What is this backend's alone:
 
 ## Known corners (documented, matching the JVM where stated)
 
-- A complex arriving only through a variable beside a real operator takes that
-  operator's ordinary path (the steering is syntactic, like the JVM's
-  `hasComplexOperand`).
+- A complex arriving only through a variable beside a float LITERAL in the same
+  operation takes the f64 path into the REAL report ("A complex through a
+  variable"); beside anything else it reaches the run-time arms.
 - A runtime-real value under a steered operator demotes exactly, but a float
   real answers a float-zero-imagined complex -- the JVM `_ccomplex` float path
   does the same (`_cneg` included: it always ends in `_ccomplex`).
@@ -242,4 +305,8 @@ implementations, changed together. What is this backend's alone:
 
 Pinning tests: `WasmLispCompilerIntegrationTest#compileAndRunComplex*`
 (mirrors `LispEvaluatorTest`'s `evalComplex*` case for case, plus a
-`--component` smoke leg); `NoGcWasmCompilerTest#rejectsComplexNumbers`.
+`--component` smoke leg); `NoGcWasmCompilerTest#rejectsComplexNumbers`;
+`WasmLispCompilerIntegrationTest#complexThroughAVariable` (every optimize
+level, P1 and component, outside and inside EH mode) with its
+`ComplexThroughAVariableFixture` twins and `ci-spec.yaml`'s
+`complex-arithmetic-through-a-variable`.

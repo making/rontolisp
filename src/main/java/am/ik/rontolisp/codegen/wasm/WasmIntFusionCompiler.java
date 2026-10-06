@@ -414,10 +414,9 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.END);
 		emitFallback(left, ctx);
 		emitFallback(right, ctx);
-		emitCall(WasmLispCompiler.FUNC_RAT_CMP_BITS, ctx);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(cmpMask);
-		ctx.writer.write(Instruction.I32_AND);
+		// The comparison compiler's own generic form, so = finds a complex a leaf held
+		// the way an unfused = does.
+		WasmComparisonCompiler.emitGenericCompare(ctx, cmpMask);
 		ctx.writer.write(Instruction.END);
 		if (boxResult) {
 			WasmEmitHelper.emitBoolFromI32(ctx);

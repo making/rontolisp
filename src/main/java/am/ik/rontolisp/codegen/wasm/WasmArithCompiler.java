@@ -138,12 +138,30 @@ final class WasmArithCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.ELSE);
+		if (ctx.complexBlock != null) {
+			// A program that may observe a complex: one arriving here negates through
+			// _c_neg, part by part -- not through the _rat_sub below, whose 0 - x would
+			// turn a -0.0 part into +0.0, as it would for a real one.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_C_NEG);
+			ctx.writer.write(Instruction.ELSE);
+		}
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_SUB);
+		if (ctx.complexBlock != null) {
+			ctx.writer.write(Instruction.END);
+		}
 		ctx.writer.write(Instruction.END);
 	}
 

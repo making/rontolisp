@@ -559,6 +559,10 @@ public final class BuiltinFunctionWrappers {
 				HelperWrapper helper = HELPER_WRAPPERS.get(def.name);
 				WrapperDef chosen = helper != null && !userDefinedNames.contains(helper.helper()) ? helper.narrow()
 						: def;
+				GrayWrapper gray = GRAY_WRAPPERS.get(def.name);
+				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
+					chosen = gray.dispatching();
+				}
 				wrappers.add(chosen.toSetqLambda());
 			}
 		}
@@ -608,6 +612,126 @@ public final class BuiltinFunctionWrappers {
 								List.of(call(LispNames.PRIN1_TO_STRING, "a")))),
 				LispNames.READ_FROM_STRING,
 				new HelperWrapper(LispNames.READ_FROM_STRING_FULL_INTERNAL, unary(LispNames.READ_FROM_STRING)));
+
+	/**
+	 * A stream operator's wrapper in a program carrying the Gray protocol: the catalog
+	 * wrapper's lambda list, its body calling the {@code gray.lisp} dispatch helpers a
+	 * call-position site is rewritten to, so a function value handed a Gray stream
+	 * instance reaches the class's methods as the call does ({@code .kb/gray-streams.md},
+	 * "Function values"). Chosen exactly where every helper it names is in the program;
+	 * {@code GrayStreamsLibrary.process} splices them for an operator the program
+	 * designates ({@link #grayDispatchHelpers}), so any other program keeps the catalog
+	 * wrapper.
+	 *
+	 * @param helpers the qualified names of the dispatch helpers the body calls
+	 * @param dispatching the wrapper calling them
+	 */
+	private record GrayWrapper(List<String> helpers, WrapperDef dispatching) {
+	}
+
+	private static final Map<String, GrayWrapper> GRAY_WRAPPERS = grayWrappers();
+
+	/**
+	 * The dispatch helpers a function value of the operator calls in a program carrying
+	 * the Gray protocol, by their names in {@code gray.lisp}; empty for an operator with
+	 * no Gray twin.
+	 * @param name the operator
+	 * @return the qualified helper names
+	 */
+	public static List<String> grayDispatchHelpers(String name) {
+		GrayWrapper gray = GRAY_WRAPPERS.get(name);
+		return gray == null ? List.of() : gray.helpers();
+	}
+
+	private static Map<String, GrayWrapper> grayWrappers() {
+		Map<String, GrayWrapper> table = new java.util.LinkedHashMap<>();
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal end = getfKw(LispNames.END_KEYWORD);
+		// (s &optional st &key start end): the bounds helper, which checks a spelled
+		// bound and hands the method integers.
+		for (String[] op : new String[][] { { LispNames.WRITE_STRING, "%GRAY-WRITE-STRING-BOUNDS-DISPATCH" },
+				{ LispNames.WRITE_LINE, "%GRAY-WRITE-LINE-BOUNDS-DISPATCH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0],
+					new GrayWrapper(List.of(helper),
+							new WrapperDef(op[0],
+									List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
+									List.of(callV(helper, new LispSymbol("s"), new LispSymbol("st"), start, end)))));
+		}
+		// (seq stream &key start end).
+		for (String[] op : new String[][] { { LispNames.READ_SEQUENCE, "%GRAY-READ-SEQUENCE-DISPATCH" },
+				{ LispNames.WRITE_SEQUENCE, "%GRAY-WRITE-SEQUENCE-DISPATCH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0],
+					new GrayWrapper(List.of(helper),
+							new WrapperDef(op[0], List.of("seq", "st", LispNames.LAMBDA_REST, "kw"),
+									List.of(callV(helper, new LispSymbol("seq"), new LispSymbol("st"), start, end)))));
+		}
+		// (value &optional stream).
+		for (String[] op : new String[][] { { LispNames.PRINC, "%GRAY-PRINC-DISPATCH" },
+				{ LispNames.PRIN1, "%GRAY-PRIN1-DISPATCH" }, { LispNames.PRINT, "%GRAY-PRINT-DISPATCH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0], new GrayWrapper(List.of(helper), new WrapperDef(op[0],
+					List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "a", "s")))));
+		}
+		// (&optional stream).
+		for (String[] op : new String[][] { { LispNames.TERPRI, "%GRAY-TERPRI-DISPATCH" },
+				{ LispNames.FRESH_LINE, "%GRAY-FRESH-LINE-DISPATCH" },
+				{ LispNames.FORCE_OUTPUT, "%GRAY-FORCE-OUTPUT-DISPATCH" },
+				{ LispNames.FINISH_OUTPUT, "%GRAY-FINISH-OUTPUT-DISPATCH" },
+				{ LispNames.CLEAR_OUTPUT, "%GRAY-CLEAR-OUTPUT-DISPATCH" },
+				{ LispNames.LISTEN, "%GRAY-LISTEN-DISPATCH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0], new GrayWrapper(List.of(helper),
+					new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "s")))));
+		}
+		// (&optional stream (eof-error-p t) eof-value recursive-p).
+		for (String[] op : new String[][] { { LispNames.READ_CHAR, "%GRAY-READ-CHAR-DISPATCH" },
+				{ LispNames.READ_CHAR_NO_HANG, "%GRAY-READ-CHAR-NO-HANG-DISPATCH" },
+				{ LispNames.READ_LINE, "%GRAY-READ-LINE-DISPATCH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0],
+					new GrayWrapper(List.of(helper),
+							new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+									List.of(call(helper, "s", "e", "v")))));
+		}
+		String peekChar = grayHelper("%GRAY-PEEK-CHAR-DISPATCH");
+		table.put(LispNames.PEEK_CHAR,
+				new GrayWrapper(List.of(peekChar),
+						new WrapperDef(LispNames.PEEK_CHAR,
+								List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+								List.of(call(peekChar, "a", "b", "e", "v")))));
+		String readByte = grayHelper("%GRAY-READ-BYTE-DISPATCH");
+		table.put(LispNames.READ_BYTE,
+				new GrayWrapper(List.of(readByte),
+						new WrapperDef(LispNames.READ_BYTE,
+								List.of("s", LispNames.LAMBDA_OPTIONAL, "e" + DEFAULT_TRUE, "v"),
+								List.of(call(readByte, "s", "e", "v")))));
+		// (stream): the stream queries. A program owning one with a defmethod defines
+		// the name itself, and its catalog wrapper is not injected at all.
+		for (String[] op : new String[][] { { LispNames.INPUT_STREAM_P, "%GRAY-INPUT-STREAM-P-DISPATCH" },
+				{ LispNames.OUTPUT_STREAM_P, "%GRAY-OUTPUT-STREAM-P-DISPATCH" },
+				{ LispNames.STREAM_ELEMENT_TYPE, "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH" },
+				{ LispNames.FILE_LENGTH, "%GRAY-BROADCAST-FILE-LENGTH" } }) {
+			String helper = grayHelper(op[1]);
+			table.put(op[0],
+					new GrayWrapper(List.of(helper), new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
+		}
+		String position = grayHelper("%GRAY-FILE-POSITION-DISPATCH");
+		String positionSet = grayHelper("%GRAY-FILE-POSITION-SET-DISPATCH");
+		table.put(LispNames.FILE_POSITION,
+				new GrayWrapper(List.of(position, positionSet),
+						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
+								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
+										call(positionSet, "a", "b"), call(position, "a")))))));
+		String writeString = grayHelper("%GRAY-WRITE-STRING-DISPATCH");
+		table.put(LispNames.FORMAT, new GrayWrapper(List.of(writeString), formatWrapper(writeString)));
+		return java.util.Collections.unmodifiableMap(table);
+	}
+
+	private static String grayHelper(String member) {
+		return LispNames.RONTOLISP_PKG + "::" + member;
+	}
 
 	/**
 	 * {@code #'read-from-string}: {@code (lambda (s &rest r) (if r (apply
@@ -1999,11 +2123,16 @@ public final class BuiltinFunctionWrappers {
 	// string, anything else (the t designator or a stream handle) gets one write-string
 	// call and nil.
 	private static WrapperDef formatWrapper() {
+		return formatWrapper(LispNames.WRITE_STRING);
+	}
+
+	// writer: the (writer string destination) call that writes the rendered text.
+	private static WrapperDef formatWrapper(String writer) {
 		LispSymbol strVar = new LispSymbol("__fmt_str");
 		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
 		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
-				callV(LispNames.WRITE_STRING, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
+				callV(writer, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
 		LispVal ifForm = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));

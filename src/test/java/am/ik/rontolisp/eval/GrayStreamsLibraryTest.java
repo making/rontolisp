@@ -75,6 +75,29 @@ class GrayStreamsLibraryTest {
 		assertThat(compileAndRun(processed)).isEqualToNormalizingWhitespace(BODY_STREAM_EXPECTED);
 	}
 
+	/**
+	 * A stream operator the program takes as a function value has no call site to
+	 * rewrite, so the pass splices the dispatch helpers its Gray wrapper calls -- every
+	 * one of them a gray.lisp defun.
+	 */
+	@Test
+	void aStreamOperatorTakenAsAValueSplicesItsDispatchHelpers() {
+		List<String> operators = am.ik.rontolisp.compiler.BuiltinFunctionWrappers.names()
+			.stream()
+			.filter(op -> !am.ik.rontolisp.compiler.BuiltinFunctionWrappers.grayDispatchHelpers(op).isEmpty())
+			.sorted()
+			.toList();
+		assertThat(operators).contains("WRITE-STRING", "READ-BYTE", "FILE-POSITION");
+		for (String op : operators) {
+			List<LispVal> processed = GrayStreamsLibrary.process(LispReader.readAllFromString(
+					"(defclass c (rontolisp:fundamental-character-output-stream) ()) (print #'" + op + ")"));
+			List<String> defuns = processed.stream().map(LispVal::print).filter(f -> f.startsWith("(DEFUN ")).toList();
+			for (String helper : am.ik.rontolisp.compiler.BuiltinFunctionWrappers.grayDispatchHelpers(op)) {
+				assertThat(defuns).as(op).anyMatch(f -> f.startsWith("(DEFUN " + helper + " "));
+			}
+		}
+	}
+
 	// The CLI pipeline's two splices, in its order: the server value model first, then
 	// the Gray placement + call-site rewrite.
 	private static List<LispVal> process(List<LispVal> program) {

@@ -219,7 +219,11 @@ final class JvmComplexRuntimeBuilder {
 		return JvmRuntimeClassFiles.read(RUNTIME_CLASS_FILES);
 	}
 
-	/** Shared constant-pool references for the complex helpers. */
+	/**
+	 * Shared constant-pool references for the complex helpers. {@code hasComplex} is the
+	 * holder-presence probe (`.kb/jvm-complex.md`), which a helper reachable from a
+	 * program that never builds a holder consults before any holder test.
+	 */
 	private record Refs(ClassEntry thisClass, ClassEntry rcClass, FieldRefEntry rcReal, FieldRefEntry rcImag,
 			MethodRefEntry rcInit, ClassEntry longClass, ClassEntry doubleClass, ClassEntry bigClass,
 			ClassEntry ratArrClass, ClassEntry numberClass, ClassEntry mathClass, ClassEntry rteClass,
@@ -227,7 +231,7 @@ final class JvmComplexRuntimeBuilder {
 			MethodRefEntry numDoubleValue, MethodRefEntry rteInit, JvmOperandTypeRuntime.ThrowRefs throwRefs,
 			MethodRefEntry rAdd, MethodRefEntry rSub, MethodRefEntry rMul, MethodRefEntry rDiv, MethodRefEntry rNeg,
 			MethodRefEntry rDbl, MethodRefEntry rCmp, MethodRefEntry rCComplex, MethodRefEntry rCMul,
-			MethodRefEntry rCDiv, MethodRefEntry rPow) {
+			MethodRefEntry rCDiv, MethodRefEntry rPow, MethodRefEntry rCPow, FieldRefEntry hasComplex) {
 	}
 
 	/**
@@ -262,7 +266,8 @@ final class JvmComplexRuntimeBuilder {
 				self(cp, thisClass, JvmNumericRuntimeBuilder.DBL, UNARY_DESC),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.CMP, CMP_DESC), self(cp, thisClass, COMPLEX, BINARY_DESC),
 				self(cp, thisClass, MUL, BINARY_DESC), self(cp, thisClass, DIV, BINARY_DESC),
-				self(cp, thisClass, JvmNumericRuntimeBuilder.POW, BINARY_DESC));
+				self(cp, thisClass, JvmNumericRuntimeBuilder.POW, BINARY_DESC), self(cp, thisClass, POW, BINARY_DESC),
+				cp.fieldRef(thisClass, "_hasComplex", "Z"));
 		List<ComplexMethod> methods = new ArrayList<>();
 		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
 		addMethod(cp, thisClass, methods, ops, COMPLEX, BINARY_DESC,
@@ -543,10 +548,53 @@ final class JvmComplexRuntimeBuilder {
 		return refs.rDiv();
 	}
 
-	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc).
+	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc). A REAL operand
+	// multiplies each part of the other instead (SBCL's rule, and the only one that keeps
+	// a
+	// -0.0 part: the formula over (r, 0) turns it into +0.0), and two reals are a plain
+	// _mul. The interpreter twin is Environment.mulComplexPair.
 	// Slots: params 0-1, parts 2-5, boxed results 6-7, doubles 8-15.
 	private static ComplexMethod buildMul(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
+		MethodCode.Label firstIsHolder = c.newLabel();
+		MethodCode.Label general = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifne(firstIsHolder);
+		// First operand real.
+		MethodCode.Label secondIsHolder = c.newLabel();
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifne(secondIsHolder);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.areturn();
+		c.labelBinding(secondIsHolder);
+		emitExtractParts(c, refs, 1, 4, 5);
+		c.aload(0);
+		c.aload(4);
+		c.invokestatic(refs.rMul());
+		c.aload(0);
+		c.aload(5);
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+		// First operand a holder: a real second operand scales both parts.
+		c.labelBinding(firstIsHolder);
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifne(general);
+		emitExtractParts(c, refs, 0, 2, 3);
+		c.aload(2);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.aload(3);
+		c.aload(1);
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rCComplex());
+		c.areturn();
+		c.labelBinding(general);
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
 		MethodCode.Label toFloat = c.newLabel();
@@ -1209,9 +1257,30 @@ final class JvmComplexRuntimeBuilder {
 	 * integer-valued power, a NaN, an infinite power -- delegates to the unconditional
 	 * {@code _pow}, which keeps the exact rational path and the error funnels
 	 * unduplicated. Slots: base 0, exp 1, x 2, y 4, modulus 6, boxed parts 8 and 9.
+	 *
+	 * <p>
+	 * "Real" is what the call site's SOURCE shows; a complex arriving through a variable
+	 * is handed to {@code _cpow} before the coercion that would reject it, behind the
+	 * presence probe, since this helper runs in programs that never build a holder.
 	 */
 	private static ComplexMethod buildPowReal(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
+		c.getstatic(refs.hasComplex());
+		MethodCode.Label noHolder = c.newLabel();
+		c.ifeq(noHolder);
+		MethodCode.Label toComplex = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifne(toComplex);
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifeq(noHolder);
+		c.labelBinding(toComplex);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(refs.rCPow());
+		c.areturn();
+		c.labelBinding(noHolder);
 		emitToDouble(c, refs, 0);
 		c.dstore(2);
 		emitToDouble(c, refs, 1);
@@ -1976,10 +2045,16 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	// _ccmpb(Object a, Object b): like _cmpb, but a complex operand signals the
-	// interpreter's REAL operand-type report text instead of comparing.
+	// interpreter's REAL operand-type report text instead of comparing. Every ordering
+	// of a program that may observe a complex calls it, not only one with a complex
+	// literal beside it, so it consults the presence probe first: a lone class run
+	// without the travelling file resolves no holder class, and holds no holder.
 	private static ComplexMethod buildCCmpBits(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodRefEntry rCmpb = self(cp, refs.thisClass(), JvmNumericRuntimeBuilder.CMPB, CMP_DESC);
 		MethodCode c = new MethodCode();
+		c.getstatic(refs.hasComplex());
+		MethodCode.Label noHolder = c.newLabel();
+		c.ifeq(noHolder);
 		c.aload(0);
 		c.instanceOf(refs.rcClass());
 		MethodCode.Label ifAReal = c.newLabel();
@@ -1992,6 +2067,7 @@ final class JvmComplexRuntimeBuilder {
 		c.ifeq(ifBReal);
 		emitRealErrThrow(c, refs, 1);
 		c.labelBinding(ifBReal);
+		c.labelBinding(noHolder);
 		c.aload(0);
 		c.aload(1);
 		c.invokestatic(rCmpb);

@@ -10446,6 +10446,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGrayStreamWriteWithoutABoundPassesIntegerBounds() {
+		// stream-write-string sees start and end as integers when the call spells no
+		// bound, and write-sequence of a string reaches it with the range -- sbcl's
+		// answers, pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_EXPECTED);
+	}
+
+	@Test
+	void streamOperatorsAsFunctionValuesReachAGrayStream() {
+		// #'write-string, 'write-line, (apply #'read-char ...) and the rest of the
+		// stream operators taken as values dispatch to a Gray instance like their calls.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader
+			.readAllFromString(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_EXPECTED);
+	}
+
+	@Test
 	void sequenceOperatorsRefuseABadBound() {
 		// A negative, non-integer or out-of-range bound and a start past its end are a
 		// type-error before anything is called or written, in call position and first
@@ -10559,6 +10586,14 @@ class LispEvaluatorTest {
 		// The refused bound, its range and subseq's report text.
 		assertThat(evalPrinted(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() {
+		// Every argument once, in the call's order; the first of a repeated keyword is
+		// the one used.
+		assertThat(evalPrinted(StringComparisonBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
 	}
 
 	@Test
@@ -20166,6 +20201,28 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
 	}
 
+	// The reference the compiled backends are held to for a complex reaching arithmetic
+	// through a parameter, a global or a designator's argument rather than a literal in
+	// the call. The twins are JvmLispCompilerTest#compileAndRunComplexThroughAVariable
+	// and WasmLispCompilerIntegrationTest#complexThroughAVariable.
+	@Test
+	void complexThroughAVariable() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	// A product with a complex operand keeps a negative zero part (the fold seeded from
+	// 1+0i lost it). The twins are
+	// JvmLispCompilerTest#compileAndRunComplexProductSignedZero
+	// and WasmLispCompilerIntegrationTest#complexProductSignedZero.
+	@Test
+	void complexProductSignedZero() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The
@@ -24388,8 +24445,8 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defclass gs-count (rontolisp:fundamental-character-output-stream)
 				  ((n :initform 0)))
-				(defmethod rontolisp:stream-write-string ((s gs-count) str)
-				  (setf (slot-value s 'n) (+ (slot-value s 'n) (length str)))
+				(defmethod rontolisp:stream-write-string ((s gs-count) str &optional (start 0) end)
+				  (setf (slot-value s 'n) (+ (slot-value s 'n) (length (subseq str start end))))
 				  str)
 				(let ((s (make-instance 'gs-count)))
 				  (write-string "hello" s)
@@ -24586,22 +24643,24 @@ class LispEvaluatorTest {
 		// class was built with -- a typep against the two direction base classes rather
 		// than a predicate generic per class. A bare fundamental-stream subclass is
 		// neither; a string input stream answers its real direction.
-		assertThat(evalMulti("""
-				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
-				(defclass gdp-plain (rontolisp:fundamental-stream) ())
-				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-				(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
-				(list (input-stream-p (make-instance 'gdp-in))
-				      (output-stream-p (make-instance 'gdp-in))
-				      (input-stream-p (make-instance 'gdp-out))
-				      (output-stream-p (make-instance 'gdp-out))
-				      (input-stream-p (make-instance 'gdp-plain))
-				      (output-stream-p (make-instance 'gdp-plain))
-				      (input-stream-p (make-string-input-stream "z"))
-				      (output-stream-p (make-string-input-stream "z"))
-				      (input-stream-p 3))
-				""").print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
+		assertThat(evalMulti(
+				"""
+						(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gdp-plain (rontolisp:fundamental-stream) ())
+						(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+						(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+						(list (input-stream-p (make-instance 'gdp-in))
+						      (output-stream-p (make-instance 'gdp-in))
+						      (input-stream-p (make-instance 'gdp-out))
+						      (output-stream-p (make-instance 'gdp-out))
+						      (input-stream-p (make-instance 'gdp-plain))
+						      (output-stream-p (make-instance 'gdp-plain))
+						      (input-stream-p (make-string-input-stream "z"))
+						      (output-stream-p (make-string-input-stream "z"))
+						      (input-stream-p 3))
+						""")
+			.print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
 	}
 
 	@Test
@@ -24611,22 +24670,24 @@ class LispEvaluatorTest {
 		// Lisp stream" (cl+ssl's etypecase) can be handed a wrapper and route it. A
 		// non-stream instance -- and a pathname, which is an instance of its own fixed
 		// layout -- stays nil.
-		assertThat(evalMulti("""
-				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
-				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gsp-other () ())
-				(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
-				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
-				(defun gsp-typep (x ty) (typep x ty))
-				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
-				      (other (make-instance 'gsp-other)))
-				  (list (streamp out) (streamp in) (streamp other)
-				        (typep out 'stream) (typep in 'stream) (typep other 'stream)
-				        (mapcar #'streamp (list out other 3 t nil))
-				        (streamp (make-pathname :name "a"))
-				        (etypecase out (integer :fd) (stream :lisp-stream))
-				        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-				""").print()).isEqualTo("(T T NIL T T NIL (T NIL NIL T NIL) NIL :LISP-STREAM (T NIL NIL))");
+		assertThat(evalMulti(
+				"""
+						(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gsp-other () ())
+						(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+						(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+						(defun gsp-typep (x ty) (typep x ty))
+						(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+						      (other (make-instance 'gsp-other)))
+						  (list (streamp out) (streamp in) (streamp other)
+						        (typep out 'stream) (typep in 'stream) (typep other 'stream)
+						        (mapcar #'streamp (list out other 3 t nil))
+						        (streamp (make-pathname :name "a"))
+						        (etypecase out (integer :fd) (stream :lisp-stream))
+						        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+						""")
+			.print()).isEqualTo("(T T NIL T T NIL (T NIL NIL T NIL) NIL :LISP-STREAM (T NIL NIL))");
 	}
 
 	@Test

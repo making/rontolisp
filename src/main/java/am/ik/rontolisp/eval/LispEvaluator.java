@@ -1707,19 +1707,14 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, rawArgs -> {
 			List<LispVal> args = resolveStreamArg(rawArgs, 1);
 			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
-				ensureGrayStreamsLoaded();
-				LispVal generic = resolveFunction(
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.GRAY_STREAM_WRITE_STRING));
-				// A spelled :start / :end goes through the bounds-checking helper, so the
-				// generic sees checked integers; anything else in the tail keeps today's
-				// leniency.
+				// A spelled :start / :end goes through the bounds-checking helper; either
+				// way the generic sees integer bounds. Anything else in the tail keeps
+				// today's leniency.
+				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
 				List<LispVal> bounds = grayStreamBounds(args, 2);
-				if (!bounds.isEmpty()) {
-					List<LispVal> forwardedBounds = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
-					forwardedBounds.addAll(bounds);
-					return applyGrayDispatch(GRAY_WRITE_STRING_BOUNDS_DISPATCH, forwardedBounds);
-				}
-				return apply(generic, new java.util.ArrayList<>(List.of(args.get(1), args.get(0))), this.globalEnv);
+				forwarded.addAll(bounds);
+				return applyGrayDispatch(
+						bounds.isEmpty() ? GRAY_WRITE_STRING_DISPATCH : GRAY_WRITE_STRING_BOUNDS_DISPATCH, forwarded);
 			}
 			return apply(baseWriteString, args, this.globalEnv);
 		}));
@@ -6009,6 +6004,8 @@ public final class LispEvaluator {
 	private static final String GRAY_WRITE_LINE_DISPATCH = GrayStreamsLibrary.WRITE_LINE_DISPATCH;
 
 	private static final String GRAY_WRITE_LINE_BOUNDS_DISPATCH = GrayStreamsLibrary.WRITE_LINE_BOUNDS_DISPATCH;
+
+	private static final String GRAY_WRITE_STRING_DISPATCH = GrayStreamsLibrary.WRITE_STRING_DISPATCH;
 
 	private static final String GRAY_WRITE_STRING_BOUNDS_DISPATCH = GrayStreamsLibrary.WRITE_STRING_BOUNDS_DISPATCH;
 

@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.MethodCode;
 
 /**
  * Compiles the unary floating-point math built-ins ({@code sqrt}, {@code exp},
@@ -119,10 +120,41 @@ final class JvmMathFnCompiler {
 			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
 			return;
 		}
+		if (ctx.usesComplex && !JvmArithCompiler.unboxesDirectly(args.get(1), ctx)) {
+			compileHolderAware(args.get(1), ctx, className, name);
+			return;
+		}
 		// Number.doubleValue() coerces both Long and Double arguments to double.
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 		ctx.body.invokestatic(ctx.mathOp(name));
 		JvmEmitHelper.boxDouble(ctx);
+	}
+
+	/**
+	 * A program that may observe a complex, and an argument whose value arrives boxed: a
+	 * holder takes the gated {@code _cu1}'s complex arm, every real the inline
+	 * {@code StrictMath} call it always took -- one holder test, behind the presence
+	 * probe, in front of the {@code _dbl} that would reject a holder
+	 * (`.kb/jvm-complex.md`, "A complex through a variable").
+	 */
+	private static void compileHolderAware(LispVal arg, JvmLispCompiler.Ctx ctx, String className, String name) {
+		JvmExprCompiler.compileExpr(arg, ctx, className);
+		int temp = ctx.allocTemp();
+		ctx.body.astore(temp);
+		MethodCode.Label real = ctx.body.newLabel();
+		JvmComplexCompiler.emitNoHolderJump(ctx, className, real);
+		ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx)).ifeq(real);
+		ctx.body.aload(temp);
+		ctx.body.loadConstant(u1Op(name));
+		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.goto_(done);
+		ctx.body.labelBinding(real);
+		ctx.body.aload(temp);
+		JvmEmitHelper.unboxDouble(ctx);
+		ctx.body.invokestatic(ctx.mathOp(name));
+		JvmEmitHelper.boxDouble(ctx);
+		ctx.body.labelBinding(done);
 	}
 
 	/**

@@ -71,6 +71,9 @@ and first class, string1's range before string2's. A nil `:end1`/`:end2` is the 
   written (`getfKwDefault`, `.kb/sequence-bounding-keywords.md`). Both coerce a designator that is
   no literal string with `(string x)` before the cut: `(string= 'abc "BC" :start1 1)` was
   `SUBSEQ: The value ABC is not of type SEQUENCE` on the JVM and wasm until 2026-10-06.
+- Evaluation order: the lowering hoists the operands and every computed bound in the call's order
+  when it would otherwise run them in its own, and takes the first of a repeated keyword
+  (`.kb/sequence-designator-evaluation.md`, "`string=` / `string-equal` with a bounding keyword").
 - Deviations from SBCL, `subseq`'s own: a range is refused with the bound as datum (SBCL's is
   the cons `(start . end)`), and SBCL checks every bound's TYPE before any range (its lambda
   list declares `(MOD ...)`), so `(string= s s :start1 9 :start2 -1)` is its -1 and our 9. SBCL

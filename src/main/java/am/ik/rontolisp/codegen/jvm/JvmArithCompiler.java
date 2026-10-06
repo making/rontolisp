@@ -194,34 +194,64 @@ final class JvmArithCompiler {
 				return;
 			}
 		}
-		if (arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head) {
-			// The heads JvmExprCompiler routes here, with the (helper, opcode) pair it
-			// routes them with -- so an inlined operand compiles to exactly what the
-			// boxed emission of the same node would have computed.
-			String opKey = switch (head.name()) {
-				case LispNames.ADD -> JvmNumericRuntimeBuilder.ADD;
-				case LispNames.SUB -> JvmNumericRuntimeBuilder.SUB;
-				case LispNames.MUL -> JvmNumericRuntimeBuilder.MUL;
-				case LispNames.DIV -> JvmNumericRuntimeBuilder.DIV;
-				case LispNames.MOD -> JvmNumericRuntimeBuilder.MOD;
-				case LispNames.REM -> JvmNumericRuntimeBuilder.REM;
-				default -> null;
+		String opKey = inlinedOpKey(arg, ctx);
+		if (opKey != null) {
+			LispCons nested = (LispCons) arg;
+			Opcode doubleOpcode = switch (((LispSymbol) nested.car()).name()) {
+				case LispNames.ADD -> Opcode.DADD;
+				case LispNames.SUB -> Opcode.DSUB;
+				case LispNames.MUL -> Opcode.DMUL;
+				case LispNames.DIV -> Opcode.DDIV;
+				default -> Opcode.DREM;
 			};
-			List<LispVal> parts = nested.toList();
-			if (opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
-				Opcode doubleOpcode = switch (head.name()) {
-					case LispNames.ADD -> Opcode.DADD;
-					case LispNames.SUB -> Opcode.DSUB;
-					case LispNames.MUL -> Opcode.DMUL;
-					case LispNames.DIV -> Opcode.DDIV;
-					default -> Opcode.DREM;
-				};
-				compileUnboxed(parts, ctx, opKey, doubleOpcode, className);
-				return;
-			}
+			compileUnboxed(nested.toList(), ctx, opKey, doubleOpcode, className);
+			return;
 		}
 		JvmExprCompiler.compileExpr(arg, ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
+	}
+
+	/**
+	 * The helper key of an arithmetic operand that {@link #compileUnboxedOperand} inlines
+	 * as a raw double expression -- one of the heads JvmExprCompiler routes here, over a
+	 * double literal -- or null for any other operand. The heads come with the (helper,
+	 * opcode) pair JvmExprCompiler routes them with, so an inlined operand compiles to
+	 * exactly what the boxed emission of the same node would have computed.
+	 */
+	private static @org.jspecify.annotations.Nullable String inlinedOpKey(LispVal arg, JvmLispCompiler.Ctx ctx) {
+		if (!(arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		String opKey = switch (head.name()) {
+			case LispNames.ADD -> JvmNumericRuntimeBuilder.ADD;
+			case LispNames.SUB -> JvmNumericRuntimeBuilder.SUB;
+			case LispNames.MUL -> JvmNumericRuntimeBuilder.MUL;
+			case LispNames.DIV -> JvmNumericRuntimeBuilder.DIV;
+			case LispNames.MOD -> JvmNumericRuntimeBuilder.MOD;
+			case LispNames.REM -> JvmNumericRuntimeBuilder.REM;
+			default -> null;
+		};
+		List<LispVal> parts = nested.toList();
+		return opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts, ctx) ? opKey : null;
+	}
+
+	/**
+	 * Whether {@link #compileUnboxedOperand} pushes this operand's double without ever
+	 * holding the operand as a boxed value: a numeric literal, a declared-float variable
+	 * or an inlined double-literal operation. Only an operand compiled as an ordinary
+	 * expression can carry a complex into the operation that unboxes it.
+	 * @param arg the operand form
+	 * @param ctx the compile context
+	 * @return whether the operand is unboxed without passing through {@code _dbl}
+	 */
+	static boolean unboxesDirectly(LispVal arg, JvmLispCompiler.Ctx ctx) {
+		if (arg instanceof LispDouble || arg instanceof LispInteger) {
+			return true;
+		}
+		if (arg instanceof LispSymbol sym) {
+			return ctx.rawDoubleLocals.containsKey(sym.name()) || ctx.declaredDoubles.contains(sym.name());
+		}
+		return inlinedOpKey(arg, ctx) != null;
 	}
 
 }

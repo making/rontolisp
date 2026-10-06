@@ -58,7 +58,7 @@ final class JvmComparisonCompiler {
 			// signum compared against zero cannot express "unordered".
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.CMPB));
+			ctx.body.invokestatic(orderingOrEquality(branchOpcode, ctx, className));
 			JvmEmitHelper.emitIntConst(ctx, maskFor(branchOpcode));
 			ctx.body.iand();
 			branch = Opcode.IFNE;
@@ -70,6 +70,25 @@ final class JvmComparisonCompiler {
 		ctx.body.labelBinding(trueLabel);
 		JvmEmitHelper.compileTrue(ctx);
 		ctx.body.labelBinding(endLabel);
+	}
+
+	/**
+	 * The comparison helper for operands no source text shows to be complex:
+	 * {@code _cmpb}, whose holder arm compares a complex part-wise -- right for
+	 * {@code =}, which is all a syntactic complex ever reached it under -- except for an
+	 * ordering in a program that may observe a complex, which a complex arriving through
+	 * a variable must make SIGNAL, as the interpreter does: the gated {@code _ccmpb}
+	 * (`.kb/jvm-complex.md`).
+	 * @param branchOpcode the operator's branch
+	 * @param ctx the compile context
+	 * @param className the class being emitted
+	 * @return the reference to invoke
+	 */
+	static java.lang.classfile.constantpool.MethodRefEntry orderingOrEquality(Opcode branchOpcode,
+			JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.usesComplex && branchOpcode != Opcode.IFEQ
+				? JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB)
+				: ctx.numOp(JvmNumericRuntimeBuilder.CMPB);
 	}
 
 	private static int maskFor(Opcode branchOpcode) {

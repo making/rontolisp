@@ -12871,19 +12871,21 @@ class WasmLispCompilerIntegrationTest {
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
 		// CLI pipeline.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
-					  ((acc :initform "")))
-					(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
-					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
-					  str)
-					(let ((s (make-instance 'gs-upcase)))
-					  (write-string "hello" s)
-					  (write-char #\\! s)
-					  (print (slot-value s 'acc)))
-					(write-string "still-works" t)
-					(terpri)
-					"""))))).isEqualTo("\"HELLO!\"\nstill-works");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+							  ((acc :initform "")))
+							(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
+							  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+							  str)
+							(let ((s (make-instance 'gs-upcase)))
+							  (write-string "hello" s)
+							  (write-char #\\! s)
+							  (print (slot-value s 'acc)))
+							(write-string "still-works" t)
+							(terpri)
+							""")))))
+			.isEqualTo("\"HELLO!\"\nstill-works");
 	}
 
 	@Test
@@ -12968,17 +12970,19 @@ class WasmLispCompilerIntegrationTest {
 		// class (a typep, not a predicate generic per class); a string input stream
 		// answers its real direction. Same answers as the interpreter and the JVM.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
-					(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
-					(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-					(defmethod rontolisp:stream-write-string ((s gdp-out) str) str)
-					(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
-					      (handle (make-string-input-stream "z")))
-					  (print (list (input-stream-p in) (output-stream-p in)))
-					  (print (list (input-stream-p out) (output-stream-p out)))
-					  (print (list (input-stream-p handle) (output-stream-p handle))))
-					"""))))).isEqualTo("(T NIL)\n(NIL T)\n(T NIL)");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+							(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+							(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+							(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+							(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+							      (handle (make-string-input-stream "z")))
+							  (print (list (input-stream-p in) (output-stream-p in)))
+							  (print (list (input-stream-p out) (output-stream-p out)))
+							  (print (list (input-stream-p handle) (output-stream-p handle))))
+							""")))))
+			.isEqualTo("(T NIL)\n(NIL T)\n(T NIL)");
 	}
 
 	@Test
@@ -12986,21 +12990,23 @@ class WasmLispCompilerIntegrationTest {
 		// streamp / (typep x 'stream) on a Gray instance: t here as well, from the same
 		// instance arm the JVM lowering emits. Same answers as the interpreter.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
-					(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
-					(defclass gsp-other () ())
-					(defmethod rontolisp:stream-write-string ((s gsp-out) str) str)
-					(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
-					(defun gsp-typep (x ty) (typep x ty))
-					(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
-					      (other (make-instance 'gsp-other)))
-					  (print (list (streamp out) (streamp in) (streamp other)))
-					  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
-					  (print (mapcar #'streamp (list out other 3 t nil)))
-					  (print (etypecase out (integer :fd) (stream :lisp-stream)))
-					  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-					"""))))).isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL NIL T NIL)\n:LISP-STREAM\n(T NIL NIL)");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+							(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+							(defclass gsp-other () ())
+							(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+							(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+							(defun gsp-typep (x ty) (typep x ty))
+							(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+							      (other (make-instance 'gsp-other)))
+							  (print (list (streamp out) (streamp in) (streamp other)))
+							  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
+							  (print (mapcar #'streamp (list out other 3 t nil)))
+							  (print (etypecase out (integer :fd) (stream :lisp-stream)))
+							  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+							""")))))
+			.isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL NIL T NIL)\n:LISP-STREAM\n(T NIL NIL)");
 	}
 
 	@Test
@@ -14555,6 +14561,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGrayStreamWriteWithoutABoundPassesIntegerBounds() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aGrayStreamWriteWithoutABoundPassesIntegerBounds, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_EXPECTED);
+		}
+	}
+
+	@Test
+	void streamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM,
+					component))
+				.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_EXPECTED);
+		}
+	}
+
+	@Test
 	void sequenceOperatorsRefuseABadBound() throws Exception {
 		// The wasm twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound, Preview 1
 		// and the component.
@@ -14654,6 +14684,17 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(ParseIntegerBoundsFixture.REPORT_PROGRAM, true))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#stringEqualityEvaluatesItsArgumentsInTheCallsOrder, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.ORDER_PROGRAM, false))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.ORDER_PROGRAM, true))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
 	}
 
 	@Test
@@ -15912,8 +15953,8 @@ class WasmLispCompilerIntegrationTest {
 				(defvar *syn* (make-synonym-stream '*port*))
 				(defclass upcaser (rontolisp:fundamental-character-output-stream)
 				  ((target :initarg :target :reader upcaser-target)))
-				(defmethod rontolisp:stream-write-string ((s upcaser) str)
-				  (write-string (string-upcase str) (upcaser-target s))
+				(defmethod rontolisp:stream-write-string ((s upcaser) str &optional (start 0) end)
+				  (write-string (string-upcase (subseq str start end)) (upcaser-target s))
 				  str)
 				(princ (with-output-to-string (s) (let ((*port* s)) (write-string "user" *syn*))))
 				(princ "|")
@@ -20073,7 +20114,7 @@ class WasmLispCompilerIntegrationTest {
 		// arrive at the dispatch helpers exactly as they do in a quickloaded driver.
 		String program = """
 				(defclass sink (rontolisp:fundamental-character-output-stream) ())
-				(defmethod rontolisp:stream-write-string ((s sink) str) str)
+				(defmethod rontolisp:stream-write-string ((s sink) str &optional start end) (declare (ignore start end)) str)
 				(defun run-sync (client server)
 				  (write-sequence (vector 1 2 250 4) client)
 				  (let ((buf (make-array 4 :initial-element 0)))
@@ -27247,6 +27288,48 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunProgram(program)).isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
 		assertThat(compileComponentAndRunProgram(program))
 			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+	}
+
+	@Test
+	void complexThroughAVariable() throws Exception {
+		// The LispEvaluatorTest#complexThroughAVariable twin: a call site with no complex
+		// in its own text reached _rat_*/_as_f64 with a TYPE_COMPLEX and trapped (the
+		// non-EH program) or reported it as a wrong-type operand (the EH one). Every
+		// level, because the arms live in bodies the type-test fold rewrites.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"ctv-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		List<LispVal> signals = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.WASM,
+				true, false);
+		assertThat(compileAndRunProgram(signals))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+		assertThat(compileComponentAndRunProgram(signals))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void complexProductSignedZero() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
+				false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"cpsz-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
 	}
 
 	@Test
