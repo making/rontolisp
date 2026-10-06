@@ -7583,13 +7583,15 @@ class JvmLispCompilerTest {
 	// corpus went red on exactly this).
 	@Test
 	void compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers() throws Exception {
-		assertThat(compileAndRunGray("""
-				(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
-				(defmethod rontolisp:stream-write-string ((s upcaser) str &optional start end) (declare (ignore start end)) str)
-				(print (let ((l (make-list 3)))
-				         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
-				(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
-				""")).isEqualTo("(3 (#\\a #\\b #\\c))\n\"xy\"");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
+						(defmethod rontolisp:stream-write-string ((s upcaser) str &optional start end) (declare (ignore start end)) str)
+						(print (let ((l (make-list 3)))
+						         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
+						(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
+						"""))
+			.isEqualTo("(3 (#\\a #\\b #\\c))\n\"xy\"");
 	}
 
 	// A NARROWED site (a let-bound byte buffer) in a program that opens a wide stream:
@@ -13813,19 +13815,21 @@ class JvmLispCompilerTest {
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
 		// CLI pipeline.
 		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
-					  ((acc :initform "")))
-					(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
-					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
-					  str)
-					(let ((s (make-instance 'gs-upcase)))
-					  (write-string "hello" s)
-					  (write-char #\\! s)
-					  (print (slot-value s 'acc)))
-					(write-string "still-works" t)
-					(terpri)
-					"""))))).isEqualTo("\"HELLO!\"\nstill-works");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+							  ((acc :initform "")))
+							(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
+							  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+							  str)
+							(let ((s (make-instance 'gs-upcase)))
+							  (write-string "hello" s)
+							  (write-char #\\! s)
+							  (print (slot-value s 'acc)))
+							(write-string "still-works" t)
+							(terpri)
+							""")))))
+			.isEqualTo("\"HELLO!\"\nstill-works");
 	}
 
 	@Test
@@ -14045,22 +14049,24 @@ class JvmLispCompilerTest {
 		// input-stream-p / output-stream-p reach a Gray instance on the compile path
 		// too, through the same typep-against-the-base-class helpers the interpreter
 		// wraps. A string input stream answers its real direction.
-		assertThat(compileAndRunGray("""
-				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
-				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-				(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
-				(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
-				      (handle (make-string-input-stream "z")))
-				  (print (list (input-stream-p in) (output-stream-p in)))
-				  (print (list (input-stream-p out) (output-stream-p out)))
-				  (print (list (input-stream-p handle) (output-stream-p handle)))
-				  (print (list (input-stream-p 3) (output-stream-p 3))))
-				""")).isEqualTo("""
-				(T NIL)
-				(NIL T)
-				(T NIL)
-				(NIL NIL)""");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+						(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+						(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+						(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+						      (handle (make-string-input-stream "z")))
+						  (print (list (input-stream-p in) (output-stream-p in)))
+						  (print (list (input-stream-p out) (output-stream-p out)))
+						  (print (list (input-stream-p handle) (output-stream-p handle)))
+						  (print (list (input-stream-p 3) (output-stream-p 3))))
+						"""))
+			.isEqualTo("""
+					(T NIL)
+					(NIL T)
+					(T NIL)
+					(NIL NIL)""");
 	}
 
 	@Test
@@ -14069,26 +14075,28 @@ class JvmLispCompilerTest {
 		// too: the lowering gains an instance arm over the registry's
 		// fundamental-stream descendants, so an etypecase that splits "file descriptor"
 		// from "Lisp stream" picks the same arm the interpreter picks.
-		assertThat(compileAndRunGray("""
-				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
-				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gsp-other () ())
-				(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
-				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
-				(defun gsp-typep (x ty) (typep x ty))
-				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
-				      (other (make-instance 'gsp-other)))
-				  (print (list (streamp out) (streamp in) (streamp other)))
-				  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
-				  (print (mapcar #'streamp (list out other 3 t nil)))
-				  (print (etypecase out (integer :fd) (stream :lisp-stream)))
-				  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-				""")).isEqualTo("""
-				(T T NIL)
-				(T T NIL)
-				(T NIL NIL T NIL)
-				:LISP-STREAM
-				(T NIL NIL)""");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gsp-other () ())
+						(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+						(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+						(defun gsp-typep (x ty) (typep x ty))
+						(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+						      (other (make-instance 'gsp-other)))
+						  (print (list (streamp out) (streamp in) (streamp other)))
+						  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
+						  (print (mapcar #'streamp (list out other 3 t nil)))
+						  (print (etypecase out (integer :fd) (stream :lisp-stream)))
+						  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+						"""))
+			.isEqualTo("""
+					(T T NIL)
+					(T T NIL)
+					(T NIL NIL T NIL)
+					:LISP-STREAM
+					(T NIL NIL)""");
 	}
 
 	@Test

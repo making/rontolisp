@@ -37,7 +37,10 @@ public final class GrayStreamCallFixture {
 			""";
 
 	/** What {@link #UNBOUNDED_WRITE_PROGRAM} prints (SBCL's answers). */
-	public static final String UNBOUNDED_WRITE_EXPECTED = String.join("\n", "(((\"hello\" 0 5)) ((\"hello\" 0 5) (:CHAR #\\Newline)) ((\"hello\" 0 5)))", "(((\"hello\" 0 5)) ((\"GWU-SYM\" 0 7)) ((\"GWU-SYM\" 0 7)))", "(((\"hello\" 0 5)) ((\"hello\" 1 5)) ((\"hello\" 0 2)))");
+	public static final String UNBOUNDED_WRITE_EXPECTED = String.join("\n",
+			"(((\"hello\" 0 5)) ((\"hello\" 0 5) (:CHAR #\\Newline)) ((\"hello\" 0 5)))",
+			"(((\"hello\" 0 5)) ((\"GWU-SYM\" 0 7)) ((\"GWU-SYM\" 0 7)))",
+			"(((\"hello\" 0 5)) ((\"hello\" 1 5)) ((\"hello\" 0 2)))");
 
 	/**
 	 * The stream operators as function values ({@code #'op}, a quoted designator,
@@ -106,6 +109,12 @@ public final class GrayStreamCallFixture {
 			""";
 
 	/** What {@link #FUNCTION_VALUE_PROGRAM} prints (SBCL's answers). */
-	public static final String FUNCTION_VALUE_EXPECTED = String.join("\n", "((\"hello\" (\"hello\")) (\"hello\" (\"el\")) (\"hello\" (\"hello\" \"", "\")) (\"hello\" (\"he\" \"", "\")))", "((ABC (\"ABC\")) (ABC (\"ABC\")) (NIL (\"xy\")) (\"hello\" (\"lo\")) (NIL (\"", "\")))", "((\"", "\") (NIL (:FORCED)) (NIL (:FINISHED)) (NIL (:CLEARED)))", "((#\\a \"b\") (#\\a \"b\") (#\\a \"ab\") (\"ab\" \"cd\") (T \"ab\"))", "((:EOF :END) ((3 \"-ab\") \"\") (1 \"b\"))", "(1 2 :DONE)", "((NIL T) (T NIL) (CHARACTER CHARACTER))", "(\"plain1\" #\\x)");
+	public static final String FUNCTION_VALUE_EXPECTED = String.join("\n",
+			"((\"hello\" (\"hello\")) (\"hello\" (\"el\")) (\"hello\" (\"hello\" \"", "\")) (\"hello\" (\"he\" \"",
+			"\")))", "((ABC (\"ABC\")) (ABC (\"ABC\")) (NIL (\"xy\")) (\"hello\" (\"lo\")) (NIL (\"", "\")))", "((\"",
+			"\") (NIL (:FORCED)) (NIL (:FINISHED)) (NIL (:CLEARED)))",
+			"((#\\a \"b\") (#\\a \"b\") (#\\a \"ab\") (\"ab\" \"cd\") (T \"ab\"))",
+			"((:EOF :END) ((3 \"-ab\") \"\") (1 \"b\"))", "(1 2 :DONE)", "((NIL T) (T NIL) (CHARACTER CHARACTER))",
+			"(\"plain1\" #\\x)");
 
 }

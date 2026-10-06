@@ -24625,22 +24625,24 @@ class LispEvaluatorTest {
 		// class was built with -- a typep against the two direction base classes rather
 		// than a predicate generic per class. A bare fundamental-stream subclass is
 		// neither; a string input stream answers its real direction.
-		assertThat(evalMulti("""
-				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
-				(defclass gdp-plain (rontolisp:fundamental-stream) ())
-				(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-				(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
-				(list (input-stream-p (make-instance 'gdp-in))
-				      (output-stream-p (make-instance 'gdp-in))
-				      (input-stream-p (make-instance 'gdp-out))
-				      (output-stream-p (make-instance 'gdp-out))
-				      (input-stream-p (make-instance 'gdp-plain))
-				      (output-stream-p (make-instance 'gdp-plain))
-				      (input-stream-p (make-string-input-stream "z"))
-				      (output-stream-p (make-string-input-stream "z"))
-				      (input-stream-p 3))
-				""").print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
+		assertThat(evalMulti(
+				"""
+						(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gdp-plain (rontolisp:fundamental-stream) ())
+						(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+						(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+						(list (input-stream-p (make-instance 'gdp-in))
+						      (output-stream-p (make-instance 'gdp-in))
+						      (input-stream-p (make-instance 'gdp-out))
+						      (output-stream-p (make-instance 'gdp-out))
+						      (input-stream-p (make-instance 'gdp-plain))
+						      (output-stream-p (make-instance 'gdp-plain))
+						      (input-stream-p (make-string-input-stream "z"))
+						      (output-stream-p (make-string-input-stream "z"))
+						      (input-stream-p 3))
+						""")
+			.print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
 	}
 
 	@Test
@@ -24650,22 +24652,24 @@ class LispEvaluatorTest {
 		// Lisp stream" (cl+ssl's etypecase) can be handed a wrapper and route it. A
 		// non-stream instance -- and a pathname, which is an instance of its own fixed
 		// layout -- stays nil.
-		assertThat(evalMulti("""
-				(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
-				(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
-				(defclass gsp-other () ())
-				(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
-				(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
-				(defun gsp-typep (x ty) (typep x ty))
-				(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
-				      (other (make-instance 'gsp-other)))
-				  (list (streamp out) (streamp in) (streamp other)
-				        (typep out 'stream) (typep in 'stream) (typep other 'stream)
-				        (mapcar #'streamp (list out other 3 t nil))
-				        (streamp (make-pathname :name "a"))
-				        (etypecase out (integer :fd) (stream :lisp-stream))
-				        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-				""").print()).isEqualTo("(T T NIL T T NIL (T NIL NIL T NIL) NIL :LISP-STREAM (T NIL NIL))");
+		assertThat(evalMulti(
+				"""
+						(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gsp-other () ())
+						(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+						(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+						(defun gsp-typep (x ty) (typep x ty))
+						(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+						      (other (make-instance 'gsp-other)))
+						  (list (streamp out) (streamp in) (streamp other)
+						        (typep out 'stream) (typep in 'stream) (typep other 'stream)
+						        (mapcar #'streamp (list out other 3 t nil))
+						        (streamp (make-pathname :name "a"))
+						        (etypecase out (integer :fd) (stream :lisp-stream))
+						        (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+						""")
+			.print()).isEqualTo("(T T NIL T T NIL (T NIL NIL T NIL) NIL :LISP-STREAM (T NIL NIL))");
 	}
 
 	@Test

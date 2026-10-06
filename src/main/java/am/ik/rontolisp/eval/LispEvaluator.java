@@ -1713,8 +1713,8 @@ public final class LispEvaluator {
 				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
 				List<LispVal> bounds = grayStreamBounds(args, 2);
 				forwarded.addAll(bounds);
-				return applyGrayDispatch(bounds.isEmpty() ? GRAY_WRITE_STRING_DISPATCH : GRAY_WRITE_STRING_BOUNDS_DISPATCH,
-						forwarded);
+				return applyGrayDispatch(
+						bounds.isEmpty() ? GRAY_WRITE_STRING_DISPATCH : GRAY_WRITE_STRING_BOUNDS_DISPATCH, forwarded);
 			}
 			return apply(baseWriteString, args, this.globalEnv);
 		}));

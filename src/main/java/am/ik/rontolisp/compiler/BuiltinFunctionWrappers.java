@@ -652,9 +652,11 @@ public final class BuiltinFunctionWrappers {
 		for (String[] op : new String[][] { { LispNames.WRITE_STRING, "%GRAY-WRITE-STRING-BOUNDS-DISPATCH" },
 				{ LispNames.WRITE_LINE, "%GRAY-WRITE-LINE-BOUNDS-DISPATCH" } }) {
 			String helper = grayHelper(op[1]);
-			table.put(op[0], new GrayWrapper(List.of(helper), new WrapperDef(op[0],
-					List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
-					List.of(callV(helper, new LispSymbol("s"), new LispSymbol("st"), start, end)))));
+			table.put(op[0],
+					new GrayWrapper(List.of(helper),
+							new WrapperDef(op[0],
+									List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
+									List.of(callV(helper, new LispSymbol("s"), new LispSymbol("st"), start, end)))));
 		}
 		// (seq stream &key start end).
 		for (String[] op : new String[][] { { LispNames.READ_SEQUENCE, "%GRAY-READ-SEQUENCE-DISPATCH" },
@@ -669,8 +671,8 @@ public final class BuiltinFunctionWrappers {
 		for (String[] op : new String[][] { { LispNames.PRINC, "%GRAY-PRINC-DISPATCH" },
 				{ LispNames.PRIN1, "%GRAY-PRIN1-DISPATCH" }, { LispNames.PRINT, "%GRAY-PRINT-DISPATCH" } }) {
 			String helper = grayHelper(op[1]);
-			table.put(op[0], new GrayWrapper(List.of(helper),
-					new WrapperDef(op[0], List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "a", "s")))));
+			table.put(op[0], new GrayWrapper(List.of(helper), new WrapperDef(op[0],
+					List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "a", "s")))));
 		}
 		// (&optional stream).
 		for (String[] op : new String[][] { { LispNames.TERPRI, "%GRAY-TERPRI-DISPATCH" },
@@ -712,15 +714,16 @@ public final class BuiltinFunctionWrappers {
 				{ LispNames.STREAM_ELEMENT_TYPE, "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH" },
 				{ LispNames.FILE_LENGTH, "%GRAY-BROADCAST-FILE-LENGTH" } }) {
 			String helper = grayHelper(op[1]);
-			table.put(op[0], new GrayWrapper(List.of(helper),
-					new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
+			table.put(op[0],
+					new GrayWrapper(List.of(helper), new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
 		}
 		String position = grayHelper("%GRAY-FILE-POSITION-DISPATCH");
 		String positionSet = grayHelper("%GRAY-FILE-POSITION-SET-DISPATCH");
-		table.put(LispNames.FILE_POSITION, new GrayWrapper(List.of(position, positionSet),
-				new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
-						List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
-								call(positionSet, "a", "b"), call(position, "a")))))));
+		table.put(LispNames.FILE_POSITION,
+				new GrayWrapper(List.of(position, positionSet),
+						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
+								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
+										call(positionSet, "a", "b"), call(position, "a")))))));
 		String writeString = grayHelper("%GRAY-WRITE-STRING-DISPATCH");
 		table.put(LispNames.FORMAT, new GrayWrapper(List.of(writeString), formatWrapper(writeString)));
 		return java.util.Collections.unmodifiableMap(table);

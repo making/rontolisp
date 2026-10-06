@@ -235,8 +235,8 @@ public final class GrayStreamsLibrary {
 	 * Splices the dispatch helpers of every stream operator the program designates as a
 	 * function value ({@code #'write-string}, {@code 'read-char}), so the backends inject
 	 * that operator's Gray wrapper ({@code BuiltinFunctionWrappers.grayDispatchHelpers}),
-	 * which calls them: a function value has no call site for {@link #rewrite} to see.
-	 * An operator the program owns keeps its own method, as at a call site.
+	 * which calls them: a function value has no call site for {@link #rewrite} to see. An
+	 * operator the program owns keeps its own method, as at a call site.
 	 */
 	private static void markFunctionValueHelpers(List<LispVal> program, RewriteContext ctx) {
 		java.util.Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);

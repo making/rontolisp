@@ -12871,19 +12871,21 @@ class WasmLispCompilerIntegrationTest {
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
 		// CLI pipeline.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
-					  ((acc :initform "")))
-					(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
-					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
-					  str)
-					(let ((s (make-instance 'gs-upcase)))
-					  (write-string "hello" s)
-					  (write-char #\\! s)
-					  (print (slot-value s 'acc)))
-					(write-string "still-works" t)
-					(terpri)
-					"""))))).isEqualTo("\"HELLO!\"\nstill-works");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+							  ((acc :initform "")))
+							(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
+							  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+							  str)
+							(let ((s (make-instance 'gs-upcase)))
+							  (write-string "hello" s)
+							  (write-char #\\! s)
+							  (print (slot-value s 'acc)))
+							(write-string "still-works" t)
+							(terpri)
+							""")))))
+			.isEqualTo("\"HELLO!\"\nstill-works");
 	}
 
 	@Test
@@ -12968,17 +12970,19 @@ class WasmLispCompilerIntegrationTest {
 		// class (a typep, not a predicate generic per class); a string input stream
 		// answers its real direction. Same answers as the interpreter and the JVM.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
-					(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
-					(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
-					(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
-					(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
-					      (handle (make-string-input-stream "z")))
-					  (print (list (input-stream-p in) (output-stream-p in)))
-					  (print (list (input-stream-p out) (output-stream-p out)))
-					  (print (list (input-stream-p handle) (output-stream-p handle))))
-					"""))))).isEqualTo("(T NIL)\n(NIL T)\n(T NIL)");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+							(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+							(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+							(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+							(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+							      (handle (make-string-input-stream "z")))
+							  (print (list (input-stream-p in) (output-stream-p in)))
+							  (print (list (input-stream-p out) (output-stream-p out)))
+							  (print (list (input-stream-p handle) (output-stream-p handle))))
+							""")))))
+			.isEqualTo("(T NIL)\n(NIL T)\n(T NIL)");
 	}
 
 	@Test
@@ -12986,21 +12990,23 @@ class WasmLispCompilerIntegrationTest {
 		// streamp / (typep x 'stream) on a Gray instance: t here as well, from the same
 		// instance arm the JVM lowering emits. Same answers as the interpreter.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
-					(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
-					(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
-					(defclass gsp-other () ())
-					(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
-					(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
-					(defun gsp-typep (x ty) (typep x ty))
-					(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
-					      (other (make-instance 'gsp-other)))
-					  (print (list (streamp out) (streamp in) (streamp other)))
-					  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
-					  (print (mapcar #'streamp (list out other 3 t nil)))
-					  (print (etypecase out (integer :fd) (stream :lisp-stream)))
-					  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
-					"""))))).isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL NIL T NIL)\n:LISP-STREAM\n(T NIL NIL)");
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+							(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+							(defclass gsp-other () ())
+							(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+							(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+							(defun gsp-typep (x ty) (typep x ty))
+							(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+							      (other (make-instance 'gsp-other)))
+							  (print (list (streamp out) (streamp in) (streamp other)))
+							  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
+							  (print (mapcar #'streamp (list out other 3 t nil)))
+							  (print (etypecase out (integer :fd) (stream :lisp-stream)))
+							  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+							""")))))
+			.isEqualTo("(T T NIL)\n(T T NIL)\n(T NIL NIL T NIL)\n:LISP-STREAM\n(T NIL NIL)");
 	}
 
 	@Test
