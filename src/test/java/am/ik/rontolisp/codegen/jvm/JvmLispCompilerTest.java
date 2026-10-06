@@ -1980,6 +1980,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplexBaseToARationalPower() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexBaseToARationalPower: _cpow
+		// took exp(p*log z) for a float complex to an integer and lost a -0.0 part.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexRationalPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexRationalPowerFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunComplexThroughAVariable() throws Exception {
 		// The interpreter twin is LispEvaluatorTest#complexThroughAVariable: a call site
 		// with no complex in its own text reached _add/_mul/_pow/StrictMath with a holder

@@ -468,7 +468,7 @@ final class WasmComplexCompiler {
 	// (expt base exp) with a syntactic complex: an i31 exponent over the exact
 	// loop (repeated squaring through _cmul, a negative one through the exact
 	// reciprocal -- an integer power over rational parts stays exact); anything
-	// else through exp(w*log(z)) in floats.
+	// else through the float path (emitExptFloat).
 	static void compileExpt(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -493,9 +493,9 @@ final class WasmComplexCompiler {
 	static void emitExptOf(WasmLispCompiler.Ctx ctx, int baseSlot, int expSlot) {
 		int rSlot = ctx.allocTemp();
 		// The exact loop takes an i31 exponent over an EXACT base -- the interpreter's
-		// exptComplex: a float part anywhere in the base goes through exp(w*log(z)) like
-		// a float exponent does, so (expt #c(1.0 2.0) 3) answers the same bits here as
-		// there rather than the squaring loop's.
+		// exptComplex: a float part anywhere in the base takes the float path's polar
+		// form, so (expt #c(1.0 2.0) 3) answers the same bits here as there rather than
+		// the squaring loop's.
 		getLocal(ctx, expSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
@@ -839,6 +839,13 @@ final class WasmComplexCompiler {
 		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(thetaSlot);
+		emitPolarOf(ctx, modulusSlot, thetaSlot);
+	}
+
+	// Pushes modulus * cis(theta) over the boxed f64s in modulusSlot and thetaSlot:
+	// each part of the rotation multiplied by the real modulus, the interpreter's
+	// polar.
+	private static void emitPolarOf(WasmLispCompiler.Ctx ctx, int modulusSlot, int thetaSlot) {
 		int cosSlot = ctx.allocTemp();
 		callCosInto(ctx, thetaSlot, cosSlot);
 		int sinSlot = ctx.allocTemp();
@@ -1222,22 +1229,58 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	// The float expt path: exp(w*log(z)) over the complex formulas below, a zero
-	// base decided first (emitZeroBasePow). Leaves the boxed complex in rSlot.
+	// The float expt path, the interpreter's exptComplex past its exact loop: a zero
+	// power answers #C(1.0 0.0); a rational power over a complex base is the polar
+	// form |z|^w turned through w*phase(z); a float or complex power takes
+	// emitZeroBasePow, then exp(w*log(z)) over the complex formulas below. Leaves the
+	// boxed complex in rSlot.
 	private static void emitExptFloat(WasmLispCompiler.Ctx ctx, int baseSlot, int expSlot, int rSlot) {
 		int[] z = emitPartsF64(ctx, baseSlot);
 		int[] w = emitPartsF64(ctx, expSlot);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
+		emitTestZero(ctx, expSlot, w);
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitFloatComplexConst(ctx, 1);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(rSlot);
+		ctx.writer.write(Instruction.BR, 1);
+		ctx.writer.write(Instruction.END);
+		emitTestComplex(ctx, baseSlot);
+		emitTestComplex(ctx, expSlot);
+		getLocal(ctx, expSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF, 0x40);
+		int hBox = ctx.allocTemp();
+		emitHypotInto(ctx, z[0], z[1], hBox);
+		int mBox = ctx.allocTemp();
+		WasmTranscendentalCompiler.callInto(ctx, Fn.POW, hBox, w[0], mBox);
+		int tBox = ctx.allocTemp();
+		emitAtan2Into(ctx, z[1], z[0], tBox);
+		WasmEmitHelper.unboxF64Local(ctx, w[0]);
+		WasmEmitHelper.unboxF64Local(ctx, tBox);
+		ctx.writer.write(Instruction.F64_MUL);
+		WasmEmitHelper.boxF64(ctx);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tBox);
+		emitPolarOf(ctx, mBox, tBox);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(rSlot);
+		ctx.writer.write(Instruction.BR, 1);
+		ctx.writer.write(Instruction.END);
 		emitZeroBasePow(ctx, baseSlot, z, expSlot, w, rSlot);
 		emitExpLogPow(ctx, z, w, rSlot);
 		ctx.writer.write(Instruction.END);
 	}
 
-	// A zero base, decided before exp(w*log(z)) multiplies log 0 = -inf into NaN
-	// parts -- the interpreter's zeroBasePow arm for arm: a zero power answers
-	// #C(1.0 0.0), a power whose real part is positive answers zero (the exact 0 when
-	// both operands are exact, #C(0.0 0.0) otherwise), and any other power falls
-	// through to the formula's IEEE NaN parts. Each answer sets rSlot and branches
+	// A zero base to a nonzero float or complex power, decided before exp(w*log(z))
+	// multiplies log 0 = -inf into NaN parts -- the interpreter's zeroBasePow arm for
+	// arm: a power whose real part is positive answers zero (the exact 0 when both
+	// operands are exact, #C(0.0 0.0) otherwise), and any other power falls through
+	// to the formula's IEEE NaN parts. Each answer sets rSlot and branches
 	// out of the block emitExptFloat opened around this arm and the formula. Inline
 	// at every site, so it is written for bytes: a zero constant is a converted i32,
 	// and both parts are zero exactly when their magnitudes sum to zero.
@@ -1245,13 +1288,6 @@ final class WasmComplexCompiler {
 			int rSlot) {
 		emitTestZero(ctx, baseSlot, z);
 		ctx.writer.write(Instruction.IF, 0x40);
-		emitTestZero(ctx, expSlot, w);
-		ctx.writer.write(Instruction.IF, 0x40);
-		emitFloatComplexConst(ctx, 1);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(rSlot);
-		ctx.writer.write(Instruction.BR, 2);
-		ctx.writer.write(Instruction.END);
 		WasmEmitHelper.unboxF64Local(ctx, w[0]);
 		emitF64OfI32(ctx, 0);
 		ctx.writer.write(Instruction.F64_GT);

@@ -2,15 +2,18 @@ package am.ik.rontolisp;
 
 /**
  * A zero base -- the exact {@code 0}, a float zero, a complex with both parts zero -- on
- * the complex {@code expt} path, and the three arms that decide it before
- * {@code exp(w*log z)} runs (whose {@code log 0} is {@code -inf} and multiplied into NaN
- * parts): a zero power answers one ({@code #C(1.0 0.0)}); a power whose real part is
- * positive answers zero, exact {@code 0} when both operands are exact and
- * {@code #C(0.0 0.0)} otherwise; any other power keeps the IEEE answer of the formula,
- * NaN parts, as a float result of {@code expt} does (`.kb/error-handling.md`, "Per
- * operator"). A nonzero base never reaches the arms. Shared by the backend suites, so
- * every backend is held to one expected text; {@code ci-spec.yaml}'s
- * {@code a-zero-base-to-a-complex-power} pins the same rows on the native binary.
+ * the complex {@code expt} path, and the arms that decide it before {@code exp(w*log z)}
+ * runs (whose {@code log 0} is {@code -inf} and multiplied into NaN parts): a zero power
+ * answers one ({@code #C(1.0 0.0)}); a power whose real part is positive answers zero,
+ * exact {@code 0} when both operands are exact and {@code #C(0.0 0.0)} otherwise; any
+ * other power keeps the IEEE answer of the formula, NaN parts, as a float result of
+ * {@code expt} does (`.kb/error-handling.md`, "Per operator"). A complex base to a
+ * rational power never reaches the arms: it takes the polar form, whose zero modulus
+ * keeps the rotation's signs ({@code #C(0.0 -0.0)}) and whose negative power is an
+ * infinite modulus ({@code #C(Infinity NaN)}), SBCL's answers with traps masked. Shared
+ * by the backend suites, so every backend is held to one expected text;
+ * {@code ci-spec.yaml}'s {@code a-zero-base-to-a-complex-power} pins the same rows on the
+ * native binary.
  */
 public final class ZeroBaseComplexPowerFixture {
 
@@ -50,7 +53,7 @@ public final class ZeroBaseComplexPowerFixture {
 			#C(0.0 0.0)
 			#C(0.0 0.0)
 			#C(0.0 0.0)
-			#C(0.0 0.0)
+			#C(0.0 -0.0)
 			#C(0.0 0.0)
 			#C(0.0 0.0)
 			#C(1.0 0.0)
@@ -59,7 +62,7 @@ public final class ZeroBaseComplexPowerFixture {
 			#C(NaN NaN)
 			#C(NaN NaN)
 			#C(NaN NaN)
-			#C(NaN NaN)
+			#C(Infinity NaN)
 			#C(1.5384778027279442 1.2779225526272695)
 			#C(1.0 0.0)""";
 

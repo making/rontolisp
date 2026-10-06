@@ -20374,6 +20374,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
 	}
 
+	// A complex base to a rational power is SBCL's polar form, |z|^p turned through
+	// p*phase(z): exp(p*log z) lost a -0.0 part and rounded a ulp away. The twins are
+	// JvmLispCompilerTest#compileAndRunComplexBaseToARationalPower and
+	// WasmLispCompilerIntegrationTest#complexBaseToARationalPower.
+	@Test
+	void complexBaseToARationalPower() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexRationalPowerFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexRationalPowerFixture.EXPECTED);
+	}
+
 	// The reference the compiled backends are held to for a complex reaching arithmetic
 	// through a parameter, a global or a designator's argument rather than a literal in
 	// the call. The twins are JvmLispCompilerTest#compileAndRunComplexThroughAVariable

@@ -969,11 +969,13 @@ final class JvmComplexRuntimeBuilder {
 		return new ComplexMethod(name, desc, c);
 	}
 
-	// _cpow(Object base, Object exp): an int-range integer exponent over
-	// non-float parts stays exact by repeated squaring (a negative one through
-	// the exact reciprocal); a zero base takes emitZeroBasePow; anything else
-	// goes through exp(w*log(z)) in floats. Slots: params 0-1, base parts 2-3,
-	// exp parts 4-5, power 6, accumulators 7-8, temps 9-10, doubles 11-26.
+	// _cpow(Object base, Object exp), the interpreter's exptComplex: an int-range
+	// integer exponent over non-float parts stays exact by repeated squaring (a
+	// negative one through the exact reciprocal); a zero power is #C(1.0 0.0); any
+	// other rational power over a holder is the polar form |z|^w turned through
+	// w*phase(z); a float or complex power takes emitZeroBasePow, then
+	// exp(w*log(z)) in floats. Slots: params 0-1, base parts 2-3, exp parts 4-5,
+	// power 6, accumulators 7-8, temps 9-10, doubles 11-26.
 	private static ComplexMethod buildPow(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
@@ -1108,7 +1110,7 @@ final class JvmComplexRuntimeBuilder {
 		c.aload(8);
 		c.invokestatic(refs.rCComplex());
 		c.areturn();
-		// Float path through exp(w*log(z)).
+		// Float path.
 		c.labelBinding(floatPathEarly);
 		c.labelBinding(floatPathEarly2);
 		c.labelBinding(floatPathEarly3);
@@ -1125,6 +1127,37 @@ final class JvmComplexRuntimeBuilder {
 		c.dstore(15);
 		emitToDouble(c, refs, 5);
 		c.dstore(17);
+		MethodCode.Label nonZeroPower = c.newLabel();
+		emitJumpUnlessZero(c, refs, 15, 4, nonZeroPower);
+		emitNewFloatHolder(c, refs, true);
+		c.areturn();
+		c.labelBinding(nonZeroPower);
+		// A rational power over a holder: |z|^w * cis(w * atan2(im, re)).
+		MethodCode.Label notPolar = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.rcClass());
+		c.ifeq(notPolar);
+		c.aload(1);
+		c.instanceOf(refs.rcClass());
+		c.ifne(notPolar);
+		c.aload(1);
+		c.instanceOf(refs.doubleClass());
+		c.ifne(notPolar);
+		c.dload(11);
+		c.dload(13);
+		callMath(c, refs, cp, "hypot", "(DD)D");
+		c.dload(15);
+		callMath(c, refs, cp, "pow", "(DD)D");
+		c.dstore(19);
+		c.dload(15);
+		c.dload(13);
+		c.dload(11);
+		callMath(c, refs, cp, "atan2", "(DD)D");
+		c.dmul();
+		c.dstore(21);
+		emitPolarHolder(c, refs, cp, 19, 21, 7, 8);
+		c.areturn();
+		c.labelBinding(notPolar);
 		emitZeroBasePow(c, refs);
 		c.dload(11);
 		c.dload(13);
@@ -1170,23 +1203,18 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _cpow}'s zero base, decided before {@code exp(w*log z)} multiplies
-	 * {@code log 0 = -inf} into NaN parts -- the interpreter's {@code zeroBasePow} arm
-	 * for arm: a zero power answers {@code #C(1.0 0.0)}, a power whose real part is
-	 * positive answers zero (the exact {@code 0} when both operands are exact,
-	 * {@code #C(0.0 0.0)} otherwise), and any other power falls through to the formula's
-	 * IEEE NaN parts. A zero is both parts' doubles zero with no ratio part (a ratio
-	 * whose double underflows is not a zero). Reads the part slots 2-5 and their doubles
-	 * 11-17 the float path has just filled.
+	 * {@code _cpow}'s zero base to a nonzero float or complex power, decided before
+	 * {@code exp(w*log z)} multiplies {@code log 0 = -inf} into NaN parts -- the
+	 * interpreter's {@code zeroBasePow} arm for arm: a power whose real part is positive
+	 * answers zero (the exact {@code 0} when both operands are exact, {@code #C(0.0 0.0)}
+	 * otherwise), and any other power falls through to the formula's IEEE NaN parts. A
+	 * zero is both parts' doubles zero with no ratio part (a ratio whose double
+	 * underflows is not a zero). Reads the part slots 2-5 and their doubles 11-17 the
+	 * float path has just filled.
 	 */
 	private static void emitZeroBasePow(MethodCode c, Refs refs) {
 		MethodCode.Label formula = c.newLabel();
 		emitJumpUnlessZero(c, refs, 11, 2, formula);
-		MethodCode.Label nonZeroPower = c.newLabel();
-		emitJumpUnlessZero(c, refs, 15, 4, nonZeroPower);
-		emitNewFloatHolder(c, refs, true);
-		c.areturn();
-		c.labelBinding(nonZeroPower);
 		c.dload(15);
 		c.dconst_0();
 		c.dcmpl();
@@ -1229,6 +1257,29 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	/**
+	 * Pushes a fresh holder of {@code modulus * cis(theta)} from the raw doubles in
+	 * {@code modulusSlot} and {@code thetaSlot}, boxing its parts through
+	 * {@code reBox}/{@code imBox}: each part of the rotation multiplied by the real
+	 * modulus, the interpreter's {@code polar}.
+	 */
+	private static void emitPolarHolder(MethodCode c, Refs refs, ConstantPool cp, int modulusSlot, int thetaSlot,
+			int reBox, int imBox) {
+		c.dload(modulusSlot);
+		c.dload(thetaSlot);
+		callMath(c, refs, cp, "cos", "(D)D");
+		c.dmul();
+		emitBoxDouble(c, refs);
+		c.astore(reBox);
+		c.dload(modulusSlot);
+		c.dload(thetaSlot);
+		callMath(c, refs, cp, "sin", "(D)D");
+		c.dmul();
+		emitBoxDouble(c, refs);
+		c.astore(imBox);
+		emitNewHolderFromSlots(c, refs, reBox, imBox);
+	}
+
+	/**
 	 * Pushes a fresh holder of {@code (1.0, 0.0)} when {@code one}, else
 	 * {@code (0.0, 0.0)}.
 	 */
@@ -1252,11 +1303,13 @@ final class JvmComplexRuntimeBuilder {
 	 * the real line. A negative base to a non-integer power is {@code |base|^exp} turned
 	 * through {@code exp*pi} radians -- one {@code Math.pow} and one rotation, which is
 	 * the interpreter's {@code negativeBasePow} term for term (and NOT {@code _cpow}'s
-	 * {@code exp(w*log z)}: a real base's phase is exactly pi, so nothing has to be
-	 * recovered from a logarithm). Every other operand pair -- a non-negative base, an
-	 * integer-valued power, a NaN, an infinite power -- delegates to the unconditional
-	 * {@code _pow}, which keeps the exact rational path and the error funnels
-	 * unduplicated. Slots: base 0, exp 1, x 2, y 4, modulus 6, boxed parts 8 and 9.
+	 * {@code exp(w*log z)} for a float power: a real base's phase is exactly pi, so
+	 * nothing has to be recovered from a logarithm; for a rational power it is
+	 * {@code _cpow}'s polar form over {@code (x, 0)}). Every other operand pair -- a
+	 * non-negative base, an integer-valued power, a NaN, an infinite power -- delegates
+	 * to the unconditional {@code _pow}, which keeps the exact rational path and the
+	 * error funnels unduplicated. Slots: base 0, exp 1, x 2, y 4, modulus 6, boxed parts
+	 * 8 and 9.
 	 *
 	 * <p>
 	 * "Real" is what the call site's SOURCE shows; a complex arriving through a variable
@@ -1310,19 +1363,7 @@ final class JvmComplexRuntimeBuilder {
 		emitDoubleConst(c, cp, Math.PI);
 		c.dmul();
 		c.dstore(4);
-		c.dload(6);
-		c.dload(4);
-		callMath(c, refs, cp, "cos", "(D)D");
-		c.dmul();
-		emitBoxDouble(c, refs);
-		c.astore(8);
-		c.dload(6);
-		c.dload(4);
-		callMath(c, refs, cp, "sin", "(D)D");
-		c.dmul();
-		emitBoxDouble(c, refs);
-		c.astore(9);
-		emitNewHolderFromSlots(c, refs, 8, 9);
+		emitPolarHolder(c, refs, cp, 6, 4, 8, 9);
 		c.areturn();
 		c.labelBinding(realPathSign);
 		c.labelBinding(realPathInfinite);

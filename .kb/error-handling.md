@@ -1356,12 +1356,17 @@ measured that day (default / traps masked):
 | `(expt #c(0.0 0.0) 0)`, `(expt 0 #c(0.0 0.0))` | `#C(1.0 0.0)` | same | same |
 | `(expt #c(0.0 0.0) 0.0)` | arguments-out-of-domain | same | `#C(1.0 0.0)` |
 | `(expt 0 #c(-1 1))`, `(expt 0 #c(0 1))`, `(expt 0.0 #c(0 1))` | DBZ | `#C(NaN NaN)` | `#C(NaN NaN)` |
-| `(expt #c(0.0 0.0) -2)`, `... -2.5` | DBZ | `#C(inf NaN)` | `#C(NaN NaN)` |
+| `(expt #c(0.0 0.0) -2)` / `... -2.5` | DBZ | `#C(inf NaN)` | `#C(Infinity NaN)` / `#C(NaN NaN)` |
 
-SBCL's rule is `(if (and (zerop base) (plusp (realpart power))) (* base power) (exp (* power (log
-base))))` behind `(zerop power) -> (1+ (* base power))`. rontolisp's (`Environment.zeroBasePow`,
-`JvmComplexRuntimeBuilder.emitZeroBasePow`, `WasmComplexCompiler.emitZeroBasePow`, run only where
-the formula would): a zero power answers `#C(1.0 0.0)`; a positive real part answers the exact `0`
+SBCL's rule for a float or complex power (and a real base to a complex one) is `(if (and (zerop
+base) (plusp (realpart power))) (* base power) (exp (* power (log base))))` behind `(zerop power) ->
+(1+ (* base power))`; a complex base to a RATIONAL power is the polar form instead
+(`.kb/jvm-complex.md`), which rontolisp takes too since later that day -- so a complex zero to a
+rational power never reaches these arms: its zero modulus keeps the rotation's signs (`(expt
+#c(-0.0 0.0) 2)` is `#C(0.0 -0.0)`, SBCL's) and a negative power's infinite modulus answers SBCL's
+masked `#C(Infinity NaN)`. Any zero power answers `#C(1.0 0.0)` ahead of every arm. rontolisp's
+zero-base arm (`Environment.zeroBasePow`, `JvmComplexRuntimeBuilder.emitZeroBasePow`,
+`WasmComplexCompiler.emitZeroBasePow`, run only where the formula would): a positive real part answers the exact `0`
 when both operands are exact, else `#C(0.0 0.0)` -- positive zeros for every zero's sign, as IEEE
 `pow(±0, y)` for a non-integer `y > 0`, rather than `*`'s signs (which already differ from SBCL's and
 between the interpreter and the compiled backends on signed zeros); anything else keeps the

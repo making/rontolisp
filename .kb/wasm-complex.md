@@ -201,8 +201,10 @@ The order, the pairwise generic fold and the pins are the JVM twin's
 axis and the signed zeros: `copysign(pi/2, y)` for a nonzero `y` over either
 zero, a zero `y`'s own sign over `+0` and `copysign(pi, y)` over `-0` -- the
 axis the old hand-rolled assembly got wrong, `.todo/766`), `expt` (the exact
-squaring loop for an i31 exponent over an EXACT base, `exp(w*log z)` for
-anything with a float part, `Environment.exptComplex`'s rule; a zero base takes
+squaring loop for an i31 exponent over an EXACT base, `#C(1.0 0.0)` for a zero
+power, the polar form `|z|^w * cis(w*phase z)` for any other rational power over a
+complex base, `exp(w*log z)` for a float or complex power, `Environment.exptComplex`'s
+rule, `.kb/jvm-complex.md`; a zero base to a float or complex power takes
 `emitZeroBasePow` first, `.kb/error-handling.md` "A zero base on the complex `expt`
 path") and the fifteen
 unary functions run the interpreter's formulas over calls into the fdlibm
