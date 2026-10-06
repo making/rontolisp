@@ -56,34 +56,75 @@ and full-Unicode case folding for free. Iterative, so long strings cannot exhaus
    `(a b &rest kw)` and re-extract bounds with `getf` -- without that,
    `(apply #'string= a b :start1 1)` would silently ignore them on the compile paths.
 
-**A nil start is no bound** on every surface, SBCL's answer: a `type-error` whose datum is NIL
-for `:start1`/`:start2` (a nil `:end1`/`:end2` is the length). `boundedStringArg` hands a nil
-start to `requireIndex`; `%string-compare` binds the start as given (no `(or start1 0)`), so the
-walk's first comparison refuses it -- before any character is read, over empty strings too; the
-`stringEquality` wrappers read the starts with `getfKwDefault` (`.kb/sequence-bounding-keywords.md`).
-The call-position `string=` lowering always handed the start to `subseq` as written. The
-`nstring-*` case conversions take `&key start end` and delegate the window to the non-destructive
-sibling (`.kb/subseq-runtime.md`, "Bounded string operators"), taking the unbounded fold when the
-window is the whole string. The interpreter's keyword walk also honors the FIRST occurrence of a
-repeated keyword (CLHS 3.4.1.4) where it used to take the last.
-Pinned by `StringNilStartFixture` (interpreter, JVM, P1, component) and ci-spec
-`string-operators-refuse-a-nil-start`.
-- Cost (measured 2026-10-05, JVM / P1 / component bytes, over every ci-spec case, the examples
-  in `examples.yaml`, size-report and bench-report: 2,408 compiled artifacts): 2,180 are
-  byte-identical; the rest shrink -- a `funcall`ed `#'string=` with bounds 14,341 -> 13,944 JVM,
-  14,050 -> 13,749 P1, 15,266 -> 14,963 component (a program carrying the compiled `eval`'s
-  wrapper table -798 to -935 JVM, -700 to -798 wasm); a `string<` program -137 B JVM, 0 to
-  -22 B wasm -- summed -60.5 KB JVM, -27.5 KB P1, -27.6 KB component. An `nstring-*`
-  program grows: `(print (nstring-upcase (copy-seq "abc")))` 27,390 -> 30,977 JVM (the `&key`
-  parsing the program had no other use for), 22,286 -> 23,079 P1, 23,500 -> 24,289 component;
-  with another `&key` defun in the program +1,030 JVM / +837 P1; the ci-spec case using all
-  three +4,908 JVM / +798 P1 / +820 component. Speed: a keyword-free
+**Every bound is checked once, before the walk** -- the rule the sequence operators follow
+(`.kb/sequence-bounding-keywords.md`, "Every bound is checked once"), with the same refusal: a
+negative, non-integer (a nil start included) or past-int-range bound, one past the string's length
+and a start past its end are `subseq`'s `type-error` (datum the refused bound, expected type its
+range, report `SUBSEQ: invalid bounds S, E for string of length N`) on every backend, call position
+and first class, string1's range before string2's. A nil `:end1`/`:end2` is the length.
+- `string<` family: `%string-compare` calls `(%check-bounds sa start1 end1)` and
+  `(%check-bounds sb start2 end2)` after the designator coercion and before the walk -- one
+  definition, all four backends. The start is bound as given (no `(or start1 0)`).
+- `string=`/`string-equal`: the interpreter's `boundedStringArg` refuses through `stringWindow`
+  (shared with `boundedCaseConversion`) -> `subseqBoundsError`; the call-position lowering and
+  the `stringEquality` wrappers cut with `subseq`, which refuses alike, reading a given start as
+  written (`getfKwDefault`, `.kb/sequence-bounding-keywords.md`). Both coerce a designator that is
+  no literal string with `(string x)` before the cut: `(string= 'abc "BC" :start1 1)` was
+  `SUBSEQ: The value ABC is not of type SEQUENCE` on the JVM and wasm until 2026-10-06.
+- Deviations from SBCL, `subseq`'s own: a range is refused with the bound as datum (SBCL's is
+  the cons `(start . end)`), and SBCL checks every bound's TYPE before any range (its lambda
+  list declares `(MOD ...)`), so `(string= s s :start1 9 :start2 -1)` is its -1 and our 9. SBCL
+  2.2.9's `string<`/`string>`/`string<=` over two LITERAL strings check no range at all
+  (`(string< "abc" "abd" :end1 9)` -> 2, through `funcall` too; over `(copy-seq "abc")` a
+  `type-error`), which is why the fixtures compare strings that are no literals.
+- Before (measured 2026-10-06, four backends): only a nil start was refused. The `string<`
+  family answered from the walk (`:start1 -1` -> -1 JVM, 0 wasm, the interpreter's `char`
+  `type-error`; `:start1 2 :end1 1` -> 2; `:start2 4` -> NIL; `:end1 9` over a `copy-seq`
+  string trapped on wasm, out-of-bounds array access); the interpreter's `string=` refused
+  with a `simple-error`.
+- Cost (2026-10-06, JVM / P1 / component bytes, 792 programs: every ci-spec case, the examples
+  in `examples.yaml`, size-report, bench-report): 2,098 of 2,324 artifacts byte-identical, among
+  them every program that names no string comparison and every keyword-free `string=`. The
+  shared defun cannot tell a keyword-free `string<` from a bounded one, so every program
+  carrying the `string<` family pays (the check, plus `_ckBounds` / `_ck_bounds` where nothing
+  else brought it): `(print (string< "abc" "abd"))` 22,974 -> 24,057 / 7,527 -> 7,612 / 8,714 ->
+  8,799, with a `handler-case` +1,215 / +426 / +433; the ci-spec `string-comparison-family` case
+  +652 JVM / +264 P1 on the check alone. The `stringEquality` wrapper's two `(string x)`
+  coercions add +343..+686 JVM / +178..+404 wasm to a program carrying it (the compiled `eval`'s
+  wrapper table). Differing: JVM 111 (sum +70.1 KB, max +2.2 KB), P1 56 (+27.1 KB, max
+  +1.3 KB, the ningle examples), component 59 (+28.4 KB). Selecting an unchecked `%string-compare`
+  for a program that provably passes no bound was rejected: a function value, an `apply`, a
+  run-time `eval` or a wrapper body injected after prelude selection can all pass one, and a
+  wrong "provably" is the silent wrong answer this check exists to remove.
+- Speed (2026-10-06, pinned, min of 15 steady-state reps of 400 K calls (P1) / 4 M (JVM), 8
+  characters): keyword-free `string<` +4-7% (P1 261-274 -> 275-293 ms; JVM 385-419 -> 406-435),
+  bounded `string-lessp` P1 209 -> 229 ms; JVM bounded runs are bimodal (JIT) on base and after
+  alike. A guard skipping the check for default bounds won the P1 keyword-free time back but
+  measured slower on the JVM's bounded loop, and costs bytes on every program. Bounded `string=`
+  over variables (now coerced with `string`): within noise.
+- ANSI `strings` (interpreter, suite `ca06bd9`, 2026-10-06): 435 / 509 before and after, the
+  FAIL/ERROR sets identical name by name.
+- Pinned by `StringComparisonBoundsFixture` (`PROGRAM`: sbcl's answers; `REPORT_PROGRAM`: the
+  slots and text) in `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
+  (P1 and component), ci-spec `string-comparisons-refuse-a-bad-bound`; the nil start also by
+  `StringNilStartFixture` and ci-spec `string-operators-refuse-a-nil-start`.
+
+The `nstring-*` case conversions take `&key start end` and delegate the window to the
+non-destructive sibling (`.kb/subseq-runtime.md`, "Bounded string operators"), taking the
+unbounded fold when the window is the whole string. The interpreter's keyword walk honors the
+FIRST occurrence of a repeated keyword (CLHS 3.4.1.4).
+- Cost of refusing a nil start (measured 2026-10-05, JVM / P1 / component bytes, over every
+  ci-spec case, the examples in `examples.yaml`, size-report and bench-report: 2,408 compiled
+  artifacts): 2,180 are byte-identical; the rest shrink -- a `funcall`ed `#'string=` with bounds
+  14,341 -> 13,944 JVM, 14,050 -> 13,749 P1, 15,266 -> 14,963 component (a program carrying the
+  compiled `eval`'s wrapper table -798 to -935 JVM, -700 to -798 wasm); a `string<` program
+  -137 B JVM, 0 to -22 B wasm -- summed -60.5 KB JVM, -27.5 KB P1, -27.6 KB component. An
+  `nstring-*` program grows: `(print (nstring-upcase (copy-seq "abc")))` 27,390 -> 30,977 JVM
+  (the `&key` parsing the program had no other use for), 22,286 -> 23,079 P1, 23,500 -> 24,289
+  component; with another `&key` defun in the program +1,030 JVM / +837 P1; the ci-spec case
+  using all three +4,908 JVM / +798 P1 / +820 component. Speed: a keyword-free
   `nstring-upcase` loop is within noise on P1 and the JVM; routed through the bounded fold it
   measured ~1.25x (P1) / ~2x (JVM) slower, which is why the whole-string window skips it.
-- Known gap (`.todo/d38`): no other bound is validated alike. A negative, out-of-range or
-  crossed bound is a `type-error` in SBCL; the `string<` family answers (`:start1 -1` is -1 on
-  the JVM, 0 on wasm, a `type-error` in the interpreter), and the interpreter's `string=`
-  refuses with a non-`type-error`.
 
 Compile-path consequence: a program calling `string>` never mentions `%string-compare`, so
 `LispPreludeLibrary.process` selects prelude entries **to a fixpoint**. The interpreter resolves

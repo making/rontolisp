@@ -1935,13 +1935,14 @@ public final class BuiltinFunctionWrappers {
 	// Variadic wrapper for string= / string-equal: a plain two-argument call (the hot
 	// :test #'string= shape) stays a direct call, and a first-class call carrying the
 	// bounding-index keywords re-extracts them with getf and compares the designated
-	// substrings -- the same subseq lowering the compilers apply to a literal call
+	// substrings of the coerced designators -- the same (subseq (string x) ...) lowering
+	// the compilers apply to a literal call
 	// (LispMacroExpander.expandStringComparisonBounds), so #'string= agrees with
 	// string= and with the interpreter's Java-side keyword parsing.
 	private static WrapperDef stringEquality(String name) {
-		LispVal boundedA = callV(LispNames.SUBSEQ, new LispSymbol("a"),
+		LispVal boundedA = callV(LispNames.SUBSEQ, call(LispNames.STRING, "a"),
 				getfKwDefault(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
-		LispVal boundedB = callV(LispNames.SUBSEQ, new LispSymbol("b"),
+		LispVal boundedB = callV(LispNames.SUBSEQ, call(LispNames.STRING, "b"),
 				getfKwDefault(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
 		LispVal bounded = listToCons(List.of(new LispSymbol(name), boundedA, boundedB));
 		LispVal body = listToCons(

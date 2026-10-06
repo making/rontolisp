@@ -3503,14 +3503,17 @@ public final class LispPreludeLibrary {
 		// which is what string<=/string>= must return). Each operator is then a one-line
 		// test on the order, so the case-folding and the bounding-index handling exist
 		// once instead of ten times. Iterative (not recursive) so comparing long strings
-		// cannot exhaust the stack on any backend. A nil start is no bound: the walk's
-		// first comparison refuses it (a type-error, datum NIL); only a nil end defaults.
+		// cannot exhaust the stack on any backend. Both ranges are checked once, before
+		// the walk, string1's first: a bad one is subseq's type-error (%check-bounds), a
+		// nil start included -- only a nil end defaults, to the length.
 		SOURCES.put(LispNames.STRING_COMPARE, """
 				(defun %string-compare (a b start1 end1 start2 end2 foldp)
 				  (let* ((sa (string a)) (sb (string b))
 				         (i start1) (j start2)
 				         (e1 (or end1 (length sa))) (e2 (or end2 (length sb)))
 				         (result nil))
+				    (%check-bounds sa start1 end1)
+				    (%check-bounds sb start2 end2)
 				    (while (null result)
 				      (cond ((and (>= i e1) (>= j e2)) (setq result (cons 0 i)))
 				            ((>= i e1) (setq result (cons -1 i)))

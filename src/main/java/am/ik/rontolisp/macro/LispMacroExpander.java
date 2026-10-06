@@ -32361,11 +32361,12 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (string= s1 s2 :start1 a :end1 b :start2 c :end2 d) -- and the identical
-	 * {@code string-equal} shape -- into (string= (subseq s1 a b) (subseq s2 c d)), so
-	 * the compile backends keep their two-argument string-equality intrinsic and the
-	 * bounding indices cost nothing when absent. The ordering predicates ({@code string<}
-	 * and its nine siblings) need no such lowering: they are ordinary {@code defun}s
-	 * taking the four keywords in their lambda list.
+	 * {@code string-equal} shape -- into (string= (subseq (string s1) a b) (subseq
+	 * (string s2) c d)), the coercion left out for a literal string, so the compile
+	 * backends keep their two-argument string-equality intrinsic and the bounding indices
+	 * cost nothing when absent. The ordering predicates ({@code string<} and its nine
+	 * siblings) need no such lowering: they are ordinary {@code defun}s taking the four
+	 * keywords in their lambda list.
 	 * @param cons the string= / string-equal expression
 	 * @return the expanded expression
 	 */
@@ -32392,18 +32393,22 @@ public final class LispMacroExpander {
 				boundedSubstringForm(parts.get(2), start2, end2)));
 	}
 
-	// (subseq s start end) for the bounds actually given -- the string itself when
-	// neither is. subseq accepts a nil end (the string's length), so an :end without a
+	// (subseq (string s) start end) for the bounds actually given -- the string itself
+	// when neither is. A designator that is no literal string is coerced first, so a
+	// symbol or a character is cut as its name (subseq of the symbol itself is no
+	// sequence). subseq accepts a nil end (the string's length), so an :end without a
 	// :start still becomes a single call.
 	private static LispVal boundedSubstringForm(LispVal string, @Nullable LispVal start, @Nullable LispVal end) {
 		if (start == null && end == null) {
 			return string;
 		}
+		LispVal coerced = string instanceof LispString || isStringDesignatorCoercion(string) ? string
+				: callOf(LispNames.STRING, string);
 		LispVal startForm = (start == null) ? new LispInteger(0) : start;
 		if (end == null) {
-			return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startForm));
+			return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), coerced, startForm));
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startForm, end));
+		return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), coerced, startForm, end));
 	}
 
 	/**
