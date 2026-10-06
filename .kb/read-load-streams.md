@@ -28,7 +28,8 @@ nesting `#|...|#`.
   both carrying the stream `stream-error-stream` reads back -- converted from `LispReadException`
   (whose `isEndOfFile` flag is the distinction) in `LispEvaluator.foldStructLiteralsOf`. A
   `handler-case` for `error` catches both spellings everywhere, so the divergence only shows to
-  a clause naming the type.
+  a clause naming the type. Text that runs out and a stray `)` are the exception: typed on every
+  backend ("The one-argument `read-from-string` refuses malformed text" below).
 - `#S`: JVM bakes `_rdStructs` in `<clinit>` (`structTableClinit`, gated on
   `usesRead && mayUseInstances`); WASM appends a directory blob after the `WasmInstanceLayouts`
   records (`buildReadCtx`). An omitted slot takes a nil initform, re-reads a baked
@@ -49,8 +50,8 @@ nesting `#|...|#`.
 - `read-from-string` reads the FIRST datum only. The compiled readers always did; the interpreter parses the
   whole text first and, only when that signals, cuts it at `LispLexer.datumEnd` and reads the head, so
   `"5.)"`, `"abc)"`, `"1 (2"` answer the first datum like SBCL and a stray `)` ALONE or an unfinished datum
-  still signals. The compiled readers still read a lone `)` or an unterminated list leniently (nil / the
-  list), the divergence listed above. Pinned by ci-spec `runtime-read-stops-after-the-first-datum`.
+  still signals -- on all four backends (next section). Pinned by ci-spec
+  `runtime-read-stops-after-the-first-datum`.
 - Dotted pairs: `.` is a dot token only when the next byte is a delimiter (whitespace `( ) ' " ;`) or
   EOF (`LispReader.readList`, `buildReadList`, `buildReadListBody`).
 
@@ -128,6 +129,40 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
 `read-from-string-stop-index`.
 
+## The one-argument `read-from-string` refuses malformed text
+**Invariant: text holding no datum (empty, whitespace, comments) or ending inside one (a list, a
+string, a quote, a dotted tail, `#(`, `#S(`, `#|`, `#\`) is `end-of-file`, and a `)` where a datum is
+due is `reader-error` reporting `Unexpected ')'`, on all four backends** (SBCL's classes; the
+interpreter's reader always did).
+- The emitted readers never throw for these. They RECORD how the parse ended -- JVM static
+  `_readFail` (`JvmReadRuntimeBuilder.FAIL_FIELD`), WASM `READ_FAIL_ADDR`, which SHARES the
+  block-comment depth cell (no free word below `DATA_BASE_OFFSET`): 0 a datum, bit 0 the text ran out
+  (an OR, so a `)` recorded first survives), 2 a stray `)`, which also moves the cursor to the end so
+  every enclosing reader unwinds through its end-of-input path and no later `#|` can overwrite the
+  cell. Each `read-from-string` setup resets it.
+- The call site signals: `LispMacroExpander.expandReadFromStringFailure` lowers `(read-from-string s)`
+  to `%read-from-string-raw` + `(%read-failure)` and an `eql` dispatch, from both expression
+  compilers. Behind a landing pad the arms are `(error 'end-of-file)` / `(error 'reader-error
+  :format-control ...)` (restart-mode handlers run at the signal point); without one, plain `%error`
+  with the same text -- the `lowerParseError` split. `READ_FROM_STRING_FAILURE_SITES` stands in for
+  both tags in `conditionNarrowing` / `usedLayoutTags`.
+- The conditions carry no stream on the compiled backends (`stream-error-stream` is nil; the
+  interpreter's carries a string-input stream).
+- Runtime `load` (`_load`, both backends) reads the same record after each form and refuses the bad
+  one before evaluating it: a catchable `simple-error` reporting `end of file` / `Unexpected ')'`,
+  after the forms before it ran (SBCL's order). Before, a stray `)` evaluated as nil and an unfinished
+  form as its partial list; only an unterminated `#|` signalled. The interpreter's `load` parses the
+  whole file first, and that parse error escapes `handler-case`.
+- Not covered (remain compiled-only leniencies): `( . a)` and `(a . b c)` read as lists (SBCL and the
+  interpreter: `reader-error`), `#` alone reads as a symbol everywhere.
+- Before (measured 2026-10-06, SBCL 2.2.9 and the four backends): `")"` answered `(NIL 1)`, `""`
+  `(NIL 0)`, `"(a b"` `((A B) 4)`, `"\"ab"` `("ab" 3)`, `"'"` `('NIL 1)`; `#|x`, `#\` and an unfinished
+  `#S(` signalled `simple-error`.
+
+Pinned by `ReadFromStringMalformedFixture` (ci-spec `read-from-string-refuses-malformed-text`) in the
+three backend suites, `JvmLispCompilerTest.compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`,
+`WasmLispCompilerIntegrationTest.loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen`.
+
 ## `read-from-string`'s whole lambda list is ONE prelude defun
 **Invariant: a call passing more than the string -- `eof-error-p`, `eof-value`, `:start`,
 `:end`, `:preserve-whitespace` -- is `(%read-from-string-full ...)` on all four backends, in call
@@ -138,8 +173,7 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
 - The body is `read`'s: `with-input-from-string` over the window, `%rd-datum` delimits, the
   native one-argument read parses the collected text. So an input holding no datum (whitespace
   and comments only) answers `eof-value` or signals `end-of-file` as `eof-error-p` says, an
-  incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error` -- on the
-  compiled backends too, where the one-argument read answers nil / the partial list for those.
+  incomplete datum is `end-of-file` WHATEVER it says, and a stray `)` is `reader-error`.
 - The index is `:start` plus the window stream's `file-position`. A `--no-wasi` module answers
   `file-position` with the constant nil ("Limits" under `file-position` below), and there the defun counts the characters a
   `read-char` drain still finds (it trapped on `(+ start nil)` before the fallback; pinned by

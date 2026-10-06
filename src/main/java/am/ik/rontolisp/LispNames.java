@@ -8729,6 +8729,22 @@ public final class LispNames {
 	public static final String READ_FROM_STRING_FULL_INTERNAL = "%READ-FROM-STRING-FULL";
 
 	/**
+	 * The one-argument {@code read-from-string} of the compiled backends' runtime reader
+	 * without the check that refuses malformed text: what
+	 * {@code LispMacroExpander.expandReadFromStringFailure} reads through before it asks
+	 * {@link #READ_FAILURE_INTERNAL}. Only that lowering emits it.
+	 */
+	public static final String READ_FROM_STRING_RAW_INTERNAL = "%READ-FROM-STRING-RAW";
+
+	/**
+	 * {@code (%read-failure)}: how the compiled backends' runtime reader's last
+	 * {@code read-from-string} parse ended -- 0 with a datum, 1 when the text ran out
+	 * before one was complete (or held none), 2 or more at a {@code )} that closed
+	 * nothing. Only {@code LispMacroExpander.expandReadFromStringFailure} emits it.
+	 */
+	public static final String READ_FAILURE_INTERNAL = "%READ-FAILURE";
+
+	/**
 	 * The shared runtime-{@code %subtypep-valid} dispatch defun the compilers inject once
 	 * per program when a multiple-value {@code subtypep} carries a non-literal type
 	 * specifier -- the valid-p twin of {@link #SUBTYPEP_RUNTIME}, which it calls.

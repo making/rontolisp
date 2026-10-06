@@ -25,6 +25,7 @@ import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10595,6 +10596,18 @@ class LispEvaluatorTest {
 		// A radix that is no integer in 2..36 is the type-error of (INTEGER 2 36), before
 		// any character is read -- sbcl's answers, pinned on all four backends.
 		assertThat(evalPrinted(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void readFromStringRefusesMalformedText() {
+		// A stray ')' is a reader-error, no datum or an unfinished one an end-of-file --
+		// sbcl's answers, pinned on all four backends.
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.RESTART_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+		assertThat(evalPrinted(ReadFromStringMalformedFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
 	}
 
 	@Test

@@ -14,6 +14,7 @@ import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13624,6 +13625,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReadFromStringRefusesMalformedText() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringRefusesMalformedText.
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.RESTART_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunParseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax.
@@ -15106,6 +15118,20 @@ class JvmLispCompilerTest {
 		Files.writeString(lib, "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n");
 		String code = "(load \"" + lib + "\") (print (eval '(dbl (inc 4))))";
 		assertThat(compileAndRun(code)).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen() throws Exception {
+		// The forms before the bad one are evaluated, then the load signals -- a ')' that
+		// closes nothing, an unfinished list, an unterminated block comment.
+		String[][] cases = { { "(print 1) )\n(print 9)\n", "Unexpected ')'" }, { "(print 1) (print 2", "end of file" },
+				{ "(print 1) #| x", "end of file" } };
+		for (int i = 0; i < cases.length; i++) {
+			Path lib = tempDir.resolve("bad" + i + ".lisp");
+			Files.writeString(lib, cases[i][0]);
+			String code = "(print (handler-case (load \"" + lib + "\") (error (c) (princ-to-string c))))";
+			assertThat(compileAndRun(code)).isEqualTo("1\n\"" + cases[i][1] + "\"");
+		}
 	}
 
 	// === dynamic mode (late binding) ===

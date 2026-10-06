@@ -6356,6 +6356,44 @@ cases:
       1
       X
       1
+  # A one-argument read-from-string over text holding no complete datum signals: a ')'
+  # that closes nothing is a reader-error, no datum or an unfinished one an end-of-file
+  # (sbcl's answers; .kb/read-load-streams.md).
+  - name: read-from-string-refuses-malformed-text
+    source: |
+      (defun rfm-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (end-of-file (c) (list :eof (typep c 'stream-error) (typep c 'parse-error)))
+          (reader-error (c) (list :reader-error (typep c 'parse-error) (typep c 'stream-error)))
+          (error (c) (list :other-error (type-of c)))))
+      (defmacro rfm-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(rfm-probe (lambda () ,f))) forms))))
+      (rfm-row (read-from-string ")") (read-from-string (copy-seq " ) a")) (read-from-string (copy-seq "')"))
+               (read-from-string (copy-seq "(a ')")))
+      (rfm-row (read-from-string "") (read-from-string (copy-seq "   ")) (read-from-string (copy-seq "; c"))
+               (read-from-string (copy-seq "#| x |#")))
+      (rfm-row (read-from-string (copy-seq "(a b")) (read-from-string (copy-seq "\"ab"))
+               (read-from-string (copy-seq "'")) (read-from-string (copy-seq "(a . b")))
+      (rfm-row (read-from-string (copy-seq "#(1 2")) (read-from-string (copy-seq "#|x"))
+               (read-from-string (copy-seq "#\\")) (read-from-string (copy-seq "#2A((1 2)")))
+      (rfm-row (funcall #'read-from-string (copy-seq ")")) (funcall #'read-from-string (copy-seq "(a"))
+               (apply #'read-from-string (list (copy-seq ""))) (values (read-from-string (copy-seq "(a . )"))))
+      (print (block rfm-hb
+               (handler-bind ((reader-error (lambda (c) (return-from rfm-hb (list :handler-bind (typep c 'reader-error))))))
+                 (read-from-string (copy-seq ")")))))
+      (print (let ((c (nth-value 1 (ignore-errors (read-from-string (copy-seq "(a"))))))
+               (list :ignore-errors (typep c 'end-of-file))))
+      (rfm-row (read-from-string (copy-seq "a)")) (read-from-string (copy-seq "(a) )"))
+               (read-from-string (copy-seq "#| c |# x")) (read-from-string (copy-seq " \"a\\\\\" ")))
+    expected: |
+      ((:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T) (:READER-ERROR T T))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:EOF T NIL) (:EOF T NIL) (:EOF T NIL) (:EOF T NIL))
+      ((:READER-ERROR T T) (:EOF T NIL) (:EOF T NIL) (:READER-ERROR T T))
+      (:HANDLER-BIND T)
+      (:IGNORE-ERRORS T)
+      ((A 1) ((A) 4) (X 9) ("a\\" 7))
   - name: read-from-string-upcase
     source: |
       (print (read-from-string "foo"))

@@ -2776,6 +2776,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// locals, so #| ... |# nesting counts through this cell instead).
 	static final int RD_DEPTH_ADDR = 192;
 
+	// How the reader's last read-from-string parse ended -- 0 with a datum, bit 0 set
+	// when the text ran out before a datum was complete (or held none), 2 at a ')' that
+	// closed nothing (WasmReadRuntimeBuilder.emitMarkEof / the _read_expr ')' arm). It
+	// SHARES the block-comment depth cell: a comment that closes leaves the cell at 0,
+	// one the text ends inside of overwrites it with the end-of-file 1, and after either
+	// failure the cursor sits at the end, so no later comment is entered to overwrite
+	// the record. Reset by every read-from-string setup and by _load.
+	static final int READ_FAIL_ADDR = RD_DEPTH_ADDR;
+
 	// Monotonic counter cell minting the dynamic block-instance id of the cross-lambda
 	// non-local-exit machinery ({@code %nlx-tag}, see WasmNlxCompiler): each catch
 	// activation gets the next integer as an i31 value, so throw/catch matching is
@@ -12646,6 +12655,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (String site : LispMacroExpander.PARSE_ERROR_SITES) {
 				if (symbols.contains(site)) {
 					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PARSE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
+			// The same for a read-from-string's end-of-file / reader-error
+			// (expandReadFromStringFailure).
+			for (String site : LispMacroExpander.READ_FROM_STRING_FAILURE_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.END_OF_FILE_CLASS_NAME);
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.READER_ERROR_CLASS_NAME);
 					break;
 				}
 			}

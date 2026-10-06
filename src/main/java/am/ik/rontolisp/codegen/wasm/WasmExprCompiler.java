@@ -1777,9 +1777,13 @@ final class WasmExprCompiler {
 					compileExpansion(full, ctx, tail);
 				}
 				else {
-					WasmReadFromStringCompiler.compile(cons, ctx);
+					// Malformed text signals (expandReadFromStringFailure).
+					compileExpansion(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
 				}
 			}
+			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> WasmReadFromStringCompiler.compile(cons, ctx);
+			case LispNames.READ_FAILURE_INTERNAL -> WasmReadFromStringCompiler.compileFailure(ctx);
 			case LispNames.READ_FROM_STRING_END -> WasmReadFromStringCompiler.compileEnd(cons, ctx);
 			// A string=/string-equal call with the bounding-index keywords is lowered
 			// onto subseq first, so the intrinsic below always sees two strings.

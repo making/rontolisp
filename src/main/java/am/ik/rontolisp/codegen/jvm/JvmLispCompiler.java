@@ -3258,6 +3258,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry readSrcDesc = cp.utf8Entry("Ljava/lang/String;");
 		Utf8Entry readPosName = cp.utf8Entry("_readPos");
 		Utf8Entry readPosDesc = cp.utf8Entry("I");
+		@Nullable Utf8Entry readFailName = usesRead ? cp.utf8Entry(JvmReadRuntimeBuilder.FAIL_FIELD) : null;
 		Utf8Entry rdStructsName = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
 		Utf8Entry rdStructsDesc = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
@@ -4144,6 +4145,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (usesRead) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readSrcName, readSrcDesc);
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readPosName, readPosDesc);
+			// How the last read-from-string parse ended
+			// (JvmReadRuntimeBuilder.FAIL_FIELD).
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, Objects.requireNonNull(readFailName),
+					readPosDesc);
 		}
 		if (structTableClinitFinal != null) {
 			// The runtime struct-layout directory for #S(...) read at run time.

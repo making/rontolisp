@@ -28,6 +28,7 @@ import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14699,6 +14700,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readFromStringRefusesMalformedText() throws Exception {
+		// The wasm twin of LispEvaluatorTest#readFromStringRefusesMalformedText,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.RESTART_PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(ReadFromStringMalformedFixture.REPORT_PROGRAM, component))
+				.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+		}
+	}
+
+	@Test
 	void parseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax, Preview 1
@@ -16413,6 +16428,16 @@ class WasmLispCompilerIntegrationTest {
 		String lib = "(defun INC (x) (+ x 1))\n(defun DBL (x) (* x 2))\n";
 		String code = "(load \"lib.lisp\") (print (eval '(dbl (inc 4))))";
 		assertThat(compileAndRunLoad(code, lib)).isEqualTo("10");
+	}
+
+	@Test
+	void loadRefusesAFormTheTextEndsInsideOrAStrayCloseParen() throws Exception {
+		// The forms before the bad one are evaluated, then the load signals -- a ')' that
+		// closes nothing, an unfinished list, an unterminated block comment.
+		String code = "(print (handler-case (load \"lib.lisp\") (error (c) (princ-to-string c))))";
+		assertThat(compileAndRunLoad(code, "(print 1) )\n(print 9)\n")).isEqualTo("1\n\"Unexpected ')'\"");
+		assertThat(compileAndRunLoad(code, "(print 1) (print 2")).isEqualTo("1\n\"end of file\"");
+		assertThat(compileAndRunLoad(code, "(print 1) #| x")).isEqualTo("1\n\"end of file\"");
 	}
 
 	@Test

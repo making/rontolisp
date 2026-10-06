@@ -9,11 +9,14 @@ import am.ik.wasm.Instruction;
 /**
  * Compiles the one-argument {@code read-from-string} (a call passing more than the string
  * is the prelude {@code %read-from-string-full},
- * {@code LispMacroExpander.expandReadFromString}). Points the runtime reader's cursor/end
- * at the string argument's bytes (skipping the surrounding quotes) and calls the embedded
- * {@code _read_expr}, which itself skips leading whitespace. Subject to the same
- * integer/symbol limitation as the rest of the WASM reader; {@code #\} character literals
- * and floats parsed at runtime are out of scope.
+ * {@code LispMacroExpander.expandReadFromString}), which arrives as
+ * {@code %read-from-string-raw} inside
+ * {@code LispMacroExpander.expandReadFromStringFailure}: that lowering reads
+ * {@code %read-failure} after the parse and signals over malformed text. Points the
+ * runtime reader's cursor/end at the string argument's bytes (skipping the surrounding
+ * quotes) and calls the embedded {@code _read_expr}, which itself skips leading
+ * whitespace. Subject to the same integer/symbol limitation as the rest of the WASM
+ * reader; {@code #\} character literals and floats parsed at runtime are out of scope.
  */
 final class WasmReadFromStringCompiler {
 
@@ -78,6 +81,19 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
+	/**
+	 * Compiles {@code (%read-failure)} -- how the reader's last parse ended
+	 * ({@code WasmLispCompiler.READ_FAIL_ADDR}), as a fixnum. Emitted only by
+	 * {@code LispMacroExpander.expandReadFromStringFailure}, right after the parse.
+	 * @param ctx the compilation context
+	 */
+	static void compileFailure(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_FAIL_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
 	// Pushes mem[READ_CURSOR_ADDR].
 	private static void loadCursor(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.I32_CONST);
@@ -133,6 +149,12 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		// no failure recorded yet (READ_FAIL_ADDR)
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_FAIL_ADDR);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 		// reserve: HEAP_PTR = READ_END + 1 = sp + totalLen
 		ctx.writer.write(Instruction.I32_CONST);

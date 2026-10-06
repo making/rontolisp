@@ -1483,9 +1483,13 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(full, ctx, className);
 				}
 				else {
-					JvmReadFromStringCompiler.compile(cons, ctx, className);
+					// Malformed text signals (expandReadFromStringFailure).
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				}
 			}
+			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> JvmReadFromStringCompiler.compile(cons, ctx, className);
+			case LispNames.READ_FAILURE_INTERNAL -> JvmReadFromStringCompiler.compileFailure(ctx, className);
 			case LispNames.READ_FROM_STRING_END -> JvmReadFromStringCompiler.compileEnd(cons, ctx, className);
 			// A string=/string-equal call with the bounding-index keywords is lowered
 			// onto subseq first, so the intrinsic below always sees two strings.

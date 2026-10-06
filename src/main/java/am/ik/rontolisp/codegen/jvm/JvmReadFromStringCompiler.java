@@ -13,7 +13,10 @@ import am.ik.rontolisp.LispVal;
  * string argument via the {@code _readFromString} runtime helper (which reuses the
  * embedded reader). A call passing more than the string never reaches here: it is the
  * prelude {@code %read-from-string-full}
- * ({@code LispMacroExpander.expandReadFromString}).
+ * ({@code LispMacroExpander.expandReadFromString}). The call itself arrives as
+ * {@code %read-from-string-raw} inside
+ * {@code LispMacroExpander.expandReadFromStringFailure}, which reads
+ * {@code %read-failure} after the parse and signals over malformed text.
  */
 final class JvmReadFromStringCompiler {
 
@@ -41,6 +44,19 @@ final class JvmReadFromStringCompiler {
 		ctx.body.pop();
 		FieldRefEntry pos = ctx.cp.fieldRef(ctx.cp.classEntry(className), "_readPos", "I");
 		ctx.body.getstatic(pos).i2l();
+		JvmEmitHelper.boxLong(ctx);
+	}
+
+	/**
+	 * Compiles {@code (%read-failure)} -- how the last {@code _readFromString} parse
+	 * ended ({@code JvmReadRuntimeBuilder.FAIL_FIELD}), as a fixnum. Emitted only by
+	 * {@code LispMacroExpander.expandReadFromStringFailure}, right after the parse.
+	 * @param ctx the compilation context
+	 * @param className the enclosing class name
+	 */
+	static void compileFailure(JvmLispCompiler.Ctx ctx, String className) {
+		FieldRefEntry fail = ctx.cp.fieldRef(ctx.cp.classEntry(className), JvmReadRuntimeBuilder.FAIL_FIELD, "I");
+		ctx.body.getstatic(fail).i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 

@@ -48,6 +48,16 @@ final class JvmReadRuntimeBuilder {
 	 */
 	static final String STRUCT_TABLE_FIELD = "_rdStructs";
 
+	/**
+	 * The static int field recording how the last {@code _readFromString} parse ended: 0
+	 * with a datum; bit 0 set when the text ran out before a datum was complete (or held
+	 * none); 2 at a {@code )} that closed nothing, which also ends the parse by moving
+	 * {@code _readPos} to the end. The readers never throw for either: a
+	 * {@code read-from-string} call reads the field after the parse
+	 * ({@code %read-failure}) and signals the typed condition, and {@code _load} throws.
+	 */
+	static final String FAIL_FIELD = "_readFail";
+
 	static final String STRUCT_TABLE_DESC = "[[Ljava/lang/Object;";
 
 	private final ConstantPool cp;
@@ -78,6 +88,8 @@ final class JvmReadRuntimeBuilder {
 	private final FieldRefEntry readSrc;
 
 	private final FieldRefEntry readPos;
+
+	private final FieldRefEntry readFail;
 
 	private final MethodRefEntry isWhitespace;
 
@@ -261,6 +273,7 @@ final class JvmReadRuntimeBuilder {
 
 		this.readSrc = cp.fieldRef(thisClass, "_readSrc", "Ljava/lang/String;");
 		this.readPos = cp.fieldRef(thisClass, "_readPos", "I");
+		this.readFail = cp.fieldRef(thisClass, FAIL_FIELD, "I");
 
 		ClassEntry characterClass = cp.classEntry("java/lang/Character");
 		this.isWhitespace = cp.methodRef(characterClass, "isWhitespace", "(C)Z");
@@ -545,6 +558,17 @@ final class JvmReadRuntimeBuilder {
 		a.putstatic(this.readPos);
 	}
 
+	/**
+	 * Emits {@code _readFail |= 1}: the text ran out where a datum (or the rest of one)
+	 * was due. An OR, so a stray {@code )} recorded first stays visible.
+	 */
+	private void markEof(MethodCode a) {
+		a.getstatic(this.readFail);
+		a.loadConstant(1);
+		a.ior();
+		a.putstatic(this.readFail);
+	}
+
 	private MethodCode buildSkipWs() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
@@ -611,8 +635,7 @@ final class JvmReadRuntimeBuilder {
 		srcLen(a);
 		a.if_icmplt(bNotClose);
 		// input exhausted inside the comment: unterminated
-		ldc(a, "Unterminated block comment");
-		a.invokestatic(this.rdErr);
+		markEof(a);
 		a.return_();
 		a.labelBinding(bNotClose);
 		// "|#" -> depth--, back to whitespace skipping at 0
@@ -718,13 +741,18 @@ final class JvmReadRuntimeBuilder {
 		a.iload(0);
 		a.loadConstant(')');
 		a.if_icmpne(atom);
-		advance(a);
+		// a ')' where a datum is due closes nothing: record it and end the parse
+		a.loadConstant(2);
+		a.putstatic(this.readFail);
+		srcLen(a);
+		a.putstatic(this.readPos);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(atom);
 		a.invokestatic(this.readAtom);
 		a.areturn();
 		a.labelBinding(retNull);
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		return a;
@@ -763,6 +791,7 @@ final class JvmReadRuntimeBuilder {
 		MethodCode.Label cont = a.newLabel();
 		MethodCode.Label notDot = a.newLabel();
 		MethodCode.Label isDot = a.newLabel();
+		MethodCode.Label tailEof = a.newLabel();
 		MethodCode.Label build = a.newLabel();
 		a.invokestatic(this.readSkipWs);
 		pos(a);
@@ -825,11 +854,15 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.if_icmpge(build);
+		a.if_icmpge(tailEof);
 		charAtPos(a);
 		a.loadConstant(')');
 		a.if_icmpne(build);
 		advance(a); // consume ')'
+		a.goto_(build);
+		a.labelBinding(tailEof);
+		// the text ends before the dotted list's ')'
+		markEof(a);
 		a.goto_(build);
 		a.labelBinding(notDot);
 		a.invokestatic(this.readList);
@@ -847,6 +880,8 @@ final class JvmReadRuntimeBuilder {
 		a.aastore();
 		a.areturn();
 		a.labelBinding(retNull);
+		// the text ends before the list's ')'
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		return a;
@@ -903,6 +938,7 @@ final class JvmReadRuntimeBuilder {
 		MethodCode.Label e2 = a.newLabel();
 		MethodCode.Label e3 = a.newLabel();
 		MethodCode.Label e4 = a.newLabel();
+		MethodCode.Label eof = a.newLabel();
 		// consume opening quote
 		advance(a);
 		// sb = new StringBuilder("\"")
@@ -914,7 +950,7 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(loop);
 		pos(a);
 		srcLen(a);
-		a.if_icmpge(done);
+		a.if_icmpge(eof);
 		charAtPos(a);
 		a.istore(1); // ch
 		a.iload(1);
@@ -988,6 +1024,10 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(adv);
 		advance(a);
 		a.goto_(loop);
+		a.labelBinding(eof);
+		// the text ends before the closing quote
+		markEof(a);
+		a.goto_(done);
 		a.labelBinding(close);
 		advance(a); // consume closing quote
 		a.labelBinding(done);
@@ -1471,6 +1511,7 @@ final class JvmReadRuntimeBuilder {
 
 	// _readFromString(Object strObj): parse the first datum from a string (the quotes of
 	// the runtime string representation are stripped first); returns null when empty.
+	// _readFail says how the parse ended (FAIL_FIELD).
 	private MethodCode buildReadFromString() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label retNull = a.newLabel();
@@ -1489,6 +1530,8 @@ final class JvmReadRuntimeBuilder {
 		a.putstatic(this.readSrc);
 		a.loadConstant(0);
 		a.putstatic(this.readPos);
+		a.loadConstant(0);
+		a.putstatic(this.readFail);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
@@ -1510,6 +1553,8 @@ final class JvmReadRuntimeBuilder {
 		a.aload(2);
 		a.areturn();
 		a.labelBinding(retNull);
+		// no datum at all
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		return a;
@@ -1952,7 +1997,7 @@ final class JvmReadRuntimeBuilder {
 		pos(a);
 		srcLen(a);
 		a.if_icmplt(ok);
-		err(a, "Unexpected end of input after #\\");
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(ok);
@@ -2552,7 +2597,7 @@ final class JvmReadRuntimeBuilder {
 		pos(a);
 		srcLen(a);
 		a.if_icmplt(ne1);
-		err(a, "Unexpected end of input, expected ')'");
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(ne1);
@@ -2818,7 +2863,7 @@ final class JvmReadRuntimeBuilder {
 		pos(a);
 		srcLen(a);
 		a.if_icmplt(pl1);
-		err(a, "Unexpected end of input, expected ')'");
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(pl1);
@@ -2871,7 +2916,7 @@ final class JvmReadRuntimeBuilder {
 		pos(a);
 		srcLen(a);
 		a.if_icmplt(pv1);
-		err(a, "Unexpected end of input, expected ')'");
+		markEof(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(badSlot);
@@ -3504,6 +3549,8 @@ final class JvmReadRuntimeBuilder {
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
+		MethodCode.Label bad = a.newLabel();
+		MethodCode.Label unmatched = a.newLabel();
 		MethodRefEntry eval = java.util.Objects.requireNonNull(this.evalRef);
 		MethodRefEntry paths = java.util.Objects.requireNonNull(this.pathsGet);
 		MethodRefEntry files = java.util.Objects.requireNonNull(this.filesReadString);
@@ -3528,16 +3575,37 @@ final class JvmReadRuntimeBuilder {
 		a.putstatic(this.readSrc);
 		a.loadConstant(0);
 		a.putstatic(this.readPos);
+		a.loadConstant(0);
+		a.putstatic(this.readFail);
 		a.labelBinding(loop);
 		a.invokestatic(this.readSkipWs);
+		// a form the text ends inside of (an unterminated #| included) or a ')' that
+		// closes nothing is refused before anything of it is evaluated
+		a.getstatic(this.readFail);
+		a.ifne(bad);
 		pos(a);
 		srcLen(a);
 		a.if_icmpge(done);
 		a.invokestatic(this.readExpr);
+		a.astore(3);
+		a.getstatic(this.readFail);
+		a.ifne(bad);
+		a.aload(3);
 		a.aconst_null();
 		a.invokestatic(eval);
 		a.pop();
 		a.goto_(loop);
+		a.labelBinding(bad);
+		a.getstatic(this.readFail);
+		a.loadConstant(1);
+		a.if_icmpne(unmatched);
+		err(a, ClosRegistry.END_OF_FILE_MESSAGE);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(unmatched);
+		err(a, "Unexpected ')'");
+		a.aconst_null();
+		a.areturn();
 		a.labelBinding(done);
 		// t is the symbol "T" (the compiled runtime's true, like every other
 		// symbol), NOT the integer 1 -- the interpreter's load answers t.

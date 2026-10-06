@@ -284,6 +284,9 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   trap at EOF. `WasmExprCompiler` lowers `%read-char-raw`/`%read-byte-raw`/`%read-line-raw` too.
 - **`read` is deliberately NOT in this family**, nor default `read-line`: both answer nil at end of
   input and `read`'s datum may legitimately BE nil.
+- The one-argument `read-from-string` signals `end-of-file` / `reader-error` through its own
+  call-site lowering over a parse RECORD rather than a nil test, since its datum may be nil
+  (`expandReadFromStringFailure`, [read-load-streams.md](read-load-streams.md)).
 
 ## `parse-integer` signals a `parse-error`
 A string that is no integer syntax without `:junk-allowed` (junk, no digit, an empty region) is a
