@@ -45,8 +45,8 @@ import org.jspecify.annotations.Nullable;
  * {@code eql} on these elements</b> -- the comparison would have to call back into the
  * evaluator per element, which is the cost this arm exists to avoid.</li>
  * <li><b>A bounding index outside its sequence</b>, or {@code start > end} -- the
- * prelude's {@code elt} decides whether that signals, truncates or answers something odd,
- * and it does so per call shape.</li>
+ * prelude body refuses it with {@code subseq}'s {@code type-error}, and the refusal stays
+ * written once, there.</li>
  * <li><b>Anything {@code (length seq)} does not measure the way this arm does</b> -- a
  * dotted list, a rank-2 array, a non-sequence.</li>
  * <li><b>{@code mismatch} with {@code :from-end}</b> -- the prelude accepts the keyword
@@ -203,8 +203,8 @@ final class SequenceScanFast {
 			return null;
 		}
 		// A start defaults to 0 only when ABSENT: the prelude's lambda list binds an
-		// explicit :start1 nil to nil, whose (+ start1 i) is the prelude's own error. An
-		// end is or-defaulted inside the body, so nil there IS the default.
+		// explicit :start1 nil to nil, which its bounds check refuses. An end is
+		// or-defaulted inside the body, so nil there IS the default.
 		int s1 = start1 == null ? 0 : boundingIndex(start1);
 		int e1 = end1 == null || end1 instanceof LispNil ? first.length() : boundingIndex(end1);
 		int s2 = start2 == null ? 0 : boundingIndex(start2);
@@ -212,8 +212,7 @@ final class SequenceScanFast {
 		if (s1 < 0 || e1 < 0 || s2 < 0 || e2 < 0) {
 			return null;
 		}
-		// Out of range is declined whole: what the prelude does there depends on which
-		// elt call it reaches first, and that is call-shape specific.
+		// Out of range is declined whole: the prelude body owns the refusal.
 		if (s1 > e1 || e1 > first.length() || s2 > e2 || e2 > second.length()) {
 			return null;
 		}
@@ -221,7 +220,7 @@ final class SequenceScanFast {
 	}
 
 	// A bounding index as a non-negative int, or -1 for anything else (nil, a float, a
-	// bignum, a negative) -- all of which the prelude's arithmetic and elt own.
+	// bignum, a negative) -- all of which the prelude's bounds check refuses.
 	private static int boundingIndex(LispVal value) {
 		if (value instanceof LispInteger n && n.value() >= 0 && n.value() <= Integer.MAX_VALUE) {
 			return (int) n.value();

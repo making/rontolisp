@@ -70,8 +70,8 @@ the refused bound, expected type its range, the report `SUBSEQ: invalid bounds S
 length N` (`.kb/subseq-runtime.md`, "Bounds check") -- on every backend. A call spelling no
 bound carries no check.** SBCL signals the same class at the same point (its datum for a range
 is the pair of bounds, the divergence `subseq` already has). It covers the fifteen,
-`remove-duplicates`/`delete-duplicates`, `fill`, `replace` and the six `position`/`find`
-spellings (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
+`remove-duplicates`/`delete-duplicates`, `fill`, `replace`, the six `position`/`find`
+spellings and `search`/`mismatch` (`reduce` was already a `subseq`, `.kb/subseq-runtime.md`). Until 2026-10-05 only a
 nil start was refused (by `lo`'s `(max start 0)`, gone): a negative start acted as 0, a float
 compared, a list `:end` past the length stopped there, `fill`/`replace` wrote nothing, and
 `position`/`find`, believed to check already, refused only a non-integer start (measured
@@ -81,7 +81,8 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   the refusal. Interpreter: `Environment.checkBoundingIndices`, also what every runtime twin
   calls (`sequenceScanValues`, `removeDuplicatesValues`, `positionScanValues`, the native
   `fill`/`replace`). The string comparisons' `%string-compare` calls it too, on every call
-  (`.kb/characters-code-points.md`, "String comparison family"). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
+  (`.kb/characters-code-points.md`, "String comparison family"), and so do the `search` /
+  `mismatch` prelude defuns, when a bound is spelled (below). JVM: `_ckBounds`, `JvmSubseqCompiler.compileCheckBounds`. wasm:
   `_ck_bounds` (`FUNC_CK_BOUNDS` after `_subseq_bad`, shaken when nothing spells a bound;
   `WasmStringRuntimeBuilder.buildCheckBoundsBody`), refusing through `_subseq_bad` in EH mode
   and with a bare `unreachable` outside it, like `subseq`. A string or vector is measured by its
@@ -106,6 +107,40 @@ compared, a list `:end` past the length stopped there, `fill`/`replace` wrote no
   1 2 3) :end 9)` answers 1 and `:start 9` nil, a vector refuses both) and its compiled
   transform of a CONSTANT bound checks nothing (`(position 2 (vector 1 2 3) :start 9)` -> nil).
   Here every representation is refused alike (`SequenceBoundsFixture.BOUND_REPORT_PROGRAM`).
+- `search`/`mismatch` are prelude defuns shared by every call, so the check is in the body,
+  after both `%check-sequence` lines and before the cursors are seeded: `(when (or s1p end1)
+  (%check-bounds seq1 start1 end1))`, `s1p` the start's supplied-p. A range with no start
+  given and a nil end is the whole sequence, inside it by construction. A list too short for
+  its bound is refused like every other representation; SBCL's `search` over a LITERAL
+  needle walks a list `sequence-2` lazily (`(search '(2) (list 1 2 3) :start2 9)` -> NIL),
+  over `(list 2)` it refuses. The interpreter's `SequenceScanFast` arm declines every bad
+  range and the defun refuses it. Before (measured 2026-10-06, four backends): only a
+  negative or nil start reached an error, as `elt`'s or the arithmetic's; a past-the-end
+  `:start1` answered 0 or 9, a crossed `:start2`/`:end2` NIL, `:end2 9` over a vector 1, and
+  `(mismatch s s :start1 -1)` over two strings trapped on both wasm legs (out-of-bounds array
+  access). Clojure's `index-of` / `.indexOf` lowerings passed a Java `fromIndex` straight
+  through; they clamp it now (`.kb/clojure-frontend.md`).
+- Guarded vs always checked (2026-10-06, the two candidates): speed, pinned, min of 15
+  steady-state reps, one loop shape per program (JVM 2M calls; P1 200K), base / always /
+  guarded -- keyword-free `search` (3 chars in 10) JVM 79-82 / 78-85 / 79-82 ms, P1
+  453-454 / 463 / 434-448; bounded `search :start2 1 :end2 9` JVM 137-176 / 155-176 /
+  146-166, P1 532 / 544-547 / 536-537; keyword-free `mismatch` (8 chars) JVM 57-62 / 71-76
+  / 59-61, P1 434-435 / 435-440 / 419-431. Under C2
+  (`-XX:-UseJVMCICompiler`) always-checked was flat alone but +20-45% in a program mixing
+  the three shapes. A guard on `(eql start1 0)` instead of a supplied-p measured slower than
+  either (JVM bounded 196-246, `mismatch` 75-79). Graal runs of the mixed-shape program are
+  bimodal on base too (fast ~80 ms / slow ~270 ms for the first loop): base 7/12 fast,
+  always-checked 2/12, guarded 3/8 vs base 5/8 in a second batch -- a lottery, not a
+  ranking. Bytes (JVM / P1 / component, 793 programs: every ci-spec case, the
+  `examples.yaml` examples, size-report, bench-report): 2,271 of 2,327 artifacts
+  byte-identical either way, the 56 that differ all calling `search`/`mismatch`. Always
+  checked: JVM sum -122 B (-151..+803), P1 -1,051 (-190..+544), component -1,031 (the
+  dropped `integerp`/`>=` cursor guards pay for the check on wasm). Guarded: JVM +4,751
+  (0..+1,046), P1 -109 (-128..+554), component -89. A one-site program
+  `(print (search "b" (copy-seq "abc")))`: base 31,462 / 7,966 / 9,146, always 31,702 /
+  7,967 / 9,147, guarded 31,945 / 7,977 / 9,157; with a `handler-case` 39,249 / 17,716 /
+  18,950 -> 39,732 / 17,797 / 19,034 guarded. The guard won: ~240 B JVM per program buys
+  the keyword-free JVM `mismatch` back (+20% checked always).
 - `count`/`count-if` bind their operand outside the scaffold when any bounding keyword is
   spelled: the scaffold binds the sequence outside the loop, so `(count (f) (g) :start 1)` ran
   `(g)` before `(f)` on the compile paths and the interpreter's call position (SBCL: item first).
@@ -325,7 +360,10 @@ tests, which stop at `make-sequence` with a computed result type before any of t
 - The bounds check: `sequenceOperatorsRefuseABadBound` / `aBadSequenceBoundReportsAsSubseqDoes`
   in `LispEvaluatorTest`, `WasmLispCompilerIntegrationTest` (P1 and component) and,
   `compileAndRun`-prefixed, `JvmLispCompilerTest`, over `SequenceBoundsFixture`; ci-spec
-  `sequence-operators-refuse-a-bad-bound` (sbcl's answers).
+  `sequence-operators-refuse-a-bad-bound` (sbcl's answers). `search`/`mismatch`:
+  `searchAndMismatchRefuseABadBound` / `aBadSearchOrMismatchBoundReportsAsSubseqDoes` in the
+  same three classes over `SearchMismatchBoundsFixture`, ci-spec
+  `search-and-mismatch-refuse-a-bad-bound`.
 - The rejection text is part of the contract:
   `REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: X`
   (`.kb/error-handling.md`, "Argument-shape errors"), pinned in ci-spec and in the

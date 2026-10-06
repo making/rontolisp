@@ -1813,8 +1813,8 @@ final class ClojureInteropLowering {
 		LispVal search = switch (args.size()) {
 			case 1 -> last ? ClojureStringLowering.lastIndexForm(recv, args.get(0), null)
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), args.get(0), recv);
-			case 2 -> last ? ClojureStringLowering.lastIndexForm(recv, args.get(0), args.get(1)) : ClojureLowerUtil
-				.list(ClojureLowerUtil.sym("search"), args.get(0), recv, ClojureLowerUtil.sym(":start2"), args.get(1));
+			case 2 -> last ? ClojureStringLowering.lastIndexForm(recv, args.get(0), args.get(1))
+					: ClojureStringLowering.searchFrom(args.get(0), recv, args.get(1));
 			default -> null;
 		};
 		if (search == null) {

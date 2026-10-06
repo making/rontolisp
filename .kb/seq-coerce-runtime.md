@@ -110,10 +110,11 @@ unchanged. Served only where identical answers are provable:
   prelude's `(length x)` (NIL until 2026-09-26), and so is a dotted operand, over
   its tail.
 - **Every bounding index must be inside its sequence, start <= end.** Outside it
-  the prelude's answer depends on which `elt` it reaches first
-  (`(search "ab" "xab" :end2 99)` is 1, not an error), so the arm never guesses.
-  An END of `nil` IS the default (the body or-defaults it); a START of `nil` is
-  not (the lambda list binds it, the arithmetic signals).
+  the prelude body refuses the range with `subseq`'s `type-error`
+  (`.kb/sequence-bounding-keywords.md`, "Every bound is checked once"), and the
+  refusal stays written once, there. An END of `nil` IS the default (the body
+  or-defaults it); a START of `nil` is not (the lambda list binds it, the check
+  refuses it).
 - **`mismatch` with `:from-end` declines.** The prelude accepts and IGNORES the
   keyword: `(mismatch "abcd" "xbcd" :from-end t)` is 0 on all four backends where
   CLHS says 1 -- a deliberate deviation
@@ -140,19 +141,18 @@ unchanged. Served only where identical answers are provable:
 ```
 
 - The `map-into` cursor shape (`LispMacroExpander.readElement`) with the advance
-  folded into the read. A non-list operand pins a nil cursor and keeps indexing;
-  a cursor run out (past an out-of-range bound, or onto a dotted tail) falls back
-  to the very `elt` call the body used to make, answer and error alike -- since
-  2026-09-28 (`.kb/error-handling.md`, "elt of a LIST outside it") a list index
-  outside the list is `ELT`'s type-error there, so `(search '(1 2 3) '(1 2 3)
-  :start2 -1)` signals where it answered 0.
+  folded into the read. A non-list operand pins a nil cursor and keeps indexing.
+  Both ranges are checked before the cursor is seeded, so a list's cursor never
+  runs out inside its window: a bound past a list, or past the cells before a
+  dotted tail, is the check's refusal, and a dotted list with no end is
+  `length`'s.
 - `search` seeds the needle cursor once (its `start1`/`end1` window never moves)
   and advances the haystack cursor one `cdr` per OUTER position, both copied into
   the restarting inner walk.
 - **The cursor is NOT a `(null cell)` STOP.** `replace`'s array-arm list source
   took one and changed what an invalid call answers
-  (`.kb/sequence-op-runtimes.md`); this pair cannot, `SequenceScanFast` having
-  DECLINED every out-of-range bound so these bodies keep owning them.
+  (`.kb/sequence-op-runtimes.md`); this pair needs none, the bounds check having
+  refused every range a list does not hold.
 - **Folding the advance into the read is what makes it free for a string.** A
   separate `(if (consp c) (cdr c) c)` step form costs a SECOND `consp` per
   element -- on the declined path (a string; cursor never fires) that is the
@@ -240,9 +240,9 @@ index, everywhere one can be written:
   the drift, running one program on the interpreter (the arms) and three backends
   that run the expansion / the `defun`. Same rule if `coerceToVectorBody` learns
   to rebuild a packed array (today `LispFloatArray` is served for `'list`,
-  identity for `'vector`). Making `mismatch`'s `:from-end` CLHS-correct or giving
-  an out-of-range bound a uniform error are prelude-SOURCE changes that move
-  every backend at once and lift the matching decline with them.
+  identity for `'vector`). Making `mismatch`'s `:from-end` CLHS-correct is a
+  prelude-SOURCE change that moves every backend at once and lifts the matching
+  decline with it.
 - **Serving the declined shapes** (`:key`, a user `:test`) means an `apply` per
   element -- a weaker win over a wider agreement surface; measure a consumer.
 - **A new loop over a sequence whose representation is a RUNTIME fact must carry
@@ -262,8 +262,8 @@ index, everywhere one can be written:
 `ci-spec.yaml` cases, all four backends via `CiSpecE2eTest`:
 `sequence-coerce-across-representations` (served and declined alike);
 `search-and-mismatch-across-representations` (every keyword served, the declined
-`:key` / `#'char-equal` / out-of-range `:end2` / `start1 > end1` /
-`mismatch :from-end`, and the list-cursor rows);
+`:key` / `#'char-equal` / `mismatch :from-end`, the refused out-of-range `:end2` /
+`start1 > end1`, and the list-cursor rows);
 `make-array-rank2-initial-contents`, `replace-into-a-list`, `map`,
 `format-runtime-control-string`, `map-into` -- each extended with run-time
 list/vector/string/packed operands, the `'string` result type, the repositioning

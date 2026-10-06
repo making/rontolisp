@@ -99,11 +99,18 @@ final class ClojureStringLowering {
 			}
 			case "index-of" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "index-of takes a string, a value and an optional start");
-				yield n == 3
-						? ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), ctx.lower(items.get(2)),
-								ctx.lower(items.get(1)), ClojureLowerUtil.sym(":start2"), ctx.lower(items.get(3)))
-						: ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), ctx.lower(items.get(2)),
-								ctx.lower(items.get(1)));
+				if (n == 2) {
+					yield ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), ctx.lower(items.get(2)),
+							ctx.lower(items.get(1)));
+				}
+				LispSymbol str = ctx.freshTemp();
+				LispSymbol sub = ctx.freshTemp();
+				LispSymbol from = ctx.freshTemp();
+				yield ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(str, ctx.lower(items.get(1))),
+								ClojureLowerUtil.list(sub, ctx.lower(items.get(2))),
+								ClojureLowerUtil.list(from, ctx.lower(items.get(3))))),
+						searchFrom(sub, str, from));
 			}
 			case "last-index-of" -> {
 				ClojureLowerUtil.isTrue(n == 2 || n == 3, "last-index-of takes a string, a value and an optional end");
@@ -516,6 +523,20 @@ final class ClojureStringLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(str, text), ClojureLowerUtil.list(sub, wanted))),
 				test);
+	}
+
+	/**
+	 * {@code search} from a start read as Java's {@code indexOf} reads one: a negative
+	 * start is 0 and one past the end is the end (the oracle answers nil there, or the
+	 * length for an empty match), where {@code search} refuses a start outside the
+	 * string. {@code str} is a variable, read twice.
+	 */
+	static LispVal searchFrom(LispVal sub, LispVal str, LispVal from) {
+		LispVal clamped = ClojureLowerUtil.list(ClojureLowerUtil.sym("max"), new LispInteger(0),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("min"), bound(from),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), str)));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), sub, str, ClojureLowerUtil.sym(":start2"),
+				clamped);
 	}
 
 	/**
