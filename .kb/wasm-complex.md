@@ -113,7 +113,9 @@ axis and the signed zeros: `copysign(pi/2, y)` for a nonzero `y` over either
 zero, a zero `y`'s own sign over `+0` and `copysign(pi, y)` over `-0` -- the
 axis the old hand-rolled assembly got wrong, `.todo/766`), `expt` (the exact
 squaring loop for an i31 exponent over an EXACT base, `exp(w*log z)` for
-anything with a float part, `Environment.exptComplex`'s rule) and the fifteen
+anything with a float part, `Environment.exptComplex`'s rule; a zero base takes
+`emitZeroBasePow` first, `.kb/error-handling.md` "A zero base on the complex `expt`
+path") and the fifteen
 unary functions run the interpreter's formulas over calls into the fdlibm
 runtime (`WasmTranscendentalCompiler`, `.kb/transcendentals.md`), so since
 2026-09-17 they answer the interpreter's BITS; `isCloseTo` pins that predate

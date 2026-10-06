@@ -1184,11 +1184,125 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	// The float expt path: exp(w*log(z)) over the complex formulas below. Leaves
-	// the boxed complex in rSlot.
+	// The float expt path: exp(w*log(z)) over the complex formulas below, a zero
+	// base decided first (emitZeroBasePow). Leaves the boxed complex in rSlot.
 	private static void emitExptFloat(WasmLispCompiler.Ctx ctx, int baseSlot, int expSlot, int rSlot) {
 		int[] z = emitPartsF64(ctx, baseSlot);
 		int[] w = emitPartsF64(ctx, expSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		emitZeroBasePow(ctx, baseSlot, z, expSlot, w, rSlot);
+		emitExpLogPow(ctx, z, w, rSlot);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// A zero base, decided before exp(w*log(z)) multiplies log 0 = -inf into NaN
+	// parts -- the interpreter's zeroBasePow arm for arm: a zero power answers
+	// #C(1.0 0.0), a power whose real part is positive answers zero (the exact 0 when
+	// both operands are exact, #C(0.0 0.0) otherwise), and any other power falls
+	// through to the formula's IEEE NaN parts. Each answer sets rSlot and branches
+	// out of the block emitExptFloat opened around this arm and the formula. Inline
+	// at every site, so it is written for bytes: a zero constant is a converted i32,
+	// and both parts are zero exactly when their magnitudes sum to zero.
+	private static void emitZeroBasePow(WasmLispCompiler.Ctx ctx, int baseSlot, int[] z, int expSlot, int[] w,
+			int rSlot) {
+		emitTestZero(ctx, baseSlot, z);
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitTestZero(ctx, expSlot, w);
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitFloatComplexConst(ctx, 1);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(rSlot);
+		ctx.writer.write(Instruction.BR, 2);
+		ctx.writer.write(Instruction.END);
+		WasmEmitHelper.unboxF64Local(ctx, w[0]);
+		emitF64OfI32(ctx, 0);
+		ctx.writer.write(Instruction.F64_GT);
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitTestExactZero(ctx, baseSlot);
+		emitTestFloatValue(ctx, expSlot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		constI32(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.ELSE);
+		emitFloatComplexConst(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(rSlot);
+		ctx.writer.write(Instruction.BR, 2);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+	}
+
+	// Pushes `slot is a zero` as an i32: |part0| + |part1| == 0 (a NaN is not) and
+	// the value a float (real or complex) or the exact 0 -- a ratio whose double
+	// underflows to zero is not a zero.
+	private static void emitTestZero(WasmLispCompiler.Ctx ctx, int slot, int[] parts) {
+		for (int part : parts) {
+			WasmEmitHelper.unboxF64Local(ctx, part);
+			ctx.writer.write(Instruction.F64_ABS);
+		}
+		ctx.writer.write(Instruction.F64_ADD);
+		emitF64OfI32(ctx, 0);
+		ctx.writer.write(Instruction.F64_EQ);
+		emitTestFloatValue(ctx, slot);
+		emitTestExactZero(ctx, slot);
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.I32_AND);
+	}
+
+	// Pushes `slot holds a float, or a complex with float parts` as an i32 (a
+	// canonical complex has both parts float or neither, so the real part answers).
+	private static void emitTestFloatValue(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		emitTestComplex(ctx, slot);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.ELSE);
+		constI32(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.I32_OR);
+	}
+
+	// Pushes `slot is the exact integer 0` (an i31, compared by value) as an i32.
+	private static void emitTestExactZero(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		constI32(ctx, 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.REF_EQ);
+	}
+
+	// Pushes the float complex (re, 0.0) for a small integer re.
+	private static void emitFloatComplexConst(WasmLispCompiler.Ctx ctx, int re) {
+		emitComplexTag(ctx);
+		emitF64OfI32(ctx, re);
+		WasmEmitHelper.boxF64(ctx);
+		emitF64OfI32(ctx, 0);
+		WasmEmitHelper.boxF64(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
+	}
+
+	// Pushes the f64 of a small integer: three bytes where an f64.const is nine.
+	private static void emitF64OfI32(WasmLispCompiler.Ctx ctx, int value) {
+		constI32(ctx, value);
+		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
+	}
+
+	// exp(w*log(z)) over the boxed f64 parts. Leaves the boxed complex in rSlot.
+	private static void emitExpLogPow(WasmLispCompiler.Ctx ctx, int[] z, int[] w, int rSlot) {
 		int lRe = ctx.allocTemp();
 		int lIm = ctx.allocTemp();
 		emitComplexLogInto(ctx, z[0], z[1], lRe, lIm);

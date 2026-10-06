@@ -27063,6 +27063,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void zeroBaseToAComplexPower() throws Exception {
+		// The LispEvaluatorTest#zeroBaseToAComplexPower twin: the inline exp(w*log z)
+		// answered #C(NaN NaN) for a zero base and every power.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ZeroBaseComplexPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(program)).isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+	}
+
+	@Test
 	void ehAnUncaughtDivisionByZeroReportsBeforeTrapping() throws Exception {
 		// EH mode without a handler around the division: the entry landing pad reports
 		// it as the interpreter does. Outside EH mode it is still the bare trap.

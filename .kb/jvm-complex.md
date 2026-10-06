@@ -177,6 +177,9 @@ carry an anchor against the real functions
 four-backend leg `ci-spec.yaml`'s `complex-tan-tanh-are-quotients`, which pins
 the identity rather than digits the backends round differently).
 
+`_cpow`'s float path decides a zero base before `exp(w*log z)` (`emitZeroBasePow`; the rule and
+its SBCL table: `.kb/error-handling.md`, "A zero base on the complex `expt` path").
+
 ## Real arguments that leave the real domain (`.todo/763`, 2026-09-11)
 
 `log` of a negative, `asin`/`acos` beyond `[-1, 1]` and `expt` of a negative base to a

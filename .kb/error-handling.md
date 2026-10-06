@@ -1312,6 +1312,46 @@ exception classes) +133 B jar. Performance: bench-report mandelbrot/matmul/sort/
 unchanged within noise on JVM and P1; a loop of 200M float `mod`+`rem` on the JVM ~+7%
 (1.60 -> 1.73 s; the one NaN compare per call), P1 unchanged.
 
+### A zero base on the complex `expt` path (decided 2026-10-06)
+`exp(w*log z)` multiplies `log 0 = -inf` into NaN parts, so until 2026-10-06 EVERY zero base on the
+complex path -- the exact `0`, a float zero, a complex with both parts zero -- answered `#C(NaN NaN)`
+on all four backends, `(expt #c(0.0 0.0) 0)` and `(expt #c(0.0 0.0) 2)` included. SBCL 2.2.9,
+measured that day (default / traps masked):
+
+| Form | SBCL default | SBCL masked | rontolisp now |
+| --- | --- | --- | --- |
+| `(expt 0 #c(1 1))`, `(expt 0 #c(1/2 1))` | 0 | 0 | 0 |
+| `(expt 0 #c(1.0 1.0))`, `(expt 0.0 #c(1 1))`, `(expt #c(0.0 0.0) 2.5)`, `... 2`, `... 1/2` | `#C(0.0 0.0)` | same | same |
+| `(expt -0.0 #c(1 1))` / `(expt #c(0.0 -0.0) 2.5)` | `#C(-0.0 -0.0)` / `#C(0.0 -0.0)` | same | `#C(0.0 0.0)` |
+| `(expt #c(0.0 0.0) 0)`, `(expt 0 #c(0.0 0.0))` | `#C(1.0 0.0)` | same | same |
+| `(expt #c(0.0 0.0) 0.0)` | arguments-out-of-domain | same | `#C(1.0 0.0)` |
+| `(expt 0 #c(-1 1))`, `(expt 0 #c(0 1))`, `(expt 0.0 #c(0 1))` | DBZ | `#C(NaN NaN)` | `#C(NaN NaN)` |
+| `(expt #c(0.0 0.0) -2)`, `... -2.5` | DBZ | `#C(inf NaN)` | `#C(NaN NaN)` |
+
+SBCL's rule is `(if (and (zerop base) (plusp (realpart power))) (* base power) (exp (* power (log
+base))))` behind `(zerop power) -> (1+ (* base power))`. rontolisp's (`Environment.zeroBasePow`,
+`JvmComplexRuntimeBuilder.emitZeroBasePow`, `WasmComplexCompiler.emitZeroBasePow`, run only where
+the formula would): a zero power answers `#C(1.0 0.0)`; a positive real part answers the exact `0`
+when both operands are exact, else `#C(0.0 0.0)` -- positive zeros for every zero's sign, as IEEE
+`pow(±0, y)` for a non-integer `y > 0`, rather than `*`'s signs (which already differ from SBCL's and
+between the interpreter and the compiled backends on signed zeros); anything else keeps the
+formula's NaN parts. **A non-positive real part does NOT signal, an exact zero base included**: no
+exact value exists, so the result is a float and this section's `expt` rule applies -- the
+`(expt 0 -1/2)` row, not the `(expt 0 -1)` one. A zero is decided on the VALUE, not its double: a
+ratio below the least subnormal converts to `0.0` but is neither base nor power zero and keeps the
+formula. The float zero power answering one is pow's `x^0.0 = 1.0`, where CLHS leaves a zero base
+undefined.
+
+Pinned by `ZeroBaseComplexPowerFixture` (`LispEvaluatorTest`/`JvmLispCompilerTest`/
+`WasmLispCompilerIntegrationTest#zeroBaseToAComplexPower`, P1 and component) and `ci-spec.yaml`'s
+`a-zero-base-to-a-complex-power`. Size, measured 2026-10-06: the four `size-report` programs and the
+ten `bench-report` ones byte-identical as P1 `--optimize=off` / default / `--optimize=size`,
+component, JVM class and jar. The wasm arm is inline at each complex `expt` site: +159 B per site (a site was
+~380 B; a constant zero is `i32.const`+`f64.convert_i32_s`, 3 B where `f64.const` is 9). JVM: a class
+keeping the complex group +144 B, jar +73 B (the arm, less a duplicated `atan2` call `_cpow` used to
+make). A 2M-iteration nonzero-base complex `expt` loop unchanged within noise on the interpreter,
+JVM and P1.
+
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of
 type T` with the type the operator requires, as a catchable `type-error` answering the datum and

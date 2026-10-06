@@ -923,9 +923,9 @@ final class JvmComplexRuntimeBuilder {
 
 	// _cpow(Object base, Object exp): an int-range integer exponent over
 	// non-float parts stays exact by repeated squaring (a negative one through
-	// the exact reciprocal); anything else goes through exp(w*log(z)) in
-	// floats. Slots: params 0-1, base parts 2-3, exp parts 4-5, power 6,
-	// accumulators 7-8, temps 9-10, doubles 11-26.
+	// the exact reciprocal); a zero base takes emitZeroBasePow; anything else
+	// goes through exp(w*log(z)) in floats. Slots: params 0-1, base parts 2-3,
+	// exp parts 4-5, power 6, accumulators 7-8, temps 9-10, doubles 11-26.
 	private static ComplexMethod buildPow(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
@@ -1077,15 +1077,12 @@ final class JvmComplexRuntimeBuilder {
 		c.dstore(15);
 		emitToDouble(c, refs, 5);
 		c.dstore(17);
+		emitZeroBasePow(c, refs);
 		c.dload(11);
 		c.dload(13);
 		callMath(c, refs, cp, "hypot", "(DD)D");
 		callMath(c, refs, cp, "log", "(D)D");
 		c.dstore(19);
-		c.dload(13);
-		c.dload(11);
-		callMath(c, refs, cp, "atan2", "(DD)D");
-		c.dstore(21);
 		c.dload(13);
 		c.dload(11);
 		callMath(c, refs, cp, "atan2", "(DD)D");
@@ -1122,6 +1119,84 @@ final class JvmComplexRuntimeBuilder {
 		emitNewHolderFromSlots(c, refs, 7, 8);
 		c.areturn();
 		return new ComplexMethod(name, desc, c);
+	}
+
+	/**
+	 * {@code _cpow}'s zero base, decided before {@code exp(w*log z)} multiplies
+	 * {@code log 0 = -inf} into NaN parts -- the interpreter's {@code zeroBasePow} arm
+	 * for arm: a zero power answers {@code #C(1.0 0.0)}, a power whose real part is
+	 * positive answers zero (the exact {@code 0} when both operands are exact,
+	 * {@code #C(0.0 0.0)} otherwise), and any other power falls through to the formula's
+	 * IEEE NaN parts. A zero is both parts' doubles zero with no ratio part (a ratio
+	 * whose double underflows is not a zero). Reads the part slots 2-5 and their doubles
+	 * 11-17 the float path has just filled.
+	 */
+	private static void emitZeroBasePow(MethodCode c, Refs refs) {
+		MethodCode.Label formula = c.newLabel();
+		emitJumpUnlessZero(c, refs, 11, 2, formula);
+		MethodCode.Label nonZeroPower = c.newLabel();
+		emitJumpUnlessZero(c, refs, 15, 4, nonZeroPower);
+		emitNewFloatHolder(c, refs, true);
+		c.areturn();
+		c.labelBinding(nonZeroPower);
+		c.dload(15);
+		c.dconst_0();
+		c.dcmpl();
+		c.ifle(formula);
+		MethodCode.Label floatZero = c.newLabel();
+		c.aload(0);
+		c.instanceOf(refs.longClass());
+		c.ifeq(floatZero);
+		c.aload(4);
+		c.instanceOf(refs.doubleClass());
+		c.ifne(floatZero);
+		c.lconst_0();
+		c.invokestatic(refs.longValueOf());
+		c.areturn();
+		c.labelBinding(floatZero);
+		emitNewFloatHolder(c, refs, false);
+		c.areturn();
+		c.labelBinding(formula);
+	}
+
+	/**
+	 * Jumps to {@code notZero} unless the number whose part doubles are in
+	 * {@code doubleSlot}/{@code doubleSlot + 2} and whose parts are in
+	 * {@code partSlot}/{@code partSlot + 1} is a zero: both doubles zero (a NaN is not)
+	 * and neither part a ratio.
+	 */
+	private static void emitJumpUnlessZero(MethodCode c, Refs refs, int doubleSlot, int partSlot,
+			MethodCode.Label notZero) {
+		for (int i = 0; i < 2; i++) {
+			c.dload(doubleSlot + 2 * i);
+			c.dconst_0();
+			c.dcmpl();
+			c.ifne(notZero);
+		}
+		for (int i = 0; i < 2; i++) {
+			c.aload(partSlot + i);
+			c.instanceOf(refs.ratArrClass());
+			c.ifne(notZero);
+		}
+	}
+
+	/**
+	 * Pushes a fresh holder of {@code (1.0, 0.0)} when {@code one}, else
+	 * {@code (0.0, 0.0)}.
+	 */
+	private static void emitNewFloatHolder(MethodCode c, Refs refs, boolean one) {
+		c.new_(refs.rcClass());
+		c.dup();
+		if (one) {
+			c.dconst_1();
+		}
+		else {
+			c.dconst_0();
+		}
+		emitBoxDouble(c, refs);
+		c.dconst_0();
+		emitBoxDouble(c, refs);
+		c.invokespecial(refs.rcInit());
 	}
 
 	/**

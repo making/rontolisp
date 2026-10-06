@@ -9805,7 +9805,8 @@ public final class Environment implements Scope {
 
 	// z^w for a complex operand: an int-range integer exponent over rational parts
 	// stays exact by repeated squaring (a negative one through the exact
-	// reciprocal); anything else goes through exp(w*log(z)) in floats.
+	// reciprocal); a zero base takes zeroBasePow; anything else goes through
+	// exp(w*log(z)) in floats.
 	private static LispVal exptComplex(LispVal base, LispVal exp) {
 		double[] z = complexDoubleParts(base);
 		boolean exactBase = !hasComplexDoublePart(List.of(base)) && !(base instanceof LispDouble);
@@ -9836,9 +9837,39 @@ public final class Environment implements Scope {
 			return LispComplex.valueOf(re, im);
 		}
 		double[] w = complexDoubleParts(exp);
+		LispVal zero = zeroBasePow(base, z, exp, w);
+		if (zero != null) {
+			return zero;
+		}
 		double[] l = complexLog(z[0], z[1]);
 		double[] e = complexExp(w[0] * l[0] - w[1] * l[1], w[0] * l[1] + w[1] * l[0]);
 		return LispComplex.valueOf(new LispDouble(e[0]), new LispDouble(e[1]));
+	}
+
+	// A zero base, decided before exp(w*log(z)) multiplies log 0 = -inf into NaN
+	// parts: a zero power answers one, a power whose real part is positive answers
+	// zero -- exact when both operands are, #C(0.0 0.0) otherwise (positive zeros for
+	// any zero's sign, like IEEE pow of a zero to a non-integer power) -- and any
+	// other power answers null, keeping the formula's IEEE NaN parts. A ratio whose
+	// double underflows to zero is not a zero.
+	private static @Nullable LispVal zeroBasePow(LispVal base, double[] z, LispVal exp, double[] w) {
+		if (z[0] != 0.0 || z[1] != 0.0 || !isZeroNumber(base)) {
+			return null;
+		}
+		if (w[0] == 0.0 && w[1] == 0.0 && isZeroNumber(exp)) {
+			return LispComplex.valueOf(new LispDouble(1.0), new LispDouble(0.0));
+		}
+		if (!(w[0] > 0.0)) {
+			return null;
+		}
+		if (base instanceof LispInteger && !hasComplexDoublePart(List.of(exp))) {
+			return new LispInteger(0);
+		}
+		return LispComplex.valueOf(new LispDouble(0.0), new LispDouble(0.0));
+	}
+
+	private static boolean isZeroNumber(LispVal val) {
+		return isZeroReal(complexReal(val)) && isZeroReal(complexImag(val));
 	}
 
 	/**

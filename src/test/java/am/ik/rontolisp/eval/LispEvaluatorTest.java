@@ -20015,6 +20015,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
 	}
 
+	// A zero base to a complex power answered #C(NaN NaN) for every power: log 0 is
+	// -inf, multiplied into NaN parts. The twins are
+	// JvmLispCompilerTest#compileAndRunZeroBaseToAComplexPower and
+	// WasmLispCompilerIntegrationTest#zeroBaseToAComplexPower.
+	@Test
+	void zeroBaseToAComplexPower() {
+		assertThat(printedLines(am.ik.rontolisp.ZeroBaseComplexPowerFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

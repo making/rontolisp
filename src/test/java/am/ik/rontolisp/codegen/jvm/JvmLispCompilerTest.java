@@ -1963,6 +1963,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunZeroBaseToAComplexPower() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#zeroBaseToAComplexPower: _cpow's
+		// exp(w*log z) answered #C(NaN NaN) for a zero base and every power.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ZeroBaseComplexPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

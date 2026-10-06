@@ -21065,6 +21065,52 @@ cases:
       64.0
       NIL
 
+  - name: a-zero-base-to-a-complex-power
+    # A zero base on the complex expt path: a zero power answers one, a power whose
+    # real part is positive answers zero (exact when both operands are), any other
+    # power the IEEE NaN parts of exp(w*log z). The rows are ZeroBaseComplexPowerFixture's.
+    source: |
+      (defvar *ci-zb-zero* 0)
+      (defvar *ci-zb-fzero* 0.0)
+      (print (expt 0 #c(1 1)))
+      (print (expt *ci-zb-zero* #c(1/2 1)))
+      (print (expt 0 #c(1.0 1.0)))
+      (print (expt *ci-zb-fzero* #c(1 1)))
+      (print (expt -0.0 #c(1 1)))
+      (print (expt (complex 0.0 0.0) 2.5))
+      (print (expt (complex 0.0 -0.0) 2.5))
+      (print (expt (complex -0.0 0.0) 2))
+      (print (expt (complex 0.0 0.0) 1/2))
+      (print (expt (complex 0.0 0.0) #c(1 1)))
+      (print (expt (complex 0.0 0.0) 0))
+      (print (expt (complex 0.0 -0.0) 0.0))
+      (print (expt 0 #c(0.0 0.0)))
+      (print (expt 0 #c(-1 1)))
+      (print (expt *ci-zb-zero* #c(0 1)))
+      (print (expt 0.0 #c(-1.0 1.0)))
+      (print (expt (complex 0.0 0.0) -2))
+      (print (expt 2 #c(1 1)))
+      (print (expt (complex 1.5 2.0) 0))
+    expected: |
+      0
+      0
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(0.0 0.0)
+      #C(1.0 0.0)
+      #C(1.0 0.0)
+      #C(1.0 0.0)
+      #C(NaN NaN)
+      #C(NaN NaN)
+      #C(NaN NaN)
+      #C(NaN NaN)
+      #C(1.5384778027279442 1.2779225526272695)
+      #C(1.0 0.0)
   - name: complex-asin-acos-branch-cut
     # asin/acos cut the real axis outside [-1, 1]: the value ON the cut is the one
     # continuous with quadrant IV above +1 and quadrant II below -1, and the sign of an
