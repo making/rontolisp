@@ -90,8 +90,14 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   `(read-from-string s)` parses once and pays nothing. Interpreter: `LispLexer.datumEnd`,
   a RAW-CHARACTER scan (`skipDatum`, the `#+`/`#-` walk) rather than a second parse --
   which is what lets it answer for text the parse refuses. JVM: `_readFromString` then
-  `_readPos`. WASM: the cursor delta, the start value riding the OPERAND STACK across the
-  parse call rather than costing a scratch address.
+  `_readPos`. WASM: the cursor delta.
+- **The index counts CHARACTERS (code points)**, as SBCL does: `"日本 x"` -> 3, `"😀 x"` -> 2.
+  Each backend's cursor is in another unit, so each converts: the interpreter and JVM hold a
+  UTF-16 index (a supplementary-plane character is two) and answer
+  `codePointCount(0, index)`; the WASM reader walks UTF-8 bytes, so `compileEnd` keeps the start
+  in an i64 scratch local across the parse and counts the non-continuation bytes
+  (`(b & 0xC0) != 0x80`) between it and the cursor. Pinned by ci-spec
+  `read-from-string-stop-index-counts-characters`.
 - CLHS 23.2 decides the last character: a whitespace terminator is CONSUMED with the
   datum it terminates, a terminating macro character is given back -- and (SBCL-verified,
   2026-09-19, `.todo/903`) this holds for ANY datum, not only a token: a list, a string

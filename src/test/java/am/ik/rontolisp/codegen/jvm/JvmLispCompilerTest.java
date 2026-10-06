@@ -17029,6 +17029,20 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("(ABC 3)\n((1 2) 6)\n2\n(A B)\n5");
 	}
 
+	// The stop index counts CHARACTERS: a supplementary-plane character is one, not two
+	// UTF-16 units. See .kb/read-load-streams.md.
+	@Test
+	void compileReadFromStringStopIndexCountsCharacters() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "日本 x")))
+				(print (multiple-value-list (read-from-string "\\"日本\\" x")))
+				(print (multiple-value-list (read-from-string "(日本 a) x")))
+				(print (multiple-value-list (read-from-string "   日本 x")))
+				(print (multiple-value-list (read-from-string "😀 x")))
+				(print (nth-value 1 (read-from-string "日本語")))
+				""")).isEqualTo("(日本 3)\n(\"日本\" 5)\n((日本 A) 7)\n(日本 6)\n(😀 2)\n3");
+	}
+
 	@Test
 	void compileReadFromStringDottedPair() throws Exception {
 		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "

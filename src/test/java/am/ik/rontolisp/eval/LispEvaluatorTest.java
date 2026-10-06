@@ -26445,6 +26445,16 @@ class LispEvaluatorTest {
 			.isEqualTo("(AB 2)");
 	}
 
+	// The stop index counts characters, a supplementary-plane character as one (a Java
+	// String index counts it as two UTF-16 units).
+	@Test
+	void readFromStringStopIndexCountsCharacters() {
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"日本 x\"))").print()).isEqualTo("(日本 3)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(日本 a) x\"))").print()).isEqualTo("((日本 A) 7)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"😀 x\"))").print()).isEqualTo("(😀 2)");
+		assertThat(evalMulti("(nth-value 1 (read-from-string \"a😀b c\"))").print()).isEqualTo("4");
+	}
+
 	// A read-from-string whose value is DISCARDED contributes no second value to the
 	// form around it: the index rides the spill from TAIL positions only. Publishing on
 	// every call instead makes the last such call's index surface as the enclosing

@@ -13779,6 +13779,20 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("(ABC 3)\n5\n((1 2) 6)\n(A B)\n5");
 	}
 
+	// The stop index counts CHARACTERS, not the UTF-8 bytes the emitted reader walks (a
+	// supplementary-plane character is one). See .kb/read-load-streams.md.
+	@Test
+	void readFromStringStopIndexCountsCharacters() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "日本 x")))
+				(print (multiple-value-list (read-from-string "\\"日本\\" x")))
+				(print (multiple-value-list (read-from-string "(日本 a) x")))
+				(print (multiple-value-list (read-from-string "   日本 x")))
+				(print (multiple-value-list (read-from-string "😀 x")))
+				(print (nth-value 1 (read-from-string "日本語")))
+				""")).isEqualTo("(日本 3)\n(\"日本\" 5)\n((日本 A) 7)\n(日本 6)\n(😀 2)\n3");
+	}
+
 	@Test
 	void readInteger() throws Exception {
 		assertThat(compileAndRunWithStdin("(print (read))", "42")).isEqualTo("42");

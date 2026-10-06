@@ -6420,6 +6420,25 @@ cases:
       (ABC 4)
       (ABC 3)
       ((A) 3)
+  # The stop index counts characters: neither the UTF-8 bytes the WASM reader walks nor
+  # the UTF-16 units a supplementary-plane character takes on the JVM (sbcl's answers).
+  - name: read-from-string-stop-index-counts-characters
+    source: |
+      (print (multiple-value-list (read-from-string "日本 x")))
+      (print (multiple-value-list (read-from-string "\"日本\" x")))
+      (print (multiple-value-list (read-from-string "(日本 a) x")))
+      (print (multiple-value-list (read-from-string "   日本 x")))
+      (print (multiple-value-list (read-from-string "😀 x")))
+      (print (nth-value 1 (read-from-string "a😀b c")))
+      (print (nth-value 1 (read-from-string "日本語")))
+    expected: |
+      (日本 3)
+      ("日本" 5)
+      ((日本 A) 7)
+      (日本 6)
+      (😀 2)
+      4
+      3
   # read-from-string's whole lambda list -- eof-error-p, eof-value, :start, :end,
   # :preserve-whitespace -- with the stop index, the eof-value of an empty window, a bad
   # bound's type-error and the argument order (ReadFromStringLambdaListFixture.PROGRAM,

@@ -7724,10 +7724,10 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal readDatumStop(String input, am.ik.rontolisp.reader.Features features) {
 		try {
-			return new LispInteger(LispLexer.datumEnd(input, features));
+			return new LispInteger(input.codePointCount(0, LispLexer.datumEnd(input, features)));
 		}
 		catch (RuntimeException ex) {
-			return new LispInteger(input.length());
+			return new LispInteger(input.codePointCount(0, input.length()));
 		}
 	}
 

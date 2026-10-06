@@ -31,10 +31,10 @@ final class JvmReadFromStringCompiler {
 	 * Compiles {@code (%read-from-string-end s)} -- the stop index {@code
 	 * read-from-string} answers as its SECOND value, emitted only by the multiple-value
 	 * lowering of a {@code read-from-string} producer. The datum is parsed and thrown
-	 * away, and the reader's cursor is the answer: the emitted reader has no suppressed
-	 * mode, so here the index exists exactly where the datum parses (the interpreter
-	 * scans instead, and so answers for text the parse refuses -- see
-	 * {@code .kb/read-load-streams.md}).
+	 * away, and the reader's cursor, counted in characters, is the answer: the emitted
+	 * reader has no suppressed mode, so here the index exists exactly where the datum
+	 * parses (the interpreter scans instead, and so answers for text the parse refuses --
+	 * see {@code .kb/read-load-streams.md}).
 	 * @param cons the call form
 	 * @param ctx the compilation context
 	 * @param className the enclosing class name
@@ -42,8 +42,16 @@ final class JvmReadFromStringCompiler {
 	static void compileEnd(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		emitRead(cons, ctx, className, LispNames.READ_FROM_STRING_END);
 		ctx.body.pop();
+		FieldRefEntry src = ctx.cp.fieldRef(ctx.cp.classEntry(className), "_readSrc", "Ljava/lang/String;");
 		FieldRefEntry pos = ctx.cp.fieldRef(ctx.cp.classEntry(className), "_readPos", "I");
-		ctx.body.getstatic(pos).i2l();
+		// The cursor is a UTF-16 index; the answer counts characters, a
+		// supplementary-plane
+		// one being one: _readSrc.codePointCount(0, _readPos).
+		ctx.body.getstatic(src);
+		ctx.body.iconst_0();
+		ctx.body.getstatic(pos);
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "codePointCount", "(II)I"));
+		ctx.body.i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
