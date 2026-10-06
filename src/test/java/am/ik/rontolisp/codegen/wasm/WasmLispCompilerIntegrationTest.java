@@ -24605,6 +24605,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void specialVarLetBindsAfterEveryInit() throws Exception {
+		// let is parallel: an init that CALLS code reading a special runs before an
+		// earlier binding of that special, so it sees the outer value.
+		assertThat(compileAndRun("""
+				(defvar *x* 0)
+				(defun peek () *x*)
+				(print (let ((*x* 1) (y (peek))) (list *x* y)))
+				(defun in-defun () (let ((a 5) (*x* 2) (b (peek)) (c 7)) (list a *x* b c)))
+				(print (in-defun))
+				(print (let ((*x* 3) (y (symbol-value '*x*))) (list *x* y)))
+				(print (let ((z 1)) (declare (special z))
+				         (let ((z 2) (w (symbol-value 'z))) (declare (special z)) (list z w))))
+				(print (do ((*x* 4 (1+ *x*)) (n (peek) n)) ((> *x* 5) (list *x* n))))
+				""")).isEqualTo("(1 0)\n(5 2 0 7)\n(3 0)\n(2 1)\n(6 0)");
+	}
+
+	@Test
 	void specialVarNestedBindingsStackAndSetq() throws Exception {
 		assertThat(compileAndRun("""
 				(defvar *x* 1)

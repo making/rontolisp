@@ -13700,6 +13700,34 @@ cases:
       (2 3 2)
       (5 5)
       (:HTML :XHTML :HTML)
+  - name: special-let-binds-after-every-init
+    source: |
+      ;; let is parallel: an init that CALLS code reading a special runs before an
+      ;; earlier binding of that special, so it sees the outer value. The compiled
+      ;; backends bound the special first and answered (1 1).
+      (defvar *slb-x* 0)
+      (defun slb-peek () *slb-x*)
+      (print (let ((*slb-x* 1) (slb-y (slb-peek))) (list *slb-x* slb-y)))
+      (defun slb-in-defun ()
+        (let ((slb-a 5) (*slb-x* 2) (slb-b (slb-peek)) (slb-c 7)) (list slb-a *slb-x* slb-b slb-c)))
+      (print (slb-in-defun))
+      (print (let ((*slb-x* 3) (slb-y (symbol-value '*slb-x*))) (list *slb-x* slb-y)))
+      (print (let ((slb-z 1))
+               (declare (special slb-z))
+               (let ((slb-z 2) (slb-w (symbol-value 'slb-z)))
+                 (declare (special slb-z))
+                 (list slb-z slb-w))))
+      (print (do ((*slb-x* 4 (1+ *slb-x*)) (slb-n (slb-peek) slb-n)) ((> *slb-x* 5) (list *slb-x* slb-n))))
+      (print (let ((*print-base* 16) (slb-s (format nil "~a" 255))) (list slb-s (format nil "~a" 255))))
+      (print (list (let ((slb-y (slb-peek)) (*slb-x* 9)) (list *slb-x* slb-y)) *slb-x*))
+    expected: |
+      (1 0)
+      (5 2 0 7)
+      (3 0)
+      (2 1)
+      (6 0)
+      ("255" "FF")
+      ((9 0) 0)
   - name: progv-compiles-on-every-backend
     source: |
       (defvar *pv-a* 1)

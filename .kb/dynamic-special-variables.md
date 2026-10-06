@@ -67,6 +67,8 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   the call site falls through to `putstatic _g$*`). `Ctx.dynVars` carries the fields.
 - A special binding in `let` is `_dbind` of the old cell into a save slot, and nothing else:
   no lexical slot, so the name is never in `Ctx.locals` and never captured.
+- Both compiled backends bind a `let`'s variables one at a time, so a `let` whose later init
+  runs code after a special binding is staged first (`.kb/parallel-let.md`).
 - Every read goes through `JvmExprCompiler.compileSpecialRead` (`_dget`: this thread's
   binding, else `_g$*`) -- in the binding method, a callee and a closure alike. `setq` writes
   the active binding (`JvmSetqCompiler.emitGlobalStore`); with none it lands in `_g$*`.

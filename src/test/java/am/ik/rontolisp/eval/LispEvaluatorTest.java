@@ -22750,6 +22750,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void specialVarLetBindsAfterEveryInit() {
+		// let is parallel: an init that CALLS code reading a special runs before an
+		// earlier binding of that special, so it sees the outer value.
+		assertThat(evalMulti("""
+				(defvar *a* 0)
+				(defun peek () *a*)
+				(list (let ((*a* 1) (b (peek))) (list *a* b))
+				      (let ((*a* 3) (b (symbol-value '*a*))) (list *a* b)))
+				""").print()).isEqualTo("((1 0) (3 0))");
+	}
+
+	@Test
 	void specialVarLetStarIsSequential() {
 		// let* is sequential: a later init sees the NEW value of an earlier special
 		// binding.
