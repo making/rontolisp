@@ -7,8 +7,8 @@ package am.ik.rontolisp;
  * <li>{@link #PROGRAM} (mirrored by the `search-and-mismatch-refuse-a-bad-bound` ci-spec
  * case): a negative, non-integer or past-int-range bound, one past the sequence's length
  * and a start past its end are a {@code type-error} -- over a list, a vector and a
- * string, a fill-pointer string, in call position and first class, with a {@code :key},
- * a {@code :test} or {@code :from-end}. The datum is printed only where it is the bound
+ * string, a fill-pointer string, in call position and first class, with a {@code :key}, a
+ * {@code :test} or {@code :from-end}. The datum is printed only where it is the bound
  * itself (a range is a cons in sbcl's report and the refused bound here). The last rows
  * are answers in range. sbcl's answers, over sequences that are no literals: sbcl's
  * {@code search} over a literal needle walks a list lazily.</li>

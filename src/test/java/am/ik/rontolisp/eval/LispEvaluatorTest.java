@@ -6510,8 +6510,8 @@ class LispEvaluatorTest {
 				      (both :backwards (refused (search "abcd" "xab" :start1 3 :end1 1))
 				            (refused (funcall #'search "abcd" "xab" :start1 3 :end1 1))))
 				""").print()).isEqualTo("(\"SUBSEQ: invalid bounds 0, 99 for string of length 3\" "
-						+ "\"SUBSEQ: invalid bounds 99, 3 for string of length 3\" "
-						+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\")");
+				+ "\"SUBSEQ: invalid bounds 99, 3 for string of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\")");
 		// An explicit nil START is not the default -- the defun's lambda list binds it
 		// and its bounds check refuses it; an explicit nil END is the length.
 		assertThatThrownBy(() -> eval("(search \"ab\" \"xab\" :start1 nil)")).isInstanceOf(LispEvalException.class);
@@ -6589,7 +6589,8 @@ class LispEvaluatorTest {
 				      (both :string-in-list (search "bc" '(#\\a #\\b #\\c #\\d))
 				            (funcall #'search "bc" '(#\\a #\\b #\\c #\\d))))
 				""").print()).isEqualTo("(2 NIL 4 2 NIL 1 1)");
-		// A bound the list does not reach, and a negative one: the body checks both ranges
+		// A bound the list does not reach, and a negative one: the body checks both
+		// ranges
 		// before the cursor is seeded, so each is subseq's type-error. SequenceScanFast
 		// DECLINES all of these (.kb/seq-coerce-runtime.md), so this body owns them.
 		assertThat(evalMulti(both + """
@@ -6605,10 +6606,10 @@ class LispEvaluatorTest {
 				      (both :m-end2-past (refused (mismatch '(1 2 3) '(1 2 3) :end2 99))
 				            (refused (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99))))
 				""").print()).isEqualTo("(\"SUBSEQ: invalid bounds 0, 99 for list of length 3\" "
-						+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\" "
-						+ "\"SUBSEQ: invalid bounds 1, 99 for list of length 3\" "
-						+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\" "
-						+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\")");
+				+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 1, 99 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\" "
+				+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\")");
 		assertThatThrownBy(() -> eval("(search '(1 2 3) '(1 2 3) :start2 -1)"))
 			.hasMessageContaining("SUBSEQ: invalid bounds -1, 3 for list of length 3");
 		assertThatThrownBy(() -> eval("(funcall #'search '(1 2 3) '(1 2 3) :start2 -1)"))

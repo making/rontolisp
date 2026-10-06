@@ -44,9 +44,9 @@ import org.jspecify.annotations.Nullable;
  * <li><b>{@code :key}</b> (supplied non-nil) and a <b>{@code :test} that is not provably
  * {@code eql} on these elements</b> -- the comparison would have to call back into the
  * evaluator per element, which is the cost this arm exists to avoid.</li>
- * <li><b>A bounding index outside its sequence</b>, or {@code start > end} -- the
- * prelude body refuses it with {@code subseq}'s {@code type-error}, and the refusal stays
- * written once, there.</li>
+ * <li><b>A bounding index outside its sequence</b>, or {@code start > end} -- the prelude
+ * body refuses it with {@code subseq}'s {@code type-error}, and the refusal stays written
+ * once, there.</li>
  * <li><b>Anything {@code (length seq)} does not measure the way this arm does</b> -- a
  * dotted list, a rank-2 array, a non-sequence.</li>
  * <li><b>{@code mismatch} with {@code :from-end}</b> -- the prelude accepts the keyword

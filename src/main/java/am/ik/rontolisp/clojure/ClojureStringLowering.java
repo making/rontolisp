@@ -532,9 +532,8 @@ final class ClojureStringLowering {
 	 * string. {@code str} is a variable, read twice.
 	 */
 	static LispVal searchFrom(LispVal sub, LispVal str, LispVal from) {
-		LispVal clamped = ClojureLowerUtil.list(ClojureLowerUtil.sym("max"), new LispInteger(0),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("min"), bound(from),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), str)));
+		LispVal clamped = ClojureLowerUtil.list(ClojureLowerUtil.sym("max"), new LispInteger(0), ClojureLowerUtil.list(
+				ClojureLowerUtil.sym("min"), bound(from), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), str)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("search"), sub, str, ClojureLowerUtil.sym(":start2"),
 				clamped);
 	}
