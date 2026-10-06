@@ -2761,8 +2761,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
 		if (mvChannel != null) {
-			// The thread running main keeps the channel's static field (JvmMvChannel).
-			mvChannel.emitClaimOwner(mainCtx);
+			// The thread running main owns the channel unless a host's thread claimed it
+			// first through an export (JvmMvChannel).
+			mvChannel.emitClaimOwner(mainCtx.body);
 		}
 		// The command line's static home, built HERE rather than beside the other
 		// runtime helpers because main's own prologue is what fills it: a defun that
@@ -3867,7 +3868,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final MethodRefEntry topRunnerRef = topRunnerName == null ? null
 				: cp.methodRef(thisClass, topRunnerName, topChunkDesc);
 		final List<JvmExportRuntimeBuilder.BuiltMethod> exportMethods = exportDecls.isEmpty() ? List.of()
-				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions, usesArrays);
+				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions, usesArrays, mvChannel);
 
 		// Effectively-final aliases for capture in the writer lambda
 		final Ctx topRunnerCtxFinal = topRunnerCtx;
@@ -4090,6 +4091,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					mvPerThread.threadLocalDesc());
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.ownerName(),
 					mvPerThread.ownerDesc());
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_FINAL,
+					mvPerThread.boxName(), mvPerThread.boxDesc());
 		}
 		if (threadRuntimeBodies != null) {
 			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
@@ -4418,6 +4421,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor));
 				clinitCode.putstatic(tlField);
 			}
+			if (mvChannel != null && mvChannel.perThread() != null) {
+				// ... and the owner's register beside them (JvmMvChannel).
+				java.util.Objects.requireNonNull(mvChannel.perThread()).emitInit(clinitCode);
+			}
 			channel.initJavaExceptions(clinitCode);
 			if (dynVarRuntime != null) {
 				// The dynamic-binding ThreadLocals (one per bound special) join
@@ -4675,9 +4682,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mvChannel != null && mvChannel.perThread() != null) {
 			JvmMvChannel.PerThread mvPerThread = mvChannel.perThread();
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
-					mvPerThread.getDesc(), mvPerThread.getCode(mvChannel.field()));
+					mvPerThread.getDesc(), mvPerThread.getCode());
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
-					mvPerThread.setDesc(), mvPerThread.setCode(mvChannel.field()));
+					mvPerThread.setDesc(), mvPerThread.setCode());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					mvPerThread.claimName(), mvPerThread.claimDesc(), mvPerThread.claimCode());
 		}
 		if (octetsPackedRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsPackedRuntime.name(),

@@ -23,14 +23,30 @@ import org.jspecify.annotations.Nullable;
  * per THREAD, as a native implementation does: through the one static field a thread's
  * tail cleared or overwrote the values another had just published, and a consumer read
  * the wrong count -- an async body's values most visibly, captured where the body
- * completes while its caller and its siblings run on. The thread that runs {@code main}
- * (the OWNER, claimed in {@code main}'s prologue) keeps the static field, behind one
- * {@code currentThread} compare in the {@code _mvGet}/{@code _mvSet} helpers; every other
- * thread's register is a {@link ThreadLocal}. The owner is the fast path because a hot
- * loop runs there: a {@code ThreadLocal.set} on every call of {@code fib} doubled its
- * time.
+ * completes while its caller and its siblings run on. One thread, the OWNER, keeps its
+ * register in a slot of {@code _mvBox}, behind one {@code currentThread} compare in the
+ * {@code _mvGet}/{@code _mvSet} helpers; every other thread's register is a
+ * {@link ThreadLocal}. The owner is the fast path because a hot loop runs there: a
+ * {@code ThreadLocal.set} on every call of {@code fib} doubled its time.
  *
- * @param field the {@code _g$} static field of the {@code %mv-spill} global
+ * <p>
+ * The owner's register is the middle slot of an array of its own rather than a static
+ * field: every other thread reads {@code _mvOwner} on every access, and a static field
+ * shares the class's cache lines with it, so the owner's writes to a register there made
+ * those reads miss -- the cost of one shared register, back ({@code .kb/multiple-values.md},
+ * "One register per thread"). The slots around the register fill the cache-line pair it
+ * sits in, so nothing else lives there.
+ *
+ * <p>
+ * The owner is the first thread to enter the class through {@code main}'s prologue or a
+ * jvm-export wrapper, claimed ONCE under the class's lock ({@code _mvClaim}) and never
+ * moved: a claim that moved would strand the values the old owner had just published in
+ * the box, its consumer then reading its ThreadLocal. So a library's host thread owns the
+ * box as a program's {@code main} thread does, and a {@code main} run after a
+ * host already called an export leaves the owner where it is.
+ *
+ * @param field the {@code _g$} static field of the {@code %mv-spill} global, the channel
+ * of a single-threaded program
  * @param perThread the per-thread store, or null in a single-threaded program
  */
 record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThread) {
@@ -50,23 +66,42 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 	 * @param setName {@code _mvSet}
 	 * @param setDesc {@code (Ljava/lang/Object;)V}
 	 * @param set the calling thread's register, written
+	 * @param boxName {@code _mvBox}
+	 * @param boxDesc {@code [Ljava/lang/Object;}
+	 * @param box the array whose middle slot is the owner's register
+	 * @param objectClass {@code java/lang/Object}, the box's component type
+	 * @param claimName {@code _mvClaim}
+	 * @param claimDesc {@code ()V}
+	 * @param claim makes the calling thread the owner unless one is claimed
 	 * @param currentThread {@code Thread.currentThread()}
 	 * @param tlGet {@code ThreadLocal.get()}
 	 * @param tlSet {@code ThreadLocal.set(Object)}
 	 */
 	record PerThread(Utf8Entry threadLocalName, Utf8Entry threadLocalDesc, FieldRefEntry threadLocal,
 			Utf8Entry ownerName, Utf8Entry ownerDesc, FieldRefEntry owner, Utf8Entry getName, Utf8Entry getDesc,
-			MethodRefEntry get, Utf8Entry setName, Utf8Entry setDesc, MethodRefEntry set, MethodRefEntry currentThread,
-			MethodRefEntry tlGet, MethodRefEntry tlSet) {
+			MethodRefEntry get, Utf8Entry setName, Utf8Entry setDesc, MethodRefEntry set, Utf8Entry boxName,
+			Utf8Entry boxDesc, FieldRefEntry box, ClassEntry objectClass, Utf8Entry claimName, Utf8Entry claimDesc,
+			MethodRefEntry claim, MethodRefEntry currentThread, MethodRefEntry tlGet, MethodRefEntry tlSet) {
 
-		/** {@code _mvGet}: the owner's static field, or this thread's ThreadLocal. */
-		MethodCode getCode(FieldRefEntry field) {
+		/**
+		 * {@code _mvBox}'s length: two 64-byte lines of 4-byte references, so the line
+		 * pair holding the middle slot lies inside the array.
+		 */
+		static final int BOX_LENGTH = 64;
+
+		/** The owner's register in {@code _mvBox}. */
+		static final int BOX_SLOT = BOX_LENGTH / 2;
+
+		/** {@code _mvGet}: the owner's register, or this thread's ThreadLocal. */
+		MethodCode getCode() {
 			MethodCode code = new MethodCode();
 			code.invokestatic(this.currentThread);
 			code.getstatic(this.owner);
 			MethodCode.Label branch = code.newLabel();
 			code.if_acmpne(branch);
-			code.getstatic(field);
+			code.getstatic(this.box);
+			code.loadConstant(BOX_SLOT);
+			code.aaload();
 			code.areturn();
 			code.labelBinding(branch);
 			code.getstatic(this.threadLocal);
@@ -75,20 +110,50 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 			return code;
 		}
 
-		/** {@code _mvSet(v)}: the owner's static field, or this thread's ThreadLocal. */
-		MethodCode setCode(FieldRefEntry field) {
+		/** {@code _mvSet(v)}: the owner's register, or this thread's ThreadLocal. */
+		MethodCode setCode() {
 			MethodCode code = new MethodCode();
 			code.invokestatic(this.currentThread);
 			code.getstatic(this.owner);
 			MethodCode.Label branch = code.newLabel();
 			code.if_acmpne(branch);
+			code.getstatic(this.box);
+			code.loadConstant(BOX_SLOT);
 			code.aload(0);
-			code.putstatic(field);
+			code.aastore();
 			code.return_();
 			code.labelBinding(branch);
 			code.getstatic(this.threadLocal);
 			code.aload(0);
 			code.invokevirtual(this.tlSet);
+			code.return_();
+			return code;
+		}
+
+		/**
+		 * {@code <clinit>}'s part: {@code _mvBox = new Object[BOX_LENGTH]}, before any
+		 * Lisp code runs.
+		 * @param clinit the class initializer's body
+		 */
+		void emitInit(MethodCode clinit) {
+			clinit.loadConstant(BOX_LENGTH);
+			clinit.anewarray(this.objectClass);
+			clinit.putstatic(this.box);
+		}
+
+		/**
+		 * {@code _mvClaim}, a {@code synchronized} static method: the calling thread
+		 * becomes the owner unless a thread already is. The lock makes the check and the
+		 * store one step, so two first callers cannot both claim.
+		 */
+		MethodCode claimCode() {
+			MethodCode code = new MethodCode();
+			code.getstatic(this.owner);
+			MethodCode.Label claimed = code.newLabel();
+			code.ifnonnull(claimed);
+			code.invokestatic(this.currentThread);
+			code.putstatic(this.owner);
+			code.labelBinding(claimed);
 			code.return_();
 			return code;
 		}
@@ -113,9 +178,15 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 		Utf8Entry getDesc = cp.utf8Entry("()Ljava/lang/Object;");
 		Utf8Entry setName = cp.utf8Entry("_mvSet");
 		Utf8Entry setDesc = cp.utf8Entry("(Ljava/lang/Object;)V");
+		Utf8Entry boxName = cp.utf8Entry("_mvBox");
+		Utf8Entry boxDesc = cp.utf8Entry("[Ljava/lang/Object;");
+		Utf8Entry claimName = cp.utf8Entry("_mvClaim");
+		Utf8Entry claimDesc = cp.utf8Entry("()V");
 		return new JvmMvChannel(field, new PerThread(tlName, tlDesc, cp.fieldRef(thisClass, tlName, tlDesc), ownerName,
 				ownerDesc, cp.fieldRef(thisClass, ownerName, ownerDesc), getName, getDesc,
 				cp.methodRef(thisClass, getName, getDesc), setName, setDesc, cp.methodRef(thisClass, setName, setDesc),
+				boxName, boxDesc, cp.fieldRef(thisClass, boxName, boxDesc), cp.classEntry("java/lang/Object"), claimName,
+				claimDesc, cp.methodRef(thisClass, claimName, claimDesc),
 				cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;"),
 				cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;"),
 				cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V")));
@@ -162,17 +233,23 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 	}
 
 	/**
-	 * Makes the calling thread the owner -- {@code main}'s prologue, before any Lisp code
-	 * runs on it. A class whose {@code main} never runs (a jvm-export library, a servlet)
-	 * keeps no owner, and every thread takes its ThreadLocal.
-	 * @param ctx {@code main}'s context
+	 * Makes the calling thread the owner unless a thread already is -- {@code main}'s
+	 * prologue and every jvm-export wrapper's, before any Lisp code runs on the thread.
+	 * Once claimed, the check is one {@code getstatic} and a branch; the claim itself
+	 * takes the class's lock ({@code _mvClaim}). A servlet's request runs on a fresh
+	 * virtual thread, so its handler claims nothing: the first request's thread would
+	 * keep the field after it ended.
+	 * @param code the entry's body
 	 */
-	void emitClaimOwner(JvmLispCompiler.Ctx ctx) {
+	void emitClaimOwner(MethodCode code) {
 		if (this.perThread == null) {
 			return;
 		}
-		ctx.body.invokestatic(this.perThread.currentThread());
-		ctx.body.putstatic(this.perThread.owner());
+		code.getstatic(this.perThread.owner());
+		MethodCode.Label claimed = code.newLabel();
+		code.ifnonnull(claimed);
+		code.invokestatic(this.perThread.claim());
+		code.labelBinding(claimed);
 	}
 
 }

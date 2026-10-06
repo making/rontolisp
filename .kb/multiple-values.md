@@ -356,25 +356,40 @@ cooperative and a suspension happens only at an `await`, which publishes afresh)
   the one gate the special-binding representation also follows
   (`.kb/dynamic-special-variables.md`, "One thread": a thread primitive, an async body, a served
   request, a jvm-export, the java: bridge or a generated java: callback, objc:, ffi:) -- reads
-  and writes the channel through `_mvGet`/`_mvSet`: the OWNER -- the thread whose `main`
-  prologue claimed `_mvOwner` -- keeps the `_g$` static field, every other thread the `_mvTl`
-  ThreadLocal. A class whose `main` never runs (a jvm-export library, a war) has no owner and
-  every thread takes the ThreadLocal. Every emission site goes through `ctx.mvChannel`, never
-  `globalFields` directly. Any other program keeps the plain `getstatic`/`putstatic`,
-  byte-identical.
+  and writes the channel through `_mvGet`/`_mvSet`: the OWNER keeps its register in the middle
+  slot of `_mvBox` (a 64-slot `Object[]`), every other thread the `_mvTl` ThreadLocal. The
+  owner is the first thread into `main`'s prologue or a jvm-export wrapper, claimed once by the
+  synchronized `_mvClaim` and never moved: a moved claim strands the values the old owner had
+  just published (its consumer then reads its ThreadLocal), so a `main` run after a host's
+  thread called an export leaves the owner alone. A war's handler claims nothing -- each
+  request runs on a fresh virtual thread (`RontoHttpServlet`), so the first one would hold the
+  claim dead. Every emission site goes through `ctx.mvChannel`, never `globalFields` directly.
+  Any other program keeps the plain `getstatic`/`putstatic` of the `_g$` field, byte-identical.
+- Why a box and not the `_g$` static field: every non-owner reads `_mvOwner` on every access,
+  and the owner writing a register in the class's own statics invalidated that line under
+  them. Measured 2026-10-06 (export of the pin below, 8 pool threads x 50 calls, best of 25
+  rounds, load 30-60): owner in the static field, 5 of 24 runs at 114-173 ms against 30-50;
+  owner in the box, 0 of 26, max 78. The box costs the owner nothing: one thread 15-21 ms
+  either way.
+- Since 2026-10-06 an export's first caller claims (before, a jvm-export class had no owner).
+  Same day, one host thread through a fixed pool, best of 25 rounds, 8 alternating pairs: no
+  owner 21-37 ms -> owner 15-26 ms. Eight threads: no owner 30-106, owner 30-78 (load 30-60;
+  the spread is the machine). An export whose tails write no values (fib) is 34 ms either way.
 - Until 2026-10-06 the gate was `usesAsyncSpawn || usesThreads`, which left out every thread a
   host calls in on: an export running 20,000 `multiple-value-bind`s a call, called 50 times on
   each of 8 Java threads at once, answered 13,041-15,173 of the 8M triples wrong per run.
   Pinned by `JvmExportTest#anExportCalledOnSeveralThreadsKeepsEachCallsMultipleValues`. Such a
   program had no `<clinit>` ThreadLocal constants of its own, so the per-thread channel now
-  makes them (`ensureThreadLocalInfra`). Cost there (same day, best of 7 rounds): one host
-  thread 35-54 -> 91-103 ms (no owner, a ThreadLocal per write); 8 threads 158-166 -> 40-42 ms
-  (the shared field's cache line, gone).
+  makes them (`ensureThreadLocalInfra`). Cost there (same day, best of 7 rounds, load 18-31):
+  one host thread 35-54 -> 91-103 ms (no owner, a ThreadLocal per write); 8 threads 158-166 ->
+  40-42 ms (the shared field's cache line, gone). The 91-103 did not reproduce later that day
+  through a fixed pool at load 10-60 (21-37 ms with no owner): the per-write ThreadLocal costs
+  ~1.4x there, not ~2x.
 - Cost (2026-09-26, x86-64 Linux, Java 25, 5 alternating process pairs). Interpreter, fib 27 +
   a 2M-call loop: 2,203-2,454 -> 2,256-2,487 ms, medians 2,352 -> 2,367, noise. JVM, fib 34
   (18M calls, each tail clears the channel) in a program with an async-defun and a consumer:
   74-101 -> 83-103 ms, class 17,055 -> 17,471 B. A `ThreadLocal.set` on EVERY write (no owner
-  fast path) was 151-177 ms, twice the time -- which is why the owner keeps the field.
+  fast path) was 151-177 ms, twice the time -- which is why the owner has a fast path.
 
 ## The REPL echo is a consumer
 `LispEvaluator.evalValues(form) -> List<LispVal>` is the ONLY multiple-value entry point outside
@@ -416,6 +431,7 @@ leaf that may answer other than one value leaves through a `return-from`).
 ## Tests
 `ThreadTest`/`JvmThreadTest.eachThreadHasItsOwnMultipleValueChannel` and the
 `AwaitValuesMatrix.CONCURRENT_PROGRAM` tests (one register per thread);
+`JvmExportTest#theFirstThreadToCallAnExportOwnsTheChannelForGood` (the claim);
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,
 `evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
 `evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`,
