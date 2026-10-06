@@ -506,6 +506,66 @@ public final class SequenceBoundsFixture {
 			report("9", "0 3", "9, 3", "list", 3), report("9", "0 3", "0, 9", "list", 3),
 			report("4", "0 3", "4, 3", "list", 3));
 
+	/**
+	 * What a counted or bounded {@code delete} / {@code nsubstitute} spelling reports:
+	 * its own name, not the {@code remove} / {@code substitute} its lowering delegates to
+	 * -- for a value that is no sequence ({@code SEQUENCE}) and for a {@code :count} that
+	 * is no integer ({@code INTEGER}), in call position and first class. sbcl names no
+	 * operator in either report; the datum and the type agree with it.
+	 */
+	public static final String OPERATOR_REPORT_PROGRAM = """
+			(defvar *sor-5* (read-from-string "5"))
+			(defvar *sor-f* (read-from-string "1.5"))
+			(defun sor-probe (thunk)
+			  (handler-case (funcall thunk)
+			    (type-error (c) (list (type-error-datum c) (princ-to-string c)))
+			    (error (c) (list :not-a-type-error (type-of c)))))
+			(defmacro sor-rows (&rest forms)
+			  `(progn ,@(mapcar (lambda (f) `(print (sor-probe (lambda () ,f)))) forms)))
+			(sor-rows (delete 2 *sor-5*)
+			          (delete 2 *sor-5* :count 1)
+			          (delete 2 *sor-5* :start 0)
+			          (delete-if #'evenp *sor-5* :count 1)
+			          (delete-if-not #'evenp *sor-5* :count 1)
+			          (nsubstitute 1 2 *sor-5* :count 1)
+			          (nsubstitute-if 1 #'evenp *sor-5* :count 1)
+			          (nsubstitute-if-not 1 #'evenp *sor-5* :count 1)
+			          (remove 2 *sor-5* :count 1)
+			          (remove-if #'evenp *sor-5* :count 1)
+			          (remove-if-not #'evenp *sor-5* :count 1)
+			          (substitute 1 2 *sor-5* :count 1)
+			          (substitute-if 1 #'evenp *sor-5* :count 1)
+			          (substitute-if-not 1 #'evenp *sor-5* :count 1)
+			          (funcall #'delete 2 *sor-5* :count 1)
+			          (funcall #'delete-if #'evenp *sor-5* :count 1)
+			          (funcall #'nsubstitute-if 1 #'evenp *sor-5* :count 1)
+			          (delete 2 (list 1 2) :count *sor-f*)
+			          (delete-if #'evenp (vector 1 2) :count *sor-f*)
+			          (delete-if-not #'evenp (list 1 2) :count *sor-f*)
+			          (nsubstitute 1 2 (vector 1 2) :count *sor-f*)
+			          (nsubstitute-if 1 #'evenp (list 1 2) :count *sor-f*)
+			          (nsubstitute-if-not 1 #'evenp (vector 1 2) :count *sor-f*))
+			""";
+
+	/** What {@link #OPERATOR_REPORT_PROGRAM} prints, one refusal per line. */
+	public static final String OPERATOR_REPORT_EXPECTED = String.join("\n", operatorReport("5", "DELETE", "SEQUENCE"),
+			operatorReport("5", "DELETE", "SEQUENCE"), operatorReport("5", "DELETE", "SEQUENCE"),
+			operatorReport("5", "DELETE-IF", "SEQUENCE"), operatorReport("5", "DELETE-IF-NOT", "SEQUENCE"),
+			operatorReport("5", "NSUBSTITUTE", "SEQUENCE"), operatorReport("5", "NSUBSTITUTE-IF", "SEQUENCE"),
+			operatorReport("5", "NSUBSTITUTE-IF-NOT", "SEQUENCE"), operatorReport("5", "REMOVE", "SEQUENCE"),
+			operatorReport("5", "REMOVE-IF", "SEQUENCE"), operatorReport("5", "REMOVE-IF-NOT", "SEQUENCE"),
+			operatorReport("5", "SUBSTITUTE", "SEQUENCE"), operatorReport("5", "SUBSTITUTE-IF", "SEQUENCE"),
+			operatorReport("5", "SUBSTITUTE-IF-NOT", "SEQUENCE"), operatorReport("5", "DELETE", "SEQUENCE"),
+			operatorReport("5", "DELETE-IF", "SEQUENCE"), operatorReport("5", "NSUBSTITUTE-IF", "SEQUENCE"),
+			operatorReport("1.5", "DELETE", "INTEGER"), operatorReport("1.5", "DELETE-IF", "INTEGER"),
+			operatorReport("1.5", "DELETE-IF-NOT", "INTEGER"), operatorReport("1.5", "NSUBSTITUTE", "INTEGER"),
+			operatorReport("1.5", "NSUBSTITUTE-IF", "INTEGER"), operatorReport("1.5", "NSUBSTITUTE-IF-NOT", "INTEGER"));
+
+	// (DATUM "OP: The value DATUM is not of type TYPE")
+	private static String operatorReport(String datum, String operator, String type) {
+		return "(" + datum + " \"" + operator + ": The value " + datum + " is not of type " + type + "\")";
+	}
+
 	// (DATUM (INTEGER LO HI) "SUBSEQ: invalid bounds S, E for KIND of length N")
 	private static String report(String datum, String range, String bounds, String kind, int length) {
 		return "(" + datum + " (INTEGER " + range + ") \"SUBSEQ: invalid bounds " + bounds + " for " + kind

@@ -237,9 +237,16 @@ bound check comes first, so that order is not pinned.
   on two matches, `1/2` on one) in call position and through the compiled wrappers, the
   interpreter's `funcall` refused it with datum NIL (the message-only `type-error`) and also
   refused a bignum; a symbol or string was already refused by `(max count 0)`, datum as given.
-- The delete / nsubstitute / substitute fresh-sequence paths expand through `remove`'s /
-  `substitute`'s lowering, so on the compile paths a bounded or counted `delete` reports under
-  `REMOVE` (a pre-existing wobble of every type-error there, not of this check).
+- The delete / nsubstitute fresh-sequence paths expand through `remove`'s / `substitute`'s
+  lowering, which takes the SPELLED operator as an argument (`expandRemove` / `expandRemoveIf` /
+  `expandRemoveIfNot` / `expandSubstitute` / `expandSubstituteIf` private overloads, and
+  `seqScanBounds`' `operator`), never the rewritten head: a bounded or counted `delete`,
+  `delete-if`, `nsubstitute-if-not` ... reports its `SEQUENCE` and `INTEGER` type-errors under its
+  own name on every backend. Before (measured 2026-10-06) the compile paths said `REMOVE` /
+  `REMOVE-IF` / `SUBSTITUTE`, and WASM said nothing when the program spelled only `delete-if`: its
+  operator table holds the operators the program SPELLS, and the delegate's name had no row.
+  Pinned by `SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM` (rontolisp's own texts; sbcl names no
+  operator, its datum and type agree).
 - Pinned by `SequenceBoundsFixture.BAD_COUNT_PROGRAM` (sbcl's answers) in the three backend
   suites and `LispMacroExpanderTest.aRemoveCallChecksAComputedCountOnceBeforeTheBounds`.
 

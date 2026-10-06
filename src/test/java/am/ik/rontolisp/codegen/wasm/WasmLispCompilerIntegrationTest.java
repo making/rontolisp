@@ -14725,6 +14725,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aCountedDeleteOrNsubstituteReportsUnderItsOwnName() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aCountedDeleteOrNsubstituteReportsUnderItsOwnName,
+		// Preview 1 and the component.
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM, false))
+			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM, true))
+			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
 	void stringOperatorsRefuseANilStart() throws Exception {
 		// The wasm twin of LispEvaluatorTest#stringOperatorsRefuseANilStart, Preview 1
 		// and the component.

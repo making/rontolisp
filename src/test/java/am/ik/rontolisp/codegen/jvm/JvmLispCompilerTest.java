@@ -13631,6 +13631,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunACountedDeleteOrNsubstituteReportsUnderItsOwnName() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aCountedDeleteOrNsubstituteReportsUnderItsOwnName.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunStringOperatorsRefuseANilStart() throws Exception {
 		// The JVM twin of LispEvaluatorTest#stringOperatorsRefuseANilStart.
 		assertThat(compileAndRunExpanded(StringNilStartFixture.PROGRAM)).isEqualTo(StringNilStartFixture.EXPECTED);

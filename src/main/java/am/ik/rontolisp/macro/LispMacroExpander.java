@@ -6879,11 +6879,24 @@ public final class LispMacroExpander {
 	 * @return the keyword forms
 	 */
 	private static SeqScanBounds seqScanBounds(List<LispVal> parts, int start, boolean counted) {
+		return seqScanBounds(parts, start, counted, parts.get(0) instanceof LispSymbol head ? head.name() : null);
+	}
+
+	/**
+	 * The same, naming {@code operator} in the reports it makes -- the operator the
+	 * program spelled, where a lowering delegates to another's expansion.
+	 * @param parts the call's elements
+	 * @param start the index its keyword tail begins at
+	 * @param counted whether the operator takes {@code :count}
+	 * @param operator the operator the reports name, or null for an unnamed report
+	 * @return the keyword forms
+	 */
+	private static SeqScanBounds seqScanBounds(List<LispVal> parts, int start, boolean counted,
+			@Nullable String operator) {
 		return new SeqScanBounds(keywordValue(parts, start, LispNames.START_KEYWORD),
 				keywordValue(parts, start, LispNames.END_KEYWORD),
 				counted ? keywordValue(parts, start, LispNames.COUNT_KEYWORD) : null,
-				keywordValue(parts, start, LispNames.FROM_END_KEYWORD),
-				parts.get(0) instanceof LispSymbol head ? head.name() : null);
+				keywordValue(parts, start, LispNames.FROM_END_KEYWORD), operator);
 	}
 
 	/**
@@ -8713,6 +8726,15 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemove(LispCons cons, boolean arraysExist) {
+		return expandRemove(cons, arraysExist, headName(cons));
+	}
+
+	/**
+	 * {@link #expandRemove(LispCons, boolean)} reporting under {@code operator}: what a
+	 * {@code delete} that delegates here has spelled, not the {@code remove} it rewrote
+	 * its head to.
+	 */
+	private static LispVal expandRemove(LispCons cons, boolean arraysExist, @Nullable String operator) {
 		List<LispVal> parts = cons.toList();
 		LispVal keywordError = boundedTestKeyKeywordTailError(cons, LispNames.REMOVE, parts, 3);
 		if (keywordError != null) {
@@ -8722,7 +8744,7 @@ public final class LispMacroExpander {
 		parts = tail.parts();
 		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
-		SeqScanBounds bounds = seqScanBounds(parts, 3, true);
+		SeqScanBounds bounds = seqScanBounds(parts, 3, true, operator);
 		LispSymbol item = new LispSymbol("__remove_item");
 		// The item binds outside the string dispatch to keep the argument evaluation
 		// order (item, then sequence); the filter's do rebinds it to itself.
@@ -8730,7 +8752,7 @@ public final class LispMacroExpander {
 				seqResultDispatchForm(parts.get(2),
 						lst -> expandFilter(item, item, lst, "__remove",
 								elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false, bounds),
-						arraysExist, false, headName(cons))));
+						arraysExist, false, operator)));
 	}
 
 	/**
@@ -8752,6 +8774,11 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveIf(LispCons cons, boolean arraysExist) {
+		return expandRemoveIf(cons, arraysExist, headName(cons));
+	}
+
+	/** {@link #expandRemoveIf(LispCons, boolean)} reporting under {@code operator}. */
+	private static LispVal expandRemoveIf(LispCons cons, boolean arraysExist, @Nullable String operator) {
 		List<LispVal> parts = cons.toList();
 		LispVal keywordError = boundedKeyKeywordTailError(cons, LispNames.REMOVE_IF, parts, 3);
 		if (keywordError != null) {
@@ -8760,12 +8787,12 @@ public final class LispMacroExpander {
 		KeywordTail tail = KeywordTail.of(parts, 3, "__removeif");
 		parts = tail.parts();
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
-		SeqScanBounds bounds = seqScanBounds(parts, 3, true);
+		SeqScanBounds bounds = seqScanBounds(parts, 3, true, operator);
 		LispSymbol pred = new LispSymbol("__removeif_pred");
 		return tail.wrap(makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						false, bounds), arraysExist, false, headName(cons))));
+						false, bounds), arraysExist, false, operator)));
 	}
 
 	/**
@@ -8787,6 +8814,11 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandRemoveIfNot(LispCons cons, boolean arraysExist) {
+		return expandRemoveIfNot(cons, arraysExist, headName(cons));
+	}
+
+	/** {@link #expandRemoveIfNot(LispCons, boolean)} reporting under {@code operator}. */
+	private static LispVal expandRemoveIfNot(LispCons cons, boolean arraysExist, @Nullable String operator) {
 		List<LispVal> parts = cons.toList();
 		LispVal keywordError = boundedKeyKeywordTailError(cons, LispNames.REMOVE_IF_NOT, parts, 3);
 		if (keywordError != null) {
@@ -8795,12 +8827,12 @@ public final class LispMacroExpander {
 		KeywordTail tail = KeywordTail.of(parts, 3, "__removeifnot");
 		parts = tail.parts();
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
-		SeqScanBounds bounds = seqScanBounds(parts, 3, true);
+		SeqScanBounds bounds = seqScanBounds(parts, 3, true, operator);
 		LispSymbol pred = new LispSymbol("__removeifnot_pred");
 		return tail.wrap(makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						true, bounds), arraysExist, false, headName(cons))));
+						true, bounds), arraysExist, false, operator)));
 	}
 
 	/**
@@ -8842,6 +8874,15 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	private static LispVal expandSubstitute(LispCons cons, boolean arraysExist, boolean destructive) {
+		return expandSubstitute(cons, arraysExist, destructive, headName(cons));
+	}
+
+	/**
+	 * {@link #expandSubstitute(LispCons, boolean, boolean)} reporting under
+	 * {@code operator}: what an {@code nsubstitute} that delegates here has spelled.
+	 */
+	private static LispVal expandSubstitute(LispCons cons, boolean arraysExist, boolean destructive,
+			@Nullable String operator) {
 		List<LispVal> parts = cons.toList();
 		LispVal keywordError = boundedTestKeyKeywordTailError(cons, LispNames.SUBSTITUTE, parts, 4);
 		if (keywordError != null) {
@@ -8851,7 +8892,7 @@ public final class LispMacroExpander {
 		parts = tail.parts();
 		TestSpec testForm = testSpec(parts, 4);
 		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
-		SeqScanBounds bounds = seqScanBounds(parts, 4, true);
+		SeqScanBounds bounds = seqScanBounds(parts, 4, true, operator);
 		LispSymbol newItem = new LispSymbol("__subst_new");
 		LispSymbol oldItem = new LispSymbol("__subst_old");
 		// (do ((__subst_acc nil) (__subst_cur lst (cdr __subst_cur)))
@@ -8864,7 +8905,7 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3),
 				lst -> substituteScan(newItem, lst, "__subst",
 						elem -> testMatchForm(testForm, oldItem, keyedForm(keyForm, elem)), true, bounds),
-				arraysExist, destructive, headName(cons));
+				arraysExist, destructive, operator);
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), scan)));
 	}
 
@@ -8922,7 +8963,7 @@ public final class LispMacroExpander {
 		substParts.set(1, newItem);
 		substParts.set(2, oldItem);
 		substParts.set(3, lst);
-		LispVal nonListForm = expandSubstitute((LispCons) listToCons(substParts), arraysExist, true);
+		LispVal nonListForm = expandSubstitute((LispCons) listToCons(substParts), arraysExist, true, headName(cons));
 		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist,
 				headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), dispatch)));
@@ -9012,6 +9053,16 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandSubstituteIf(LispCons cons, boolean arraysExist, boolean negated,
 			boolean destructive) {
+		return expandSubstituteIf(cons, arraysExist, negated, destructive, headName(cons));
+	}
+
+	/**
+	 * {@link #expandSubstituteIf(LispCons, boolean, boolean, boolean)} reporting under
+	 * {@code operator}: what an {@code nsubstitute-if} / {@code -if-not} that delegates
+	 * here has spelled.
+	 */
+	private static LispVal expandSubstituteIf(LispCons cons, boolean arraysExist, boolean negated, boolean destructive,
+			@Nullable String operator) {
 		String name = negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF;
 		List<LispVal> parts = cons.toList();
 		LispVal keywordError = boundedKeyKeywordTailError(cons, name, parts, 4);
@@ -9021,7 +9072,7 @@ public final class LispMacroExpander {
 		KeywordTail tail = KeywordTail.of(parts, 4, "__substif");
 		parts = tail.parts();
 		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
-		SeqScanBounds bounds = seqScanBounds(parts, 4, true);
+		SeqScanBounds bounds = seqScanBounds(parts, 4, true, operator);
 		LispSymbol newItem = new LispSymbol("__substif_new");
 		LispSymbol pred = new LispSymbol("__substif_pred");
 		// The new item and the predicate bind outside the string dispatch to keep the
@@ -9031,7 +9082,7 @@ public final class LispMacroExpander {
 				lst -> substituteScan(newItem, lst, "__substif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
 						!negated, bounds),
-				arraysExist, destructive, headName(cons));
+				arraysExist, destructive, operator);
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), scan)));
 	}
 
@@ -9105,7 +9156,8 @@ public final class LispMacroExpander {
 		substIfParts.set(1, newItem);
 		substIfParts.set(2, pred);
 		substIfParts.set(3, lst);
-		LispVal nonListForm = expandSubstituteIf((LispCons) listToCons(substIfParts), arraysExist, negated, true);
+		LispVal nonListForm = expandSubstituteIf((LispCons) listToCons(substIfParts), arraysExist, negated, true,
+				headName(cons));
 		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist,
 				headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), dispatch)));
@@ -9151,7 +9203,7 @@ public final class LispMacroExpander {
 		removeParts.set(0, new LispSymbol(LispNames.REMOVE));
 		removeParts.set(1, item);
 		removeParts.set(2, seq);
-		LispVal nonListForm = expandRemove((LispCons) listToCons(removeParts), arraysExist);
+		LispVal nonListForm = expandRemove((LispCons) listToCons(removeParts), arraysExist, headName(cons));
 		if (!seqScanBounds(parts, 3, true).absent()) {
 			// A bounded, counted or reversed delete answers a FRESH sequence: CLHS lets a
 			// destructive operator do that (the caller must use the RESULT), and the
@@ -9202,7 +9254,7 @@ public final class LispMacroExpander {
 		removeIfParts.set(0, new LispSymbol(LispNames.REMOVE_IF));
 		removeIfParts.set(1, pred);
 		removeIfParts.set(2, seq);
-		LispVal nonListForm = expandRemoveIf((LispCons) listToCons(removeIfParts), arraysExist);
+		LispVal nonListForm = expandRemoveIf((LispCons) listToCons(removeIfParts), arraysExist, headName(cons));
 		if (!seqScanBounds(parts, 3, true).absent()) {
 			// A bounded, counted or reversed delete answers a FRESH sequence: CLHS lets a
 			// destructive operator do that (the caller must use the RESULT), and the
@@ -9253,7 +9305,7 @@ public final class LispMacroExpander {
 		removeIfNotParts.set(0, new LispSymbol(LispNames.REMOVE_IF_NOT));
 		removeIfNotParts.set(1, pred);
 		removeIfNotParts.set(2, seq);
-		LispVal nonListForm = expandRemoveIfNot((LispCons) listToCons(removeIfNotParts), arraysExist);
+		LispVal nonListForm = expandRemoveIfNot((LispCons) listToCons(removeIfNotParts), arraysExist, headName(cons));
 		if (!seqScanBounds(parts, 3, true).absent()) {
 			// A bounded, counted or reversed delete answers a FRESH sequence: CLHS lets a
 			// destructive operator do that (the caller must use the RESULT), and the
