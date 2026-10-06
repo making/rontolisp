@@ -2151,8 +2151,8 @@ final class WasmRuntimeBuilder {
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean identityHash) {
-		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
-				false, null, 0, null, -1, false, null, identityHash, -1);
+		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, false,
+				userFuncBase, false, null, 0, null, -1, false, null, identityHash, -1);
 		if (!built.pages().isEmpty()) {
 			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
 		}
@@ -2188,6 +2188,9 @@ final class WasmRuntimeBuilder {
 	 * has -- one extra call per {@code apply} per level buys it, and only for a program
 	 * that was near the bound anyway.
 	 * @param arity ignored when {@code spread} is true
+	 * @param probesNamespace whether a SYMBOL designator is probed in the run-time
+	 * function namespace ({@code GLOBAL_FENV}) before the registry: set for a program
+	 * that can write one
 	 * @param spread whether to build the spread dispatcher instead of an arity one
 	 * @param dispatchable the funcIds this program can reach as a function VALUE, or
 	 * {@code null} for "every one of them". A funcId outside the set is called only
@@ -2204,9 +2207,10 @@ final class WasmRuntimeBuilder {
 	 */
 	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
-			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase,
-			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders,
-			@Nullable NotFunctionReport notFunction, boolean identityHash, int unsuppliedGlobal) {
+			boolean usesEval, boolean probesNamespace, int userFuncBase, boolean spread,
+			@Nullable Set<Integer> dispatchable, int pageFuncBase, @Nullable ArityReport report, int arityChkIndex,
+			boolean sharedConsReaders, @Nullable NotFunctionReport notFunction, boolean identityHash,
+			int unsuppliedGlobal) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -2237,7 +2241,8 @@ final class WasmRuntimeBuilder {
 		if (maxFuncId < DISPATCH_PAGE_BUDGET_BYTES) {
 			ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
-			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
+			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, probesNamespace, report != null, notFunction,
+					identityHash);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
 					sharedConsReaders, identityHash, unsuppliedGlobal);
 			emitDispatchEpilogue(w, dispatchArgs, notFunction);
@@ -2288,7 +2293,8 @@ final class WasmRuntimeBuilder {
 		// before, then the top digit selects a page instead of a case.
 		ByteArrayOutputStream rootBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter rw = new WasmWriter(rootBody);
-		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
+		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, probesNamespace, report != null, notFunction,
+				identityHash);
 		int funcIdLocal = dispatchArgs + 1;
 		rw.write(Instruction.GET_LOCAL);
 		rw.writeUnsignedLeb128(funcIdLocal);
@@ -3244,7 +3250,8 @@ final class WasmRuntimeBuilder {
 	 * parameters, and local 0 holding a CLOSURE struct whatever the caller passed.
 	 */
 	private static void emitDispatchPrologue(WasmWriter w, int arity, int dispatchArgs, boolean spread,
-			boolean usesEval, boolean reporting, @Nullable NotFunctionReport notFunction, boolean identityHash) {
+			boolean usesEval, boolean probesNamespace, boolean reporting, @Nullable NotFunctionReport notFunction,
+			boolean identityHash) {
 		// Locals: param 0 = funcval, params 1..arity = args
 		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref); a
 		// reporting dispatcher adds ONE more ref for the message it assembles, so a
@@ -3271,6 +3278,20 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 			w.write(Instruction.IF, 0x40);
+			if (probesNamespace) {
+				// A binding decides on its own: its function joins the closure path
+				// (the cast traps on anything else), and fmakunbound's tombstone traps.
+				w.write(Instruction.BLOCK, 0x40); // $registry
+				emitNamespaceBinding(w, argListLocal, 0);
+				emitNamespaceFunction(w, argListLocal);
+				w.write(Instruction.IF, 0x40);
+				w.write(Instruction.UNREACHABLE); // retired
+				w.write(Instruction.END);
+				emitClosureFuncId(w, funcIdLocal);
+				w.write(Instruction.BR);
+				w.writeUnsignedLeb128(1); // past the symbol arm
+				w.write(Instruction.END); // $registry
+			}
 			emitSymbolLookup(w, funcIdLocal);
 			w.write(Instruction.IF, 0x40);
 			w.write(Instruction.UNREACHABLE); // undefined function
@@ -3312,6 +3333,25 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.BR);
 			w.writeUnsignedLeb128(3); // $notFunction
 			w.write(Instruction.END);
+			if (probesNamespace) {
+				// A binding decides on its own: a closure joins the closure path, the
+				// tombstone fmakunbound leaves reports the symbol in local 0 although the
+				// registry may still answer it, and anything else is no function.
+				w.write(Instruction.BLOCK, 0x40); // $registry
+				emitNamespaceBinding(w, argListLocal, 0);
+				emitNamespaceFunction(w, argListLocal);
+				w.write(Instruction.BR_IF);
+				w.writeUnsignedLeb128(2); // $undefined
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(0);
+				w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+				w.write(Instruction.BR_IF);
+				w.writeUnsignedLeb128(1); // $closure
+				w.write(Instruction.BR);
+				w.writeUnsignedLeb128(3); // $notFunction
+				w.write(Instruction.END); // $registry
+			}
 			emitSymbolLookup(w, funcIdLocal);
 			w.write(Instruction.BR_IF);
 			w.writeUnsignedLeb128(1); // $undefined
@@ -3405,6 +3445,62 @@ final class WasmRuntimeBuilder {
 		notFunction.emitUndefinedThrow(w, argListLocal, funcIdLocal);
 		w.write(Instruction.END); // $notFunction
 		notFunction.emitNotFunctionThrow(w, argListLocal);
+	}
+
+	/**
+	 * Probes the run-time function namespace for the SYMBOL in local 0, ahead of the
+	 * registry -- the order {@code symbol-function}, {@code fboundp} and {@code _apply}
+	 * resolve a name in: leaves its binding in {@code bindingLocal}, or branches to
+	 * {@code depth} (the registry probe) when there is none.
+	 */
+	private static void emitNamespaceBinding(WasmWriter w, int bindingLocal, int depth) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0); // field 0: interned offset
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(bindingLocal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(bindingLocal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(depth);
+	}
+
+	/**
+	 * Replaces the symbol in local 0 with the function the binding in
+	 * {@code bindingLocal} holds, and pushes 1 when it holds none -- the tombstone
+	 * {@code fmakunbound} leaves -- leaving local 0 the symbol.
+	 */
+	private static void emitNamespaceFunction(WasmWriter w, int bindingLocal) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(bindingLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(bindingLocal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, Type.I32.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(bindingLocal);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
 	}
 
 	/**

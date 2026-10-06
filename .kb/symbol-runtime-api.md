@@ -235,11 +235,21 @@ A program without `fmakunbound` is byte-identical to before.
 `fmakunbound` — eager compilation cannot be undone, so only LATE-bound references see the
 retirement. `symbol-function`/`fdefinition` of a LITERAL name are folded the same way and are
 likewise not tombstone-aware.
-**Measured 2026-10-06**: a COMPUTED `funcall` is not one of those late-bound references on the
-compilers -- the dispatchers resolve a symbol through `_lookup` alone, so `(funcall (intern
-"F"))` after `fmakunbound` still calls `F` on the JVM, P1 and the component, and a name only
-`eval`'s `defun` or a computed `(setf (symbol-function ...))` bound is undefined there
-(`.todo/d79`). A computed `symbol-function` / `fdefinition` / `apply` does see the tombstone.
+**A SYMBOL reaching a dispatcher is one of those late-bound references**: the dispatcher's
+symbol arm probes the function namespace before `_lookup`, the order `symbol-function` and
+`_apply` use, and a binding decides on its own -- its function replaces the symbol (an
+interpreted closure then takes the `_apply` arm), the tombstone reports the SYMBOL as
+undefined although the registry may still answer it. JVM: `JvmRuntimeBuilder.FunctionNamespace`
+/ `emitNamespaceProbe`; WASM: `emitDispatchPrologue`'s `probesNamespace` (the `$undefined` arm
+in EH mode, a trap outside it). `_apply`'s own probe hands a tombstoned SYMBOL on instead of the
+nil its cell holds (JVM `_notFn`; WASM the spread dispatcher, which probes and reports it), so
+the report names it. Gated on `writesFunctionNamespace` (every eval-runtime reason except the
+four readers `boundp`/`symbol-value`/`set`/`fboundp`), so a program that cannot write the
+namespace is unchanged. Before (measured 2026-10-06): `(funcall (intern "F"))` after
+`fmakunbound` called `F` on the JVM, P1 and the component, a name only `eval`'s `defun` or a
+computed `(setf (symbol-function ...))` bound was undefined there, and `(apply (intern "F")
+nil)` reported `The function NIL is undefined`. Pinned on all four backends by
+`RuntimeFunctionNamespaceCallFixture`.
 
 ### `(setf (symbol-function 'f) fn)` / `(setf (fdefinition 'f) fn)`
 `expandSetf` lowers both places to `(%set-symbol-function name value)` (the CL internals
@@ -258,7 +268,7 @@ compilers -- the dispatchers resolve a symbol through `_lookup` alone, so `(func
   function NAMESPACE ONLY** — probing the compiled registry would find the forwarder itself and
   loop — and a miss signals `The function NAME is undefined`.
 - **Divergences**: an eagerly-bound call site of a name that HAD a defun keeps the old function
-  after a re-setf; `_invoke_N` still probes `_lookup` only; `--no-gc` has no eval runtime.
+  after a re-setf; `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,
   `JvmLispCompilerTest#compileAndRunSetfSymbolFunction*`,
   `WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec

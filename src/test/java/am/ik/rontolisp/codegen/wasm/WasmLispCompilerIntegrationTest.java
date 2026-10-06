@@ -24549,6 +24549,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace, on
+		// Preview 1 and the component: the dispatchers probe GLOBAL_FENV before the
+		// registry.
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.SOURCE, false))
+			.isEqualTo(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.SOURCE, true))
+			.isEqualTo(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.EXPECTED);
+	}
+
+	@Test
 	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound, on

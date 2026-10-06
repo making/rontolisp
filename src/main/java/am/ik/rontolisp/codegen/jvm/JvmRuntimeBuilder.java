@@ -73,11 +73,26 @@ final class JvmRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry integerClass, MethodRefEntry integerValue, ClassEntry objectClass,
 			ClassEntry stringClass, @org.jspecify.annotations.Nullable MethodRefEntry applyRef,
 			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef,
+			@org.jspecify.annotations.Nullable FunctionNamespace namespace,
 			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
 			JvmUnsupplied unsupplied) {
 		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
-				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false,
+				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, namespace, false,
 				dispatcherName(arity, false), false, dispatchable, arityReporting, unsupplied);
+	}
+
+	/**
+	 * The eval runtime's function namespace a dispatcher probes a SYMBOL designator in
+	 * before the compiled-function registry: the {@code _fenv} binding list
+	 * ({@code (setf (symbol-function ...))}, {@code eval}'s {@code defun},
+	 * {@code fmakunbound}'s tombstone) and {@code _envLookup}, which finds a name's
+	 * binding in it. Handed over only for a program that can write the namespace, so a
+	 * program that cannot is unchanged.
+	 *
+	 * @param fenv the {@code _fenv} field
+	 * @param envLookup {@code _envLookup(name, env)}
+	 */
+	record FunctionNamespace(FieldRefEntry fenv, MethodRefEntry envLookup) {
 	}
 
 	/**
@@ -178,6 +193,8 @@ final class JvmRuntimeBuilder {
 	 * per-arity ceiling would be -- one case per function, not one per (function, arity)
 	 * pair, since a variadic function matches every arity at or above its required count.
 	 * @param arity ignored when {@code spread} is true
+	 * @param namespace the function namespace a symbol designator is probed in before
+	 * {@code lookupRef}'s registry, or null where nothing can write one
 	 * @param spread whether to build the spread dispatcher instead of an arity one
 	 * @param name the dispatcher's name, and its segments' prefix:
 	 * {@link #dispatcherName}, or the copy only value tails call
@@ -192,7 +209,8 @@ final class JvmRuntimeBuilder {
 			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassEntry thisClass,
 			ClassEntry objectArrayClass, ClassEntry integerClass, MethodRefEntry integerValue, ClassEntry objectClass,
 			ClassEntry stringClass, @org.jspecify.annotations.Nullable MethodRefEntry applyRef,
-			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef, boolean spread, String name,
+			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef,
+			@org.jspecify.annotations.Nullable FunctionNamespace namespace, boolean spread, String name,
 			boolean checksDepth, @org.jspecify.annotations.Nullable Set<Integer> dispatchable,
 			ArityReporting arityReporting, JvmUnsupplied unsupplied) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1, int depth) -> Object,
@@ -304,6 +322,10 @@ final class JvmRuntimeBuilder {
 				// Integer funcId. The two instanceof tests fold into the casts that
 				// follow them, so a function value pays nothing it did not pay before.
 				MethodRefEntry notFnRef = cp.methodRef(thisClass, NOT_FN_NAME, NOT_FN_DESC);
+				// Where a function-namespace binding re-enters with the function it
+				// holds.
+				MethodCode.Label classify = code.newLabel();
+				code.labelBinding(classify);
 				code.aload(0);
 				code.instanceOf(objectArrayClass);
 				MethodCode.Label ifNotArray = code.newLabel();
@@ -336,6 +358,9 @@ final class JvmRuntimeBuilder {
 					code.instanceOf(stringClass);
 					MethodCode.Label ifNotString = code.newLabel();
 					code.ifeq(ifNotString);
+					if (namespace != null) {
+						emitNamespaceProbe(code, namespace, restSlot, classify, objectArrayClass, notFnRef);
+					}
 					code.aload(0);
 					code.invokestatic(lookupRef);
 					// Checked before it replaces the funcval, which the report of a name
@@ -551,6 +576,49 @@ final class JvmRuntimeBuilder {
 		a.invokespecial(exCtor);
 		a.areturn();
 		return a;
+	}
+
+	/**
+	 * Probes the function namespace for the SYMBOL in local 0, ahead of the registry --
+	 * the order {@code symbol-function}, {@code fboundp} and {@code _apply} resolve a
+	 * name in: a binding decides on its own. Its function replaces the symbol and
+	 * re-enters the classification at {@code classify} (an interpreted closure then
+	 * reaches the {@code _apply} arm like any other); {@code fmakunbound}'s tombstone (a
+	 * nil cell) reports the symbol as undefined although the registry may still answer
+	 * it, and a cell holding no function value reports that value. No binding falls
+	 * through to the registry. Clobbers {@code scratchSlot}.
+	 */
+	private static void emitNamespaceProbe(MethodCode code, FunctionNamespace namespace, int scratchSlot,
+			MethodCode.Label classify, ClassEntry objectArrayClass, MethodRefEntry notFnRef) {
+		MethodCode.Label unbound = code.newLabel();
+		code.aload(0);
+		code.getstatic(namespace.fenv());
+		code.invokestatic(namespace.envLookup());
+		code.astore(scratchSlot);
+		code.aload(scratchSlot);
+		code.ifnull(unbound);
+		code.aload(scratchSlot);
+		code.checkcast(objectArrayClass);
+		code.iconst_1();
+		code.aaload();
+		code.astore(scratchSlot);
+		MethodCode.Label bound = code.newLabel();
+		code.aload(scratchSlot);
+		code.ifnonnull(bound);
+		notFnThrowAt(code, notFnRef);
+		code.labelBinding(bound);
+		code.aload(scratchSlot);
+		code.instanceOf(objectArrayClass);
+		MethodCode.Label notArray = code.newLabel();
+		code.ifeq(notArray);
+		code.aload(scratchSlot);
+		code.astore(0);
+		code.goto_(classify);
+		code.labelBinding(notArray);
+		code.aload(scratchSlot);
+		code.invokestatic(notFnRef);
+		code.athrow();
+		code.labelBinding(unbound);
 	}
 
 	/**

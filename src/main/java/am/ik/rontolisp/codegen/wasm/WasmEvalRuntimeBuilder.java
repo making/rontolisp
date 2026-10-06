@@ -1715,6 +1715,16 @@ final class WasmEvalRuntimeBuilder {
 			w.write(Instruction.I32_EQZ);
 			w.write(Instruction.IF, 0x40);
 			emitCdrOf(w, TMP);
+			setLocal(w, TMP);
+			// fmakunbound's tombstone (a nil cell) shadows the registry: the SYMBOL goes
+			// to the spread dispatcher, whose namespace probe reports it undefined (not
+			// the nil the cell holds).
+			getLocal(w, TMP);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, 0x40);
+			emitSpreadDispatch(w, FN, ARGLIST);
+			w.write(Instruction.END);
+			getLocal(w, TMP);
 			setLocal(w, FN);
 			w.write(Instruction.ELSE);
 		}
