@@ -184,11 +184,11 @@ final class JvmSetqCompiler {
 
 	/**
 	 * Stores the value on the stack into the global variable, leaving the value there. A
-	 * special that is dynamically bound somewhere in the program writes this thread's
-	 * active binding when one exists ({@code _dset}) and only falls through to the
-	 * {@code _g$} global default when none does -- the CL rule that {@code setq} of a
-	 * special assigns the current dynamic binding. Every other global stays a plain
-	 * {@code putstatic}.
+	 * special whose dynamic binding is thread-scoped ({@code Ctx.threadScopedSpecials})
+	 * writes this thread's active binding when one exists ({@code _dset}) and only falls
+	 * through to the {@code _g$} global default when none does -- the CL rule that
+	 * {@code setq} of a special assigns the current dynamic binding. Every other global
+	 * stays a plain {@code putstatic}, which a shallow binding's field is too.
 	 */
 	static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {

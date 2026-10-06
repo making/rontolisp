@@ -255,10 +255,10 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
-	 * {@code (%global-boundp 'G)}: whether the global's variable holds a value. A
-	 * dynamically bound special asks {@code _dbound} over its ThreadLocal and global --
-	 * this thread's binding, else a global that is not the UNBOUND marker; any other
-	 * global compares its field with the marker.
+	 * {@code (%global-boundp 'G)}: whether the global's variable holds a value. A special
+	 * whose dynamic binding is thread-scoped asks {@code _dbound} over its ThreadLocal
+	 * and global -- this thread's binding, else a global that is not the UNBOUND marker;
+	 * any other global, a shallow binding's included, compares its field with the marker.
 	 */
 	static void compileGlobalBoundp(LispCons cons, JvmLispCompiler.Ctx ctx) {
 		String name = ((LispSymbol) ((LispCons) cons.toList().get(1)).toList().get(1)).name();

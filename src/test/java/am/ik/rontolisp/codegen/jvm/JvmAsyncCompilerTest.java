@@ -113,6 +113,31 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void concurrentAsyncBodiesEachSeeTheirOwnBindingOfASpecial() throws Exception {
+		// An async body runs on a virtual thread of its own, so a special it binds is
+		// bound per thread (.kb/dynamic-special-variables.md, "JVM"): sixteen bodies,
+		// past their first await at once, each bind *who* to their own number and read it
+		// back through a callee while the others do the same. None sees another's
+		// binding, and the global is untouched when they are done.
+		assertThat(compileAndRun("""
+				(defvar *who* -1)
+				(defun who () *who*)
+				(rontolisp:async-defun bind-and-read (n)
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (let ((*who* n) (seen n))
+				    (dotimes (i 50000)
+				      (unless (= (who) n) (setq seen (who))))
+				    seen))
+				(let ((futures nil) (crossed 0))
+				  (dotimes (n 16) (push (bind-and-read n) futures))
+				  (setq futures (reverse futures))
+				  (dotimes (n 16)
+				    (unless (= (rontolisp:await (nth n futures)) n) (setq crossed (1+ crossed))))
+				  (print (list :crossed crossed :global (who))))
+				""")).isEqualTo("(:CROSSED 0 :GLOBAL -1)");
+	}
+
+	@Test
 	void octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8() throws Exception {
 		// The JVM arm of the gate (the compiled twin of AsyncEvalTest's): the emitted
 		// _octetsToString answers a well-formed body from the JDK decoder and a malformed

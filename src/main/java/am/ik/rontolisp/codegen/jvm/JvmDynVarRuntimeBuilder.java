@@ -20,9 +20,11 @@ import am.ik.jvm.MethodCode;
 /**
  * Builds the thread-scoped dynamic-binding runtime for special variables that are
  * dynamically bound somewhere in the program ({@code SpecialVarCollector.
- * collectDynamicallyBound}). Emitted only when that set is non-empty, so a program that
- * never {@code let}-binds a special compiles byte-identically to a build without this
- * runtime.
+ * collectDynamicallyBound}). Emitted only when that set is non-empty and Lisp code of the
+ * program can run on another thread: a program that runs it on one thread only binds a
+ * special by saving, setting and restoring its {@code _g$} field
+ * ({@code JvmLetCompiler}), and a program that never {@code let}-binds a special compiles
+ * byte-identically to a build without this runtime.
  *
  * <p>
  * Each bound special gets, next to its {@code _g$<name>} global static field (the global

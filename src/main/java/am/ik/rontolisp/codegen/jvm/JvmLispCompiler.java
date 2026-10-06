@@ -308,6 +308,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final String GROUP_JAVA_BRIDGE = "java-bridge";
 
 	/**
+	 * Lisp code runs on threads other than the program's own, so a special's dynamic
+	 * binding is thread-scoped ({@link JvmDynVarRuntimeBuilder}) and the multiple-value
+	 * channel one register per thread ({@link JvmMvChannel}): forced on when the attempt
+	 * generated a {@code java:} implementation whose callbacks the source scan did not
+	 * predict -- a host calls them from a thread of its choosing.
+	 */
+	private static final String GROUP_OTHER_THREADS = "other-threads";
+
+	/**
 	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
 	 * finished class turns out to call that helper without it having been emitted. A
 	 * helper absent from this table is not recoverable and makes the compile fail loudly
@@ -1657,10 +1666,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The injected wrapper bodies that are (apply f r) count too: the wrappers and
 		// the runtime they call are gated on the same reference (see wrapperExcludes).
 		// So do the functions of a generated java: interface implementation
-		// (JvmJavaImplementations).
+		// (JvmJavaImplementations), which Java code calls back.
+		boolean javaCallsBack = javaSites != null && javaSites.needsApply(program);
 		boolean usesApplyRuntime = usesEval || LispMacroExpander.needsApplyRuntime(program, applyGateWrappers)
-				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY)
-				|| (javaSites != null && javaSites.needsApply(program));
+				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY) || javaCallsBack;
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -1944,17 +1953,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			globalFieldNameUtfs.add(fieldNameUtf);
 			globalFields.put(g, cp.fieldRef(thisClass, fieldNameUtf, globalFieldDescUtf));
 		}
+		// Whether Lisp code of this program can run on a thread other than the one that
+		// runs the program: a thread primitive's, an async body's or a served request's
+		// (each a virtual thread of its own), and any thread a host or a library calls
+		// in on -- through a jvm-export wrapper (a --no-main class has one; a war serves
+		// through its handler), the java: bridge's Proxy, a generated java:
+		// implementation's callback, an objc: method, block or main-thread hand-over, or
+		// an ffi:callback's upcall. A generated implementation is predicted from the
+		// forms and checked against the callbacks the attempt made (GROUP_OTHER_THREADS).
+		boolean lispOnOtherThreads = usesThreads || usesAsyncSpawn || !exportDecls.isEmpty() || usesJavaBridge
+				|| javaCallsBack || usesObjc || usesFfi || forcedGroups.contains(GROUP_OTHER_THREADS);
 		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
 		// more than one thread -- one register per thread (JvmMvChannel).
 		FieldRefEntry mvSpillField = globalFields.get(LispNames.MV_SPILL);
-		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : usesAsyncSpawn || usesThreads
+		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : lispOnOtherThreads
 				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
-		// A special that is DYNAMICALLY BOUND somewhere additionally gets a per-thread
-		// store (a _d$ ThreadLocal next to its _g$ global default), so concurrent
-		// http-handler requests binding the same special do not clobber each other --
-		// interpreter parity (its DynamicBindings is a ThreadLocal for the same reason).
-		// A special never let-bound keeps the bare static field, so its reads stay a
-		// single getstatic and a binding-free program compiles byte-identically.
+		// A special that is DYNAMICALLY BOUND somewhere is, in a program that runs Lisp
+		// code on one thread only, a SHALLOW binding of its _g$ field -- saved, set, and
+		// restored on every exit -- so every read stays one getstatic, in a closure as in
+		// a callee (WASM's shape). Where another thread can run Lisp code it gets a
+		// per-thread store instead (a _d$ ThreadLocal next to its _g$ global default), so
+		// two threads binding the same special do not clobber each other and neither
+		// sees the other's binding -- interpreter parity (its DynamicBindings is a
+		// ThreadLocal for the same reason). A special never let-bound keeps the bare
+		// static field either way, and a binding-free program compiles byte-identically.
 		// The injected runtime is walked beside the program: it is compiled the same way.
 		List<LispVal> compiledForms = new ArrayList<>(program);
 		compiledForms.addAll(injectedForms);
@@ -1989,9 +2011,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker = JvmDynVarRuntimeBuilder.unboundMarker(cp,
 				thisClass, unboundGlobals, globalFields);
-		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
-						unboundSpecials.isEmpty() ? null : Objects.requireNonNull(unboundMarker).field());
+		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty()
+				|| !lispOnOtherThreads ? null
+						: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
+								unboundSpecials.isEmpty() ? null : Objects.requireNonNull(unboundMarker).field());
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -2546,6 +2569,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.globalFields(globalFields)
 			.mvChannel(mvChannel)
 			.dynVars(dynVarRuntime)
+			.threadScopedSpecials(lispOnOtherThreads)
 			.unboundMarker(unboundMarker)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
@@ -4329,8 +4353,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			if (mvChannel != null && mvChannel.perThread() != null) {
 				// The per-thread %mv-spill store joins the same initializer: every
-				// thread's register starts null, nil.
+				// thread's register starts null, nil. A program no thread runtime
+				// brought the channel's ThreadLocal constants to (an export's, a
+				// callback's) makes them here.
 				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
+				channel.ensureThreadLocalInfra(cp);
 			}
 			if (javaSignals != null) {
 				// ... as does the record of what functions called back from Java raised.
@@ -4551,6 +4578,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			this.implementationCallbacks = callbacks;
 			this.bridgeClassFiles.putAll(implementations.classFiles(this.writeTarget()));
+			if (!callbacks.isEmpty() && !lispOnOtherThreads) {
+				// Java calls these back from a thread of its choosing, so a special's
+				// binding and the multiple-value channel must be per thread after all:
+				// the attempt is redone with the gate forced on rather than shipped
+				// single-threaded.
+				throw new GateUnderpredicted(Set.of(GROUP_OTHER_THREADS));
+			}
 		}
 		else {
 			this.implementationCallbacks = Set.of();
@@ -7446,10 +7480,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * The thread-scoped dynamic-binding runtime for the specials that are dynamically
 		 * bound somewhere in the program (a {@code _d$} ThreadLocal per name next to the
 		 * {@code _g$} global default, plus the {@code _dget}/{@code _dbind}/{@code _dset}
-		 * helpers), or {@code null} when no special is ever {@code let}-bound. Shared
-		 * across every context.
+		 * helpers), or {@code null} when no special is ever {@code let}-bound or no
+		 * binding needs one ({@link #threadScopedSpecials}). Shared across every context.
 		 */
 		JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
+
+		/**
+		 * Whether a special's dynamic binding is thread-scoped -- Lisp code of the
+		 * program can run on another thread, so a binding lives in the special's
+		 * {@link #dynVars} ThreadLocal -- rather than a shallow binding that saves, sets
+		 * and restores its {@code _g$} field. Shared across every context.
+		 */
+		boolean threadScopedSpecials;
 
 		/**
 		 * The UNBOUND marker and the globals whose {@code _g$} starts as it -- their
@@ -7670,6 +7712,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mvChannel = builder.mvChannel;
 			this.rawGlobals = builder.rawGlobals;
 			this.dynVars = builder.dynVars;
+			this.threadScopedSpecials = builder.threadScopedSpecials;
 			this.unboundMarker = builder.unboundMarker;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack();
@@ -8244,6 +8287,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = Map.of();
 
 			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
+
+			private boolean threadScopedSpecials;
 
 			private JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker;
 
@@ -8839,6 +8884,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder dynVars(JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars) {
 				this.dynVars = dynVars;
+				return this;
+			}
+
+			Builder threadScopedSpecials(boolean threadScopedSpecials) {
+				this.threadScopedSpecials = threadScopedSpecials;
 				return this;
 			}
 

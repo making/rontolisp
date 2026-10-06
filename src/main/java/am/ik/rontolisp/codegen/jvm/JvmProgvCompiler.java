@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.rontolisp.LispCons;
@@ -11,18 +12,20 @@ import am.ik.rontolisp.LispVal;
 /**
  * Compiles the four internal operators of the {@code progv} lowering
  * ({@code LispMacroExpander.expandProgvForCompile}). Each arm of the lowering's
- * name-dispatch chain names its special LITERALLY, so these emit exactly the
- * thread-scoped save/set the {@code let} path emits for that one special
- * ({@code JvmLetCompiler}) -- with the previous-binding cell flowing as a VALUE (consed
- * into the lowering's save list) instead of into a save slot, because the bind and its
- * restore sit in different loop iterations of the same {@code unwind-protect}.
+ * name-dispatch chain names its special LITERALLY, so these emit exactly the save/set the
+ * {@code let} path emits for that one special ({@code JvmLetCompiler}: shallow over its
+ * {@code _g$} field, or thread-scoped over its {@code _d$} ThreadLocal) -- with the
+ * previous state flowing as a VALUE (consed into the lowering's save list) instead of
+ * into a save slot, because the bind and its restore sit in different loop iterations of
+ * the same {@code unwind-protect}.
  *
  * <ul>
- * <li>{@code (%progv-dyn-bind NAME value)} -- {@code _dbind} a fresh cell over the
- * special's {@code _d$} ThreadLocal, answering the previous cell (possibly {@code null} =
- * no binding on this thread).
- * <li>{@code (%progv-dyn-unbind NAME prev)} -- {@code ThreadLocal.set(prev)}, the same
- * restore spelling every other exit path uses.
+ * <li>{@code (%progv-dyn-bind NAME value)} -- set the special's {@code _g$} field,
+ * answering its previous value; thread-scoped, {@code _dbind} a fresh cell over its
+ * {@code _d$} ThreadLocal, answering the previous cell (possibly {@code null} = no
+ * binding on this thread).
+ * <li>{@code (%progv-dyn-unbind NAME prev)} -- put the previous state back, the same
+ * restore every other exit path emits.
  * <li>{@code (%progv-genv)} / {@code (%progv-genv-set x)} -- read/write the eval
  * runtime's global env mirror {@code _genv}, whose binding nodes are ordinary cons cells
  * ({@code Object[]&#123;car, cdr&#125;}), so the lowering maintains the mirror in plain
@@ -34,39 +37,41 @@ final class JvmProgvCompiler {
 	private JvmProgvCompiler() {
 	}
 
-	/** {@code (%progv-dyn-bind NAME value)}: push a binding, answer the previous cell. */
+	/**
+	 * {@code (%progv-dyn-bind NAME value)}: push a binding, answer the previous state.
+	 */
 	static void compileDynBind(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		String name = ((LispSymbol) parts.get(1)).name();
-		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		FieldRefEntry tl = dyn == null ? null : dyn.fields().get(name);
-		if (dyn == null || tl == null) {
-			// The lowering only generates arms for the program's specials, and a
-			// progv-using program forces every special into the dynamically-bound set
-			// (SpecialVarCollector.collectDynamicallyBound); a miss here must fail the
-			// compile loudly, never fall back to a process-global binding.
-			throw new IllegalStateException(
-					"special variable " + name + " has no thread-local store for the progv lowering"
-							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
-		}
+		// The lowering only generates arms for the program's specials, and a progv-using
+		// program forces every special into the dynamically-bound set
+		// (SpecialVarCollector.collectDynamicallyBound), so a home is always there.
+		FieldRefEntry home = JvmLetCompiler.bindingHome(name, ctx);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.body.getstatic(tl).swap().invokestatic(dyn.dbind());
+		ctx.body.getstatic(home).swap();
+		if (ctx.threadScopedSpecials) {
+			ctx.body.invokestatic(Objects.requireNonNull(ctx.dynVars).dbind());
+		}
+		else {
+			ctx.body.putstatic(home);
+		}
 	}
 
-	/** {@code (%progv-dyn-unbind NAME prev)}: restore the saved cell; answers nil. */
+	/** {@code (%progv-dyn-unbind NAME prev)}: restore the saved state; answers nil. */
 	static void compileDynUnbind(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		String name = ((LispSymbol) parts.get(1)).name();
-		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		FieldRefEntry tl = dyn == null ? null : dyn.fields().get(name);
-		if (dyn == null || tl == null) {
-			throw new IllegalStateException(
-					"special variable " + name + " has no thread-local store for the progv lowering"
-							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
+		FieldRefEntry home = JvmLetCompiler.bindingHome(name, ctx);
+		if (ctx.threadScopedSpecials) {
+			ctx.body.getstatic(home);
+			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+			ctx.body.invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet());
 		}
-		ctx.body.getstatic(tl);
-		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.body.invokevirtual(dyn.tlSet()).aconst_null();
+		else {
+			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+			ctx.body.putstatic(home);
+		}
+		ctx.body.aconst_null();
 	}
 
 	/** {@code (%progv-genv)}: the eval runtime's global env mirror, as a Lisp alist. */

@@ -369,6 +369,41 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
+	void concurrentRequestsEachSeeTheirOwnBindingOfASpecial() throws Exception {
+		// One virtual thread per request, so a special a handler binds is bound per
+		// request (.kb/dynamic-special-variables.md, "JVM"): requests released at once,
+		// each binding *request-path* to its own path and reading it back through a
+		// callee while the others do the same, never see another request's binding.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defvar *request-path* nil)
+				(defun request-path () *request-path*)
+				(defun handle (env)
+				  (let ((*request-path* (getf env :path-info)) (crossed nil))
+				    (dotimes (i 50000)
+				      (unless (eq (request-path) (getf env :path-info)) (setq crossed t)))
+				    (list 200 nil (list (if crossed "crossed" (request-path))))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		int requests = 16;
+		java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(requests);
+		try (java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors
+			.newVirtualThreadPerTaskExecutor()) {
+			java.util.List<java.util.concurrent.Future<String>> answers = new java.util.ArrayList<>();
+			for (int i = 0; i < requests; i++) {
+				String path = "/r" + i;
+				answers.add(pool.submit(() -> {
+					together.await();
+					return get(port, path).body();
+				}));
+			}
+			for (int i = 0; i < requests; i++) {
+				assertThat(answers.get(i).get()).isEqualTo("/r" + i);
+			}
+		}
+	}
+
+	@Test
 	void concurrentRequestsGetTheirOwnSocketHandle() throws Exception {
 		// One virtual thread per request means the generated class' _streams table is
 		// allocated from concurrently: a non-atomic slot reservation hands two requests

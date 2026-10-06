@@ -160,6 +160,85 @@ class JvmExportTest {
 		assertThat(staticField(clazz, JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
 	}
 
+	@Test
+	void aSpecialAnExportBindsIsBoundPerCallingThread() throws Exception {
+		// A host calls an export on threads of its own, so a special the export binds is
+		// bound per thread (.kb/dynamic-special-variables.md, "JVM"): eight threads,
+		// released at once, each bind *who* to their own number and read it back through
+		// a callee while the others do the same. None sees another's binding, and the
+		// global is untouched when they are done -- a binding shared by the threads
+		// would cross on the first interleaving and restore in the wrong order.
+		Class<?> clazz = compileToClass("""
+				(defvar *who* -1)
+				(defun who () *who*)
+				(defun bind-and-read (n)
+				  (let ((*who* n) (seen n))
+				    (dotimes (i 20000)
+				      (unless (= (who) n) (setq seen (who))))
+				    seen))
+				(defun global-who () (who))
+				(rontolisp:jvm-export 'bind-and-read :params '(:s64) :returns :s64 :as "bindAndRead")
+				(rontolisp:jvm-export 'global-who :params '() :returns :s64 :as "globalWho")
+				""");
+		assertThat(crossedCalls(clazz.getMethod("bindAndRead", long.class), own -> own)).isEmpty();
+		assertThat(clazz.getMethod("globalWho").invoke(null)).isEqualTo(-1L);
+	}
+
+	@Test
+	void anExportCalledOnSeveralThreadsKeepsEachCallsMultipleValues() throws Exception {
+		// A host calls an export on threads of its own, so the multiple-value channel is
+		// one register per thread there too (.kb/multiple-values.md, "One register per
+		// thread"): eight threads, released at once, each receive a callee's three
+		// values 20,000 times a call while the others do the same, and never a value
+		// another thread's callee published.
+		Class<?> clazz = compileToClass("""
+				(defun spread (n) (values n (* n n) (- n)))
+				(defun mv-check (n)
+				  (let ((bad 0))
+				    (dotimes (i 20000)
+				      (multiple-value-bind (a b c) (spread (+ n i))
+				        (unless (and (eql a (+ n i)) (eql b (* (+ n i) (+ n i))) (eql c (- (+ n i))))
+				          (setq bad (1+ bad)))))
+				    bad))
+				(rontolisp:jvm-export 'mv-check :params '(:s64) :returns :s64 :as "mvCheck")
+				""");
+		assertThat(crossedCalls(clazz.getMethod("mvCheck", long.class), own -> 0L)).isEmpty();
+	}
+
+	// Calls an export on eight threads released at once, fifty times each with the
+	// thread's own number, and answers each call that answered other than expected:
+	// (number, answer).
+	private static List<List<Object>> crossedCalls(Method export, java.util.function.LongFunction<Object> expected)
+			throws InterruptedException {
+		java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		List<List<Object>> crossed = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+		List<Thread> threads = new java.util.ArrayList<>();
+		for (int i = 0; i < 8; i++) {
+			long own = i;
+			threads.add(new Thread(() -> {
+				try {
+					start.await();
+				}
+				catch (InterruptedException ex) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+				for (int call = 0; call < 50; call++) {
+					Object answer = invokeOrThrowable(export, own);
+					if (!expected.apply(own).equals(answer)) {
+						crossed.add(List.of(own, answer));
+					}
+				}
+			}, "export-caller-" + i));
+		}
+		threads.forEach(Thread::start);
+		start.countDown();
+		for (Thread thread : threads) {
+			thread.join();
+		}
+		return crossed;
+	}
+
 	private static Object invokeOrThrowable(Method method, Object argument) {
 		try {
 			return method.invoke(null, argument);

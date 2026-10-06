@@ -96,6 +96,15 @@ otherwise, and a main-less class without exports would shake to nothing.
 Exports are extra shaker roots, which is what lets a library keep the default
 `--optimize` size instead of carrying the whole runtime with `--optimize=off`.
 
+## Calling an export from several threads
+
+A host may call the exports from any number of threads at once. Dynamic bindings
+and multiple values are kept per calling thread: a special variable an exported
+function binds with `let` is seen by that call and the functions it calls, not by
+a call running on another thread, and the values a callee answers with `values`
+go only to its own caller. A global variable holds one value shared by every
+thread, read and written without synchronization, as a Java static field is.
+
 ## The packed float array
 
 `linalg:` and `vec:` values are **packed float arrays**, and they cross the

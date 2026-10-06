@@ -2,7 +2,8 @@
 
 A variable proclaimed *special* is bound with dynamic extent by `let`/`let*`/`progv`, by SHALLOW
 BINDING -- the value lives in the ordinary global cell and a binding is save/set/restore over it.
-On the interpreter and the JVM that cell is THREAD-scoped; WASM is not. Docs:
+On the interpreter that cell is THREAD-scoped, on the JVM wherever another thread can run the
+program's Lisp code ("One thread" below); WASM is not. Docs:
 `doc/en/reference/special-forms/{progv,let,defvar,defparameter}.md`.
 
 ## What proclaims a name special
@@ -53,29 +54,37 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   `evalProgv` and a `make-thread` binding alist set `progvUsed`; extra symbols -> nil;
   progv-bound names need not be declared special. Restore fires on EVERY exit.
 
-## JVM (`JvmLetCompiler`) -- thread-scoped, hybrid representation
+## JVM (`JvmLetCompiler`) -- shallow on one thread, thread-scoped where another can run Lisp
 
 - A special NEVER dynamically bound keeps the bare `_g$*` static field (one `getstatic`).
 - A special that IS bound -- decided by `SpecialVarCollector.collectDynamicallyBound`, which
   walks the fully expanded program and single-step-expands built-in binding macros via
-  `LispMacroExpander.expandBuiltinMacro` -- also gets a `private static ThreadLocal _d$*`,
-  created in `<clinit>`, **NEVER lazily** (a racy first bind would mint two ThreadLocals),
-  holding a one-element `Object[]` CELL. **A cell, not the value**: `nil` is Java `null`, so the
-  value cannot mark "no binding on this thread". Over-collection costs a read;
-  under-collection throws in `JvmLetCompiler` at compile time.
-- Helpers (`JvmDynVarRuntimeBuilder`): `_dget`, `_dbind`, `_dset` (answers 0 when no binding, so
-  the call site falls through to `putstatic _g$*`). `Ctx.dynVars` carries the fields.
-- A special binding in `let` is `_dbind` of the old cell into a save slot, and nothing else:
-  no lexical slot, so the name is never in `Ctx.locals` and never captured.
+  `LispMacroExpander.expandBuiltinMacro` -- is bound one of two ways, chosen for the whole
+  program by `lispOnOtherThreads` in `JvmLispCompiler` (`Ctx.threadScopedSpecials`; "One
+  thread" below):
+  - **One thread: shallow, WASM's shape.** The binding saves `_g$*` into a slot and sets it;
+    every read is the plain `getstatic` (plus the UNBOUND test for a tracked special), `setq`
+    the plain `putstatic`. No `_d$` field, no helper.
+  - **Another thread can run Lisp: thread-scoped.** The special also gets a
+    `private static ThreadLocal _d$*`, created in `<clinit>`, **NEVER lazily** (a racy first
+    bind would mint two ThreadLocals), holding a one-element `Object[]` CELL. **A cell, not the
+    value**: `nil` is Java `null`, so the value cannot mark "no binding on this thread".
+    Over-collection costs a read; under-collection throws in `JvmLetCompiler` at compile time.
+    Helpers (`JvmDynVarRuntimeBuilder`): `_dget`, `_dbind`, `_dset` (answers 0 when no binding,
+    so the call site falls through to `putstatic _g$*`). `Ctx.dynVars` carries the fields.
+- Either way the save slot is all a `let` binding has (`JvmLetCompiler.bindingHome` names the
+  field it saves: `_g$*` or `_d$*`): no lexical slot, so the name is never in `Ctx.locals` and
+  never captured. A shallow-bound special can never be a raw global (`JvmRawGlobals` excludes
+  the collected set; `bindingHome` throws if one slips through).
 - Both compiled backends bind a `let`'s variables one at a time, so a `let` whose later init
   runs code after a special binding is staged first (`.kb/parallel-let.md`).
-- Every read goes through `JvmExprCompiler.compileSpecialRead` (`_dget`: this thread's
-  binding, else `_g$*`) -- in the binding method, a callee and a closure alike. `setq` writes
-  the active binding (`JvmSetqCompiler.emitGlobalStore`); with none it lands in `_g$*`.
+- Every read goes through `JvmExprCompiler.compileSpecialRead` (thread-scoped: `_dget`, this
+  thread's binding, else `_g$*`) -- in the binding method, a callee and a closure alike. `setq`
+  writes the active binding (`JvmSetqCompiler.emitGlobalStore`); with none it lands in `_g$*`.
 - **The body is a PROTECTED REGION of the unwind-protect machinery**
   (`JvmUnwindProtectCompiler.Region`, opened by `JvmLetCompiler`) whose cleanups are the
-  internal `(%dyn-restore tlField saveSlot)` forms (`LispNames.DYN_RESTORE_INTERNAL`), innermost
-  first. So the restore rides every exit channel that machinery covers: normal completion, the
+  internal `(%dyn-restore homeField saveSlot)` forms (`LispNames.DYN_RESTORE_INTERNAL`; a
+  `putstatic` or a `ThreadLocal.set`), innermost first. So the restore rides every exit channel that machinery covers: normal completion, the
   catch-any handler (an error caught in this frame or across a callee's, a cross-lambda
   `%nlx-throw`, `catch`/`throw`), and the `return`/`return-from`/`go` inlining of escaped scopes'
   cleanups -- interleaved with user cleanups in CL's innermost-first order, since a binding IS an
@@ -91,6 +100,40 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
 - A spawned thread does NOT inherit the spawner's bindings; `rontolisp:make-thread`'s bindings
   alist is the hand-over, and a program using the thread primitives forces EVERY special into
   the dynamically-bound set (`.kb/threads.md`).
+- `progv`'s `%progv-dyn-bind` / `%progv-dyn-unbind` follow the same choice
+  (`JvmProgvCompiler`): the previous value or the previous cell flows through the save list.
+
+### One thread: when a binding may be shallow
+
+**Invariant: a JVM program binds a special shallow only when no thread but the one running it
+can run its Lisp code.** `lispOnOtherThreads` is true for a thread primitive (`usesThreads`), an
+async body or a served request (`usesAsyncSpawn`, which covers `http-handler`, the
+`%http-server-*` seam and so a war), a `jvm-export` (a `--no-main` class has one), the `java:`
+bridge (its `Proxy` turns any function into a callback), a generated `java:` implementation's
+callback (predicted by `JvmJavaSites.needsApply`), `objc:` (a method, a block, the main-thread
+hand-over) and `ffi:` (an upcall). The same set is what the tree shake roots besides `main`:
+every edge from a thread of the host's choosing. The one prediction is checked: an attempt that
+generated implementation callbacks while the gate was off is redone with `GROUP_OTHER_THREADS`
+forced (a gate cut to the thread primitives alone still passed the two `java:` callback tests
+through that check, and failed them without it). Not an entry: `<clinit>` and the sized `main`
+worker run one after the other; a fetch settles its future on the HTTP client's thread in Java
+(`RontoFetch`), a pull stream runs its thunk on the reader's thread.
+
+- Shallow binding is what SBCL does on one thread and what WASM does always; it is also exactly
+  as observable: none of the shapes a binding takes (a callee, a closure called inside or after
+  the extent, `setq` in it, `throw` / `return-from` / `go` / a caught error across it,
+  `unwind-protect`, `progv`, a special parameter, `boundp` of a valueless special, `set` /
+  `symbol-value`) answers differently, measured against SBCL 2.2.9 on all four backends
+  (2026-10-06).
+- The ci-spec program keeps the thread-scoped store (it holds `async-defun`s), as does every
+  served, threaded or exported program; their emission is the one before.
+- Measured 2026-10-06 (load average 5-17, best of 7 in-process rounds, alternating builds):
+  6.4M calls of a closure built inside a binding of two specials, each call reading both, JVM
+  30-31 -> 6-7 ms (the same program with `setq` save/restore in place of the binding, i.e. no
+  dynamic binding at all: 6-10 ms); a callee's reads 4 -> 3 ms. cl-ppcre, 100,000 scans (two
+  scanners, 50,000 each): JVM 249-278 -> 147-152 ms -- each scan binds `*string*`,
+  `*start-pos*`, `*end-pos*` and friends (a `_dbind` allocated a cell and did a
+  `ThreadLocal.get`/`set`) and its advance closures read them (`_dget`).
 
 ## WASM (`WasmLetCompiler`) -- shallow binding over the module global
 
@@ -450,7 +493,9 @@ declared too, and an inner one shadows the declaration.** Every backend answers 
   329-362 -> 324-367 (no difference); 100,000 scans: JVM 455-775 -> 549-927 ms, wasm
   1,674-1,911 -> 1,797-2,356. The JVM scan cost is the `labels` advance function the scanner
   builds inside its `let*` of `*end-pos*` and friends: its five lambdas went from 0 to 9 `_dget`
-  reads (the whole class has 741 -> 718), a few `ThreadLocal` lookups a step of the scan.
+  reads (the whole class has 741 -> 718), a few `ThreadLocal` lookups a step of the scan. A
+  program that runs Lisp on one thread now binds shallow and reads a field again ("One thread:
+  when a binding may be shallow" above, with the numbers).
 
 ## Parameters named like a special (all four backends, 2026-10-03)
 
@@ -570,6 +615,19 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 `WasmReentrantCompilerTest`, `ClJsonE2eTest`, `ClPpcreE2eTest`, ci-spec
 `special-variable-dynamic-binding`, `progv-compiles-on-every-backend`,
 `special-let-restores-on-every-exit`, `top-level-forms-answer-like-defun-bodies`.
+
+JVM shallow vs thread-scoped (ci-spec cannot pin it: its program holds `async-defun`s, so it is
+thread-scoped): `JvmLispCompilerTest#aSpecialIsBoundShallowUnlessAnotherThreadCanRunLispCode`
+(no `_d$`/ThreadLocal on one thread; every entry of the gate keeps them),
+`#onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker` (both shapes of `boundp`),
+`#compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable` (the collector, thread-scoped);
+threads released at once, each binding and reading its own value:
+`JvmExportTest#aSpecialAnExportBindsIsBoundPerCallingThread`,
+`JvmAsyncCompilerTest#concurrentAsyncBodiesEachSeeTheirOwnBindingOfASpecial`,
+`HttpHandlerJvmTest#concurrentRequestsEachSeeTheirOwnBindingOfASpecial`, and the `java:`
+callbacks of `specialVarBindingIsThreadScoped` / `boundpOfASpecialWithoutAValueIsThreadScoped`.
+With the gate cut to the thread primitives, every one of those three crossed on every run (the
+async test 16 of 16 bodies).
 
 By-name reads and eval'd assignments: `SpecialReadByNameFixture` (a program without `set` or
 `progv`, one with both; SBCL's answers) on `aSpecialReadByNameAnswersTheActiveBinding`
