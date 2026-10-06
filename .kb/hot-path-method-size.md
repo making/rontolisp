@@ -29,6 +29,12 @@ operator table is three methods").
   and tail-calling `_invoke_<arity>$<k>` (`emitSegmentRouter`).
 - The value tails' copy `_vtcd<arity>` exists only beside a one-segment `_invoke_<arity>`, so it
   is under the budget by construction ([jvm-tail-bounce.md](jvm-tail-bounce.md)).
+- A smaller cliff sits at C2's `FreqInlineSize` (325 bytes): a hot call site inlines a callee
+  only under it, and a small program's dispatcher is often near it (an 8-closure-type program's
+  arity-1 dispatcher: 319 B). The search-tree id and the funcval keep one-byte slots for that
+  reason; with the id one slot further out, 2 bytes at every tree node, that dispatcher was 348
+  B and its leaf calls ran 97 / 114 -> 133 / 137 ms ([jvm-tail-bounce.md](jvm-tail-bounce.md),
+  "the count as an argument").
 - A `tableswitch`/`lookupswitch` is not used: the byte emitters would have had to measure a
   variable-length instruction whose padding depends on its absolute position. Since `MethodCode`
   stores records and the writer lays the code out, that obstacle is gone

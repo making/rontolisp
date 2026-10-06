@@ -112,6 +112,16 @@ final class JvmTailGroup {
 		}
 
 		/**
+		 * {@return the slot of the value-tail depth, past the parameters} Only a member
+		 * of a group that may bounce has one ({@link JvmTailBounce}): every
+		 * {@code labels} function, and the defuns of a group whose registry entries are
+		 * {@code bounceVisible}.
+		 */
+		int depthSlot() {
+			return firstParamSlot() + paramCount();
+		}
+
+		/**
 		 * {@return whether the last parameter takes the rest list}
 		 */
 		boolean variadic() {
@@ -172,14 +182,14 @@ final class JvmTailGroup {
 
 	/**
 	 * The groups among a program's top-level defuns: each set whose tail calls to each
-	 * other -- by name, or through a literal {@code #'name} -- form a cycle.
+	 * other -- by name, or through a literal {@code #'name} -- form a cycle. Found before
+	 * the registry is: the members' registry entries, whose descriptors depend on whether
+	 * the group bounces ({@link JvmTailBounce#bouncingDefuns}), are the caller's to set.
 	 * @param defuns the defuns, in program order
-	 * @param functions the registry
 	 * @param specials the special variables, whose binding ends a tail
 	 * @return the groups, in the order of their first member
 	 */
-	static List<JvmTailGroup> ofDefuns(List<JvmLispCompiler.DefunDecl> defuns,
-			Map<String, JvmLispCompiler.FunctionInfo> functions, Set<String> specials) {
+	static List<JvmTailGroup> ofDefuns(List<JvmLispCompiler.DefunDecl> defuns, Set<String> specials) {
 		Map<String, Integer> index = new LinkedHashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			index.put(defuns.get(i).name(), i);
@@ -207,10 +217,7 @@ final class JvmTailGroup {
 		for (List<Integer> cycle : cycles(edges)) {
 			JvmTailGroup group = new JvmTailGroup(false);
 			for (int i : cycle) {
-				String name = defuns.get(i).name();
-				Member member = new Member(group, name, null);
-				member.function = functions.get(name);
-				group.members.add(member);
+				group.members.add(new Member(group, defuns.get(i).name(), null));
 			}
 			groups.add(group);
 		}
@@ -580,6 +587,13 @@ final class JvmTailGroup {
 			ctx.body.checkcast(ctx.objectArrayClass);
 			ctx.body.astore(ctx.closureEnvSlot);
 		}
+		if (ctx.depthSlot >= 0) {
+			// The value-tail depth goes on unchanged -- a jump adds no frame -- into the
+			// sibling's slot, which its parameter count places (JvmTailBounce). The
+			// arguments are on the stack, so no store below can clobber it first.
+			ctx.body.iload(JvmTailBounce.depthSlot(ctx));
+			ctx.body.istore(target.depthSlot());
+		}
 		for (int i = target.paramCount() - 1; i >= 0; i--) {
 			ctx.body.astore(target.firstParamSlot() + i);
 		}
@@ -796,13 +810,13 @@ final class JvmTailGroup {
 		MethodCode.@Nullable Label[] reentries = new MethodCode.Label[order.size()];
 		int memberSlot = -1;
 		if (!direct) {
-			// Past every member's parameters, which a jump has just stored when it
-			// stores the index.
+			// Past every member's parameters -- and value-tail depth -- which a jump has
+			// just stored when it stores the index.
 			int params = 0;
 			for (Member member : order) {
 				params = Math.max(params, member.paramCount());
 			}
-			memberSlot = (this.closures ? 1 : 0) + params;
+			memberSlot = (this.closures ? 1 : 0) + params + 1;
 			body.iconst_0().istore(memberSlot);
 			top = body.newBoundLabel();
 			emitEntry(body, memberSlot, heads);
@@ -999,6 +1013,11 @@ final class JvmTailGroup {
 			}
 			for (int i = 0; i < target.paramCount(); i++) {
 				ctx.body.aload(target.firstParamSlot() + i);
+			}
+			if (callee.bounceVisible()) {
+				// The depth the jump stored: a call handing its bounce on adds no value
+				// tail (JvmTailBounce).
+				ctx.body.iload(target.depthSlot());
 			}
 			ctx.body.invokestatic(callee.methodref());
 			if (callee.bounceVisible() && !ctx.passesBounces) {

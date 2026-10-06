@@ -133,10 +133,9 @@ final class JvmDesignatorCall {
 		// parameter takes, the UNSUPPLIED marker for an optional not passed, and a
 		// surplus linked into the rest list (JvmPhysicalArgs).
 		JvmPhysicalArgs.emit(ctx, className, this.target, args);
-		ctx.body.invokestatic(this.target.methodref());
 		// The callee may answer a bounce: the value this call answers is the
 		// trampoline's, or -- the method's tail -- the bounce itself (JvmTailBounce).
-		JvmTailBounce.emitDirectCallUnwrap(this.target, form, ctx, className);
+		JvmTailBounce.emitDirectCall(this.target, form, ctx, className);
 	}
 
 }

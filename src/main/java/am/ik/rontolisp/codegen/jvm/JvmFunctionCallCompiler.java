@@ -104,10 +104,9 @@ final class JvmFunctionCallCompiler {
 				emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 			}
 			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
-			ctx.body.invokestatic(fi.methodref());
 			// The callee may answer a bounce: driven here, or -- this method's tail --
 			// handed on to callers that drive it (JvmTailBounce).
-			JvmTailBounce.emitDirectCallUnwrap(fi, cons, ctx, className);
+			JvmTailBounce.emitDirectCall(fi, cons, ctx, className);
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -140,11 +139,11 @@ final class JvmFunctionCallCompiler {
 	}
 
 	static void emitDispatchCall(int arity, JvmLispCompiler.Ctx ctx, String className) {
-		String dispatchName = "_invoke_" + arity;
-		String dispatchDesc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
-		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(dispatchName);
-		Utf8Entry descUtf8 = ctx.cp.utf8Entry(dispatchDesc);
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmRuntimeBuilder.dispatcherName(arity, false));
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmRuntimeBuilder.dispatcherDesc(arity, false));
 		MethodRefEntry methodref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		// An ordinary call: the callee's value tails count from 0 (JvmTailBounce).
+		ctx.body.iconst_0();
 		ctx.body.invokestatic(methodref);
 		// The dispatcher answers the target's result, which is a trampoline bounce when
 		// the target's own tail was through a value: the value the caller sees is the

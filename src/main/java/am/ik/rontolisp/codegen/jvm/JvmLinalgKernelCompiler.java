@@ -394,8 +394,7 @@ final class JvmLinalgKernelCompiler {
 			});
 		}
 		JvmPhysicalArgs.emit(ctx, className, defun, temps);
-		ctx.body.invokestatic(defun.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+		JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 		ctx.body.labelBinding(hostTaken);
 		if (gpuOps != null) {
 			// A host rung that answered one of its arguments answered the backing it was

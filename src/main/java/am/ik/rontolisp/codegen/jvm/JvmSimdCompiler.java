@@ -230,8 +230,7 @@ final class JvmSimdCompiler {
 		for (int slot : slots) {
 			ctx.body.aload(slot);
 		}
-		ctx.body.invokestatic(defun.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+		JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 		ctx.body.labelBinding(skipFallback);
 		if (gpuOps != null && into) {
 			ctx.body.aload(original).aload(handed);
@@ -344,14 +343,12 @@ final class JvmSimdCompiler {
 			ctx.body.goto_(skipFallback);
 			ctx.body.labelBinding(fallback);
 			loadAll(ctx, slots);
-			ctx.body.invokestatic(defun.methodref());
-			JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+			JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 			ctx.body.labelBinding(skipFallback);
 		}
 		else {
 			loadAll(ctx, slots);
-			ctx.body.invokestatic(defun.methodref());
-			JvmTailBounce.emitDirectCallUnwrap(defun, null, ctx, className);
+			JvmTailBounce.emitDirectCall(defun, null, ctx, className);
 		}
 		ctx.body.labelBinding(hostAnswered);
 		if (destinationOriginal >= 0) {

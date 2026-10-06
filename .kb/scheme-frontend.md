@@ -1710,8 +1710,8 @@ outside such a cycle changes: a program with none lowers byte-identically.
   On the JVM the emitter trampolines them too (2026-10-03, `.todo/b69`): a tail call
   whose target the compiler cannot name -- the lowering's `(funcall
   (%scheme-ensure-procedure f) ...)` -- is a value tail, a call of the class's `_vtc<n>`
-  that is a real call while fewer than 64 such frames are on the stack of the thread that
-  owns the count, and past that answers a BOUNCE: `Object[]{Boolean.TRUE-marker,
+  that is a real call while fewer than 64 such calls have run since the nearest ordinary
+  call, and past that answers a BOUNCE: `Object[]{Boolean.TRUE-marker,
   designator, arg...}`, the method's result. Every caller of a compiled function's result
   checks for the array and, on the shape, drives the call it names in ITS OWN frame -- the
   shared `_tramp` loop, which re-enters the per-arity dispatcher until a real value comes

@@ -226,6 +226,38 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void aPullStreamsCloseThunkMakesTheCallsItsTailMakesThroughAValue() throws Exception {
+		// The close thunk is a compiled function like any other: its answer is a bounce
+		// when its tail went through a value past the limit (JvmTailBounce), and the
+		// drain and stream-close check it before dropping it, so the call the bounce
+		// deferred still runs. Unchecked, the chain stopped at the 64th hop and the
+		// release at its end never ran -- and while the count belonged to one thread, a
+		// stream an async body drained dropped even a close of one hop, the shape of a
+		// fetch body's release.
+		assertThat(compileAndRun("""
+				(defvar *closed* nil)
+				(defvar *down* nil)
+				(setq *down* (lambda (n) (if (= n 0) (setq *closed* t) (funcall *down* (- n 1)))))
+				(defvar *chunks* '("ab"))
+				(defun next-chunk () (if *chunks* (pop *chunks*) nil))
+				(defvar *drained* (rontolisp::%stream-new #'next-chunk (lambda () (funcall *down* 200))))
+				(print (rontolisp:await (rontolisp:read-all *drained*)))
+				(print *closed*)
+				(setq *closed* nil)
+				(defvar *closed-early* (rontolisp::%stream-new (lambda () "x") (lambda () (funcall *down* 200))))
+				(rontolisp:stream-close *closed-early*)
+				(print *closed*)
+				(setq *closed* nil)
+				(setq *chunks* '("cd"))
+				(rontolisp:async-defun drain ()
+				  (let ((s (rontolisp::%stream-new #'next-chunk (lambda () (funcall *down* 0)))))
+				    (rontolisp:await (rontolisp:read-all s))))
+				(print (rontolisp:await (drain)))
+				(print *closed*)
+				""")).isEqualTo("\"ab\"\nT\nT\n\"cd\"\nT");
+	}
+
+	@Test
 	void aPullStreamHasNoWriteEnd() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((s (rontolisp::%stream-new (lambda () nil) (lambda () nil))))

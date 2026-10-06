@@ -112,13 +112,11 @@ class JvmExportTest {
 	}
 
 	@Test
-	void aChainThroughValuesRunsOnASmallStackOnEveryThreadAndOnlyTheFirstOwnsTheCount() throws Exception {
-		// The first thread to make a value tail owns the count (JvmTailBounce): its value
-		// tails are real calls up to the limit, so its frames stay bounded and a
-		// 1,000,000-deep chain runs on a 256 KB stack. Every other thread bounces every
-		// value tail, so threads calling in while the owner runs neither share the count
-		// nor make it drift: each answers on the same small stack, and the count is zero
-		// once they are done.
+	void aChainThroughValuesRunsOnASmallStackOnEveryThread() throws Exception {
+		// A value tail is a real call while fewer than the limit have run since the
+		// nearest ordinary call, and a bounce past it (JvmTailBounce). The count is an
+		// argument, so every thread counts its own chains: five threads with 256 KB
+		// stacks, released at once, each run a 1,000,000-deep chain and answer.
 		Class<?> clazz = compileToClass("""
 				(defun chain (n)
 				  (let ((f nil))
@@ -127,37 +125,65 @@ class JvmExportTest {
 				(rontolisp:jvm-export 'chain :params '(:s64) :returns :s64)
 				""", true);
 		Method chain = clazz.getMethod("chain", long.class);
-		int callers = 4;
-		Object[] answers = new Object[callers + 1];
-		java.util.concurrent.CountDownLatch claimed = new java.util.concurrent.CountDownLatch(1);
-		Thread owner = new Thread(null, () -> {
-			answers[0] = invokeOrThrowable(chain, 10L);
-			claimed.countDown();
-			answers[0] = List.of(answers[0], invokeOrThrowable(chain, 1_000_000L));
-		}, "value-tail-owner", 256 * 1024);
-		List<Thread> others = new java.util.ArrayList<>();
-		for (int i = 1; i <= callers; i++) {
+		int threads = 5;
+		Object[] answers = new Object[threads];
+		java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+		List<Thread> running = new java.util.ArrayList<>();
+		for (int i = 0; i < threads; i++) {
 			int slot = i;
-			others.add(new Thread(null, () -> {
+			running.add(new Thread(null, () -> {
 				try {
-					claimed.await();
+					go.await();
 				}
 				catch (InterruptedException ex) {
 					Thread.currentThread().interrupt();
 				}
-				answers[slot] = invokeOrThrowable(chain, 1_000_000L);
-			}, "value-tail-caller-" + i, 256 * 1024));
+				answers[slot] = List.of(invokeOrThrowable(chain, 10L), invokeOrThrowable(chain, 1_000_000L));
+			}, "value-tail-chain-" + i, 256 * 1024));
 		}
-		owner.start();
-		others.forEach(Thread::start);
-		owner.join();
-		for (Thread other : others) {
-			other.join();
+		running.forEach(Thread::start);
+		go.countDown();
+		for (Thread thread : running) {
+			thread.join();
 		}
-		assertThat(answers[0]).isEqualTo(List.of(10L, 1_000_000L));
-		assertThat(Arrays.copyOfRange(answers, 1, answers.length)).containsOnly(1_000_000L);
-		assertThat(staticField(clazz, JvmTailBounce.OWNER_FIELD)).isSameAs(owner);
-		assertThat(staticField(clazz, JvmTailBounce.DEPTH_FIELD)).isEqualTo(0);
+		assertThat(answers).containsOnly(List.of(10L, 1_000_000L));
+	}
+
+	@Test
+	void aShallowValueTailIsARealCallOnEveryThreadAndTheTrampolineDrivesTheRest() throws Exception {
+		// The chain's last closure signals, and the frames on the stack when it does
+		// show how the chain ran (JvmTailBounce): each hop of a chain shorter than the
+		// limit is a real call, its closure's frame still there, on the thread that runs
+		// the export first and on any other alike; past the limit the chain bounces and
+		// the trampoline drives every hop after, one closure's frame at a time -- it
+		// re-enters at the limit, so no hop refills the real calls.
+		Class<?> clazz = compileToClass("""
+				(defun probe (n)
+				  (let ((f nil))
+				    (setq f (lambda (k) (if (= k 0) (error "probe") (funcall f (- k 1)))))
+				    (funcall f n)))
+				(rontolisp:jvm-export 'probe :params '(:s64) :returns :s64)
+				""", true);
+		Method probe = clazz.getMethod("probe", long.class);
+		int limit = JvmTailBounce.VALUE_TAIL_LIMIT;
+		long[] lengths = { 0, 10, limit - 1, limit, 1000 };
+		java.util.function.Supplier<List<Integer>> frames = () -> {
+			List<Integer> counted = new java.util.ArrayList<>();
+			for (long n : lengths) {
+				Object thrown = invokeOrThrowable(probe, n);
+				counted.add(thrown instanceof Throwable t ? (int) Arrays.stream(t.getStackTrace())
+					.filter(element -> element.getMethodName().startsWith("_lambda_"))
+					.count() : -1);
+			}
+			return counted;
+		};
+		List<Integer> expected = List.of(1, 11, limit, 1, 1);
+		assertThat(frames.get()).isEqualTo(expected);
+		Object[] other = new Object[1];
+		Thread thread = new Thread(null, () -> other[0] = frames.get(), "value-tail-other", 256 * 1024);
+		thread.start();
+		thread.join();
+		assertThat(other[0]).isEqualTo(expected);
 	}
 
 	@Test
@@ -246,12 +272,6 @@ class JvmExportTest {
 		catch (ReflectiveOperationException ex) {
 			return ex.getCause() != null ? ex.getCause() : ex;
 		}
-	}
-
-	private static Object staticField(Class<?> clazz, String name) throws ReflectiveOperationException {
-		java.lang.reflect.Field field = clazz.getDeclaredField(name);
-		field.setAccessible(true);
-		return field.get(null);
 	}
 
 	@Test

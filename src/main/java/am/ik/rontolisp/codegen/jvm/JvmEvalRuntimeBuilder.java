@@ -935,9 +935,9 @@ final class JvmEvalRuntimeBuilder {
 
 	/**
 	 * Builds the RAW apply's body ({@link JvmTailBounce#APPLY_RAW_NAME}): {@code fn}
-	 * applied to {@code argList}, its answer a trampoline bounce when a compiled target's
-	 * own tail went through a value -- {@code _apply} checks it
-	 * ({@link #buildApplyEntry}).
+	 * applied to {@code argList} at the value-tail depth its third parameter carries, its
+	 * answer a trampoline bounce when a compiled target's own tail went through a value
+	 * -- {@code _apply} checks it ({@link #buildApplyEntry}).
 	 * @param k the constants
 	 * @param withEval whether the eval runtime is emitted beside it. Without it -- the
 	 * APPLY TIER a program with a runtime apply but no eval gets -- no interpreted
@@ -952,9 +952,10 @@ final class JvmEvalRuntimeBuilder {
 	/**
 	 * Builds the body of {@code _apply(fn, argList)}, the entry every caller of a runtime
 	 * apply calls: the raw apply ({@link #buildApply},
-	 * {@link JvmTailBounce#APPLY_RAW_NAME}) with its answer checked for a trampoline
-	 * bounce, so the caller sees a real value. The trampoline re-enters the raw body
-	 * instead, so a chain of tail applies through values keeps no frame per hop.
+	 * {@link JvmTailBounce#APPLY_RAW_NAME}) at depth 0, an ordinary call, with its answer
+	 * checked for a trampoline bounce, so the caller sees a real value. The trampoline
+	 * re-enters the raw body instead, so a chain of tail applies through values keeps no
+	 * frame per hop.
 	 * @param k the constants, whose {@code applyRawRef} names the raw body
 	 * @return the method body
 	 */
@@ -962,6 +963,7 @@ final class JvmEvalRuntimeBuilder {
 		MethodCode a = new MethodCode();
 		a.aload(0);
 		a.aload(1);
+		a.iconst_0();
 		a.invokestatic(Objects.requireNonNull(k.applyRawRef));
 		JvmTailBounce.unwrapRaw(a, k.cp(), k.thisClass());
 		a.areturn();
@@ -1113,14 +1115,15 @@ final class JvmEvalRuntimeBuilder {
 		return a;
 	}
 
-	// === _applyRaw(Object fn, Object argList) -> value, or a trampoline bounce ===
-	// (_apply is this answer checked: buildApplyEntry.)
+	// === _applyRaw(Object fn, Object argList, int depth) -> value, or a trampoline
+	// bounce
+	// (_apply is this answer checked at depth 0: buildApplyEntry.)
 
 	private MethodCode applyBody(boolean withEval) {
 		MethodCode a = new MethodCode();
-		final int FN = 0, ARGLIST = 1, ARR = 2, PARAMS = 3, NEWENV = 4, BODY = 5, PAIR = 6, TMP = 7, ARGCUR = 8,
-				ARG0 = 9;
-		final int FUNCID = 17, LEN = 18;
+		final int FN = 0, ARGLIST = 1, DEPTH = 2, ARR = 3, PARAMS = 4, NEWENV = 5, BODY = 6, PAIR = 7, TMP = 8,
+				ARGCUR = 9;
+		final int FUNCID = 18, LEN = 19;
 
 		// fn == null: NIL names no function -- an undefined-function, never a silent nil
 		MethodCode.Label notNull = a.newLabel();
@@ -1285,6 +1288,9 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(compiled);
 		a.aload(FN);
 		a.aload(ARGLIST);
+		// The value-tail depth this apply was made at: 0 from _apply, the spread value
+		// tail's plus one, the limit from the trampoline (JvmTailBounce).
+		a.iload(DEPTH);
 		a.invokestatic(this.k.invokeSpread());
 		// The case answered the target's result, a trampoline bounce when the target's
 		// own tail was through a value: this raw body answers it as it is, for the
@@ -2459,6 +2465,7 @@ final class JvmEvalRuntimeBuilder {
 		a.lconst_0();
 		a.invokestatic(this.k.longValueOf());
 		a.aload(ACC);
+		a.iconst_0();
 		a.invokestatic(this.k.invoke()[2]);
 		a.astore(ACC);
 		a.goto_(notUnary);
@@ -2471,6 +2478,7 @@ final class JvmEvalRuntimeBuilder {
 		a.lconst_1();
 		a.invokestatic(this.k.longValueOf());
 		a.aload(ACC);
+		a.iconst_0();
 		a.invokestatic(this.k.invoke()[2]);
 		a.astore(ACC);
 		a.labelBinding(notUnary);
@@ -2482,6 +2490,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(FN);
 		a.aload(ACC);
 		evalCar(a, REST, ENV);
+		a.iconst_0();
 		a.invokestatic(this.k.invoke()[2]);
 		a.astore(ACC);
 		cdr(a, REST);

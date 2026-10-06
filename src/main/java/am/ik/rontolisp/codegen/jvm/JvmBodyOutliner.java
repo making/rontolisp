@@ -240,7 +240,8 @@ final class JvmBodyOutliner {
 				return false;
 			}
 		}
-		return liveNames(ctx).size() + (ctx.closureEnvSlot >= 0 ? 1 : 0) <= MAX_CONTINUATION_PARAMS;
+		return liveNames(ctx).size() + (ctx.closureEnvSlot >= 0 ? 1 : 0)
+				+ (ctx.depthSlot >= 0 ? 1 : 0) <= MAX_CONTINUATION_PARAMS;
 	}
 
 	/** The lexical names the continuation has to carry, in a stable order. */
@@ -258,11 +259,17 @@ final class JvmBodyOutliner {
 		}
 		List<String> names = liveNames(ctx);
 		boolean hasEnv = ctx.closureEnvSlot >= 0;
+		// The value-tail depth of the method it is split from: the continuation is the
+		// same function, part way through, and its value tails count from it
+		// (JvmTailBounce).
+		boolean hasDepth = ctx.depthSlot >= 0;
 		StringBuilder desc = new StringBuilder("(");
 		if (hasEnv) {
 			desc.append("[Ljava/lang/Object;");
 		}
-		desc.append("Ljava/lang/Object;".repeat(names.size())).append(")Ljava/lang/Object;");
+		desc.append("Ljava/lang/Object;".repeat(names.size()))
+			.append(hasDepth ? "I" : "")
+			.append(")Ljava/lang/Object;");
 		String methodName = "_k$" + ctx.nextOutlinedBodyId[0]++;
 		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
@@ -289,6 +296,9 @@ final class JvmBodyOutliner {
 				ctx.body.aload(java.util.Objects.requireNonNull(ctx.locals.get(name)));
 			}
 		}
+		if (hasDepth) {
+			ctx.body.iload(JvmTailBounce.depthSlot(ctx));
+		}
 		ctx.body.invokestatic(ref);
 		// The continuation's result is this method's: a bounce it ends in passes on
 		// when nothing but scope bookkeeping follows here and this method's callers
@@ -313,6 +323,9 @@ final class JvmBodyOutliner {
 		}
 		for (String name : names) {
 			cont.locals.put(name, slot++);
+		}
+		if (hasDepth) {
+			cont.depthSlot = slot++;
 		}
 		cont.nextLocal = slot;
 		cont.maxLocals = slot;

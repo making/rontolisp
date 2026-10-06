@@ -66,14 +66,15 @@ final class JvmLambdaCompiler {
 		}
 		JvmLispCompiler.LambdaInfo info = new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
 				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
-				asyncHead == null ? ctx.writtenIn : null, ctx.lambdaSelfVars.get(cons), tailMember);
+				asyncHead == null ? ctx.writtenIn : null, ctx.lambdaSelfVars.get(cons), tailMember, ctx.body);
 		if (tailMember != null) {
 			tailMember.lambda = info;
 		}
 		ctx.lambdaDecls.add(info);
 		// The edge the shake keeps the lambda's dispatcher case by: the case is live
-		// while this body is (JvmClassSplitter).
-		ctx.body.makesValueOf(methodName, JvmLispCompiler.lambdaDescriptor(paramNames.size()));
+		// while this body is (JvmClassSplitter). Recorded with the value-tail depth, and
+		// re-pointed once the lambda's own body shows it needs none (Pass 2c).
+		ctx.body.makesValueOf(methodName, JvmLispCompiler.lambdaDescriptor(paramNames.size(), true));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();

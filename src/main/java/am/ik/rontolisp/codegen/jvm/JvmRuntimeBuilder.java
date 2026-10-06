@@ -77,7 +77,7 @@ final class JvmRuntimeBuilder {
 			JvmUnsupplied unsupplied) {
 		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
 				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false,
-				dispatcherName(arity, false), dispatchable, arityReporting, unsupplied);
+				dispatcherName(arity, false), false, dispatchable, arityReporting, unsupplied);
 	}
 
 	/**
@@ -182,6 +182,9 @@ final class JvmRuntimeBuilder {
 	 * @param name the dispatcher's name, and its segments' prefix:
 	 * {@link #dispatcherName}, or the copy only value tails call
 	 * ({@link JvmTailBounce#valueTailDispatcherName})
+	 * @param checksDepth whether the dispatcher answers a depth past the value-tail limit
+	 * with the call's bounce: the copy only value tails call, which receives the calling
+	 * value tail's depth plus one ({@link JvmTailBounce#emitCopyEntryCheck})
 	 * @return the dispatcher method(s): one, or a router plus segments
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
@@ -190,17 +193,23 @@ final class JvmRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry integerClass, MethodRefEntry integerValue, ClassEntry objectClass,
 			ClassEntry stringClass, @org.jspecify.annotations.Nullable MethodRefEntry applyRef,
 			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef, boolean spread, String name,
-			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
-			JvmUnsupplied unsupplied) {
-		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object, or
-		// (Object funcval, Object argList) -> Object for the spread dispatcher.
+			boolean checksDepth, @org.jspecify.annotations.Nullable Set<Integer> dispatchable,
+			ArityReporting arityReporting, JvmUnsupplied unsupplied) {
+		// Descriptor: (Object funcval, Object a0, ..., Object aN-1, int depth) -> Object,
+		// or (Object funcval, Object argList, int depth) -> Object for the spread
+		// dispatcher (dispatcherDesc).
 		int dispatchArgs = spread ? 1 : arity;
-		String desc = "(" + "Ljava/lang/Object;".repeat(dispatchArgs + 1) + ")Ljava/lang/Object;";
-		Utf8Entry descUtf8 = cp.utf8Entry(desc);
-		// Params: slot 0=funcval, slot 1..arity=args
-		// Extra locals: fvSlot=arity+1 (Object[] fv), idSlot=arity+2 (int id),
-		// restSlot=arity+3 (arg list for the _apply fallback)
-		int fvSlot = dispatchArgs + 1;
+		Utf8Entry descUtf8 = cp.utf8Entry(dispatcherDesc(arity, spread));
+		// Params: slot 0=funcval, slot 1..arity=args, depthSlot=arity+1 (the value-tail
+		// depth, which every case whose target may bounce passes on)
+		// Extra locals: fvSlot=0 (Object[] fv: the funcval cast, over the parameter),
+		// idSlot=arity+2 (int id), restSlot=arity+3 (arg list for the _apply fallback).
+		// The id is read at every node of the search tree and the fv by every closure's
+		// case, so both keep the one-byte load an arity-1 dispatcher had before the depth
+		// took its slot: a dispatcher near the C2 hot-inlining size (FreqInlineSize, 325
+		// bytes) stays as far under it.
+		int depthSlot = dispatchArgs + 1;
+		int fvSlot = 0;
 		int idSlot = dispatchArgs + 2;
 		int restSlot = dispatchArgs + 3;
 		// The matching callables: named functions plus lambdas (whose closure env is
@@ -227,11 +236,11 @@ final class JvmRuntimeBuilder {
 			// The spread dispatcher takes EVERY callable: its case reads the parameters
 			// out of the list, so no arity has to match and no ceiling applies.
 			if (spread) {
-				cases.add(renderSpreadCase(fi, entry.getKey(), -1, cp, thisClass, objectArrayClass, arityReporting,
-						unsupplied));
+				cases.add(renderSpreadCase(fi, entry.getKey(), -1, depthSlot, cp, thisClass, objectArrayClass,
+						arityReporting, unsupplied));
 			}
 			else if (dispatchMatches(fi.required(), fi.variadic(), arity)) {
-				cases.add(renderCase(fi, arity, restSlot, -1, objectClass, cp, thisClass, unsupplied));
+				cases.add(renderCase(fi, arity, restSlot, -1, depthSlot, objectClass, cp, thisClass, unsupplied));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
@@ -240,12 +249,12 @@ final class JvmRuntimeBuilder {
 				continue;
 			}
 			if (spread) {
-				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), null, fvSlot, cp, thisClass, objectArrayClass,
-						arityReporting, unsupplied));
+				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), null, fvSlot, depthSlot, cp, thisClass,
+						objectArrayClass, arityReporting, unsupplied));
 			}
 			else if (dispatchMatches(lambdaFuncInfos.get(i).required(), lambda.variadic(), arity)) {
-				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass, cp, thisClass,
-						unsupplied));
+				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, depthSlot, objectClass, cp,
+						thisClass, unsupplied));
 			}
 		}
 		cases.sort(Comparator.comparingInt(Case::funcId));
@@ -265,7 +274,31 @@ final class JvmRuntimeBuilder {
 		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
 			Utf8Entry nameUtf8 = cp.utf8Entry(segment == 0 ? name : name + "$" + (segment - 1));
 			MethodCode code = new MethodCode();
-			if (segment == 0) {
+			// The copy only value tails call keeps the fast path alone: a function
+			// value. Anything else -- a symbol, a value that names no function, an
+			// interpreted closure, a count no case takes -- goes to the shared
+			// dispatcher, which treats it as an ordinary call does; the copy stays
+			// smaller than the dispatcher it copies by more than its entry check costs.
+			MethodCode.@org.jspecify.annotations.Nullable Label slow = segment == 0 && checksDepth ? code.newLabel()
+					: null;
+			if (slow != null) {
+				JvmTailBounce.emitCopyEntryCheck(code, arity, cp, thisClass);
+				code.aload(0);
+				code.instanceOf(objectArrayClass);
+				code.ifeq(slow);
+				code.aload(0);
+				code.checkcast(objectArrayClass);
+				code.astore(fvSlot);
+				code.aload(fvSlot);
+				code.arraylength();
+				code.ifeq(slow);
+				code.aload(fvSlot);
+				code.iconst_0();
+				code.aaload();
+				code.instanceOf(integerClass);
+				code.ifeq(slow);
+			}
+			else if (segment == 0) {
 				// The callee's representation decides, on the path every indirect call
 				// already takes: a function value is an Object[] whose slot 0 is its
 				// Integer funcId. The two instanceof tests fold into the casts that
@@ -305,12 +338,15 @@ final class JvmRuntimeBuilder {
 					code.ifeq(ifNotString);
 					code.aload(0);
 					code.invokestatic(lookupRef);
-					code.astore(fvSlot);
-					code.aload(fvSlot);
+					// Checked before it replaces the funcval, which the report of a name
+					// nothing answers spells.
+					code.dup();
 					MethodCode.Label ifResolved = code.newLabel();
 					code.ifnonnull(ifResolved);
+					code.pop();
 					notFnThrowAt(code, notFnRef, ifNotString, ifEmpty, ifNoId);
 					code.labelBinding(ifResolved);
+					code.astore(fvSlot);
 				}
 				else {
 					notFnThrowAt(code, notFnRef, ifEmpty, ifNoId);
@@ -332,8 +368,9 @@ final class JvmRuntimeBuilder {
 			code.istore(idSlot);
 			// Interpreted closure (funcId == -1, created by the eval runtime's
 			// lambda): delegate to _apply with the arguments collected into a cons
-			// list. Segment 0 only: a chained segment sees the same id.
-			if (segment == 0 && applyRef != null && !spread) {
+			// list. Segment 0 only: a chained segment sees the same id. The copy's miss
+			// reaches the shared dispatcher, which does it.
+			if (segment == 0 && applyRef != null && !spread && slow == null) {
 				code.iload(idSlot);
 				code.iconst_m1();
 				MethodCode.Label compiled = code.newLabel();
@@ -369,6 +406,7 @@ final class JvmRuntimeBuilder {
 					for (int i = 0; i < dispatchArgs; i++) {
 						args.aload(i + 1);
 					}
+					args.iload(depthSlot);
 				}, segmentRefs);
 			}
 			else {
@@ -382,7 +420,16 @@ final class JvmRuntimeBuilder {
 				// callable, so its default really is an id nothing claims and answers
 				// nil as before.
 				code.labelBinding(miss);
-				if (!spread && arityReporting.errRef() != null) {
+				if (slow != null) {
+					code.labelBinding(slow);
+					code.aload(0);
+					for (int i = 0; i < dispatchArgs; i++) {
+						code.aload(i + 1);
+					}
+					code.iload(depthSlot);
+					code.invokestatic(cp.methodRef(thisClass, cp.utf8Entry(dispatcherName(arity, false)), descUtf8));
+				}
+				else if (!spread && arityReporting.errRef() != null) {
 					code.iload(idSlot);
 					code.loadConstant(arity);
 					code.invokestatic(arityReporting.errRef());
@@ -969,6 +1016,19 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
+	 * {@return the dispatcher method descriptor} The designator, then the {@code arity}
+	 * arguments -- or, for the spread one, the argument list -- then the value-tail depth
+	 * every case whose target may bounce passes on ({@link JvmTailBounce}): 0 from an
+	 * ordinary call, the calling value tail's plus one from a value tail, the limit from
+	 * the trampoline. The raw apply and the spread value tail share the spread one's.
+	 * @param arity the argument count, ignored when {@code spread}
+	 * @param spread whether the dispatcher takes the argument list
+	 */
+	static String dispatcherDesc(int arity, boolean spread) {
+		return "(" + "Ljava/lang/Object;".repeat((spread ? 1 : arity) + 1) + "I)Ljava/lang/Object;";
+	}
+
+	/**
 	 * One case of the spread dispatcher {@code _invoke_v(funcval, argList)}: reads the
 	 * target's required parameters out of the argument list (slot 1), each physical
 	 * optional its element or -- past the end of the list -- the UNSUPPLIED marker, and
@@ -978,8 +1038,9 @@ final class JvmRuntimeBuilder {
 	 * so it can be spliced into any segment.
 	 */
 	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi,
-			@org.jspecify.annotations.Nullable String name, int fvSlot, ConstantPool cp, ClassEntry thisClass,
-			ClassEntry objectArrayClass, ArityReporting arityReporting, JvmUnsupplied unsupplied) {
+			@org.jspecify.annotations.Nullable String name, int fvSlot, int depthSlot, ConstantPool cp,
+			ClassEntry thisClass, ClassEntry objectArrayClass, ArityReporting arityReporting,
+			JvmUnsupplied unsupplied) {
 		MethodCode code = new MethodCode();
 		int required = fi.required();
 		int positional = fi.positional();
@@ -1023,6 +1084,9 @@ final class JvmRuntimeBuilder {
 				emitCell(code, objectArrayClass, 1);
 			}
 		}
+		if (fi.bounceVisible()) {
+			code.iload(depthSlot);
+		}
 		// A case runs only for a value some body made: the shake keeps the target for it
 		// only while such a body is kept.
 		code.invokestaticThroughValue(fi.methodref());
@@ -1047,8 +1111,9 @@ final class JvmRuntimeBuilder {
 	// parameter takes are passed as they are, each physical optional the arity does not
 	// reach as the UNSUPPLIED marker, and -- for a variadic target -- the args past the
 	// optionals linked into a cons list (built in restSlot) as the trailing rest
-	// parameter; fvSlot >= 0 marks a closure whose env array is passed first.
-	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot,
+	// parameter; fvSlot >= 0 marks a closure whose env array is passed first. A target
+	// that may bounce takes the dispatcher's depth last.
+	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot, int depthSlot,
 			ClassEntry objectClass, ConstantPool cp, ClassEntry thisClass, JvmUnsupplied unsupplied) {
 		MethodCode code = new MethodCode();
 		int positional = fi.positional();
@@ -1088,6 +1153,9 @@ final class JvmRuntimeBuilder {
 		else if (fi.variadic()) {
 			// nothing past the optionals: the empty rest list
 			code.aconst_null();
+		}
+		if (fi.bounceVisible()) {
+			code.iload(depthSlot);
 		}
 		// A case runs only for a value some body made: the shake keeps the target for it
 		// only while such a body is kept.

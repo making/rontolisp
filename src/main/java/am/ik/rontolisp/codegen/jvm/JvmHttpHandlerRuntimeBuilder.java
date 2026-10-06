@@ -183,8 +183,8 @@ final class JvmHttpHandlerRuntimeBuilder {
 		Utf8Entry handlerFieldDesc = cp.utf8Entry("Ljava/lang/Object;");
 		FieldRefEntry handlerField = cp.fieldRef(thisClass, handlerFieldName, handlerFieldDesc);
 		MethodRefEntry progInit = cp.methodRef(thisClass, "<init>", "()V");
-		MethodRefEntry invoke1 = cp.methodRef(thisClass, "_invoke_1",
-				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry invoke1 = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(1, false),
+				JvmRuntimeBuilder.dispatcherDesc(1, false));
 
 		// handle(Request): slots 0 this, 1 request, 2 rawBody, 3 body text scratch /
 		// env, 4 result / triple, 5 drained body.
@@ -230,9 +230,10 @@ final class JvmHttpHandlerRuntimeBuilder {
 		a.aload(2);
 		a.invokestatic(buildEnv);
 		a.astore(3);
-		// result = _await(_invoke_1(_httpHandlerFn, env))
+		// result = _await(_invoke_1(_httpHandlerFn, env, 0))
 		a.getstatic(handlerField);
 		a.aload(3);
+		a.iconst_0();
 		a.invokestatic(invoke1);
 		JvmTailBounce.unwrapRaw(a, cp, thisClass);
 		a.invokestatic(awaitHelper);

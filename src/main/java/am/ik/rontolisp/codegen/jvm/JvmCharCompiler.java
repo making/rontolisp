@@ -162,8 +162,7 @@ final class JvmCharCompiler {
 						JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 					}
 				}));
-		ctx.body.invokestatic(helper.methodref());
-		JvmTailBounce.emitDirectCallUnwrap(helper, null, ctx, className);
+		JvmTailBounce.emitDirectCall(helper, null, ctx, className);
 	}
 
 	/**
