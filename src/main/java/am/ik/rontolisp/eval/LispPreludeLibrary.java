@@ -4101,12 +4101,10 @@ public final class LispPreludeLibrary {
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
 				       (%rd-list %rd-s %rd-out) t)
 				      ((or (char= %rd-d #\\+) (char= %rd-d #\\-))
-				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
-				       (or (%rd-datum %rd-s %rd-out)
-				           (error 'end-of-file :stream (or %rd-s *standard-input*)))
-				       (write-char #\\Space %rd-out)
-				       (or (%rd-datum %rd-s %rd-out)
-				           (error 'end-of-file :stream (or %rd-s *standard-input*))))
+				       (if (%rd-guard %rd-d %rd-s)
+				           (or (%rd-datum %rd-s %rd-out)
+				               (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				           (%rd-datum %rd-s %rd-out)))
 				      ((char= %rd-d #\\.)
 				       (write-char #\\# %rd-out) (write-char %rd-d %rd-out)
 				       (or (%rd-datum %rd-s %rd-out)
@@ -4122,43 +4120,129 @@ public final class LispPreludeLibrary {
 				                (write-char %rd-e %rd-out) (%rd-string %rd-s %rd-out) t)
 				               (t (unread-char %rd-e %rd-s) t)))))))
 				""");
+		// #+ / #- resolved by the scanner itself, against the live *features*: a guard
+		// that fails skips the form behind it and the scan goes on to the next datum
+		// (CLHS 2.4.8.17), so read answers what follows instead of ending at the guard.
+		// The skip is the scanner's own walk, which delimits and parses nothing, so a
+		// nested guard inside the skipped form is evaluated like any other (the
+		// #+f #+f A B idiom skips both forms when f is absent). Answers whether the
+		// guard held; the form behind a holding one is the caller's to scan.
+		SOURCES.put(LispNames.RD_GUARD, """
+				(defun %rd-guard (%rd-d %rd-s)
+				  (let ((%rd-hold (%rd-featurep (%rd-feature %rd-s))))
+				    (if (if (char= %rd-d #\\+) %rd-hold (not %rd-hold))
+				        t
+				        (let ((%rd-skipped (make-string-output-stream)))
+				          (or (%rd-datum %rd-s %rd-skipped)
+				              (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				          (close %rd-skipped)
+				          nil))))
+				""");
+		// A feature expression, read as CL reads it: with *package* bound to KEYWORD
+		// (CLHS 24.1.2.1.1), so an unqualified name is a keyword and only a qualified
+		// one names a symbol of its package. A token without a package marker is read
+		// with a colon in front, which is that binding for the one reader every backend
+		// has.
+		SOURCES.put(LispNames.RD_FEATURE, """
+				(defun %rd-feature (%rd-s)
+				  (let ((%rd-c (%rd-skip %rd-s)))
+				    (cond
+				      ((null %rd-c) (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				      ((char= %rd-c #\\()
+				       (let ((%rd-items nil))
+				         (do ((%rd-d (%rd-skip %rd-s) (%rd-skip %rd-s)))
+				             ((and %rd-d (char= %rd-d #\\))) (nreverse %rd-items))
+				           (when (null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				           (unread-char %rd-d %rd-s)
+				           (setq %rd-items (cons (%rd-feature %rd-s) %rd-items)))))
+				      (t
+				       (unread-char %rd-c %rd-s)
+				       (let ((%rd-o (make-string-output-stream)))
+				         (or (%rd-datum %rd-s %rd-o)
+				             (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				         (let* ((%rd-text (get-output-stream-string %rd-o))
+				                (%rd-x (read-from-string %rd-text)))
+				           (close %rd-o)
+				           (if (and (symbolp %rd-x) (not (position #\\: %rd-text)))
+				               (read-from-string (concatenate 'string ":" %rd-text))
+				               %rd-x)))))))
+				""");
+		// Whether a feature expression holds in the live *features* (CLHS 24.1.2.1). A
+		// qualified name matches a non-keyword entry by its name: a rontolisp symbol does
+		// not carry its package, so a symbol read back is not EQ to the one pushed.
+		SOURCES.put(LispNames.RD_FEATUREP, """
+				(defun %rd-featurep (%rd-x)
+				  (cond
+				    ((keywordp %rd-x) (if (member %rd-x *features*) t nil))
+				    ((symbolp %rd-x)
+				     (dolist (%rd-f *features* nil)
+				       (when (and (symbolp %rd-f) (not (keywordp %rd-f))
+				                  (string= (symbol-name %rd-f) (symbol-name %rd-x)))
+				         (return t))))
+				    ((atom %rd-x) (error "invalid feature expression: ~S" %rd-x))
+				    ((eq (car %rd-x) :not)
+				     (cond ((null (cdr %rd-x))
+				            (error "too few subexpressions in feature expression: ~S" %rd-x))
+				           ((cddr %rd-x)
+				            (error "too many subexpressions in feature expression: ~S" %rd-x))
+				           (t (not (%rd-featurep (cadr %rd-x))))))
+				    ((eq (car %rd-x) :and)
+				     (dolist (%rd-y (cdr %rd-x) t)
+				       (unless (%rd-featurep %rd-y) (return nil))))
+				    ((eq (car %rd-x) :or)
+				     (dolist (%rd-y (cdr %rd-x) nil)
+				       (when (%rd-featurep %rd-y) (return t))))
+				    (t (error "unknown operator in feature expression: ~S" %rd-x))))
+				""");
 		SOURCES.put(LispNames.RD_LIST, """
 				(defun %rd-list (%rd-s %rd-out)
-				  (do ((%rd-depth 1))
+				  (do ((%rd-depth 1) (%rd-at t))
 				      ((= %rd-depth 0) nil)
 				    (let ((%rd-c (read-char %rd-s nil nil)))
-				      (cond
-				        ((null %rd-c) (error 'end-of-file :stream (or %rd-s *standard-input*)))
-				        ((char= %rd-c #\\()
-				         (write-char %rd-c %rd-out) (setq %rd-depth (+ %rd-depth 1)))
-				        ((char= %rd-c #\\))
-				         (write-char %rd-c %rd-out) (setq %rd-depth (- %rd-depth 1)))
-				        ((char= %rd-c #\\")
-				         (write-char %rd-c %rd-out) (%rd-string %rd-s %rd-out))
-				        ((char= %rd-c #\\;)
-				         (%rd-skip-line %rd-s) (write-char #\\Newline %rd-out))
-				        ((char= %rd-c #\\|)
-				         (write-char %rd-c %rd-out) (%rd-bars %rd-s %rd-out))
-				        ((char= %rd-c #\\\\)
-				         (write-char %rd-c %rd-out)
-				         (let ((%rd-e (read-char %rd-s nil nil)))
-				           (when %rd-e (write-char %rd-e %rd-out))))
-				        ((char= %rd-c #\\#)
-				         (let ((%rd-d (read-char %rd-s nil nil)))
-				           (cond
-				             ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
-				             ((char= %rd-d #\\|) (%rd-block-comment %rd-s))
-				             ((char= %rd-d #\\\\)
-				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
-				              (let ((%rd-e (read-char %rd-s nil nil)))
-				                (if (null %rd-e)
-				                    (error 'end-of-file :stream (or %rd-s *standard-input*))
-				                    (write-char %rd-e %rd-out))))
-				             ((char= %rd-d #\\()
-				              (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
-				              (setq %rd-depth (+ %rd-depth 1)))
-				             (t (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)))))
-				        (t (write-char %rd-c %rd-out))))))
+				      (setq %rd-at
+				            (cond
+				              ((null %rd-c) (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				              ((char= %rd-c #\\()
+				               (write-char %rd-c %rd-out) (setq %rd-depth (+ %rd-depth 1)) t)
+				              ((char= %rd-c #\\))
+				               (write-char %rd-c %rd-out) (setq %rd-depth (- %rd-depth 1)) t)
+				              ((char= %rd-c #\\")
+				               (write-char %rd-c %rd-out) (%rd-string %rd-s %rd-out) t)
+				              ((char= %rd-c #\\;)
+				               (%rd-skip-line %rd-s) (write-char #\\Newline %rd-out) t)
+				              ((char= %rd-c #\\|)
+				               (write-char %rd-c %rd-out) (%rd-bars %rd-s %rd-out) nil)
+				              ((char= %rd-c #\\\\)
+				               (write-char %rd-c %rd-out)
+				               (let ((%rd-e (read-char %rd-s nil nil)))
+				                 (when %rd-e (write-char %rd-e %rd-out)))
+				               nil)
+				              ((char= %rd-c #\\#)
+				               (let ((%rd-d (read-char %rd-s nil nil)))
+				                 (cond
+				                   ((null %rd-d) (error 'end-of-file :stream (or %rd-s *standard-input*)))
+				                   ((char= %rd-d #\\|) (%rd-block-comment %rd-s) %rd-at)
+				                   ((char= %rd-d #\\\\)
+				                    (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
+				                    (let ((%rd-e (read-char %rd-s nil nil)))
+				                      (if (null %rd-e)
+				                          (error 'end-of-file :stream (or %rd-s *standard-input*))
+				                          (write-char %rd-e %rd-out)))
+				                    nil)
+				                   ((char= %rd-d #\\()
+				                    (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
+				                    (setq %rd-depth (+ %rd-depth 1))
+				                    t)
+				                   ((and %rd-at (or (char= %rd-d #\\+) (char= %rd-d #\\-)))
+				                    (write-char #\\Space %rd-out)
+				                    (when (%rd-guard %rd-d %rd-s)
+				                      (or (%rd-datum %rd-s %rd-out)
+				                          (error 'end-of-file :stream (or %rd-s *standard-input*))))
+				                    t)
+				                   (t (write-char %rd-c %rd-out) (write-char %rd-d %rd-out)
+				                      (char= %rd-d #\\')))))
+				              (t (write-char %rd-c %rd-out)
+				                 (or (%rd-whitespace-p %rd-c) (%rd-terminating-p %rd-c))))))))
 				""");
 		SOURCES.put(LispNames.RD_STRING, """
 				(defun %rd-string (%rd-s %rd-out)

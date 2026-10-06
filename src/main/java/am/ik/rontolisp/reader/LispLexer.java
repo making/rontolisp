@@ -1012,27 +1012,9 @@ public final class LispLexer {
 		this.pos += 2; // skip "#+" / "#-"
 		LispVal expr = readFeatureExpr();
 		if (this.features.isEnabled(expr) == negated) {
-			skipSuppressed();
-		}
-	}
-
-	// Skips the form a FAILED guard covers. Everything inside it is read under CL's
-	// *read-suppress* rules, which is what the flag records: a nested #+/#- there yields
-	// no datum at all rather than deciding which of the forms behind it is the datum.
-	private void skipSuppressed() {
-		boolean outer = this.suppressed;
-		this.suppressed = true;
-		try {
 			skipDatum();
 		}
-		finally {
-			this.suppressed = outer;
-		}
 	}
-
-	// Whether the skip in progress is covered by a failed #+/#- guard; see
-	// skipSuppressed.
-	private boolean suppressed;
 
 	private LispVal readFeatureExpr() {
 		skipInterTokenSpace();
@@ -1162,8 +1144,8 @@ public final class LispLexer {
 
 	// Skips one datum at the raw character level, without tokenizing it, so a form
 	// guarded by a failing #+/#- may use syntax the reader does not support. A nested
-	// #+/#- produces NO datum under *read-suppress* (it consumes its feature expression
-	// and guarded form and yields nothing), so this keeps skipping until a real datum is
+	// #+/#- whose guard fails produces NO datum (it consumes its feature expression and
+	// guarded form and yields nothing), so this keeps skipping until a real datum is
 	// consumed -- that is what makes the two-form guard idiom
 	// (#+feature #+feature A B, which includes both A and B only when the feature is
 	// present) skip both A and B when it is absent.
@@ -1193,8 +1175,8 @@ public final class LispLexer {
 	}
 
 	// Skips one syntactic unit at the raw character level. Returns true if it consumed a
-	// real datum, false if it consumed only a nested #+/#- conditional (which yields no
-	// datum under *read-suppress*). The caller (skipDatum) has already ensured pos is at
+	// real datum, false if it consumed only a #+/#- conditional whose guard failed
+	// (which yields no datum). The caller (skipDatum) has already ensured pos is at
 	// a non-space character that is neither EOF nor ')'.
 	private boolean skipDatumOrConditional() {
 		char c = this.input.charAt(this.pos);
@@ -1248,26 +1230,19 @@ public final class LispLexer {
 				return true;
 			}
 			if (next == '+' || next == '-') {
-				if (this.suppressed) {
-					// A nested conditional inside a skipped form: skip its feature
-					// expression and its guarded form, like *read-suppress*. It yields
-					// NO datum, so report false -- the enclosing skipDatum keeps going.
-					this.pos += 2;
-					skipDatum();
-					skipDatum();
-					return false;
-				}
-				// Not suppressed -- this walk is deciding WHERE THE DATUM ENDS
-				// (datumEnd), so the guard has to be evaluated exactly as a real read
-				// evaluates it. When it holds, the form behind it IS the datum and the
-				// scan stops there; when it fails, the form is skipped and the scan
-				// keeps looking, which is the read's own behavior and the only way
-				// read-from-string's second value can answer for either branch.
+				// The guard is evaluated exactly as a real read evaluates it, inside a
+				// form a failed guard covers too (as SBCL does: the feature expression is
+				// read and tested even under *read-suppress*). When it holds, the form
+				// behind it IS the datum and the scan stops there; when it fails, the
+				// form is skipped and the scan keeps looking. That is the read's own
+				// behavior, the only way read-from-string's second value can answer for
+				// either branch, and what makes the #+f #+f A B idiom skip both forms
+				// when f is absent.
 				boolean negated = next == '-';
 				this.pos += 2;
 				LispVal expr = readFeatureExpr();
 				if (this.features.isEnabled(expr) == negated) {
-					skipSuppressed();
+					skipDatum();
 					return false;
 				}
 				skipDatum();

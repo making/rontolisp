@@ -17,7 +17,8 @@ nesting `#|...|#`.
   (dot-only tokens), `#:a:b`, `#<`, `#n*` over/under-fill, a constituent behind `#*` bits and a
   trailing `\` are reader errors there and symbols here. The `#n*` fill (repeat-last-bit) the
   interpreter computes in the lexer has no twin on either compiled backend.
-- PERMANENT limits: `#.`, `#+`/`#-`, `#n=`/`#n#` signal a catchable error. The interpreter's runtime
+- PERMANENT limits: `#.`, `#+`/`#-`, `#n=`/`#n#` signal a catchable error (`#+`/`#-` only in the
+  one-argument `read-from-string`: `read` and the full defun resolve guards in the prelude scanner). The interpreter's runtime
   read still resolves the first two and reads labels — one documented interpreter/compiled
   divergence; `#.` EVALUATES via `Environment.setReadTimeEvalResolver`, gated on `*read-eval*`
   (`.kb/reader-features.md`).
@@ -64,7 +65,20 @@ It consumes exactly ONE datum's characters and leaves the stream after them.
 
 - **The scanner only DELIMITS**; `read-from-string` parses the text, so a syntax the emitted reader
   lacks (backquote, `|...|`) is a `read-from-string` gap, identical for `read`. The walk mirrors
-  `LispLexer.skipDatum`, where `#+`/`#-` take feature expression AND guarded form as one unit.
+  `LispLexer.skipDatum`.
+- **Except `#+`/`#-`, which the scanner RESOLVES** (`%rd-guard`), at top level and at a token start
+  inside a list or vector (`%rd-list` tracks the token start), so the text handed to the parse
+  carries no guard and the compiled backends -- whose emitted readers know no `#+` -- read it too.
+  The feature expression is read by `%rd-feature` with a `:` prefixed to every token lacking a
+  package marker (the `*package*`-is-`KEYWORD` rule, which no backend's reader can be told) and
+  tested by `%rd-featurep` against the live `*features*`; a qualified name matches a non-keyword
+  entry by NAME, since a symbol read back is not `eq` to the one pushed ([[reader-features]]). A
+  failed guard's form is skipped by the scanner's own walk into a discarded stream, so a nested
+  guard there is evaluated like SBCL's. Malformed expressions are `simple-error` with SBCL's
+  messages. Before (2026-10-06, SBCL 2.2.9): `(read s)` over `"#+nope (a b) c d"` was `C` on SBCL,
+  `end-of-file` on the interpreter and `simple-error` on JVM / P1 / component. Pinned by
+  `ReadFeatureGuardFixture` (ci-spec `read-skips-a-failed-feature-guard`) in the three backend
+  suites.
 - The character a terminator gives back rides the `unread-char` cell (`unread-char.lisp` on compile
   paths, the `Environment` cell interpreted) — what makes `read` + `read-line` on one stream work.
 - **After the object, ONE whitespace character is consumed** (CLHS 23.2); a terminating macro
@@ -198,9 +212,8 @@ keeps the built-in, byte for byte.** CL's lambda list is the defun's own, so a r
   spliced, the compile paths inject the full `#'read-from-string` wrapper `(s &rest r)`, the
   one-argument wrapper elsewhere (`BuiltinFunctionWrappers.HELPER_WRAPPERS`). The interpreter's
   publishing function applies the defun when given more than the string.
-- Its `#+`/`#-` is `read`'s: on the interpreter a guard that fails in front of the datum ends the
-  read with `end-of-file` (the one-argument call reads the next datum, as SBCL does); the
-  compiled readers signal on any `#+`.
+- Its `#+`/`#-` is `read`'s: the scanner resolves the guard on every backend, while the
+  one-argument call resolves it on the interpreter only.
 - Before (measured on all four backends): every argument after the string was ignored (the read
   started at 0, a bad bound read the whole string), and `#'read-from-string` given them was a
   `program-error` on the compiled paths. ANSI `reader` (interpreter, suite `ca06bd9`): 369 ->

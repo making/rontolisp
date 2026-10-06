@@ -13,6 +13,7 @@ import am.ik.rontolisp.SearchMismatchBoundsFixture;
 import am.ik.rontolisp.ParseIntegerBoundsFixture;
 import am.ik.rontolisp.ParseIntegerSyntaxFixture;
 import am.ik.rontolisp.RadixRangeFixture;
+import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.StringNilStartFixture;
@@ -13731,6 +13732,16 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.corpus(ReadFromStringLambdaListFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadSkipsAFailedFeatureGuardInFrontOfTheDatum() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readSkipsAFailedFeatureGuardInFrontOfTheDatum: the emitted
+		// reader knows no #+, so the prelude scanner resolving the guard is what reads.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadFeatureGuardFixture.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFeatureGuardFixture.EXPECTED);
 	}
 
 	@Test

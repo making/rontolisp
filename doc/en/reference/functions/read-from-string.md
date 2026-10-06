@@ -32,7 +32,11 @@ The arguments after the string are Common Lisp's, on all four backends, in call 
 (multiple-value-list (read-from-string "123  " t nil :preserve-whitespace t)) ; => (123 3)
 ```
 
-Such a call reads its datum the way [`read`](read.md) does, so it shares `read`'s limits: a `#+`/`#-` guard whose feature does not hold, in front of the datum, ends the read with `end-of-file` (on the interpreter; the compiled readers signal on any `#+`/`#-`).
+Such a call reads its datum the way [`read`](read.md) does, so it resolves a `#+`/`#-` guard on every backend, against the live `*features*`: a guard that fails skips the form behind it and the call answers the next datum. The one-argument call resolves guards on the interpreter only; the compiled readers signal on any `#+`/`#-` there.
+
+```lisp
+(multiple-value-list (read-from-string "#+nope (a b) c" nil nil)) ; => (C 14)
+```
 
 ## The stop index, and `*read-suppress*`
 

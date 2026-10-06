@@ -91,12 +91,18 @@ from the evaluator), hands the reader `Features.ofRuntimeList` over the live lis
   value, and the whole answer of a suppressed read -- used to treat every `#+` as a FAILED guard and
   walk on to the next form, so the index was right only when the guarded form happened to be last.
   It now evaluates the guard: a holding guard makes the form behind it the datum and stops there.
-  Inside a form a failed guard already covers, the old rule stands (`LispLexer.suppressed`) -- a
-  nested conditional there yields no datum at all, which is what makes the `#+f #+f A B` two-form
-  idiom skip both.
-- INTERPRETER only: the readers emitted into compiled output know no `#+` at all
-  ([[read-load-streams]]). Pinned by
-  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList`.
+  **Inside a form a failed guard already covers, a nested guard is evaluated too** (SBCL reads and
+  tests the feature expression even under `*read-suppress*`): a holding one makes the form behind
+  it the skipped datum, a failing one yields none -- which still makes the `#+f #+f A B` idiom skip
+  both when `f` is absent. The lexer used to skip every nested conditional unevaluated, so
+  `#+nope #+rontolisp a b c` read `C` where SBCL's `#+nope #+sbcl a b c` reads `B`. One leniency
+  stays: a skip that consumed only failed guards ends quietly at `)` or end of input (SBCL: reader
+  error / `end-of-file`).
+- The ONE-ARGUMENT `read-from-string` is interpreter-only: the readers emitted into compiled output
+  know no `#+` at all. `read` and the multi-argument `read-from-string` resolve guards in the prelude
+  scanner on every backend ([[read-load-streams]], "`read` is PRELUDE RONTOLISP"). Pinned by
+  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList`,
+  `LispReaderTest.readFeatureConditionalStackedUnderAFailedGuardIsEvaluated`.
 
 ## Threading
 `LispReader.readAllFromString(input, features)` (1-arg overload = INTERPRETER). Reading happens
