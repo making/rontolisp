@@ -10574,6 +10574,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aCountedDeleteOrNsubstituteReportsUnderItsOwnName() {
+		// The delete / nsubstitute spellings delegate to remove's / substitute's lowering
+		// for a bounded call; the report still names the operator the program spelled,
+		// the same on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
 	void stringOperatorsRefuseANilStart() {
 		// A nil :start (:start1, :start2) is no bound for string=/string-equal, the
 		// string< family and the nstring-* case conversions either, in call position and
