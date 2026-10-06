@@ -142,18 +142,16 @@ complex-free class is byte-identical and the Long fast path tests nothing new.
 - `_dbl`'s REAL arm moved from its first instruction to after the `Double`, ratio and
   `Number` rungs -- the same answer, and no holder test on the float path.
 - A unary math site (`exp sin cos tan atan sinh cosh tanh`; `log`/`asin`/`acos` with a
-  variable already reach `_cu1` through the escape gate) whose argument is not unboxed
-  directly (`JvmArithCompiler.unboxesDirectly`: a literal, a declared float, an inlined
-  double-literal tree) stores it and tests it: a holder takes `_cu1`, a real the inline
-  `StrictMath` call (`JvmMathFnCompiler.compileHolderAware`).
+  variable already reach `_cu1` through the escape gate) whose argument may hold a
+  complex evaluates it through `JvmFloatOperands` and tests it: a holder takes `_cu1`, a
+  real the inline `StrictMath` call (next section).
 - Every ordering of such a program calls `_ccmpb` (`JvmComparisonCompiler.orderingOrEquality`,
   and the fused compare's bail), `=` keeps `_cmpb`.
 - Every holder test is behind the presence probe: `_ccmpb` and `_cpowr` gained it, since
   they now run in programs that never build a holder.
 
-Not reached: an operation whose own form spells a float literal (`(+ z 1.5)`,
-`(exp (* 1.0 z))`) takes the unboxed double path, whose `_dbl` still signals REAL (the
-WASM twin's f64 path the same) -- `.todo/d57`.
+An operation whose own form spells a float literal (`(+ z 1.5)`, `(exp (* 1.0 z))`) is
+the next section's.
 
 Measured 2026-10-06 (linux/amd64, GraalVM 25): the size-report and bench-report programs
 compile to the same JVM class and jar bytes (and, for the WASM twin, the same modules at
@@ -170,6 +168,50 @@ Pinned by `ComplexThroughAVariableFixture` (`LispEvaluatorTest#complexThroughAVa
 `WasmLispCompilerIntegrationTest#complexThroughAVariable`: the answers outside EH mode, the
 REAL signals and the reported culprit under handlers) and `ci-spec.yaml`'s
 `complex-arithmetic-through-a-variable`.
+
+## A complex beside a float literal
+
+A float literal routes `(* 2.0 z)`, `(exp (* 1.0 z))` and `(= (* 2.0 z) 1.0)` onto the
+unboxed double path (`hasDoubleLiteral`, `isDefinitelyDouble`), whose `_dbl` signals REAL
+for a holder, so the variable's complex never met the helpers above. In a program
+`ComplexCapability` gates, a site whose operands may hold a complex
+(`ComplexCapability.mayYieldComplex`: a variable or a call, or an arithmetic operation
+over one; never a constant or a declared float) takes `JvmFloatOperands`; every other
+site, and every complex-free class, keeps its raw emission byte for byte.
+
+- Each operation evaluates its operands as the interpreter does: left to right into
+  temporaries, an inner float-literal operation applied where it stands. Then it tests
+  the operands a variable or a call produced (`instanceof RontoComplex` behind the
+  presence probe) and the inner operations that went generic, and folds raw when none
+  holds a complex, through the generic helpers (`_add` & co., whose tails hand a holder
+  to `_cadd` & co.; `_neg` for a unary minus) when one does.
+- An inner operation leaves its double in one slot and, only when it went generic, its
+  boxed answer in another (null otherwise): the raw path boxes nothing it did not box
+  before, and the parent reads whichever holds the value. It runs under its own
+  operator and source site, so a wrong-typed operand of an inner `*` reports `*`.
+- Order: every operand of an operation runs before the operation signals, and an inner
+  operation signals before the outer one's later operands run -- the interpreter's
+  order. The complex-free raw path converts each operand before the next one runs, and
+  int fusion evaluates every leaf of its tree before any operation, so neither keeps it.
+- The consumers do the same over their operands (`JvmFloatOperands.compileCall` for the
+  one-helper shapes): the comparison on proven doubles (`_cmpb` for `=`, `_ccmpb` for an
+  ordering, which reports the complex the inner operation computed), `min`/`max`
+  (`_min`/`_max`), the unary math functions (`_cu1`), `atan`'s two-argument form (`_dbl`
+  over the boxed operands, the same REAL report), `abs` (`_abs`), `expt` (`_pow`) and
+  `signum` (`_signum`). The rounding family and `random` take their argument boxed, so
+  their `_dbl` already meets the computed complex. `isDefinitelyDouble` turns down a tree
+  with a complex literal, as its WASM twin does, so `(max (+ #c(1 2) 0.5) 1.0)` reports
+  `#C(1.5 2.0)` through `_max`, not the literal through `_dbl`.
+- The generic fold is pairwise, like SBCL's and the generic sites': the interpreter's
+  `+ - /` with a complex and a float argument floats the whole fold, so
+  `(+ z (- z) 1.5)` over an exact `z` is `1.5` compiled and on SBCL and `#C(1.5 0.0)`
+  on the interpreter.
+
+Pinned by `ComplexBesideAFloatLiteralFixture` (`LispEvaluatorTest#complexBesideAFloatLiteral`,
+`JvmLispCompilerTest#compileAndRunComplexBesideAFloatLiteral`,
+`WasmLispCompilerIntegrationTest#complexBesideAFloatLiteral`: the answers outside EH mode;
+the REAL reports, the operator an inner operation reports under and the order under
+handlers) and `ci-spec.yaml`'s `complex-beside-a-float-literal`.
 
 ## The asin/acos branch cut, and their exact real axis (`.todo/764`, 2026-09-11)
 
@@ -306,14 +348,13 @@ gated helper must be on that list.
 
 ### What this does NOT reach
 
-The answer's type is now a run-time property, and the syntactic steering around it is
-unchanged, so two shapes keep the pre-existing corner rather than gaining an arm:
+The answer's type is now a run-time property. A float-literal operation over the call --
+`(+ 1.0 (log x))`, `(* alpha (log p))` -- reaches it: the call is an operand that may hold
+a complex, which the site tests while keeping its f64 path for a real ("A complex beside
+a float literal" above). Widening `containsComplex` to cover the escapes instead would
+have pushed every such operation off the f64 path. One shape keeps the pre-existing
+corner:
 
-- `(+ 1.0 (log x))` takes the unboxed double path and lands in `_dbl`'s
-  NUMBER operand-type report (catchable, correctly rendered) when `x` is negative -- the same
-  corner a complex arriving through a variable has always had. Widening
-  `containsComplex` to cover the escapes would fix it and would also push every
-  `(* alpha (log p))` in a numeric loop off the f64 path, which is the wrong trade.
 - A typed numeric loop (`JvmTypedLoopCompiler`) computes `log`/`asin`/`acos` as raw f64
   and keeps the NaN. `sqrt` is in that same list with the same property and has been
   since typed loops existed: the loop's result goes into a packed float array, which has
@@ -411,9 +452,6 @@ carries the four shapes.
 
 ## Known corners (documented, not fixed here)
 
-A complex arriving only through a variable beside a double literal takes the
-unboxed path into `_dbl`'s REAL operand-type landing (catchable, correctly
-rendered) instead of the complex answer ("A complex through a variable" above).
 The embedded runtime reader has no `#C` arm yet. `signum` of a complex is 754's
 audit.
 

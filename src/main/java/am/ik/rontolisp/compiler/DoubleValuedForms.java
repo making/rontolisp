@@ -26,11 +26,13 @@ import am.ik.rontolisp.LispVal;
  * The set is CONSERVATIVE, and deliberately narrower than the backends' own
  * {@code hasDoubleLiteral} float-path predicate (which recurses into arbitrary subforms):
  * an IMMEDIATE literal double argument of a float-contagious operator. Every form this
- * answers true for is therefore one the backends already compile onto the unboxed f64
- * path, whose result is a boxed double whatever the other operands turn out to be.
- * Answering true for something that can also answer another type would print it as a
- * float, so a new entry is only earned by checking each backend's emission for that
- * operator.
+ * answers true for is therefore one the backends compile onto the unboxed f64 path, whose
+ * result is a boxed double whatever the other operands turn out to be -- except in a
+ * program that may observe a complex, where an operand a variable or a call produces may
+ * be one and the path answers the complex instead
+ * ({@link ComplexCapability#mayYieldComplex}). Answering true for something that can also
+ * answer another type would print it as a float, so a new entry is only earned by
+ * checking each backend's emission for that operator.
  */
 public final class DoubleValuedForms {
 
@@ -48,9 +50,11 @@ public final class DoubleValuedForms {
 	/**
 	 * Whether {@code form} evaluates to a double-float on every backend.
 	 * @param form the argument form
+	 * @param mayObserveComplex whether the program may observe a complex
+	 * ({@link ComplexCapability#mayObserveComplex})
 	 * @return true when the value needs no run-time type dispatch to print
 	 */
-	public static boolean certainlyDouble(LispVal form) {
+	public static boolean certainlyDouble(LispVal form, boolean mayObserveComplex) {
 		if (form instanceof LispDouble) {
 			return true;
 		}
@@ -65,9 +69,11 @@ public final class DoubleValuedForms {
 		// before the literal double may decide: one interleaved pass returned true
 		// for (+ 3d0 #c(1d0 2d0)) on the double it met FIRST, never reaching the
 		// complex, and the WASM printer's ref.cast to TYPE_FLOAT then trapped on the
-		// complex struct instead of printing #C(4.0 2.0).
+		// complex struct instead of printing #C(4.0 2.0). A program that may observe a
+		// complex can hand one in through a variable or a call just the same.
 		for (int i = 1; i < parts.size(); i++) {
-			if (am.ik.rontolisp.macro.LispMacroExpander.containsComplex(parts.get(i))) {
+			if (am.ik.rontolisp.macro.LispMacroExpander.containsComplex(parts.get(i))
+					|| mayObserveComplex && ComplexCapability.mayYieldComplex(parts.get(i), name -> false)) {
 				return false;
 			}
 		}

@@ -124,7 +124,7 @@ final class WasmPrintCompiler {
 			ctx.writer.writeUnsignedLeb128(objSlot);
 			WasmLiteralPrint.emitStaticWrite(rendered, obj, readably, ctx);
 		}
-		else if (DoubleValuedForms.certainlyDouble(obj)) {
+		else if (DoubleValuedForms.certainlyDouble(obj, ctx.complexBlock != null)) {
 			// A float takes the SAME arm in both dispatches -- unbox the struct, call
 			// the digit printer -- so calling it directly is byte-identical output and
 			// leaves the whole value dispatch (and every printer reachable only from

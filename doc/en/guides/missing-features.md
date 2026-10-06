@@ -21,7 +21,7 @@ the [Language Reference](../reference/special-forms.md).
 | `eval-when` | treated as `progn` (no phase distinction) |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
 | `*modules*` | not available (`require`/`provide` are) |
-| complex numbers | available on every backend but `--no-gc`, with one exception on the JVM and WASM backends ([Numeric tower](#numeric-tower)) |
+| complex numbers | available on every backend but `--no-gc` ([Numeric tower](#numeric-tower)) |
 | `catch` / `throw` / `unwind-protect` / conditions under `--no-gc` | compile error (available on every other backend) |
 
 ## Multiple values
@@ -225,12 +225,7 @@ parts). A negative square root answers the complex root:
 ```
 
 The `--no-gc` backend has no complex representation: a complex literal or
-constructor is a compile error there. On the JVM and WASM backends a complex
-takes part in arithmetic wherever it arrives from -- a literal, a variable, a
-function's argument -- except in an operation whose own form spells a float
-literal beside it: with `z` holding a complex, `(* 2.0 z)` and
-`(exp (* 1.0 z))` signal a `type-error` there (`z` is not of type `REAL`),
-while `(* z 2)` and `(* x z)` with `x` holding `2.0` answer the complex.
+constructor is a compile error there.
 
 ## Other omissions
 

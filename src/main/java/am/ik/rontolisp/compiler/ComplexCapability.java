@@ -1,6 +1,8 @@
 package am.ik.rontolisp.compiler;
 
 import java.util.List;
+import java.util.Set;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
@@ -22,6 +24,10 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  */
 public final class ComplexCapability {
 
+	/** The operators whose result is complex only when an operand is. */
+	private static final Set<String> ARITHMETIC = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
+			LispNames.MOD, LispNames.REM);
+
 	private ComplexCapability() {
 	}
 
@@ -41,6 +47,38 @@ public final class ComplexCapability {
 				|| designates(program, closRegistry, LispNames.COMPLEX)
 				|| designates(program, closRegistry, LispNames.CONJUGATE)
 				|| designates(program, closRegistry, LispNames.PHASE);
+	}
+
+	/**
+	 * Whether evaluating an operand form may produce a complex its own text does not
+	 * spell, in a program {@link #mayObserveComplex} admits: a variable or a call may, a
+	 * constant may not (a complex constant steers its site at compile time), and an
+	 * arithmetic operation may exactly when one of its operands may. The operands a
+	 * compiled site tests for a complex at run time are the ones this answers true for.
+	 * @param form the operand form
+	 * @param knownReal whether a variable is known to hold a real (a float declaration
+	 * the JVM backend unboxes on the strength of)
+	 * @return whether a site must be ready for the operand to be a complex
+	 */
+	public static boolean mayYieldComplex(LispVal form, Predicate<String> knownReal) {
+		if (ArgumentOrder.isOrderIndependent(form)) {
+			return false;
+		}
+		if (form instanceof LispSymbol sym) {
+			return !knownReal.test(sym.name());
+		}
+		if (form instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& ARITHMETIC.contains(head.name())) {
+			LispVal operands = cons.cdr();
+			while (operands instanceof LispCons cell) {
+				if (mayYieldComplex(cell.car(), knownReal)) {
+					return true;
+				}
+				operands = cell.cdr();
+			}
+			return false;
+		}
+		return true;
 	}
 
 	// Whether some cons of the program has the symbol as its car: a call, a quote or a

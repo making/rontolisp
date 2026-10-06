@@ -46,7 +46,7 @@ final class WasmTranscendentalCompiler {
 		}
 		WasmComplexBlock complexBlock = ctx.complexBlock;
 		WasmComplexBlock.Fn entry = complexBlock == null ? null : WasmComplexBlock.unary(name);
-		if (complexBlock != null && entry != null && WasmComplexBlock.mayHoldComplex(args.get(1))) {
+		if (complexBlock != null && entry != null && WasmFloatOperands.guards(args.subList(1, 2), ctx)) {
 			compileHolderAware(args.get(1), ctx, fn, complexBlock, entry);
 			return;
 		}

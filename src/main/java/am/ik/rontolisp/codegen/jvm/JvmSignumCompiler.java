@@ -20,6 +20,14 @@ final class JvmSignumCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (!JvmLispCompiler.hasComplexOperand(args) && JvmLispCompiler.hasDoubleLiteral(args, ctx)
+				&& JvmFloatOperands.guards(args.subList(1, 2), ctx)) {
+			// The argument may hold a complex the form does not spell: _signum answers
+			// its unit vector.
+			JvmFloatOperands.compileCall(args.subList(1, 2), ctx.mathOp(JvmMathFnCompiler.SIGNUM_D),
+					ctx.numOp(JvmNumericRuntimeBuilder.SIGNUM), ctx, className);
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (!JvmLispCompiler.hasComplexOperand(args) && JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmEmitHelper.unboxDouble(ctx);

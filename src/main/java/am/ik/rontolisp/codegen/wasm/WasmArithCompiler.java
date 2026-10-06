@@ -49,6 +49,11 @@ final class WasmArithCompiler {
 			return;
 		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
+			List<LispVal> operands = args.subList(1, args.size());
+			if (WasmFloatOperands.guards(operands, ctx)) {
+				compileGuarded(operands, ctx, f64Opcode, ratioFunc);
+				return;
+			}
 			// Unary (/ x) is the reciprocal: 1.0 / x.
 			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {
 				ctx.writer.write(Instruction.F64_CONST);
@@ -104,6 +109,61 @@ final class WasmArithCompiler {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 			WasmOperandTypes.emitCall(ctx, ratioFunc);
 		}
+	}
+
+	/**
+	 * The float-literal path in a module whose program may observe a complex, over
+	 * operands one of which may hold one ({@link WasmFloatOperands}): every operand is
+	 * evaluated first, then the {@code f64} fold runs when none is a complex and the
+	 * generic {@code _rat_*} fold, whose arms answer it, when one is.
+	 */
+	private static void compileGuarded(List<LispVal> operandForms, WasmLispCompiler.Ctx ctx, int f64Opcode,
+			int ratioFunc) {
+		WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(operandForms, ctx);
+		int count = operands.size();
+		operands.emitHoldsComplex(ctx);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		if (count == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			operands.pushBoxed(0, ctx);
+			WasmOperandTypes.emitCall(ctx, ratioFunc);
+		}
+		else if (count == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+			// The one operand IS the complex here: negated part by part, as
+			// compileUnaryNegate negates one.
+			operands.pushBoxed(0, ctx);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_C_NEG);
+		}
+		else {
+			operands.pushBoxed(0, ctx);
+			for (int i = 1; i < count; i++) {
+				operands.pushBoxed(i, ctx);
+				WasmOperandTypes.emitCall(ctx, ratioFunc);
+			}
+		}
+		ctx.writer.write(Instruction.ELSE);
+		if (count == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {
+			ctx.writer.write(Instruction.F64_CONST);
+			ctx.writer.writeF64(1.0);
+			operands.pushRaw(0, ctx);
+			ctx.writer.write(f64Opcode);
+		}
+		else if (count == 1 && ratioFunc == WasmLispCompiler.FUNC_RAT_SUB) {
+			operands.pushRaw(0, ctx);
+			ctx.writer.write(Instruction.F64_NEG);
+		}
+		else {
+			operands.pushRaw(0, ctx);
+			for (int i = 1; i < count; i++) {
+				operands.pushRaw(i, ctx);
+				ctx.writer.write(f64Opcode);
+			}
+		}
+		WasmEmitHelper.boxF64(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

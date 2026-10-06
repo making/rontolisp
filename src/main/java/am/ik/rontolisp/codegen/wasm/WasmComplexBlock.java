@@ -196,17 +196,6 @@ final class WasmComplexBlock {
 	}
 
 	/**
-	 * Whether an operand form can evaluate to a complex its site cannot see: a variable
-	 * or a call. Any other atom is a literal, and a complex literal steers its site at
-	 * compile time.
-	 * @param form the operand form
-	 * @return whether the site must test the value
-	 */
-	static boolean mayHoldComplex(am.ik.rontolisp.LispVal form) {
-		return form instanceof am.ik.rontolisp.LispSymbol || form instanceof am.ik.rontolisp.LispCons;
-	}
-
-	/**
 	 * The block's unary entry for one of the float unary functions, or null for a name
 	 * with none.
 	 * @param name the (uppercase-canonical) Lisp name

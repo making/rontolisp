@@ -40,6 +40,13 @@ final class JvmArithCompiler {
 		}
 		boolean unaryDiv = JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2;
 		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
+			List<LispVal> operands = args.subList(1, args.size());
+			if (JvmFloatOperands.guards(operands, ctx)) {
+				// An operand may hold a complex the form does not spell: the raw fold
+				// runs only when none does (`.kb/jvm-complex.md`).
+				JvmFloatOperands.compileArithmetic(operands, opKey, ctx, className);
+				return;
+			}
 			compileUnboxed(args, ctx, opKey, doubleOpcode, className);
 			JvmEmitHelper.boxDouble(ctx);
 			return;
@@ -218,7 +225,7 @@ final class JvmArithCompiler {
 	 * opcode) pair JvmExprCompiler routes them with, so an inlined operand compiles to
 	 * exactly what the boxed emission of the same node would have computed.
 	 */
-	private static @org.jspecify.annotations.Nullable String inlinedOpKey(LispVal arg, JvmLispCompiler.Ctx ctx) {
+	static @org.jspecify.annotations.Nullable String inlinedOpKey(LispVal arg, JvmLispCompiler.Ctx ctx) {
 		if (!(arg instanceof LispCons nested && nested.isProperList() && nested.car() instanceof LispSymbol head)) {
 			return null;
 		}
@@ -233,25 +240,6 @@ final class JvmArithCompiler {
 		};
 		List<LispVal> parts = nested.toList();
 		return opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts, ctx) ? opKey : null;
-	}
-
-	/**
-	 * Whether {@link #compileUnboxedOperand} pushes this operand's double without ever
-	 * holding the operand as a boxed value: a numeric literal, a declared-float variable
-	 * or an inlined double-literal operation. Only an operand compiled as an ordinary
-	 * expression can carry a complex into the operation that unboxes it.
-	 * @param arg the operand form
-	 * @param ctx the compile context
-	 * @return whether the operand is unboxed without passing through {@code _dbl}
-	 */
-	static boolean unboxesDirectly(LispVal arg, JvmLispCompiler.Ctx ctx) {
-		if (arg instanceof LispDouble || arg instanceof LispInteger) {
-			return true;
-		}
-		if (arg instanceof LispSymbol sym) {
-			return ctx.rawDoubleLocals.containsKey(sym.name()) || ctx.declaredDoubles.contains(sym.name());
-		}
-		return inlinedOpKey(arg, ctx) != null;
 	}
 
 }

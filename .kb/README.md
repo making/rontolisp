@@ -150,7 +150,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-export.md](jvm-export.md) -- `rontolisp:jvm-export`, `--no-main`, `-o out.jar`, the `-o` path-to-class-name rule, the Maven plugin
 - [jvm-int-fusion.md](jvm-int-fusion.md) -- integer expression-tree fusion into unboxed arithmetic
 - [jvm-double-arithmetic.md](jvm-double-arithmetic.md) -- `hasDoubleLiteral` routing and unboxed IEEE operations
-- [jvm-complex.md](jvm-complex.md) -- the `RontoComplex` holder, the gated `_c*` group, and the `hasComplexOperand` steering
+- [jvm-complex.md](jvm-complex.md) -- the `RontoComplex` holder, the gated `_c*` group, the `hasComplexOperand` steering, and a complex through a variable or beside a float literal found at run time
 - [jvm-typed-loops.md](jvm-typed-loops.md) -- typed numeric loops over packed float arrays
 - [jvm-bignum-literal-pool.md](jvm-bignum-literal-pool.md) -- one `BigInteger` instance per distinct literal in a `_bi$N` pool
 - [jvm-method-size-limits.md](jvm-method-size-limits.md) -- the 64 KB method code limit, the signed-16-bit branch offset, the split of a program past one class's 65534-entry constant pool into `$PartN` classes, every class written through `java.lang.classfile` (`JvmClassSplitter`, `CodeReplay`), and the typed emission layer every emitter writes on, instruction records over master-pool entries (`MethodCode`, `Ctx.body`)
@@ -175,7 +175,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-gc-object-size.md](wasm-gc-object-size.md) -- what a struct field costs on the heap per engine, measured (a wasmtime object is a 16-byte header plus fields rounded to 16, so the identity-hash slot is free there and +8 bytes per cons on V8), and the capped-heap probe that measures it
 - [wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md) -- a `try_table` landing pad refreshes every local live after it: Cranelift passes a local into the pad as a pre-call exceptional-edge argument, stale after a copying collection; the push is narrowed to the live locals once the body is complete
 - [wasm-bignum.md](wasm-bignum.md) -- exact integers in three tiers (i31, `TYPE_BIGNUM`, `TYPE_BIGINT`), ratios with components in those tiers, and the correctly rounded conversions to double
-- [wasm-complex.md](wasm-complex.md) -- the tagged `TYPE_COMPLEX` struct (the `TYPE_FARRAY` twin that forced the tag), the `_c*` runtime group, and the `containsComplex` steering
+- [wasm-complex.md](wasm-complex.md) -- the tagged `TYPE_COMPLEX` struct (the `TYPE_FARRAY` twin that forced the tag), the `_c*` runtime group, the `containsComplex` steering, and a complex through a variable or beside a float literal found at run time
 - [wasm-int-fusion.md](wasm-int-fusion.md) -- integer expression-tree fusion keeping raw i64
 - [wasm-ref-type-fold.md](wasm-ref-type-fold.md) -- a closed module's `ref.test`/`ref.cast` are decided by its own constructors: the byte-level type-flow fold before the shaker, the call-forwarding redirect, the exact integer export lane, the raw condition compare
 - [wasm-counted-loops.md](wasm-counted-loops.md) -- a loop induction variable as a bare `i64` counter
