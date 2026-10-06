@@ -1260,7 +1260,9 @@ cases:
   # start past its end -- string=/string-equal and the string< family, call position
   # and first class, over a symbol or character designator and a fill-pointer string,
   # string1's range first. The datum is printed only where it is the bound itself (sbcl
-  # reports a range as a cons). SBCL's answers, over strings that are no literals.
+  # reports a range as a cons). SBCL's answers, over strings that are no literals. Every
+  # argument of string=/string-equal runs once, in the call's order, and the first of a
+  # repeated keyword is the one used (StringComparisonBoundsFixture.ORDER_PROGRAM).
   - name: string-comparisons-refuse-a-bad-bound
     source: |
       (defvar *scb-m1* (read-from-string "-1"))
@@ -1332,6 +1334,26 @@ cases:
                    (funcall #'string-equal "bc" 'abc :start2 *scb-1*)
                    (string= #\a "xa" :start2 *scb-1*)
                    (string<= 'abc 'abd :end1 *scb-2* :end2 *scb-2*)))
+      (defvar *sco-log* nil)
+      (defun sco-n (tag v) (push tag *sco-log*) v)
+      (defun sco-probe (thunk)
+        (setq *sco-log* nil)
+        (let ((r (handler-case (funcall thunk)
+                   (error () :error))))
+          (list r (reverse *sco-log*))))
+      (print (sco-probe (lambda () (string= (sco-n :s1 "abc") (sco-n :s2 "abc") :end1 (sco-n :e1 3) :start1 (sco-n :st1 0)))))
+      (print (sco-probe (lambda () (string= "abc" "abc" :start1 (sco-n :a 1) :start1 (sco-n :b 0)))))
+      (print (sco-probe (lambda () (string= "abc" "abc" :start1 1 :start1 0))))
+      (print (sco-probe (lambda () (string= "abc" "bc" :start1 1 :start1 0))))
+      (print (sco-probe (lambda () (string-equal (sco-n :s1 "ABC") (sco-n :s2 "xabc") :end2 (sco-n :e2 4) :start2 (sco-n :st2 1)
+                                                 :end1 (sco-n :e1 3)))))
+      (print (sco-probe (lambda () (string-equal "abc" "ABC" :end1 (sco-n :a 2) :end1 (sco-n :b 3)))))
+      (print (sco-probe (lambda () (string= (sco-n :s1 "xabcx") (sco-n :s2 "yabcy") :end2 (sco-n :e2 4) :start1 (sco-n :st1 1)
+                                            :start2 (sco-n :st2 1) :end1 (sco-n :e1 4)))))
+      (print (sco-probe (lambda () (string= 'abc (sco-n :s2 "xABC") :start2 (sco-n :st2 1) :end1 (sco-n :e1 3)))))
+      (print (sco-probe (lambda () (funcall #'string= (sco-n :s1 "xabc") (sco-n :s2 "abc") :start2 (sco-n :st2 0) :start1 (sco-n :st1 1)))))
+      (print (sco-probe (lambda () (funcall #'string-equal (sco-n :s1 "abc") (sco-n :s2 "ABC") :end1 (sco-n :a 2) :end1 (sco-n :b 3)))))
+      (print (sco-probe (lambda () (string= (sco-n :s1 "abc") (sco-n :s2 "abc") :end1 (sco-n :e1 9) :start1 (sco-n :st1 4)))))
     expected: |
       ((:TYPE-ERROR -1) :TYPE-ERROR :TYPE-ERROR (:TYPE-ERROR 1.5))
       (:TYPE-ERROR (:TYPE-ERROR -1) (:TYPE-ERROR 18446744073709551616) :TYPE-ERROR)
@@ -1345,6 +1367,17 @@ cases:
       (3 NIL T NIL)
       (0 2 T 1)
       (T T T 2)
+      (T (:S1 :S2 :E1 :ST1))
+      (NIL (:A :B))
+      (NIL NIL)
+      (T NIL)
+      (T (:S1 :S2 :E2 :ST2 :E1))
+      (NIL (:A :B))
+      (T (:S1 :S2 :E2 :ST1 :ST2 :E1))
+      (T (:S2 :ST2 :E1))
+      (T (:S1 :S2 :ST2 :ST1))
+      (NIL (:S1 :S2 :A :B))
+      (:ERROR (:S1 :S2 :E1 :ST1))
   # search / mismatch: a negative, non-integer or past-int-range bound, one past the
   # sequence's length and a start past its end are subseq's type-error before the walk
   # -- list, vector and string, call position and first class. SBCL's answers, over

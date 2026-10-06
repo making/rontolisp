@@ -15,6 +15,9 @@ package am.ik.rontolisp;
  * {@code string>} / {@code string<=} over two literal strings check no range.</li>
  * <li>{@link #REPORT_PROGRAM}: what that {@code type-error} carries -- the refused bound,
  * its range and {@code subseq}'s report text.</li>
+ * <li>{@link #ORDER_PROGRAM} (mirrored by the same ci-spec case): every argument is
+ * evaluated once, in the order the call spells them, and the first of a repeated keyword
+ * is the one used -- {@code string=} / {@code string-equal}, called and first class.</li>
  * </ul>
  * The bounds are read at run time so no backend can fold them.
  */
@@ -143,5 +146,43 @@ public final class StringComparisonBoundsFixture {
 			"(2 (INTEGER 0 1) \"SUBSEQ: invalid bounds 2, 1 for string of length 1\")",
 			"(4 (INTEGER 0 3) \"SUBSEQ: invalid bounds 0, 4 for string of length 3\")",
 			"(4 (INTEGER 0 3) \"SUBSEQ: invalid bounds 4, 3 for string of length 3\")");
+
+	/** Each line: the answer (or {@code :error}) and the tags logged, in order. */
+	public static final String ORDER_PROGRAM = """
+			(defvar *sco-log* nil)
+			(defun sco-n (tag v) (push tag *sco-log*) v)
+			(defun sco-probe (thunk)
+			  (setq *sco-log* nil)
+			  (let ((r (handler-case (funcall thunk)
+			             (error () :error))))
+			    (list r (reverse *sco-log*))))
+			(print (sco-probe (lambda () (string= (sco-n :s1 "abc") (sco-n :s2 "abc") :end1 (sco-n :e1 3) :start1 (sco-n :st1 0)))))
+			(print (sco-probe (lambda () (string= "abc" "abc" :start1 (sco-n :a 1) :start1 (sco-n :b 0)))))
+			(print (sco-probe (lambda () (string= "abc" "abc" :start1 1 :start1 0))))
+			(print (sco-probe (lambda () (string= "abc" "bc" :start1 1 :start1 0))))
+			(print (sco-probe (lambda () (string-equal (sco-n :s1 "ABC") (sco-n :s2 "xabc") :end2 (sco-n :e2 4) :start2 (sco-n :st2 1)
+			                                           :end1 (sco-n :e1 3)))))
+			(print (sco-probe (lambda () (string-equal "abc" "ABC" :end1 (sco-n :a 2) :end1 (sco-n :b 3)))))
+			(print (sco-probe (lambda () (string= (sco-n :s1 "xabcx") (sco-n :s2 "yabcy") :end2 (sco-n :e2 4) :start1 (sco-n :st1 1)
+			                                      :start2 (sco-n :st2 1) :end1 (sco-n :e1 4)))))
+			(print (sco-probe (lambda () (string= 'abc (sco-n :s2 "xABC") :start2 (sco-n :st2 1) :end1 (sco-n :e1 3)))))
+			(print (sco-probe (lambda () (funcall #'string= (sco-n :s1 "xabc") (sco-n :s2 "abc") :start2 (sco-n :st2 0) :start1 (sco-n :st1 1)))))
+			(print (sco-probe (lambda () (funcall #'string-equal (sco-n :s1 "abc") (sco-n :s2 "ABC") :end1 (sco-n :a 2) :end1 (sco-n :b 3)))))
+			(print (sco-probe (lambda () (string= (sco-n :s1 "abc") (sco-n :s2 "abc") :end1 (sco-n :e1 9) :start1 (sco-n :st1 4)))))
+			""";
+
+	/** What {@link #ORDER_PROGRAM} prints (sbcl's answers). */
+	public static final String ORDER_EXPECTED = String.join("\n",
+			"(T (:S1 :S2 :E1 :ST1))",
+			"(NIL (:A :B))",
+			"(NIL NIL)",
+			"(T NIL)",
+			"(T (:S1 :S2 :E2 :ST2 :E1))",
+			"(NIL (:A :B))",
+			"(T (:S1 :S2 :E2 :ST1 :ST2 :E1))",
+			"(T (:S2 :ST2 :E1))",
+			"(T (:S1 :S2 :ST2 :ST1))",
+			"(NIL (:S1 :S2 :A :B))",
+			"(:ERROR (:S1 :S2 :E1 :ST1))");
 
 }

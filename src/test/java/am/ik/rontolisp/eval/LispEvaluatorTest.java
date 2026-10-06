@@ -10589,6 +10589,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() {
+		// Every argument once, in the call's order; the first of a repeated keyword is
+		// the one used.
+		assertThat(evalPrinted(StringComparisonBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
 	void parseIntegerEvaluatesItsArgumentsInTheCallsOrder() {
 		// Every argument once, in the call's order, before the bounds are checked; the
 		// first of a repeated keyword is the one used. The first-class function reads a

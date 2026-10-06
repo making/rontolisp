@@ -14687,6 +14687,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringEqualityEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#stringEqualityEvaluatesItsArgumentsInTheCallsOrder, Preview 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.ORDER_PROGRAM, false))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(StringComparisonBoundsFixture.ORDER_PROGRAM, true))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
 	void parseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder, Preview 1

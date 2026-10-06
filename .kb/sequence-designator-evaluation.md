@@ -113,6 +113,18 @@ plain program, prints exactly ANSI's expected values and evaluation-count tuple.
   A call spelling the keywords in that order, each once, expands as before; any other tail goes
   through `KeywordTail.of(parts, 2, "__pi")` first (`keywordsInOrder`). The interpreter's
   first-class builtin kept the LAST of a repeated keyword; it keeps the first now.
+- **`string=` / `string-equal` with a bounding keyword**: `expandStringComparisonBounds` lowers
+  the call onto `(string= (subseq (string s1) a b) (subseq (string s2) c d))`, which runs the
+  forms operand-beside-its-bounds, and kept the LAST of a repeated keyword -- literals included
+  (`(string= "abc" "abc" :start1 1 :start1 0)` was `T`, sbcl's `NIL`). `stringBoundsInCallOrder`
+  compares the call's order with the lowering's over the forms that are not literals; a call with
+  no computed form (a cons) at all, or one already in order, expands as before, and any other
+  goes through `KeywordTail.of(parts, 3, "__sc")` first, so a bare variable among computed forms
+  is read in its turn too. The first of a repeated keyword is used on every path. The `string<`
+  family is a `&key` defun and the interpreter parses the call itself: both were right. Pinned by
+  `StringComparisonBoundsFixture.ORDER_PROGRAM` (four backends, ci-spec
+  `string-comparisons-refuse-a-bad-bound`) and
+  `LispMacroExpanderTest.aBoundedStringEqualityCallRunsItsArgumentsInTheCallsOrder`.
 
 Each of the three fixes is `KeywordTail.of(parts, start, prefix)` plus `tail.parts()` plus
 `tail.wrap(...)`, same as every entry above, EXCEPT that `sort`/`stable-sort`'s existing

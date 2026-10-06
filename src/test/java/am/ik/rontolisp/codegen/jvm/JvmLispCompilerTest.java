@@ -13615,6 +13615,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStringEqualityEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#stringEqualityEvaluatesItsArgumentsInTheCallsOrder.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunParseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
