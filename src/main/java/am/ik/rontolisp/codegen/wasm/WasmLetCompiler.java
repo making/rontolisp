@@ -65,10 +65,10 @@ final class WasmLetCompiler {
 		// __FLET registration below: that one wants a LAMBDA init, this one a designator.
 		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, ctx.functions.keySet());
 		// A let is PARALLEL, and the loop below binds one variable at a time: a let in
-		// which a later init reads an earlier variable's name is staged through
-		// temporaries first (ParallelLetStaging; the JVM twin does the same). Any other
-		// let comes back as the same object.
-		letForm = ParallelLetStaging.stage(letForm);
+		// which a later init reads an earlier variable's name, or runs code after a
+		// special binding, is staged through temporaries first (ParallelLetStaging; the
+		// JVM twin does the same). Any other let comes back as the same object.
+		letForm = ParallelLetStaging.stage(letForm, ctx.specialVars);
 		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));

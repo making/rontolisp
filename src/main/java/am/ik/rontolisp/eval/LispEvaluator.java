@@ -1257,11 +1257,12 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.SYMBOL_FUNCTION + " expects 1 argument, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispSymbol sym)) {
+			String name = standardSymbolName(args.get(0));
+			if (name == null) {
 				throw new LispEvalException(
 						LispNames.SYMBOL_FUNCTION + " expects a symbol, got " + args.get(0).print());
 			}
-			return resolveFunction(sym.name());
+			return resolveFunction(name);
 		}));
 		// fdefinition = symbol-function for symbol designators (no setf-function names).
 		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
@@ -1269,10 +1270,11 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.FDEFINITION + " expects 1 argument, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispSymbol sym)) {
+			String name = standardSymbolName(args.get(0));
+			if (name == null) {
 				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
 			}
-			return resolveFunction(sym.name());
+			return resolveFunction(name);
 		}));
 		// concatenate re-registered WITH the class registry, so a result-type designator
 		// naming a user deftype (fast-http's simple-byte-vector) resolves through its
@@ -2240,8 +2242,9 @@ public final class LispEvaluator {
 		// operators too).
 		this.globalEnv.defineFunction(LispNames.FBOUNDP, new LispFunction(LispNames.FBOUNDP, args -> {
 			requireSingleArg(LispNames.FBOUNDP, args);
-			if (args.get(0) instanceof LispNil) {
-				// nil IS a symbol in CL and names no function -- trivia level2 probes
+			if (args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+				// nil and t ARE symbols in CL and name no function -- trivia level2
+				// probes
 				// (fboundp (find-symbol ...)) whose argument is nil on a miss.
 				return LispNil.INSTANCE;
 			}
@@ -10224,6 +10227,21 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The spelling of a symbol-valued argument of the function-namespace operators:
+	 * {@code t} and {@code nil} are their own value types here, but symbols all the same.
+	 * @param value the argument
+	 * @return the symbol's name, or {@code null} when the value is not a symbol
+	 */
+	private static @Nullable String standardSymbolName(LispVal value) {
+		return switch (value) {
+			case LispSymbol sym -> sym.name();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
+			default -> null;
+		};
+	}
+
+	/**
 	 * Resolves a function designator name against the global function namespace.
 	 * @param name the function name
 	 * @return the function value
@@ -13661,11 +13679,12 @@ public final class LispEvaluator {
 				}
 			}
 		}
-		// Not a designator at all: CL's type-error. NIL IS a symbol, so it is the
+		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
 		// undefined-function the symbol arm above reports for any unbound name.
-		LispEvalException failure = function instanceof LispNil
+		String standardName = standardSymbolName(function);
+		LispEvalException failure = standardName != null
 				? LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
-						ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + "NIL"
+						ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + standardName
 								+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
 				: LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
 						ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX + function.print());

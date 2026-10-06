@@ -17722,6 +17722,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theFunctionNamespaceOfTNilAndAKeywordIsUnbound() {
+		// fboundp answers nil and symbol-function / fdefinition / funcall / apply signal
+		// undefined-function for t, nil, a keyword and an undefined name -- sbcl's
+		// answers, pinned on all four backends.
+		assertThat(printedLines(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
 	void aNameDispatchAnswersEveryNameItsChainDoes() {
 		// The reference answer for the compilers' searched name dispatch: reads, sets
 		// and progv bindings by name over more names than one segment holds, two pairs
@@ -22750,6 +22759,18 @@ class LispEvaluatorTest {
 				(defvar *a* 1)
 				(let ((*a* 2) (b *a*)) (list *a* b))
 				""").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void specialVarLetBindsAfterEveryInit() {
+		// let is parallel: an init that CALLS code reading a special runs before an
+		// earlier binding of that special, so it sees the outer value.
+		assertThat(evalMulti("""
+				(defvar *a* 0)
+				(defun peek () *a*)
+				(list (let ((*a* 1) (b (peek))) (list *a* b))
+				      (let ((*a* 3) (b (symbol-value '*a*))) (list *a* b)))
+				""").print()).isEqualTo("((1 0) (3 0))");
 	}
 
 	@Test

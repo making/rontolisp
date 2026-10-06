@@ -14,6 +14,12 @@ four backends** -- in `(let ((a b) (b a)) ...)` the second init reads the OUTER 
   `(let ((%let-init-0 i0) ...) (let ((a %let-init-0) ...) body...))`. A literal init binds
   directly. Any other `let` comes back as the SAME object: emitted bytes unchanged, typed
   slots kept.
+- **A special binding is observable without its name**: a later init that RUNS CODE (any cons
+  but `quote`/`function`/`lambda`) after a special binding -- `(f)` whose body reads `*x*`,
+  `(symbol-value '*x*)` -- is staged too; the let compilers pass `ctx.specialVars` (proclaimed
+  and locally declared, after `SpecialDeclarationScoping`). Before 2026-10-06
+  `(let ((*x* 1) (y (f))) ...)` answered `(1 1)` on the JVM and both WASM backends, `(1 0)`
+  on SBCL and the interpreter.
 - **Why at the let compilers and not an AST pre-pass**: `do`, `multiple-value-bind` and
   every other macro expanding to a `let` expand inside the expression compilers, after any
   pre-pass ran. The entry is the one place all of them reach.
@@ -37,5 +43,7 @@ operator with no argument is a compile error naming it. Was an
 
 `JvmLispCompilerTest.compileAndRunLetBindsInParallel` / `.compileAndRunArithmeticWithNoArguments`,
 `WasmLispCompilerIntegrationTest.letBindsInParallel` / `.arithmeticWithNoArguments`, ci-spec
-`let-binds-in-parallel`, `arithmetic-identities-with-no-arguments`; scheme-spec
+`let-binds-in-parallel`, `arithmetic-identities-with-no-arguments`; the special case:
+`specialVarLetBindsAfterEveryInit` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+`WasmLispCompilerIntegrationTest`), ci-spec `special-let-binds-after-every-init`; scheme-spec
 `internal-defines-are-letrec-star` (the swap through the Scheme front end).

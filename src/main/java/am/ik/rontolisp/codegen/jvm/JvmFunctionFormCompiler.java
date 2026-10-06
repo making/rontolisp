@@ -77,6 +77,13 @@ final class JvmFunctionFormCompiler {
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		int symSlot = ctx.allocTemp();
 		ctx.body.astore(symSlot);
+		// nil is a symbol that names no function: it reports as "NIL" like any other
+		// undefined name instead of reaching the registry as a null.
+		MethodCode.Label named = ctx.body.newLabel();
+		ctx.body.aload(symSlot).ifnonnull(named);
+		JvmEmitHelper.compileStringLiteral("NIL", ctx);
+		ctx.body.astore(symSlot);
+		ctx.body.labelBinding(named);
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.evalStoreRef != null) {
 			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className));

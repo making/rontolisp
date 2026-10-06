@@ -32,9 +32,16 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * (let ((%let-init-0 init0) (%let-init-1 init1)) (let ((a %let-init-0) (b %let-init-1)) body...))
  * </pre>
  *
- * whose outer inits still run left to right and see only outer names. A {@code let}
- * without that hazard -- nearly every one -- is returned as the SAME object, so its
- * emitted bytes do not change and its bindings keep their typed slots.
+ * whose outer inits still run left to right and see only outer names.
+ *
+ * <p>
+ * A SPECIAL binding is observable without its name: it is the dynamic binding every read
+ * resolves through, so a later init that runs code -- {@code (f)} whose body reads
+ * {@code *x*}, {@code (symbol-value '*x*)} -- saw the new value in
+ * {@code (let ((*x* 1) (y (f))) ...)}. A special followed by such an init is staged the
+ * same way. A {@code let} with neither hazard -- nearly every one -- is returned as the
+ * SAME object, so its emitted bytes do not change and its bindings keep their typed
+ * slots.
  */
 public final class ParallelLetStaging {
 
@@ -43,12 +50,13 @@ public final class ParallelLetStaging {
 
 	/**
 	 * Stages the inits of a {@code let} in which a later init refers to an earlier
-	 * variable's name.
+	 * variable's name, or runs code after an earlier special binding.
 	 * @param letForm the {@code (let bindings body...)} form
+	 * @param specialVars the names bound dynamically on this compile path
 	 * @return the staged form, or {@code letForm} itself when no init can observe the
 	 * binding order
 	 */
-	public static LispCons stage(LispCons letForm) {
+	public static LispCons stage(LispCons letForm, Set<String> specialVars) {
 		if (!(letForm.cdr() instanceof LispCons rest)
 				|| !(LispMacroExpander.normalizeBindingList(rest.car()) instanceof LispCons bindingList)
 				|| !bindingList.isProperList()) {
@@ -65,7 +73,8 @@ public final class ParallelLetStaging {
 			names.add(name.name());
 			inits.add(initCell.car());
 		}
-		if (!laterInitReadsEarlierVariable(names, inits)) {
+		if (!laterInitRunsAfterSpecialBinding(names, inits, specialVars)
+				&& !laterInitReadsEarlierVariable(names, inits)) {
 			return letForm;
 		}
 		List<LispVal> staged = new ArrayList<>();
@@ -84,6 +93,27 @@ public final class ParallelLetStaging {
 		LispCons outer = (LispCons) list(List.of(new LispSymbol(LispNames.LET), list(staged), inner));
 		SourceProvenance.inherit(letForm, inner);
 		return SourceProvenance.inherit(letForm, outer);
+	}
+
+	private static boolean laterInitRunsAfterSpecialBinding(List<String> names, List<LispVal> inits,
+			Set<String> specialVars) {
+		boolean specialBound = false;
+		for (int i = 0; i < inits.size(); i++) {
+			if (specialBound && runsCode(inits.get(i))) {
+				return true;
+			}
+			specialBound |= specialVars.contains(names.get(i));
+		}
+		return false;
+	}
+
+	// A literal, a variable read, a quoted datum and a function object run nothing that
+	// could read a dynamic binding; anything else may. A variable read of the special
+	// itself is the named hazard below.
+	private static boolean runsCode(LispVal init) {
+		return init instanceof LispCons cons
+				&& !(cons.car() instanceof LispSymbol head && (head.name().equals(LispNames.QUOTE)
+						|| head.name().equals(LispNames.FUNCTION) || head.name().equals(LispNames.LAMBDA)));
 	}
 
 	private static boolean laterInitReadsEarlierVariable(List<String> names, List<LispVal> inits) {
