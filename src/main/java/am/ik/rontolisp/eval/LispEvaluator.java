@@ -53,6 +53,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.SpecialDeclarations;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
@@ -554,6 +555,18 @@ public final class LispEvaluator {
 	 * begins).
 	 */
 	private final java.util.Set<String> specialVars = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/**
+	 * The names a LOCAL {@code (declare (special ...))} has named so far, recorded as
+	 * each binding form reads its declarations. Such a name is special only where a
+	 * declaration covers it ({@link Environment#SPECIAL}); elsewhere a binding of it is
+	 * lexical. A free reference to one with no lexical binding in sight reads an active
+	 * dynamic binding before the global -- an undefined variable, which CL
+	 * implementations treat as special -- so only these names (and any, once
+	 * {@code progv} has run) ever consult the dynamic store on a lexical miss. Concurrent
+	 * for the same reason as {@link #specialVars}.
+	 */
+	private final java.util.Set<String> localSpecials = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 	{
 		// Seeded: *print-escape* is proclaimed special without a defvar in user code,
@@ -5240,9 +5253,10 @@ public final class LispEvaluator {
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
 		LispVal resolved = prepareJavaSites(resolveStructLiterals(this.packageResolver.resolve(expr)));
-		// Register special declarations BEFORE evaluating, so a defun body's local
-		// (declare (special x)) makes later let bindings of x dynamic (the same
-		// pessimistic program-wide reading the compilers get from SpecialVarCollector).
+		// Register the form's special proclamations BEFORE evaluating it, so a defvar
+		// makes the bindings of its name in the same form dynamic. A local
+		// (declare (special x)) is no proclamation: the binding form it heads reads it
+		// (declaredSpecials).
 		SpecialVarCollector.collectForm(resolved, this.specialVars);
 		try {
 			return eval(resolved, this.globalEnv);
@@ -5715,12 +5729,15 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates a bare symbol reference. Keywords self-evaluate. A special variable with
-	 * an active dynamic binding reads that binding (dynamic extent, visible across
-	 * function calls); otherwise the reference falls through to the ordinary
-	 * lexical/global lookup, which finds the special's global default. Non-special names
-	 * never reach the dynamic store, so the cheap emptiness gate keeps ordinary lexical
-	 * reads (the common case) off the thread-local path entirely.
+	 * Evaluates a bare symbol reference. Keywords self-evaluate. A proclaimed special
+	 * reads its active dynamic binding (dynamic extent, visible across function calls),
+	 * else its global -- it is never bound lexically, so no closure holds a copy of it.
+	 * Any other name reads its innermost lexical binding; where none is in sight, or a
+	 * local special declaration is the innermost thing naming it
+	 * ({@link Environment#SPECIAL}), an active dynamic binding of it (a declared one, or
+	 * {@code progv}'s), and the global behind that. Only a name a local declaration has
+	 * named, or any name once {@code progv} has run, can have such a binding, so an
+	 * ordinary lexical or global read never reaches the thread-local store.
 	 */
 	private LispVal evalSymbolRef(LispSymbol sym, Environment env) {
 		if (sym.isKeyword()) {
@@ -5730,10 +5747,26 @@ public final class LispEvaluator {
 		if (LispNames.PACKAGE_VAR.equals(name)) {
 			return currentPackageValue();
 		}
-		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
-			return this.dynamicBindings.get(name);
+		LispVal value;
+		if (this.specialVars.contains(name)) {
+			if (this.dynamicBindings.isBound(name)) {
+				return this.dynamicBindings.get(name);
+			}
+			value = env.lookupOrNull(name);
+			if (value == Environment.SPECIAL) {
+				// A local declaration of a name proclaimed only afterwards.
+				value = env.root().lookupOrNull(name);
+			}
 		}
-		LispVal value = env.lookupOrNull(name);
+		else {
+			value = env.lookupLexical(name);
+			if (value == null || value == Environment.SPECIAL) {
+				if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
+					return this.dynamicBindings.get(name);
+				}
+				value = env.root().lookupOrNull(name);
+			}
+		}
 		if (value == null && !this.globalSymbolMacros.isEmpty()) {
 			// define-symbol-macro: the name is not a variable, so it only ever reaches
 			// here with nothing bound. Evaluating the expansion in the CURRENT
@@ -7160,10 +7193,12 @@ public final class LispEvaluator {
 	/**
 	 * The scope of a call of {@code lambda} on {@code args} whose every parameter binds
 	 * lexically -- the arguments checked against the lambda list and bound in a fresh
-	 * scope over the closure's -- or {@code null} when a parameter is proclaimed special:
-	 * its dynamic binding must be popped when the body ends, which {@link #apply} does in
-	 * a frame of its own. This is the tail-transparent call of {@link #evalCons}'s loop:
-	 * the body runs in the caller's frame.
+	 * scope over the closure's, the names a free special declaration at the head of the
+	 * body names marked special there -- or {@code null} when a parameter is special
+	 * (proclaimed, or declared in the body): its dynamic binding must be popped when the
+	 * body ends, which {@link #apply} does in a frame of its own. This is the
+	 * tail-transparent call of {@link #evalCons}'s loop: the body runs in the caller's
+	 * frame.
 	 * @param lambda the function
 	 * @param args its arguments
 	 * @return the body's scope, or null
@@ -7171,15 +7206,16 @@ public final class LispEvaluator {
 	private @Nullable Environment lexicalLambdaScope(LispLambda lambda, List<LispVal> args) {
 		checkArity(lambda, args);
 		int required = lambda.params().size();
-		if (!this.specialVars.isEmpty()) {
-			for (int i = 0; i < required; i++) {
-				if (this.specialVars.contains(lambda.params().get(i).name())) {
-					return null;
-				}
-			}
-			if (lambda.rest() != null && this.specialVars.contains(lambda.rest().name())) {
+		Set<String> declared = declaredSpecials(lambda.body(), true);
+		for (int i = 0; i < required; i++) {
+			String paramName = lambda.params().get(i).name();
+			if (this.specialVars.contains(paramName) || declared.contains(paramName)) {
 				return null;
 			}
+		}
+		if (lambda.rest() != null
+				&& (this.specialVars.contains(lambda.rest().name()) || declared.contains(lambda.rest().name()))) {
+			return null;
 		}
 		Environment lambdaEnv = callScope(lambda);
 		for (int i = 0; i < required; i++) {
@@ -7192,6 +7228,7 @@ public final class LispEvaluator {
 			}
 			lambdaEnv.define(lambda.rest().name(), restList);
 		}
+		markDeclaredSpecials(declared, lambdaEnv);
 		return lambdaEnv;
 	}
 
@@ -9506,35 +9543,25 @@ public final class LispEvaluator {
 		}
 		Environment macroEnv = new Environment(macro.env());
 		macroEnv.lexicalFunction(name);
-		// A macro parameter named like a proclaimed special must also bind DYNAMICALLY:
-		// symbol reads consult the dynamic store first, so a lexical binding would be
-		// shadowed by an active dynamic binding of the same name and the macro body
-		// would read that value instead of the argument form (cl-ppcre's
-		// case-insensitive-mode-p has a parameter named flags, expanded while flags is
-		// dynamically bound).
+		// A macro parameter binds like a function's (bindParameter): dynamically when
+		// its name is proclaimed or declared special, lexically otherwise -- and a
+		// lexical one is what the body reads even while a dynamic binding of the name
+		// is active (cl-ppcre's case-insensitive-mode-p has a parameter named flags,
+		// expanded while flags is dynamically bound).
+		Set<String> declared = declaredSpecials(macro.body(), true);
 		List<String> dynamicParams = null;
 		for (int i = 0; i < macro.required().size(); i++) {
-			String paramName = macro.required().get(i).name();
-			macroEnv.define(paramName, args.get(i));
-			if (!this.specialVars.isEmpty() && this.specialVars.contains(paramName)) {
-				this.dynamicBindings.push(paramName, args.get(i));
-				dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
-				dynamicParams.add(paramName);
-			}
+			dynamicParams = bindParameter(macro.required().get(i).name(), args.get(i), declared, macroEnv,
+					dynamicParams);
 		}
 		if (macro.rest() != null) {
 			LispVal restList = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= macro.required().size(); i--) {
 				restList = new LispCons(args.get(i), restList);
 			}
-			String restName = macro.rest().name();
-			macroEnv.define(restName, restList);
-			if (!this.specialVars.isEmpty() && this.specialVars.contains(restName)) {
-				this.dynamicBindings.push(restName, restList);
-				dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
-				dynamicParams.add(restName);
-			}
+			dynamicParams = bindParameter(macro.rest().name(), restList, declared, macroEnv, dynamicParams);
 		}
+		markDeclaredSpecials(declared, macroEnv);
 		// Common Lisp expands a macro while COMPILING the calling file, so *package* is
 		// that file's. The interpreter expands lazily instead, at call time, and only a
 		// TOP-LEVEL call site still has its file's package current -- a call buried in a
@@ -11103,13 +11130,14 @@ public final class LispEvaluator {
 
 	/**
 	 * The scope of a {@code let} whose every binding is lexical, established -- the inits
-	 * evaluated in {@code env} (a {@code let} is parallel) and the names defined in a
-	 * fresh scope -- or {@code null}, with nothing evaluated, when the form needs a frame
-	 * of its own: a binding of a special (a dynamic binding to pop) or of
-	 * {@code *package*} (the resolver's package to restore), or a shape the plain walk
-	 * does not cover, all of which {@link #evalLetIn} handles. This is the
-	 * tail-transparent {@code let} of {@link #evalCons}'s loop: its body runs in the
-	 * caller's frame.
+	 * evaluated in {@code env} (a {@code let} is parallel), the names defined in a fresh
+	 * scope, and the names a FREE special declaration at the head of its body names
+	 * marked special there ({@link #markDeclaredSpecials}) -- or {@code null}, with
+	 * nothing evaluated, when the form needs a frame of its own: a binding of a special
+	 * (a dynamic binding to pop) or of {@code *package*} (the resolver's package to
+	 * restore), or a shape the plain walk does not cover, all of which {@link #evalLetIn}
+	 * handles. This is the tail-transparent {@code let} of {@link #evalCons}'s loop: its
+	 * body runs in the caller's frame.
 	 * @param cons the let form
 	 * @param env the environment the form is evaluated in
 	 * @return the body's scope, or null
@@ -11122,13 +11150,14 @@ public final class LispEvaluator {
 		if (!(bindings instanceof LispNil) && !(bindings instanceof LispCons)) {
 			return null;
 		}
-		boolean checkSpecial = !this.specialVars.isEmpty();
+		Set<String> declared = declaredSpecials(bindingsCell.cdr(), false);
 		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
 			if (!(cell.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol name)
 					|| !(pair.cdr() instanceof LispCons)) {
 				return null;
 			}
-			if (LispNames.PACKAGE_VAR.equals(name.name()) || checkSpecial && this.specialVars.contains(name.name())) {
+			if (LispNames.PACKAGE_VAR.equals(name.name()) || this.specialVars.contains(name.name())
+					|| declared.contains(name.name())) {
 				return null;
 			}
 		}
@@ -11137,7 +11166,58 @@ public final class LispEvaluator {
 			LispCons pair = (LispCons) cell.car();
 			letEnv.define(((LispSymbol) pair.car()).name(), eval(((LispCons) pair.cdr()).car(), env));
 		}
+		markDeclaredSpecials(declared, letEnv);
 		return letEnv;
+	}
+
+	/**
+	 * The names the special declarations at the head of a binding form's body declare
+	 * ({@link SpecialDeclarations}), recorded as names a local declaration has named:
+	 * from here on a free reference to one consults the dynamic store
+	 * ({@link #evalSymbolRef}). Empty for the commonest body, whose first form is no
+	 * declaration.
+	 * @param body the body forms, a cons chain
+	 * @param functionBody whether the body is a function's
+	 * @return the declared names
+	 */
+	private Set<String> declaredSpecials(LispVal body, boolean functionBody) {
+		Set<String> names = SpecialDeclarations.leading(body, functionBody);
+		recordLocalSpecials(names);
+		return names;
+	}
+
+	/** {@link #declaredSpecials(LispVal, boolean)} over a body held as a list. */
+	private Set<String> declaredSpecials(List<LispVal> body, boolean functionBody) {
+		Set<String> names = SpecialDeclarations.leading(body, functionBody);
+		recordLocalSpecials(names);
+		return names;
+	}
+
+	private void recordLocalSpecials(Set<String> names) {
+		for (String name : names) {
+			if (!this.localSpecials.contains(name)) {
+				this.localSpecials.add(name);
+			}
+		}
+	}
+
+	/**
+	 * Marks every declared name not proclaimed special ({@link Environment#SPECIAL}) in
+	 * the scope a binding form's body runs in, unless the scope already binds it -- a
+	 * name the form binds lexically is no declared one. A name the form binds DYNAMICALLY
+	 * is marked by its caller, which pushed the binding. A reference in the body then
+	 * reads the dynamic binding even where a lexical binding of the name is visible
+	 * further out, and an inner binding of the name, which is lexical unless declared,
+	 * shadows the mark (CLHS 3.3.4).
+	 * @param declared the names the body's declarations declare special
+	 * @param scope the body's scope
+	 */
+	private void markDeclaredSpecials(Set<String> declared, Environment scope) {
+		for (String name : declared) {
+			if (!this.specialVars.contains(name) && !scope.isBound(name)) {
+				scope.define(name, Environment.SPECIAL);
+			}
+		}
 	}
 
 	/**
@@ -11163,59 +11243,44 @@ public final class LispEvaluator {
 		// currentPackageValue); savedPackage is what the finally restores.
 		List<String> dynamicNames = null;
 		String savedPackage = null;
+		Set<String> declared = declaredSpecials(((LispCons) cons.cdr()).cdr(), false);
 		if (bindings instanceof LispCons bindingsCons) {
 			List<LispVal> bindingList = bindingsCons.toList();
-			if (this.specialVars.isEmpty()) {
-				// No name can be special: bind every init lexically. let is parallel, so
-				// each init is evaluated in the OUTER env before the binding takes
-				// effect.
-				for (LispVal binding : bindingList) {
-					List<LispVal> pair = ((LispCons) binding).toList();
-					String bindingName = ((LispSymbol) pair.get(0)).name();
-					LispVal bindingValue = eval(pair.get(1), env);
-					if (LispNames.PACKAGE_VAR.equals(bindingName) && savedPackage == null) {
-						savedPackage = rebindCurrentPackage(bindingValue);
-					}
-					letEnv.define(bindingName, bindingValue);
+			// Evaluate ALL inits in the outer env first (parallel let -- a later init
+			// must not see an earlier binding in the same let), then establish the
+			// lexical and dynamic bindings. A binding is dynamic when its name is
+			// proclaimed special or a declaration at the head of the body names it
+			// (CLHS 3.3.4); a dynamic binding has no lexical twin, so a closure built in
+			// the body reads whatever binding is active when it runs, as in CL.
+			int n = bindingList.size();
+			String[] names = new String[n];
+			LispVal[] vals = new LispVal[n];
+			for (int i = 0; i < n; i++) {
+				List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
+				names[i] = ((LispSymbol) pair.get(0)).name();
+				vals[i] = eval(pair.get(1), env);
+				if (LispNames.PACKAGE_VAR.equals(names[i]) && savedPackage == null) {
+					savedPackage = rebindCurrentPackage(vals[i]);
 				}
 			}
-			else {
-				// Some names may be special: evaluate ALL inits in the outer env first
-				// (parallel let -- a later init must not see an earlier binding in the
-				// same
-				// let), then establish the lexical and dynamic bindings.
-				int n = bindingList.size();
-				String[] names = new String[n];
-				LispVal[] vals = new LispVal[n];
-				for (int i = 0; i < n; i++) {
-					List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
-					names[i] = ((LispSymbol) pair.get(0)).name();
-					vals[i] = eval(pair.get(1), env);
-					if (LispNames.PACKAGE_VAR.equals(names[i]) && savedPackage == null) {
-						savedPackage = rebindCurrentPackage(vals[i]);
+			for (int i = 0; i < n; i++) {
+				boolean proclaimed = this.specialVars.contains(names[i]);
+				if (proclaimed || declared.contains(names[i])) {
+					if (dynamicNames == null) {
+						dynamicNames = new java.util.ArrayList<>(2);
+					}
+					this.dynamicBindings.push(names[i], vals[i]);
+					dynamicNames.add(names[i]);
+					if (!proclaimed) {
+						letEnv.define(names[i], Environment.SPECIAL);
 					}
 				}
-				for (int i = 0; i < n; i++) {
-					// A special name is ALSO defined lexically with the same value (dual
-					// binding): a closure built in the body and called after the dynamic
-					// extent pops must still see the bound value -- CL gets this via a
-					// lexical rebinding shadowing the special (a free (declare (special
-					// x)) does not affect an inner LET binding of x), which the
-					// pessimistic program-wide special set cannot distinguish
-					// (cl-ppcre's matcher closures capture end-string this way). The
-					// dual binding diverges only under setq, which updates the dynamic
-					// side alone.
+				else {
 					letEnv.define(names[i], vals[i]);
-					if (this.specialVars.contains(names[i])) {
-						if (dynamicNames == null) {
-							dynamicNames = new java.util.ArrayList<>(2);
-						}
-						this.dynamicBindings.push(names[i], vals[i]);
-						dynamicNames.add(names[i]);
-					}
 				}
 			}
 		}
+		markDeclaredSpecials(declared, letEnv);
 		try {
 			int last = parts.size() - 1;
 			for (int i = 2; i < last; i++) {
@@ -11398,14 +11463,27 @@ public final class LispEvaluator {
 			assignCurrentPackage(value);
 			return;
 		}
-		// A special with an active dynamic binding is assigned in that binding
-		// (visible to callees within the extent); otherwise env.set walks to the
-		// global default (a special never has a lexical binding to shadow).
-		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
+		// The read rule of evalSymbolRef: a proclaimed special is assigned in its active
+		// dynamic binding, else its global; any other name in its innermost lexical
+		// binding, and where a special declaration or nothing lexical names it, in an
+		// active dynamic binding, else the global.
+		if (this.specialVars.contains(name)) {
+			if (this.dynamicBindings.isBound(name)) {
+				this.dynamicBindings.setCurrent(name, value);
+			}
+			else if (!env.setLexical(name, value)) {
+				env.root().set(name, value);
+			}
+			return;
+		}
+		if (env.setLexical(name, value)) {
+			return;
+		}
+		if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
 			this.dynamicBindings.setCurrent(name, value);
 		}
 		else {
-			env.set(name, value);
+			env.root().set(name, value);
 		}
 	}
 
@@ -13431,6 +13509,34 @@ public final class LispEvaluator {
 	 * @param body the lambda's body forms
 	 * @return the block form's elements, or null
 	 */
+	/**
+	 * Binds one parameter of a function or a macro in its call scope: dynamically when
+	 * its name is proclaimed special or {@code declared} names it -- marking a declared
+	 * one special in the scope, so a reference reads the binding -- and lexically
+	 * otherwise.
+	 * @param name the parameter name
+	 * @param value the argument
+	 * @param declared the names the body's special declarations name
+	 * @param scope the call scope
+	 * @param dynamicParams the dynamic bindings made so far, or null for none
+	 * @return the dynamic bindings made, or null for none
+	 */
+	private @Nullable List<String> bindParameter(String name, LispVal value, Set<String> declared, Environment scope,
+			@Nullable List<String> dynamicParams) {
+		boolean proclaimed = this.specialVars.contains(name);
+		if (!proclaimed && !declared.contains(name)) {
+			scope.define(name, value);
+			return dynamicParams;
+		}
+		this.dynamicBindings.push(name, value);
+		if (!proclaimed) {
+			scope.define(name, Environment.SPECIAL);
+		}
+		List<String> pushed = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+		pushed.add(name);
+		return pushed;
+	}
+
 	private static @Nullable List<LispVal> soleBlockForm(List<LispVal> body) {
 		if (body.size() != 1 || !(body.get(0) instanceof LispCons form)
 				|| !(form.car() instanceof LispSymbol head && LispNames.BLOCK.equals(head.name()))) {
@@ -13493,40 +13599,23 @@ public final class LispEvaluator {
 			checkArity(lambda, args);
 			int required = lambda.params().size();
 			Environment lambdaEnv = callScope(lambda);
-			// A parameter whose name is proclaimed special binds DYNAMICALLY, as in CL:
-			// symbol reads consult the dynamic store before the lexical chain, so a
-			// lexical binding of a special name would be shadowed by any active outer
-			// dynamic binding instead of holding the argument (cl-ppcre's convert
-			// phase passes such names around while they are dynamically bound). It is
-			// ALSO defined lexically with the same value: a closure built in this body
-			// and called after the extent pops must still see the argument (cl-ppcre's
-			// create-scanner-aux parameter reg-num, special only because convert.lisp
-			// pessimistically proclaimed the name, is captured by the scanner closure)
-			// -- the dual binding diverges only if the parameter is setq'd, which
-			// updates the dynamic side alone.
+			// A parameter whose name is proclaimed special, or declared special at the
+			// head of the body, binds DYNAMICALLY, as in CL -- and only so: a closure
+			// built in this body reads whatever binding is active when it runs.
+			Set<String> declared = declaredSpecials(lambda.body(), true);
 			List<String> dynamicParams = null;
 			for (int i = 0; i < required; i++) {
 				String paramName = lambda.params().get(i).name();
-				lambdaEnv.define(paramName, args.get(i));
-				if (!this.specialVars.isEmpty() && this.specialVars.contains(paramName)) {
-					this.dynamicBindings.push(paramName, args.get(i));
-					dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
-					dynamicParams.add(paramName);
-				}
+				dynamicParams = bindParameter(paramName, args.get(i), declared, lambdaEnv, dynamicParams);
 			}
 			if (lambda.rest() != null) {
 				LispVal restList = LispNil.INSTANCE;
 				for (int i = args.size() - 1; i >= required; i--) {
 					restList = new LispCons(args.get(i), restList);
 				}
-				String restName = lambda.rest().name();
-				lambdaEnv.define(restName, restList);
-				if (!this.specialVars.isEmpty() && this.specialVars.contains(restName)) {
-					this.dynamicBindings.push(restName, restList);
-					dynamicParams = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
-					dynamicParams.add(restName);
-				}
+				dynamicParams = bindParameter(lambda.rest().name(), restList, declared, lambdaEnv, dynamicParams);
 			}
+			markDeclaredSpecials(declared, lambdaEnv);
 			// See expandMacroCall: the depth tells a macro expansion whether its call
 			// site is a TOP-LEVEL form (whose file's package is still current) or one
 			// buried in a function body evaluated long after its file was read.

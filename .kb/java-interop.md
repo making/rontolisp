@@ -275,8 +275,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   - Known gaps (both paths agree unless noted): a site that a user macro's expansion BUILDS is
     lowered on the compile path (user macros pre-expanded) but not by the interpreter (the
     evaluator re-expands; the rewrite has nowhere to live) -- visible only for an upper-bound
-    receiver; a name made special by a form AFTER the binding (rontolisp's pessimistic
-    program-wide special reading) is still inferred on both.
+    receiver; a name a form AFTER the binding makes special (the compile path's special set is
+    program-wide) is still inferred on both.
 - Measured 2026-09-26 (`--warn-java-reflection`, compile path), before -> after let inference +
   declaim: swing.lisp 13 -> 32 of 53 sites resolved (the 21 left: defun parameters, user-function
   results, gethash values, a `let` assigned by `setq`); java-interop.lisp 8 of 17 unchanged (its

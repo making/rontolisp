@@ -13,11 +13,9 @@ package am.ik.rontolisp;
  * never names), and a {@code setq} of the parameter wrote the global. The stream case was
  * the interpreter's own: a parameter was no binding its special collector saw, so
  * {@code *standard-output*} named as one stayed lexical there too. The expected text is
- * SBCL's but for one value: a closure called after the parameter's extent answers the
- * argument it captured ({@code :CAPTURED}), where SBCL reads the global -- the dual
- * binding every backend gives a special binding
- * ({@code .kb/dynamic-special-variables.md}). Shared by the backend suites, so every
- * backend is held to one expected text; {@code ci-spec.yaml}'s
+ * SBCL's: a closure called after the parameter's extent reads the global, as every
+ * special reference does ({@code SpecialBindingScopeFixture}). Shared by the backend
+ * suites, so every backend is held to one expected text; {@code ci-spec.yaml}'s
  * {@code special-parameters-bind-dynamically} runs the same program on the native binary.
  */
 public final class SpecialParameterFixture {
@@ -69,6 +67,6 @@ public final class SpecialParameterFixture {
 	public static final String EXPECTED = String.join("\n",
 			"(1 (:A (2 3) :B) :DEFAULT 4 :KDEFAULT 5 (6 7) 80 (9 9) (1 (:TOP NIL)) (0 (:TOP T)) (:TOP :TOP-Y))",
 			"(10 11 12 (1 2 3) :TOP)", "((((:S))) (:EV 1) (:OD 1 2) :TOP)", "(:TOP :THROWN (1 :RET) :TOP)",
-			"(:SET :TOP :CAPTURED :TOP)", "(:DONE \"redirected\")");
+			"(:SET :TOP :TOP :TOP)", "(:DONE \"redirected\")");
 
 }

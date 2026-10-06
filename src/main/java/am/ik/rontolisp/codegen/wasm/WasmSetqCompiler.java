@@ -149,7 +149,6 @@ final class WasmSetqCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 			ctx.writer.writeUnsignedLeb128(0);
-			dualWriteSpecialGlobal(name, tmpSlot, ctx);
 			// Return value
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
@@ -173,7 +172,6 @@ final class WasmSetqCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 			ctx.writer.writeUnsignedLeb128(0);
-			dualWriteSpecialGlobal(name, tmpSlot, ctx);
 			// Return value
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
@@ -222,26 +220,6 @@ final class WasmSetqCompiler {
 		// top-level let/loop/do variable -- nor the temporaries the macro expanders
 		// generate (__loop_acc0, the while cursor, __nrev_*), which are not symbols in
 		// any package at all.
-		dualWriteSpecialGlobal(name, slot, ctx);
-	}
-
-	// A special that is dual-bound here (a lexical slot/capture established by a
-	// special-named let, see WasmLetCompiler): the assignment must reach the DYNAMIC
-	// binding too, so a called function reading the special sees it. Stack-neutral.
-	// --reentrant: the dynamic half lives in the per-call task record (WasmDynVars).
-	private static void dualWriteSpecialGlobal(String name, int valueSlot, WasmLispCompiler.Ctx ctx) {
-		Integer globalIndex = ctx.globalIndices.get(name);
-		if (globalIndex == null || !ctx.specialVars.contains(name)) {
-			return;
-		}
-		if (WasmDynVars.handles(ctx, name)) {
-			WasmDynVars.emitWrite(ctx, name, globalIndex, valueSlot);
-			return;
-		}
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(valueSlot);
-		ctx.writer.write(Instruction.SET_GLOBAL);
-		ctx.writer.writeUnsignedLeb128(globalIndex);
 	}
 
 	/**

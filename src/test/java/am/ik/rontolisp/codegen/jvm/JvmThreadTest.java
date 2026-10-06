@@ -153,14 +153,16 @@ class JvmThreadTest {
 	@Test
 	void spawnedThreadDoesNotInheritTheSpawnersDynamicBindings() throws Exception {
 		// The plain-ThreadLocal rule of .kb/dynamic-special-variables.md, now with user
-		// code as the spawner: the new thread reads the global default.
+		// code as the spawner: the new thread reads the global default -- a closure built
+		// inside the binding too, since no special binding has a lexical twin to capture.
 		assertThat(compileAndRun("""
 				(defvar *who* 'global)
 				(defun who-reader () *who*)
 				(let ((*who* 'spawner))
 				  (print (list (who-reader)
-				               (rontolisp:join-thread (rontolisp:make-thread #'who-reader)))))
-				""", "ThreadScopeProg")).isEqualTo("(SPAWNER GLOBAL)");
+				               (rontolisp:join-thread (rontolisp:make-thread #'who-reader))
+				               (rontolisp:join-thread (rontolisp:make-thread (lambda () *who*))))))
+				""", "ThreadScopeProg")).isEqualTo("(SPAWNER GLOBAL GLOBAL)");
 	}
 
 	@Test

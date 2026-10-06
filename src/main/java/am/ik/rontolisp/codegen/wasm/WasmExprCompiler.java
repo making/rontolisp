@@ -212,7 +212,7 @@ final class WasmExprCompiler {
 	/**
 	 * The local slot a form reads as a bare {@code local.get}, or -1. Exactly the
 	 * variables {@link #compileSymbolRef} compiles to that one instruction: a lexical
-	 * local that is not a special (a dual-bound special reads its global), not an unboxed
+	 * local that is not a special (a special reads its global), not an unboxed
 	 * dual-representation local (a boxing read) and not a boxed captured cell (an unbox).
 	 * An emitter that needs its operand twice reads such a slot in place instead of
 	 * spilling a copy into a temp.
@@ -240,14 +240,11 @@ final class WasmExprCompiler {
 			compileExpr(LispNil.INSTANCE, ctx);
 			return;
 		}
-		// DYNAMIC-FIRST read of a dual-bound special (see WasmLetCompiler): in the
-		// binding function the lexical slot exists only so nested lambdas can capture
-		// it -- reads go to the module global, so a called function's dynamic
-		// rebinding or setq is visible. Inside a closure, the CAPTURE wins: the
-		// closure may run after the extent ended and restored the global. The binding
-		// is active here, so the value is never the UNBOUND marker.
-		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
-				&& ctx.globalIndices.containsKey(name)) {
+		// A special is never a lexical (WasmLetCompiler binds it in its global alone),
+		// so it is read from the global below wherever it is read -- in a closure as in
+		// the binding function. In the function whose let made the binding it is active,
+		// so the value is never the UNBOUND marker.
+		if (ctx.boundSpecials.contains(name) && ctx.globalIndices.containsKey(name)) {
 			emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
 			return;
 		}

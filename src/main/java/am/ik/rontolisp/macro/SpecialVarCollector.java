@@ -21,14 +21,17 @@ import java.util.Set;
  * dynamic-extent binding under {@code let}/{@code let*} instead of a fresh lexical slot.
  *
  * <p>
- * A name becomes special when Common Lisp would proclaim it special: it is the name of a
+ * A name is PROCLAIMED special when Common Lisp would proclaim it: it is the name of a
  * top-level {@code defvar}/{@code defparameter}/{@code defconstant}, or it appears in a
- * {@code (special ...)} clause of a top-level {@code declaim} or {@code proclaim}. A
- * local {@code (declare (special x))} anywhere inside a form is honored PESSIMISTICALLY:
- * the name becomes special program-wide, not just for that binding form -- the same
- * global treatment a declaim would give it (cl-ppcre's convert phase threads its state
- * through let-bound locally-declared specials, so the lite reading must cover it). The
- * earmuffs convention ({@code *x*}) is a style hint, not the mechanism: a variable is
+ * {@code (special ...)} clause of a top-level {@code declaim} or {@code proclaim}. Every
+ * binding of a proclaimed name is dynamic and every reference reads its dynamic binding.
+ * A local {@code (declare (special x))} makes only the binding it names and the
+ * references in its body special ({@link am.ik.rontolisp.SpecialDeclarations}): the
+ * interpreter reads the declarations of each binding form it evaluates
+ * ({@link #collectProclaimed} is its special set), and the compile paths rename the other
+ * bindings of such a name apart first ({@code compiler.SpecialDeclarationScoping}), after
+ * which every occurrence of it is special and it joins the set {@link #collect} answers.
+ * The earmuffs convention ({@code *x*}) is a style hint, not the mechanism: a variable is
  * special because it was declared, not because of its name.
  *
  * <p>
@@ -58,7 +61,10 @@ public final class SpecialVarCollector {
 	}
 
 	/**
-	 * Returns the set of special-variable names declared by the given top-level forms.
+	 * Returns the set of special-variable names declared by the given top-level forms:
+	 * the proclaimed ones and, on the compile paths, the locally declared ones too --
+	 * once {@code compiler.SpecialDeclarationScoping} has renamed a locally declared
+	 * name's lexical bindings apart, every occurrence left of it is special.
 	 * @param topLevelExprs the top-level forms
 	 * @return the special variable names in declaration order
 	 */
@@ -66,15 +72,18 @@ public final class SpecialVarCollector {
 		LinkedHashSet<String> specials = new LinkedHashSet<>();
 		for (LispVal expr : topLevelExprs) {
 			collectForm(expr, specials);
+			collectLocalDeclares(expr, specials);
 		}
 		return specials;
 	}
 
 	/**
-	 * Records any special names declared by a single form (a {@code defvar}-family form
-	 * or a {@code declaim}/{@code proclaim} carrying {@code (special ...)} clauses) into
-	 * the given set. Used both by {@link #collect(List)} and by the interpreter, which
-	 * discovers specials incrementally as it evaluates top-level forms.
+	 * Records the special names a single form proclaims (a {@code defvar}-family form or
+	 * a {@code declaim}/{@code proclaim} carrying {@code (special ...)} clauses), and the
+	 * seeded stream specials it binds, into the given set. Used both by
+	 * {@link #collect(List)} and by the interpreter, which discovers specials
+	 * incrementally as it evaluates top-level forms. A local special declaration is not
+	 * one ({@link #collectLocallyDeclared}).
 	 * @param form the form to inspect
 	 * @param out the set to add discovered special names to
 	 */
@@ -91,7 +100,46 @@ public final class SpecialVarCollector {
 		// `(with-input-from-string (*standard-input* s) ...)` -- which is also the only
 		// case whose behavior differs from the plain-stdio default.
 		out.addAll(collectDynamicallyBound(List.of(form), SEEDED_STREAM_SPECIALS));
-		collectDeclared(form, out);
+		collectProclaimed(form, out);
+	}
+
+	/**
+	 * Records the names a form's local {@code (declare (special ...))} declarations name,
+	 * anywhere inside it (quoted data skipped). Such a name is special only where a
+	 * declaration covers it; the interpreter keeps the set so that a free reference to
+	 * one outside every declaration -- an undefined variable CL implementations treat as
+	 * special -- still reads an active dynamic binding.
+	 * @param form the form to inspect
+	 * @param out the set to add the names to
+	 */
+	public static void collectLocallyDeclared(LispVal form, Set<String> out) {
+		collectLocalDeclares(form, out);
+	}
+
+	/**
+	 * The names the program's local special declarations name and nothing proclaims
+	 * special: the names whose OTHER bindings are lexical, which the compile paths rename
+	 * apart ({@code compiler.SpecialDeclarationScoping}). A {@code cl} symbol is never
+	 * one -- every standard variable is proclaimed special, by the backends if not by the
+	 * program.
+	 * @param program the program's top-level forms
+	 * @return those names, in first-declaration order
+	 */
+	public static LinkedHashSet<String> collectLocallyDeclaredOnly(List<LispVal> program) {
+		LinkedHashSet<String> local = new LinkedHashSet<>();
+		for (LispVal form : program) {
+			collectLocalDeclares(form, local);
+		}
+		if (local.isEmpty()) {
+			return local;
+		}
+		Set<String> proclaimed = new HashSet<>();
+		for (LispVal form : program) {
+			collectProclaimed(form, proclaimed);
+		}
+		local.removeIf(name -> proclaimed.contains(name) || PackageRegistry.isClSymbol(name)
+				|| PackageRegistry.isClSymbol(member(name)));
+		return local;
 	}
 
 	/**
@@ -112,15 +160,25 @@ public final class SpecialVarCollector {
 	}
 
 	/**
-	 * Records the special names a single form DECLARES -- {@link #collectForm} without
-	 * the seeded stream specials a binding makes special: the name of a
-	 * {@code defvar}-family form, the {@code (special ...)} clauses of a
-	 * {@code declaim}/{@code proclaim}, and every local {@code (declare (special ...))}
-	 * inside the form. One linear walk, no macro expansion.
+	 * Records the special names a single form DECLARES -- {@link #collectProclaimed} and
+	 * {@link #collectLocallyDeclared} together, without the seeded stream specials a
+	 * binding makes special. One linear walk, no macro expansion.
 	 * @param form the form to inspect
 	 * @param out the set to add discovered special names to
 	 */
 	public static void collectDeclared(LispVal form, Set<String> out) {
+		collectProclaimed(form, out);
+		collectLocalDeclares(form, out);
+	}
+
+	/**
+	 * Records the special names a single form PROCLAIMS: the name of a
+	 * {@code defvar}-family form and the {@code (special ...)} clauses of a
+	 * {@code declaim}/{@code proclaim}.
+	 * @param form the form to inspect
+	 * @param out the set to add discovered special names to
+	 */
+	public static void collectProclaimed(LispVal form, Set<String> out) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
 			return;
 		}
@@ -148,7 +206,6 @@ public final class SpecialVarCollector {
 			default -> {
 			}
 		}
-		collectLocalDeclares(form, out);
 	}
 
 	/**
@@ -472,8 +529,7 @@ public final class SpecialVarCollector {
 
 	/**
 	 * Walks the form for local {@code (declare (special ...))} clauses (skipping quoted
-	 * data) and records their names -- pessimistically program-wide, see the class
-	 * comment.
+	 * data) and records their names.
 	 */
 	private static void collectLocalDeclares(LispVal form, Set<String> out) {
 		while (form instanceof LispCons cons) {

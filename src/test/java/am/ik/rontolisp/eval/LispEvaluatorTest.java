@@ -22779,6 +22779,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void specialBindingsAreNeverCapturedAndLocalDeclarationsAreScoped() {
+		// The reference answer for the compiled backends' twins of this name, and
+		// SBCL's: a special reference reads the binding active when it runs, never one
+		// a closure captured, and a local special declaration covers the binding it
+		// names and the references in its body, not an inner binding of the name
+		// (.kb/dynamic-special-variables.md).
+		assertThat(printedLines(am.ik.rontolisp.SpecialBindingScopeFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialBindingScopeFixture.EXPECTED);
+	}
+
+	@Test
 	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() {
 		// The reference answer for the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest), and SBCL's: a setq of

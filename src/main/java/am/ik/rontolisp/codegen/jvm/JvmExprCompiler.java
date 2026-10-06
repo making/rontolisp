@@ -353,17 +353,9 @@ final class JvmExprCompiler {
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
-		// DYNAMIC-FIRST read of a dual-bound special (see JvmLetCompiler): in the
-		// binding method the lexical slot exists only so nested lambdas can capture
-		// it -- reads go to the dynamic store, so a called function's dynamic
-		// rebinding or setq is visible (cl-ppcre's starts-with accumulation). Inside a
-		// closure, the CAPTURE wins: the closure may run after the extent ended and
-		// restored the previous binding (cl-ppcre's end-string).
-		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
-				&& ctx.globals.contains(name)) {
-			compileSpecialRead(name, ctx);
-			return;
-		}
+		// A special is never a lexical (JvmLetCompiler binds it in its dynamic cell
+		// alone), so it reaches the globals arm below wherever it is read: the active
+		// binding through _dget, in a closure as in the binding method.
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			if (ctx.boxedVars.contains(name)) {
