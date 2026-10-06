@@ -108,7 +108,11 @@ runs in constant stack too: a closure calling itself through the variable that h
 closures in a table calling each other, a continuation handed to a function that calls it.
 Such a call stays an ordinary call, which the JIT can inline, until 64 of them are on the
 stack -- an adapter closure or a composed function never gets that deep -- and past that the
-chain continues through the class's trampoline. Only the first thread that makes such a call
+chain continues through the class's trampoline. It goes through a copy of the dispatch method
+for its argument count that only such calls use, so a JIT inlining a chain of them sees only
+the functions they reach; where that dispatch method is split across several methods (a
+program with many functions of that argument count), they use the shared one, so the class
+never carries its largest dispatch methods twice. Only the first thread that makes such a call
 counts them; on every other thread each one goes through the trampoline. A call inside a
 special binding is not in tail position, so it keeps a frame.
 
@@ -171,7 +175,7 @@ optimizer does not bring such a name back.
 selects — everything above — for a build script that wants it written down.
 `--optimize=off` declines it, and emits what a build before the flag was on by
 default emitted. `--optimize=size` asks for the smallest output a backend can
-give. On this backend it declines the two emissions that spend bytes on speed.
+give. On this backend it declines the three emissions that spend bytes on speed.
 One is the typed numeric loop: a `dotimes` whose body reads and writes packed
 single/double-float arrays through fixnum index math, `let` temporaries,
 `+ - * /`, `(length a)` of such an array, the unary math functions and
@@ -180,14 +184,16 @@ default to a primitive `long`/`double` loop over raw `float[]`/`double[]`
 accesses, behind a check at the loop's entry that falls back to the ordinary
 emission whenever the variables are not what the typing assumed -- the same
 values either way, several times faster, and a larger class because the body is
-emitted more than once. The other is integer expression-tree fusion: a nested
+emitted more than once. Another is integer expression-tree fusion: a nested
 `+ - * mod rem logand logior logxor lognot ash` tree compiles by default into a
 shared method that runs the whole tree as raw `long` arithmetic and boxes only
 the result, with the generic per-operation chain kept alongside as the fallback
 for anything that is not a machine-word integer at run time -- again the same
-values, and a class that carries each tree twice. `--optimize=size` keeps only
-the ordinary emissions; a program with neither shape compiles to the same class
-at both levels, and the same program's JVM bytecode is about a third the size of
+values, and a class that carries each tree twice. The third is the copy of the
+dispatch method that tail calls through a function value go through (above), one
+per argument count those calls use. `--optimize=size` keeps only the ordinary
+emissions; a program with none of these shapes compiles to the same class at both
+levels, and the same program's JVM bytecode is about a third the size of
 its WASM to begin with. So one build script can pass `--optimize=size` for every
 target.
 

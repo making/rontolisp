@@ -3180,11 +3180,18 @@ public final class JvmLispCompiler implements LispCompiler {
 								JvmRuntimeBuilder.ARITY_CHK_DESC) : null,
 						reportsCount ? arityOperators : null)
 				: JvmRuntimeBuilder.ArityReporting.NONE;
+		// The arities whose value tails call a dispatcher copy of their own, as the
+		// latest build of the dispatchers left them
+		// (JvmTailBounce.valueTailDispatcherName). The copy spends bytes on speed, so
+		// --optimize=size declines it.
+		Set<Integer> valueTailCopies = new java.util.TreeSet<>();
+		boolean valueTailDispatchers = !this.optimize.prefersSizeOverSpeed();
 		// The dispatchers over a set of funcIds: built here over every dispatchable one,
 		// and again, once the class is assembled, over the ones a kept body can make a
 		// value of (rebuildDispatchers).
 		java.util.function.Function<Set<Integer>, List<DispatchMethod>> dispatchers = funcIds -> {
 			List<DispatchMethod> built = new ArrayList<>();
+			valueTailCopies.clear();
 			if (reportsMiss || reportsCount) {
 				built.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
 						objectArrayClass, stringClass, funcIds, reportsMiss, reportsCount, arityOperators));
@@ -3197,9 +3204,22 @@ public final class JvmLispCompiler implements LispCompiler {
 						JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod)));
 			}
 			for (int arity : indirectCallArities) {
-				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp,
-						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-						applyRefForDispatch, lookupRefForDispatch, funcIds, arityReporting, mainCtx.unsupplied));
+				List<DispatchMethod> shared = JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
+						lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
+						stringClass, applyRefForDispatch, lookupRefForDispatch, funcIds, arityReporting,
+						mainCtx.unsupplied);
+				built.addAll(shared);
+				// A value tail's real call goes through a copy of its arity's
+				// dispatcher, whose profile holds only what value tails reach. An arity
+				// routed past one segment keeps the shared dispatcher: its copy would
+				// double it.
+				if (valueTailDispatchers && shared.size() == 1 && mainCtx.valueTailArities.contains(arity)) {
+					built.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos,
+							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
+							applyRefForDispatch, lookupRefForDispatch, false,
+							JvmTailBounce.valueTailDispatcherName(arity), funcIds, arityReporting, mainCtx.unsupplied));
+					valueTailCopies.add(arity);
+				}
 			}
 			// The spread dispatcher _apply calls: it takes the argument list whole, so an
 			// apply through a COMPUTED designator has no arity ceiling. Emitted with
@@ -3207,7 +3227,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesApplyRuntime) {
 				built.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp,
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-						applyRefForDispatch, lookupRefForDispatch, true, funcIds, arityReporting, mainCtx.unsupplied));
+						applyRefForDispatch, lookupRefForDispatch, true, JvmRuntimeBuilder.dispatcherName(0, true),
+						funcIds, arityReporting, mainCtx.unsupplied));
 			}
 			return built;
 		};
@@ -4262,12 +4283,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (int arity : mainCtx.valueTailArities) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
 					cp.utf8Entry(JvmTailBounce.valueTailName(arity)), cp.utf8Entry(JvmTailBounce.valueTailDesc(arity)),
-					JvmTailBounce.valueTailBody(arity, false, cp, thisClass));
+					JvmTailBounce.valueTailBody(arity, false, valueTailCopies.contains(arity), cp, thisClass));
 		}
 		if (mainCtx.spreadBounces[0]) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
 					cp.utf8Entry(JvmTailBounce.VALUE_TAIL_SPREAD_NAME), cp.utf8Entry(JvmTailBounce.valueTailDesc(1)),
-					JvmTailBounce.valueTailBody(1, true, cp, thisClass));
+					JvmTailBounce.valueTailBody(1, true, false, cp, thisClass));
 		}
 		if (valueTails) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cp.utf8Entry(JvmTailBounce.OWNER_FIELD),
@@ -4886,8 +4907,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		JvmTailBounce.unwBody(unwCode, cp, thisClass, trampolineLive(classDefinition, roots, mainCtx.bouncingBodies));
 		if (roots != null) {
+			Set<Integer> assembledCopies = Set.copyOf(valueTailCopies);
 			classDefinition = rebuildDispatchers(classDefinition, roots, dispatchMethods, dispatchers,
 					dispatchableFuncIds, functions, lambdaFuncInfos);
+			// Fewer cases can bring an arity under one segment: its value tails then call
+			// the copy the rebuild made.
+			if (!valueTailCopies.equals(assembledCopies)) {
+				classDefinition = retargetValueTails(classDefinition, mainCtx.valueTailArities, valueTailCopies, cp,
+						thisClass);
+			}
 		}
 		return this.write(classDefinition, roots, exportDecls, writeStart);
 	}
@@ -4964,6 +4992,36 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return definition.withMethods(swapped);
+	}
+
+	/**
+	 * The class with every {@code _vtc<n>} rewritten to call the dispatcher its arity has
+	 * now: the copy only value tails call when the arity is in {@code copies}, the shared
+	 * one otherwise ({@link JvmTailBounce#valueTailDispatcherName}). The copies are
+	 * decided where the dispatchers are built, and the rebuild over the funcIds a kept
+	 * body can make a value of can bring a routed arity under one segment.
+	 * @param definition the class, its dispatchers rebuilt
+	 * @param arities the argument counts of the class's value tails
+	 * @param copies the arities with a copy
+	 * @param cp the class's constant pool
+	 * @param thisClass the class
+	 * @return the class
+	 */
+	private static ClassDefinition retargetValueTails(ClassDefinition definition, Set<Integer> arities,
+			Set<Integer> copies, ConstantPool cp, ClassEntry thisClass) {
+		Map<String, Integer> byName = new HashMap<>();
+		for (int arity : arities) {
+			byName.put(JvmTailBounce.valueTailName(arity), arity);
+		}
+		List<ClassDefinition.Method> methods = new ArrayList<>();
+		for (ClassDefinition.Method method : definition.methods()) {
+			Integer arity = byName.get(method.name().stringValue());
+			methods.add(arity == null ? method
+					: new ClassDefinition.Method(method.access(), method.name(), method.descriptor(),
+							JvmTailBounce.valueTailBody(arity, false, copies.contains(arity), cp, thisClass),
+							method.lineNumbers()));
+		}
+		return definition.withMethods(methods);
 	}
 
 	/**

@@ -25,11 +25,22 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
   -- `_vtcv(fn, argList)` for an `apply`, which calls the raw apply `_applyRaw`. The site
   builds no array, so it is smaller than the inline bounce it replaced.
 - **`_vtc<n>`** (`valueTailBody`): `d = _vtcDepth; if (d < 64) { if (currentThread() ==
-  _vtcOwner) { _vtcDepth = d + 1; r = _invoke_n(fn, ..); _vtcDepth = d; return r; } if
+  _vtcOwner) { _vtcDepth = d + 1; r = _vtcd_n(fn, ..); _vtcDepth = d; return r; } if
   (_vtcOwner == null) _vtcClaim(); } return bounce`. A catch-all handler around the call
   restores `d` and rethrows, so a `throw`, a `return-from` out of a closure or an error that
   leaves a chain leaves no count behind; the answer is never checked here, so a bounce from
   deeper in the chain reaches the nearest frame that checks.
+- **The value tails' own dispatcher** `_vtcd<n>` (`valueTailDispatcherName`): a copy of
+  `_invoke_<n>`, same cases, that only `_vtc<n>` calls. A dispatcher's branch profile is one
+  per method, so through the shared one a JIT inlining a chain hop by hop inlines every
+  target the program's indirect calls reach at every hop; through the copy, only what value
+  tails reach. Built beside `_invoke_<n>` when that one is a single segment
+  (`JvmLispCompiler`'s dispatcher build, again in `rebuildDispatchers`; a rebuild over fewer
+  cases that brings an arity under one segment retargets `_vtc<n>`, `retargetValueTails`);
+  a routed arity's value tails call `_invoke_<n>`, since its copy would double the largest
+  dispatchers, and so does every arity at `--optimize=size`, which declines speed-for-size
+  trades. The trampoline re-enters the shared one. `_vtcv` calls the raw apply as before.
+  Measurements: "the value tails' own dispatcher" below.
 - **The owner and the count** are two private statics, `_vtcOwner` and `_vtcDepth`. Only the
   owner writes the count, so no thread can make it drift: another thread reads it at most and
   bounces every value tail, the behavior before the limit. `_vtcClaim` (synchronized) makes
@@ -41,10 +52,10 @@ composition, a `reduce` step -- is an ordinary call the JIT can inline. Defuns b
   chain grow unbounded; not a depth parameter: it changes every lambda's and bouncing defun's
   descriptor and bounds the frames per non-tail nesting level instead of per thread.
 - **The bound** is the owner's whole stack's, nested non-tail calls included: at most 64
-  frame groups (`_vtc<n>`, the dispatcher -- its router and segment when routed --, the
-  callee, and any named tail call the callee hands on between), a constant a program pays at
-  most once. `-Drontolisp.jvm.value-tail-limit=N` at compile time (clamped to 0..32767)
-  replaces 64; 0 makes every value tail bounce, for measuring.
+  frame groups (`_vtc<n>`, the dispatcher -- the copy, or the router and segment when
+  routed --, the callee, and any named tail call the callee hands on between), a constant a
+  program pays at most once. `-Drontolisp.jvm.value-tail-limit=N` at compile time (clamped
+  to 0..32767) replaces 64; 0 makes every value tail bounce, for measuring.
 - **The bounce** is the value tail's answer past the limit: `Object[]{Boolean.TRUE,
   designator, arg...}`, or for an `apply` `Object[]{Boolean.FALSE, designator, argList}`. No
   Lisp value is an `Object[]` with a `java.lang.Boolean` in slot 0.
@@ -160,13 +171,16 @@ JIT) and `java -XX:-UseJVMCICompiler Prog` (C2); best of 7 alternating runs, eac
 | 8 different state lambdas: 3M hops / 300,000 chains of 10 | 44 / 29 -> 53 / 48 | 62 / 76 -> 65 / 69 |
 
 Where it loses, on Graal only: Graal scalar-replaces a bounce whose array its inlined `_tramp`
-loop consumes when one closure type dominates the trampoline's profile, while a real call
-through the dispatcher cannot be inlined past one recursion level -- so a chain through
-globals of one closure type, a few hops through megamorphic dispatch, and a deep state machine
-whose `_tramp` profile also holds the 64 real calls each chain starts with run slower (the
-state machine alone in its program measures 46 both ways; beside the CPS sums 31 -> 87). No
-limit recovers them (16 / 4 / 2: one forwarder 55-62, chains of 10 50-62, against 29-36);
-at 0, every value tail bouncing, they measure as every bounce did (the state machine 35, 31).
+loop consumes when one closure type dominates the trampoline's profile, while the real call
+went through the shared dispatcher at every hop -- so a chain through globals of one closure
+type, a few hops through megamorphic dispatch, and a deep state machine whose `_tramp` profile
+also holds the 64 real calls each chain starts with run slower (the state machine alone in its
+program measures 46 both ways; beside the CPS sums 31 -> 87). No limit recovers them (16 / 4 /
+2: one forwarder 55-62, chains of 10 50-62, against 29-36); at 0, every value tail bouncing,
+they measure as every bounce did (the state machine 35, 31). The cause was first read as the
+dispatcher not inlined past one recursion level; the 2026-10-06 traces overturned that for
+Graal (below): it inlines the dispatcher recursively, each level with every target the
+dispatcher's one profile holds. The one-type chain has run faster than its bounce since.
 
 Rejected, measured on a prototype the same way:
 - A `ThreadLocal<int[]>` count, so every thread makes real calls: worse than this count in
@@ -197,10 +211,86 @@ Time on whole programs, unchanged within noise: the corpora (best of 3) ci-spec 
 scanners, 50,000 rounds) Graal 1,078 -> 1,071 ms, C2 1,198 -> 1,255; Clojure `comp`,
 `partial`, `map`/`filter`/`reduce` loops.
 
+## Measurements: the value tails' own dispatcher (2026-10-06)
+
+Same box, each round started at a 1-minute load under 16 (3-5 measured); best of 5 alternating
+runs (the 8-types program 11), each the best of 5 in-process rounds; ms for 10M calls unless
+noted. Columns: every value tail bouncing (`value-tail-limit=0`) / real calls through the
+shared `_invoke_<n>` (before) / through `_vtcd<n>` (now).
+
+| shape | Graal | C2 |
+| --- | --- | --- |
+| one forwarder through a global, alone in its program | 30 / 58 / 4 | 128 / 82 / 71 |
+| two forwarders through globals | 38 / 78 / 72 | 206 / 132 / 117 |
+| chains of 3 / 5 through globals, each alone | 125 / 165 / 141; 241 / 268 / 244 | 266 / 208 / 196; 388 / 352 / 294 |
+| chains of 1 / 3 / 5 in one program | 32 / 62 / 4; 120 / 137 / 148; 239 / 231 / 258 | 125 / 83 / 75; 247 / 203 / 185; 380 / 386 / 281 |
+| two forwarders made in the caller / made by a defun | 141 / 0 / 0; 3 / 0 / 0 | 191 / 145 / 43; 183 / 86 / 46 |
+| a `compose`d closure | 142 / 3 / 0 | 217 / 155 / 130 |
+| an argument-swapping adapter; a defun `(funcall f x)`; an `apply` forwarder | 3 / 3 / 3; 3 / 3 / 3; 14 / 15 / 15 | 128 / 41 / 40; 33 / 33 / 34; 33 / 33 / 33 |
+| `reduce :from-end` with a lambda, 1,000 elements x 10,000 | 96 / 57 / 57 | 183 / 135 / 131 |
+| 8 closure types per site: `apply-to` defun, composition, adapter, forwarder, two forwarders | 166 / 96 / 93; 218 / 174 / 197; 288 / 176 / 146; 157 / 137 / 113; 231 / 160 / 153 | 169 / 131 / 132; 270 / 219 / 244; 313 / 242 / 228; 226 / 163 / 170; 304 / 226 / 192 |
+| a tree evaluator, depth 10 / 40 | 239 / 212 / 206; 258 / 216 / 215 | 249 / 203 / 206; 231 / 203 / 202 |
+| 8 state lambdas: 3M hops; 300,000 chains of 10 | 43 / 45 / 41; 33 / 47 / 53 | 61 / 62 / 62; 65 / 65 / 67 |
+| 3M hops of 8 instances of one state lambda, beside 10 CPS sums of 100,000 | 35 / 83 / 86 | 118 / 119 / 117 |
+| the same alone in its program (bimodal: medians 84 / 82 / 86 and 65 / 61 / 62) | 58 / 55 / 83 | 60 / 56 / 58 |
+| 3M-hop chains: a closure through its variable, a pair, a continuation; 10 CPS sums | 49 / 48 / 52; 25 / 26 / 25; 25 / 24 / 25; 24 / 24 / 24 | 74 / 37 / 69 (bimodal); 30 / 28 / 28; 26 / 26 / 26; 23 / 25 / 26 |
+| the cl-ppcre scan loop above | - / 1,016 / 1,002 | - / 1,202 / 1,196 |
+
+The one-type forwarder now inlines whole on both JITs, its bounce 7x slower on Graal. What a
+chain of several hops still pays is the count and the copy's one profile, which every hop of
+the chain shares. The count: a prototype with none (unbounded, a measurement only) runs chains
+of 3 / 5 in Graal 147 -> 85 / 241 -> 168, C2 199 -> 136 / 315 -> 246, two forwarders Graal
+73 -> 64, C2 124 -> 85 -- 20-42% of a hop (`.todo/d52`); with the owner check or the
+exception handler left out instead, nothing moves (Graal chain of 3: 143 -> 141 / 145).
+The shared profile: the megamorphic composition and the 8-state chains of 10 lose 13% on
+Graal, 11% / 3% on C2, while on Graal the adapter and the forwarder of the composition's
+program win 17-18%.
+
+The traces behind it (one forwarder through a global): `-Djdk.graal.TraceInlining=true`
+shows `_invoke_1` inlined into itself seven levels deep, each level with both lambdas' cases
+-- the branch profile is the method's, so the forwarder's call and the leaf's are not told
+apart -- and stops at the eighth; through `_vtcd1` the run loop inlines `_invoke_1` with the
+forwarder alone and `_vtcd1` with the leaf alone. C2's `-XX:+PrintInlining` refuses the second
+recursion level of a 106-byte `_invoke_2` ("recursive inlining is too deep",
+`MaxRecursiveInlineLevel=1`). So neither JIT stops for the dispatcher's shape or size: the
+plan's other item -- a `tableswitch` over the funcIds, smaller segments, "a shape the JIT
+inlines one more level" -- was not built.
+
+The 8-instance state machine beside the CPS sums (31 -> 87 when the limit came) is no property
+of the bounce: alone in its program every variant is bimodal (the row above), and under
+`-XX:+UseParallelGC` the bounce, the shared and the own dispatcher all measure 46-47.
+
+Rejected, measured on a prototype the same way:
+- An allocation-free bounce on the owner thread (the designator and the arguments in
+  owner-confined statics, a shared marker as the answer): under G1, the default, slower
+  wherever a chain bounces -- 8 state lambdas, 3M hops, Graal 47 -> 125, C2 67 -> 149; the
+  state machine beside the CPS sums Graal 80 -> 119, C2 126 -> 137. A static field lives in
+  the class mirror, an old-generation object, so every store of a young argument into it
+  takes G1's cross-region post-write barrier; under `-XX:+UseParallelGC` the same statics are
+  5-10% faster than the array (Graal 45 -> 41, 47 -> 42; C2 67 -> 65, 73 -> 68). A young
+  array is what G1 makes cheap, and Graal often removes it.
+- The trampoline re-entering the copy too: the 8-instance state machine beside 300 arity-2
+  lambdas 53 -> 84 on Graal, the rest equal.
+- A copy for a routed arity too: with 400 arity-1 lambdas, one forwarder and a chain of 3 gain
+  (Graal 74 -> 57 / 183 -> 140, C2 110 -> 81 / 226 -> 227), but the copy doubles the largest
+  dispatchers -- the 116 JVM-compiled examples 46,705,620 -> 47,741,956 B (+2.2%; the ningle
+  and clack stacks +3.9-4.9%), ci-spec's class 7,632,202 -> 8,074,526 (+5.8%) -- and the
+  cl-ppcre loop, the closure-heavy real program measured, moves under neither.
+
+Bytes: bench-report's ten programs identical (`.class` and both wasm); size-report `zlib`
+178,156 -> 179,416 (three value tails), the rest identical; the corpora as one program
+identical (every arity their value tails use is routed: ci-spec 7,644,257 B, scheme-spec
+998,355, clojure-spec 7,309,978); the 116 JVM-compiled examples 46,705,620 -> 46,766,125
+(+0.13%): 52 identical, 64 larger by 147-5,274 B (`net/httpbin-jzon` +0.92%), each copy at
+most one segment; the cl-ppcre loop's class 692,679 -> 696,354. WASM output identical.
+
 ## Tests
 
 `JvmLispCompilerTest#aShallowValueTailIsACallAndAChainPastTheLimitBouncesIntoTheTrampoline`
 (every chain length around the limit, the count zero after, the worker the owner),
+`#aValueTailCallsThroughADispatcherOfItsOwnWhileItsArityFitsOneSegment` (the copy, the
+trampoline on the shared one, none at `--optimize=size` or for a routed arity, a copy the
+shake's rebuild brings),
 `#theValueTailCountComesBackWhenANonLocalExitLeavesAChain` (`throw`, `return-from`, an error,
 from past and under the limit), `#aLambdasTailCallThroughAValueRunsInConstantStack`,
 `#everyFormTheTailMarkPassesHandsABounceOnAndAPlainTailNeedsNoCheck` (every relay, the
