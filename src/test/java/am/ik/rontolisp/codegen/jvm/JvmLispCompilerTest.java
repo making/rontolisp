@@ -5535,6 +5535,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
+		// back out of the text it recovers the class from, and a direct call's stub
+		// throws that text raw, so restart mode classifies it at the pad as well
+		// (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunWrongArityThroughAFunctionValueSignalsProgramError() throws Exception {
 		String defs = "(defun f (x) x) (defun g (x &rest r) (list x r)) ";
 		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c)) (error (c) :plain)))";

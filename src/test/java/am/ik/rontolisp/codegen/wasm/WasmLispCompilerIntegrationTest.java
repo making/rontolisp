@@ -26839,6 +26839,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component, both through the whole front end: the typed throw stores the
+		// symbol in the name slot, and a direct call's stub reaches the same throw
+		// (.kb/error-handling.md).
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void ehAStructAccessorOnANonInstanceSignalsATypeError() throws Exception {
 		// The checked %obj-ref / %obj-set cast is a br_on_cast_fail whose miss runs the
 		// accessor's %struct-type-error (.kb/defstruct.md, "Accessors check their
@@ -28177,19 +28195,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void ehAnUndefinedFunctionCallIsCaughtAsASimpleErrorHere() throws Exception {
-		// The DIVERGENCE pin: the interpreter and the JVM answer
-		// :UNDEFINED for this, but the call-time stub cannot construct a typed
-		// condition -- it is produced during body compilation, after the layout scan
-		// chose what to bake -- so this backend catches the text as a simple-error.
-		// The raw-trap families ((car 1), (/ 1 0)) are not catchable here at all.
-		// Reason and re-evaluation trigger: .kb/error-handling.md,
-		// LispMacroExpander.undefinedFunctionCallStub.
+	void ehAnUndefinedFunctionCallIsCaughtAsTheClassTheProgramNames() throws Exception {
+		// A program naming the class bakes its layout, so the call-time stub reaches the
+		// dispatchers' typed throw (_undefined_function) and is caught as the
+		// interpreter and the JVM catch it; one that names no class keeps the stub's
+		// own signal, a simple-error, as the dispatchers' message-only payload is
+		// there -- where the interpreter, the JVM and SBCL catch nothing
+		// (.kb/error-handling.md,
+		// LispMacroExpander.undefinedFunctionCallStub). It was a simple-error in both
+		// until the stub learned the typed throw.
 		assertThat(compileAndRunEh("""
 				(print (handler-case (no-such-function-xyz 1)
 				         (undefined-function (e) :undefined)
-				         (simple-error (e) (list :simple (princ-to-string e)))))
-				""")).isEqualTo("(:SIMPLE \"The function NO-SUCH-FUNCTION-XYZ is undefined\")");
+				         (simple-error (e) :simple)))
+				""")).isEqualTo(":UNDEFINED");
+		assertThat(compileAndRunEh("""
+				(print (handler-case (no-such-function-xyz 1) (simple-error (e) :simple)))
+				""")).isEqualTo(":SIMPLE");
 	}
 
 	@Test

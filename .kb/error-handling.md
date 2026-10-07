@@ -1109,17 +1109,36 @@ message at the catching end** -- except for the failures the backends report as 
   entry of its own -- every constant it names is already interned class-wide. What fills the
   corpus pool: 10,057 `String`s, ~6,100 self `Methodref`s (each with its own `NameAndType` and
   name), and 2,755 `_qd$N` quoted-datum fields (three entries each).
-- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **An
-  undefined-function call diverges by CLASS rather than catchability**: catchable, but as a
-  `simple-error`. **The stub cannot construct the typed instance**: it is produced during BODY
-  compilation, after `mayCreateInstances` fixed whether the artifact has an instance representation
-  and after `usedLayoutTags` chose which layouts to bake (`%OBJ-NEW reached the compiler with no
-  instance representation`). **Trigger: teach both gates about undefined calls** -- the precedent is
-  the non-number family ("A non-number reaching arithmetic"), whose `type-error` layout
-  `usedLayoutTags` bakes on the pad's presence alone.
+- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it.
 - **Undefined functions keep the call-time stub contract**: a call to a name with no definition
   compiles to `The function X is undefined` at call time plus a compile-time warning, matching the
-  interpreter's late binding. It stays a STRING signal for the gate reason above.
+  interpreter's late binding. **The stub constructs no instance itself**: it is produced during
+  BODY compilation, after `mayCreateInstances` fixed whether the artifact has an instance
+  representation and after `usedLayoutTags` chose which layouts to bake (`%OBJ-NEW reached the
+  compiler with no instance representation`). It reaches the throw every other undefined-function
+  signal reaches instead: the JVM throws the text raw (`JvmFunctionFormCompiler.emitUndefinedFunctionThrow`),
+  wasm calls `_undefined_function` with the symbol wherever the module baked the class (the gate
+  `emitsUndefinedFunction` widened to that, so it is decided in the pre-pass from the same
+  `usedLayoutTags` answer the bake uses), and only a wasm module without it keeps the
+  `(error "...")` form (`LispMacroExpander.undefinedFunctionCallStub`), a `simple-error` like the
+  dispatchers' message-only payload there -- the one divergence left: a `simple-error` clause
+  catches it where the other backends catch nothing (pinned by `WasmLispCompilerIntegrationTest`
+  `ehAnUndefinedFunctionCallIsCaughtAsTheClassTheProgramNames`). Through the CLI the bake is
+  common: anything that splices the report runtime (`princ-to-string` of a condition) names the
+  class.
+- **Every undefined-function names its function** (`cell-error-name`, SBCL's answer; NIL on every
+  backend before 2026-10-07). Interpreter: the four throw sites raise `CellErrorException`
+  carrying the spelling, `synthesizeCondition` fills `NAME` (`symbolOfSpelling`: NIL and T are the
+  singletons). JVM: the pad's undefined-function arm reads the name back out of the message it
+  recovers the class from -- the text between `UNDEFINED_FUNCTION_MESSAGE_PREFIX` and the suffix IS
+  the symbol there, `"NIL"` mapped to null (`emitUndefinedFunctionConstruction`). wasm:
+  `NotFunctionReport`'s typed throw stores local 0 (the symbol) in the name slot, the slot array
+  built on the stack (`emitConditionThrowOnStack`, `array.new_fixed`) because local 0 is still live.
+  Pinned by `UndefinedFunctionNameFixture` (`LispEvaluatorTest` / `JvmLispCompilerTest` /
+  `WasmLispCompilerIntegrationTest` `anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot`) and
+  ci-spec `undefined-function-carries-its-name`. **`unbound-variable` still answers NIL** (and
+  traps on wasm-GC): `.todo/d82`; `#'name` / `(funcall 'name)` of an undefined name does not
+  compile at all: `.todo/d83`.
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts
@@ -1129,11 +1148,10 @@ message at the catching end** -- except for the failures the backends report as 
   numeric operators name themselves by per-operator emission at the call ("A non-number reaching
   arithmetic"), never by message parsing at the pad. The substitution does NOT reach the UNCAUGHT
   top-level line on the JVM -- deliberate.
-- **Restart mode moves the undefined-function text out of the pad's reach**: the string-datum `error`
-  arm builds its `simple-error` at the SIGNAL point and hands it over on the condition channel, so
-  `(handler-case (nosuchfn) (undefined-function ...))` matches on the JVM in a plain program and not
-  in a restart-mode one. **Trigger: restart mode is where both instance gates are already open, so
-  the stub CAN carry its class there.**
+- **Restart mode would move a string-datum signal out of the pad's reach**: the string-datum
+  `error` arm builds its `simple-error` at the SIGNAL point and hands it over on the condition
+  channel, so the undefined-call stub, an `(error "...")` until 2026-10-07, was a `simple-error` in a
+  restart-mode program on the JVM. The raw throw above is classified at the pad in both modes.
 - **`conditionNarrowing` marks the five classes constructible**
   (`LispMacroExpander.rawFailureConditionClasses`): no site names them, but a pad can build one, and
   without the mark a caught `(car 1)` would print as a bare `#<TYPE-ERROR>`. Unlike the simple-*
@@ -2687,7 +2705,8 @@ standalone `uncaught-non-function-report`, `LispEvaluatorTest`
   `type-error` / `undefined-function` has it baked (`usedLayoutTags`) and gets the typed instance
   (`WasmRuntimeBuilder.NotFunctionReport`, `conditionInstance`); one that does not cannot tell the
   instance from the message-only `(nil . message)` payload, so nothing new is baked. This is why the
-  designator path's undefined-function is TYPED on wasm while a direct call's stub is not.
+  designator path's undefined-function is TYPED on wasm, and why a direct call's stub reaches the
+  same throw only through `_undefined_function` (gated on that bake).
 - **Outside EH mode wasm is byte-identical** and still traps (unreachable / cast failure) -- the
   uncaught-report rule above. `--no-gc` unaffected.
 - **One text in every mode**: the Scheme REPL used to reword the failure (`#f is not a procedure;

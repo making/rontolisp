@@ -20807,6 +20807,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot() {
+		// The reference answer (SBCL's) the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against:
+		// every signal of the class names the function, NIL used to be read back
+		// (.kb/error-handling.md, "Applying a value that names no function").
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No

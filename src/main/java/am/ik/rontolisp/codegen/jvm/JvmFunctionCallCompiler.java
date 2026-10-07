@@ -134,7 +134,7 @@ final class JvmFunctionCallCompiler {
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.
 			CompileWarnings.warn(cons, "the function " + name + " is undefined; compiled as a call-time error");
-			JvmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx, className);
+			JvmFunctionFormCompiler.emitUndefinedFunctionThrow(name, ctx);
 		}
 	}
 

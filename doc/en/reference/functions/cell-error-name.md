@@ -9,3 +9,10 @@ The `name` slot of a `cell-error` condition -- the name of the cell that could n
 (handler-case (slot-value (make-instance 'ce-box) 'v)
   (unbound-slot (e) (cell-error-name e))) ; => V
 ```
+
+The `undefined-function` a call of an undefined name signals carries that name -- through `funcall`, `apply`, `symbol-function` or a direct call, on every backend:
+
+```lisp
+(handler-case (funcall (intern "CE-NO-SUCH-FUNCTION"))
+  (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
+```

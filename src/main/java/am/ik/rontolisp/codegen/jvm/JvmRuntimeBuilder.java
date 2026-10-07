@@ -520,11 +520,11 @@ final class JvmRuntimeBuilder {
 	/**
 	 * {@code _notFn(Object value) -> RuntimeException}: what applying a value that names
 	 * no function raises, returned for the caller to throw. The text is the
-	 * interpreter's, so {@code JvmHandlerCaseCompiler} recovers the class from it:
-	 * {@code The function NAME is undefined} ({@code undefined-function}) for a symbol --
-	 * NIL, which is {@code null} here, included -- and
-	 * {@link ClosRegistry#NOT_A_FUNCTION_MESSAGE_PREFIX} plus the value printed
-	 * ({@code type-error}) for anything else, a quote-framed string among them.
+	 * interpreter's, so {@code JvmHandlerCaseCompiler} recovers the class (and an
+	 * {@code undefined-function}'s name) from it: {@code The function NAME is undefined}
+	 * ({@code undefined-function}) for a symbol -- NIL, which is {@code null} here,
+	 * included -- and {@link ClosRegistry#NOT_A_FUNCTION_MESSAGE_PREFIX} plus the value
+	 * printed ({@code type-error}) for anything else, a quote-framed string among them.
 	 * @param cp the constant pool
 	 * @param stringClass the {@code String} class constant
 	 * @param lispToString the generated class's {@code _lispToString(Object)}
