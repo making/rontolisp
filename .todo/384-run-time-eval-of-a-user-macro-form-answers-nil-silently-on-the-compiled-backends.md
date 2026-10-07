@@ -43,3 +43,8 @@ Observed 2026-09-28: a REFERENCE-GATED built-in (`BuiltinFunctionWrappers.REFERE
 the program never takes as a value is the same silent nil, since the eval runtime has no entry
 for it: `(eval '(read-char s))` / `(eval '(peek-char nil s))` answer NIL on JVM/wasm/component,
 and the same program with a `#'read-char` anywhere answers the character.
+
+`--dynamic` rides the same nil: a late-bound call of an undefined name evaluates
+`(function name)` through the eval runtime, gets nil, and the dispatcher then reports
+`The function NIL is undefined` with `cell-error-name` NIL instead of the name the call
+spelled (found 2026-10-07 beside the undefined-function name slot fix, `.kb/error-handling.md`).

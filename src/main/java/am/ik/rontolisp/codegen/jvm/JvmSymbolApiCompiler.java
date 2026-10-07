@@ -735,22 +735,8 @@ final class JvmSymbolApiCompiler {
 		ctx.body.labelBinding(noBinding);
 		ctx.body.labelBinding(cleared);
 		ctx.body.pop();
-		emitUndefinedFunctionThrow(nameSlot, ctx);
+		JvmFunctionFormCompiler.emitUndefinedFunctionThrow(nameSlot, ctx);
 		ctx.body.labelBinding(end);
-	}
-
-	// throw new RuntimeException("The function " + name + " is undefined") -- the
-	// compile-expression twin of the funcall dispatchers' symbol arm
-	// (JvmRuntimeBuilder.buildNotFnBody).
-	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
-		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
-		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		ctx.body.new_(runtimeEx).dup();
-		JvmEmitHelper.compileStringLiteral("The function ", ctx);
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
-		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
-		ctx.body.invokevirtual(concat).invokespecial(exCtor).athrow();
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {

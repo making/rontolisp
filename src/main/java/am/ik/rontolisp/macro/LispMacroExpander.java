@@ -36407,17 +36407,19 @@ public final class LispMacroExpander {
 	 * program.
 	 *
 	 * <p>
-	 * It signals the TEXT, not a typed {@code undefined-function} instance, and that is a
-	 * deliberate limit rather than an oversight: this stub is produced during BODY
-	 * compilation, long after {@code mayCreateInstances} fixed whether the artifact has
-	 * an instance representation at all and after the wasm layout scan chose which
-	 * layouts to bake, so a construction here would be a gate/expansion disagreement (it
-	 * was tried: `%OBJ-NEW reached the compiler with no instance representation`). The
-	 * JVM recovers the class at its landing pad from this very text; the wasm backends
-	 * catch it as a {@code simple-error}, one more entry in the error-fidelity spectrum
-	 * their raw traps already occupy. **Re-evaluation trigger**: teach the two gates
-	 * about undefined calls (the wasm scan's `read`-family precedent) and the stub can
-	 * carry its class on every backend.
+	 * It signals the TEXT, not a typed {@code undefined-function} instance: this stub is
+	 * produced during BODY compilation, long after {@code mayCreateInstances} fixed
+	 * whether the artifact has an instance representation at all and after the wasm
+	 * layout scan chose which layouts to bake, so a construction here would be a
+	 * gate/expansion disagreement (it was tried: `%OBJ-NEW reached the compiler with no
+	 * instance representation`). Neither backend constructs here for that reason: the JVM
+	 * throws the same text raw
+	 * ({@code JvmFunctionFormCompiler.emitUndefinedFunctionThrow}) and recovers the class
+	 * and the name at its landing pad, and the wasm backends call the dispatchers' typed
+	 * throw ({@code _undefined_function}) wherever the module baked the class. This form
+	 * is what a wasm module without that throw compiles: a {@code simple-error}, as the
+	 * dispatchers' message-only signal is in a module that baked no
+	 * {@code undefined-function} layout.
 	 * @param name the undefined function's name
 	 * @return the signaling expression
 	 */

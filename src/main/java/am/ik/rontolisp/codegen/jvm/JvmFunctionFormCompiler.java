@@ -6,6 +6,7 @@ import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -174,18 +175,43 @@ final class JvmFunctionFormCompiler {
 		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_lookup", "(Ljava/lang/Object;)[Ljava/lang/Object;");
 	}
 
-	// throw new RuntimeException("The function " + name + " is undefined") -- the
-	// same late-binding failure the _invoke_N dispatchers raise for a symbol no
-	// registry row answers.
-	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
+	/**
+	 * Emits {@code throw new RuntimeException("The function " + name + " is undefined")}
+	 * for the symbol in {@code nameSlot} -- the same late-binding failure the
+	 * {@code _invoke_N} dispatchers raise for a symbol no registry row answers
+	 * ({@code JvmRuntimeBuilder.buildNotFnBody}), whose text the landing pad recovers the
+	 * class and the name from ({@code JvmHandlerCaseCompiler}).
+	 * @param nameSlot the local holding the symbol, never null
+	 * @param ctx the method context
+	 */
+	static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
 		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
 		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		ctx.body.new_(runtimeEx).dup();
-		JvmEmitHelper.compileStringLiteral("The function ", ctx);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ctx);
 		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
-		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx);
 		ctx.body.invokevirtual(concat).invokespecial(exCtor).athrow();
+	}
+
+	/**
+	 * {@link #emitUndefinedFunctionThrow(int, JvmLispCompiler.Ctx)} for a name known at
+	 * compile time: the call-time stub of a direct call of a name with no definition. Raw
+	 * like every other site, rather than an {@code (error "...")}, so restart mode --
+	 * which builds a string datum's {@code simple-error} at its signal point -- still
+	 * classifies it at the landing pad.
+	 * @param name the undefined function's name
+	 * @param ctx the method context
+	 */
+	static void emitUndefinedFunctionThrow(String name, JvmLispCompiler.Ctx ctx) {
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		ctx.body.new_(runtimeEx).dup();
+		JvmEmitHelper.compileStringLiteral(
+				ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX,
+				ctx);
+		ctx.body.invokespecial(exCtor).athrow();
 	}
 
 }

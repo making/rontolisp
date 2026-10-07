@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -163,6 +166,15 @@ final class WasmFunctionCallCompiler {
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.
 			CompileWarnings.warn(cons, "the function " + name + " is undefined; compiled as a call-time error");
+			if (ctx.undefinedFunctionFuncIndex >= 0) {
+				// The throw every other signal of the class reaches: the typed instance,
+				// naming the function, where the module baked its layout.
+				WasmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.QUOTE),
+						new LispCons(new LispSymbol(name), LispNil.INSTANCE)), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
+				return;
+			}
 			WasmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx);
 		}
 	}

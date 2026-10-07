@@ -713,9 +713,7 @@ public final class Environment implements Scope {
 	public LispVal lookupFunction(String name) {
 		LispVal val = lookupFunctionOrNull(name);
 		if (val == null) {
-			throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
-					ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
-							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
+			throw CellErrorException.undefinedFunction(name);
 		}
 		return val;
 	}

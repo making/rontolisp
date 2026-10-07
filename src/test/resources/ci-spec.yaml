@@ -21509,6 +21509,47 @@ cases:
       "The function NIL is undefined"
       "Not a function: 3"
 
+  # An undefined-function names its function in the cell-error name slot on every
+  # backend and through every computed signal of it -- funcall / apply / mapcar /
+  # symbol-function / fdefinition, a name fmakunbound retired, NIL, T, a keyword --
+  # also under a handler-bind. UndefinedFunctionNameFixture's programs without their
+  # direct calls of an undefined name, whose compile-time warning the corpus compiles
+  # forbid (UndefinedWarnings); the backend suites pin those. SBCL's expected text.
+  - name: undefined-function-carries-its-name
+    source: |
+      (defun ufn-name (thunk)
+        (handler-case (funcall thunk)
+          (undefined-function (c) (list (cell-error-name c) (type-of c)))))
+      (defun ufn-gone () 1)
+      (fmakunbound 'ufn-gone)
+      (print (list (ufn-name (lambda () (funcall (intern "UFN-NOPE"))))
+                   (ufn-name (lambda () (funcall (intern "UFN-NOPE") 1 2)))
+                   (ufn-name (lambda () (apply (intern "UFN-NOPE") '(1 2))))
+                   (ufn-name (lambda () (mapcar (intern "UFN-NOPE") '(1 2))))
+                   (ufn-name (lambda () (symbol-function (intern "UFN-NOPE"))))
+                   (ufn-name (lambda () (fdefinition (intern "UFN-NOPE"))))))
+      (print (list (ufn-name (lambda () (funcall (intern "UFN-GONE"))))
+                   (ufn-name (lambda () (symbol-function (intern "UFN-GONE"))))
+                   (ufn-name (lambda () (funcall (car (list nil)))))
+                   (ufn-name (lambda () (funcall (car (list t)))))
+                   (ufn-name (lambda () (funcall (car (list :ufn-key)))))))
+      (print (eq (cell-error-name (handler-case (funcall (intern "UFN-NOPE")) (undefined-function (c) c)))
+                 'ufn-nope))
+      (defvar *ufn-seen* nil)
+      (defun ufn-bound (thunk)
+        (handler-case
+            (handler-bind ((undefined-function (lambda (c) (push (cell-error-name c) *ufn-seen*))))
+              (funcall thunk))
+          (undefined-function (c) (list (cell-error-name c) (type-of c)))))
+      (print (list (ufn-bound (lambda () (funcall (intern "UFN-NOPE"))))
+                   (ufn-bound (lambda () (apply (intern "UFN-OTHER") '(1))))
+                   *ufn-seen*))
+    expected: |
+      ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION) (UFN-NOPE UNDEFINED-FUNCTION))
+      ((UFN-GONE UNDEFINED-FUNCTION) (UFN-GONE UNDEFINED-FUNCTION) (NIL UNDEFINED-FUNCTION) (T UNDEFINED-FUNCTION) (:UFN-KEY UNDEFINED-FUNCTION))
+      T
+      ((UFN-NOPE UNDEFINED-FUNCTION) (UFN-OTHER UNDEFINED-FUNCTION) (UFN-OTHER UFN-NOPE))
+
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
   # ignore-merges and the SentencePiece half, on all four backends. The vocabulary is

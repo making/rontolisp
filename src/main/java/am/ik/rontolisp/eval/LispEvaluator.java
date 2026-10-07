@@ -2288,9 +2288,7 @@ public final class LispEvaluator {
 					}
 					LispVal fn = this.globalEnv.lookupFunctionOrNull(sym.name());
 					if (fn == null) {
-						throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
-								ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + sym.name()
-										+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
+						throw CellErrorException.undefinedFunction(sym.name());
 					}
 					return fn;
 				}));
@@ -10812,9 +10810,7 @@ public final class LispEvaluator {
 					return bare;
 				}
 			}
-			throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
-					ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
-							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
+			throw CellErrorException.undefinedFunction(name);
 		}
 	}
 
@@ -11981,6 +11977,12 @@ public final class LispEvaluator {
 		if (e instanceof OperandTypeException operand
 				&& this.closRegistry.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map
 					.of("DATUM", operand.datum(), "EXPECTED-TYPE", operand.expectedType())) instanceof LispVal c) {
+			return c;
+		}
+		// An unbound cell (an undefined function): the condition names it.
+		if (e instanceof CellErrorException cell && className != null
+				&& this.closRegistry.newReportingCondition(className, messageVal,
+						java.util.Map.of("NAME", symbolOfSpelling(cell.spelling()))) instanceof LispVal c) {
 			return c;
 		}
 		// A java: member that threw (JavaInterop.fail): the condition carries the
@@ -13780,10 +13782,7 @@ public final class LispEvaluator {
 		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
 		// undefined-function the symbol arm above reports for any unbound name.
 		String standardName = standardSymbolName(function);
-		LispEvalException failure = standardName != null
-				? LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
-						ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + standardName
-								+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
+		LispEvalException failure = standardName != null ? CellErrorException.undefinedFunction(standardName)
 				: LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
 						ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX + function.print());
 		throw failure;

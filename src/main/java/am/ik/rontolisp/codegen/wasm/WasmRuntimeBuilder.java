@@ -2501,7 +2501,8 @@ final class WasmRuntimeBuilder {
 	 * The class rides on a layout the module already has. A program that NAMES
 	 * {@code type-error} (or {@code undefined-function}) has that layout baked, and so
 	 * does one with a handler landing pad ({@code type-error}, for the operand landings,
-	 * {@code WasmOperandTypes}); it gets the typed instance a clause can match. Any other
+	 * {@code WasmOperandTypes}); it gets the typed instance a clause can match, an
+	 * {@code undefined-function} naming the function in its {@code name} slot. Any other
 	 * program gets the message-only payload and bakes nothing new. The pieces are
 	 * interned on first use, as {@link ArityReport}'s are.
 	 */
@@ -2513,6 +2514,9 @@ final class WasmRuntimeBuilder {
 
 		private final @Nullable ConditionInstance undefinedFunction;
 
+		/** The {@code name} slot of {@link #undefinedFunction}, or -1 without one. */
+		private final int undefinedNameSlot;
+
 		private final boolean identityHash;
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry notFunctionPrefix;
@@ -2522,10 +2526,11 @@ final class WasmRuntimeBuilder {
 		private WasmLispCompiler.StringTable.@Nullable StringEntry undefinedSuffix;
 
 		NotFunctionReport(WasmLispCompiler.StringTable stringTable, @Nullable ConditionInstance typeError,
-				@Nullable ConditionInstance undefinedFunction, boolean identityHash) {
+				@Nullable ConditionInstance undefinedFunction, int undefinedNameSlot, boolean identityHash) {
 			this.stringTable = stringTable;
 			this.typeError = typeError;
 			this.undefinedFunction = undefinedFunction;
+			this.undefinedNameSlot = undefinedFunction != null ? undefinedNameSlot : -1;
 			this.identityHash = identityHash;
 		}
 
@@ -2594,7 +2599,19 @@ final class WasmRuntimeBuilder {
 			emitConcat(w);
 			emitStrConst(w, Objects.requireNonNull(this.undefinedSuffix));
 			emitConcat(w);
-			emitThrow(w, this.undefinedFunction, msgLocal, this.identityHash);
+			ConditionInstance instance = this.undefinedFunction;
+			if (instance != null && this.undefinedNameSlot >= 0) {
+				// The instance names the function: local 0 still holds the symbol, so the
+				// slots are built on the stack rather than through a slots local.
+				w.write(Instruction.SET_LOCAL);
+				w.writeUnsignedLeb128(msgLocal);
+				emitConditionThrowOnStack(w, instance, msgLocal, Map.of(this.undefinedNameSlot, () -> {
+					w.write(Instruction.GET_LOCAL);
+					w.writeUnsignedLeb128(0);
+				}));
+				return;
+			}
+			emitThrow(w, instance, msgLocal, this.identityHash);
 		}
 
 		/**
@@ -3022,6 +3039,50 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * {@link #emitConditionThrow(WasmWriter, ConditionInstance, int, int, Map)} with the
+	 * slot array built on the operand stack ({@code array.new_fixed}) instead of through
+	 * a slots local, for a thrower whose every spare local is taken while a slot's value
+	 * is still live in one: each entry's emitter pushes that slot's value, every other
+	 * slot is nil.
+	 * @param w the writer
+	 * @param instance the condition class's shape
+	 * @param msgLocal the local holding the message
+	 * @param slots slot index to the emission pushing its value
+	 */
+	static void emitConditionThrowOnStack(WasmWriter w, ConditionInstance instance, int msgLocal,
+			Map<Integer, Runnable> slots) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(instance.layoutAddress());
+		for (int i = 0; i < instance.slotCapacity(); i++) {
+			Runnable slot = slots.get(i);
+			if (i == instance.formatControlSlot()) {
+				// the message as its text control: the report renders the slot as a
+				// control
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(msgLocal);
+				emitTildeCall(w, false);
+			}
+			else if (slot != null) {
+				slot.run();
+			}
+			else {
+				w.write(Instruction.REF_NULL);
+				w.writeHeapType(Type.EQ.code());
+			}
+		}
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(instance.slotCapacity());
+		WasmEmitHelper.emitNewInstance(w, instance.instanceTypeIndex(), instance.identityHash());
+		// the payload: (condition-instance . message)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(msgLocal);
+		WasmEmitHelper.emitNewCons(w, instance.identityHash());
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
 	 * Calls {@code _tilde} ({@code FUNC_TILDE}) on the string on the stack: its text
 	 * control ({@code %text-control}), or with {@code undo} the text of a control whose
 	 * only directive is {@code ~~} ({@code %control-text}).
@@ -3398,8 +3459,8 @@ final class WasmRuntimeBuilder {
 	 * {@code undefined-function} the dispatchers' {@code $undefined} arm throws for
 	 * {@code name}, without their registry lookup -- for a caller that already knows the
 	 * name names no function although the registry may still answer it (a name
-	 * {@code fmakunbound} retired). Never returns; a bare {@code unreachable} where no
-	 * report exists.
+	 * {@code fmakunbound} retired), or that no definition of it exists (a direct call's
+	 * call-time stub). Never returns; a bare {@code unreachable} where no report exists.
 	 * @param notFunction the dispatchers' report, or null outside EH mode
 	 * @return the function body
 	 */

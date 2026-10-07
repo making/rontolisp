@@ -9,3 +9,10 @@
 (handler-case (slot-value (make-instance 'ce-box) 'v)
   (unbound-slot (e) (cell-error-name e))) ; => V
 ```
+
+未定義の名前を呼び出したときに通知される `undefined-function` は、その名前を持ちます — `funcall`、`apply`、`symbol-function`、直接の呼び出しのいずれでも、すべてのバックエンドで:
+
+```lisp
+(handler-case (funcall (intern "CE-NO-SUCH-FUNCTION"))
+  (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
+```

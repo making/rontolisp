@@ -879,13 +879,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * Whether this module carries {@code _undefined_function}, the throw a computed
-	 * {@code symbol-function} reaches for a name {@code fmakunbound} retired: the arity-0
-	 * dispatcher every other unbound arm reports through cannot serve it, since the
-	 * retired name may still be in the compiled-function registry and the dispatcher
-	 * would call it. Gated like the dispatchers' own report (EH mode) and on the program
-	 * calling {@code fmakunbound}, the only writer of a tombstone; deliberately loose in
-	 * the {@link #emitsArityChk} direction -- the computed sites live in bodies not yet
-	 * compiled -- and decided in the pre-pass, because it shifts {@link #userFuncBase()}.
+	 * {@code symbol-function} reaches for a name {@code fmakunbound} retired -- the
+	 * arity-0 dispatcher every other unbound arm reports through cannot serve it, since
+	 * the retired name may still be in the compiled-function registry and the dispatcher
+	 * would call it -- and a direct call of a name no definition has
+	 * ({@code WasmFunctionCallCompiler}'s call-time stub). Gated like the dispatchers'
+	 * own report (EH mode) and on the program calling {@code fmakunbound}, the only
+	 * writer of a tombstone, or baking the {@code undefined-function} layout, without
+	 * which the stub's own signal reports the same; deliberately loose in the
+	 * {@link #emitsArityChk} direction -- the sites live in bodies not yet compiled --
+	 * and decided in the pre-pass, because it shifts {@link #userFuncBase()}.
 	 */
 	private boolean emitsUndefinedFunction;
 
@@ -3734,7 +3737,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// is where a thrown program-error has both a representation and a catcher.
 		this.emitsArityChk = ehMode && hasLandingPad && this.usesInstances
 				&& (usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns);
-		this.emitsUndefinedFunction = ehMode && programUsesSymbol(program, LispNames.FMAKUNBOUND);
+		// The instance layouts this module bakes (null: every one), decided here because
+		// the gate below reads them, and baked in front of Pass 2a.
+		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
+				? usedLayoutTags(program, closRegistry, usesEval || usesRead) : java.util.Set.of();
+		// Whether this module carries _undefined_function: for a name fmakunbound
+		// retired,
+		// and for a direct call of a name no definition has (WasmFunctionCallCompiler's
+		// call-time stub) wherever the throw can be the typed undefined-function -- its
+		// layout baked -- since elsewhere the stub's own message-only signal reports the
+		// same. Deliberately loose like emitsArityChk: the undefined calls are found in
+		// bodies not yet compiled.
+		boolean typedUndefinedFunction = this.usesInstances && (bakedLayoutTags == null
+				|| bakedLayoutTags.contains(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME));
+		this.emitsUndefinedFunction = ehMode
+				&& (programUsesSymbol(program, LispNames.FMAKUNBOUND) || typedUndefinedFunction);
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -4509,8 +4526,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// which are consumed by runtime helper bodies built after their append -- these
 		// addresses must exist before any body is compiled. (Like them, the append must
 		// also land before the data segment is snapshotted.)
-		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
-				usedLayoutTags(program, closRegistry, usesEval || usesRead)) : Map.of();
+		Map<String, Integer> layoutAddresses = this.usesInstances
+				? WasmInstanceLayouts.emit(closRegistry, stringTable, bakedLayoutTags) : Map.of();
 		this.addressKeyedLayout = java.util.stream.Stream.of(LispNames.OBJC_POINTER_TYPE)
 			.map(name -> layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + name))
 			.filter(java.util.Objects::nonNull)
@@ -5902,6 +5919,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.usesInstances
 						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
 						: null,
+				slotIndex(closRegistry, ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, "NAME"),
 				this.usesIdentityHashTables) : null;
 		// The undefined-function throw a name in hand reaches, built here beside the
 		// dispatchers so its texts are interned with theirs.
@@ -9467,6 +9485,26 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The index of a seeded class's slot in its instance's slot array, or -1.
+	 * @param closRegistry the class registry, for the slot layout
+	 * @param className the class
+	 * @param slotName the slot's base name
+	 * @return the index, or -1
+	 */
+	private static int slotIndex(ClosRegistry closRegistry, String className, String slotName) {
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		if (info == null) {
+			return -1;
+		}
+		for (int i = 0; i < info.slots().size(); i++) {
+			if (slotName.equals(info.slots().get(i).baseName())) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/**
