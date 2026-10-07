@@ -371,6 +371,51 @@ final class WasmRatioRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	// _rat_add_f64 .. _rat_div_f64((ref null eq) a, (ref null eq) b) -> f64: the f64 of
+	// the ratFunc step over two boxed operands, the step that joins a float site's exact
+	// prefix to its f64 fold. A float operand makes it the f64 step the fold takes -- the
+	// float read straight out of its box, the other through _as_f64, so a float pays the
+	// test _as_f64's own float rung makes and nothing more -- and two exact operands the
+	// conversion of the exact step (ratFunc, whose landings also report a non-number and
+	// an exact zero divisor).
+	static byte[] buildRatStepF64Body(int ratFunc, int f64Opcode) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no extra locals
+		getLocal(w, 0);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF, Type.F64.code());
+		emitFloatField(w, 0);
+		emitLocalToF64(w, 1);
+		w.write(f64Opcode);
+		w.write(Instruction.ELSE);
+		getLocal(w, 1);
+		refTestType(w, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.IF, Type.F64.code());
+		emitLocalToF64(w, 0);
+		emitFloatField(w, 1);
+		w.write(f64Opcode);
+		w.write(Instruction.ELSE);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		call(w, ratFunc);
+		call(w, WasmLispCompiler.FUNC_AS_F64);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// The f64 of the TYPE_FLOAT in local[slot].
+	private static void emitFloatField(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+	}
+
 	// _rat_div((ref null eq) a, (ref null eq) b) -> (ref null eq): exact Common Lisp
 	// division; traps on division by zero. Two exact integers are the numerator and the
 	// denominator _rat_new normalizes (an even division demotes to the quotient, so

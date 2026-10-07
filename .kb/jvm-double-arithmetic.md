@@ -9,7 +9,9 @@ path allocated and immediately unwrapped, never a different computation. Sibling
 ## Routing
 - `JvmLispCompiler.hasDoubleLiteral` (recursive via `containsDouble`) decides per NODE. It is a
   syntactic guess, not type inference: the unboxed path coerces through `_dbl` (accepts `Long`,
-  `BigInteger`, `Double`, ratio), so a wrong guess still gives a defined float result.
+  `BigInteger`, `Double`, ratio). For `+ - * / mod rem` the raw fold runs only where
+  `isDefinitelyDouble` proves an operand ("The exact prefix" below); a one-operand site
+  (`(- x)`, `(/ x)`, `abs`, `signum`, `expt`, `random`) still answers a float for a wrong guess.
   `INTEGER_VALUED_FORMS` (`round`, `truncate`, `floor`, `ceiling`) stop the recursion.
 - **`_dbl`'s ratio arm is the generated `_ratToDouble`: the correctly-rounded nearest
   double** (round-half-even over a 56-bit `BigInteger` head plus the remainder as the
@@ -42,7 +44,7 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   they return one operand AS IT STANDS (no contagion), so reboxing the wrong one changes its TYPE
   — `(min 1 2.0)` answered `1.0` instead of `1`. `isDefinitelyDouble` needs EACH operand
   independently proven (a `LispDouble` literal, a declared/raw double local, or a
-  `+`/`-`/`*`/`mod`/`rem` tree with one provably-double operand and no complex literal); it never
+  `+`/`-`/`*`/`/`/`mod`/`rem` tree with one provably-double operand and no complex literal); it never
   crosses a function call or `min`/`max`. Then `_fmin`/`_fmax`, else the boxed `_min`/`_max`. **Trap**: the `mod`/`rem`
   arm assumes they answer a double whenever EITHER argument is one — if their result TYPE ever
   depends on which operand is which, this arm must move with it.
@@ -59,6 +61,43 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   (a NaN jumps back to the old DCMPL, which collapses it to -1 as before). The ANSI
   `*.17`/`*.18` + `BIGNUM.FLOAT.COMPARE.1A-4B` pin the interpreter; `JvmLispCompilerTest`
   pins the JVM call-site gate (a double LITERAL beside a computed ratio) and the funnel.
+
+## The exact prefix
+CL's n-ary `+ - * /` is a left fold of the two-argument step, and a step floats only once one
+of ITS operands is a float, so the arguments ahead of the first float fold exactly:
+`(+ 1/10 1/5 0.0)` is `0.3`. Measured 2026-10-07, SBCL 2.2.9 (`*read-default-float-format*`
+`double-float`, operands literal or through `notinline` identity calls): `0.3` for the `+`,
+`-`, `*`, `/` rows, `9.007199254740994e15` for `(+ 9007199254740993 1 0.0)`,
+division-by-zero for `(/ 1/2 0 1.0)`. Before that day the interpreter (`hasDouble`, one double
+loop) and the JVM converted every argument first (`0.30000000000000004`, `...992e15`,
+Infinity); WASM did too on a float-literal site and for `/` through calls, and folded `+ - *`
+through calls pairwise (fusion took them).
+
+- `compiler/FloatFold.exactPrefix`: the raw fold runs from the first operand iff operand 0 or
+  1 is proven a float (`isDefinitelyDouble`) -- then every step is a float step and converting
+  each operand IS the pairwise fold, so the site's bytes do not change. Otherwise the operands
+  ahead of the first proven float fold through the generic helpers, and only the last of
+  those steps differs: `_addd`/`_subd`/`_muld`/`_divd` (`(OO)D`, wrapped per operator like
+  `_add`; WASM `_rat_add_f64` .. `_rat_div_f64`, type `TYPE_RAT_STEP_F64`) return the raw
+  double of the step. No proven float at all: the generic fold IS the site (a boxed site
+  keeps the generic value -- exact operands answer exactly; an inlined inner site ends on the
+  `_addd` step, which the parent converts anyway).
+- Why that helper and not `_dbl(_add(a, b))`: a Double first operand is read straight out of
+  its box and the other goes through `_dbl`, the same tests `_dbl(a)`, `_dbl(b)` made on the old
+  raw path, so floats at an unproven site pay nothing new; the composition boxes the step's
+  float (a `TYPE_FLOAT` allocation on wasmtime, which has no escape analysis). A run-time
+  `instanceof` branch at the site was rejected: a test per site, plus temporaries for every
+  later operand of the branch. Left: a site with three or more unproven operands ahead of the
+  first float boxes one value per extra step when they hold floats (counted 2026-10-07 over
+  `examples/`, `src/main/resources`, `bench-report/` and `size-report/`: 16 float sites with
+  an unproven pair ahead of their first proven float, 4 of them with three).
+- Interpreter: `Environment.floatFold` (exact fold of the prefix, then doubles). JVM:
+  `JvmArithCompiler.compileFold` and `JvmFloatOperands.foldRaw` (its prefix operands evaluated
+  boxed). WASM: `WasmArithCompiler.compileFold`, `compileGuarded`. The fused double path folds
+  the integer constants a node starts with exactly at emit time (`JvmIntFusionCompiler.
+  exactConstant`), since a `Long` leaf bails there anyway.
+- Pins: `ExactPrefixFloatFoldFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest` both levels,
+  `WasmLispCompilerIntegrationTest` every level and the component).
 
 ## The all-Double fast path inside `_fx$N`
 `.kb/jvm-int-fusion.md`'s fused methods guard leaves `instanceof Long`; they now carry a second

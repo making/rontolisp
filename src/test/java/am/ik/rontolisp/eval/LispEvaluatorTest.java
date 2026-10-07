@@ -20511,6 +20511,19 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
 	}
 
+	// A real + - * / over a float folds one pair at a time from the first argument, as
+	// SBCL folds it: the arguments ahead of the first float fold exactly (the interpreter
+	// converted every argument first, so (+ 1/10 1/5 0.0) was 0.30000000000000004). The
+	// twins are JvmLispCompilerTest#compileAndRunExactPrefixFloatFold and
+	// WasmLispCompilerIntegrationTest#exactPrefixFloatFold.
+	@Test
+	void exactPrefixFloatFold() {
+		assertThat(printedLines(am.ik.rontolisp.ExactPrefixFloatFoldFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_SOURCE))
+			.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_EXPECTED);
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

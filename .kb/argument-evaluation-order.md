@@ -41,6 +41,11 @@ lost its output, `(block nil (+ (* 2 a) (return 5)))` returned instead of signal
 
 SBCL 2.2.9 (measured 2026-10-07) agrees for every binary operation, every inner operation
 and every exit, and an earlier operation's condition wins over a later argument's.
+The generic n-ary fold applied each step as it went until the same day: `(/ a 0 (f))`, and
+`+ - *` wherever fusion declined (`--optimize=size`, a complex literal), signalled before
+`(f)` ran. Its steps now wait like the float site's conversions (`FloatFold.waiting`), and a
+float site's exact prefix (`.kb/jvm-double-arithmetic.md`, "The exact prefix") is that same
+fold.
 Compiled n-ary arithmetic is its one difference: `(+ 1.5 a (f))` is source-transformed to
 `(+ (+ 1.5 a) (f))` and signals before `(f)` runs, while its own full call
 (`notinline`, `funcall` of the symbol, `eval`) evaluates `(f)` first. Every backend here
@@ -58,9 +63,9 @@ The shared predicates live in `compiler/ArgumentOrder`:
 - `integerArithmeticVariables(form, quietVariable)`: integer arithmetic over quiet
   variables, which cannot signal once each holds an integer (fusion's leaf guard).
 
-A float site (`JvmArithCompiler.compileUnboxedOperands`, `WasmArithCompiler.compileF64Operands`)
-holds back only an operand whose conversion can fail and that has an observable operand
-after it; those, up to the last observable one, wait in temporaries and convert in order
+A float site (`JvmArithCompiler.compileOperands`, `WasmArithCompiler.compileOperands`, the
+plan in `compiler/FloatFold.waiting`) holds back only an operand whose conversion -- or, for a
+boxed operand, generic step -- can fail and that has an observable operand after it; those, up to the last observable one, wait in temporaries and convert in order
 afterwards, every other operand converts where it stands. An inner float-literal operation
 is applied where it stands, under its own operator (on the JVM it is inlined raw, so its
 `_dbl` calls go through its own operator's wrapper). Why this shape: the conversion is the
@@ -81,4 +86,5 @@ ci-spec `argument-evaluation-order-left-to-right` and
 The operation order: `FastPathEvaluationOrderFixture` (`LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest#...FastPathsKeepTheInterpretersEvaluationOrder`:
 a complex-free program under handlers, one without handlers, a complex-capable one; every
-level, P1 and component) and ci-spec `fast-paths-keep-the-evaluation-order`.
+level, P1 and component) and ci-spec `fast-paths-keep-the-evaluation-order`; the generic
+fold's held-back steps: `ExactPrefixFloatFoldFixture`'s traced rows.

@@ -265,11 +265,10 @@ final class WasmComplexCompiler {
 				return;
 			}
 		}
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		for (int i = 2; i < args.size(); i++) {
-			WasmExprCompiler.compileExpr(args.get(i), ctx);
-			call(ctx, complexFunc);
-		}
+		// The steps held back as the real fold holds them, so none applies before a
+		// later operand runs.
+		WasmArithCompiler.compileGenericFold(args.subList(1, args.size()), complexFunc == WasmLispCompiler.FUNC_C_DIV,
+				ctx, complexFunc);
 	}
 
 	// An = form carrying a syntactic complex, any arity: every adjacent pair must
