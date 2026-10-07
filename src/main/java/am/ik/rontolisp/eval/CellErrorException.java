@@ -9,7 +9,7 @@ import am.ik.rontolisp.ClosRegistry;
  */
 final class CellErrorException extends LispEvalException {
 
-	/** The name's canonical spelling, as the function namespace keys it. */
+	/** The name's canonical spelling, as its namespace keys it. */
 	private final String spelling;
 
 	private CellErrorException(String className, String message, String spelling) {
@@ -27,6 +27,17 @@ final class CellErrorException extends LispEvalException {
 		return new CellErrorException(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
 				ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + spelling
 						+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX,
+				spelling);
+	}
+
+	/**
+	 * The {@code unbound-variable} of a read of a name no binding answers.
+	 * @param spelling the name's canonical spelling
+	 * @return the exception to throw
+	 */
+	static CellErrorException unboundVariable(String spelling) {
+		return new CellErrorException(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+				ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + spelling + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX,
 				spelling);
 	}
 

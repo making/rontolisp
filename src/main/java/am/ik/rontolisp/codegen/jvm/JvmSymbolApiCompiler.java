@@ -6,6 +6,7 @@ import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -783,15 +784,17 @@ final class JvmSymbolApiCompiler {
 		ctx.body.invokestatic(envLookupRef(ctx, className));
 	}
 
+	// throw new RuntimeException("The variable " + name + " is unbound"): the landing
+	// pad recovers the class and the name from the text (JvmHandlerCaseCompiler).
 	private static void emitUnboundThrow(int tempSlot, JvmLispCompiler.Ctx ctx) {
 		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
 		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		MethodRefEntry valueOf = ctx.cp.methodRef(ctx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
 		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		ctx.body.new_(runtimeEx).dup();
-		JvmEmitHelper.compileStringLiteral("The variable ", ctx);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX, ctx);
 		ctx.body.aload(tempSlot).invokestatic(valueOf).invokevirtual(concat);
-		JvmEmitHelper.compileStringLiteral(" is unbound", ctx);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX, ctx);
 		ctx.body.invokevirtual(concat).invokespecial(ctor).athrow();
 	}
 

@@ -699,7 +699,14 @@ final class JvmHandlerCaseCompiler {
 				emitTypeErrorConstruction(excSlot, condSlot, classes.get(i), msgVar, ctx, className);
 			}
 			else if (ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME.equals(classes.get(i))) {
-				emitUndefinedFunctionConstruction(rawSlot, condSlot, msgVar, ctx, className);
+				emitCellErrorConstruction(rawSlot, condSlot, classes.get(i),
+						ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX,
+						msgVar, ctx, className);
+			}
+			else if (ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME.equals(classes.get(i))) {
+				emitCellErrorConstruction(rawSlot, condSlot, classes.get(i),
+						ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX, ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX,
+						msgVar, ctx, className);
 			}
 			else {
 				JvmExprCompiler.compileExpr(
@@ -753,20 +760,21 @@ final class JvmHandlerCaseCompiler {
 	}
 
 	/**
-	 * Emits the {@code undefined-function} arm's construction with {@code name} read back
-	 * out of the raw message the arm's test matched: every throw site spells it
-	 * {@code The function <name> is undefined} around the symbol itself, which is its
-	 * bare name here (a keyword with its colon), and NIL -- null here -- as
-	 * {@code "NIL"}. The text is this compiler's own, the same text the class is
-	 * recovered from.
+	 * Emits a {@code cell-error} arm's construction -- {@code undefined-function},
+	 * {@code unbound-variable} -- with {@code name} read back out of the raw message the
+	 * arm's test matched: every throw site spells it {@code <prefix><name><suffix>}
+	 * ({@code The function <name> is undefined}, {@code The variable <name> is unbound})
+	 * around the symbol itself, which is its bare name here (a keyword with its colon),
+	 * and NIL -- null here -- as {@code "NIL"}. The text is this compiler's own, the same
+	 * text the class is recovered from.
 	 */
-	private static void emitUndefinedFunctionConstruction(int rawSlot, int condSlot, LispSymbol msgVar,
-			JvmLispCompiler.Ctx ctx, String className) {
+	private static void emitCellErrorConstruction(int rawSlot, int condSlot, String cellClass, String prefix,
+			String suffix, LispSymbol msgVar, JvmLispCompiler.Ctx ctx, String className) {
 		int nameSlot = ctx.allocTemp();
 		ctx.body.aload(rawSlot);
-		JvmEmitHelper.emitIntConst(ctx, ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX.length());
+		JvmEmitHelper.emitIntConst(ctx, prefix.length());
 		ctx.body.aload(rawSlot).invokevirtual(JvmEmitHelper.stringMethod(ctx, "length", "()I"));
-		JvmEmitHelper.emitIntConst(ctx, ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX.length());
+		JvmEmitHelper.emitIntConst(ctx, suffix.length());
 		ctx.body.isub().invokevirtual(JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;"));
 		ctx.body.astore(nameSlot);
 		MethodCode.Label named = ctx.body.newLabel();
@@ -778,8 +786,7 @@ final class JvmHandlerCaseCompiler {
 		String nameVar = "__hc_name$" + nameSlot;
 		ctx.locals.put(nameVar, nameSlot);
 		try {
-			JvmExprCompiler.compileExpr(LispMacroExpander.reportingConditionForm(ctx.closRegistry,
-					ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, msgVar,
+			JvmExprCompiler.compileExpr(LispMacroExpander.reportingConditionForm(ctx.closRegistry, cellClass, msgVar,
 					java.util.Map.of("NAME", new LispSymbol(nameVar))), ctx, className);
 		}
 		finally {

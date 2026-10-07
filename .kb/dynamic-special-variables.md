@@ -430,7 +430,7 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `boundp-and-fboundp-as-function-values`.
 - Still nil, not an error, for a read of a tracked special while unbound (a direct read,
   `symbol-value`, `eval`), as for every unassigned global; a `progv` short of values binds nil
-  (both documented).
+  (both documented). Signalling instead, for every valueless `defvar`: `.todo/d85`.
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
   httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
