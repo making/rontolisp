@@ -95,9 +95,8 @@ public final class BoundpInBindingFixture {
 	 * A read of such a special while it has no value signals the {@code unbound-variable}
 	 * naming it, never answering the marker its variable holds -- a direct read,
 	 * {@code symbol-value} of a literal and of a computed name, {@code eval}, a binding's
-	 * init form -- while a {@code progv} short of values binds the symbol to nil
-	 * (documented; SBCL leaves it unbound). The compile paths used to read nil for every
-	 * one of them.
+	 * init form, a {@code progv} short of values. The compile paths used to read nil for
+	 * every one of them, and every backend bound the {@code progv}'s symbol to nil.
 	 */
 	public static final String UNBOUND_READ_SOURCE = """
 			(defvar *bil*)
@@ -114,6 +113,6 @@ public final class BoundpInBindingFixture {
 	/** What {@link #UNBOUND_READ_SOURCE} prints, one value per line. */
 	public static final String UNBOUND_READ_EXPECTED = String.join("\n", "(T NIL)",
 			"((:UNBOUND *BIL*) (:UNBOUND *BIL*) (:UNBOUND *BIL*) (:UNBOUND *BIL*))", "(:UNBOUND *BIL*)",
-			"((NIL T) NIL)");
+			"(((:UNBOUND *BIL*) NIL) NIL)");
 
 }

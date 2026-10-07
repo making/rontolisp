@@ -56,9 +56,11 @@ import am.ik.rontolisp.ClosRegistry;
  * marker and keeps it until a global store. {@code _dget} hands the marker back like any
  * value -- the read site tests it ({@code JvmExprCompiler.compileSpecialRead}) -- and for
  * a bound special whose bound-ness the program probes ({@code SpecialVarCollector.
- * collectProbedValueless}) {@code _dbound(tl, global)} answers t for this thread's
- * binding or a global that is not the marker. A binding never touches {@code _g$}, so the
- * marker outlives every extent. A program without such a special has no {@code _dbound}.
+ * collectProbedValueless}) {@code _dbound(tl, global)} answers whether this thread's
+ * binding, else the global, holds something other than the marker. A binding never
+ * touches {@code _g$}, so the marker outlives every extent; a {@code progv} short of
+ * values puts it in this thread's cell for its extent. A program without such a special
+ * has no {@code _dbound}.
  */
 final class JvmDynVarRuntimeBuilder {
 
@@ -88,13 +90,13 @@ final class JvmDynVarRuntimeBuilder {
 
 	/**
 	 * The UNBOUND marker: {@code _unbound}, a {@code new Object()} no Lisp value can be,
-	 * which the {@code _g$} global of each of {@code globals} holds from {@code <clinit>}
-	 * until a store overwrites it. A read of such a global outside a binding of it
-	 * signals the {@code unbound-variable} naming it ({@code _bound}), and {@code boundp}
-	 * answers nil.
+	 * which some globals' {@code _g$} holds from {@code <clinit>} until a store
+	 * overwrites it, and a {@code progv} short of values binds a special to. A read of
+	 * one of {@code globals} that finds it signals the {@code unbound-variable} naming it
+	 * ({@code _bound}), and {@code boundp} answers nil.
 	 *
-	 * @param globals the globals whose variable carries their bound-ness, in seeding
-	 * order
+	 * @param globals the globals whose variable can hold the marker -- every read of them
+	 * is checked -- in the order they were collected
 	 * @param probed the ones among them a {@code boundp} answers from the variable
 	 * ({@code LispMacroExpander.dynamicFirstBoundp}), in the order a computed probe's
 	 * inline chain tests them; every other name's {@code boundp} probes the eval mirror,
@@ -127,13 +129,15 @@ final class JvmDynVarRuntimeBuilder {
 	 * (.kb/emitted-output-determinism.md).
 	 * @param cp the class's constant pool
 	 * @param thisClass the class being emitted
-	 * @param globals the globals whose {@code _g$} starts as the marker
+	 * @param globals the globals whose {@code _g$} can hold the marker, every read of
+	 * them checked
+	 * @param seeded the ones among them whose {@code _g$} starts as the marker
 	 * @param probed the ones among them whose {@code boundp} reads the variable
 	 * @param globalFields every global's {@code _g$} field
 	 * @return the marker, or null when {@code globals} is empty
 	 */
 	static @Nullable UnboundMarker unboundMarker(ConstantPool cp, ClassEntry thisClass, SequencedSet<String> globals,
-			SequencedSet<String> probed, Map<String, FieldRefEntry> globalFields) {
+			SequencedSet<String> seeded, SequencedSet<String> probed, Map<String, FieldRefEntry> globalFields) {
 		if (globals.isEmpty()) {
 			return null;
 		}
@@ -146,7 +150,7 @@ final class JvmDynVarRuntimeBuilder {
 		clinitCode.dup();
 		clinitCode.invokespecial(cp.methodRef(objectClass, "<init>", "()V"));
 		clinitCode.putstatic(field);
-		for (String name : globals) {
+		for (String name : seeded) {
 			clinitCode.getstatic(field);
 			clinitCode.putstatic(Objects.requireNonNull(globalFields.get(name)));
 		}
@@ -242,7 +246,8 @@ final class JvmDynVarRuntimeBuilder {
 		if (unboundField != null) {
 			Utf8Entry dboundName = cp.utf8Entry("_dbound");
 			dbound = cp.methodRef(thisClass, dboundName, refDescUtf);
-			methods.add(new HelperMethod(dboundName, refDescUtf, dboundCode(tlGet, unboundField, cp)));
+			methods
+				.add(new HelperMethod(dboundName, refDescUtf, dboundCode(tlGet, unboundField, objectArrayClass, cp)));
 		}
 		return new DynVarRuntime(fields, fieldNameUtfs, fieldDescUtf, tlSet, dget, dbind, dset, List.copyOf(methods),
 				clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"), dbound);
@@ -274,17 +279,29 @@ final class JvmDynVarRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _dbound(tl, global)}: t when this thread has a binding or the global is not
-	 * the UNBOUND marker, else nil -- {@code boundp} of a special whose variable carries
-	 * its bound-ness.
+	 * {@code _dbound(tl, global)}: nil when this thread's binding -- else the global --
+	 * holds the UNBOUND marker, else t: {@code boundp} of a special whose variable
+	 * carries its bound-ness. A binding holds the marker for the extent of a
+	 * {@code progv} short of values.
 	 */
-	private static MethodCode dboundCode(MethodRefEntry tlGet, FieldRefEntry unboundField, ConstantPool cp) {
+	private static MethodCode dboundCode(MethodRefEntry tlGet, FieldRefEntry unboundField, ClassEntry objectArrayClass,
+			ConstantPool cp) {
 		MethodCode code = new MethodCode();
+		MethodCode.Label global = code.newLabel();
+		MethodCode.Label test = code.newLabel();
 		MethodCode.Label bound = code.newLabel();
 		code.aload(0);
 		code.invokevirtual(tlGet);
-		code.ifnonnull(bound);
+		code.dup();
+		code.ifnull(global);
+		code.checkcast(objectArrayClass);
+		code.iconst_0();
+		code.aaload();
+		code.goto_(test);
+		code.labelBinding(global);
+		code.pop();
 		code.aload(1);
+		code.labelBinding(test);
 		code.getstatic(unboundField);
 		code.if_acmpne(bound);
 		code.aconst_null();

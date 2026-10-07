@@ -2186,8 +2186,8 @@ public final class LispEvaluator {
 				case LispTrue ignored -> LispTrue.INSTANCE;
 				case LispNil ignored -> LispTrue.INSTANCE;
 				case LispSymbol sym -> sym.isKeyword() || LispNames.PACKAGE_VAR.equals(sym.name())
-						|| this.dynamicBindings.isBound(sym.name()) || this.globalEnv.hasBinding(sym.name())
-								? LispTrue.INSTANCE : LispNil.INSTANCE;
+						|| (this.dynamicBindings.isBound(sym.name()) ? this.dynamicBindings.get(sym.name()) != null
+								: this.globalEnv.hasBinding(sym.name())) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 				default ->
 					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
 			};
@@ -2204,10 +2204,8 @@ public final class LispEvaluator {
 					if (LispNames.PACKAGE_VAR.equals(sym.name())) {
 						yield currentPackageValue();
 					}
-					if (this.dynamicBindings.isBound(sym.name())) {
-						yield this.dynamicBindings.get(sym.name());
-					}
-					LispVal value = this.globalEnv.lookupOrNull(sym.name());
+					LispVal value = this.dynamicBindings.isBound(sym.name()) ? this.dynamicBindings.get(sym.name())
+							: this.globalEnv.lookupOrNull(sym.name());
 					if (value == null) {
 						throw CellErrorException.unboundVariable(sym.name());
 					}
@@ -5844,7 +5842,7 @@ public final class LispEvaluator {
 		LispVal value;
 		if (this.specialVars.contains(name)) {
 			if (this.dynamicBindings.isBound(name)) {
-				return this.dynamicBindings.get(name);
+				return dynamicValue(name);
 			}
 			value = env.lookupOrNull(name);
 			if (value == Environment.SPECIAL) {
@@ -5856,7 +5854,7 @@ public final class LispEvaluator {
 			value = env.lookupLexical(name);
 			if (value == null || value == Environment.SPECIAL) {
 				if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
-					return this.dynamicBindings.get(name);
+					return dynamicValue(name);
 				}
 				value = env.root().lookupOrNull(name);
 			}
@@ -10091,9 +10089,22 @@ public final class LispEvaluator {
 			return currentPackageValue();
 		}
 		if (this.dynamicBindings.isBound(name)) {
-			return this.dynamicBindings.get(name);
+			return dynamicValue(name);
 		}
 		LispVal value = this.globalEnv.lookupOrNull(name);
+		if (value == null) {
+			throw CellErrorException.unboundVariable(name);
+		}
+		return value;
+	}
+
+	/**
+	 * The value of the active dynamic binding of {@code name}, which the caller has seen
+	 * is bound: the {@code unbound-variable} naming it when the binding holds no value (a
+	 * symbol {@code progv} had no value for).
+	 */
+	private LispVal dynamicValue(String name) {
+		LispVal value = this.dynamicBindings.get(name);
 		if (value == null) {
 			throw CellErrorException.unboundVariable(name);
 		}
@@ -11571,9 +11582,10 @@ public final class LispEvaluator {
 	/**
 	 * Evaluates {@code (progv symbols values body...)}: binds each symbol in the
 	 * runtime-computed {@code symbols} list dynamically to the corresponding value in
-	 * {@code values} (nil when the values list is shorter), for the extent of the body,
-	 * restored on any exit. Unlike {@code let}, the bound symbols need not have been
-	 * proclaimed special and are not permanently marked special.
+	 * {@code values} -- a symbol past the end of a shorter values list is bound WITHOUT a
+	 * value, unbound for the extent as in CL -- restored on any exit. Unlike {@code let},
+	 * the bound symbols need not have been proclaimed special and are not permanently
+	 * marked special.
 	 */
 	private LispVal evalProgv(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -11592,8 +11604,12 @@ public final class LispEvaluator {
 					throw new LispEvalException(
 							LispNames.PROGV + " expects a list of symbols, got " + symbols.get(i).print());
 				}
-				LispVal value = i < values.size() ? values.get(i) : LispNil.INSTANCE;
-				this.dynamicBindings.push(sym.name(), value);
+				if (i < values.size()) {
+					this.dynamicBindings.push(sym.name(), values.get(i));
+				}
+				else {
+					this.dynamicBindings.pushUnbound(sym.name());
+				}
 				pushed.add(sym.name());
 			}
 			LispVal result = LispNil.INSTANCE;

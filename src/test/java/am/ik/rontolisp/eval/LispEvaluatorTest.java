@@ -21274,6 +21274,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() {
+		// The reference answer (SBCL's) the compiled backends' twins of this name
+		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against: a
+		// symbol progv has no value for is unbound for the extent -- a read signals the
+		// unbound-variable naming it, boundp answers nil -- and bound as before after it.
+		assertThat(printedLines(am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+	}
+
+	@Test
 	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() {
 		// The reference answer (SBCL's) the compiled backends' twins of this name
 		// (JvmLispCompilerTest, WasmLispCompilerIntegrationTest) are measured against: a

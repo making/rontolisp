@@ -243,7 +243,8 @@ final class WasmExprCompiler {
 		// A special is never a lexical (WasmLetCompiler binds it in its global alone),
 		// so it is read from the global below wherever it is read -- in a closure as in
 		// the binding function. In the function whose let made the binding it is active,
-		// so the value is never the UNBOUND marker.
+		// so the value is never the UNBOUND marker (a progv inside, which can bind it,
+		// compiles with no such special).
 		if (ctx.boundSpecials.contains(name) && ctx.globalIndices.containsKey(name)) {
 			emitRawSpecialRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
 			return;
@@ -1906,17 +1907,28 @@ final class WasmExprCompiler {
 			case LispNames.IF -> WasmIfCompiler.compile(cons, ctx, tail);
 			case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
 			case LispNames.LET -> WasmLetCompiler.compile(cons, ctx, false, tail);
-			case LispNames.PROGV ->
+			case LispNames.PROGV -> {
 				// The symbols are runtime-computed, but the candidate SPECIALS are
 				// static: lower to a loop dispatching each name over that set, with
 				// an unwind-protect carrying the restores (.kb/dynamic-special-
-				// variables.md). The unwind-protect is why progv forces EH mode.
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars,
-						ctx.usesEval, ctx.functions.containsKey(LispNames.PROGV_BIND_RUNTIME)
-								&& ctx.functions.containsKey(LispNames.PROGV_UNBIND_RUNTIME)),
-						ctx);
+				// variables.md). The unwind-protect is why progv forces EH mode. A
+				// special this function's let binds may be bound to the UNBOUND marker
+				// inside, so no read there skips its test (Ctx.boundSpecials).
+				java.util.Set<String> boundSpecials = ctx.boundSpecials;
+				ctx.boundSpecials = java.util.Set.of();
+				try {
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars,
+							ctx.usesEval, ctx.functions.containsKey(LispNames.PROGV_BIND_RUNTIME)
+									&& ctx.functions.containsKey(LispNames.PROGV_UNBIND_RUNTIME)),
+							ctx);
+				}
+				finally {
+					ctx.boundSpecials = boundSpecials;
+				}
+			}
 			case LispNames.PROGV_DYN_BIND -> WasmProgvCompiler.compileDynBind(cons, ctx);
 			case LispNames.PROGV_DYN_UNBIND -> WasmProgvCompiler.compileDynUnbind(cons, ctx);
+			case LispNames.PROGV_UNBOUND -> WasmProgvCompiler.compileUnbound(ctx);
 			case LispNames.PROGV_GENV -> WasmProgvCompiler.compileGenvRead(ctx);
 			case LispNames.PROGV_GENV_SET -> WasmProgvCompiler.compileGenvWrite(cons, ctx);
 			case LispNames.SYMBOL_VALUE_RAW -> WasmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx);

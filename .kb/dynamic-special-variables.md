@@ -51,8 +51,9 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   never the root scope), and on a miss or a mark the dynamic store -- gated on
   `progvUsed || localSpecials.contains(name)` -- then the global. So a lexical read never
   touches the thread-local store. `symbol-value`, `boundp` stay dynamic-first by name.
-  `evalProgv` and a `make-thread` binding alist set `progvUsed`; extra symbols -> nil;
-  progv-bound names need not be declared special. Restore fires on EVERY exit.
+  `evalProgv` and a `make-thread` binding alist set `progvUsed`; an extra symbol is bound
+  WITHOUT a value ("A progv short of values" below); progv-bound names need not be declared
+  special. Restore fires on EVERY exit.
 
 ## JVM (`JvmLetCompiler`) -- shallow on one thread, thread-scoped where another can run Lisp
 
@@ -269,6 +270,8 @@ native `evalProgv`).
   workers, postgres/postmodern/bbs-api) at +70 to +147 B wasm, +3 B JVM: same strings, a
   different string-table order (the runtime compiles where the shaken site did not).
 - The literal-`boundp` fold refuses progv programs (`CompileTimeBoundp.fold` gate).
+- A symbol past the end of the values is bound to the UNBOUND marker (`%progv-unbound`), and in
+  a program that calls `progv` every special's read is checked ("A progv short of values" below).
 - Deliberate divergence: a non-symbol in the symbols list is not detected.
 
 ## Compile-path limitations (interpreter unaffected)
@@ -431,7 +434,7 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), ci-spec
   `boundp-and-fboundp-as-function-values`.
 - A read of such a special while unbound signals ("A read of a special without a value"
-  below); a `progv` short of values still binds nil (documented; SBCL leaves it unbound).
+  below), and so does one inside a `progv` short of values ("A progv short of values" below).
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
   httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
@@ -542,7 +545,49 @@ and such a read answered NIL.
   did.
 - Not covered: the check is per global, so a read after the store pays it too once the global is
   checked; a first store under a `let` or `progn` is not recognised (checked); `--no-gc` keeps
-  nil; a `progv` short of values still binds nil.
+  nil.
+
+## A progv short of values (all four backends, 2026-10-07)
+
+**Invariant: a symbol a `progv` has no value for is unbound for the extent -- a read of it signals
+the `unbound-variable` naming it, `boundp` answers NIL, an assignment gives the binding a value --
+and its previous binding is back after the extent, as in SBCL.** Landed with `.todo/e09`. Before,
+every backend bound it to nil, documented as a divergence.
+
+- Interpreter: `DynamicBindings.pushUnbound`, a binding holding a private sentinel that `get`
+  answers as null; `evalSymbolRef` / `symbol-value` report it as the `unbound-variable`, `boundp`
+  as NIL.
+- Compile paths: the bind loop's value past the values is `(%progv-unbound)`, the marker of "A read
+  of a special without a value" (JVM `_unbound`, wasm the raw-local sentinel); nil where no read is
+  checked. Any special can be among the symbols, so in a program that calls `progv`
+  (`programCallsProgv`) every special but a `cl` symbol is read-checked
+  (`SpecialVarCollector.collectProgvUnbindable`, joined to JVM `UnboundMarker.globals` / wasm
+  `Ctx.unboundGlobals`). Only the valueless ones are SEEDED with the marker; a special a definer
+  gives a value keeps its plain start. A `cl` symbol's `%progv-dyn-bind` arm binds nil in place of
+  the marker: the runtimes read the standard variables outside any compiled read.
+- `boundp`: a tracked special answers from its variable; JVM `_dbound` tests the thread's cell
+  VALUE (a cell can now hold the marker), a few bytes more in every thread-scoped program with a
+  probed valueless special. Every other name answers from the eval mirror, so with the mirror the
+  bind loop takes the name OUT of it for the extent (record `(name prev entry nil t)`), and the
+  restore drops any binding a store made meanwhile and links the taken entry back. That relies on
+  the mirror holding at most one binding a name: `_store` and the bind loop prepend only for a
+  name it does not hold.
+- Wasm: a read in the frame of a `let` of the special skips the test (`Ctx.boundSpecials`); a
+  `progv` inside can bind the marker there, so the expansion compiles with that set empty.
+- Measured 2026-10-07. Premise: the todo program (`(defvar *pa* 1)`, `(progv '(*pa*) '() ...)`
+  read through a handler, plus `boundp`) SBCL 2.2.9 `((:UNBOUND *PA*) NIL)` then `1`;
+  interpreter, JVM, P1, component `(NIL T)` then `1`. A name no declaration makes special: SBCL
+  `(NIL (:UNBOUND NAME))`, every backend `(T NIL)`. Census of the checked set: size-report,
+  bench-report and every example's compile (142 JVM compiles): no program calls `progv`, so the
+  set is unchanged in each. The ci-spec program: 541 specials, 475 not `cl` symbols, 58 checked
+  before, 452 newly checked, ~2,480 JVM read sites newly passing through `_bound`. cl-json's
+  `progv` sites (never short) make a cl-json program pay the same.
+- Not covered: a `cl` special short of values is nil on the compile paths (unbound in the
+  interpreter). Pins: `ProgvShortOfValuesFixture` on `aProgvShortOfValuesLeavesTheExtraSymbolsUnbound`
+  (`LispEvaluatorTest`, `JvmLispCompilerTest` with a thread-scoped twin,
+  `WasmLispCompilerIntegrationTest`), ci-spec
+  `a-progv-short-of-values-leaves-the-extra-symbols-unbound`, `BoundpInBindingFixture`'s
+  `UNBOUND_READ_SOURCE`, `SpecialVarCollectorTest`.
 
 ## Local special declarations; a special is never captured (all four backends, 2026-10-05)
 

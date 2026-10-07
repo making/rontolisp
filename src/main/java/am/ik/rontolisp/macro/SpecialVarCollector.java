@@ -315,12 +315,43 @@ public final class SpecialVarCollector {
 			collectValued(form, valued);
 		}
 		for (String name : specials) {
-			if (!valued.contains(name) && !PackageRegistry.isClSymbol(name)
-					&& !PackageRegistry.isClSymbol(member(name))) {
+			if (!valued.contains(name) && !isClName(name)) {
 				out.add(name);
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * The specials a {@code progv} short of values can leave without a value: in a
+	 * program that calls {@code progv}, every special but a {@code cl} symbol, since the
+	 * symbols a {@code progv} binds are run-time values and any special may be among
+	 * them. A symbol past the end of the values is unbound for the extent, so the compile
+	 * paths bind each of these to the UNBOUND marker there and test every read of it, as
+	 * they do for {@link #collectValueless}'s from the start. A {@code cl} symbol (the
+	 * standard variables the backends seed, whose values the runtime also reads outside
+	 * any compiled read) is bound to nil instead.
+	 * @param program the program's forms
+	 * @param specials the program's special-variable names
+	 * @return those specials, in {@code specials} order; empty without a {@code progv}
+	 */
+	public static LinkedHashSet<String> collectProgvUnbindable(Collection<LispVal> program,
+			SequencedSet<String> specials) {
+		LinkedHashSet<String> out = new LinkedHashSet<>();
+		if (specials.isEmpty() || !LispMacroExpander.programCallsProgv(program)) {
+			return out;
+		}
+		for (String name : specials) {
+			if (!isClName(name)) {
+				out.add(name);
+			}
+		}
+		return out;
+	}
+
+	/** Whether the name, or its member name, is a {@code cl} symbol. */
+	private static boolean isClName(String name) {
+		return PackageRegistry.isClSymbol(name) || PackageRegistry.isClSymbol(member(name));
 	}
 
 	/**

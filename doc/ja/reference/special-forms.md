@@ -7,7 +7,7 @@
 | `quote` | `(quote expr)` or `'expr` | 式を評価せずに返します |
 | `if` | `(if cond then else?)` | 条件分岐。`nil` は偽、それ以外はすべて真です |
 | `let` | `(let ((x 1) (y 2)) body...)` | ローカル変数の束縛(並列)。スペシャル宣言された名前(`defvar`/`declaim`)はレキシカルではなくダイナミックに束縛されます |
-| `progv` | `(progv symbols values body...)` | 実行時に計算した `symbols` のリストを `values` に本体の間ダイナミック束縛し、脱出時に復元します(インタプリタのみ) |
+| `progv` | `(progv symbols values body...)` | 実行時に計算した `symbols` のリストを `values` に本体の間ダイナミック束縛し、脱出時に復元します |
 | `lambda` | `(lambda (params...) body...)` | 無名関数 |
 | `progn` | `(progn expr1 expr2...)` | 式を順に評価し、最後の値を返します |
 | `setq` | `(setq name value ...)` | 変数に値を代入します。複数の `name value` ペアを受け付け、左から右へ代入し、最後の値を返します |
