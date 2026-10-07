@@ -14064,6 +14064,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGetOutputStreamStringRefusesAClosedStringOutputStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAClosedStringOutputStream.
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.CLOSED_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunComputedTypepOfAStreamTypeName() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes.

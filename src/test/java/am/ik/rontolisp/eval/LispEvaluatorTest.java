@@ -10779,6 +10779,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void getOutputStreamStringRefusesAClosedStringOutputStream() {
+		// A closed string output stream is the same type-error as a stream of another
+		// kind, not a simple-error. Pinned on all four backends.
+		assertThat(evalPrinted(OutputStreamStringKindFixture.CLOSED_PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+	}
+
+	@Test
 	void computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes() {
 		// A stream type name held in a value decides what its literal spelling decides.
 		// Pinned on all four backends.

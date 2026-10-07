@@ -5888,7 +5888,9 @@ public final class Environment implements Scope {
 					LispVal stream = args.get(0);
 					if (stream instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG)
 							&& inst.slot(1) instanceof LispSymbol kind
-							&& LispLayout.Kinds.STRING_OUTPUT.equals(kind.name())) {
+							&& LispLayout.Kinds.STRING_OUTPUT.equals(kind.name())
+							&& inst.slot(0) instanceof LispInteger handle
+							&& streams.get(handle.value()) instanceof StringWriter) {
 						return streamContents.apply(args);
 					}
 					if (env.lookupFunction(LispNames.STREAMP) instanceof LispFunction streamp

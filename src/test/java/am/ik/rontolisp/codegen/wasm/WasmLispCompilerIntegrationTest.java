@@ -14962,6 +14962,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void getOutputStreamStringRefusesAClosedStringOutputStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAClosedStringOutputStream,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.CLOSED_PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+		}
+	}
+
+	@Test
 	void computedTypepOfAStreamTypeName() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes,
