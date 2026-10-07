@@ -303,7 +303,8 @@ final class JvmQuoteCompiler {
 	 * e_0, ...]}, data offset {@code 1 + 2 * rank}). Each word -- header and element
 	 * alike -- is a {@code sipush} of its low sixteen bits followed by {@code sastore},
 	 * so a bfloat16 literal costs about half the bytes of the {@code #f} one, which is
-	 * what keeps it furthest from {@code .todo/017}'s baked-constant ceiling.
+	 * what keeps it furthest from the 64 KB method-code ceiling a baked literal hits
+	 * ({@code .kb/jvm-method-size-limits.md}).
 	 * @param fa the packed literal
 	 * @param ctx the compilation context
 	 */

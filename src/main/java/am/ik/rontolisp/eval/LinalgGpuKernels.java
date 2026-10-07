@@ -435,7 +435,7 @@ final class LinalgGpuKernels {
 	/**
 	 * The bfloat16 sibling of {@link #matvec(float[], float[], int, int)}: a matrix of
 	 * bf16 bit patterns against an f32 vector, into an f32 result -- the fused pairing
-	 * ({@code .kb/bfloat16.md}), on the device ({@code .todo/490}).
+	 * ({@code .kb/bfloat16.md}), on the device.
 	 * @param w the matrix's stored patterns, row-major
 	 * @param x the vector
 	 * @param rows rows of the matrix
@@ -450,7 +450,7 @@ final class LinalgGpuKernels {
 	/**
 	 * The Q8_0 sibling of {@link #matvec(float[], float[], int, int)}: ggml's blocks
 	 * against an f32 vector, into an f32 result that is the CPU kernel's bits
-	 * ({@code .kb/quantized-matrix.md}), on the device ({@code .todo/728}).
+	 * ({@code .kb/quantized-matrix.md}), on the device.
 	 * @param w the matrix's blocks, row-major
 	 * @param x the vector
 	 * @param rows rows of the matrix
@@ -573,7 +573,7 @@ final class LinalgGpuKernels {
 		return Gpu.multiply(a, 0, sa, ta, b, 0, sb, tb, out, 0, batch, n, m, p) ? out : null;
 	}
 
-	// --- the resident tier (.todo/491) -------------------------------------------------
+	// --- the resident tier -------------------------------------------------------------
 
 	/**
 	 * {@code op} over two SAME-SHAPED double-float operands, or {@code null} when the
@@ -766,7 +766,7 @@ final class LinalgGpuKernels {
 		return Gpu.sumSquares(a, 0, n, acc);
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier -------------------------------------------------------------
 
 	/** {@code linalg::%la-gelu} on the device: one pass, or {@code null}. */
 	static double @Nullable [] gelu(double[] a, int n) {

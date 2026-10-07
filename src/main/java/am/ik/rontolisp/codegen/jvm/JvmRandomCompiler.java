@@ -31,7 +31,7 @@ final class JvmRandomCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (JvmLispCompiler.isDefinitelyDouble(args.get(1), ctx)) {
 			// Float limit: tlr.nextDouble() * limit, kept as a double -- but check the
-			// limit's sign first (.todo/981): a non-positive float is _random's domain
+			// limit's sign first: a non-positive float is _random's domain
 			// violation too, and this path never reaches _random to catch it. unboxDouble
 			// is a pure coercion (no draw), so calling it twice on the positive path
 			// costs
@@ -55,7 +55,7 @@ final class JvmRandomCompiler {
 		else {
 			// Any other limit: _random dispatches on the runtime type (a Double limit
 			// returns a Double, otherwise the truncated Long), so a float limit through a
-			// variable works, and rejects a non-positive or ratio limit (.todo/981).
+			// variable works, and rejects a non-positive or ratio limit.
 			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM));
 		}
 	}

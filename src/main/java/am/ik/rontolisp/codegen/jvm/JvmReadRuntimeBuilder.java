@@ -2300,7 +2300,7 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(done);
 		// header = Object[]{ Object[]{Long(count)}, null, null, null, "BIT" } into
 		// slot 0 of the list: a bit vector read at run time is stamped with the
-		// remembered element type bit, like the frontend's #* lowering (.todo/043).
+		// remembered element type bit, like the frontend's #* lowering.
 		a.aload(0);
 		a.loadConstant(0);
 		a.loadConstant(5);

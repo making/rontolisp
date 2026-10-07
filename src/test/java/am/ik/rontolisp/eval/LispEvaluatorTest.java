@@ -1202,7 +1202,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void readConsumesExactlyOneDatumAndLeavesTheStreamAfterIt() {
-		// CL's read contract (todo-624): a second datum on the same line survives, a
+		// CL's read contract: a second datum on the same line survives, a
 		// datum may SPAN lines, and read leaves the stream positioned after the object
 		// -- so read and read-line mix. Same answers as SBCL, on all four backends
 		// (ci-spec case read-stream-datum-by-datum).
@@ -1231,7 +1231,7 @@ class LispEvaluatorTest {
 	@Test
 	void readAtEndOfInputAnswersTheEofValueAndSignalsWhenAsked() {
 		// CL's default: eof-error-p is t, so a bare read signals end-of-file at
-		// end of input (.todo/807); an explicit nil still answers the eof-value.
+		// end of input; an explicit nil still answers the eof-value.
 		assertThat(eval("""
 				(handler-case (with-input-from-string (s "") (read s))
 				  (end-of-file () :caught))""").print()).isEqualTo(":CAUGHT");
@@ -1779,7 +1779,7 @@ class LispEvaluatorTest {
 	void prin1EscapesQuotesAndBackslashesInStrings() {
 		// *print-escape* = t: an embedded " or \ is preceded by a \, so the output reads
 		// back. A NEWLINE is deliberately NOT escaped -- CLHS escapes only the string
-		// terminator and the single-escape character (todo 216).
+		// terminator and the single-escape character.
 		assertThat(capture("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")")).isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
 		assertThat(capture("(prin1 \"a\\\"b\\\\c\")")).isEqualTo("\"a\\\"b\\\\c\"");
 		assertThat(capture("(prin1 (list \"x\\\"y\" 'foo))")).isEqualTo("(\"x\\\"y\" FOO)");
@@ -1793,7 +1793,7 @@ class LispEvaluatorTest {
 	@Test
 	void prin1OutputReadsBackAsTheSameString() {
 		// The defining contract of prin1: (read-from-string (prin1-to-string s)) == s,
-		// for a string carrying a quote, a backslash and a literal newline (todo 216).
+		// for a string carrying a quote, a backslash and a literal newline.
 		assertThat(evalMulti("""
 				(let ((s (concatenate 'string "a" (string (code-char 34)) "b"
 				                      (string (code-char 92)) "c"
@@ -1861,7 +1861,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalInternalStringConcatCopiesBytes() {
 		// %string-concat is strings-only by contract: the WASM backend byte-copies
-		// both operands (.todo/338) instead of rendering them through the value
+		// both operands instead of rendering them through the value
 		// printer, so a non-string must fail here exactly as it does there.
 		assertThat(eval("(%string-concat \"foo\" \"bar\")")).isEqualTo(new LispString("foobar"));
 		assertThat(eval("(%string-concat \"\" \"\")")).isEqualTo(new LispString(""));
@@ -1965,8 +1965,7 @@ class LispEvaluatorTest {
 		// of it: (coerce seq '(vector single-float)) is the packed float array
 		// make-array builds, not a general vector -- and (coerce packed '(array
 		// bfloat16)) converts rather than answering its ARGUMENT unchanged, which is what
-		// dropping the element type looked like when the source was already packed
-		// (.todo/707).
+		// dropping the element type looked like when the source was already packed.
 		assertThat(eval("""
 				(let ((v (coerce '(1 2) '(vector single-float))))
 				  (list (array-element-type v) (typep v '(simple-array single-float (*))) v))""").print())
@@ -2174,7 +2173,7 @@ class LispEvaluatorTest {
 	// NaN cannot live in a packed single-float array at all, whatever bit pattern the
 	// program hands it -- which is what makes NoGcWasmCompiler.compileFloatArrayLiteral's
 	// f64.const + f32.demote_f64 round trip safe: the one value it could not carry
-	// cannot reach it (.kb/bfloat16.md, .todo/487).
+	// cannot reach it (.kb/bfloat16.md).
 	@Test
 	void evalASignallingNaNCannotSurviveIntoAPackedSingleFloatArray() {
 		// 0x7F800001: exponent all ones, payload nonzero, quiet bit CLEAR.
@@ -2193,7 +2192,7 @@ class LispEvaluatorTest {
 	// designator held in a variable and one written literally are the same call here --
 	// which is exactly why this engine is the REFERENCE the two compile paths are held
 	// against, and why the defect they had was invisible from here. Keyed to
-	// ArrayElementTypes rather than listing the widths (.todo/487).
+	// ArrayElementTypes rather than listing the widths.
 	@Test
 	void evalMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling() {
 		for (int code : ArrayElementTypes.specializedCodes()) {
@@ -2416,7 +2415,7 @@ class LispEvaluatorTest {
 		// A designator the compiler cannot read still resolves to a FUNCTION value:
 		// functionp answers t, the value prints its registered name, and funcall
 		// works -- on the interpreter and (see the matching compiler tests) every
-		// compiled backend, matching SBCL (.todo/750).
+		// compiled backend, matching SBCL.
 		assertThat(evalMulti("(defun rrd-add (a b) (+ a b))" + "(let ((fn (symbol-function (car (list 'rrd-add)))))"
 				+ " (list (functionp fn) (princ-to-string fn) (funcall fn 2 3)))"))
 			.isEqualTo(eval("(list t \"#<function RRD-ADD>\" 5)"));
@@ -2724,7 +2723,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(append '(1 2) 3)").print()).isEqualTo("(1 2 . 3)");
 	}
 
-	// The copy is built iteratively (.todo/749): a first argument far past any
+	// The copy is built iteratively: a first argument far past any
 	// plausible stack answers instead of overflowing.
 	@Test
 	void evalAppendLongFirstArgument() {
@@ -2735,7 +2734,7 @@ class LispEvaluatorTest {
 	}
 
 	// mapcan/mapcon concatenate right-folded through the same iterative copy, so a
-	// long input list is linear rather than a stack overflow (.todo/749).
+	// long input list is linear rather than a stack overflow.
 	@Test
 	void evalMapcanMapconLongInput() {
 		assertThat(eval("(length (mapcan #'list (make-list 100000 :initial-element 9)))").print()).isEqualTo("100000");
@@ -2840,7 +2839,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalComplexConstructor() {
-		// SBCL parity (.todo/751): a rational zero imaginary part demotes to the
+		// SBCL parity: a rational zero imaginary part demotes to the
 		// real, a float zero stays complex (the int zero coerced to 0.0), mixed
 		// rational/float coerces the rational side to float.
 		assertThat(eval("(complex 1 2)")).isEqualTo(LispComplex.valueOf(new LispInteger(1), new LispInteger(2)));
@@ -3160,7 +3159,7 @@ class LispEvaluatorTest {
 		// JvmLispCompilerTest#compileAndRunComplexUnaryMathMirrorsTheInterpreterArmForArm:
 		// that differential can only see a DISAGREEMENT, so the value it agrees on is
 		// anchored here against the real functions. Each axis of complex tan/tanh is the
-		// real function of one family, and the JVM's slot reuse (.todo/765) broke exactly
+		// real function of one family, and the JVM's slot reuse once broke exactly
 		// this: losing the denominator left the numerator, so tan of a real was sin of
 		// it. The digits are the platform's Math, so closeness is the pin.
 		assertThat(((LispDouble) eval("(realpart (tan #c(1d0 0d0)))")).value()).isCloseTo(StrictMath.tan(1.0),
@@ -3188,7 +3187,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalComplexTypep() {
-		// SBCL parity (.todo/754): a complex is of type complex (and of type
+		// SBCL parity: a complex is of type complex (and of type
 		// number) but not of type real; a real is not of type complex.
 		assertThat(eval("(typep #c(1 2) 'complex)")).isSameAs(LispTrue.INSTANCE);
 		assertThat(eval("(typep #c(1 2) 'real)")).isSameAs(LispNil.INSTANCE);
@@ -3247,7 +3246,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUpgradedComplexPartType() {
-		// SBCL parity (.todo/754, host 2.2.9): a real-subtype name answers itself, a
+		// SBCL parity (host 2.2.9): a real-subtype name answers itself, a
 		// compound real specifier answers its head's name, anything else signals.
 		assertThat(eval("(upgraded-complex-part-type 'integer)")).isEqualTo(new LispSymbol("INTEGER"));
 		assertThat(eval("(upgraded-complex-part-type 'single-float)")).isEqualTo(new LispSymbol("SINGLE-FLOAT"));
@@ -3266,7 +3265,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalCoerceToComplex() {
-		// SBCL parity (.todo/754): a real demotes when exact (5 stays 5), a float
+		// SBCL parity: a real demotes when exact (5 stays 5), a float
 		// stays complex, a complex answers itself, a part-typed target coerces both
 		// parts first, and a real target answers a real as is.
 		assertThat(eval("(coerce 5 'complex)")).isEqualTo(new LispInteger(5));
@@ -3291,7 +3290,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalComplexSignum() {
-		// SBCL parity (.todo/754): the unit vector z/|z| in floats; a zero answers
+		// SBCL parity: the unit vector z/|z| in floats; a zero answers
 		// the canonicalization of its own parts (0 for exact, #C(0.0 0.0) for float).
 		assertThat(eval("(signum #c(3 4))").print()).isEqualTo("#C(0.6 0.8)");
 		assertThat(eval("(signum #c(0 0))")).isEqualTo(new LispInteger(0));
@@ -3302,7 +3301,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalComplexRealOnlyOperationsSignalCatchableTypeErrors() {
-		// Real-only by contract (.todo/754): isqrt, the floor family, mod/rem,
+		// Real-only by contract: isqrt, the floor family, mod/rem,
 		// gcd/lcm, the bitwise operators, float and numerator/denominator signal a
 		// catchable type-error over a complex (SBCL parity; the message prefix is
 		// what the compiled backends mirror byte-identical).
@@ -3925,7 +3924,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(acosh #c(-4d0 0d0))").print()).isEqualTo("#C(2.0634370688955603 3.141592653589793)");
 		// SBCL answers #C(-2.0634370688955608 -3.141592653589793) here -- a NEGATIVE
 		// real part, against CLHS's stated range (real part >= 0). This is what the
-		// ANSI formula produces; the SBCL deviation is 761's measurement, not a pin.
+		// ANSI formula produces; the SBCL deviation is a measurement, not a pin.
 		assertThat(eval("(acosh #c(-4d0 -0d0))").print()).isEqualTo("#C(2.0634370688955603 -3.141592653589793)");
 		// The round trip returns the argument to within an ulp on both parts; WHICH
 		// ulp follows the platform's Math.log through acosh's real part, so the trip's
@@ -5046,7 +5045,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() {
-		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place (SBCL's
+		// sort/nreverse/stable-sort permute a vector/string in place (SBCL's
 		// contract too), so a fill-pointered or adjustable argument must keep its fill
 		// pointer, its adjustable flag AND its own identity, not just the right values.
 		assertThat(eval("""
@@ -5074,9 +5073,9 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalDeleteNsubstituteFamilyOnVectorsAndStrings() {
-		// .todo/623: delete/delete-if/delete-if-not/nsubstitute/nsubstitute-if(-not) used
-		// to be silent no-ops on a vector or string (only their cons-splice/rplaca arm
-		// was implemented) -- CLHS lets a destructive form answer a fresh sequence, so
+		// delete/delete-if/delete-if-not/nsubstitute/nsubstitute-if(-not) used to be
+		// silent no-ops on a vector or string (only their cons-splice/rplaca arm was
+		// implemented) -- CLHS lets a destructive form answer a fresh sequence, so
 		// they now route through remove/substitute's own vector/string handling.
 		assertThat(eval("(delete 1 (vector 3 1 2))").print()).isEqualTo("#(3 2)");
 		assertThat(eval("(delete #\\a (copy-seq \"aba\"))").print()).isEqualTo("\"b\"");
@@ -5097,10 +5096,10 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalNsubstituteFamilyWritesThroughVectorArgument() {
-		// .todo/773: .todo/623's plain reuse of substitute's non-destructive form (the
-		// test above) checks only the VALUE nsubstitute answers; ANSI
-		// (NSUBSTITUTE-VECTOR.3/.32/.33 and their -IF/-IF-NOT twins) expects the
-		// ARGUMENT itself to change, which a fresh-sequence answer never did.
+		// A plain reuse of substitute's non-destructive form (the test above) checks
+		// only the VALUE nsubstitute answers; ANSI (NSUBSTITUTE-VECTOR.3/.32/.33 and
+		// their -IF/-IF-NOT twins) expects the ARGUMENT itself to change, which a
+		// fresh-sequence answer never did.
 		assertThat(evalMulti("(let ((x (vector 1 2 1))) (nsubstitute 9 1 x) x)").print()).isEqualTo("#(9 2 9)");
 		assertThat(evalMulti("(let ((x (vector 1 2 3))) (nsubstitute-if 0 #'oddp x) x)").print()).isEqualTo("#(0 2 0)");
 		assertThat(evalMulti("(let ((x (vector 1 2 3))) (nsubstitute-if-not 0 #'oddp x) x)").print())
@@ -6046,9 +6045,9 @@ class LispEvaluatorTest {
 		// significand is the float's significand scaled to float-digits bits --
 		// 53 for a normal double, exactly as SBCL answers (checked against
 		// (integer-decode-float ...) in SBCL 2.2.9). rontolisp used to strip
-		// factors of two from the significand and answer a float sign
-		// (.todo/896); a stripped, odd significand is wrong for any of these
-		// forms whose true 53-bit significand happens to be even.
+		// factors of two from the significand and answer a float sign; a stripped,
+		// odd significand is wrong for any of these forms whose true 53-bit
+		// significand happens to be even.
 		assertThat(eval("(multiple-value-list (integer-decode-float 1.0))").print())
 			.isEqualTo("(4503599627370496 -52 1)");
 		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print())
@@ -6218,7 +6217,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalLdbTest() {
 		// (ldb-test bytespec int) is T when any bit of the field is set --
-		// (not (zerop (ldb bytespec int))) (.todo/818).
+		// (not (zerop (ldb bytespec int))).
 		assertThat(eval("(ldb-test (byte 4 4) 255)").print()).isEqualTo("T");
 		assertThat(eval("(ldb-test (byte 4 4) 15)").print()).isEqualTo("NIL");
 		assertThat(eval("(ldb-test (byte 8 0) 255)").print()).isEqualTo("T");
@@ -6757,7 +6756,7 @@ class LispEvaluatorTest {
 	void replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead() {
 		// The native replace read its source with sequenceRef per element, and that walks
 		// a LIST from the head -- so a list source was quadratic on the INTERPRETER while
-		// the three compile paths, which took a cursor with todo-413, were linear: 26.5
+		// the three compile paths, which already read through a cursor, were linear: 26.5
 		// ms against 0.06 at n=4000. One cursor now serves all three destination arms.
 		// Every answer below is the one the indexed read gave.
 		assertThat(evalMulti("""
@@ -7429,10 +7428,10 @@ class LispEvaluatorTest {
 	@Test
 	void evalBitTypeLattice() {
 		// bit is (integer 0 1): a lattice edge below integer with a matching typep
-		// test, so the literal fold and the computed/runtime dispatch agree
-		// (.todo/180). The lattice is edges only, so bit is NOT below
-		// unsigned-byte here (CL would answer T); that range reasoning is out of
-		// scope. Pinned identically by JvmLispCompilerTest#compileBitTypeLattice,
+		// test, so the literal fold and the computed/runtime dispatch agree. The
+		// lattice is edges only, so bit is NOT below unsigned-byte here (CL would
+		// answer T); that range reasoning is out of scope. Pinned identically by
+		// JvmLispCompilerTest#compileBitTypeLattice,
 		// WasmLispCompilerIntegrationTest#bitTypeLattice and the bit-type-lattice
 		// ci-spec case.
 		assertThat(evalMulti("""
@@ -7464,7 +7463,7 @@ class LispEvaluatorTest {
 		// The array predicate trio and the bounds check without signaling: each
 		// predicate answers exactly what its typep specifier does, and
 		// array-in-bounds-p never signals -- a non-array, a rank/subscript-count
-		// mismatch and any out-of-range subscript all answer nil (.todo/043).
+		// mismatch and any out-of-range subscript all answer nil.
 		// Pinned identically by
 		// JvmLispCompilerTest#compileArrayPredicatesAndInBounds,
 		// WasmLispCompilerIntegrationTest#arrayPredicatesAndInBounds and the
@@ -7513,7 +7512,7 @@ class LispEvaluatorTest {
 		// type bit: a #* literal or a (make-array ... :element-type 'bit), of any rank.
 		// bit-vector-p/simple-bit-vector-p answer exactly what their typep specifiers
 		// do, and the eleven bit-* operators validate through bit-vector-p and walk
-		// row-major-aref, so rank-n arrays work too (.todo/043). Pinned identically by
+		// row-major-aref, so rank-n arrays work too. Pinned identically by
 		// JvmLispCompilerTest#compileBitVectorsAndBitOps,
 		// WasmLispCompilerIntegrationTest#bitVectorsAndBitOps and the
 		// bit-vectors-and-bit-ops ci-spec case.
@@ -7600,7 +7599,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalBitVectorPreservationAcrossSequenceOps() {
-		// Keeping the bit stamp where a bit vector flows through (.todo/820):
+		// Keeping the bit stamp where a bit vector flows through:
 		// subseq answers a bit vector, a computed compound coerce element reads
 		// like the literal one, map/make-sequence build one, printing spells #*
 		// and class-of answers bit-vector. Pinned identically by
@@ -7786,7 +7785,7 @@ class LispEvaluatorTest {
 	void evalPrintOfACyclicConsIsFinite() {
 		// A cons whose cdr chain re-enters itself used to loop the renderer without end
 		// (an OutOfMemoryError, not the StackOverflowError the car cycle throws): the
-		// chain is walked iteratively, so the todo-584 path guard alone cannot see it.
+		// chain is walked iteratively, so the recursive path guard alone cannot see it.
 		// The chain's cycle is detected up front and the cycle-start cell's second
 		// arrival prints as " . #" -- every element exactly once, then the same "#"
 		// cutoff marker the instance guard uses.
@@ -7852,7 +7851,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalPrintOfACyclicConsIsFiniteThroughThePrintObjectRoute() {
 		// With a print-object method defined, the printing operators render through the
-		// %print-object-str walk (todo-437); its cons and vector arms carry the same
+		// %print-object-str walk; its cons and vector arms carry the same
 		// chain detection and path guard as the raw renderer, so the text is identical.
 		assertThat(evalMulti("""
 				(defclass tagged () ())
@@ -8161,7 +8160,7 @@ class LispEvaluatorTest {
 		// The character marker MEANS "a rank-1 character array", i.e. a string, so
 		// nothing above rank 1 carries it: the value is the plain general array, on
 		// every backend. stringp and vectorp answer NIL (SBCL 2.2.9 agrees). The
-		// element type is still REMEMBERED (todo-611), exactly as a rank-n
+		// element type is still REMEMBERED, exactly as a rank-n
 		// '(unsigned-byte 8) request's is.
 		assertThat(eval("""
 				(let ((b (make-array '(2 2) :element-type 'character :initial-element #\\a)))
@@ -8279,7 +8278,7 @@ class LispEvaluatorTest {
 				+ " DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))");
 		// A designator that upgrades to t is remembered as nothing at all, and an
 		// unsupplied element of one is nil -- the runtime designator changes neither.
-		// 'bit is not one of those: since .todo/043 it is remembered, so the runtime
+		// 'bit is not one of those: it is remembered, so the runtime
 		// designator builds what the literal spelling builds.
 		assertThat(evalMulti("""
 				(defun mkt (et) (make-array 3 :element-type et))
@@ -9241,7 +9240,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalFFamilySingleValueContext() {
 		// CLHS: ffloor/fceiling/fround/ftruncate are their integer twins with a FLOAT
-		// primary value (todo-667) -- the quotient is the same one, only floated.
+		// primary value -- the quotient is the same one, only floated.
 		assertThat(eval("(ffloor 7 2)")).isEqualTo(new LispDouble(3.0));
 		assertThat(eval("(fceiling 7 2)")).isEqualTo(new LispDouble(4.0));
 		assertThat(eval("(fround 7 2)")).isEqualTo(new LispDouble(4.0));
@@ -9270,8 +9269,8 @@ class LispEvaluatorTest {
 		assertThat(eval("(multiple-value-bind (q r) (ftruncate -7 2) (list q r))").print()).isEqualTo("(-3.0 -1)");
 		assertThat(eval("(multiple-value-bind (q r) (fround 7 2) (list q r))").print()).isEqualTo("(4.0 -1)");
 		// The remainder is the SAME exact quantity floor/ceiling/round/truncate answer,
-		// not SBCL's rounded-double one (todo-660's documented, intentional divergence
-		// carries over unchanged) -- 1.0 here, not 0.0.
+		// not SBCL's rounded-double one (the documented, intentional divergence carries
+		// over unchanged) -- 1.0 here, not 0.0.
 		assertThat(eval("(multiple-value-bind (q r) (ffloor 1d300 7.0) (list q r))").print())
 			.isEqualTo("(1.4285714285714286e299 1.0)");
 	}
@@ -9336,7 +9335,7 @@ class LispEvaluatorTest {
 		// promotes to a bignum instead. The quotient below is the exact one -- SBCL
 		// answers a DIFFERENT integer here (the exact value of the ROUNDED double a/b),
 		// which is what makes its own (rem 1d300 7.0) 0.0 where the exact remainder is
-		// 1.0; todo-659 settled that rontolisp answers the exact remainder, so the
+		// 1.0; rontolisp answers the exact remainder by design, so the
 		// quotient it belongs to is the exact one. See .kb/linalg-simd.md, mod/rem.
 		String big = "1428571428571428646435371793149171783863526544440227364165505879302574939984154565409"
 				+ "1019644006398057767206340469769688242036046219434722509211316925524385469262674298951082910540"
@@ -9433,8 +9432,9 @@ class LispEvaluatorTest {
 					BigInteger num = exactA[0].multiply(exactB[1])
 						.subtract(expectedQuotient.multiply(exactB[0]).multiply(exactA[1]));
 					BigInteger den = exactA[1].multiply(exactB[1]);
-					// A zero remainder keeps the sign todo-652 settled (mod and rem share
-					// it): -0.0 only when the dividend is -0.0 and the divisor positive.
+					// A zero remainder keeps its settled sign (mod and rem share it):
+					// -0.0
+					// only when the dividend is -0.0 and the divisor positive.
 					double expectedRemainder = num.signum() == 0
 							? (Double.doubleToRawLongBits(a) == Long.MIN_VALUE && b > 0 ? -0.0 : 0.0)
 							: new java.math.BigDecimal(num).divide(new java.math.BigDecimal(den)).doubleValue();
@@ -9448,7 +9448,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void theFloorAndTruncateRemaindersAreModAndRem() {
-		// The identity the defect broke, stated the way todo-652 stated it: the second
+		// The identity a signed-zero defect once broke: the second
 		// value of truncate is rem and the second value of floor is mod, whatever the
 		// magnitude and whatever the operands.
 		String source = """
@@ -9465,16 +9465,16 @@ class LispEvaluatorTest {
 
 	@Test
 	void theFloorFamilyQuotientWithAnInfiniteDivisorComposesWithItsOwnRemainder() {
-		// todo-666: 659 settled the REMAINDER for an infinite divisor by the CLHS
-		// formula (the truncating quotient of a finite dividend is the integer 0, so
-		// rem is the dividend itself, and mod's divisor-sign correction can push it to
-		// +/-Infinity); 660 made the quotient exact everywhere else but left this one
-		// regime alone -- the quotient stayed the f64 answer (0, from
-		// (floor (/ a b)) with a/b rounding to a signed zero), which does not compose
-		// with 659's remainder. There is no oracle here (SBCL signals on an infinite
-		// operand), so the quotient is settled by the formula 659 already used: with a
-		// finite nonzero dividend, a/b is an infinitesimal of magnitude under 1/2, so
-		// truncate and round are always 0, and floor/ceiling round it down or up --
+		// The REMAINDER for an infinite divisor follows the CLHS formula (the
+		// truncating quotient of a finite dividend is the integer 0, so rem is the
+		// dividend itself, and mod's divisor-sign correction can push it to
+		// +/-Infinity). The quotient, exact everywhere else, once left this one regime
+		// alone -- the quotient stayed the f64 answer (0, from (floor (/ a b)) with a/b
+		// rounding to a signed zero), which does not compose with that remainder. There
+		// is no oracle here (SBCL signals on an infinite operand), so the quotient is
+		// settled by the formula the remainder uses: with a finite nonzero dividend, a/b
+		// is an infinitesimal of magnitude under 1/2, so truncate and round are always
+		// 0, and floor/ceiling round it down or up --
 		// reading off whether the dividend and the divisor agree in sign.
 		//
 		// quotient*divisor + remainder = number holds only IN THE LIMIT (0 * Infinity
@@ -9826,8 +9826,8 @@ class LispEvaluatorTest {
 			(defmethod ctx-get ((key string) (context hash-table))
 			  (gethash (string-upcase key) context))
 			(defun f-cond (h k) (cond (k (gethash "K" h)) (t nil)))
-			(setq mv427-tbl (make-hash-table :test 'equal))
-			(setf (gethash "K" mv427-tbl) "V")
+			(setq mvr-tbl (make-hash-table :test 'equal))
+			(setf (gethash "K" mvr-tbl) "V")
 			""";
 
 	@Test
@@ -9837,7 +9837,7 @@ class LispEvaluatorTest {
 		// body publishes its secondary value through %mv-spill, so the extra value
 		// survives an arbitrary call chain -- including a defmethod, the shape that
 		// found this (cl-mustache's context-get IS a gethash).
-		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-gethash mv427-tbl))").print())
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-gethash mvr-tbl))").print())
 			.isEqualTo("(\"V\" T)");
 		// A stored nil is still distinguished from a missing key through the return.
 		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-gethash (make-hash-table)))").print())
@@ -9850,22 +9850,20 @@ class LispEvaluatorTest {
 			.isEqualTo("(CAR :INHERITED)");
 		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-disp (make-array 3)))").print())
 			.isEqualTo("(NIL 0)");
-		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (ctx-get \"k\" mv427-tbl))").print())
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (ctx-get \"k\" mvr-tbl))").print())
 			.isEqualTo("(\"V\" T)");
 		// A producer under a tail cond clause escapes too; the untaken branch is a
 		// single value.
-		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mv427-tbl t))").print())
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mvr-tbl t))").print())
 			.isEqualTo("(\"V\" T)");
-		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mv427-tbl nil))").print())
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-list (f-cond mvr-tbl nil))").print())
 			.isEqualTo("(NIL)");
 		// multiple-value-bind through the same indirection: the shape the todo names.
-		assertThat(
-				evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-bind (v f) (ctx-get \"k\" mv427-tbl) (list v f))")
-					.print())
-			.isEqualTo("(\"V\" T)");
+		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (multiple-value-bind (v f) (ctx-get \"k\" mvr-tbl) (list v f))")
+			.print()).isEqualTo("(\"V\" T)");
 		// A NON-tail producer stays single-valued: the caller's consumer reads nil.
 		assertThat(evalMulti(MV_PRODUCER_TAIL_DEFS + " (defun f-nontail (h) (let ((v (gethash \"K\" h))) v))"
-				+ " (multiple-value-list (f-nontail mv427-tbl))")
+				+ " (multiple-value-list (f-nontail mvr-tbl))")
 			.print()).isEqualTo("(\"V\")");
 	}
 
@@ -10492,7 +10490,7 @@ class LispEvaluatorTest {
 	void peekCharPushbackSurvivesReadLineAndRead(@TempDir Path tempDir) {
 		// A peeked character opens the next read-line instead of being dropped, and a
 		// peeked datum opener is still there for read -- sbcl's answers, pinned on all
-		// four backends (.todo/936).
+		// four backends.
 		String file = tempDir.resolve("peek.txt").toString().replace("\\", "\\\\");
 		String rdFile = tempDir.resolve("peek-rd.txt").toString().replace("\\", "\\\\");
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -10507,7 +10505,7 @@ class LispEvaluatorTest {
 	void readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() {
 		// A dotted-list buffer, a negative, non-integer or symbolic bound, and a range
 		// outside the buffer are type-errors -- sbcl's answers, pinned on all four
-		// backends (.todo/932).
+		// backends.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.PROGRAM)) {
@@ -10928,21 +10926,20 @@ class LispEvaluatorTest {
 	@Test
 	void readSequenceOnAGrayStreamValidatesItsBoundsToo() {
 		// A Gray stream bypasses the shared expansion, so the interpreter validates
-		// in the dispatch branch instead -- the same defun over the same values
-		// (.todo/932).
+		// in the dispatch branch instead -- the same defun over the same values.
 		assertThat(evalMulti("""
-				(defclass gw-in932 (rontolisp:fundamental-character-input-stream)
+				(defclass gw-bounds-in (rontolisp:fundamental-character-input-stream)
 				  ((s :initarg :s)))
-				(defmethod rontolisp:stream-read-char ((s gw-in932))
+				(defmethod rontolisp:stream-read-char ((s gw-bounds-in))
 				  (read-char (slot-value s 's)))
 				(list (handler-case
 				          (read-sequence (make-array 3)
-				                         (make-instance 'gw-in932 :s (make-string-input-stream "abc"))
+				                         (make-instance 'gw-bounds-in :s (make-string-input-stream "abc"))
 				                         :start -1)
 				        (type-error () :type-error) (error () :other-error))
 				      (handler-case
 				          (read-sequence '(a . b)
-				                         (make-instance 'gw-in932 :s (make-string-input-stream "abc")))
+				                         (make-instance 'gw-bounds-in :s (make-string-input-stream "abc")))
 				        (type-error () :type-error) (error () :other-error)))
 				""").print()).isEqualTo("(:TYPE-ERROR :TYPE-ERROR)");
 	}
@@ -11302,7 +11299,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalReadEof() {
 		// eof-error-p defaults to t, so a bare read at end of input signals
-		// end-of-file (.todo/807); an explicit nil answers the eof-value.
+		// end-of-file; an explicit nil answers the eof-value.
 		assertThat(evalWithStdin("(handler-case (read) (end-of-file () :caught))", "").print()).isEqualTo(":CAUGHT");
 		assertThat(evalWithStdin("(read nil nil :done)", "")).isEqualTo(new LispSymbol(":DONE"));
 	}
@@ -12084,8 +12081,8 @@ class LispEvaluatorTest {
 	void translatePathnameSubstitutesTheCapturedWildcards() {
 		// Every expectation checked against SBCL 2.6.5 on the same forms. Matching and
 		// substitution are COMPONENT-wise: DIRECTORY to DIRECTORY, NAME to NAME, TYPE to
-		// TYPE (the todo-447 fix -- a to-wildcard with FEWER wildcards than the
-		// from-wildcard used to take the wrong ones).
+		// TYPE (a to-wildcard with FEWER wildcards than the from-wildcard used to take
+		// the wrong ones).
 		assertThat(eval("(translate-pathname \"d/a.txt\" \"d/*.*\" \"e/*.*\")").print()).isEqualTo("#P\"e/a.txt\"");
 		assertThat(eval("(translate-pathname \"src/foo.lisp\" \"src/*.lisp\" \"build/*.fasl\")").print())
 			.isEqualTo("#P\"build/foo.fasl\"");
@@ -12312,11 +12309,11 @@ class LispEvaluatorTest {
 		// after close), and closing a synonym stream leaves its target alone.
 		String here = tempDir.toString().replace("\\", "\\\\");
 		assertThat(evalMulti("""
-				(defvar *g919* (open "%1$s/g919.bin" :direction :output :element-type '(unsigned-byte 16)))
-				(defvar *g919-syn* (make-synonym-stream '*g919*))
-				(close *g919-syn*)
-				(list (stream-element-type *g919*)
-				      (progn (close *g919*) (stream-element-type *g919*)))
+				(defvar *gbin* (open "%1$s/gbin.bin" :direction :output :element-type '(unsigned-byte 16)))
+				(defvar *gbin-syn* (make-synonym-stream '*gbin*))
+				(close *gbin-syn*)
+				(list (stream-element-type *gbin*)
+				      (progn (close *gbin*) (stream-element-type *gbin*)))
 				""".formatted(here)).print()).isEqualTo("((UNSIGNED-BYTE 16) CHARACTER)");
 	}
 
@@ -12353,15 +12350,15 @@ class LispEvaluatorTest {
 
 	@Test
 	void loadAcceptsTheKeywordOptions(@TempDir Path tempDir) throws Exception {
-		Path lib = tempDir.resolve("lib439.lisp");
-		java.nio.file.Files.writeString(lib, "(defun sq439 (x) (* x x))\n");
+		Path lib = tempDir.resolve("lib-opts.lisp");
+		java.nio.file.Files.writeString(lib, "(defun sq-opts (x) (* x x))\n");
 		String file = lib.toString().replace("\\", "\\\\");
-		String missing = tempDir.resolve("gone439.lisp").toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("gone-opts.lisp").toString().replace("\\", "\\\\");
 		// :verbose / :print / :external-format are accepted and ignored -- there is no
 		// progress output to produce and no second decoder to select.
 		assertThat(evalMulti("""
 				(load "%s" :verbose nil :print nil :external-format :utf-8)
-				(sq439 7)
+				(sq-opts 7)
 				""".formatted(file))).isEqualTo(new LispInteger(49));
 		// :if-does-not-exist is real: a false value answers nil instead of signalling.
 		assertThat(eval("(load \"%s\" :if-does-not-exist nil)".formatted(missing))).isEqualTo(LispNil.INSTANCE);
@@ -12444,7 +12441,7 @@ class LispEvaluatorTest {
 	// which is what a BF16 safetensors or GGUF tensor holds -- so such a file loads with
 	// no conversion and writing it back reproduces the bytes. The value is chosen so a
 	// byte-swap could not pass unnoticed: bf16 0x3F80 is exactly 1.0, and the swapped
-	// 0x803F is a tiny negative denormal (.kb/bfloat16.md, .todo/487 step 3).
+	// 0x803F is a tiny negative denormal (.kb/bfloat16.md).
 	@Test
 	void readWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns(@TempDir Path tempDir) {
 		String file = tempDir.resolve("bf16.dat").toString().replace("\\", "\\\\");
@@ -15121,7 +15118,7 @@ class LispEvaluatorTest {
 	}
 
 	// A CHARACTER is a Unicode code point: (code-char 128512) is U+1F600 unchanged, and
-	// char-code round-trips. Pins the interpreter half of todo 153; see
+	// char-code round-trips. Pins the interpreter half; see
 	// .kb/characters-code-points.md.
 	@Test
 	void evalCharBeyondBmpCodePoint() {
@@ -15502,7 +15499,7 @@ class LispEvaluatorTest {
 	@Test
 	void aHashTableReportsAndPrintsTheTestItImplements() {
 		// EQUALP for a table whose keys are folded, EQUAL for every other -- an eql table
-		// still places structurally (.todo/012), so reporting eql would describe behavior
+		// still places structurally, so reporting eql would describe behavior
 		// that does not exist. The same two answers on all four backends.
 		LispVal result = evalMulti("""
 				(defparameter *tp* (make-hash-table :test 'equalp))
@@ -15550,7 +15547,7 @@ class LispEvaluatorTest {
 	@Test
 	void anEqHashTableKeysAggregatesByIdentity() {
 		// :test 'eq is identity for aggregates: two instances with equal slots are two
-		// keys, and a key mutated after insertion still finds its entry (.todo/444).
+		// keys, and a key mutated after insertion still finds its entry.
 		LispVal result = evalMulti("""
 				(defstruct ipt x y)
 				(defparameter *q* (make-hash-table :test 'eq))
@@ -15568,7 +15565,7 @@ class LispEvaluatorTest {
 	@Test
 	void anEqlHashTableKeysNumbersByValueButAggregatesByIdentity() {
 		// :test 'eql compares numbers by type and value but aggregates by identity: a
-		// freshly built cons with equal contents is a MISS (.todo/444).
+		// freshly built cons with equal contents is a MISS.
 		LispVal result = evalMulti("""
 				(defparameter *e* (make-hash-table :test 'eql))
 				(setf (gethash 1.5d0 *e*) 'one-half)
@@ -15826,10 +15823,10 @@ class LispEvaluatorTest {
 	@Test
 	void aQuotedDatumIsOneSharedConstantOnEveryBackend() {
 		// quote hands back the datum -- necessarily so here, because (quote <value>) is
-		// also the interpreter's live-value splice (quoteValue) -- and since todo 579
-		// both compile backends MEMOIZE the datum instead of rebuilding it, so this is
-		// the shared rule, not an interpreter residual (.kb/quoted-data.md, pinned
-		// cross-backend by the quoted-datum-shared ci-spec case).
+		// also the interpreter's live-value splice (quoteValue) -- and both compile
+		// backends MEMOIZE the datum instead of rebuilding it, so this is the shared
+		// rule, not an interpreter residual (.kb/quoted-data.md, pinned cross-backend
+		// by the quoted-datum-shared ci-spec case).
 		assertThat(eval("(let ((f (lambda () '#(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(let ((f (lambda () '(1 2 3)))) (eq (funcall f) (funcall f)))")).isEqualTo(LispTrue.INSTANCE);
 	}
@@ -15869,8 +15866,8 @@ class LispEvaluatorTest {
 		// The compiled backends' %schar-set-runtime rebuilds the string and setq's it
 		// back into the variable; the source constant is never written. row-major-aref
 		// on a rank-1 string target is the same place -- expandSetf routes it through
-		// %schar-set too, so it rebinds rather than refuses (.kb/string-write-runtime.md,
-		// todo 587).
+		// %schar-set too, so it rebinds rather than refuses
+		// (.kb/string-write-runtime.md).
 		assertThat(evalMulti("""
 				(defun %lit-str () "abc")
 				(list (let ((a (%lit-str))) (setf (char a 0) #\\Z) a)
@@ -16003,7 +16000,7 @@ class LispEvaluatorTest {
 	void rowMajorArefReadsAStringLikeAref() {
 		// A string is a rank-1 array of characters in CL, so row-major-aref reads it
 		// like aref/char/schar/elt do -- the interpreter arm row-major-aref was missing
-		// (.kb/string-write-runtime.md, todo 587).
+		// (.kb/string-write-runtime.md).
 		assertThat(eval("(row-major-aref \"abc\" 0)")).isEqualTo(new LispChar('a'));
 		assertThat(eval("(row-major-aref \"abc\" 2)")).isEqualTo(new LispChar('c'));
 	}
@@ -16025,8 +16022,8 @@ class LispEvaluatorTest {
 	void anInstanceLiteralIsOneSharedConstantOnEveryBackend() {
 		// A bare #P"..." / #S(...) is the one literal family that is a CONSTANT rather
 		// than a constructor: the interpreter's self-evaluating LispInstance arm hands
-		// the reader's own instance back, and since todo 581 both compile backends
-		// memoize it into the same lazy slot a quoted datum uses (.kb/quoted-data.md).
+		// the reader's own instance back, and both compile backends memoize it into the
+		// same lazy slot a quoted datum uses (.kb/quoted-data.md).
 		assertThat(eval("(let ((f (lambda () #P\"a/b.txt\"))) (eq (funcall f) (funcall f)))"))
 			.isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("""
@@ -16759,7 +16756,7 @@ class LispEvaluatorTest {
 	void torchFusedCompositionsAreTheCompositionsTheyReplacedBitForBit() {
 		// TorchGradcheck.FUSED_PROGRAM, shared verbatim with the JVM and WASM backends:
 		// the exact torch:gelu, torch:layer-norm, torch:softmax's adjoint and
-		// torch:dropout's mask are one internal linalg member each since todo-499, and
+		// torch:dropout's mask are one internal linalg member each, and
 		// each prints T against the torch-op composition it replaced -- forward,
 		// gradient, and the gradient of a parameter the input also feeds directly.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -16790,8 +16787,8 @@ class LispEvaluatorTest {
 	@Test
 	void torchTransposeViewIsTheMaterializedTransposeBitForBit() {
 		// TorchGradcheck.VIEW_PROGRAM, shared verbatim with the JVM and WASM backends:
-		// a last-two-axes torch:transpose is a view torch:matmul reads in place
-		// (todo-630), and every line prints T against the materialized transpose.
+		// a last-two-axes torch:transpose is a view torch:matmul reads in place, and
+		// every line prints T against the materialized transpose.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		for (LispVal expr : LispReader.readAllFromString(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM)) {
@@ -17083,7 +17080,7 @@ class LispEvaluatorTest {
 	void gensymAcceptsANonNegativeIntegerSuffix() {
 		// CL's other gensym shape: the integer IS the suffix (under the default "G"
 		// prefix) and does not consume the counter -- the (gensym) either side of
-		// (gensym 42) still gets consecutive numbers (todo a42).
+		// (gensym 42) still gets consecutive numbers.
 		assertThat(evalMulti("(list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym)))").print())
 			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
 		assertThatThrownBy(() -> evalMulti("(gensym -1)")).isInstanceOf(LispEvalException.class)
@@ -17343,7 +17340,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void runtimeMakeDeleteRenamePackage() {
-		// The runtime tier (.todo/741): make-package answers the package keyword,
+		// The runtime tier: make-package answers the package keyword,
 		// rename replaces the name and nicknames, delete drops the registration.
 		// The interpreter registers in its live registry, so later forms see the
 		// package through every query.
@@ -17945,7 +17942,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void quotedConstantNamesReadAsSymbolsWhileCodePositionAnswersTheValue() {
-		// .todo/679: 'pi used to read as a double wherever the spelling appeared --
+		// 'pi used to read as a double wherever the spelling appeared --
 		// under quote, inside quoted lists, as a binding name. The names read as
 		// symbols now; each backend binds the global with its own value.
 		assertThat(eval("(symbolp (car '(pi)))")).isEqualTo(LispTrue.INSTANCE);
@@ -19396,7 +19393,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void runtimeReadErrorsAreTypedReaderConditions() {
-		// .todo/807: a runtime read error is a CONDITION the suite can catch --
+		// A runtime read error is a CONDITION the suite can catch --
 		// reader-error for a bad token, end-of-file for input that ran out
 		// mid-datum -- and the condition carries a stream stream-error-stream
 		// reads back (what signals-error checks streamp of).
@@ -19451,7 +19448,7 @@ class LispEvaluatorTest {
 	void uninternedSymbolWithAColonPrintsEscapedAndReadsBack() {
 		// A colon in an uninterned member must be |...|-escaped: a bare one behind
 		// #: is a package marker the reader refuses (CLHS 2.4.8.5), so the printer
-		// spells it escaped and the spelling reads back (.todo/807).
+		// spells it escaped and the spelling reads back.
 		assertThat(evalMulti("""
 				(list (prin1-to-string (make-symbol ":"))
 				      (symbol-name (read-from-string (prin1-to-string (make-symbol ":"))))
@@ -19960,7 +19957,7 @@ class LispEvaluatorTest {
 		// real but neither, and an integer or float limit <= 0 is out of range either
 		// way. Both report under RANDOM's own registered REAL type, like a non-real
 		// limit above, rather than teaching the operand-type table a compound type for
-		// this one operator (.todo/981). The twins are JvmLispCompilerTest and
+		// this one operator. The twins are JvmLispCompilerTest and
 		// WasmLispCompilerIntegrationTest's randomLimitDomainViolationsSignalATypeError.
 		String source = """
 				(defun te (thunk)
@@ -20627,7 +20624,7 @@ class LispEvaluatorTest {
 		// so it was never affected by this bug -- pinned here alongside
 		// #'array-row-major-index, which had no such native registration and fell back to
 		// BuiltinFunctionWrappers' shared Horner fold (arefFoldBody/rowMajorFoldBody),
-		// unchecked until todo a58. The compiled-backend twins are
+		// unchecked until it took the same checks. The compiled-backend twins are
 		// JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds and
 		// WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds.
 		String source = """
@@ -22045,7 +22042,7 @@ class LispEvaluatorTest {
 		// A cl:-qualified spelling of a standard constant means the standard name:
 		// the reader strips it before package resolution (which would otherwise
 		// reject e.g. cl:t as "not external"), and the bare name answers the
-		// per-backend global (.todo/679).
+		// per-backend global.
 		assertThat(eval("(> cl:most-positive-fixnum 1000000)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(< cl:most-negative-fixnum -1000000)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(list cl:t cl:nil cl:char-code-limit)").print()).isEqualTo("(T NIL 1114112)");
@@ -22534,7 +22531,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void printObjectMethodDefinedBelowItsFirstUse() {
-		// Todo 445: a print-object method defined BELOW its first use renders the
+		// A print-object method defined BELOW its first use renders the
 		// built-in text for the earlier print and the method's text after the form
 		// runs -- the compile paths route through the generic from the start, so
 		// their dispatcher skips the not-yet-assigned body the same way.
@@ -22549,7 +22546,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void nestedDefmethodCallBeforeItsFormFallsThroughToTheDefault() {
-		// Todo 445, the general shape: a call before the nested defmethod form runs
+		// The general shape: a call before the nested defmethod form runs
 		// answers the default, and after it the new method.
 		assertThat(evalMulti("""
 				(defclass nd-late () ())
@@ -23384,8 +23381,8 @@ class LispEvaluatorTest {
 		// adjust-array on a displaced argument un-displaces it, matching SBCL 2.2.9: an
 		// :adjustable view is adjusted IN PLACE (eq), keeps the elements at the
 		// subscripts valid in both shapes, and comes back un-displaced
-		// (array-displacement => NIL, 0). The un-displace machinery is .todo/647's
-		// (LispArray.undisplace / LispString.undisplace).
+		// (array-displacement => NIL, 0). The un-displace machinery is
+		// LispArray.undisplace / LispString.undisplace.
 		assertThat(evalMulti("""
 				(setq b (make-array 6 :initial-contents '(10 20 30 40 50 60)))
 				(setq v (make-array 4 :displaced-to b :displaced-index-offset 1 :adjustable t))
@@ -24662,7 +24659,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void bfloat16BulkNarrowingIsTheSameRoundingAsTheScalarPair() {
-		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding
+		// The bulk narrowing pair and the scalar pair are ONE rounding
 		// (am.ik.rontolisp.BFloat16), not two copies of it: a checkpoint's bulk load
 		// must not sit a bit away from what the program computes element by element.
 		// Widening every pattern into an f32 array and narrowing it straight back is
@@ -24707,7 +24704,8 @@ class LispEvaluatorTest {
 		// Widening then narrowing is the identity for every pattern EXCEPT the JDK's own
 		// float16ToFloat/floatToFloat16 pair does not itself round-trip a signalling NaN
 		// to the same pattern (it quiets on the way to float) -- so the check below
-		// skips NaN, matching .todo/671's ci-spec.yaml case and its "NaN payload aside"
+		// skips NaN, matching the float16-bits ci-spec.yaml case and its "NaN payload
+		// aside"
 		// convention for this pair specifically (unlike bfloat16-bits above, which IS
 		// exact and total, including NaN, per BFloat16's own contract).
 		assertThat(eval("""
@@ -25692,7 +25690,7 @@ class LispEvaluatorTest {
 				        (typep a '(simple-array (unsigned-byte 8) (*)))))
 				""").print()).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
 		// A rank-n / fill-pointer / adjustable combination keeps the general boxed
-		// representation, but REMEMBERS the element type it was asked for (todo-611):
+		// representation, but REMEMBERS the element type it was asked for:
 		// the representation degrades, the declared type does not.
 		assertThat(eval("(array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8)))").print())
 			.isEqualTo("(UNSIGNED-BYTE 8)");
@@ -25766,8 +25764,8 @@ class LispEvaluatorTest {
 		// The LEGAL CLHS upgrades the shipped corpus passes -- refusing an unrecognized
 		// element type would refuse ironclad's and chipz's 'fixnum, jzon's
 		// '(unsigned-byte 64) and cl-ppcre's '(or null fixnum). 'bit is NOT an upgrade:
-		// since .todo/043 a bit vector is the general array stamped bit, so
-		// array-element-type answers it back.
+		// a bit vector is the general array stamped bit, so array-element-type answers
+		// it back.
 		assertThat(eval("""
 				(list (array-element-type (make-array 2 :element-type 'bit))
 				      (array-element-type (make-array 2 :element-type 'fixnum))
@@ -25994,7 +25992,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void openDirectionIoReadsBackWhatItJustWroteThroughOneCursor(@TempDir Path tempDir) {
-		// .todo/918: :direction :io is ONE stream whose reads, writes and file-position
+		// :direction :io is ONE stream whose reads, writes and file-position
 		// share a cursor -- so write, seek to the start, read gives back what was
 		// written. :if-exists :overwrite is the same stream with the read half unused:
 		// it opens for writing at 0 WITHOUT truncating, so the tail survives. Measured
@@ -26090,7 +26088,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void compositeStreamsMoveBytesAsWellAsCharacters(@TempDir Path tempDir) {
-		// .todo/387 gave the composite constructors their character methods; the byte
+		// The composite constructors have character methods; the byte
 		// methods are the same shape, so read-byte / write-byte reach the components.
 		String here = tempDir.toString().replace("\\", "\\\\");
 		assertThat(evalMulti("""
@@ -26231,7 +26229,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopVersionComparisonTable() {
-		// version< is written over lexicographic< (.todo/354): "1.2" < "1.10"
+		// version< is written over lexicographic<: "1.2" < "1.10"
 		// numerically, an equal-prefix shorter version is less, and malformed input
 		// answers nil WITHOUT signalling (parse-version with on-error nil returns nil,
 		// and lexicographic< over nil is nil). version<= / version= derive from it.
@@ -26368,7 +26366,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopLispBuildReifySimpleSexpRoundTrip() {
-		// .todo/365: reify-simple-sexp / unreify-simple-sexp are a pure sexp <->
+		// reify-simple-sexp / unreify-simple-sexp are a pure sexp <->
 		// portable representation over the atoms and cons cells. A symbol reifies
 		// through uiop/package:reify-symbol, which signals (the pair is part of the
 		// image-upgrade surgery), so the round trip is pinned on the portable part.
@@ -26382,7 +26380,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopLispBuildLoadFromString() {
-		// .todo/365: load-from-string is load over a string stream; rontolisp's load
+		// load-from-string is load over a string stream; rontolisp's load
 		// cannot load from a string-input-stream, so the stream arm is
 		// uiop/stream:eval-input -- read and evaluate each form (upstream's arm for the
 		// implementations that cannot load from a stream either).
@@ -26394,7 +26392,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopLispBuildNotImplementedErrorNamesTheOperation() {
-		// .todo/365: compile-file* and the deferred-warnings machinery signal
+		// compile-file* and the deferred-warnings machinery signal
 		// not-implemented-error naming the operation -- the condition type is real and
 		// the report names COMPILE-FILE. The rest of the sub-package (the muffled
 		// family, the condition classes, load*, reify-simple-sexp and the pathname
@@ -26419,13 +26417,13 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopStreamFileContentsAndSafeIo(@TempDir Path tempDir) throws Exception {
-		// .todo/359: the "give me the contents" half of uiop/stream -- the openers,
+		// The "give me the contents" half of uiop/stream -- the openers,
 		// the designator coercions, the slurp family, the safe-IO syntax, the eval
 		// thunks, the copy pair and the print helpers. Same shape and expectations
 		// as the compile-path twins (JvmLispCompilerTest and the WASM integration
 		// test) and the uiop-stream-file-contents-and-safe-io ci-spec case.
 		Files.writeString(tempDir.resolve("s.txt"), "hello\nworld\n");
-		Files.writeString(tempDir.resolve("f.txt"), "(defun u359-f (x) (* x 2))\n42\n");
+		Files.writeString(tempDir.resolve("f.txt"), "(defun ucont-f (x) (* x 2))\n42\n");
 		String dir = tempDir.toString().replace("\\", "\\\\");
 		assertThat(evalMulti("""
 				(list (uiop:read-file-lines "%1$s/s.txt")
@@ -26435,7 +26433,7 @@ class LispEvaluatorTest {
 				      (uiop:safe-read-file-form "%1$s/f.txt" :at 1)
 				      (uiop:safe-read-file-line "%1$s/s.txt" :at 0))
 				""".formatted(dir)).print())
-			.isEqualTo("((\"hello\" \"world\") \"world\" ((DEFUN U359-F (X) (* X 2)) 42) 42 42 \"hello\")");
+			.isEqualTo("((\"hello\" \"world\") \"world\" ((DEFUN UCONT-F (X) (* X 2)) 42) 42 42 \"hello\")");
 		// The designator table: nil is the standard stream, t the terminal one, a
 		// string is a string stream, a pathname is opened; a stream is used as-is.
 		assertThat(evalMulti("""
@@ -26529,10 +26527,10 @@ class LispEvaluatorTest {
 		// *standard-output* holds is not a file stream, so only a synonym over a
 		// real file stream is one.
 		assertThat(evalMulti("""
-				(defvar *u359-holder* nil)
+				(defvar *ucont-holder* nil)
 				(with-open-file (f "%1$s/s.txt")
-				  (setq *u359-holder* f)
-				  (let ((syn (make-synonym-stream '*u359-holder*))
+				  (setq *ucont-holder* f)
+				  (let ((syn (make-synonym-stream '*ucont-holder*))
 				        (str (make-string-input-stream "x")))
 				    (list (uiop:file-stream-p f)
 				          (uiop:file-stream-p str)

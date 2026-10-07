@@ -85,7 +85,7 @@ class JvmLispCompilerTest {
 	// offset is 1 + 2 * rank, the only arm in that method where it is not 1 + rank
 	// (JvmPackedFloatWidth's two-slots-per-dimension header). The value is chosen so a
 	// byte swap could not pass: bf16 0x3F80 is exactly 1.0, swapped 0x803F is a tiny
-	// negative denormal (.kb/bfloat16.md, .todo/487 step 3).
+	// negative denormal (.kb/bfloat16.md).
 	@Test
 	void compileAndRunReadWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns() throws Exception {
 		String file = this.tempDir.resolve("bf16.dat").toString().replace("\\", "\\\\");
@@ -118,7 +118,7 @@ class JvmLispCompilerTest {
 	// one per ArrayElementTypes code. The widths are taken FROM the enum rather than
 	// listed here: four hand-written copies of that list existed, all documented as
 	// covering seven codes and all spelling six, so bfloat16 through a runtime
-	// designator answered a BOXED general array (.todo/487). A list of seven in this
+	// designator answered a BOXED general array. A list of seven in this
 	// test would have been the fifth copy.
 	//
 	// Both lowerings are covered. compileAndRun(String) splices the prelude, so the site
@@ -834,7 +834,7 @@ class JvmLispCompilerTest {
 		// The JVM half of LispEvaluatorTest#evalBitVectorsAndBitOps: a bit vector is
 		// the general boxed array stamped with the remembered element type bit, and
 		// the eleven bit-* operators validate through bit-vector-p over
-		// row-major-aref (.todo/043).
+		// row-major-aref.
 		assertThat(compileAndRun("""
 				(defvar *bv-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
 				(defvar *bv-b* (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0)))
@@ -896,8 +896,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileBitVectorPreservationAcrossSequenceOps() throws Exception {
-		// The JVM half of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps
-		// (.todo/820).
+		// The JVM half of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps.
 		assertThat(compileAndRun("""
 				(print
 				  (list
@@ -1345,8 +1344,7 @@ class JvmLispCompilerTest {
 		// The evaluator twin is randomLimitDomainViolationsSignalATypeError.
 		// JvmIntFusionCompiler fuses (random <int>) into surrounding arithmetic --
 		// literal or through a variable -- and used to skip this check entirely: a
-		// non-positive limit silently produced a wrong value instead of signaling
-		// (.todo/981).
+		// non-positive limit silently produced a wrong value instead of signaling.
 		assertThat(compileAndRun("""
 				(defun te (thunk)
 				  (handler-case (funcall thunk)
@@ -3943,7 +3941,7 @@ class JvmLispCompilerTest {
 	void compileGensymAcceptsANonNegativeIntegerSuffix() throws Exception {
 		// The JVM twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
 		// literal integer argument used to lower through the computed-prefix path
-		// unchecked, e.g. (gensym 5) printed "#:51" (todo a42).
+		// unchecked, e.g. (gensym 5) printed "#:51".
 		assertThat(
 				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
 			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
@@ -4599,9 +4597,9 @@ class JvmLispCompilerTest {
 		// with (), the arguments are the nil literal and the bug is invisible. The
 		// probe used to be with-current-directory; it grew its own expansion over
 		// call-with-current-directory, so the probe moved to a stream macro nothing
-		// implements yet -- with-input-file until .todo/359 gave it one over
-		// call-with-input-file, with-null-input until .todo/360 gave it one --
-		// with-saved-deferred-warnings (.todo/365's deferred-warnings stub) now.
+		// implements yet -- with-input-file until it got one over
+		// call-with-input-file, then with-null-input until it got one too --
+		// with-saved-deferred-warnings (a deferred-warnings stub) now.
 		assertThat(compileAndRun("""
 				(print (handler-case (uiop:with-saved-deferred-warnings () (defun um-probe () 1))
 				         (uiop:not-implemented-error () :signalled)))
@@ -4656,7 +4654,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunUiopLispBuildPortableHalf() throws Exception {
-		// .todo/365: the portable half of uiop/lisp-build -- the muffled-conditions
+		// The portable half of uiop/lisp-build -- the muffled-conditions
 		// macros (Java expansions over the call-with- defuns, selected by the
 		// surface-form rule), call-around-hook, reify-simple-sexp round trip, the
 		// warnings-file plumbing and the condition classes -- runs on the compile
@@ -4771,7 +4769,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunQuotedConstantsStaySymbolsWhileCodePositionAnswersTheValue() throws Exception {
-		// .todo/679: 'pi used to read as a double wherever the spelling appeared.
+		// 'pi used to read as a double wherever the spelling appeared.
 		// The names read as symbols now; this backend seeds the globals with its
 		// own values (see ClConstants), so code position still answers.
 		assertThat(compileAndRun("(print (symbolp (car '(pi)))) (print 'pi)"
@@ -4872,7 +4870,7 @@ class JvmLispCompilerTest {
 		// A run-time name resolution boxes the resolved funcId as a function value, so
 		// functionp answers t, the value prints its registered name through _funName,
 		// and funcall dispatches -- the interpreter's answer on every shape
-		// (LispEvaluatorTest#runtimeResolvedDesignatorsAreFunctionValues, .todo/750).
+		// (LispEvaluatorTest#runtimeResolvedDesignatorsAreFunctionValues).
 		// The print-only leg needs the registry without any call site spelling it.
 		assertThat(compileAndRun("""
 				(defun rrd-add (a b) (+ a b))
@@ -5431,7 +5429,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void aCapturedLetVariableAssignedInlineInASiblingBranchPastTheSlotCeiling() throws Exception {
-		// todo-561's reproducer. One arm closes over acc/hit, the SIBLING arm assigns
+		// One arm closes over acc/hit, the SIBLING arm assigns
 		// them inline -- and because both are captured, every inline setq mints a temp
 		// that ctx.nextLocal never reuses, so the frame passes 255 slots at ~4 KB of
 		// code, far under the HugeMethodLimit that would have made AstOutliner cut it.
@@ -6389,7 +6387,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunArefRejectsAWrongSubscriptCount() throws Exception {
-		// A packed float array (todo 479): the JVM's _fvAref2 used to apply 2 subscripts
+		// A packed float array: the JVM's _fvAref2 used to apply 2 subscripts
 		// positionally to a rank-3 array (0 * 2 + 1 = flat index 1, silently 1.0) instead
 		// of checking the count against the array's own rank, the way the interpreter's
 		// LispFloatArray#flatIndex does.
@@ -6426,7 +6424,7 @@ class JvmLispCompilerTest {
 		// out-of-range column, and (apply #'aref m '(1)) silently answered the row-major
 		// element at index 1 instead of rejecting the short subscript list. Call position
 		// ((aref m 0 2)) already reported both correctly on every backend; this pins the
-		// function-value path to the same report (todo a58). #'array-row-major-index
+		// function-value path to the same report. #'array-row-major-index
 		// shares the same fold and needs the same checks.
 		assertThat(compileAndRun("""
 				(defun te (thunk)
@@ -6469,8 +6467,7 @@ class JvmLispCompilerTest {
 		// helper); this pins it and the write spelling
 		// (setf (row-major-aref v i) c), which is the same %schar-set place aref/char/elt
 		// use: in place for a mutable buffer, a rebind that leaves the source constant
-		// for
-		// a literal (.kb/string-write-runtime.md, todo 587).
+		// for a literal (.kb/string-write-runtime.md).
 		assertThat(compileAndRun("""
 				(defun %rmar-lit () "abc")
 				(print (row-major-aref (%rmar-lit) 1))
@@ -6695,7 +6692,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
-		// .todo/623: these five were silent no-ops on a vector/string (only their
+		// These five were silent no-ops on a vector/string (only their
 		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
 		// sequence, so they now route through remove/substitute's own vector/string
 		// handling.
@@ -6712,9 +6709,9 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunNsubstituteFamilyWritesThroughVectorArgument() throws Exception {
-		// .todo/773: the test above checks only the VALUE nsubstitute answers; ANSI
-		// expects the ARGUMENT itself to change, which .todo/623's plain reuse of
-		// substitute's non-destructive form never did over a vector.
+		// The test above checks only the VALUE nsubstitute answers; ANSI expects the
+		// ARGUMENT itself to change, which a plain reuse of substitute's
+		// non-destructive form never did over a vector.
 		assertThat(compileAndRun("(let ((x (vector 1 2 1))) (nsubstitute 9 1 x) (print x))")).isEqualTo("#(9 2 9)");
 		assertThat(compileAndRun("(let ((x (vector 1 2 3))) (nsubstitute-if 0 #'oddp x) (print x))"))
 			.isEqualTo("#(0 2 0)");
@@ -7072,13 +7069,13 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunUiopStreamFileContentsAndSafeIo() throws Exception {
-		// .todo/359: the "give me the contents" half of uiop/stream -- the openers
+		// The "give me the contents" half of uiop/stream -- the openers
 		// over the computed-option lowering, the designator coercions, the slurp
 		// family over prelude read, the safe-IO syntax, the eval thunks and the
 		// print helpers. Same shape and expectations as the interpreter test
 		// (LispEvaluatorTest#evalUiopStreamFileContentsAndSafeIo); paths are built
 		// at run time so no literal absolute path is bundled at compile time.
-		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("u359"));
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("ucont"));
 		String dir = root.toString().replace("\\", "\\\\");
 		assertThat(compileAndRunRead("""
 				(let ((base "%1$s/"))
@@ -7087,7 +7084,7 @@ class JvmLispCompilerTest {
 				  (print (uiop:read-file-lines (concatenate 'string base "s.txt")))
 				  (print (uiop:read-file-line (concatenate 'string base "s.txt") :at 1))
 				  (uiop:with-output-file (out (concatenate 'string base "f.txt"))
-				    (write-line "(defun u359-f (x) (* x 2))" out)
+				    (write-line "(defun ucont-f (x) (* x 2))" out)
 				    (write-line "42" out))
 				  (print (uiop:read-file-forms (concatenate 'string base "f.txt")))
 				  (print (uiop:safe-read-file-form (concatenate 'string base "f.txt") :at 1))
@@ -7111,7 +7108,7 @@ class JvmLispCompilerTest {
 				""".formatted(dir))).isEqualTo("""
 				("hello" "world")
 				"world"
-				((DEFUN U359-F (X) (* X 2)) 42)
+				((DEFUN UCONT-F (X) (* X 2)) 42)
 				42
 				"xyz"
 				#\\a
@@ -7130,7 +7127,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunUiopTemporaryFilesStagingAndNullStreams() throws Exception {
-		// .todo/360: the temporary-file / staging / null-stream half of uiop/stream --
+		// The temporary-file / staging / null-stream half of uiop/stream --
 		// call-with-temporary-file over %temp-file-name, with-temporary-file as its
 		// wrapper, tmpize-pathname, with-staging-pathname over a rename, and the null
 		// streams. Same shape as the interpreter test
@@ -7299,9 +7296,8 @@ class JvmLispCompilerTest {
 				;; A mutable character vector IS written in place, on every backend.
 				(print (let ((s (make-string 3 :initial-element #\\a)))
 				         (list (eq s (nstring-upcase s)) s)))
-				;; A copy-seq result is a mutable character vector too (.todo/559 step
-				;; 2), so the destructive case family writes it in place like the
-				;; interpreter.
+				;; A copy-seq result is a mutable character vector too, so the
+				;; destructive case family writes it in place like the interpreter.
 				(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
 				(print (list (lisp-implementation-type) (software-type) (software-version)))
 				(print (list (machine-type) (machine-version) (machine-instance)))
@@ -7739,7 +7735,7 @@ class JvmLispCompilerTest {
 		// The run-time path keeps every literal-path folding out of the way; nothing
 		// here creates the missing directory, so every operation fails for real.
 		assertThat(compileAndRun("""
-				(defvar *fe-path* (concatenate 'string "fe890-missing/" "x.txt"))
+				(defvar *fe-path* (concatenate 'string "ferr-missing/" "x.txt"))
 				(defun fe-probe (thunk)
 				  (handler-case (progn (funcall thunk) :no-error)
 				    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
@@ -7755,15 +7751,15 @@ class JvmLispCompilerTest {
 				(handler-case (delete-file *fe-path*) (file-error (e) (princ e) (terpri)))
 				(with-input-from-string (s "")
 				  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""")).isEqualTo("""
-				(:FILE-ERROR "fe890-missing/x.txt")
-				(:FILE-ERROR "fe890-missing/x.txt")
-				(:FILE-ERROR "fe890-missing/x.txt")
-				(:FILE-ERROR "fe890-missing/x.txt")
-				(:FILE-ERROR "fe890-missing/x.txt")
-				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
 
-				OPEN: cannot open file fe890-missing/x.txt
-				DELETE-FILE: cannot delete fe890-missing/x.txt
+				OPEN: cannot open file ferr-missing/x.txt
+				DELETE-FILE: cannot delete ferr-missing/x.txt
 				end of file""");
 	}
 
@@ -8178,7 +8174,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void readWriteSequenceOverLetBoundByteBuffersTakesTheByteArm() throws Exception {
-		// compiler/SequenceIoNarrowing (.todo/338): a let-bound non-string buffer
+		// compiler/SequenceIoNarrowing: a let-bound non-string buffer
 		// skips the runtime stringp test and the character arm. The element stores
 		// below do not stand the narrowing down (they rebind nothing), while the
 		// string buffer over a character stream keeps the shared expansion -- both
@@ -9135,7 +9131,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunPrin1EscapesQuotesAndBackslashesInStrings() throws Exception {
-		// *print-escape* = t escapes the embedded " and \ (todo 216); princ / ~a do not.
+		// *print-escape* = t escapes the embedded " and \; princ / ~a do not.
 		// A bare SYMBOL still prints verbatim -- the leading quote is the discriminator.
 		assertThat(compileAndRun("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")"))
 			.isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
@@ -9162,7 +9158,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunInternalStringConcatCopiesBytes() throws Exception {
-		// %string-concat is strings-only by contract (.todo/338): empty operands,
+		// %string-concat is strings-only by contract: empty operands,
 		// multi-byte UTF-8, a mutable character vector operand, and the rebuild path
 		// every (setf (aref s i) c) spelling lowers through.
 		assertThat(compileAndRun("""
@@ -9242,7 +9238,7 @@ class JvmLispCompilerTest {
 	// prefixes: (apply #'concatenate 'string lines) is the shape a caller reaches for
 	// over a file's lines, and the wrapper used to fold PAIRWISE through
 	// %string-concat, so 495,920 lines of a 12.8 MB tokenizer.json cost about 2.7e12
-	// character copies and never returned (.todo/704, .kb/string-accumulate-cost.md).
+	// character copies and never returned (.kb/string-accumulate-cost.md).
 	// 4,096 pieces of 64 characters: 6,933 ms under the fold, 39 ms sized once.
 	@Test
 	void compileANaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes() throws Exception {
@@ -9402,7 +9398,7 @@ class JvmLispCompilerTest {
 		// it, so the very same designator rule builds the packed FLOAT array here -- and
 		// a source that is ALREADY packed at another width converts rather than being
 		// answered unchanged, which is what dropping the element type looked like from
-		// that direction (.todo/707). bfloat16 is on this backend, so all three widths
+		// that direction. bfloat16 is on this backend, so all three widths
 		// run; only wasm refuses one.
 		assertThat(compileAndRun("""
 				(defun %id (x) x)
@@ -10689,14 +10685,14 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (expt 2.0 3))")).isEqualTo("8.0");
 		assertThat(compileAndRun("(print (expt 2 70))")).isEqualTo("1180591620717411303424");
-		// An integer exponent beyond the int range is pow, not base^(e mod 2^32)
-		// (.todo/849): the interpreter's rule, pinned on every backend.
+		// An integer exponent beyond the int range is pow, not base^(e mod 2^32): the
+		// interpreter's rule, pinned on every backend.
 		assertThat(compileAndRun("(print (expt 2 4294967297))")).isEqualTo("Infinity");
 		assertThat(compileAndRun("(print (expt 2 -4294967297))")).isEqualTo("0.0");
 		assertThat(compileAndRun("(print (let ((b 1.5)) (expt b -4294967297)))")).isEqualTo("0.0");
 	}
 
-	// Complex numbers (.todo/752): every case mirrors the interpreter case of
+	// Complex numbers: every case mirrors the interpreter case of
 	// the same name in LispEvaluatorTest (SBCL parity pinned there), print-compared
 	// so the JVM leg answers identically.
 	@Test
@@ -10881,7 +10877,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void aComplexFreeArangeProgramRunsStandaloneWithoutTheHolder() throws Exception {
-		// .todo/757: the spliced linalg.lisp mentions sqrt in defuns this program never
+		// The spliced linalg.lisp mentions sqrt in defuns this program never
 		// calls (%la-fsqrt and friends), which opens the complex gate for a program
 		// that can never observe a complex. The lone class still carries the pool
 		// reference, but no executed path may resolve it: the holder-presence probe
@@ -10950,7 +10946,7 @@ class JvmLispCompilerTest {
 		// values, not against a printed spelling: StrictMath.exp(1.0) is 1 ulp apart
 		// between x64 and aarch64 (2.718281828459045 and 2.7182818284590455), so a
 		// literal expected here is the digit string of whichever box took it
-		// (.todo/756). The exact answers keep their literal form.
+		// (.kb/jvm-complex.md). The exact answers keep their literal form.
 		assertThat(compileAndRun("(print (expt #c(1 1) 2))")).isEqualTo("#C(0 2)");
 		assertThat(compileAndRun("(print (expt #c(1 1) -1))")).isEqualTo("#C(1/2 -1/2)");
 		assertThat(compileAndRun("(print (expt #c(0 1) 2))")).isEqualTo("-1");
@@ -11036,10 +11032,11 @@ class JvmLispCompilerTest {
 		// arm that writes a second quantity over a slot it still needs answers a
 		// plausible number rather than failing. tan and tanh did exactly that for as long
 		// as they existed: |cos z|^2 landed on cos z's real part, so both degenerated to
-		// their numerator on the real axis and (tan #c(1d0 0d0)) answered sin 1
-		// (.todo/765). Every arm is therefore pinned against the INTERPRETER's own value,
-		// point by point, which no per-arm literal could do: the digits are the
-		// PLATFORM's Math rounding (.kb/jvm-complex.md), not a constant.
+		// their numerator on the real axis and (tan #c(1d0 0d0)) answered sin 1. Every
+		// arm
+		// is therefore pinned against the INTERPRETER's own value, point by point, which
+		// no per-arm literal could do: the digits are the PLATFORM's Math rounding
+		// (.kb/jvm-complex.md), not a constant.
 		StringBuilder program = new StringBuilder();
 		for (String function : COMPLEX_UNARY_FUNCTIONS) {
 			for (String argument : COMPLEX_UNARY_ARGUMENTS) {
@@ -11266,7 +11263,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunComplexTypep() throws Exception {
-		// SBCL parity (.todo/754): a complex is of type complex (and of type
+		// SBCL parity: a complex is of type complex (and of type
 		// number) but not of type real; a real is not of type complex.
 		assertThat(compileAndRun("(print (typep #c(1 2) 'complex))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (typep #c(1 2) 'real))")).isEqualTo("NIL");
@@ -11331,7 +11328,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunComplexSignum() throws Exception {
-		// SBCL parity (.todo/754): the unit vector z/|z| in floats; a zero answers
+		// SBCL parity: the unit vector z/|z| in floats; a zero answers
 		// the canonicalization of its own parts.
 		assertThat(compileAndRun("(print (signum #c(3 4)))")).isEqualTo("#C(0.6 0.8)");
 		assertThat(compileAndRun("(print (signum #c(0 0)))")).isEqualTo("0");
@@ -11401,8 +11398,8 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (funcall #'numerator 1/2))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (funcall #'denominator 1/2))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (mapcar #'numerator (list 1/2 2/3)))")).isEqualTo("(1 2)");
-		// The wrong-type report through the first-class value still names the operator
-		// (.todo/972's naming applies whether the call is direct or through funcall).
+		// The wrong-type report through the first-class value still names the operator,
+		// the same as a direct call.
 		assertThat(compileAndRun("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -12465,7 +12462,7 @@ class JvmLispCompilerTest {
 	void compileAndRunIntegerDecodeFloat() throws Exception {
 		// CLHS: the sign is an INTEGER and the significand is scaled to
 		// float-digits bits (53 for a normal double), not stripped of factors
-		// of two -- matches SBCL exactly (.todo/896).
+		// of two -- matches SBCL exactly.
 		assertThat(compileAndRun(
 				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
 			.isEqualTo(
@@ -12515,7 +12512,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLdbTest() throws Exception {
-		// The ldb-test prelude: T when any bit of the field is set (.todo/818).
+		// The ldb-test prelude: T when any bit of the field is set.
 		assertThat(compileAndRun(
 				"(print (ldb-test (byte 4 4) 255)) (print (ldb-test (byte 4 4) 15)) (print (ldb-test (byte 8 0) 0)) (print (ldb-test (byte 4 0) 16)) (print (ldb-test (byte 4 4) -1)) (print (funcall #'ldb-test (byte 4 4) 255))"))
 			.isEqualTo("T\nNIL\nNIL\nNIL\nT\nT");
@@ -13460,19 +13457,19 @@ class JvmLispCompilerTest {
 				(defun f-find (n) (find-symbol n))
 				(defun f-intern (n) (intern n))
 				(defun f-nontail (h) (let ((v (gethash "K" h))) v))
-				(setq mv427-tbl (make-hash-table :test 'equal))
-				(setf (gethash "K" mv427-tbl) "V")
-				(print (multiple-value-list (f-gethash mv427-tbl)))
+				(setq mvr-tbl (make-hash-table :test 'equal))
+				(setf (gethash "K" mvr-tbl) "V")
+				(print (multiple-value-list (f-gethash mvr-tbl)))
 				(print (multiple-value-list (f-gethash (make-hash-table))))
 				(print (multiple-value-list (f-floor 7 2)))
 				(print (multiple-value-list (f-find "MY-USER-FN")))
 				(print (multiple-value-list (f-intern "MY-USER-FN")))
 				(print (multiple-value-list (f-disp (make-array 3))))
-				(print (multiple-value-list (ctx-get "k" mv427-tbl)))
-				(print (multiple-value-list (f-cond mv427-tbl t)))
-				(print (multiple-value-list (f-cond mv427-tbl nil)))
-				(multiple-value-bind (v f) (ctx-get "k" mv427-tbl) (print (list v f)))
-				(print (multiple-value-list (f-nontail mv427-tbl)))
+				(print (multiple-value-list (ctx-get "k" mvr-tbl)))
+				(print (multiple-value-list (f-cond mvr-tbl t)))
+				(print (multiple-value-list (f-cond mvr-tbl nil)))
+				(multiple-value-bind (v f) (ctx-get "k" mvr-tbl) (print (list v f)))
+				(print (multiple-value-list (f-nontail mvr-tbl)))
 				""")).isEqualTo("(\"V\" T)\n(NIL NIL)\n(3 1)\n(MY-USER-FN :INTERNAL)\n(MY-USER-FN :INTERNAL)\n(NIL 0)\n"
 				+ "(\"V\" T)\n(\"V\" T)\n(NIL)\n(\"V\" T)\n(\"V\")");
 	}
@@ -14371,18 +14368,18 @@ class JvmLispCompilerTest {
 		// LispEvaluatorTest#readSequenceOnAGrayStreamValidatesItsBoundsToo,
 		// through the Gray splices (the expansion check runs before the dispatch).
 		assertThat(compileAndRunGray("""
-				(defclass gw-in932 (rontolisp:fundamental-character-input-stream)
+				(defclass gw-bounds-in (rontolisp:fundamental-character-input-stream)
 				  ((s :initarg :s)))
-				(defmethod rontolisp:stream-read-char ((s gw-in932))
+				(defmethod rontolisp:stream-read-char ((s gw-bounds-in))
 				  (read-char (slot-value s 's)))
 				(print (list (handler-case
 				                 (read-sequence (make-array 3)
-				                                (make-instance 'gw-in932 :s (make-string-input-stream "abc"))
+				                                (make-instance 'gw-bounds-in :s (make-string-input-stream "abc"))
 				                                :start -1)
 				               (type-error () :type-error) (error () :other-error))
 				             (handler-case
 				                 (read-sequence '(a . b)
-				                                (make-instance 'gw-in932 :s (make-string-input-stream "abc")))
+				                                (make-instance 'gw-bounds-in :s (make-string-input-stream "abc")))
 				               (type-error () :type-error) (error () :other-error))))
 				""")).isEqualTo("(:TYPE-ERROR :TYPE-ERROR)");
 	}
@@ -14915,7 +14912,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunBfloat16BulkAgreesWithTheScalarPair() throws Exception {
-		// .todo/671's bulk pair and .todo/487's scalar pair are ONE rounding: widening
+		// The bulk pair and the scalar pair are ONE rounding (.kb/bfloat16.md): widening
 		// every pattern into an f32 array and narrowing it straight back is the plain
 		// identity over all 65536 patterns, NaN payloads included. widen-float-bits
 		// stores the bit pattern verbatim (a bfloat16 pattern IS an f32's top half
@@ -15280,7 +15277,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (funcall #'mapcan (lambda (x) (list x)) '(1 2 3)))")).isEqualTo("(1 2 3)");
 	}
 
-	// The _append copy is built iteratively (.todo/749): a first argument far past
+	// The _append copy is built iteratively: a first argument far past
 	// any plausible stack answers instead of overflowing.
 	@Test
 	void compileAndRunAppendLongFirstArgument() throws Exception {
@@ -15290,7 +15287,7 @@ class JvmLispCompilerTest {
 			.isEqualTo("7");
 	}
 
-	// mapcan/mapcon accumulate through a tail pointer (.todo/749): a long input
+	// mapcan/mapcon accumulate through a tail pointer: a long input
 	// list is linear rather than a stack overflow (and rather than quadratic).
 	@Test
 	void compileAndRunMapcanMapconLongInput() throws Exception {
@@ -15317,7 +15314,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() throws Exception {
-		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place, so a
+		// sort/nreverse/stable-sort permute a vector/string in place, so a
 		// fill-pointered or adjustable argument must keep its fill pointer, its
 		// adjustable flag AND its own identity -- not just the right values.
 		assertThat(compileAndRun("""
@@ -15629,7 +15626,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadConsumesExactlyOneDatum() throws Exception {
-		// todo-624: one datum's characters, the stream left after them. The compile
+		// One datum's characters, the stream left after them. The compile
 		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
 		// one line and "b)" on the next read as (A) then B.
 		assertThat(compileAndRunRead("""
@@ -15748,7 +15745,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunReadEof() throws Exception {
-		// eof-error-p defaults to t (.todo/807), so a bare read at end of input
+		// eof-error-p defaults to t, so a bare read at end of input
 		// signals end-of-file; an explicit nil still answers the eof-value.
 		assertThat(compileAndRunWithStdin("(print (null (read nil nil)))", "")).isEqualTo("T");
 		assertThat(compileAndRunWithStdin("(print (handler-case (read) (end-of-file () :caught)))", ""))
@@ -16191,7 +16188,7 @@ class JvmLispCompilerTest {
 		// Removing every other entry of a 1,000-entry table, oldest first: the count
 		// drops, maphash walks the survivors in insertion order, a removed key stays
 		// gone, removing a missing key answers NIL, re-storing a removed key appends
-		// it, and clr resets everything (.todo/855's tombstone representation).
+		// it, and clr resets everything (the tombstone representation).
 		assertThat(compileAndRun("""
 				(let ((h (make-hash-table :test 'eq)) (keys nil))
 				  (dotimes (i 1000)
@@ -16222,7 +16219,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunRemhashOfManyEntriesStaysFast() throws Exception {
-		// .todo/855: removing from the insertion-order list was O(n) per removal, so
+		// Removing from the insertion-order list was O(n) per removal, so
 		// removing every entry oldest-first was quadratic (~3 s per 50k on this
 		// machine). Tombstones make each removal O(1); the bound below has an order
 		// of magnitude of headroom over the fixed shape and fails on the old one.
@@ -16338,7 +16335,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunRuntimePackageApi() throws Exception {
-		// The runtime tier (.todo/741) on the JVM backend: the prelude defuns over
+		// The runtime tier (.kb/packages.md) on the JVM backend: the prelude defuns over
 		// the injected baked table plus the mutable runtime table answer exactly
 		// like the interpreter's live-registry natives, failures included.
 		assertThat(compileAndRun("""
@@ -16562,7 +16559,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunRuntimePackageMemberTable() throws Exception {
-		// The runtime package MEMBER table on the JVM backend (.todo/917): the
+		// The runtime package MEMBER table on the JVM backend (.kb/packages.md): the
 		// %runtime-packages% entry records what intern / export / shadowing-import /
 		// shadow put in it and what unintern takes out, and the find-symbol / intern /
 		// export / use-package lowerings consult it -- the same answers as the
@@ -17453,7 +17450,7 @@ class JvmLispCompilerTest {
 
 	// A CHARACTER is a Unicode code point on every backend: (code-char 128512) survives
 	// as U+1F600 (not truncated to a lone surrogate) and prints as its glyph. Pins the
-	// JVM int[]{cp} widening from todo 153; see .kb/characters-code-points.md.
+	// JVM int[]{cp} widening; see .kb/characters-code-points.md.
 	@Test
 	void compileCharBeyondBmpCodePoint() throws Exception {
 		assertThat(compileAndRun("""
@@ -17993,8 +17990,7 @@ class JvmLispCompilerTest {
 		// to
 		// reach Object.toString and print Java's container syntax -- including an
 		// IDENTITY
-		// HASH, i.e. different text on two runs (todo 430,
-		// .kb/emitted-output-determinism.md).
+		// HASH, i.e. different text on two runs (.kb/emitted-output-determinism.md).
 		// It prints the interpreter's unreadable tag instead, nested positions included,
 		// with the LIVE ENTRY COUNT read from the same size() call _hashCount makes.
 		assertThat(compileAndRun("""
@@ -18194,7 +18190,7 @@ class JvmLispCompilerTest {
 	@Test
 	// An eq table keys aggregates by identity: two instances with equal slots are two
 	// keys, and a key mutated after insertion still finds its entry -- on every
-	// backend (.todo/444).
+	// backend (.kb/hash-tables.md).
 	void compileEqHashTableKeysAggregatesByIdentity() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct jpt x y)
@@ -18217,7 +18213,7 @@ class JvmLispCompilerTest {
 	@Test
 	// An eql table compares numbers by type and value but aggregates by identity: a
 	// freshly built cons with equal contents is a MISS -- on every backend
-	// (.todo/444).
+	// (.kb/hash-tables.md).
 	void compileEqlHashTableKeysNumbersByValueButAggregatesByIdentity() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((h (make-hash-table :test 'eql)))
@@ -19320,7 +19316,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
-		// A copy-seq/subseq result is a MUTABLE character vector (.todo/559 step 2), so
+		// A copy-seq/subseq result is a MUTABLE character vector, so
 		// a displaced view over it aliases real storage and a write through the view
 		// reaches the target -- the same answer the interpreter and SBCL give. The
 		// promote-on-write fallback this test used to pin applied only while such a
@@ -19386,7 +19382,7 @@ class JvmLispCompilerTest {
 		// An equalp table's key fold runs AFTER the character-vector render: without
 		// it two same-content producer-built keys fold to two distinct vectors and
 		// never collide, while the literal spelling of the same key hits
-		// (.kb/hash-tables.md; found by the .todo/596 boundary sweep).
+		// (.kb/hash-tables.md; found by a boundary sweep over the string producers).
 		assertThat(compileAndRun("""
 				(let ((h (make-hash-table :test 'equalp)))
 				  (setf (gethash (format nil "K~a" 1) h) 42)
@@ -20153,7 +20149,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunTorchFusedCompositions() throws Exception {
-		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (todo-499) against the
+		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (.kb/torch.md) against the
 		// compositions they replaced, bit for bit, on the compiled backend.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
@@ -20171,8 +20167,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunTorchTransposeView() throws Exception {
 		// TorchGradcheck.VIEW_PROGRAM: the transpose view torch:matmul reads in place
-		// (todo-630) against the materialized transpose, bit for bit, on the compiled
-		// backend.
+		// against the materialized transpose, bit for bit, on the compiled backend.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
 	}
@@ -21906,7 +21901,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compilePrintObjectMethodDefinedBelowItsFirstUse() throws Exception {
-		// Todo 445: a print-object method defined BELOW its first use used to crash
+		// A print-object method defined BELOW its first use used to crash
 		// with a raw NullPointerException (the whole-program registry routes the
 		// printer through the generic from the start, but the body global is assigned
 		// only when the defmethod form runs). The dispatcher now skips the
@@ -21922,7 +21917,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileNestedDefmethodCallBeforeItsFormFallsThrough() throws Exception {
-		// Todo 445, the general shape: a call before the nested defmethod form runs
+		// The general shape: a call before the nested defmethod form runs
 		// answers the default, and after it the new method.
 		assertThat(compileAndRun("""
 				(defclass nd-late () ())
@@ -22556,7 +22551,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void theFFamilyMatchesTheInterpreter() throws Exception {
-		// ffloor/fceiling/fround/ftruncate (todo-667): the same exact quotient the plain
+		// ffloor/fceiling/fround/ftruncate: the same exact quotient the plain
 		// family answers, only floated for the primary value, and the same remainder.
 		assertThat(compileAndRun("""
 				(defun q (a b) (multiple-value-list (ffloor a b)))
@@ -22581,7 +22576,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
-		// todo-666: the one regime the sweep above declines on purpose (an infinite
+		// The one regime the sweep above declines on purpose (an infinite
 		// divisor), checked the same way -- against the interpreter, whose _fdiv-free
 		// route (ExactRounding.infiniteDivisorQuotient) and this one (_fdiv's own
 		// infinite-divisor arm) were written from the same sign formula independently
@@ -23048,7 +23043,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
 		// A rank-n shape (runtime-detected) and a fill-pointer combination keep the
 		// general boxed representation, but REMEMBER the element type they were asked
-		// for (todo-611).
+		// for.
 		assertThat(compileAndRun("(print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))"))
 			.isEqualTo("(UNSIGNED-BYTE 8)");
 		assertThat(compileAndRun("""
@@ -23295,7 +23290,7 @@ class JvmLispCompilerTest {
 		// The LEGAL CLHS upgrades the shipped corpus passes -- refusing an unrecognized
 		// element type would refuse ironclad's and chipz's 'fixnum, jzon's
 		// '(unsigned-byte 64) and cl-ppcre's '(or null fixnum). 'bit is NOT an upgrade:
-		// since .todo/043 a bit vector is the general array stamped bit, so
+		// a bit vector is the general array stamped bit, so
 		// array-element-type answers it back.
 		assertThat(compileAndRun("""
 				(print (list (array-element-type (make-array 2 :element-type 'bit))
@@ -23332,7 +23327,7 @@ class JvmLispCompilerTest {
 		// %array-alike over a packed float array: the copy comes back packed at the
 		// SAME width, all three of them. It used to come back a general simple-vector
 		// -- _ivAlike tested only the long[] marker, and a float-only program did not
-		// even emit it (.todo/719).
+		// even emit it.
 		assertThat(compileAndRun("""
 				(let ((d (make-array 3 :element-type 'double-float :initial-element 1.5d0)))
 				  (print (list (type-of (subseq d 0 2)) (array-element-type (copy-seq d)) (subseq d 1))))
@@ -23498,7 +23493,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunOpenDirectionIoAndOverwrite(@TempDir Path tempDir) throws Exception {
-		// .todo/918: the interpreter's twin is
+		// The interpreter's twin is
 		// LispEvaluatorTest#openDirectionIoReadsBackWhatItJustWroteThroughOneCursor.
 		// Both run the SAME class -- runtime/RontoIoFileStream, which travels beside the
 		// compiled output -- so the two readings of :direction :io cannot drift.
@@ -23606,18 +23601,18 @@ class JvmLispCompilerTest {
 		String here = tempDir.toString().replace("\\", "\\\\");
 		assertThat(compileAndRunGray(
 				"""
-						(defclass w919-sink (rontolisp:fundamental-character-output-stream) ())
-						(with-open-file (o "%1$s/g919.bin" :direction :output :element-type '(signed-byte 16) :if-exists :supersede)
+						(defclass wbin-sink (rontolisp:fundamental-character-output-stream) ())
+						(with-open-file (o "%1$s/gbin.bin" :direction :output :element-type '(signed-byte 16) :if-exists :supersede)
 						  (write-byte -2 o)
 						  (write-byte 513 o))
-						(print (with-open-file (i "%1$s/g919.bin" :element-type '(signed-byte 16))
+						(print (with-open-file (i "%1$s/gbin.bin" :element-type '(signed-byte 16))
 						         (list (stream-element-type i) (read-byte i) (read-byte i) (file-length i) (file-position i))))
-						(defvar *g919* (open "%1$s/g919.bin" :element-type '(unsigned-byte 16)))
-						(defvar *g919-syn* (make-synonym-stream '*g919*))
-						(close *g919-syn*)
-						(print (list (stream-element-type *g919*) (read-byte *g919*)))
-						(close *g919*)
-						(print (stream-element-type *g919*))
+						(defvar *gbin* (open "%1$s/gbin.bin" :element-type '(unsigned-byte 16)))
+						(defvar *gbin-syn* (make-synonym-stream '*gbin*))
+						(close *gbin-syn*)
+						(print (list (stream-element-type *gbin*) (read-byte *gbin*)))
+						(close *gbin*)
+						(print (stream-element-type *gbin*))
 						"""
 					.formatted(here)))
 			.isEqualTo("""
@@ -23628,7 +23623,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunWideAndNarrowElementTypes(@TempDir Path tempDir) throws Exception {
-		// .todo/919: the twin of
+		// The twin of
 		// LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem and
 		// WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1. A wide
 		// element composes above the octet primitive through the prelude registry; the
@@ -23636,49 +23631,49 @@ class JvmLispCompilerTest {
 		String here = tempDir.toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(
 				"""
-						(defun w919-drain (s)
+						(defun wbin-drain (s)
 						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
 						      ((eq b :eof) (nreverse r))))
-						(defun w919-octets ()
-						  (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+						(defun wbin-octets ()
+						  (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 8)) (wbin-drain i)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
 						  (dolist (v '(0 1 1)) (write-byte v o)))
-						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 1))
-						               (list (stream-element-type i) (file-length i) (w919-drain i)))
-						             (w919-octets)))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 1))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
 						  (dolist (v '(1 258)) (write-byte v o)))
-						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
-						               (list (stream-element-type i) (file-length i) (w919-drain i)))
-						             (w919-octets)))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
 						  (dolist (v '(-1 5)) (write-byte v o)))
-						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 8))
-						               (list (stream-element-type i) (file-length i) (w919-drain i)))
-						             (w919-octets)))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(signed-byte 8))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
 						  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
-						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 64))
-						               (list (stream-element-type i) (file-length i) (w919-drain i)))
-						             (w919-octets)))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(signed-byte 64))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
 						  (write-byte 150 o))
-						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(integer 100 200))
-						               (list (stream-element-type i) (file-length i) (w919-drain i)))
-						             (w919-octets)))
-						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(integer 100 200))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
 						         (list (file-length i) (read-byte i nil :partial))))
-						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
 						  (write-sequence (vector 1 2 65535) o))
-						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
 						         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
 						               (file-position i :end) (read-byte i nil :eof))))
-						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
 						         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
 						           (list (read-sequence v i) (aref v 0) (aref v 2)))))
-						(print (with-open-file (s "%1$s/w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+						(print (with-open-file (s "%1$s/wbin.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
 						         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
-						(print (with-open-file (s "%1$s/w919.bin") (stream-element-type s)))
+						(print (with-open-file (s "%1$s/wbin.bin") (stream-element-type s)))
 						"""
 					.formatted(here)))
 			.isEqualTo(

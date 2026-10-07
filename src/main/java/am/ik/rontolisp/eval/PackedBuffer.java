@@ -26,7 +26,7 @@ import org.jspecify.annotations.Nullable;
  * reads into a bf16 array in ONE transfer with no conversion at all, and writing it back
  * reproduces the file byte for byte, signalling NaN payloads included. It is deliberately
  * NOT the widened f32: a width that converted on the wire could not round-trip
- * ({@code .kb/bfloat16.md}, {@code .todo/487} step 3).
+ * ({@code .kb/bfloat16.md}).
  *
  * <p>
  * {@code objc:data} / {@code objc:bytes} hand the same bytes to Objective-C
@@ -121,7 +121,7 @@ record PackedBuffer(LispVal value, int width, int size) {
 					default -> bytes.asIntBuffer().get(iv.ints(), start, n);
 				}
 			}
-			// The blocks are the device's residency key too (.todo/728): the read is
+			// The blocks are the device's residency key too: the read is
 			// reported like any other bulk write, so a matrix re-read after a GEMV is a
 			// first sight again and never a stale copy.
 			case LispQuantizedMatrix qm -> bytes.get((byte[]) FloatArrayAccessHook.written(qm.blocks()), start, n);

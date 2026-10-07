@@ -31,8 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>
  * The smart-buffer spill runs for real here too: both WASM backends create the temporary
- * file's directory through the {@code path_create_directory} import (.todo/257), so the
- * legs share the spilling expectation with the interpreter and the JVM.
+ * file's directory through the {@code path_create_directory} import, so the legs share
+ * the spilling expectation with the interpreter and the JVM.
  *
  * <p>
  * Opt-in ({@code RONTOLISP_LACK_E2E=1}): it needs Docker (the pinned wasmtime image) and,

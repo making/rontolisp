@@ -93,9 +93,9 @@ final class JvmSimdCompiler {
 			LispNames.VEC_MATVEC, 0, LispNames.VEC_MATVEC_INTO, 1);
 
 	/**
-	 * The members with a FUSED bfloat16 element-wise kernel (`.todo/747`): exactly the
-	 * ones with a single-float lane loop -- {@code add}/{@code sub}/{@code mul}/
-	 * {@code div} with the four CL operator spellings and their {@code -into} siblings,
+	 * The members with a FUSED bfloat16 element-wise kernel: exactly the ones with a
+	 * single-float lane loop -- {@code add}/{@code sub}/{@code mul}/ {@code div} with the
+	 * four CL operator spellings and their {@code -into} siblings,
 	 * {@code sqrt}/{@code abs}/{@code negative}/{@code reciprocal} with theirs. Unlike
 	 * {@link #BF16_OPERAND}'s one narrow position against f32 activations, the admitted
 	 * pairing here is bf16 x bf16 {@code ->} bf16: every ARRAY operand must be a
@@ -119,8 +119,8 @@ final class JvmSimdCompiler {
 	 * destination is a shape only the defun computes. A member absent from this map
 	 * declines a {@code byte[]} in every position. The device rung of
 	 * {@link #compileMatvecChain} takes the allocating form's {@code byte[]} against a
-	 * {@code float[]} ahead of this arm ({@code JvmGpuTemplate.gpuMatvec},
-	 * {@code .todo/728}) and answers the same bits.
+	 * {@code float[]} ahead of this arm ({@code JvmGpuTemplate.gpuMatvec}) and answers
+	 * the same bits.
 	 */
 	private static final Map<String, Integer> QUANTIZED_OPERAND = Map.of(LispNames.VEC_MATVEC, 0,
 			LispNames.VEC_MATVEC_INTO, 1);
@@ -366,9 +366,9 @@ final class JvmSimdCompiler {
 	 * or {@code float[]}, all operands of ONE of the two -- and cast anything else
 	 * ({@link JvmSimdVectorTemplate}), so every ARRAY argument is asked, POSITIVELY,
 	 * whether it is that width before the kernel is called; any other representation (a
-	 * {@code bfloat16} {@code short[]} today, whatever {@code .todo/672} brings tomorrow)
-	 * takes the spliced {@code vec.lisp} defun over the packed representation instead,
-	 * the same decline the interpreter's {@code VecSimd} chain gives. Asking "is it the
+	 * {@code bfloat16} {@code short[]} today, whatever width is added tomorrow) takes the
+	 * spliced {@code vec.lisp} defun over the packed representation instead, the same
+	 * decline the interpreter's {@code VecSimd} chain gives. Asking "is it the
 	 * unsupported one?" would let the next unsupported width fall through to the cast. A
 	 * scalar position ({@link #SCALAR_TAIL}) is not an array and is not asked. Each
 	 * failing test branches to the caller's {@code fallback} label.
@@ -397,10 +397,10 @@ final class JvmSimdCompiler {
 	 * <p>
 	 * The members of {@link #BF16_ELEMENTWISE} carry a third arm ahead of the general
 	 * test: when the FIRST operand is a {@code short[]}, every other array operand must
-	 * be one too (bf16 x bf16 {@code ->} bf16, `.todo/747`); when it is not, the ordinary
-	 * two-width test runs and any {@code short[]} anywhere fails it -- so a mixed
-	 * bf16/f32 pair declines to the defun rather than reaching the bridge. Every
-	 * combination this arm admits has a kernel, and the bridge stays TOTAL the same way.
+	 * be one too (bf16 x bf16 {@code ->} bf16); when it is not, the ordinary two-width
+	 * test runs and any {@code short[]} anywhere fails it -- so a mixed bf16/f32 pair
+	 * declines to the defun rather than reaching the bridge. Every combination this arm
+	 * admits has a kernel, and the bridge stays TOTAL the same way.
 	 *
 	 * <p>
 	 * The two GEMV members of {@link #QUANTIZED_OPERAND} have a third arm ahead of those

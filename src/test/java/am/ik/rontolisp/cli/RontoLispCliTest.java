@@ -816,7 +816,7 @@ class RontoLispCliTest {
 
 	@Test
 	void interpreterSimdParallelIsAHardErrorWithoutTheIncubatorModule() throws Exception {
-		// .todo/700: on a JVM without jdk.incubator.vector, --simd --parallel used to
+		// On a JVM without jdk.incubator.vector, --simd --parallel used to
 		// degrade to the SCALAR vec:/linalg: kernels split across threads -- a ~100x
 		// slowdown that reads as a hang under a long program's own output, with only a
 		// one-line warning (easily scrolled off) as the tell. --parallel is asked for

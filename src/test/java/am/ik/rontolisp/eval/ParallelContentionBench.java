@@ -3,11 +3,11 @@ package am.ik.rontolisp.eval;
 import java.util.Random;
 
 /**
- * {@code .todo/697}'s measurement: what {@code --parallel}'s thread count costs when the
- * box is not idle. The pool's workers spin on an epoch and the caller spins until the
- * LAST leaf of a call is done, so a worker descheduled while it holds a leaf stalls the
- * whole call for a scheduler quantum -- and with {@code threads == availableProcessors}
- * and anything else runnable, that happens on nearly every call.
+ * A measurement of what {@code --parallel}'s thread count costs when the box is not idle.
+ * The pool's workers spin on an epoch and the caller spins until the LAST leaf of a call
+ * is done, so a worker descheduled while it holds a leaf stalls the whole call for a
+ * scheduler quantum -- and with {@code threads == availableProcessors} and anything else
+ * runnable, that happens on nearly every call.
  *
  * <p>
  * The arm is the shipped f32 GEMV ({@link VecSimdKernels#matvecIntoF}, parallel) run in a

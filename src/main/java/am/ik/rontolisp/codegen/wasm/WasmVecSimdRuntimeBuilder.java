@@ -957,7 +957,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// wide enough to pay for them (WasmVecLoops.MATVEC_ACC_THRESHOLD, a pure function of
 	// the COLUMN COUNT so the same column count takes the same path on all four --simd
 	// implementations); acc1..acc3 and `wide` exist for that. The f64 row keeps its one
-	// chain -- .todo/480 is about the f32x4 chain, and the f64 one is unmeasured.
+	// chain -- only the f32x4 chain was measured (.kb/vec.md); the f64 one is unmeasured.
 	private static byte[] buildMatvec(boolean into, int vecBase, int scalar) {
 		int params = into ? 3 : 2;
 		int mat = into ? 1 : 0;

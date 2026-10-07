@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <b>A test that prints a compile warning must assert on it.</b> When the corpus lost its
  * {@code TokenizersLibrary} splice, the WASM guard compiled fifteen undefined-call
  * warnings to standard output and PASSED -- the program was broken, the breakage was on
- * the console, and nobody reads the output of a green test (.todo/688). Warnings reach
+ * the console, and nobody reads the output of a green test. Warnings reach
  * {@code System.err} whether a backend buffers them per attempt or prints them straight
  * through ({@code compiler/CompileWarnings}), so capturing that stream catches both.
  *

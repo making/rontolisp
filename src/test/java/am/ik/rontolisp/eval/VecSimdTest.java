@@ -52,8 +52,8 @@ class VecSimdTest {
 
 	/**
 	 * The dead-flag guard's discriminator: a named defun and the native kernel installed
-	 * over it print the SAME {@code #<function NAME>} text (todo 434 gave defuns names),
-	 * so the pair is told apart by the Java type -- {@link LispFunction} is the installed
+	 * over it print the SAME {@code #<function NAME>} text (a defun prints its name), so
+	 * the pair is told apart by the Java type -- {@link LispFunction} is the installed
 	 * kernel, {@link LispLambda} the {@code vec.lisp} defun -- while the printed tag
 	 * stays pinned alongside.
 	 */
@@ -140,7 +140,7 @@ class VecSimdTest {
 		assertThat(eval(probe32("16777216.0", "(vec:sum v)"), false).print()).isEqualTo("16778239");
 		// The scalar path accumulates 16778239 in f64 and narrows on store: an odd
 		// multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
-		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// A GEMV row is NOT vec:dot's chain: above
 		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
 		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
 		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
@@ -175,7 +175,7 @@ class VecSimdTest {
 
 	@Test
 	void partialFinalGroupFoldsTheScalarTailByDesign() {
-		// .todo/758, closed as a contract exception rather than a unification: at a
+		// A contract exception rather than a unification (.kb/vec.md): at a
 		// length that is not a multiple of the f32x4 lane count the two folds close
 		// the last, partial group differently -- this side (interpreter, JVM class,
 		// --no-gc) runs the lane loop to loopBound(n) and adds the leftover as a
@@ -262,9 +262,9 @@ class VecSimdTest {
 	// --- matvec (GEMV) -----------------------------------------------------------
 
 	/**
-	 * The multi-accumulator gate ({@code .todo/480}), pinned on BOTH sides and at the
-	 * boundary. From {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32}
-	 * columns up a GEMV row folds four independent four-lane accumulators as
+	 * The multi-accumulator gate, pinned on BOTH sides and at the boundary. From
+	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
+	 * GEMV row folds four independent four-lane accumulators as
 	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
 	 *
 	 * <p>
@@ -288,7 +288,7 @@ class VecSimdTest {
 	 * folds the partial group with its padding zeroed, so its answer matches this one
 	 * here by arithmetic luck and not by contract -- the deliberate divergence is pinned
 	 * by {@code partialFinalGroupFoldsTheScalarTailByDesign} here and the wasm-GC mirror
-	 * beside it ({@code .todo/758}, closed as a contract exception).
+	 * beside it (a contract exception, {@code .kb/vec.md}).
 	 *
 	 * <p>
 	 * <b>16 and 32 are asserted identically on all four {@code --simd}
@@ -454,7 +454,7 @@ class VecSimdTest {
 
 	@Test
 	void mixingWidthsInAnIntoKernelComputesRatherThanSignalling() {
-		// A BEHAVIOUR CHANGE (.todo/686): see
+		// A BEHAVIOUR CHANGE: see
 		// mixingSingleAndDoubleFloatOperandsComputesRatherThanSignalling above. Both a
 		// mismatch between the two operands and a mismatch between the destination and
 		// its operands decline to the scalar defun rather than raising.
@@ -636,7 +636,7 @@ class VecSimdTest {
 
 	@Test
 	void mixingWidthsInAUnaryIntoKernelComputesRatherThanSignalling() {
-		// A BEHAVIOUR CHANGE (.todo/686): see
+		// A BEHAVIOUR CHANGE: see
 		// mixingSingleAndDoubleFloatOperandsComputesRatherThanSignalling above.
 		assertMatchesScalarOracle("(vec:sqrt-into (vec:zeros 1) #f(1.0))");
 	}
@@ -856,7 +856,7 @@ class VecSimdTest {
 	void aBf16OperandWithoutAFusedKernelDeclinesToTheScalarDefun() {
 		// Only two shapes have a fused kernel: the decode shape -- bf16 weights
 		// against f32 activations -- and the element-wise bf16 x bf16 -> bf16
-		// pairings (`.todo/747`). Every other pairing DECLINES: the scalar vec.lisp
+		// pairings. Every other pairing DECLINES: the scalar vec.lisp
 		// defun answers, bit for bit, so --simd stays a speed flag at this width.
 		// Note the element-wise members decline a MIXED bf16/f32 pair rather than
 		// signalling the fixed-width error: the defun computes it happily and --simd
@@ -874,13 +874,13 @@ class VecSimdTest {
 
 	@Test
 	void theFusedBf16ElementWiseKernelsEqualTheScalarDefun() {
-		// `.todo/747`'s subset: add/sub/mul/div with the four CL operator spellings
+		// The fused subset: add/sub/mul/div with the four CL operator spellings
 		// and their -into siblings, sqrt/abs/negative/reciprocal with theirs, over
 		// bf16 x bf16 -> bf16. 300 elements, so the lane loop runs rather than only
 		// the scalar tail; the values are a deterministic LCG in [-1, 1], zeros and
 		// negatives included (the f32 intermediate is the defun's answer over all
-		// 65536 patterns for every one of these members, `.todo/696`'s sweep and the
-		// scratch sweep it cites for the four unary members). sqrt runs over the
+		// 65536 patterns for every one of these members, swept exhaustively;
+		// .kb/vec.md). sqrt runs over the
 		// signed values directly: the element function is the float-domain square
 		// root, NaN on negatives on both paths, so no abs wrapper is needed.
 		for (String body : new String[] { "(vec:add vb vb)", "(vec:sub vb vb)", "(vec:mul vb vb)", "(vec:div vb vb)",
@@ -931,7 +931,7 @@ class VecSimdTest {
 		assertThat(eval("(let ((o (vec:zeros 2 :element-type 'single-float)))"
 				+ " (vec:add-into o #f(1.0 2.0) #bf16(0.5 0.25)))", true)
 			.print()).isEqualTo("#f(1.5 2.25)");
-		// A mixed #d/#f pair also declines rather than signals (.todo/686) -- see
+		// A mixed #d/#f pair also declines rather than signals (.kb/vec.md) -- see
 		// mixingSingleAndDoubleFloatOperandsComputesRatherThanSignalling for the value
 		// pins; every mismatch a lane kernel meets hands the call back to the defun.
 		// A bf16 second operand where the FIRST has a fused kernel is still a decline,
@@ -945,7 +945,7 @@ class VecSimdTest {
 
 	@Test
 	void mixingSingleAndDoubleFloatOperandsComputesRatherThanSignalling() {
-		// A BEHAVIOUR CHANGE (.todo/686): --simd used to raise a fixed-width error here
+		// A BEHAVIOUR CHANGE: --simd used to raise a fixed-width error here
 		// while the scalar vec.lisp defun (aref on a packed float array widens to
 		// double regardless of storage width) computed it happily -- a speed flag was
 		// deciding whether the program ran. Every member with a fixed-width lane

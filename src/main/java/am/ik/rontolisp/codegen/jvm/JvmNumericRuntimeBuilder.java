@@ -551,7 +551,7 @@ final class JvmNumericRuntimeBuilder {
 		// only with the gate on so no complex-free constant pool names it.
 		MethodRefEntry rCsignum = usesComplex ? cp.methodRef(thisClass, JvmComplexRuntimeBuilder.SIGNUM,
 				JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.SIGNUM)) : null;
-		// The holder-presence probe (.todo/757, minted in JvmLispCompiler): every
+		// The holder-presence probe (minted in JvmLispCompiler): every
 		// holder arm below consults it before resolving the travelling class, so a
 		// lone class run without the file beside it takes the holder-less shape.
 		// Null exactly when the gate is off, like rcClass.
@@ -1678,7 +1678,7 @@ final class JvmNumericRuntimeBuilder {
 			// the gated call sites use _ccmpb, which signals. Like the _abs arm,
 			// emitted only for a complex-capable program. The presence probe first:
 			// a lone class run without the travelling file must not resolve the
-			// holder class it then never touches (.todo/757).
+			// holder class it then never touches.
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			ClassEntry complexClass = Objects.requireNonNull(rcClass);
 			FieldRefEntry complexReal = Objects.requireNonNull(rcReal);
@@ -1826,7 +1826,7 @@ final class JvmNumericRuntimeBuilder {
 	 * Emits the holder-presence probe for a holder arm: falls through when a holder
 	 * instance can exist (the travelling class loaded), and returns the label to bind at
 	 * the arm's end, where it jumps otherwise -- then the holder-less shape that follows
-	 * is exact, because no holder instance can exist without its class (.todo/757).
+	 * is exact, because no holder instance can exist without its class.
 	 */
 	private static MethodCode.Label emitNoHolderJump(MethodCode c, @Nullable FieldRefEntry hasComplex) {
 		c.getstatic(Objects.requireNonNull(hasComplex));
@@ -1875,8 +1875,7 @@ final class JvmNumericRuntimeBuilder {
 			// parts, a real even for exact parts like the interpreter. Emitted
 			// only for a complex-capable program, so the holder class the test
 			// resolves stays out of every other constant pool. The presence probe
-			// first, so a lone class without the file never resolves it
-			// (.todo/757).
+			// first, so a lone class without the file never resolves it.
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			ClassEntry complexClass = Objects.requireNonNull(rcClass);
 			FieldRefEntry complexReal = Objects.requireNonNull(rcReal);
@@ -1975,7 +1974,7 @@ final class JvmNumericRuntimeBuilder {
 			// interpreter. Emitted only for a complex-capable program, so the
 			// holder class the test resolves stays out of every other constant
 			// pool (the _abs arm pattern). The presence probe first, so a lone
-			// class without the file never resolves it (.todo/757).
+			// class without the file never resolves it.
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			c.aload(0);
 			c.instanceOf(rcClass);
@@ -2021,8 +2020,7 @@ final class JvmNumericRuntimeBuilder {
 	// is real but neither, and an integer or float limit <= 0 is out of range either way.
 	// Both are reported under RANDOM's own registered REAL type (like a non-real limit,
 	// `.kb/error-handling.md` "A wrong-type argument names its operator") rather than
-	// teaching the shared operand-type table a compound type for this one operator
-	// (.todo/981).
+	// teaching the shared operand-type table a compound type for this one operator.
 	private static NumericMethod buildRandom(ConstantPool cp, Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
 			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
 			MethodRefEntry longValueOf, MethodRefEntry tlrCurrent, MethodRefEntry tlrNextDouble, ClassEntry ratArrClass,
@@ -2143,8 +2141,7 @@ final class JvmNumericRuntimeBuilder {
 			// interpreter (min and max select over an
 			// ordering, so both throw here). Emitted only for a
 			// complex-capable program, like the _abs arm. The presence probe
-			// first, so a lone class without the file never resolves it
-			// (.todo/757).
+			// first, so a lone class without the file never resolves it.
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			ClassEntry complexClass = Objects.requireNonNull(rcClass);
 			c.aload(0);
@@ -2583,7 +2580,8 @@ final class JvmNumericRuntimeBuilder {
 	// _dbl(e)) -- the interpreter's answer for (expt 4 1/2) = 2.0 and (expt 2 0.5). A
 	// Long exponent beyond [-Integer.MAX_VALUE, Integer.MAX_VALUE] takes the same
 	// Math.pow path: narrowing it with L2I would silently answer base^(e mod 2^32)
-	// ((expt 2 4294967297) is Infinity, not 2), the interpreter's rule (.todo/849).
+	// ((expt 2 4294967297) is Infinity, not 2), the interpreter's rule
+	// (.kb/transcendentals.md).
 	//
 	// In a program that may observe a complex, a holder base or exponent is handed to
 	// _cpow on each arm ahead of the funnel that would reject it (_dbl, _ratnum), so the

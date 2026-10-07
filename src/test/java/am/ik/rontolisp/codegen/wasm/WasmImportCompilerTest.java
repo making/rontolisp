@@ -895,9 +895,10 @@ class WasmImportCompilerTest {
 		assertThat(compileNoWasiSize(source)).isNotEmpty();
 	}
 
-	// Negative (.todo/793): a user defun on a name that is NOT a `cl` function keeps the
+	// Negative: a user defun on a name that is NOT a `cl` function keeps the
 	// gate closed exactly as before -- fixing this by trusting every user defun would
-	// give back the bytes .todo/789 bought.
+	// give back the bytes saved by keeping the charvec normalizer off the string
+	// boundary.
 	@Test
 	void aNonClUserDefunKeepsTheGateClosed() {
 		String bare = """

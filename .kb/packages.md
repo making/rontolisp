@@ -438,7 +438,7 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
   `nil`/`t`/`pi`/`most-*-fixnum`/`array-*-limit`/`char-code-limit`/
   `internal-time-units-per-second`/`lambda-list-keywords` before ANY package resolution, so `cl:pi`
   reached the resolver as an ordinary reference; `unqualifyClConstant` strips a `cl:`/`cl::`
-  qualifier for exactly that set (`CL_READ_TIME_CONSTANTS`). ci-spec `missing-cl-names-443`.
+  qualifier for exactly that set (`CL_READ_TIME_CONSTANTS`). ci-spec `missing-cl-names`.
 
 ## Runtime tier (`.todo/741`)
 `make-package` / `delete-package` / `rename-package` / `packagep` /

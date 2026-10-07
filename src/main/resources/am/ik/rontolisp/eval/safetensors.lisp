@@ -76,7 +76,7 @@
      ((not (eq format :f32)) (checkpoint:stage-float-bits s count format dst))
      ;; An F32 tensor into a single-float destination is its own bytes, and into
      ;; a bfloat16 one is narrowed AS IT STREAMS -- both are one staged pass, no
-     ;; whole-tensor transient (.todo/487 step 4).
+     ;; whole-tensor transient (.kb/checkpoint-readers.md).
      ((not (eq element-type 'double-float)) (checkpoint:stage-float32 s dst))
      (t
       ;; an F32 tensor into a double array: through a single-float one

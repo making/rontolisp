@@ -3,7 +3,7 @@ package am.ik.rontolisp.eval;
 import java.util.Random;
 
 /**
- * {@code .todo/713}'s follow-up to the {@code .todo/702} size sweep: that sweep found a
+ * The follow-up to the {@code ParallelGemvSizeSweepBench} size sweep: that sweep found a
  * reproducible dip to 25-28 Gelem/s at 3072x3072, well below both 2048x2048 (~54) and
  * 4096x4096 (~42), and left the cause unestablished. This bench separates the two live
  * hypotheses from {@code SimdParallel.rows}'s grain formula
@@ -34,7 +34,7 @@ import java.util.Random;
  * }</pre>
  *
  * Results and conditions are recorded in {@code .todo/artefacts/713-.../README.md}, not
- * here -- this file does not change once the item closes.
+ * here -- this file does not change with them.
  */
 public final class ParallelGemvDipSweepBench {
 

@@ -17,7 +17,8 @@ import org.jspecify.annotations.Nullable;
  * {@code java.lang.Float} intrinsics, inline -- no bit trick needed on the JVM, unlike
  * WASM's {@link am.ik.rontolisp.codegen.wasm.WasmFloat16Compiler}) and
  * {@code rontolisp:widen-float-bits}/{@code narrow-float-bits} (a call into
- * {@link JvmFloat16RuntimeBuilder}'s self-referencing helpers). See {@code .todo/671}.
+ * {@link JvmFloat16RuntimeBuilder}'s self-referencing helpers). See
+ * {@code .kb/bfloat16.md}.
  */
 final class JvmFloat16Compiler {
 

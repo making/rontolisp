@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The {@code bfloat16} packed array on the JVM backend ({@code .todo/485}): a
+ * The {@code bfloat16} packed array on the JVM backend ({@code .kb/bfloat16.md}): a
  * {@code #bf16(...)} literal and {@code make-array :element-type 'bfloat16} compile to a
  * bare {@code short[]} carrying the two-slots-per-dimension header
  * {@link JvmPackedFloatWidth#BFLOAT16} lays out, and every array op routes through the
@@ -256,7 +256,7 @@ class JvmBFloat16ArrayTest {
 
 	@Test
 	void aDimensionAbove32767IndexesToItsLastElement() throws Exception {
-		// Option (c) of .todo/485 -- keeping the one-slot header -- reads the wrong data
+		// A one-slot header (a short caps at 32767) would read the wrong data
 		// offset silently on exactly these shapes; the interpreter comparison is what
 		// says the answer is the stored value and not another slot's.
 		assertAgreedText(
@@ -603,7 +603,7 @@ class JvmBFloat16ArrayTest {
 	 * defun's bit for bit. {@code vec:sum} over a bf16 vector runs the fused kernel
 	 * instead and joins the f32 reduction contract, which accumulates in f32 rather than
 	 * the defun's f64; {@code vec:mul} over two bf16 vectors runs the fused element-wise
-	 * kernel (`.todo/747`), which is the defun's answer bit for bit.
+	 * kernel, which is the defun's answer bit for bit.
 	 */
 	private static final String VEC_ROUNDING_DECLINED_PROGRAM = """
 			(print (vec:exp #bf16(0.0 1.0 -0.5)))
@@ -631,7 +631,7 @@ class JvmBFloat16ArrayTest {
 	void aSimdBuildDeclinesABf16OperandWithNoFusedKernelToTheDefunBitForBit() throws Exception {
 		// The lane kernels carry double[] and float[] only, except for the members with
 		// a FUSED bf16 kernel: the decode shape (below) and the element-wise bf16 x
-		// bf16 -> bf16 pairings (`.todo/747`). Every other bf16 operand takes the
+		// bf16 -> bf16 pairings. Every other bf16 operand takes the
 		// spliced vec.lisp defun over the packed representation, so --simd stays a
 		// speed flag and not a semantics flag at this width. Both programs here are
 		// exact at the width or reach only declined members -- plus the fused
@@ -709,7 +709,7 @@ class JvmBFloat16ArrayTest {
 
 	@Test
 	void aSimdBuildFusesBf16ElementWiseKernelsToTheDefunsBits() throws Exception {
-		// `.todo/747`'s subset -- add/sub/mul/div with the four CL operator spellings
+		// The fused subset -- add/sub/mul/div with the four CL operator spellings
 		// and their -into siblings, sqrt/abs/negative/reciprocal with theirs -- over
 		// bf16 x bf16 -> bf16, at 300 elements so the lane loop runs on both sides.
 		// Unlike the reductions above the oracle is the DEFUN itself (the f32

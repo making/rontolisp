@@ -12,9 +12,9 @@ import org.jspecify.annotations.Nullable;
  * storage and a matrix written back is what {@code llama.cpp} reads.
  *
  * <p>
- * Only {@link #Q8_0} exists today. The enum is what a second format ({@code q4-k},
- * {@code .todo/490}'s device successor) joins; every switch over it is written as an
- * EXPRESSION so a new constant is a compile error at each site that decides something.
+ * Only {@link #Q8_0} exists today. The enum is what a second format (a {@code q4-k})
+ * joins; every switch over it is written as an EXPRESSION so a new constant is a compile
+ * error at each site that decides something.
  */
 public enum QuantizedFormat {
 

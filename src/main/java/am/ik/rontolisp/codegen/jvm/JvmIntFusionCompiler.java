@@ -885,8 +885,9 @@ final class JvmIntFusionCompiler {
 	 * dead counter boxes are real objects INTERLEAVED with the cells the loop allocates:
 	 * {@code (loop for i from 1 to 1000 collect i)} laid its list out over 64 bytes per
 	 * element instead of 48, a third more cache footprint for every walk of it
-	 * afterwards. Measured on {@code .todo/517}'s {@code nth} row (10^9 {@code cdr} steps
-	 * over that list), the interleave -- not the allocation -- is what the walk pays for.
+	 * afterwards. Measured on an {@code nth} walk (10^9 {@code cdr} steps over that list,
+	 * {@code .todo/artefacts/517-sbcl-class-performance-on-the-compiled-backends/nth-defun.lisp}),
+	 * the interleave -- not the allocation -- is what the walk pays for.
 	 *
 	 * <p>
 	 * The overflow guard is {@code Math.addExact}'s condition spelled out for a constant
@@ -1507,7 +1508,7 @@ final class JvmIntFusionCompiler {
 		LispVal limit = parts.get(1);
 		if (limit instanceof LispInteger lit) {
 			if (lit.value() <= 0) {
-				// _random's domain violation (.todo/981): bail out of fusion so the
+				// _random's domain violation: bail out of fusion so the
 				// unfused path's call reaches the checked, throwing helper instead of
 				// baking a bad constant into the draw.
 				return null;
@@ -2263,8 +2264,8 @@ final class JvmIntFusionCompiler {
 					l.flagSlot = ctx.allocTemp();
 					l.boxSlot = ctx.allocTemp();
 				}
-				// ctx.operator names the wrapper this numOp call resolves to
-				// (.todo/981): the fusion planner reaches this leaf structurally, never
+				// ctx.operator names the wrapper this numOp call resolves to: the
+				// fusion planner reaches this leaf structurally, never
 				// through JvmExprCompiler.compileCons's own (random ...) dispatch, so
 				// nothing else sets it to RANDOM here.
 				String outerOperator = ctx.operator;
@@ -2414,11 +2415,11 @@ final class JvmIntFusionCompiler {
 	 * same expression {@code _random} evaluates for it,
 	 * {@code (long) (ThreadLocalRandom.current().nextDouble() * limit)}, straight into a
 	 * raw slot, with the box on both ends gone -- unless it is non-positive, which
-	 * {@code _random} rejects too (.todo/981): that joins the not-a-Long case below
-	 * instead of drawing. Any other limit (a float reaching {@code random} through a
-	 * variable) takes its ONE draw from {@code _random} into the boxed slot and raises
-	 * the bail flag, so the tree falls back with the value already drawn -- or, for a
-	 * rejected limit, with {@code _random}'s throw instead.
+	 * {@code _random} rejects too: that joins the not-a-Long case below instead of
+	 * drawing. Any other limit (a float reaching {@code random} through a variable) takes
+	 * its ONE draw from {@code _random} into the boxed slot and raises the bail flag, so
+	 * the tree falls back with the value already drawn -- or, for a rejected limit, with
+	 * {@code _random}'s throw instead.
 	 */
 	private static void emitRandomDraw(RandomLeaf leaf, JvmLispCompiler.Ctx ctx, MethodRefEntry randomHelper,
 			int limitScratch, int bailFlag) {
@@ -2433,7 +2434,7 @@ final class JvmIntFusionCompiler {
 		ctx.body.aload(leaf.limitParam);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.body.lstore(limitScratch);
-		// A non-positive Long limit is _random's domain violation too (.todo/981): join
+		// A non-positive Long limit is _random's domain violation too: join
 		// the not-a-Long trampoline below instead of drawing, so the boxed helper call
 		// throws (its own check runs before any draw, so this never draws twice).
 		ctx.body.lload(limitScratch).lconst_0().lcmp();
@@ -2615,7 +2616,7 @@ final class JvmIntFusionCompiler {
 	 * dead the instant the read that filled it is done, and every read stores the same
 	 * type into it, so one triple serves the whole method -- keeping a leaf-heavy method
 	 * away from the slot number past which every load and store costs a {@code wide}
-	 * prefix ({@code .todo/137}).
+	 * prefix ({@code .kb/jvm-method-size-limits.md}).
 	 */
 	private record ArefScratch(int idxSlot, int headerSlot, int dataSlot) {
 	}

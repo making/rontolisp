@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * The {@code -o app.war} output end to end: one war compiled by the CLI, deployed
- * UNMODIFIED into embedded Tomcat AND Jetty, serving the rows the {@code .todo/529} spike
+ * UNMODIFIED into embedded Tomcat AND Jetty, serving the rows the first war spike
  * verified by hand -- and the two invariants only a deployment can pin: the
  * one-virtual-thread-per-request rule under a container pool far smaller than the burst
  * ({@code .kb/concurrent-served-requests.md}), and a broken program failing the
@@ -228,7 +228,7 @@ class WarE2eTest {
 	@Test
 	void theWarUnderAContextPathSplitsScriptNameAndPathInfo() throws Exception {
 		optIn();
-		// The .todo/531 defect end to end: deployed at /myapp, :script-name must be the
+		// The context-path split end to end: deployed at /myapp, :script-name must be the
 		// mount point and :path-info the remainder (the Rack/PSGI split) -- before the
 		// fix :path-info was /myapp/echo with :script-name "", so every mounted route
 		// missed. The war is the ONLY transport that can produce a non-empty
@@ -279,7 +279,7 @@ class WarE2eTest {
 	@Test
 	void aWarBuiltWithoutTheClinitMoveFailsTheDeploymentLoudly() throws Exception {
 		optIn();
-		// The .todo/529 spike's failure mode: a class whose top level stayed in main
+		// The first war spike's failure mode: a class whose top level stayed in main
 		// deploys, is found, and 500s on every request with an unfilled handler slot.
 		// The initializer's post-init check turns that into a failed deployment. The war
 		// is hand-assembled here because -o app.war always makes the move -- this pins

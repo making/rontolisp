@@ -277,7 +277,7 @@ class JvmSimdAccelCompilerTest {
 	}
 
 	/**
-	 * The multi-accumulator gate ({@code .todo/480}), pinned on both sides. From
+	 * The multi-accumulator gate, pinned on both sides. From
 	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
 	 * GEMV row folds four independent four-lane accumulators as
 	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
@@ -304,8 +304,8 @@ class JvmSimdAccelCompilerTest {
 	 * scalar tail and folds the partial group with its padding zeroed, which reaches the
 	 * same neighbour here and a different one when the {@code 2^24} sits in the tail
 	 * region (the deliberate divergence pinned by
-	 * {@code partialFinalGroupFoldsTheScalarTailByDesign} and its wasm-GC mirror,
-	 * {@code .todo/758} closed as a contract exception).
+	 * {@code partialFinalGroupFoldsTheScalarTailByDesign} and its wasm-GC mirror, a
+	 * contract exception recorded in {@code .kb/vec.md}).
 	 *
 	 * <p>
 	 * 24 columns is the middle of the region between {@code MATVEC_ROW_THRESHOLD} and
@@ -351,7 +351,7 @@ class JvmSimdAccelCompilerTest {
 
 		// The scalar path accumulates 16778239 in f64 then narrows on store; that is an
 		// odd multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
-		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// A GEMV row is NOT vec:dot's chain: above
 		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
 		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
 		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
@@ -371,7 +371,7 @@ class JvmSimdAccelCompilerTest {
 
 	@Test
 	void partialFinalGroupFoldsTheScalarTailByDesign() throws Exception {
-		// .todo/758, closed as a contract exception: at a length that is not a
+		// A contract exception, by design (.kb/vec.md): at a length that is not a
 		// multiple of the f32x4 lane count this side folds loopBound(n) lanes plus
 		// a scalar tail in index order, while wasm-GC folds ceil(n/4) zero-padded
 		// groups -- same value in exact arithmetic, different last bit at a

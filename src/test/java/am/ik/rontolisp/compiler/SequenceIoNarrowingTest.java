@@ -9,11 +9,11 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The pin for the byte-buffer narrowing of {@code read-sequence} / {@code write-sequence}
- * (.todo/338): a sequence proven not to be a string takes the byte arm directly, so the
- * dead character arm (and with it the {@code read-char} runtime on WASM) leaves the
- * artifact. Every case the analysis cannot decide keeps the shared runtime-tested
- * expansion exactly as it was.
+ * The pin for the byte-buffer narrowing of {@code read-sequence} /
+ * {@code write-sequence}: a sequence proven not to be a string takes the byte arm
+ * directly, so the dead character arm (and with it the {@code read-char} runtime on WASM)
+ * leaves the artifact. Every case the analysis cannot decide keeps the shared
+ * runtime-tested expansion exactly as it was.
  */
 class SequenceIoNarrowingTest {
 

@@ -29,8 +29,7 @@ final class WasmGensymCompiler {
 			// CL's other gensym shape: a non-negative integer IS the suffix (under the
 			// default "G" prefix) and never touches the counter -- a plain compile-time
 			// constant symbol, like a literal string/symbol elsewhere, never routed
-			// through FUNC_GENSYM (which always appends AND advances the counter) (todo
-			// a42).
+			// through FUNC_GENSYM (which always appends AND advances the counter).
 			if (n.value() < 0) {
 				throw new UnsupportedOperationException(
 						LispNames.GENSYM + " suffix must be a non-negative integer: " + cons.print());

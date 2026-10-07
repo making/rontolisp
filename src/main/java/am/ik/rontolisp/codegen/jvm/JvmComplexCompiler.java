@@ -30,10 +30,10 @@ final class JvmComplexCompiler {
 	}
 
 	/**
-	 * The holder-presence probe's field reference (.todo/757, minted in
-	 * {@code JvmLispCompiler}): every holder test below consults it before resolving the
-	 * travelling class. Created on demand like {@link #complexOp} -- only a site that
-	 * emits the probe names the field.
+	 * The holder-presence probe's field reference (minted in {@code JvmLispCompiler}):
+	 * every holder test below consults it before resolving the travelling class. Created
+	 * on demand like {@link #complexOp} -- only a site that emits the probe names the
+	 * field.
 	 */
 	static FieldRefEntry hasComplexField(JvmLispCompiler.Ctx ctx, String className) {
 		return ctx.cp.fieldRef(ctx.cp.classEntry(className), "_hasComplex", "Z");
@@ -43,8 +43,8 @@ final class JvmComplexCompiler {
 	 * Emits the holder-presence probe: falls through when a holder instance can exist,
 	 * and jumps to {@code noHolder}, which the caller binds at the arm's end, otherwise
 	 * -- then the holder-less shape that follows is exact, because no holder instance can
-	 * exist without its class (.todo/757). Net zero on the operand stack (the flag is
-	 * pushed and popped above whatever is live).
+	 * exist without its class. Net zero on the operand stack (the flag is pushed and
+	 * popped above whatever is live).
 	 */
 	static void emitNoHolderJump(JvmLispCompiler.Ctx ctx, String className, MethodCode.Label noHolder) {
 		ctx.body.getstatic(hasComplexField(ctx, className)).ifeq(noHolder);
@@ -119,8 +119,8 @@ final class JvmComplexCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// The presence probe first: a lone class run without the travelling file
-		// answers nil without resolving the holder class it then never touches
-		// (.todo/757) -- exact, since no holder can exist then.
+		// answers nil without resolving the holder class it then never touches --
+		// exact, since no holder can exist then.
 		MethodCode.Label notHolder = ctx.body.newLabel();
 		emitNoHolderJump(ctx, className, notHolder);
 		ctx.body.instanceOf(complexClass(ctx));
@@ -164,8 +164,7 @@ final class JvmComplexCompiler {
 		ctx.body.astore(temp);
 		if (ctx.usesComplex) {
 			// The presence probe first: without the travelling file no holder
-			// can exist, so the real funnel below is the whole answer
-			// (.todo/757).
+			// can exist, so the real funnel below is the whole answer.
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			emitNoHolderJump(ctx, className, notHolder);
 			ctx.body.aload(temp).instanceOf(complexClass(ctx)).ifeq(notHolder);
@@ -209,8 +208,7 @@ final class JvmComplexCompiler {
 		ctx.body.astore(temp);
 		if (ctx.usesComplex) {
 			// The presence probe first: without the travelling file no holder
-			// can exist, so the real zero below is the whole answer
-			// (.todo/757).
+			// can exist, so the real zero below is the whole answer.
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			emitNoHolderJump(ctx, className, notHolder);
 			ctx.body.aload(temp).instanceOf(complexClass(ctx)).ifeq(notHolder);

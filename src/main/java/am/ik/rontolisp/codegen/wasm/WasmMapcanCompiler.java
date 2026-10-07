@@ -18,8 +18,8 @@ import am.ik.wasm.Type;
  * The concatenation is a tail-pointer splice of a FRESH copy of each piece, not a left
  * fold over the shared {@code _append} helper: folding copied the whole accumulator per
  * piece (quadratic) through a call that itself recursed per element (linear stack depth),
- * so a long input list was a slow crash rather than a slow call (.todo/749). The result
- * is fully fresh, matching the interpreter's right fold piece for piece.
+ * so a long input list was a slow crash rather than a slow call. The result is fully
+ * fresh, matching the interpreter's right fold piece for piece.
  */
 final class WasmMapcanCompiler {
 

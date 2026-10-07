@@ -1301,7 +1301,8 @@ public final class Environment implements Scope {
 			int packedIntWidth = packedIntElementWidth(elementTypeArg);
 			if (packedIntWidth > 0 && dims.length == 1 && !hasFillPointer && !adjustable) {
 				// :element-type '(unsigned-byte 8|16|32) on a rank-1 array selects the
-				// packed integer-vector representation (todo 194 stage 2). Stores mask to
+				// packed integer-vector representation (.kb/packed-integer-vectors.md).
+				// Stores mask to
 				// the width (what raw i8/i16/i32 storage does on the compiled backends);
 				// reads widen unsigned. A non-integer element is a type error. Rank-n /
 				// fill-pointer / adjustable / displaced combinations keep the general
@@ -1736,8 +1737,7 @@ public final class Environment implements Scope {
 				// A fill-pointer / adjustable packed vector: no
 				// LispIntVector/LispFloatArray
 				// instance of its own to match above, only the elementTypeCode it
-				// remembers -- same representation gap subseq's general-array arm closes
-				// (.todo/698).
+				// remembers -- same representation gap subseq's general-array arm closes.
 				int width = packedIntWidthForElementTypeCode(arr.elementTypeCode());
 				if (width > 0) {
 					return LispIntVector.zeros(width, n);
@@ -1748,8 +1748,7 @@ public final class Environment implements Scope {
 				}
 			}
 			// A bit vector IS the general boxed array stamped bit (no packed bits
-			// anywhere): a copy keeps the stamp, zero-filled with 0 like a made one
-			// (.todo/820).
+			// anywhere): a copy keeps the stamp, zero-filled with 0 like a made one.
 			if (args.get(0) instanceof LispArray srcArr
 					&& srcArr.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT) {
 				LispVal[] bitData = new LispVal[n];
@@ -2366,7 +2365,7 @@ public final class Environment implements Scope {
 	// stored as a general LispArray that only REMEMBERS its width
 	// (.kb/adjustable-arrays.md),
 	// so a copy of one must consult this field rather than the runtime class the way the
-	// simple (LispIntVector/LispFloatArray) arms do (.todo/698).
+	// simple (LispIntVector/LispFloatArray) arms do.
 	private static @Nullable LispVal packedCopyForElementType(String fn, int elementTypeCode, LispVal[] elements) {
 		int width = packedIntWidthForElementTypeCode(elementTypeCode);
 		if (width > 0) {
@@ -3014,7 +3013,7 @@ public final class Environment implements Scope {
 		// Unary floating-point functions: a double for real operands (StrictMath.<name>),
 		// the float complex formula for complex ones. A real argument OUTSIDE the
 		// function's real domain runs the same complex formula at (x, +0.0) instead of
-		// answering NaN (SBCL parity, .todo/763): sqrt of a negative below, log of a
+		// answering NaN (SBCL parity): sqrt of a negative below, log of a
 		// negative, asin/acos beyond [-1, 1], acosh below 1 and atanh beyond [-1, 1].
 		env.defineFunction(LispNames.SQRT, new LispFunction(LispNames.SQRT, args -> {
 			requireArgCount(LispNames.SQRT, args, 1);
@@ -3158,7 +3157,7 @@ public final class Environment implements Scope {
 		}));
 		// IEEE binary16 (f16) bit conversion: a real width unlike single/double-float,
 		// which needs no bignum model (16 bits always fits a plain fixnum), so it is a
-		// rontolisp: primitive rather than a float-features one -- see .todo/671.
+		// rontolisp: primitive rather than a float-features one (.kb/bfloat16.md).
 		// Float.floatToFloat16/float16ToFloat are JDK 20+ intrinsics. Registered under
 		// their PACKAGE-QUALIFIED name (the rontolisp:version arrangement above) so
 		// PackageResolver output resolves to them directly; the compiled backends'
@@ -3174,11 +3173,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.BITS_FLOAT16, args, 1);
 			return new LispDouble(Float.float16ToFloat((short) asLong(args.get(0))));
 		}));
-		// The bulk f16/bf16 widen and narrow: .todo/671's actual point, since a
+		// The bulk f16/bf16 widen and narrow is what a checkpoint needs, since a
 		// checkpoint's tensors arrive as (unsigned-byte 16) bit patterns, never as
 		// single elements. Dispatches on the DESTINATION's/SOURCE's concrete packed
 		// float width through an exhaustive switch (not an instanceof-vs-else guess at
-		// "the other width") so a third LispFloatArray permit (.todo/484's #bf16) fails
+		// "the other width") so a third LispFloatArray permit (as #bf16 was) fails
 		// to compile here instead of silently widening into the wrong width; see
 		// FloatBitsWidening.
 		String widenFloatBitsName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS);
@@ -3244,8 +3243,7 @@ public final class Environment implements Scope {
 			// neither, and an integer or float limit <= 0 is out of range either way.
 			// Both are reported under RANDOM's own registered REAL type (like a
 			// non-real limit below) rather than teaching the operand-type table a
-			// compound type for this one operator (.todo/981,
-			// .kb/error-handling.md).
+			// compound type for this one operator (.kb/error-handling.md).
 			if (limit instanceof LispDouble d) {
 				if (d.value() <= 0.0) {
 					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
@@ -4065,16 +4063,16 @@ public final class Environment implements Scope {
 
 	/**
 	 * Like {@link #seqResult}, but for a DESTRUCTIVE caller ({@code sort},
-	 * {@code stable-sort}, {@code nreverse} -- {@code .todo/623}): a string/array/packed
-	 * vector argument is written back into its OWN storage and answered as itself, so it
-	 * keeps its fill pointer, its adjustable flag and its identity, instead of losing
-	 * them to a fresh rebuild. {@code list} must have exactly as many elements as
-	 * {@code original}'s own active length (true for every caller here -- all three
-	 * permute {@code original}'s elements, never adding or removing one), so this never
-	 * grows or shrinks the backing store; a fill-pointered array with spare capacity
-	 * keeps that capacity untouched, matching every implementation that sorts these three
-	 * kinds in place. A list argument is unaffected (falls through to {@link #seqResult},
-	 * whose list branch already answers a fresh list without touching {@code original}).
+	 * {@code stable-sort}, {@code nreverse}): a string/array/packed vector argument is
+	 * written back into its OWN storage and answered as itself, so it keeps its fill
+	 * pointer, its adjustable flag and its identity, instead of losing them to a fresh
+	 * rebuild. {@code list} must have exactly as many elements as {@code original}'s own
+	 * active length (true for every caller here -- all three permute {@code original}'s
+	 * elements, never adding or removing one), so this never grows or shrinks the backing
+	 * store; a fill-pointered array with spare capacity keeps that capacity untouched,
+	 * matching every implementation that sorts these three kinds in place. A list
+	 * argument is unaffected (falls through to {@link #seqResult}, whose list branch
+	 * already answers a fresh list without touching {@code original}).
 	 * @param original the original sequence argument
 	 * @param list the list result of the scan over {@link #seqAsList}
 	 * @return {@code original}, mutated in place, for a string/array/packed vector;
@@ -4375,7 +4373,7 @@ public final class Environment implements Scope {
 		// prefix is any runtime string. A non-negative integer argument is CL's other
 		// shape: it is the suffix itself (under the default "G" prefix), and it does not
 		// touch the counter -- (gensym 5) is #:G5, and the very next (gensym) still uses
-		// the count it would have without that call (todo a42).
+		// the count it would have without that call (.kb/gensym-macroexpand.md).
 		AtomicLong gensymCounter = new AtomicLong();
 		env.defineFunction(LispNames.GENSYM, new LispFunction(LispNames.GENSYM, args -> {
 			if (args.size() > 1) {
@@ -4542,7 +4540,7 @@ public final class Environment implements Scope {
 			// cell as the new head (Common Lisp semantics; use the return value). A
 			// string/vector argument is not a cons chain -- it reverses via a coerced
 			// list (seqAsList, the sort/reduce precedent) and is written back into its
-			// own storage (seqResultDestructive, .todo/623), keeping its fill pointer,
+			// own storage (seqResultDestructive), keeping its fill pointer,
 			// adjustable flag and identity, like sort/stable-sort above.
 			LispVal original = args.get(0);
 			boolean isSeq = !(original instanceof LispCons) && !(original instanceof LispNil);
@@ -4792,7 +4790,7 @@ public final class Environment implements Scope {
 				// sequence of the same kind, and the simple (non-adjustable) case already
 				// does this via the LispIntVector/LispFloatArray arms below, so the
 				// adjustable case must match rather than silently degrading to a
-				// simple-vector (.todo/698).
+				// simple-vector.
 				int len = arr.effectiveLength();
 				int end = (endArg != null) ? subseqBound(endArg) : len;
 				if (start < 0 || end > len || start > end) {
@@ -4807,7 +4805,7 @@ public final class Environment implements Scope {
 					return packed;
 				}
 				// A bit-vector subsequence stays a bit vector (CLHS): the stamp rides
-				// the copy the way adjust-array carries it (.todo/820).
+				// the copy the way adjust-array carries it.
 				if (arr.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT) {
 					return new LispArray(new int[] { copy.length }, copy, -1, false,
 							am.ik.rontolisp.ArrayElementTypes.BIT);
@@ -4829,7 +4827,7 @@ public final class Environment implements Scope {
 				// a subsequence of a packed float array (single/double/bfloat16) stays
 				// packed at the same width instead of falling through to the "expects a
 				// string, list, or vector" refusal below, which is what every packed
-				// float subseq did before .todo/698 (crashing on the interpreter; the
+				// float subseq once did (crashing on the interpreter; the
 				// compile paths silently degraded to a general boxed vector instead).
 				int len = fa.totalSize();
 				int end = (endArg != null) ? subseqBound(endArg) : len;
@@ -7915,7 +7913,7 @@ public final class Environment implements Scope {
 					return charVector(LispNames.CONCATENATE, elements);
 				}
 				// A (vector bit) result is the general boxed array stamped bit, like
-				// the make-array spelling of the same designator (.todo/043).
+				// the make-array spelling of the same designator (.kb/array-literals.md).
 				if (spec.elementType() == ArrayElementTypes.BIT) {
 					return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]), -1, false,
 							ArrayElementTypes.BIT);
@@ -8151,9 +8149,9 @@ public final class Environment implements Scope {
 		// paths inherit that for free (their %octets-to-string-packed native declines
 		// a general array and the same generic loop runs). This native mirror used to
 		// require a LispIntVector outright, so a general array -- exactly what a general
-		// array's subseq answered before .todo/698 fixed it -- signaled here while the
-		// compile paths quietly decoded it: the interpreter/compiled-backend asymmetry
-		// .todo/698 found. asOctetVector closes it by widening to the same rank-1 array
+		// array's subseq once answered -- signaled here while the compile paths quietly
+		// decoded it, an interpreter/compiled-backend asymmetry. asOctetVector closes it
+		// by widening to the same rank-1 array
 		// acceptance the Lisp source has, so only a genuinely non-array argument still
 		// signals.
 		String octetsToString = LispNames.OCTETS_TO_STRING_INTERNAL_QUALIFIED;
@@ -8919,7 +8917,7 @@ public final class Environment implements Scope {
 		if (!(list instanceof LispCons head)) {
 			throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.APPEND);
 		}
-		// Iterative (.todo/749): the recursive spelling allocated its result by
+		// Iterative: the recursive spelling allocated its result by
 		// recursing once per element, so a long first argument was a
 		// StackOverflowError rather than a slow call. Walk forward, cons as you go,
 		// and patch the last cdr to the shared tail; the result is unchanged (a

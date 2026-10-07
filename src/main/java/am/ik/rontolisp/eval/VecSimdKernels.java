@@ -1060,7 +1060,7 @@ final class VecSimdKernels {
 	// Fusing the decode into the lane loop, rather than widening into an f32 scratch and
 	// reusing the f32 kernel, is the whole point: half the weight bytes for a decode that
 	// is one shift, so the kernel is bandwidth-bound where the f32 one is. The scratch
-	// route stores and reloads every element and loses on both JITs (.todo/488).
+	// route stores and reloads every element and loses on both JITs (.kb/bfloat16.md).
 	//
 	// One small method per width, and no decoder shared behind a flag: the probe that
 	// carried both a bf16 and an f16 decoder in one method overran C2's inlining budget
@@ -1120,7 +1120,7 @@ final class VecSimdKernels {
 	 * bf16 sign, exponent and payload, so {@code u} is carried across untouched, forced
 	 * nonzero only when the payload was already all zero (which would otherwise read back
 	 * as an infinity, not a NaN). A plain {@code bits | 0x0040} -- this method's first
-	 * version, until {@code .todo/746}'s census found it -- forces the quiet bit
+	 * version, until a census of the narrowing sites found it -- forces the quiet bit
 	 * unconditionally, which changes 126 of the 65536 patterns' payload rather than
 	 * carrying it across, exactly the bug {@code eval/FloatBitsWidening}'s own
 	 * float-array narrowing was fixed for on 2026-09-03 (that fix never reached this
@@ -1273,7 +1273,7 @@ final class VecSimdKernels {
 	}
 
 	// --- bfloat16 (bf16) element-wise kernels ---------------------------------------
-	// bf16 x bf16 -> bf16, the one element-wise pairing `.todo/747` admits: a program
+	// bf16 x bf16 -> bf16, the one element-wise pairing admitted: a program
 	// that chose the width stays in it, and the result width is what `vec::%make-like`
 	// gives the defun for two bf16 operands. A mixed bf16/f32 pair in either direction
 	// still declines to the defun -- no caller mixes element-wise (the GEMV is the
@@ -1284,14 +1284,14 @@ final class VecSimdKernels {
 	// the transcendental ufuncs call `java.lang.Math` per element -- none of them has a
 	// lane form to mirror.
 	//
-	// The shape is `.todo/488`'s -- widen, compute in f32, narrow on store, never keep
-	// an intermediate at the narrow width -- with the narrowing as the branch-free lane
-	// form `.todo/696` measured (1.4-3.2x the scalar loop, 0 mismatches over all 2^32
+	// The shape is the fused bf16 GEMV's -- widen, compute in f32, narrow on store, never
+	// keep an intermediate at the narrow width -- with the narrowing as the branch-free
+	// lane form measured at 1.4-3.2x the scalar loop (0 mismatches over all 2^32
 	// f32 patterns; the composite 2.3-2.7x the scalar route): the bias-add and odd-bit
 	// carry as int lanes, the NaN arm as a second expression, a mask choosing between
 	// them, an `I2S` narrowing store. Bit-exact at any lane count, so
 	// `SPECIES_PREFERRED` like the f32 element-wise kernels. One small method per member
-	// -- the C2 inlining cliff (`.todo/482` round 2) is a rule about method size.
+	// -- the C2 inlining cliff (`.kb/vec.md`) is a rule about method size.
 
 	/**
 	 * The int species the element-wise bit arithmetic runs in: the same shape as
@@ -1315,9 +1315,9 @@ final class VecSimdKernels {
 
 	/**
 	 * {@link #floatToBf16} as lanes: both arms computed, the NaN one blended in under a
-	 * mask, then an {@code I2S} narrowing store. Operation for operation the form
-	 * `.todo/696`'s harness sweeps against the scalar over all 2^32 f32 patterns with 0
-	 * mismatches.
+	 * mask, then an {@code I2S} narrowing store. Operation for operation the form swept
+	 * against the scalar over all 2^32 f32 patterns with 0 mismatches
+	 * ({@code .kb/bfloat16.md}).
 	 */
 	private static ShortVector narrowLanes(FloatVector v) {
 		IntVector bits = v.reinterpretAsInts();
@@ -1333,8 +1333,8 @@ final class VecSimdKernels {
 
 	/**
 	 * {@code r[i] = x[i] + y[i]} over bf16 vectors, widened, added in f32, narrowed on
-	 * store -- the defun's answer bit for bit (`.todo/696` sweeps all 65536x65536 operand
-	 * pairs per operation with 0 mismatches).
+	 * store -- the defun's answer bit for bit (swept over all 65536x65536 operand pairs
+	 * per operation with 0 mismatches, {@code .kb/bfloat16.md}).
 	 */
 	static void addIntoBf16(short[] r, short[] x, short[] y) {
 		int n = Math.min(x.length, y.length);
@@ -1522,15 +1522,19 @@ final class VecSimdKernels {
 	// FloatVector.SPECIES_128 are fixed, like FSPECIES_REDUCE. No threshold, no other
 	// accumulator split: a block is the unit and a row of one block runs the same lanes.
 	//
-	// Why f32 lanes: measured 2026-09-05 (.todo/672's README). One reduceLanes(ADD) plus
+	// Why f32 lanes: measured 2026-09-05 (.kb/quantized-matrix.md). One reduceLanes(ADD)
+	// plus
 	// a scalar double chain per block was latency-bound at 5-6 Gelem/s on one thread at
 	// every shape (level with the fused bf16 kernel at 4096x4096, below f32 under C2);
 	// double lanes through an int-to-double convertShape are not intrinsified by Graal 25
-	// and ran at 0.02 Gelem/s; convert(I2F) into f32 lanes is the shape .todo/482's
-	// Quant.java measured fast under both JITs. No FMA, deliberately: `acc + lane * p`
-	// is two roundings on both sides, and the defun has no fused form to mirror one with.
+	// and ran at 0.02 Gelem/s; convert(I2F) into f32 lanes is the shape
+	// .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Quant.java measured fast
+	// under
+	// both JITs. No FMA, deliberately: `acc + lane * p` is two roundings on both sides,
+	// and the defun has no fused form to mirror one with.
 	//
-	// Why no part-1 conversion anywhere (2026-09-06, .todo/706): a convertShape whose
+	// Why no part-1 conversion anywhere (2026-09-06, .kb/quantized-matrix.md): a
+	// convertShape whose
 	// part is not 0 is `slice(origin)` then the part-0 conversion, and `slice` is two
 	// rearranges and a blend over an iota shuffle -- which C2 compiles as written, ~4
 	// cycles a slice, and Graal folds into the widening instruction. The first kernel

@@ -25,11 +25,11 @@ import static am.ik.gpu.MetalDriver.L;
  * The Apple half of {@code --gpu}: one {@code MTLDevice}, one command queue, one library
  * compiled from {@code gemm.metal} at run time, and the kernels it exports -- a STACKED
  * matrix product, an element-wise map, the strided broadcast/gather pair, the GEMV behind
- * {@code vec:matvec}, and since {@code .todo/494} the resident tier (the equal-shape and
- * scalar binary ops, {@code where}, the Adam step, the strided copy and the axis fold) --
- * plus the rank-2 product, which goes through {@code MPSMatrixMultiplication} instead.
- * Everything that can fail fails into a decline; nothing here throws but
- * {@link #materialize}, which cannot.
+ * {@code vec:matvec}, and the resident tier (the equal-shape and scalar binary ops,
+ * {@code where}, the Adam step, the strided copy and the axis fold) -- plus the rank-2
+ * product, which goes through {@code MPSMatrixMultiplication} instead. Everything that
+ * can fail fails into a decline; nothing here throws but {@link #materialize}, which
+ * cannot.
  *
  * <h2>Single float, or nothing</h2>
  *
@@ -63,13 +63,14 @@ import static am.ik.gpu.MetalDriver.L;
  *
  * Eagerly (the library's default), every result comes home before the call returns, and
  * this half keeps ONE kind of array resident: the matrix of an accepted {@link #gemvF}.
- * That is todo-477's measurement: on unified memory an upload is a memcpy into the slab's
- * {@code contents} -- 1.5 MB in ~75 us -- while a slab held out of the pool for a
- * resident copy costs the pool a FRESH slab for the next call of that size, and a fresh
- * slab pays its first-touch page faults (~1 us a page). With every result still coming
- * home, keeping every operand and result resident was 1-5% SLOWER than the pure pool at
- * every cap tried. Every other slab is SCRATCH: fully overwritten on the way in, fully
- * read on the way out, recycled the moment the call ends.
+ * Measured ({@code .kb/gpu.md}, "Residency and the GEMV on this backend"): on unified
+ * memory an upload is a memcpy into the slab's {@code contents} -- 1.5 MB in ~75 us --
+ * while a slab held out of the pool for a resident copy costs the pool a FRESH slab for
+ * the next call of that size, and a fresh slab pays its first-touch page faults (~1 us a
+ * page). With every result still coming home, keeping every operand and result resident
+ * was 1-5% SLOWER than the pure pool at every cap tried. Every other slab is SCRATCH:
+ * fully overwritten on the way in, fully read on the way out, recycled the moment the
+ * call ends.
  *
  * <p>
  * Lazily ({@link #lazyResults}), a member's result is NOT copied home: its slab goes into
@@ -84,12 +85,11 @@ import static am.ik.gpu.MetalDriver.L;
  * never dropped. Lazily a call also does not WAIT: it commits its command buffer and
  * returns, and the wait moves to the first host touch of the bytes ({@link #commit},
  * {@link #settle}) -- which is what lets the device run a chain while the host encodes
- * the next member, and what made the mode pay here (todo-495: the interceptors ask for
- * it, {@link #lazyResultsPay}). It did not pay from todo-494 to then, when every call
- * waited: a tie at the notebook's shapes and a loss at the book's. The other half of that
- * loss was memory -- on unified memory the pool and the heap share the machine -- and the
- * lazy budgets below are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command
- * buffers on Metal").
+ * the next member, and what made the mode pay here (the interceptors ask for it,
+ * {@link #lazyResultsPay}). It did not pay while every call waited: a tie at the
+ * notebook's shapes and a loss at the book's. The other half of that loss was memory --
+ * on unified memory the pool and the heap share the machine -- and the lazy budgets below
+ * are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
  *
  * @see Gpu
  * @see MetalDriver
@@ -107,15 +107,15 @@ final class MetalGemm implements GpuDevice {
 	static final String KERNEL_BATCHED_F32 = "gemm_batched_f32", KERNEL_MAP_F32 = "map_f32",
 			KERNEL_BCAST_F32 = "bcast_f32", KERNEL_GATHER_F32 = "gather_f32", KERNEL_GEMV_F32 = "gemv_f32";
 
-	/** The resident tier's kernels ({@code .todo/494}), in the order of {@link #tier}. */
+	/** The resident tier's kernels, in the order of {@link #tier}. */
 	static final String[] KERNELS_RESIDENT = { "zip_f32", "scal_f32", "where_f32", "adam_f32", "copy_f32", "fold_f32" };
 
 	private static final int ZIP = 0, SCAL = 1, WHERE = 2, ADAM = 3, COPY = 4, FOLD = 5;
 
 	/**
-	 * The fused tier's kernels (todo-636), in the order of {@link #fused}. The last three
-	 * are todo-643's: the attention head's scaled and masked softmax pair, and the launch
-	 * that packs their mask a bit a cell.
+	 * The fused tier's kernels, in the order of {@link #fused}. The last three are the
+	 * attention head's scaled and masked softmax pair, and the launch that packs their
+	 * mask a bit a cell.
 	 */
 	static final String[] KERNELS_FUSED = { "gelu_f32", "gelu_grad_f32", "softmax_f32", "softmax_grad_f32",
 			"log_softmax_f32", "log_softmax_grad_f32", "layer_norm_f32", "layer_norm_grad_f32", "softmax_sm_f32",
@@ -286,15 +286,15 @@ final class MetalGemm implements GpuDevice {
 	 * and less a headroom of an eighth (never less than {@link #LAZY_HEADROOM_FLOOR}).
 	 * The CUDA half's lazy rule is the same shape over free DEVICE memory; here the
 	 * pool's slabs and the heap are the same physical memory, and a pool sized without
-	 * the heap -- the working set less an eighth, the rule until todo-495 -- filled the
-	 * machine at the book's shapes: 96 GB of slabs beside a 24 GB heap on 128 GB, and a
-	 * step that went from 1.9 s to 4 with the system's time in page compression. The
-	 * quarter share of the eager pool is not enough either once results live on the
-	 * device: a training step at the book's shapes holds tens of gigabytes of activations
-	 * reachable until its backward, and a budget below that flushed them as fast as they
-	 * were made -- measured, 195 GB of flushes over 13 steps and a step a third slower
-	 * than the pure pool ({@code .kb/gpu.md}, "Lazy results and the resident tier on
-	 * Metal"), the trap {@code .todo/491} hit at 1 GB on CUDA.
+	 * the heap -- the working set less an eighth, the earlier rule -- filled the machine
+	 * at the book's shapes: 96 GB of slabs beside a 24 GB heap on 128 GB, and a step that
+	 * went from 1.9 s to 4 with the system's time in page compression. The quarter share
+	 * of the eager pool is not enough either once results live on the device: a training
+	 * step at the book's shapes holds tens of gigabytes of activations reachable until
+	 * its backward, and a budget below that flushed them as fast as they were made --
+	 * measured, 195 GB of flushes over 13 steps and a step a third slower than the pure
+	 * pool ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal"), the trap
+	 * the CUDA half hit at a 1 GB budget.
 	 */
 	private static final long LAZY_HEADROOM_SHARE = 8, LAZY_HEADROOM_FLOOR = 512L << 20;
 
@@ -304,8 +304,8 @@ final class MetalGemm implements GpuDevice {
 	 * the power-of-two CAPACITY of its slabs, up to twice the span -- so a resident
 	 * budget nearer the pool's is never reached before the pool's is, and the LRU that
 	 * asks for a collection before it flushes never runs; what runs instead is the pool's
-	 * own pressure path. Measured (todo-495): at seven eighths the pool filled at every
-	 * step with the LRU idle.
+	 * own pressure path. Measured: at seven eighths the pool filled at every step with
+	 * the LRU idle.
 	 */
 	private static final long LAZY_RESIDENT_DIVISOR = 2;
 
@@ -681,15 +681,15 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * Always {@code false}: the bfloat16 GEMV is a CUDA member only ({@code .todo/490}
-	 * kept Apple out of scope, as the rest of {@code .todo/482} did).
+	 * Always {@code false}: the bfloat16 GEMV is a CUDA member only (MSL has a
+	 * {@code bfloat}, but nothing has been measured there).
 	 */
 	@Override
 	public boolean supportsBfloat16() {
 		return false;
 	}
 
-	/** Always {@code false}: the Q8_0 GEMV is a CUDA member only ({@code .todo/728}). */
+	/** Always {@code false}: the Q8_0 GEMV is a CUDA member only. */
 	@Override
 	public boolean supportsQuantized() {
 		return false;
@@ -917,10 +917,10 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * The TRANSPOSED stacked product (todo-631): either operand's {@code n x m} (or
-	 * {@code m x p}) matrix STORED with its last two axes exchanged, which is what the
-	 * linear backward's {@code g . b^T} and {@code a^T . g} hand it -- and, since the
-	 * transpose view, the attention head's forward too.
+	 * The TRANSPOSED stacked product: either operand's {@code n x m} (or {@code m x p})
+	 * matrix STORED with its last two axes exchanged, which is what the linear backward's
+	 * {@code g . b^T} and {@code a^T . g} hand it -- and, since the transpose view, the
+	 * attention head's forward too.
 	 *
 	 * <p>
 	 * The kernel indexes the operand where it already is instead of reading a strided
@@ -1354,7 +1354,7 @@ final class MetalGemm implements GpuDevice {
 		}
 	}
 
-	// --- the resident tier (.todo/494) -------------------------------------------------
+	// --- the resident tier ------------------------------------------------------------
 	// Offered by Gpu only once an operand is resident, and declined here below
 	// MIN_RESIDENT_ELEMENTS, where the command-buffer floor loses to a memcpy and a lane
 	// loop. Each is the ordinary shape -- look up, take what is missing, stage, launch,
@@ -1472,13 +1472,12 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * {@code c = where(m, x, y)} over three operands broadcast to {@code dims}, any of
 	 * which may be a scalar. The values and the result must be single; the MASK may be
-	 * EITHER WIDTH (todo-645), and a {@code double[]} one is not the hard decline every
-	 * other double operand here is. {@code linalg:where}'s test is {@code (/= m 0)} --
-	 * "any bit but the sign set" -- so the mask is a PREDICATE, read as raw words and
-	 * never entering the arithmetic this backend has no {@code double} for, exactly as
-	 * the fused softmax's {@code pack_mask} reads it. It is staged and looked up at its
-	 * own width. The value scalars are narrowed on the host exactly as the CPU kernel
-	 * narrows them.
+	 * EITHER WIDTH, and a {@code double[]} one is not the hard decline every other double
+	 * operand here is. {@code linalg:where}'s test is {@code (/= m 0)} -- "any bit but
+	 * the sign set" -- so the mask is a PREDICATE, read as raw words and never entering
+	 * the arithmetic this backend has no {@code double} for, exactly as the fused
+	 * softmax's {@code pack_mask} reads it. It is staged and looked up at its own width.
+	 * The value scalars are narrowed on the host exactly as the CPU kernel narrows them.
 	 * @return {@code true} when {@code c} was filled
 	 */
 	@Override
@@ -2221,18 +2220,14 @@ final class MetalGemm implements GpuDevice {
 		return storage;
 	}
 
-	// --- the fused tier (todo-636, the Apple half of .todo/499 and .todo/629) ----------
+	// --- the fused tier (the Apple half of CudaGemm's) --------------------------------
 	// Eight of the nine compositions gemm.cu fuses, each one MSL kernel where torch.lisp
 	// launched a chain of linalg: members -- and on this backend that removes four of
-	// five
-	// COMMAND BUFFERS as well as the memory passes, which eagerly are four full waits
-	// (lazily the buffers are asynchronous, todo-495). Every one reproduces the chain's
-	// rounding,
-	// through the float route where two floats settle it and through the software
-	// binary64
-	// route where they do not (gemm.metal, "THE FUSED TIER"). The ninth, the dropout
-	// mask,
-	// stays declined: see dropoutMaskF.
+	// five COMMAND BUFFERS as well as the memory passes, which eagerly are four full
+	// waits (lazily the buffers are asynchronous). Every one reproduces the chain's
+	// rounding, through the float route where two floats settle it and through the
+	// software binary64 route where they do not (gemm.metal, "THE FUSED TIER"). The
+	// ninth, the dropout mask, stays declined: see dropoutMaskF.
 	//
 	// The double halves are the hard decline every other member's is.
 
@@ -2383,14 +2378,14 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * Layer-norm's affine folded into the normalization (todo-634): DECLINED here, at
-	 * both widths, so the module runs the normalization and its two broadcast passes
-	 * member by member as it did before. todo-646 BUILT the MSL pair and measured it
-	 * rather than guessing: per call it is worth 13% of the forward and a quarter of the
-	 * adjoint at the book's shapes, and it does not move the step at all, because the
-	 * host round trips it removes had already been removed generically at the compiled
-	 * call site. The kernels are not kept. {@code .kb/gpu.md}, "Layer-norm's affine on
-	 * Metal", has the numbers and the condition that would reopen it.
+	 * Layer-norm's affine folded into the normalization: DECLINED here, at both widths,
+	 * so the module runs the normalization and its two broadcast passes member by member
+	 * as it did before. The MSL pair was BUILT and measured it rather than guessing: per
+	 * call it is worth 13% of the forward and a quarter of the adjoint at the book's
+	 * shapes, and it does not move the step at all, because the host round trips it
+	 * removes had already been removed generically at the compiled call site. The kernels
+	 * are not kept. {@code .kb/gpu.md}, "Layer-norm's affine on Metal", has the numbers
+	 * and the condition that would reopen it.
 	 * @return {@code false}, always
 	 */
 	@Override
@@ -2557,20 +2552,20 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * The attention head's softmax pair (todo-643): {@link #rowMember}'s shape with the
-	 * mask as an operand of its own length and width and the scale as the trailing
-	 * parameters. Two dispatches ride ONE command buffer -- {@code pack_mask} over the
-	 * mask, then the row kernel over the packed words -- because a compute encoder
-	 * dispatches serially, so the pack costs the launch and not a second wait, which on
-	 * this backend is what a call costs.
+	 * The attention head's softmax pair: {@link #rowMember}'s shape with the mask as an
+	 * operand of its own length and width and the scale as the trailing parameters. Two
+	 * dispatches ride ONE command buffer -- {@code pack_mask} over the mask, then the row
+	 * kernel over the packed words -- because a compute encoder dispatches serially, so
+	 * the pack costs the launch and not a second wait, which on this backend is what a
+	 * call costs.
 	 *
 	 * <p>
 	 * The mask is either width: a {@code double[]} one is read as raw word pairs by the
 	 * packing kernel and never enters arithmetic -- {@link #whereF} reads its own mask
-	 * the same way since todo-645, for the same reason. It is staged like any operand and
-	 * ADOPTED on the second sight ({@link #gemvF}'s rule), because the causal mask of a
-	 * training step is one array reached seventy-two times a step and its upload is
-	 * otherwise paid every time.
+	 * the same way, for the same reason. It is staged like any operand and ADOPTED on the
+	 * second sight ({@link #gemvF}'s rule), because the causal mask of a training step is
+	 * one array reached seventy-two times a step and its upload is otherwise paid every
+	 * time.
 	 *
 	 * <p>
 	 * The slots are the {@code declared} operands, then the mask, the packed words and
@@ -2765,11 +2760,11 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * {@code true} since todo-495: with the command buffers asynchronous the mode pays --
-	 * measured, the training step at the book's shapes goes 4.80 -> 1.81 s and the
-	 * notebook's width 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers
-	 * on Metal"). It was {@code false} from todo-494 to then, when every call waited for
-	 * its command buffer and the mode was a tie at small shapes and a loss at large ones.
+	 * {@code true}: with the command buffers asynchronous the mode pays -- measured, the
+	 * training step at the book's shapes goes 4.80 -> 1.81 s and the notebook's width
+	 * 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal"). It
+	 * was {@code false} while every call waited for its command buffer and the mode was a
+	 * tie at small shapes and a loss at large ones.
 	 */
 	@Override
 	public boolean lazyResultsPay() {
@@ -2948,7 +2943,7 @@ final class MetalGemm implements GpuDevice {
 				// the resident set must never be the reason a call declines, and -- the
 				// pool being the machine's own memory here -- neither may the whole of
 				// it be flushed into the heap at once, which is what evicting it all did
-				// (todo-495: a thousand flushes and ten gigabytes of backings in one
+				// (measured: a thousand flushes and ten gigabytes of backings in one
 				// call, and an OutOfMemoryError when the step's phase made it forty).
 				while (this.residency.occupied()) {
 					if (this.residency.evictSome(keep, capacity) == 0) {

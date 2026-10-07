@@ -16,20 +16,21 @@ import org.graalvm.word.WordFactory;
  * binds are interpreted by SubstrateVM -- a handle that did not exist at build time has
  * no compiled invoker, so every call walks its {@code LambdaForm} boxing each argument,
  * ~1.7 us plus ~0.4 us per argument, 6.4 us for a gemv and 7.2 for a gemm against 7-30 ns
- * on the JVM ({@code .todo/727}). An {@code @InvokeCFunctionPointer} interface method is
- * compiled at build time against a function pointer supplied at run time, and costs what
- * the JVM's call costs: 11-16 ns for the CUDA shapes, ~90 ns here with the three operand
- * arrays pinned ({@code .todo/artefacts/729-.../CfpShapeFloor.java}). So the binary's
- * {@code --blas} crossover is the JVM's again and {@code MIN_WORK} is one number.
+ * on the JVM ({@code .kb/native-downcalls.md}). An {@code @InvokeCFunctionPointer}
+ * interface method is compiled at build time against a function pointer supplied at run
+ * time, and costs what the JVM's call costs: 11-16 ns for the CUDA shapes, ~90 ns here
+ * with the three operand arrays pinned
+ * ({@code .todo/artefacts/729-.../CfpShapeFloor.java}). So the binary's {@code --blas}
+ * crossover is the JVM's again and {@code MIN_WORK} is one number.
  *
  * <p>
- * The operands are Java heap arrays. {@link Linker.Option#critical(boolean) critical}
- * has no counterpart on this route; a {@link PinnedObject} holds each array in place for
- * the call and hands out the address of its first used element. The call TRANSITIONS to
+ * The operands are Java heap arrays. {@link Linker.Option#critical(boolean) critical} has
+ * no counterpart on this route; a {@link PinnedObject} holds each array in place for the
+ * call and hands out the address of its first used element. The call TRANSITIONS to
  * native, so a long product is safepoint-friendly and the staged-arena branch the JVM
  * takes above {@code CRITICAL_FLOP_CEILING} is not needed here. Word-typed values must
- * not cross a lambda or sit in a static field (both fail the image build, the second
- * with "missing StateSplitProxy"), which is why the pointer is made inside each method.
+ * not cross a lambda or sit in a static field (both fail the image build, the second with
+ * "missing StateSplitProxy"), which is why the pointer is made inside each method.
  *
  * <p>
  * Compiled only under the {@code native} Maven profile ({@code src/native/java}); the JVM

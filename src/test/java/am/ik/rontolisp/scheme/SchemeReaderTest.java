@@ -58,7 +58,7 @@ class SchemeReaderTest {
 
 	@Test
 	void radixAndExactnessPrefixesCombine() {
-		// Gauche 0.9.15's answers for the same tokens (`.todo/889`): a radix prefix
+		// Gauche 0.9.15's answers for the same tokens: a radix prefix
 		// overrides the caller's default, an exactness prefix converts the result,
 		// either order, each at most once, and #e on a decimal is the exact rational
 		// the digits spell rather than a flonum rounding.

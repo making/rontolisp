@@ -187,7 +187,7 @@ final class JvmGpuRuntimeBuilder {
 	private static final List<String> MAP_KERNELS = List.of("gpuExp", "gpuLog", "gpuTanh", "gpuSin", "gpuCos", "gpuTan",
 			"gpuAsin", "gpuAcos", "gpuAtan", "gpuSinh", "gpuCosh", "gpuErf", "gpuSqrt", "gpuAbs", "gpuNegative",
 			"gpuSign",
-			// The fused tier's one-argument member (todo-499).
+			// The fused tier's one-argument member.
 			"gpuGelu");
 
 	/**
@@ -198,10 +198,10 @@ final class JvmGpuRuntimeBuilder {
 	private static final List<String> BINARY_KERNELS = List.of("gpuAdd", "gpuSub", "gpuMul", "gpuDiv", "gpuMaximum",
 			"gpuMinimum", "gpuGreater", "gpuGreaterEqual", "gpuLess", "gpuLessEqual", "gpuEqual", "gpuTransposeAxes",
 			"gpuReshape", "gpuConcatenate", "gpuScale", "gpuTakeRows", "gpuPick", "gpuSumSquares",
-			// The fused tier's two-argument members (todo-499): softmax over its axis,
+			// The fused tier's two-argument members: softmax over its axis,
 			// layer-norm's normalization over its epsilon.
 			"gpuSoftmaxAxis", "gpuLayerNorm",
-			// log-softmax over its axis (todo-629).
+			// log-softmax over its axis.
 			"gpuLogSoftmaxAxis");
 
 	/**
@@ -209,9 +209,9 @@ final class JvmGpuRuntimeBuilder {
 	 * ({@code a, axis, keepdims}).
 	 */
 	private static final List<String> FOLD_KERNELS = List.of("gpuSumAxis", "gpuAmaxAxis", "gpuAminAxis",
-			// The fused tier's three-argument adjoints (todo-499).
+			// The fused tier's three-argument adjoints.
 			"gpuGeluGrad", "gpuSoftmaxGrad",
-			// log-softmax's adjoint (todo-629).
+			// log-softmax's adjoint.
 			"gpuLogSoftmaxGrad");
 
 	/**
@@ -219,7 +219,7 @@ final class JvmGpuRuntimeBuilder {
 	 * ({@code g, x, eps, old}) and the dropout mask ({@code shape, p, st, width}).
 	 */
 	private static final List<String> FUSED4_KERNELS = List.of("gpuLayerNormGrad", "gpuDropoutMask",
-			// Layer-norm's affine forward ({@code x, w, b, eps}), todo-634.
+			// Layer-norm's affine forward ({@code x, w, b, eps}).
 			"gpuLayerNormAffine");
 
 	/**
@@ -228,7 +228,7 @@ final class JvmGpuRuntimeBuilder {
 	 * ({@code g, out, axis, scale, mask}).
 	 */
 	private static final List<String> FUSED5_KERNELS = List.of("gpuScaledMaskedSoftmax", "gpuScaledMaskedSoftmaxGrad",
-			// Layer-norm's affine adjoint ({@code g, x, w, eps, old}), todo-634.
+			// Layer-norm's affine adjoint ({@code g, x, w, eps, old}).
 			"gpuLayerNormAffineGrad");
 
 	/**

@@ -12,8 +12,8 @@
 // same provenance note however long it grows)
 //
 // compute_75 (Turing, 2018) is the floor because CUDA 13 refuses to target anything older,
-// not because we chose it. -fmad=false (todo-499): nvcc may otherwise contract `a * b + c`
-// into one fused multiply-add anywhere, and every kernel here that promises the CPU's
+// not because we chose it. -fmad=false: nvcc may otherwise contract `a * b + c` into
+// one fused multiply-add anywhere, and every kernel here that promises the CPU's
 // bits rounds the product and the sum separately; the products that DO fuse (the GEMMs,
 // the GEMV) say so with an explicit fma(), which the flag leaves alone. See .kb/gpu.md.
 
@@ -206,7 +206,7 @@ __device__ T map_op(int op, T x) {
     case 10: return cosh(x);
     case 11: return erf(x);
     // The four members the element-wise tier REFUSED as a round trip -- one machine
-    // instruction over one stream -- and takes since .todo/491 over a RESIDENT operand,
+    // instruction over one stream -- and takes over a RESIDENT operand,
     // where there is no trip to pay for. Each computes in DOUBLE and narrows on the store,
     // which lands on the CPU kernel's bits: a correctly rounded double sqrt narrowed to
     // float IS the correctly rounded float sqrt (innocuous double rounding), and the other
@@ -411,7 +411,7 @@ __device__ double wh_next(int* s1, int* s2, int* s3) {
   return u >= 2.0 ? __dsub_rn(u, 2.0) : (u >= 1.0 ? __dsub_rn(u, 1.0) : u);
 }
 
-// The jump is taken in two hops (todo-499): the BLOCK's part, a^(first element of the
+// The jump is taken in two hops: the BLOCK's part, a^(first element of the
 // block * draws), is one square-and-multiply chain computed by one thread and shared,
 // and each thread then jumps its own offset inside the block, whose exponent is at most
 // 255 * 12 and so twelve bits. Both hops are the same exact integer arithmetic (a^(p+q)
@@ -459,7 +459,7 @@ extern "C" __global__ void rng_fill_f64(double* out, int n, int mode, double lo,
   rng_fill<double>(out, n, mode, lo, span, s1, s2, s3);
 }
 
-// The GEMV behind vec:matvec, y = W x over a row-major rows x cols matrix (.todo/475): one
+// The GEMV behind vec:matvec, y = W x over a row-major rows x cols matrix: one
 // WARP per row, lane l walking columns l, l + 32, ..., then a shuffle tree across the warp.
 // A matrix-by-vector product is memory-bound -- every element of W is read once and never
 // again -- so the kernel is written for coalesced reads of W (the 32 lanes of a warp read
@@ -470,11 +470,11 @@ extern "C" __global__ void rng_fill_f64(double* out, int n, int mode, double lo,
 // stays").
 //
 // THE ACCUMULATOR. At f64 it is a double: the fused multiply-add and the tree are the
-// product's own few-ulp story. At f32 and bf16 it WAS a double too (.todo/475: every
+// product's own few-ulp story. At f32 and bf16 it WAS a double too (every
 // product of two floats is exact in it, so only the ORDER of a double sum separates the
 // kernel from the scalar vec.lisp defun's widen-accumulate-narrow rule, and it landed on
 // the defun's bits on 1024 of 1024 rows where a float accumulator landed on 268) -- until
-// .todo/490 measured the bfloat16 kernel at HALF the device's bandwidth (138 GB/s over a
+// 2026-09-06 measured the bfloat16 kernel at HALF the device's bandwidth (138 GB/s over a
 // 508 MB matrix against 234 for f32) and every load width from 16 to 128 bits at the same
 // figure: on a GB10 one double FMA per element is a COMPUTE ceiling (~70 G/s), which the
 // f32 kernel sat just under and the bf16 kernel, with half the bytes per element, hit. So
@@ -549,14 +549,14 @@ extern "C" __global__ void gemv_f64(const double* W, const double* x, double* y,
   gemv<double>(W, x, y, rows, cols);
 }
 
-// The bfloat16 GEMV (.todo/490): gemv_f32 over a matrix STORED as bf16 bit patterns
+// The bfloat16 GEMV: gemv_f32 over a matrix STORED as bf16 bit patterns
 // against an f32 vector, into an f32 result -- the one pairing the CPU's fused kernel has
 // (bf16 weights, f32 activations, .kb/bfloat16.md), at half the bytes a row streams.
 extern "C" __global__ void gemv_bf16(const unsigned short* W, const float* x, float* y, int rows, int cols) {
   gemv_ff<unsigned short>(W, x, y, rows, cols);
 }
 
-// The Q8_0 GEMV (.todo/728): vec:matvec over a rontolisp:quantized-matrix -- ggml's Q8_0
+// The Q8_0 GEMV: vec:matvec over a rontolisp:quantized-matrix -- ggml's Q8_0
 // blocks held VERBATIM, 34 bytes a block of 32 (a binary16 scale d, then 32 int8 quants),
 // row-major -- against an f32 vector into an f32 result, and it is the CPU kernel's BITS.
 // .kb/quantized-matrix.md pins vec::%matvec-quantized and the --simd kernel as ONE value:
@@ -637,7 +637,7 @@ extern "C" __global__ void gemv_q8_0(const unsigned char* W, const unsigned char
   if (t == 0 && live) y[row] = r;
 }
 
-// The RESIDENT tier (.todo/491): the members whose CPU twin is a LANE loop and which a
+// The RESIDENT tier: the members whose CPU twin is a LANE loop and which a
 // round trip therefore could never win -- the equal-shape binary ops, the array-with-
 // scalar forms, the three-way select behind torch:masked-fill, and the fused Adam update.
 // They are offered ONLY when an operand is already on the device (Gpu checks residency
@@ -753,7 +753,7 @@ extern "C" __global__ void adam_f64(double* X, const double* G, double* Mm, doub
 // DESTINATION stride per axis, either of which may be negative (a slice with a negative
 // step). It is what reshape (both contiguous), the rank-2 transpose, linalg:slice /
 // %la-gather-strided (a base offset and innermost-first strides) and concatenate (each
-// input into its own slab of the output) are, and since .todo/491 all of them are members
+// input into its own slab of the output) are, and all of them are members
 // over a RESIDENT operand: a copy cannot pay for a round trip, and it does not have to --
 // the operand is already here, the result stays here, and the CPU would have had to
 // download the operand to copy it. A pure copy, so trivially bit-identical.
@@ -885,7 +885,7 @@ extern "C" __global__ void sumsq_f64(const double* A, double* P, int n) {
   sumsq<double>(A, P, n);
 }
 
-// The FUSED tier (.todo/499): the four compositions a transformer step spent a third of
+// The FUSED tier: the four compositions a transformer step spent a third of
 // its device time on -- GELU, softmax, layer-norm and the dropout mask -- each as ONE
 // kernel where the `torch.lisp` composition launched five to fourteen `linalg:` members,
 // one full memory pass each. What a fused kernel buys on this card is the passes it
@@ -1612,7 +1612,7 @@ extern "C" __global__ void layer_norm_grad_f64(const double* G, const double* X,
   layer_norm_grad_rows<double>(G, X, OLD, C, rows, len, eps);
 }
 
-// LAYER-NORM'S AFFINE, AND THE ONE KERNEL HERE THAT WRITES TWO RESULTS (todo-634).
+// LAYER-NORM'S AFFINE, AND THE ONE KERNEL HERE THAT WRITES TWO RESULTS.
 // `torch:layer-norm`'s module forward is the normalization above and then
 // `norm * weight + bias`, which was two more BROADCAST passes over the activation; its
 // backward was a third (`g * weight`, towards the normalization) and a zip (`g * norm`,

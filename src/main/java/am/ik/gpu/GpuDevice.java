@@ -68,10 +68,9 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	/**
 	 * Whether a bfloat16 matrix -- a {@code short[]} of bf16 bit patterns, the top
 	 * sixteen bits of an f32 each -- can be the weight of {@link #gemvBf16} here.
-	 * {@code true} on CUDA; {@code false} on Metal, where the width is out of scope
-	 * ({@code .todo/490}: MSL has a {@code bfloat}, but nothing has been measured there),
-	 * so a {@code #bf16} operand is a hard decline on that backend exactly as a
-	 * {@code #d} one is.
+	 * {@code true} on CUDA; {@code false} on Metal, where the width is out of scope (MSL
+	 * has a {@code bfloat}, but nothing has been measured there), so a {@code #bf16}
+	 * operand is a hard decline on that backend exactly as a {@code #d} one is.
 	 * @return {@code true} when the bfloat16 GEMV may be offered
 	 */
 	boolean supportsBfloat16();
@@ -80,8 +79,8 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * Whether a Q8_0 quantized matrix -- a {@code byte[]} of ggml's 34-byte blocks, a
 	 * binary16 scale then 32 int8 quants, row-major -- can be the weight of
 	 * {@link #gemvQ8} here. {@code true} on CUDA; {@code false} on Metal, where the width
-	 * is out of scope as bfloat16 is ({@code .todo/728}), so a quantized operand is a
-	 * hard decline on that backend exactly as a {@code #bf16} one is.
+	 * is out of scope as bfloat16 is, so a quantized operand is a hard decline on that
+	 * backend exactly as a {@code #bf16} one is.
 	 * @return {@code true} when the Q8_0 GEMV may be offered
 	 */
 	boolean supportsQuantized();
@@ -170,10 +169,10 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * block of 32 columns, {@code rows * cols / 32} of them from byte {@code ow} of
 	 * {@code w} -- against an f32 vector into an f32 result: the integer-dot GEMV of
 	 * {@code .kb/quantized-matrix.md}, and BIT FOR BIT the scalar defun's and the CPU
-	 * kernel's value ({@code .todo/728}). The activation is quantized on the host by the
-	 * contract's rule ({@link Gpu#quantizeActivationQ8}) and the kernel walks the four
-	 * f32 lane accumulators in the defun's order ({@code gemm.cu}). The same residency
-	 * rule as {@link #gemv}, and a hard decline where {@link #supportsQuantized()} is
+	 * kernel's value. The activation is quantized on the host by the contract's rule
+	 * ({@link Gpu#quantizeActivationQ8}) and the kernel walks the four f32 lane
+	 * accumulators in the defun's order ({@code gemm.cu}). The same residency rule as
+	 * {@link #gemv}, and a hard decline where {@link #supportsQuantized()} is
 	 * {@code false}.
 	 * @return {@code true} when {@code y} was filled
 	 */
@@ -181,8 +180,8 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * {@code c[i] = op(a[i], b[i])} over two operands of the SAME shape -- the resident
-	 * tier ({@code .todo/491}): offered by {@link Gpu} only once an operand is resident,
-	 * because as a round trip the CPU's lane loop wins. Bit-identical to it.
+	 * tier: offered by {@link Gpu} only once an operand is resident, because as a round
+	 * trip the CPU's lane loop wins. Bit-identical to it.
 	 * @return {@code true} when {@code c} was filled
 	 */
 	boolean zip(int op, double[] a, int oa, double[] b, int ob, double[] c, int oc, int n);
@@ -278,13 +277,12 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n, double[] rule);
 
 	/**
-	 * The FUSED tier ({@code .todo/499}): the exact GELU, its adjoint, the last-axis
-	 * softmax and its adjoint, the last-axis log-softmax and its adjoint
-	 * ({@code .todo/629}), layer-norm's normalization and its adjoint, and the
-	 * inverted-dropout mask, each as one pass where the {@code torch.lisp} composition
-	 * launched a chain of members -- every rounding of the chain reproduced ({@link Gpu}
-	 * has the per-member contract). On CUDA since todo-499; the Metal half declines them
-	 * all, and the compositions run there member by member as before.
+	 * The FUSED tier: the exact GELU, its adjoint, the last-axis softmax and its adjoint,
+	 * the last-axis log-softmax and its adjoint, layer-norm's normalization and its
+	 * adjoint, and the inverted-dropout mask, each as one pass where the
+	 * {@code torch.lisp} composition launched a chain of members -- every rounding of the
+	 * chain reproduced ({@link Gpu} has the per-member contract). On CUDA; the Metal half
+	 * declines them all, and the compositions run there member by member as before.
 	 * @return {@code true} when the result was filled
 	 */
 	boolean gelu(double[] a, int oa, double[] c, int oc, int n);
@@ -344,7 +342,7 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * Layer-norm's normalization AND the module's affine over a {@code (len)} weight and
-	 * bias, as one pass per row (todo-634).
+	 * bias, as one pass per row.
 	 */
 	boolean layerNormAffine(double[] x, int ox, double[] w, int ow, double[] b, int ob, double[] c, int oc, int rows,
 			int len, double eps);
@@ -415,9 +413,8 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 
 	/**
 	 * Whether a member's result STAYS on the device until the host first reads it, rather
-	 * than being downloaded before the call returns. Both halves honour it: CUDA since
-	 * {@code .todo/491}, Metal since {@code .todo/494}, each measured on its own hardware
-	 * ({@code .kb/gpu.md}).
+	 * than being downloaded before the call returns. Both halves honour it, each measured
+	 * on its own hardware ({@code .kb/gpu.md}).
 	 * @param on whether to keep results on the device
 	 */
 	void lazyResults(boolean on);
@@ -426,11 +423,10 @@ sealed interface GpuDevice permits CudaGemm, MetalGemm {
 	 * Whether lazy results PAY on this backend -- the measured answer that decides
 	 * whether the interceptors switch them on ({@link Gpu#lazyResultsIfWorthwhile}).
 	 * {@code true} on CUDA (a fifth off the training step, then half), and {@code true}
-	 * on Metal since todo-495 made its command buffers asynchronous under the mode (the
-	 * step at the book's shapes 4.80 -> 1.81 s); it was {@code false} there while every
-	 * call waited ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
-	 * Independent of {@link #lazyResults}: an embedder that asks gets the mode on either
-	 * backend.
+	 * on Metal since its command buffers became asynchronous under the mode (the step at
+	 * the book's shapes 4.80 -> 1.81 s); it was {@code false} there while every call
+	 * waited ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal"). Independent
+	 * of {@link #lazyResults}: an embedder that asks gets the mode on either backend.
 	 * @return {@code true} when the interceptors should run with lazy results
 	 */
 	boolean lazyResultsPay();

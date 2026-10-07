@@ -98,8 +98,8 @@ class VecSimdBf16KernelsTest {
 	}
 
 	/**
-	 * {@code .todo/746}'s census check: the narrowing must agree with
-	 * {@code am.ik.rontolisp.BFloat16}, the single authority, on EVERY pattern, NaN
+	 * The conversion census check ({@code .kb/bfloat16.md}): the narrowing must agree
+	 * with {@code am.ik.rontolisp.BFloat16}, the single authority, on EVERY pattern, NaN
 	 * payloads included -- not just "stays a NaN", which is all the test above and
 	 * {@link #theNarrowingNeverTurnsANanIntoAnInfinity} check.
 	 */
@@ -214,9 +214,9 @@ class VecSimdBf16KernelsTest {
 		assertThat(out).isEqualTo(VecSimdKernels.matvecBf16(w, 64, 1024, x, false));
 	}
 
-	// --- element-wise bf16 x bf16 -> bf16 (`.todo/747`) ------------------------------
+	// --- element-wise bf16 x bf16 -> bf16 ------------------------------------------
 	// The oracle here is the SCALAR composite -- widen each operand, compute in f32,
-	// narrow on store through the scalar `floatToBf16` -- which `.todo/696`'s harness
+	// narrow on store through the scalar `floatToBf16` -- which an exhaustive harness
 	// already swept against the `vec.lisp` DEFUN's f64 route over all 65536x65536
 	// operand pairs per operation with 0 mismatches. So kernel == composite pins the
 	// lane loop (and the lane narrow) against the defun transitively, and
@@ -337,7 +337,7 @@ class VecSimdBf16KernelsTest {
 		// differently per instruction shape: the packed lanes quiet the source payload
 		// while the scalar instructions answer the indefinite. Both are quiet NaNs,
 		// so the pin is the CLASS, not the payload -- and the defun agrees with the
-		// scalar route's class (`.todo/696`'s pair sweep covers sNaN patterns with 0
+		// scalar route's class (the exhaustive pair sweep covers sNaN patterns with 0
 		// mismatches against it at the payload level, which the lanes cannot keep).
 		short[] x = { (short) 0x7f81, (short) 0xff81, (short) 0x7fbf, VecSimdKernels.floatToBf16(1.5f) };
 		short[] bigX = new short[1024];

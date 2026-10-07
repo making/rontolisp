@@ -62,13 +62,13 @@ import am.ik.rontolisp.PackageRegistry;
  * type.
  *
  * <p>
- * It retired it for the integer widths ONLY until 2026-09-06 ({@code .todo/707}): the
- * float widths were never added, so {@code (coerce '(1.0) '(vector single-float))}
- * answered a general vector and {@code (coerce #f(1.0) '(array bfloat16))} answered its
- * ARGUMENT -- a silent wrong answer in both directions, at every float width, through
- * both operators. That is why the element type travels as a CODE from the closed space
- * rather than as a second width field beside the integer one: a hand-rolled list of the
- * packed families is exactly what went one family short.
+ * It retired it for the integer widths ONLY until 2026-09-06: the float widths were never
+ * added, so {@code (coerce '(1.0) '(vector single-float))} answered a general vector and
+ * {@code (coerce #f(1.0) '(array bfloat16))} answered its ARGUMENT -- a silent wrong
+ * answer in both directions, at every float width, through both operators. That is why
+ * the element type travels as a CODE from the closed space rather than as a second width
+ * field beside the integer one: a hand-rolled list of the packed families is exactly what
+ * went one family short.
  *
  * <p>
  * The CHARACTER code joined the packed arms the same day, through {@link #needsSeqString}
@@ -110,8 +110,8 @@ public final class ConcatenateForms {
 	 * The code and not a width: the packed representations are a closed code space
 	 * already ({@code make-array} picks one from exactly it), and a second field shaped
 	 * like the integer widths would be the next transcription of that space -- the defect
-	 * {@code .todo/487} removed from four other sites on 2026-09-05. Which representation
-	 * a code names is asked of the representations themselves
+	 * removed from four other sites on 2026-09-05 ({@code .kb/bfloat16.md}). Which
+	 * representation a code names is asked of the representations themselves
 	 * ({@link #packedIntWidth(int)}, {@link #isPackedFloat(int)}), never of a list here.
 	 *
 	 * @param family the sequence family the result belongs to
@@ -229,7 +229,7 @@ public final class ConcatenateForms {
 					// An atomic 'bit-vector names no element type, but the family IS
 					// the bit family: the packed-element reader answers null for a
 					// bare symbol, so the code falls back to the stamp the atomic
-					// spelling means (.todo/043).
+					// spelling means.
 					LispVal elementType = LispNames.packedVectorElementType(current);
 					int code = (elementType == null
 							&& ("BIT-VECTOR".equals(member) || "SIMPLE-BIT-VECTOR".equals(member)))
@@ -629,7 +629,7 @@ public final class ConcatenateForms {
 		}
 		if (elementTypeCode == ArrayElementTypes.BIT) {
 			// A bit-vector result builds the stamped general array through coerce's
-			// bit arm, not the T vector the fallthrough below answers (.todo/043).
+			// bit arm, not the T vector the fallthrough below answers.
 			return coerceCall(elements, "BIT-VECTOR");
 		}
 		return coerceCall(elements, "VECTOR");

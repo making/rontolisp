@@ -23,8 +23,9 @@
 (defun rontolisp::%url-utf8p ()
   ;; Retained as NIL for backwards compatibility with any caller that resolves
   ;; the internal helper: every backend now indexes strings BY CODE POINT
-  ;; (todo 153), so the previous "UTF-8 bytes per (char s i)" WASM path is
-  ;; gone. url-decode / url-encode always take the code-point path below.
+  ;; (.kb/characters-code-points.md), so the previous "UTF-8 bytes per
+  ;; (char s i)" WASM path is gone. url-decode / url-encode always take the
+  ;; code-point path below.
   nil)
 
 (defun rontolisp::%url-char-string (code)

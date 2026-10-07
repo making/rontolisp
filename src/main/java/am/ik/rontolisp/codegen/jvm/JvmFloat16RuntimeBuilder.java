@@ -11,7 +11,7 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 
 /**
  * The JVM-compiled arm of {@code rontolisp:widen-float-bits} / {@code
- * rontolisp:narrow-float-bits} (.todo/671): two hand-assembled bytecode helpers,
+ * rontolisp:narrow-float-bits}: two hand-assembled bytecode helpers,
  * {@code _widenFloatBits}/{@code _narrowFloatBits}, that loop over the same bare
  * {@code double[]}/{@code float[]}/{@code short[]} (with a
  * {@code [rank, dims..., data...]} header, {@link JvmFloatArrayRuntimeBuilder}; the
@@ -34,15 +34,14 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * {@link JvmFloat16Compiler} compiles them straight to {@code invokestatic
  * java/lang/Float.floatToFloat16}/{@code float16ToFloat} at the call site, the JDK 20+
  * intrinsics. The bf16 round-to-nearest-even narrow ({@link #emitBf16Narrow}) is an
- * internal duplicate of the same trick {@code .todo/487}'s {@code bfloat16-bits} owns the
- * Lisp-level symbol for (now {@code am.ik.rontolisp.BFloat16#bits}), so this item needs
- * no dependency on that one's landing order. Every decoded value stays a raw
- * {@code float} end to end when the destination/source is single-float -- NEVER routed
- * through a {@code double} local, even transiently: measured (both directions,
- * exhaustively over all 2^32 float32 patterns), an f32-&gt;f64 widen (f2d) quiets a
- * signalling NaN exactly as often as a widen-then-narrow roundtrip does (126 of 65536),
- * so there is no safe direction through {@code double} to fall back on -- only avoiding
- * it entirely closes the gap.
+ * internal duplicate of the trick behind the Lisp-level {@code bfloat16-bits}
+ * ({@code am.ik.rontolisp.BFloat16#bits}). Every decoded value stays a raw {@code float}
+ * end to end when the destination/source is single-float -- NEVER routed through a
+ * {@code double} local, even transiently: measured (both directions, exhaustively over
+ * all 2^32 float32 patterns), an f32-&gt;f64 widen (f2d) quiets a signalling NaN exactly
+ * as often as a widen-then-narrow roundtrip does (126 of 65536), so there is no safe
+ * direction through {@code double} to fall back on -- only avoiding it entirely closes
+ * the gap.
  */
 final class JvmFloat16RuntimeBuilder {
 
@@ -424,7 +423,8 @@ final class JvmFloat16RuntimeBuilder {
 
 	// The bf16 round-to-nearest-even narrow, over the raw bits of a float already in
 	// local slot fTmp: NaN is special-cased (a plain bits + 0x7fff + lsb bias-add can
-	// carry a heavy-payload NaN's low bits into the sign -- .todo/482's Enc.java note)
+	// carry a heavy-payload NaN's low bits into the sign --
+	// .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java)
 	// rather than relying on the payload surviving the add. Emitted instruction for
 	// instruction from am.ik.rontolisp.BFloat16#bits(float), which eval.FloatBitsWidening
 	// calls -- the interpreter and this backend answer one rounding (.kb/bfloat16.md).

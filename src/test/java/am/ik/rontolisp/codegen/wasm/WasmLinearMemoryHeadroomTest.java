@@ -17,9 +17,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * runtime-created string -- so its need follows what a program builds at load time, not a
  * constant. The rule was three fixed growth pages (~192 KB), which a library that reads
  * tens of thousands of strings in exhausts mid-load, trapping out of bounds with nothing
- * but an address to go on (cl-unicode, {@code .todo/545}). It is now "at least as much
- * heap as static data", which leaves a small program on exactly the old three pages --
- * the reason a memory-capped host is not handed a large constant instead.
+ * but an address to go on (cl-unicode). It is now "at least as much heap as static data",
+ * which leaves a small program on exactly the old three pages -- the reason a
+ * memory-capped host is not handed a large constant instead.
  */
 class WasmLinearMemoryHeadroomTest {
 

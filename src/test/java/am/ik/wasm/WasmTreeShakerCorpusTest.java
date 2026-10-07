@@ -75,7 +75,7 @@ class WasmTreeShakerCorpusTest {
 		// CompileFrontend.expand, so the shaker decodes exactly the module the real CLI
 		// emits. It runs per mode because --no-wasi reaches the front end too (the
 		// feature set, and which wasi:*-binding libraries splice), which the
-		// hand-written copy this replaces could not express at all (.todo/688).
+		// hand-written copy this replaces could not express at all.
 		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(corpusSource(),
 				am.ik.rontolisp.reader.Features.WASM, true, noWasi);
 		String mode = noWasi ? "nowasi" : "wasi";

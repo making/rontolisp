@@ -23,10 +23,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * interpreter forever. That is invisible in every functional test and cost this class
  * 2.7x: the operator table of {@code evalCons} -- the innermost method of the whole
  * interpreter -- had grown to 8209 bytecodes, so every evaluated form paid interpreted
- * dispatch (todo 188). The table is now split across {@code evalCons} and
- * {@code evalConsRareOperator}; this test fails the build if either half (or any other
- * method here) grows back past the cliff, since the symptom is otherwise only a slow
- * program.
+ * dispatch ({@code .kb/hot-path-method-size.md}). The table is now split across
+ * {@code evalCons} and {@code evalConsRareOperator}; this test fails the build if either
+ * half (or any other method here) grows back past the cliff, since the symptom is
+ * otherwise only a slow program.
  */
 class LispEvaluatorHotMethodSizeTest {
 

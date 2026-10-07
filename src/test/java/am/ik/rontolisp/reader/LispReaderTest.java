@@ -69,7 +69,7 @@ class LispReaderTest {
 
 	@Test
 	void readConstantNamesAsSymbolsEvenUnderQuote() {
-		// .todo/679: pi and the limit/float constants used to read as their values
+		// Pi and the limit/float constants used to read as their values
 		// wherever the spelling appeared -- including under quote. They read as
 		// symbols now; each backend binds the global with its own value.
 		assertThat(LispReader.readFromString("pi")).isEqualTo(new LispSymbol("PI"));

@@ -171,8 +171,8 @@ class JvmSimdVectorTemplateBf16Test {
 	}
 
 	/**
-	 * {@code .todo/746}'s census check: the narrowing must agree with
-	 * {@code am.ik.rontolisp.BFloat16}, the single authority, on EVERY pattern, NaN
+	 * The conversion census check ({@code .kb/bfloat16.md}): the narrowing must agree
+	 * with {@code am.ik.rontolisp.BFloat16}, the single authority, on EVERY pattern, NaN
 	 * payloads included -- not just "stays a NaN", which is all the test above and
 	 * {@link #theNarrowingNeverTurnsANanIntoAnInfinity} check.
 	 */
@@ -277,12 +277,12 @@ class JvmSimdVectorTemplateBf16Test {
 		assertThat(elements(out)).isEqualTo(elements(JvmSimdVectorTemplate.simdMatvec(m, x)));
 	}
 
-	// --- element-wise bf16 x bf16 -> bf16 (`.todo/747`) ----------------------------
+	// --- element-wise bf16 x bf16 -> bf16 ----------------------------------------------
 	// Driven through the BRIDGE ENTRIES over the compiled packed representation, so
 	// the header arithmetic is asserted too -- including the length-1 vector, where a
 	// hard-coded one-slot offset would read the rank word as an element. The oracle
 	// is the scalar composite (widen, compute in f32, narrow through the scalar
-	// `floatToBf16`), which `.todo/696`'s harness pins against the defun; the
+	// `floatToBf16`), which is pinned against the defun (.kb/bfloat16.md); the
 	// interpreter twin is pinned by `eval.VecSimdBf16KernelsTest`.
 
 	/** The scalar composite for one pair, the oracle the lane loop must match. */

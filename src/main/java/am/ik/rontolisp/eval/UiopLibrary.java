@@ -401,7 +401,7 @@ public final class UiopLibrary {
 	 * them, including through the prelude's {@code %temp-file-name}.
 	 */
 	private static final Map<String, List<String>> MACRO_EXPANSION_CALLEES = Map.ofEntries(
-			// .todo/360: with-temporary-file is upstream's wrapper over
+			// with-temporary-file is upstream's wrapper over
 			// call-with-temporary-file. The fixpoint pulls the rest (ensure-directory-
 			// pathname / default-temporary-directory, delete-file-if-exists,
 			// call-function)

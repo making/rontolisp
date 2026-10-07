@@ -3477,7 +3477,7 @@ final class WasmReadRuntimeBuilder {
 		i31New(w);
 		arraySet(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// A bit vector read at run time is stamped with the remembered element type
-		// bit, like the frontend's #* lowering (.todo/043).
+		// bit, like the frontend's #* lowering.
 		emitGeneralArrayCell(w, DIMS, DATA, WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT),
 				ctx);
 		w.write(Instruction.END);

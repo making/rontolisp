@@ -892,9 +892,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/**
 	 * Whether the top-level form is the residue a consumed package declaration leaves
-	 * behind: the package keyword a {@code defpackage} resolves to (a quoted package name
-	 * before {@code .todo/917}), or the {@code (setq *package* :P)} an {@code in-package}
-	 * resolves to.
+	 * behind: the package keyword a {@code defpackage} resolves to (formerly a quoted
+	 * package name), or the {@code (setq *package* :P)} an {@code in-package} resolves
+	 * to.
 	 * @param expr the top-level form
 	 * @return whether it can be dropped
 	 */
@@ -1846,7 +1846,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		if (use.quote()) {
 			out.add("\"");
-			// The single-escape byte print emits before an embedded " / \ (todo 216).
+			// The single-escape byte print emits before an embedded " / \.
 			out.add("\\");
 		}
 		if (use.boolT() || use.boolToString()) {
@@ -4276,7 +4276,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// never needs a constant. :u8 and :u16 keep their single bound compare -- the bound
 	// there is a two- or three-byte constant, cheaper than the mask the canon form would
 	// need -- and :u64 keeps the plain sign check (only the sign can be wrong). Measured
-	// 2026-09-14 against c972efa5d, .todo/811.
+	// 2026-09-14 against c972efa5d (.kb/no-gc-scalar-wasm.md).
 	private static void emitRangeChecks(WasmWriter w, BoundaryType type, boolean fromFloat, int slot) {
 		boolean narrowSigned = type.signed() && type.bits() < 64;
 		boolean narrowUnsigned = !type.signed() && type.bits() < 64;
@@ -4564,8 +4564,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.BLOCK -> compileExpr(LispMacroExpander.expandBlock(cons), fn);
 			case LispNames.RETURN -> compileReturn(args, fn);
 			case LispNames.UNWIND_PROTECT ->
-				// The wasm-GC backends catch via the exception-handling proposal (todo
-				// 129), but --no-gc stays a rejection by design: condition objects are
+				// The wasm-GC backends catch via the exception-handling proposal,
+				// but --no-gc stays a rejection by design: condition objects are
 				// cons/CLOS-subset values its unboxed value model rejects, and its
 				// contract is a zero-flag plain MVP module.
 				throw new UnsupportedOperationException(LispNames.UNWIND_PROTECT
@@ -5618,7 +5618,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	//
 	// The exception the round trip does NOT survive is a signalling NaN -- f2d and d2f
 	// alike quiet one, and f32.demote_f64 is free by specification to invent any NaN
-	// payload (.kb/bfloat16.md). CHECKED 2026-09-05 (.todo/487) rather than assumed:
+	// payload (.kb/bfloat16.md). CHECKED 2026-09-05 rather than assumed:
 	// a signalling NaN cannot reach this method, for three independent reasons, any one
 	// of which is sufficient.
 	//
@@ -6746,7 +6746,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// vec:dot uses at f64 (WasmVecLoops.simdDot), and at f32 the multi-accumulator
 	// sibling WasmVecLoops.simdMatvecRowDotF32 -- vec:dot keeps ONE chain, a GEMV row
 	// folds four above a column gate, so the two no longer sum in the same order
-	// (todo-480; an f32 row still accumulates in f32 lanes and promotes once, the --simd
+	// (an f32 row still accumulates in f32 lanes and promotes once, the --simd
 	// single-precision reduction contract); without --simd the
 	// v128-free scalar loop (WasmVecLoops.scalarDot), so the module stays MVP-clean.
 	// Widths may not mix: x (and out) must be the same width as W, the vec: fail-fast
@@ -6809,7 +6809,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int trem = -1;
 		int acc = -1;
 		// The f32 row folds WasmVecLoops.MATVEC_ACCUMULATORS independent chains once it
-		// is wide enough (todo-480); the f64 row keeps its one chain, so it needs neither
+		// is wide enough; the f64 row keeps its one chain, so it needs neither
 		// the extra accumulators nor the wide-loop counter.
 		int wide = -1;
 		int acc1 = -1;
@@ -7703,8 +7703,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		Ty t2 = staticType(args.get(2), fn);
 		Ty operand = t1.join(t2);
 		if (operand == Ty.FLOAT && isIntLike(t1) != isIntLike(t2)) {
-			// A mixed integer/float pair compares exact values, like the interpreter
-			// (.todo/037): the float's exact binary value against the i64. Coercing
+			// A mixed integer/float pair compares exact values, like the interpreter:
+			// the float's exact binary value against the i64. Coercing
 			// the integer through f64 rounds past 2^53, so (= 9007199254740993
 			// 9007199254740992.0) answered T and (> 9007199254740993
 			// 9007199254740992.0) answered NIL. Each side stays in its own type and
@@ -8244,7 +8244,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// ldb-test rides on ldb, whose expansion reads the bytespec cons
 			// back -- and the scalar value model has no cons -- so it is
 			// refused outright like deposit-field's field replacement above
-			// (.todo/818) -- never a trap, never a wrong answer.
+			// -- never a trap, never a wrong answer.
 			throw new UnsupportedOperationException(
 					"--no-gc: " + name.toLowerCase(java.util.Locale.ROOT) + " is not supported in function '" + fnName
 							+ "': (" + name + " ...) (the scalar backend is for pure numeric exports)");
@@ -8543,7 +8543,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				LispMacroExpander.expandFloorFamilyDivisor(cons);
 			// ffloor/fceiling/fround/ftruncate always expand -- (float (floor a [b])) --
 			// onto the FLOAT and FLOOR-family builtins already handled above/below, so
-			// this backend needs no separate lowering (todo-667). Unlike the plain
+			// this backend needs no separate lowering. Unlike the plain
 			// family there is no one-argument native form to fall through to.
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
 				LispMacroExpander.expandFFamily(cons);

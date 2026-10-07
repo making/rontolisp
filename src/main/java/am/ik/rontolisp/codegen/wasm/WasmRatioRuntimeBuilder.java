@@ -721,7 +721,7 @@ final class WasmRatioRuntimeBuilder {
 	// it) against the exact operand -- through the existing big-tier helpers alone
 	// (`_int_new` of the decomposed mantissa, `_big_ash`, `_big_mul`, `_big_cmp`; no
 	// new runtime function), so a near tie decides strictly: `(= 0.6666666666666666
-	// 2/3)` is NIL here as on the interpreter and the JVM (.todo/037). A float
+	// 2/3)` is NIL here as on the interpreter and the JVM. A float
 	// against anything else keeps the old f64 behavior, including its `_type_err_*`
 	// traps for a complex or a non-number.
 	static byte[] buildRatCmpBitsBody() {

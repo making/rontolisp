@@ -65,7 +65,7 @@ final class JvmSubseqCompiler {
 		List<LispVal> args = cons.toList();
 		// seq, UNNORMALIZED: a mutable character vector reads its elements directly in
 		// _subseqCv (rendering it here would both cost O(source) per slice and launder
-		// the mutable representation away, .todo/559). An omitted end is nil, which the
+		// the mutable representation away). An omitted end is nil, which the
 		// lane reads as "to the end" like a runtime nil, matching the interpreter's
 		// (subseq seq start nil).
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -328,7 +328,7 @@ final class JvmSubseqCompiler {
 		// _cpoff(s, i): the UTF-16 code-unit index of the i-th CHARACTER inside the
 		// framing quotes. Used to translate a character range (start, end) into code-unit
 		// offsets so a supplementary code point in the middle is one indexed step,
-		// matching (length s) after todo 153.
+		// matching (length s).
 		MethodRefEntry cpOffset = JvmEmitHelper.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
 				JvmStringIndexRuntimeBuilder.OFFSET_DESC);
 		StringEntry quote = ctx.cp.stringEntry("\"");
@@ -363,7 +363,7 @@ final class JvmSubseqCompiler {
 		asm.aconst_null();
 		asm.astore(resultSlot);
 		if (ctx.usesArrays) {
-			// ---- STRING PATH, mutable result (.todo/559 step 2) ----
+			// ---- STRING PATH, mutable result ----
 			// _subseqCv answers a fresh MUTABLE character vector for a string in either
 			// representation, so a copy-seq/subseq result has a writable identity like
 			// the interpreter's. A character vector reads its elements directly (no

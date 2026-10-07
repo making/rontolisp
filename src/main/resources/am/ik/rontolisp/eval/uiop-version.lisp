@@ -60,7 +60,7 @@
       (uiop/version:unparse-version %nv-list))))
 
 ;;; The comparison table, written over uiop/utility's lexicographic< /
-;;; lexicographic<= (.todo/354). version< on malformed input answers nil
+;;; lexicographic<=. version< on malformed input answers nil
 ;;; (parse-version with on-error nil returns nil, and lexicographic< over nil is
 ;;; nil), so the comparisons never signal.
 (defun uiop/version:version< (%v<1 %v<2)

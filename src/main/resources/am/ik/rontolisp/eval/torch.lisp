@@ -597,7 +597,7 @@
   ;; composed from torch ops; the exact form is ONE node over the internal
   ;; linalg::%la-gelu, whose adjoint linalg::%la-gelu-grad spells the tape's
   ;; own backward through the five ops it replaces -- so the bits are the
-  ;; composition's, and a device runs each direction as one pass (todo-499).
+  ;; composition's, and a device runs each direction as one pass.
   (let ((tx (torch::%t-wrap a)))
     (cond ((and (eq approximate :none) (not (numberp (torch::%t-data tx))))
            (let ((xa (torch::%t-data tx)))
@@ -1099,7 +1099,7 @@
   ;; integer :axis -- torch's softmax(x, dim)). The adjoint is
   ;; s * (g - sum(g * s)) over each distribution -- in the :axis form through
   ;; linalg::%la-softmax-grad, the same four members as one call, so a device
-  ;; runs them as one pass (todo-499). Over a :fill or :scale view -- the
+  ;; runs them as one pass. Over a :fill or :scale view -- the
   ;; attention head's masked, scaled score -- the :axis form is the one node
   ;; torch::%t-attention-softmax makes (2026-09-02).
   (let ((ta (torch::%t-wrap a)))
@@ -1162,7 +1162,7 @@
   ;; half of a cross-entropy loss). The adjoint is g - softmax(x) * sum(g),
   ;; with softmax(x) recovered as exp of the forward result -- in the :axis
   ;; form through linalg::%la-log-softmax-grad, the same four members as one
-  ;; call, so a device runs them as one pass (todo-629).
+  ;; call, so a device runs them as one pass.
   (let* ((ta (torch::%t-wrap a)) (xa (torch::%t-data ta)))
     (let* ((ax (if axis (linalg::%la-norm-axis (array-dimensions xa) axis) nil))
            (out
@@ -1543,15 +1543,15 @@
   ;; (x - mean) / sqrt(var + eps) * weight + bias over the LAST axis, with the
   ;; biased (ddof 0) variance -- PyTorch's unbiased=False. At nn.LayerNorm's own
   ;; shape the WHOLE expression is ONE node over the internal
-  ;; linalg::%la-layer-norm-affine (todo-634): the affine was two broadcast passes
+  ;; linalg::%la-layer-norm-affine: the affine was two broadcast passes
   ;; over the activation forward and a third plus a zip backward, and its adjoint
   ;; linalg::%la-layer-norm-affine-grad answers both arrays the tape needs -- x's
   ;; gradient (with g * weight folded in, onto what x already held) and g * norm,
   ;; whose broadcast folds are the weight's gradient. The bias's is the folds of g.
   ;; Every member rounds where the four nodes rounded, so the bits are the
   ;; composition's, and a device runs each direction as one pass. A scalar input, or
-  ;; a weight or bias of any other shape, keeps the normalization node of todo-499
-  ;; and the two torch ops around it.
+  ;; a weight or bias of any other shape, keeps the fused normalization node
+  ;; (linalg::%la-layer-norm) and the two torch ops around it.
   (let* ((tx (torch::%t-wrap x))
          (xa (torch::%t-data tx))
          (eps (torch:field self :eps))
@@ -1619,8 +1619,8 @@
                                           (linalg::%la-width-code-of-etype
                                            torch::*default-element-type*))))
           ;; The mask (rand > p) / (1 - p) is ONE member over an explicit
-          ;; generator state, so a device draws and scales it in one pass
-          ;; (todo-499); the state it advances is put back as linalg:rand
+          ;; generator state, so a device draws and scales it in one pass;
+          ;; the state it advances is put back as linalg:rand
           ;; would. It is built at torch's own width: paired with the
           ;; activations at a DIFFERENT width the multiply below declines
           ;; every --simd kernel (.kb/torch.md).
@@ -1900,7 +1900,7 @@
   ;; The per-element loop itself is NOT here: it is linalg::%la-adam-step,
   ;; called once per parameter with the whole rule packed into a double vector.
   ;; It was the LARGEST frame of a --gpu --simd training step -- 22-31% of it,
-  ;; a boxed do loop over row-major-aref, plus the boxing it drove (todo-473)
+  ;; a boxed do loop over row-major-aref, plus the boxing it drove
   ;; -- and moving it into a linalg: internal member is
   ;; what puts it on the acceleration seam -- which intercepts linalg: members
   ;; and nothing else. What this function keeps is everything that is not

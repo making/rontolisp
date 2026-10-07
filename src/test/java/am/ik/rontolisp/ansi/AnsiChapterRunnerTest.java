@@ -17,9 +17,9 @@ class AnsiChapterRunnerTest {
 	/**
 	 * {@code setf} on an unrecognized place throws a raw
 	 * {@code UnsupportedOperationException} at macroexpansion time (LispMacroExpander),
-	 * which the suite shim's own {@code handler-case} cannot catch -- exactly the failure
-	 * mode .todo/681 is about. Before the fix, this form escapes
-	 * {@code AnsiChapterRunner}'s outer catch as {@code %%%EVAL}, which
+	 * which the suite shim's own {@code handler-case} cannot catch -- the failure mode
+	 * that used to drop a failing test from the report's denominator. Before the fix,
+	 * this form escapes {@code AnsiChapterRunner}'s outer catch as {@code %%%EVAL}, which
 	 * {@code ChapterResult.parse} counts into neither {@code pass}, {@code fail} nor
 	 * {@code error} -- the passing test right after it is the control that shows the loss
 	 * costs exactly one test, not the rest of the chapter.

@@ -8,7 +8,7 @@
 ;; are implemented with stream.new/read/write/drop + future.read over wasi:cli + wasi:filesystem
 ;; 0.3; random_get/clock_time_get/environ_* bridge wasi:random / wasi:clocks
 ;; (system-clock, renamed from 0.2's wall-clock) / wasi:cli/environment. The environ_*
-;; pair is UNREACHABLE from Lisp since todo 217: uiop:getenv under --component is
+;; pair is UNREACHABLE from Lisp: uiop:getenv under --component is
 ;; environment.lisp, which binds get-environment straight off this block's own
 ;; wasi:cli/environment instance (see ../../.kb/time-environment-builtins.md), so these
 ;; two stay only because the core's preview1 import slots are index-pinned.

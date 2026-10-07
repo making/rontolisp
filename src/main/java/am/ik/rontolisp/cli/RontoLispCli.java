@@ -514,8 +514,9 @@ public final class RontoLispCli {
 	// something large enough to be worth splitting across threads, and without the
 	// module that "acceleration" is threads racing the scalar defun -- a ~100x
 	// slowdown from the native kernel that reads as a hang under a long program's own
-	// output, with the warning below as the only tell (.todo/700 lost an hour to it,
-	// the warning scrolled off under an LLM decode loop's load line). Unlike the
+	// output, with the warning below as the only tell (an hour was once lost to it,
+	// the warning scrolled off under an LLM decode loop's load line; .kb/vec.md). Unlike
+	// the
 	// compiled .class output (JvmSimdModuleFallbackTest), which may run on a different,
 	// module-equipped machine LATER and so must keep degrading, the interpreter knows
 	// RIGHT NOW whether the module is there: refuse instead of degrading.

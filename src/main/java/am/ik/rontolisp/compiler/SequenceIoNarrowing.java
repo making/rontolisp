@@ -21,7 +21,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * Narrows {@code read-sequence} / {@code write-sequence} call sites whose sequence is
  * proven not to be a string to the byte arm, so the dead character arm (and with it the
  * {@code read-char} / {@code write-string}-over-slice runtime on WASM) leaves the
- * artifact (.todo/338).
+ * artifact.
  *
  * <p>
  * The proof is lexical, in the shape of {@link LetBoundDesignators} but for element

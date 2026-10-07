@@ -42,10 +42,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * through another one. Each probe also asks for {@code current_user}, which is the proof
  * of which role actually got in;</li>
  * <li><b>SCRAM-SHA-256</b> -- the same probe against the SCRAM-only role. It used to be
- * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted;
- * todo 188 made that ~50 s (~1 s on the JVM, ~3 s on the component), so it is an ordinary
- * leg again. The server's {@code authentication_timeout} is raised, for the reason
- * spelled out at {@link #POSTGRES};</li>
+ * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted; a
+ * faster PBKDF2 made that ~50 s (~1 s on the JVM, ~3 s on the component), so it is an
+ * ordinary leg again. The server's {@code authentication_timeout} is raised, for the
+ * reason spelled out at {@link #POSTGRES};</li>
  * <li><b>CRUD</b> -- create / insert / select / update / delete / drop through
  * {@code exec-query}, plus a parameterised statement run twice through
  * {@code prepare-query} + {@code exec-prepared} so the extended protocol is covered too.

@@ -28,40 +28,40 @@ import org.jspecify.annotations.Nullable;
  *
  * An entry is CLEAN when device and host hold the same bytes -- an operand after its
  * upload, a result after its download -- and the host array is then authoritative: a host
- * read needs nothing, and a host write drops the entry. Since {@code .todo/491} an entry
- * can also be DIRTY: the device holds the bytes and the host array does NOT -- a result a
- * member left on the device rather than downloading it, or an array a device member
- * updated in place. A dirty entry is the one place the library is the source of truth,
- * and every host read of that array has to {@linkplain #claim materialize} it first; the
- * enumeration of those readers, on each interceptor, is in {@code .kb/gpu.md} ("The two
- * seams, and what must report through them") and pinned by a test on each, as the writers
- * are. The device side never drops a dirty entry on its own: every path that removes one
- * -- an eviction, a release, a replacement at a different span -- hands the buffer back
- * to the owning device as a {@link Flush} to DOWNLOAD before it is freed, and the device
- * does so at once, before it returns to its caller. A dirty entry whose host array has
- * been collected holds bytes nobody can read, and is simply freed.
+ * read needs nothing, and a host write drops the entry. An entry can also be DIRTY: the
+ * device holds the bytes and the host array does NOT -- a result a member left on the
+ * device rather than downloading it, or an array a device member updated in place. A
+ * dirty entry is the one place the library is the source of truth, and every host read of
+ * that array has to {@linkplain #claim materialize} it first; the enumeration of those
+ * readers, on each interceptor, is in {@code .kb/gpu.md} ("The two seams, and what must
+ * report through them") and pinned by a test on each, as the writers are. The device side
+ * never drops a dirty entry on its own: every path that removes one -- an eviction, a
+ * release, a replacement at a different span -- hands the buffer back to the owning
+ * device as a {@link Flush} to DOWNLOAD before it is freed, and the device does so at
+ * once, before it returns to its caller. A dirty entry whose host array has been
+ * collected holds bytes nobody can read, and is simply freed.
  *
  * <h2>A result's host array may be a STUB, and the storage is then this class's</h2>
  *
- * Since {@code .todo/492} the host array a member is handed for its RESULT may be shorter
- * than the span it stands for -- an array holding only the prefix ahead of the elements
- * (the JVM class output's {@code [rank, dim...]} header; nothing at all on the
- * interpreter), allocated by an interceptor that does not want to pay for a zeroed host
- * array nobody may ever read. Such a stub is recognised structurally -- it is shorter
- * than the span the entry records -- and never written into: its bytes live on the device
- * while the entry is dirty, and in a BACKING array this class allocates the first time
- * the host asks for them ({@link #claim}: the prefix copied from the stub, the elements
- * downloaded by the owner). The backing is held STRONGLY for as long as the stub is
- * reachable (a second weak-keyed map, {@code backings}), answered by every later claim,
- * written through by the host's setters, and uploaded from when the stub is offered again
- * after its device copy was dropped. So a stub is in one of three states and never a
- * fourth: a dirty device copy and no backing; a device copy and a backing; a backing
- * alone. Every path that lets a dirty copy go flushes it into the backing first, and a
- * stub that has neither is a broken invariant the owner throws on rather than uploading
- * zeros. The identity the interceptors key on is the STUB's -- it is the object the
- * program holds -- and the backing is handed out only for the duration of a host read or
- * write; a host rung that would answer its argument back is made to answer the caller's
- * own object ({@code .kb/gpu.md}, "Lazy results, and the result that has no host array").
+ * The host array a member is handed for its RESULT may be shorter than the span it stands
+ * for -- an array holding only the prefix ahead of the elements (the JVM class output's
+ * {@code [rank, dim...]} header; nothing at all on the interpreter), allocated by an
+ * interceptor that does not want to pay for a zeroed host array nobody may ever read.
+ * Such a stub is recognised structurally -- it is shorter than the span the entry records
+ * -- and never written into: its bytes live on the device while the entry is dirty, and
+ * in a BACKING array this class allocates the first time the host asks for them
+ * ({@link #claim}: the prefix copied from the stub, the elements downloaded by the
+ * owner). The backing is held STRONGLY for as long as the stub is reachable (a second
+ * weak-keyed map, {@code backings}), answered by every later claim, written through by
+ * the host's setters, and uploaded from when the stub is offered again after its device
+ * copy was dropped. So a stub is in one of three states and never a fourth: a dirty
+ * device copy and no backing; a device copy and a backing; a backing alone. Every path
+ * that lets a dirty copy go flushes it into the backing first, and a stub that has
+ * neither is a broken invariant the owner throws on rather than uploading zeros. The
+ * identity the interceptors key on is the STUB's -- it is the object the program holds --
+ * and the backing is handed out only for the duration of a host read or write; a host
+ * rung that would answer its argument back is made to answer the caller's own object
+ * ({@code .kb/gpu.md}, "Lazy results, and the result that has no host array").
  *
  * <h2>The key is the IDENTITY of the primitive array, held WEAKLY</h2>
  *
@@ -710,8 +710,8 @@ final class DeviceResidency {
 	/**
 	 * A stub's backing: the full span, with the stub's own prefix copied in. The
 	 * {@code short[]} and {@code byte[]} arms are for symmetry only -- no member RESULTS
-	 * in a bfloat16 or a quantized array ({@code .todo/490}'s and {@code .todo/728}'s
-	 * GEMVs write f32), so no stub of either width exists to back.
+	 * in a bfloat16 or a quantized array (the bfloat16 and Q8_0 GEMVs write f32), so no
+	 * stub of either width exists to back.
 	 */
 	private static Object allocateBacking(Object stub, long spanEnd) {
 		if (stub instanceof float[] f) {

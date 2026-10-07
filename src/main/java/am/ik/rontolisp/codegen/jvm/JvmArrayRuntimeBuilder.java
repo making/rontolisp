@@ -331,11 +331,11 @@ final class JvmArrayRuntimeBuilder {
 	/**
 	 * {@code _subseqCv(Object, Object, Object) -> Object}: the string {@code subseq} lane
 	 * answering a MUTABLE character vector, so a {@code copy-seq}/{@code subseq} result
-	 * has a writable identity like the interpreter's ({@code .todo/559} step 2). A
-	 * character vector or string view input copies elements through {@code _rmGet}; an
-	 * immutable {@code String} slices by code point and converts once through
-	 * {@code _strToCharVec}. The bounds arrive as given, a nil {@code end} meaning "to
-	 * the length", so a refusal reports them as given.
+	 * has a writable identity like the interpreter's. A character vector or string view
+	 * input copies elements through {@code _rmGet}; an immutable {@code String} slices by
+	 * code point and converts once through {@code _strToCharVec}. The bounds arrive as
+	 * given, a nil {@code end} meaning "to the length", so a refusal reports them as
+	 * given.
 	 */
 	static final String SUBSEQ_CV = "_subseqCv";
 
@@ -344,12 +344,11 @@ final class JvmArrayRuntimeBuilder {
 	/**
 	 * {@code _toMutStr(Object) -> Object}: the mutable-result wrap the flipped string
 	 * PRODUCERS ({@code concatenate 'string}, the case family, {@code format nil}, the
-	 * string-stream capture, {@code read-line} -- {@code .todo/559}'s follow-up) finish
-	 * with. A {@code String} input -- always a FRESH runtime string at those sites, never
-	 * the shared literal itself -- converts once through {@code _strToCharVec} (the
-	 * fill-pointer slot cleared: the result is a SIMPLE string); anything else (a
-	 * character vector already, {@code format t}'s nil, an eof value) passes through
-	 * untouched.
+	 * string-stream capture, {@code read-line}) finish with. A {@code String} input --
+	 * always a FRESH runtime string at those sites, never the shared literal itself --
+	 * converts once through {@code _strToCharVec} (the fill-pointer slot cleared: the
+	 * result is a SIMPLE string); anything else (a character vector already,
+	 * {@code format t}'s nil, an eof value) passes through untouched.
 	 */
 	static final String TO_MUT_STR = "_toMutStr";
 
@@ -2215,7 +2214,7 @@ final class JvmArrayRuntimeBuilder {
 		de.ifne(deChar);
 		// A bit vector's zero is the integer 0, not the float 0.0 the two float
 		// widths take below: the stamp is a name string like theirs, so it needs
-		// its own arm before the float fallthrough (.todo/043).
+		// its own arm before the float fallthrough.
 		de.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BIT));
 		de.aload(2);
 		de.invokevirtual(stringEquals);
@@ -2464,7 +2463,7 @@ final class JvmArrayRuntimeBuilder {
 		}
 		// Anything else: the general nil-filled vector, stamped with what seq
 		// remembers -- a bit vector IS the general boxed array stamped bit, so the
-		// copy keeps the stamp the way adjust-array carries it (.todo/820). T is
+		// copy keeps the stamp the way adjust-array carries it. T is
 		// remembered as nothing, so the adopt is a no-op for a plain vector.
 		al.aload(1);
 		al.aconst_null();
@@ -2628,8 +2627,8 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.utf8Entry(STRV), cp.utf8Entry(STRV_DESC), sv));
 
 		// _subseqCv(o, start, end): the string subseq lane answering a MUTABLE character
-		// vector (.todo/559 step 2 -- a copy-seq/subseq result has a writable identity,
-		// like the interpreter's and SBCL's). A nil end means "to the length". A
+		// vector (a copy-seq/subseq result has a writable identity, like the
+		// interpreter's and SBCL's). A nil end means "to the length". A
 		// character vector or string view copies its elements [start, end) directly
 		// through _rmGet (never rendering the source, so chained slicing stays linear);
 		// an immutable String slices by code point and converts once through
@@ -3909,7 +3908,7 @@ final class JvmArrayRuntimeBuilder {
 		a.arraylength();
 		a.istore(rank);
 		// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
-		// printed bit vector reads back as one (.todo/820). make-array never
+		// printed bit vector reads back as one. make-array never
 		// validates stores, so a non-bit element falls back to the general #()
 		// vector below. The stamp is
 		// read through _arrayElementType itself (which hops a displaced chain and
@@ -4457,7 +4456,7 @@ final class JvmArrayRuntimeBuilder {
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BFLOAT16,
 				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BFLOAT16)));
 		// A bit vector is the general boxed array stamped bit: the stamp is the whole
-		// representation, so it decodes to the name the same way (.todo/043).
+		// representation, so it decodes to the name the same way.
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BIT,
 				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BIT)));
 		// ArrayElementTypes.T, which never reaches here: nothing is remembered for it.

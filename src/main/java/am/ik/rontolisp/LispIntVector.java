@@ -10,7 +10,7 @@ import java.util.Arrays;
  * adjustability or displacement -- those, and any rank other than 1, fall back to the
  * general boxed {@link LispArray}) and by ironclad's {@code #N@(...)} table literal. This
  * is the representation that lets the compile backends keep byte/word buffers unboxed
- * (todo 194 stage 2): on the wasm-GC backend the same value is a raw
+ * ({@code .kb/packed-integer-vectors.md}): on the wasm-GC backend the same value is a raw
  * {@code (array (mut i8|i16|i32))}, on the JVM a {@code byte[]} (width 8) or a
  * {@code long[]} (16/32) with a width header.
  *

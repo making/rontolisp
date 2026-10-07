@@ -31,8 +31,8 @@ import org.jspecify.annotations.Nullable;
  * materialize is the device interceptor itself, which takes {@code storage()} instead.
  *
  * <p>
- * Both seams ANSWER the array to read or write. Since {@code .todo/492} a device member's
- * result may be a STUB -- on this backend an empty {@code float[]} / {@code double[]} in
+ * Both seams ANSWER the array to read or write. A device member's result may be a STUB
+ * ({@code .kb/gpu.md}) -- on this backend an empty {@code float[]} / {@code double[]} in
  * the record's field, distinct per result, so that it keys the residency by identity like
  * any storage -- whose elements live on the device and, once read, in a BACKING array the
  * accelerator allocates and answers here; the record's {@code data()} answers that

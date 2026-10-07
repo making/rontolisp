@@ -63,7 +63,7 @@ public record LispSymbol(String name) implements LispVal {
 			// A colon in the member must be |...|-escaped even though needsEscape
 			// accepts it: a bare one behind #: is a package marker the reader
 			// refuses (CLHS 2.4.8.5), so #:a:b would not read back while #:|a:b|
-			// does (.todo/807).
+			// does.
 			return "#:" + (member.indexOf(':') >= 0 ? forceEscape(member) : escape(member));
 		}
 		int colon = qualifierEnd(this.name);

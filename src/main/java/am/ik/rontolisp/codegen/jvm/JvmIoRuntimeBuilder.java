@@ -584,9 +584,9 @@ final class JvmIoRuntimeBuilder {
 	/**
 	 * {@code _strv}, minted only when the array runtime exists: a string reaching a
 	 * runtime body here can then be a MUTABLE CHARACTER VECTOR (every subseq/copy-seq
-	 * result is one, {@code .todo/559} step 2), and the body's {@code (String)} cast
-	 * needs the rendered form. Without the array runtime no character vector can exist
-	 * and the reference must not be minted -- the method it names is not emitted.
+	 * result is one), and the body's {@code (String)} cast needs the rendered form.
+	 * Without the array runtime no character vector can exist and the reference must not
+	 * be minted -- the method it names is not emitted.
 	 */
 	@Nullable private final MethodRefEntry strvRef;
 
@@ -3923,7 +3923,7 @@ final class JvmIoRuntimeBuilder {
 		// is an int and a short caps at 32767 (JvmPackedFloatWidth.BFLOAT16) -- the one
 		// place in this method where the data offset is not 1 + rank. An element on the
 		// wire is the stored pattern itself, so a BF16 tensor reads in with no conversion
-		// (.kb/bfloat16.md, .todo/487 step 3).
+		// (.kb/bfloat16.md).
 		//
 		// UNGATED, unlike the quantized arm below: this arm and its transfer twin are
 		// ~45 bytes together, they are emitted only for a program that already does

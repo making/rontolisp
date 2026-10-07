@@ -98,8 +98,8 @@ public final class ArrayElementTypes {
 	 * as covering seven codes and all four spelled six: {@code bfloat16} was missing from
 	 * the day the width landed until 2026-09-05, so a runtime designator naming it
 	 * degraded to a BOXED general array on every backend but the interpreter
-	 * ({@code .todo/487}). The set is a fact about THIS class, so every site now derives
-	 * it from {@link #specializedCodes()} and an eighth width is one entry here.
+	 * ({@code .kb/bfloat16.md}). The set is a fact about THIS class, so every site now
+	 * derives it from {@link #specializedCodes()} and an eighth width is one entry here.
 	 */
 	public static final int ALL_SPECIALIZED_MASK = specializedMask();
 

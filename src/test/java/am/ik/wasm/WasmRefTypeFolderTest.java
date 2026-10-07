@@ -559,7 +559,7 @@ class WasmRefTypeFolderTest {
 
 	@Test
 	void theIntegerOnlyReactorLosesTheFloatAndRationalTiers() {
-		// The .todo/790 reactor: three operators on a value that entered as an :s32 and
+		// An integer-only reactor: three operators on a value that entered as an :s32 and
 		// never leaves the exact tiers. Reachability alone keeps every arm of the generic
 		// arithmetic (a float or ratio operand is a branch, not a call); the fold proves
 		// those arms dead, and the float struct disappears from the module with them.

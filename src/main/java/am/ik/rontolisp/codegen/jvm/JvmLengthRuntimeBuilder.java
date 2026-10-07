@@ -89,7 +89,7 @@ final class JvmLengthRuntimeBuilder {
 
 		// String: return _scount(v) -- the character-visible length inside the
 		// surrounding quote framing. A supplementary code point counts as one character,
-		// matching (length "😀") == 1 on every backend after todo 153.
+		// matching (length "😀") == 1 on every backend (.kb/characters-code-points.md).
 		MethodCode.Label notSequence = a.newLabel();
 		a.aload(0);
 		a.instanceOf(stringClass);

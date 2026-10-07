@@ -563,7 +563,7 @@ below): with none, every printing operator compiles exactly as before.
 - **A `print-object` method defined BELOW its first use renders the built-in text for
   the earlier print on all four backends** (todo 445; pinned by the per-backend
   `*PrintObjectMethodDefinedBelowItsFirstUse` tests and
-  `clos-print-object-method-defined-below-its-first-use-445`). The compile paths
+  `clos-print-object-method-defined-below-its-first-use`). The compile paths
   route through the generic from the very first print (whole-program registry) while
   the interpreter has not seen the method yet — the two cannot agree on the first
   print by construction, so the compile path answers what the interpreter (and CL)
@@ -861,9 +861,9 @@ computed `change-class`, `withSlots` write-only + nested capture, writer / class
 ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `clos-defclass-slots-inheritance-and-dispatch`, `clos-method-qualifiers-and-call-next-method`,
 `clos-multiple-inheritance-cpl-slots-and-dispatch`, `clos-setf-methods-and-setf-generic`,
-`clos-computed-change-class-442`, `clos-reinitialize-442`,
-`clos-slot-options-and-metaobject-types-442`, `clos-defmethod-eql-specializer-over-a-constant`,
-`clos-print-object-method-defined-below-its-first-use-445`,
+`clos-computed-change-class`, `clos-reinitialize`,
+`clos-slot-options-and-metaobject-types`, `clos-defmethod-eql-specializer-over-a-constant`,
+`clos-print-object-method-defined-below-its-first-use`,
 `package-defmethod-specializer`, `defmethod-on-a-builtin-name-keeps-the-builtin`,
 `defgeneric-short-form-method-combination`, `find-class-metaobject-substrate`,
 `defclass-metaclass-protocol`, `mop-widening-for-mito`,

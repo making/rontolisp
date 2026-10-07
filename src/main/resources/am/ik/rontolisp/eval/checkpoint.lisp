@@ -42,7 +42,7 @@
   ;; ELEMENT-TYPE ('single-float, 'double-float or 'bfloat16), verified to be
   ;; packed. The type arrives as a VALUE, which is the only way a reader can
   ;; pass it and was the shape that caught the runtime-:element-type dispatch
-  ;; missing bfloat16 on every compile backend (.todo/487).
+  ;; missing bfloat16 on every compile backend.
   (let ((a (make-array shape :element-type element-type :initial-element 0.0)))
     (unless (eq (array-element-type a) element-type)
       (error
@@ -108,7 +108,7 @@
   ;; A bfloat16 DST is the one shape that is not its own bytes, so the f32
   ;; words are staged a chunk at a time and NARROWED in, never by materializing
   ;; the whole f32 tensor first -- at 1B parameters that transient is 4.4 GB
-  ;; (.todo/487 step 4).
+  ;; (.kb/checkpoint-readers.md).
   (if (eq (array-element-type dst) 'bfloat16)
       (checkpoint::%stage-float32-narrowed stream dst)
       (progn

@@ -61,8 +61,8 @@ class LinalgBlasTest {
 
 	/**
 	 * The dead-flag guard's discriminator: a named defun and the native kernel installed
-	 * over it print the SAME {@code #<function NAME>} text (todo 434 gave defuns names),
-	 * so the pair is told apart by the Java type -- {@link LispFunction} is the installed
+	 * over it print the SAME {@code #<function NAME>} text (a defun prints its name), so
+	 * the pair is told apart by the Java type -- {@link LispFunction} is the installed
 	 * kernel, {@link LispLambda} the {@code linalg.lisp} / {@code vec.lisp} defun --
 	 * while the printed tag stays pinned alongside.
 	 */

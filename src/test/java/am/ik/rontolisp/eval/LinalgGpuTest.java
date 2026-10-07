@@ -160,8 +160,8 @@ class LinalgGpuTest {
 
 	/**
 	 * The dead-flag guard's discriminator: a named defun and the native kernel installed
-	 * over it print the SAME {@code #<function NAME>} text (todo 434 gave defuns names),
-	 * so the pair is told apart by the Java type -- {@link LispFunction} is the installed
+	 * over it print the SAME {@code #<function NAME>} text (a defun prints its name), so
+	 * the pair is told apart by the Java type -- {@link LispFunction} is the installed
 	 * kernel, {@link LispLambda} the {@code linalg.lisp} defun -- while the printed tag
 	 * stays pinned alongside.
 	 */
@@ -318,8 +318,7 @@ class LinalgGpuTest {
 		// And every member of the STRIDED tier: the six binary ops (the override is
 		// installed unconditionally, the SHAPE and the residency are what the kernel
 		// declines on), the three axis folds and the axes transpose -- and the RESIDENT
-		// tier (.todo/491): sqrt / abs / negative / sign, the five comparison masks,
-		// where
+		// tier: sqrt / abs / negative / sign, the five comparison masks, where
 		// and the Adam update, members over a resident operand only -- plus the INDEX
 		// tier and the clip norm's sum of squares, resident-only as well.
 		for (String member : new String[] { "add", "sub", "mul", "div", "maximum", "minimum", "sum", "amax", "amin",
@@ -332,8 +331,8 @@ class LinalgGpuTest {
 		}
 		for (String internal : new String[] { "%la-adam-step", "%la-gather-strided", "%la-scale", "%la-scatter-rows",
 				"%la-sum-squares",
-				// The fused tier (.todo/499): the compositions torch.lisp spells as one
-				// member each.
+				// The fused tier: the compositions torch.lisp spells as one member
+				// each.
 				"%la-softmax-grad", "%la-log-softmax-grad", "%la-gelu", "%la-gelu-grad", "%la-layer-norm",
 				"%la-layer-norm-grad", "%la-layer-norm-affine", "%la-layer-norm-affine-grad", "%la-dropout-mask",
 				// The attention head's scaled and masked softmax pair (2026-09-02).
@@ -359,7 +358,7 @@ class LinalgGpuTest {
 		assertValueIs("(vec:zeros 1) #'vec:dot", true, LispLambda.class, "VEC:DOT");
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier -------------------------------------------------------------
 
 	/** Rows enough for the fold rule and the fold threshold at a 384-wide row. */
 	private static final int FUSED_ROWS = (int) Math.max(256, (am.ik.gpu.GpuThresholds.fusedMinElements() + 383) / 384);
@@ -393,7 +392,7 @@ class LinalgGpuTest {
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm *x* 1.0e-5)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 nil)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)");
-			// The affine pair (todo-634): the adjoint answers a two-element list, and
+			// The affine pair: the adjoint answers a two-element list, and
 			// both arrays in it are the chain's bits.
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-affine *x* *w* *b* 1.0e-5)");
 			assertMatchesScalarOracle(operands + "(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 nil)");
@@ -462,7 +461,7 @@ class LinalgGpuTest {
 		// Guarded like the resident and index tiers above: eagerly (the mode an embedder
 		// gets by default) a member's result comes home when the call returns, so nothing
 		// but a GEMV matrix is ever resident and the adjoint's operand is uploaded rather
-		// than found. Both backends run lazily here since todo-495, and the operands are
+		// than found. Both backends run lazily here, and the operands are
 		// sized off the FUSED threshold in force, which on Metal is the map threshold
 		// rather than the fold threshold the CUDA half shares -- sized off the latter the
 		// forward declined there and this counted nothing. The divergence assertions in
@@ -561,9 +560,10 @@ class LinalgGpuTest {
 		// answer is the DEFUN's -- and the first call is the lane kernel's, because the
 		// first sight of a matrix declines.
 		// That makes the chain legible from Lisp: (lane device).
-		// .todo/480 gave the lane rung four independent accumulators above 32 columns,
-		// so at 1024 columns it groups as sixteen lanes and answers 16778176 where it
-		// answered 16777984 before. The DEVICE rung is unmoved: it accumulates in
+		// The lane rung keeps four independent accumulators above 32 columns, so at
+		// 1024 columns it groups as sixteen lanes and answers 16778176 where a single
+		// accumulator chain answered 16777984. The DEVICE rung is unmoved: it accumulates
+		// in
 		// double, like the defun, so it still prints 16778240 -- which is the whole
 		// point of the probe, and the reason the two rungs stay legible apart.
 		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
@@ -593,7 +593,7 @@ class LinalgGpuTest {
 				""", "(vec:matvec #f((1.0 2.0) (3.0 4.0)) #d(1.0 2.0))", "(vec:matvec #d(1.0 2.0) #d(1.0 2.0))",
 				"(vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(1.0))",
 				// A bf16 matrix against a bf16 or a double vector, ABOVE the threshold:
-				// the device carries the bf16-against-f32 pairing only (.todo/490), so
+				// the device carries the bf16-against-f32 pairing only, so
 				// both are the defun's answer with the flag and without.
 				"""
 						(defparameter *w* (make-array '(512 512) :element-type 'bfloat16 :initial-element 0.375))
@@ -606,7 +606,7 @@ class LinalgGpuTest {
 						""",
 				// A Q8_0 matrix against a #d vector above the threshold, and a rank-1
 				// quantized "matrix" (one row) against an #f vector: the device carries
-				// the rank-2-against-f32 pairing only (.todo/728), the defun the rest.
+				// the rank-2-against-f32 pairing only, the defun the rest.
 				"""
 						(defparameter *w* (rontolisp:quantize (linalg:reshape (linalg:sin (linalg:arange 1 262145 :element-type 'single-float)) '(512 512)) 'q8-0))
 						(defparameter *x* (linalg:cos (linalg:arange 0 512)))
@@ -622,7 +622,7 @@ class LinalgGpuTest {
 		}
 	}
 
-	// --- the bfloat16 matrix-by-vector product (.todo/490) ---------------------------
+	// --- the bfloat16 matrix-by-vector product ---------------------------------------
 
 	private static boolean takesBf16Matvec() {
 		return takesMatvec() && am.ik.gpu.GpuThresholds.supportsBfloat16();
@@ -686,7 +686,7 @@ class LinalgGpuTest {
 		assertThat(eval(program, false, false, false).print()).as("scalar").isEqualTo("(16778240 16778240)");
 	}
 
-	// --- the Q8_0 matrix-by-vector product (.todo/728) --------------------------------
+	// --- the Q8_0 matrix-by-vector product -------------------------------------------
 
 	private static boolean takesQuantizedMatvec() {
 		return takesMatvec() && am.ik.gpu.GpuThresholds.supportsQuantized();
@@ -1435,17 +1435,17 @@ class LinalgGpuTest {
 		assertThat(output(program, true, true)).as("--gpu --simd").isEqualTo(output(program, false, true));
 	}
 
-	// --- lazy results and the resident tier (.todo/491) -------------------------------
+	// --- lazy results and the resident tier (.kb/gpu.md) -----------------------------
 
 	/**
 	 * Every HOST READ of a packed array's storage there is, each over a result the device
-	 * produced and -- since {@code .todo/491} -- left on the device: the element reads,
-	 * the printer, a defun that walks the array, the lane and the {@code vec:} kernels, a
-	 * typed loop, {@code to-list}, the bulk {@code write-sequence}, and the writes that
-	 * must bring a result home BEFORE they land ({@code (setf (aref ...))}, an in-place
-	 * kernel, an {@code -into}). A reader the materialization does not see prints the
-	 * zeros of an array nobody filled. The members are the bit-identical ones (a
-	 * broadcast add, a transpose), so the oracle is the same program without the flag.
+	 * produced and left on the device: the element reads, the printer, a defun that walks
+	 * the array, the lane and the {@code vec:} kernels, a typed loop, {@code to-list},
+	 * the bulk {@code write-sequence}, and the writes that must bring a result home
+	 * BEFORE they land ({@code (setf (aref ...))}, an in-place kernel, an {@code -into}).
+	 * A reader the materialization does not see prints the zeros of an array nobody
+	 * filled. The members are the bit-identical ones (a broadcast add, a transpose), so
+	 * the oracle is the same program without the flag.
 	 */
 	private static String residencyReaders(int side, String type, String file) {
 		int n = side * side;
@@ -1503,7 +1503,7 @@ class LinalgGpuTest {
 	@Test
 	void aDeviceResultStaysOnTheDeviceUntilTheHostFirstReadsIt() {
 		assumeThat(am.ik.gpu.GpuThresholds.lazyResultsOn())
-			.as("lazy results pay on this backend (CUDA, and Metal since todo-495)")
+			.as("lazy results pay on this backend (CUDA, and Metal with asynchronous command buffers)")
 			.isTrue();
 		int side = residentSide();
 		String program = """
@@ -1596,7 +1596,7 @@ class LinalgGpuTest {
 		// and the cache counted each as a hit. Thirty-odd members; the bound is loose.
 		// Eagerly nothing but a GEMV matrix is ever resident, the tier is never offered,
 		// and the program still prints the oracle -- which the assertion above has
-		// checked; both backends run lazily here since todo-495.
+		// checked; both backends run lazily here.
 		if (am.ik.gpu.GpuThresholds.lazyResultsOn()) {
 			assertThat(am.ik.gpu.GpuThresholds.residencyHits()).isGreaterThan(hits + 20);
 		}

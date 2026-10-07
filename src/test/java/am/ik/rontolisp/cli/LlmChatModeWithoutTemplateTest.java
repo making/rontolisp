@@ -12,11 +12,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * examples/llm/llm.lisp's {@code -m chat} on a checkpoint with no chat template used to
- * fall through to plain generation silently (.todo/712): the user asked for chat mode and
- * got a well-formed answer to a different question, with no diagnostic.
- * {@code stories260K.bin} (a plain llama, checked in beside {@code tok512.bin}) has no
- * {@code <|im_start|>} in its 512-token vocabulary, so it reproduces this without a
- * download.
+ * fall through to plain generation silently: the user asked for chat mode and got a
+ * well-formed answer to a different question, with no diagnostic. {@code stories260K.bin}
+ * (a plain llama, checked in beside {@code tok512.bin}) has no {@code <|im_start|>} in
+ * its 512-token vocabulary, so it reproduces this without a download.
  */
 class LlmChatModeWithoutTemplateTest {
 

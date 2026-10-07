@@ -24,9 +24,9 @@ import java.util.Objects;
  * {@link #ORDER_KEY}; a String key can never collide with an {@code Integer} bucket key,
  * so the whole table stays ONE object that {@code hash-table-p} and the printer recognise
  * by its class alone. A removed pair is NOT unlinked from that list (unlinking is O(n)
- * per removal: scan plus memmove, which made 50,000 removals take ~3 s -- `.todo/855`);
- * its key slot is nulled instead and the list compacts lazily, while the count of such
- * tombstones hangs off {@link #DEAD_KEY}.
+ * per removal: scan plus memmove, which made 50,000 removals take ~3 s --
+ * {@code .kb/hash-tables.md}); its key slot is nulled instead and the list compacts
+ * lazily, while the count of such tombstones hangs off {@link #DEAD_KEY}.
  *
  * <p>
  * The class is exact, not merely map-shaped: the emitted helpers cast to it, so a plain

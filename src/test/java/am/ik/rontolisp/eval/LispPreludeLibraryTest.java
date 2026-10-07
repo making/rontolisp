@@ -113,8 +113,7 @@ class LispPreludeLibraryTest {
 	// fifth transcription with a green tick on it. Four such transcriptions existed --
 	// these two helpers, the inline lowering and the program-scan mask -- all documented
 	// as covering seven codes and all spelling six, so bfloat16 through a runtime
-	// designator degraded to a boxed general array everywhere but the interpreter
-	// (.todo/487).
+	// designator degraded to a boxed general array everywhere but the interpreter.
 	@Test
 	void bothMakeArrayElementTypeHelpersCoverEverySpecializedCode() {
 		// Each helper is selected by the call SHAPE: the -fp twin only by a site that

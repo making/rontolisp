@@ -277,13 +277,13 @@ class GpuDeclineTest {
 		// The GEMV pair behind vec:matvec, the one member outside linalg:.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F64);
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F32);
-		// And the bfloat16 one (.todo/490), which decodes in its lane loop and is
+		// And the bfloat16 one, which decodes in its lane loop and is
 		// otherwise gemv_f32 -- the source says so with the one shift that widens.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_BF16);
 		assertThat(resource("gemm.cu")).contains("__uint_as_float(((unsigned) p) << 16)")
 			.contains("gemv_ff<unsigned short>(W, x, y, rows, cols)")
 			.contains("gemv_ff<float>(W, x, y, rows, cols)");
-		// And the Q8_0 one (.todo/728), which is the CPU contract's bits: the source
+		// And the Q8_0 one, which is the CPU contract's bits: the source
 		// spells the pinned f32 step with the _rn intrinsics (no FMA whatever the
 		// toolchain) and the defun's fold.
 		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_Q8);
@@ -295,7 +295,7 @@ class GpuDeclineTest {
 			assertThat(ptx).contains(".visible .entry " + kernel);
 		}
 		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_SQRT + ": {").contains("sqrt((double) x)");
-		// The fused tier's fourteen (.todo/499).
+		// The fused tier's fourteen.
 		for (String kernel : CudaGemm.KERNELS_FUSED) {
 			assertThat(ptx).contains(".visible .entry " + kernel);
 		}
@@ -369,7 +369,7 @@ class GpuDeclineTest {
 		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, cols)).isFalse();
 		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, 0)).isFalse();
 		assertThat(y).containsOnly(0.0);
-		// The bfloat16 form (.todo/490): the same conditions over a short[] matrix and an
+		// The bfloat16 form: the same conditions over a short[] matrix and an
 		// f32 vector, declining rather than throwing -- and on a machine whose device
 		// has no bf16 kernel (Metal), declining at every shape.
 		short[] wb = new short[rows * cols];
@@ -383,7 +383,7 @@ class GpuDeclineTest {
 		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 0, 0, cols)).isFalse();
 		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 0, rows, 0)).isFalse();
 		assertThat(yf).containsOnly(0.0f);
-		// The Q8_0 form (.todo/728): the same conditions over a byte[] of blocks -- whose
+		// The Q8_0 form: the same conditions over a byte[] of blocks -- whose
 		// extent is a BYTE count, rows * cols / 32 * 34 -- plus a column count that is
 		// not whole blocks, declining rather than throwing; and on a device without the
 		// kernel (Metal), at every shape.
@@ -403,7 +403,7 @@ class GpuDeclineTest {
 
 	@Test
 	void theQuantizedActivationIsTheCpuContractsQuantizerBlockForBlock() {
-		// The host half of the Q8_0 GEMV (.todo/728), on every machine: what the device
+		// The host half of the Q8_0 GEMV, on every machine: what the device
 		// is handed is the CPU contract's activation (.kb/quantized-matrix.md) -- amax
 		// over |x| with a strict > (a NaN never raises it), sx = amax / 127 in double,
 		// q = rint(x / sx) half to even, all zero where sx is -- packed as nb
@@ -584,7 +584,7 @@ class GpuDeclineTest {
 		assertThat(Gpu.layerNorm(xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
 		assertThat(Gpu.layerNormGrad(xf, 0, xf, 0, xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
-		// Layer-norm's affine pair (todo-634), whose parameters are a row long.
+		// Layer-norm's affine pair, whose parameters are a row long.
 		double[] par = new double[len];
 		float[] parf = new float[len];
 		assertThat(Gpu.layerNormAffine(x, 0, par, 0, par, 0, c, 0, rows, len, 1e-5)).isFalse();

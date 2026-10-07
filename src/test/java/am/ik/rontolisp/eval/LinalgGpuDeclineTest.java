@@ -276,7 +276,7 @@ class LinalgGpuDeclineTest {
 
 	@Test
 	void theLibmFreeFusedMembersAreByteIdenticalWithTheFlagOnEveryMachine() {
-		// The fused tier (.todo/499): layer-norm's normalization and adjoint, softmax's
+		// The fused tier: layer-norm's normalization and adjoint, softmax's
 		// adjoint and the dropout mask replay chains with no library function in them,
 		// so with a device they land on the defun's bits and without one the defun
 		// runs -- the same print either way. 384 x 384 is over the fused threshold on
@@ -290,7 +290,7 @@ class LinalgGpuDeclineTest {
 				""";
 		String[] calls = { "(linalg::%la-layer-norm *x* 1.0e-5)", "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)",
 				"(linalg::%la-softmax-grad *g* *x* -1)",
-				// Layer-norm's affine and its two-array adjoint (todo-634).
+				// Layer-norm's affine and its two-array adjoint.
 				"(linalg::%la-layer-norm-affine *x* *w* *b* 1.0e-5)",
 				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 nil)",
 				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 *g*)",
@@ -341,7 +341,7 @@ class LinalgGpuDeclineTest {
 					""".formatted(type, type);
 			assertThat(eval(program, true)).as(type).isEqualTo(eval(program, false));
 		}
-		// And the bfloat16 pairing (.todo/490): a #bf16 matrix against an #f vector,
+		// And the bfloat16 pairing: a #bf16 matrix against an #f vector,
 		// below the threshold, prints the defun's #f result with the flag and without.
 		String bf16 = """
 				(defparameter *w* (make-array '(16 16) :element-type 'bfloat16 :initial-element 0.375))
@@ -349,7 +349,7 @@ class LinalgGpuDeclineTest {
 				(list (vec:matvec *w* *x*) (vec:matvec *w* *x*))
 				""";
 		assertThat(eval(bf16, true)).as("bfloat16").isEqualTo(eval(bf16, false));
-		// And the Q8_0 pairing (.todo/728): a quantized matrix against an #f vector,
+		// And the Q8_0 pairing: a quantized matrix against an #f vector,
 		// below the threshold, prints the defun's #f result with the flag and without.
 		String q8 = """
 				(defparameter *w* (rontolisp:quantize (linalg:reshape (linalg:sin (linalg:arange 1 513 :element-type 'single-float)) '(16 32)) 'q8-0))

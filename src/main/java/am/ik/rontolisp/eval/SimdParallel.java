@@ -129,9 +129,9 @@ final class SimdParallel {
 
 	/**
 	 * Half the available processors, never below two on a box that has two -- the
-	 * template's rule, and the measurements behind it are in {@code .kb/simd-parallel.md}
-	 * ({@code .todo/697}). A pool as wide as the machine buys nothing (the GEMV is
-	 * bandwidth-bound well before the last core) and makes every call's latency the
+	 * template's rule, and the measurements behind it are in
+	 * {@code .kb/simd-parallel.md}. A pool as wide as the machine buys nothing (the GEMV
+	 * is bandwidth-bound well before the last core) and makes every call's latency the
 	 * maximum over as many threads as the box can run, so anything else runnable -- a
 	 * build, a second copy of the same program -- lands in the middle of a leaf and the
 	 * caller waits out a scheduler quantum for it.

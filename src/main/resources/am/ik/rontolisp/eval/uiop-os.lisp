@@ -140,7 +140,7 @@
 ;;; Windows shortcut support. The two octet readers are portable stream work
 ;;; and are real; the two .lnk parsers are upstream's bodies, which navigate the
 ;;; file with file-position on a binary file stream. That repositioning is now
-;;; real on all four backends (.kb/read-load-streams.md, .todo/876, .todo/877),
+;;; real on all four backends (.kb/read-load-streams.md),
 ;;; so the bodies below run unguarded everywhere.
 (defun uiop/os:read-null-terminated-string (%rnt-s)
   (with-output-to-string (%rnt-out)

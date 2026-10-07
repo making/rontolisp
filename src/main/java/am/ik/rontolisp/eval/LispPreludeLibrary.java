@@ -296,7 +296,7 @@ public final class LispPreludeLibrary {
 		// the array to write into (a fresh bit array for a nil result, the first input
 		// destructively for t, or the supplied result array after checking it is a bit
 		// array of the same dimensions). The loops walk row-major-aref, which is
-		// rank-blind, so a rank-n bit array works the way CL requires (.todo/043).
+		// rank-blind, so a rank-n bit array works the way CL requires.
 		SOURCES.put("%BIT-ARRAY-P", """
 				(defun %bit-array-p (x)
 				  (and (arrayp x) (equal (array-element-type x) 'bit)))
@@ -440,7 +440,7 @@ public final class LispPreludeLibrary {
 		// drift apart. No bit-vector value exists yet (a :element-type 'bit
 		// array is a plain vector), so the two bit spellings answer nil for
 		// every value today; the functions exist so portable code calling
-		// them loads (.todo/043).
+		// them loads.
 		SOURCES.put(LispNames.SIMPLE_VECTOR_P, """
 				(defun simple-vector-p (x)
 				  (typep x 'simple-vector))
@@ -458,7 +458,7 @@ public final class LispPreludeLibrary {
 		// subscript; t only when every subscript is a valid index. Strings
 		// count (they are rank-1 character arrays), and the dimension -- not
 		// the fill pointer -- is what a subscript is checked against, matching
-		// array-dimensions on every backend (.todo/043).
+		// array-dimensions on every backend.
 		SOURCES.put(LispNames.ARRAY_IN_BOUNDS_P, """
 				(defun array-in-bounds-p (array &rest subscripts)
 				  (if (not (arrayp array))
@@ -578,7 +578,7 @@ public final class LispPreludeLibrary {
 				        (if (functionp held) (funcall held condition) held))
 				      (error 'type-error :datum condition :expected-type 'java:java-exception)))
 				""");
-		// Undoes the |...|-framing todo 626 gave prin1-to-string's spelling of a symbol
+		// Undoes the |...|-framing prin1-to-string gives the spelling of a symbol
 		// whose name is not upcase-invariant. type-of and symbol-package both read a
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
 		// (below), and the %struct-/%class- tag prefix is always lowercase, so an
@@ -983,7 +983,7 @@ public final class LispPreludeLibrary {
 				                     (t :no-match))))
 				      (m 0 0 nil))))
 				""");
-		// translate-pathname -- the COMPONENT-WISE translation (todo-447), a port of
+		// translate-pathname -- the COMPONENT-WISE translation, a port of
 		// SBCL's translate-component / translate-directories rule onto the flat
 		// namestring model: source, from and to are split with %pathname-split +
 		// %path-dir-parts and handled DIRECTORY to DIRECTORY, NAME to NAME, TYPE to
@@ -1265,8 +1265,8 @@ public final class LispPreludeLibrary {
 		// the cond spelled six from the day bfloat16 landed until 2026-09-05, so a
 		// runtime designator naming that width degraded to a BOXED general array on
 		// every backend but the interpreter -- and on wasm walked straight past the
-		// refusal WasmArrayCompiler puts on the literal spelling for exactly that reason
-		// (.todo/487). Count the arms against ArrayElementTypes, never against this
+		// refusal WasmArrayCompiler puts on the literal spelling for exactly that reason.
+		// Count the arms against ArrayElementTypes, never against this
 		// sentence. Doing that AT each call site costs
 		// ~1.3 KB of wasm per site (measured; .kb/array-literals.md), and
 		// array-operations alone has 21 of them, so the arms live here instead and every
@@ -1612,7 +1612,7 @@ public final class LispPreludeLibrary {
 				        (if (equal %csp-k :string-input) t (equal %csp-k :string-output)))
 				      nil))
 				""");
-		// The read-sequence / write-sequence argument check (.todo/932): a dotted-list
+		// The read-sequence / write-sequence argument check: a dotted-list
 		// buffer, a negative, non-integer or symbolic bound, and a range outside the
 		// buffer are type-errors. ONE defun every site calls, not an inline test: the
 		// inline check cost ~8 KB of wasm per site, the defun call ~0.2 KB -- the
@@ -2418,7 +2418,7 @@ public final class LispPreludeLibrary {
 				                                 %tfn-t)))
 				        (unless (probe-file %tfn-c) (setq %tfn-n %tfn-c))))))
 				""");
-		// The uiop/stream designator tables (.todo/359): upstream defines
+		// The uiop/stream designator tables (.kb/uiop.md): upstream defines
 		// call-with-input and call-with-output but does NOT export them, so no
 		// uiop resource may define them -- they live here, called by the
 		// with-input / with-output Java expansions and by the exported designator
@@ -2562,7 +2562,7 @@ public final class LispPreludeLibrary {
 				                    (write-char (code-char b) s)
 				                    (setq i (+ i 1)))))))))))
 				""");
-		// rontolisp:octets-to-string: the PUBLIC name for the decoder above (.todo/691).
+		// rontolisp:octets-to-string: the PUBLIC name for the decoder above.
 		// A thin delegator, not a second definition -- the lenient policy (an
 		// (unsigned-byte 8) vector, never nil, never signals; a byte that leads no
 		// valid sequence, one a shorter prefix truncates, and one whose 4-byte
@@ -3062,7 +3062,7 @@ public final class LispPreludeLibrary {
 		// (see float-digits below) -- never stripped of trailing factors of two
 		// beyond that width: a normal double's significand always fills the full
 		// 53 bits, even bits included, matching the fixed-width mantissa field
-		// the hardware stores (.todo/896 -- the previous body stripped every
+		// the hardware stores (the previous body stripped every
 		// factor of two it could, answering 1 0 1.0 for 1.0d0 where SBCL answers
 		// 4503599627370496 -52 1). Every intermediate is scalar-small (at most a
 		// 53-bit significand), exact on the interpreter, the JVM and WASM-GC.
@@ -3129,8 +3129,8 @@ public final class LispPreludeLibrary {
 				""");
 		// ldb-test: T when any bit of the byte specifier's field is set -- the
 		// negation of ldb's zero test. Going through ldb (not a hand-rolled
-		// dpb spelling) dodges the deposit-field/dpb mix-up (.todo/037 Slice A:
-		// dpb deposits newbyte's LOW size bits, deposit-field its bits AT the
+		// dpb spelling) dodges the deposit-field/dpb mix-up (dpb deposits
+		// newbyte's LOW size bits, deposit-field its bits AT the
 		// field); the inner ldb call validates the argument shapes.
 		SOURCES.put(LispNames.LDB_TEST, """
 				(defun ldb-test (bytespec integer)
@@ -3145,7 +3145,7 @@ public final class LispPreludeLibrary {
 		// (already a simplest rational, and the only one that round-trips by
 		// construction) -- with no fraction involved this is exact on every
 		// backend, and the check runs BEFORE integer-decode-float: since
-		// .todo/896 that function answers a full-width (float-digits ax)-bit
+		// that function answers a full-width (float-digits ax)-bit
 		// significand instead of one stripped down to its odd part, an
 		// integer-valued float's exponent is no longer reliably non-negative
 		// (2.0 decodes to significand 4503599627370496 and exponent -51, not
@@ -4673,7 +4673,7 @@ public final class LispPreludeLibrary {
 			return referencesName(program, LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED, canonical);
 		}
 		// The entries uiop:with-input's and uiop:with-output's EXPANSIONS call
-		// (.todo/359). Same timing problem: the expansions run inside the
+		// (.kb/uiop.md). Same timing problem: the expansions run inside the
 		// expression compilers, long after this pass, so the reference this
 		// selection would look for does not exist yet. The uiop halves of the
 		// same expansions -- the pathname arms opening through
@@ -5188,9 +5188,9 @@ public final class LispPreludeLibrary {
 	 * {@code bfloat16} was missing from all four from the day the width landed until
 	 * 2026-09-05, so a runtime designator naming it degraded to a BOXED general array on
 	 * every backend but the interpreter, and on wasm walked past the refusal
-	 * {@code WasmArrayCompiler} puts on the literal spelling for exactly that reason
-	 * ({@code .todo/487}). The set is a fact about {@link ArrayElementTypes}; an eighth
-	 * width is one entry there and all four sites follow.
+	 * {@code WasmArrayCompiler} puts on the literal spelling for exactly that reason. The
+	 * set is a fact about {@link ArrayElementTypes}; an eighth width is one entry there
+	 * and all four sites follow.
 	 * @param name the defun's name
 	 * @param prefix the defun's parameter-name prefix ({@code %mae} / {@code %maef})
 	 * @param extraParams the extra parameters, each preceded by a space, or empty

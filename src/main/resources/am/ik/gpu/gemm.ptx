@@ -12,8 +12,8 @@
 // same provenance note however long it grows)
 //
 // compute_75 (Turing, 2018) is the floor because CUDA 13 refuses to target anything older,
-// not because we chose it. -fmad=false (todo-499): nvcc may otherwise contract `a * b + c`
-// into one fused multiply-add anywhere, and every kernel here that promises the CPU's
+// not because we chose it. -fmad=false: nvcc may otherwise contract `a * b + c` into
+// one fused multiply-add anywhere, and every kernel here that promises the CPU's
 // bits rounds the product and the sum separately; the products that DO fuse (the GEMMs,
 // the GEMV) say so with an explicit fma(), which the flag leaves alone. See .kb/gpu.md.
 //

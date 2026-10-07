@@ -335,7 +335,7 @@
   ;; SmolLM2-Instruct's own tokenizer_config.json chat_template
   ;; unconditionally opens with this system turn whenever the first message
   ;; is not already one -- confirmed byte-identical to llama.cpp's own
-  ;; rendering of the checkpoint's template (.todo/701). *chatml* (no system
+  ;; rendering of the checkpoint's template. *chatml* (no system
   ;; turn) is what LFM2.5's own template renders for the same one-user-turn
   ;; case, so the two families need separate constants despite sharing every
   ;; other token.

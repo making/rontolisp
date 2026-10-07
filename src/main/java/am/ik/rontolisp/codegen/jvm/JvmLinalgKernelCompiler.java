@@ -99,7 +99,7 @@ final class JvmLinalgKernelCompiler {
 			// The internal STACKED matrix product behind linalg:matmul at rank >= 3
 			// (torch.bmm): one ikj slab per batch, the same kernel dot's M.M case runs.
 			Map.entry(LispNames.LINALG_MATMUL_ND, "laMatmulNd"),
-			// The two members todo-473 moved onto this seam: the fused optimizer update
+			// The two members moved onto this seam: the fused optimizer update
 			// behind torch:adam / torch:adamw, and the one fill loop behind
 			// linalg:rand / randn / uniform. Both are internal linalg: members precisely
 			// so that this compiler -- which claims linalg: call sites and nothing else
@@ -168,7 +168,7 @@ final class JvmLinalgKernelCompiler {
 			case LispNames.LINALG_IM2COL, LispNames.LINALG_ADAM_STEP, LispNames.LINALG_RNG_FILL,
 					LispNames.LINALG_GATHER_STRIDED,
 					// The attention head's softmax pair (2026-09-02), and layer-norm's
-					// affine adjoint (todo-634).
+					// affine adjoint.
 					LispNames.LINALG_SCALED_MASKED_SOFTMAX, LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD,
 					LispNames.LINALG_LAYER_NORM_AFFINE_GRAD ->
 				5;
@@ -176,10 +176,10 @@ final class JvmLinalgKernelCompiler {
 			case LispNames.LINALG_WHERE, LispNames.LINALG_SCATTER_ROWS, LispNames.LINALG_GELU_GRAD,
 					LispNames.LINALG_SOFTMAX_GRAD, LispNames.LINALG_LOG_SOFTMAX_GRAD ->
 				3;
-			// The fused tier's four-argument members (todo-499); %la-layer-norm is two,
+			// The fused tier's four-argument members; %la-layer-norm is two,
 			// the default.
 			case LispNames.LINALG_LAYER_NORM_GRAD, LispNames.LINALG_DROPOUT_MASK,
-					// Layer-norm's affine forward (todo-634).
+					// Layer-norm's affine forward.
 					LispNames.LINALG_LAYER_NORM_AFFINE ->
 				4;
 			// concatenate takes its list and :axis; a device member only, in that form.
@@ -205,7 +205,7 @@ final class JvmLinalgKernelCompiler {
 			LispNames.LINALG_ARGMAX, new Extended("laArgmaxAxis", 2), LispNames.LINALG_ARGMIN,
 			new Extended("laArgminAxis", 2),
 			// concatenate has no lane kernel: the name here is never emitted, the shape
-			// is. Nor has softmax, a device member in this form only (todo-499).
+			// is. Nor has softmax, a device member in this form only.
 			LispNames.LINALG_CONCATENATE, new Extended("laConcatenate", 2), LispNames.LINALG_SOFTMAX,
 			new Extended("laSoftmaxAxis", 2), LispNames.LINALG_LOG_SOFTMAX, new Extended("laLogSoftmaxAxis", 2));
 
@@ -230,7 +230,7 @@ final class JvmLinalgKernelCompiler {
 	private static final Map<String, int[]> WRITTEN = Map.of(LispNames.LINALG_ADAM_STEP, new int[] { 0, 2, 3 },
 			LispNames.LINALG_SCATTER_ROWS, new int[] { 0 }, LispNames.LINALG_SCALE, new int[] { 0 },
 			LispNames.LINALG_RNG_FILL, new int[] { 0 },
-			// The dropout mask advances its state vector in place (todo-499).
+			// The dropout mask advances its state vector in place.
 			LispNames.LINALG_DROPOUT_MASK, new int[] { 2 });
 
 	/** The ops-map key of a member's extended bridge registration. */

@@ -67,7 +67,7 @@ final class WasmRandomCompiler {
 		}
 		if (WasmLispCompiler.isDefinitelyDouble(args.get(1))) {
 			// A limit proven a float: the float path directly, no runtime test needed --
-			// but reject a non-positive one first (.todo/981), which this path would
+			// but reject a non-positive one first, which this path would
 			// otherwise never check.
 			int limitSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -105,7 +105,7 @@ final class WasmRandomCompiler {
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.IF);
 			ctx.writer.writeRefType(true, Type.EQ.code());
-			// Float limit: reject <= 0.0 first under EH mode (.todo/981), then
+			// Float limit: reject <= 0.0 first under EH mode, then
 			// (rand / 2^31) * limit, a TYPE_FLOAT struct. The fraction spends the
 			// draw's low 32 bits, masked to [0, 2^31).
 			if (WasmEmitHelper.checksConsFields(ctx)) {
@@ -143,8 +143,7 @@ final class WasmRandomCompiler {
 				ctx.writer.write(Instruction.DROP);
 				// A ratio passes _as_f64 (float contagion) but is neither integer nor
 				// float: _int_val rejects it too, now under the SAME register so it
-				// reports RANDOM's own REAL type instead of an unnamed INTEGER one
-				// (.todo/981).
+				// reports RANDOM's own REAL type instead of an unnamed INTEGER one.
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(limitSlot);
 				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_VAL);
@@ -329,8 +328,8 @@ final class WasmRandomCompiler {
 
 	/**
 	 * Rejects a {@code TYPE_FLOAT} limit whose value is {@code <= 0.0}: RANDOM's domain
-	 * violation (.todo/981), reported like a non-real limit -- a catchable
-	 * {@code type-error} naming RANDOM's own REAL type under EH mode, a trap outside it
+	 * violation, reported like a non-real limit -- a catchable {@code type-error} naming
+	 * RANDOM's own REAL type under EH mode, a trap outside it
 	 * ({@link WasmLispCompiler#FUNC_TYPE_ERR_REAL}'s own gate).
 	 * @param ctx the compilation context
 	 * @param limitSlot the {@code (ref null eq)} local holding the limit

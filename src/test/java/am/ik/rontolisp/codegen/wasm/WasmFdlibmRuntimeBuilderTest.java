@@ -131,7 +131,7 @@ class WasmFdlibmRuntimeBuilderTest {
 	// patterns that reach every edge), then the special values, whose pairs feed the
 	// binary functions through the consecutive-input rule.
 	private static double[] inputs() {
-		Random random = new Random(842);
+		Random random = new Random(0x5EEDL);
 		List<Double> out = new ArrayList<>();
 		for (int i = 0; i < 12000; i++) {
 			double u = random.nextDouble();

@@ -65,7 +65,7 @@ final class JvmHttpServerSeamCompiler {
 				// refusing by name. Refusing would be the more honest answer to "a war
 				// cannot own a port" -- but the register spelling is the whole point:
 				// the clack-handler-rontolisp shim reaches this seam, and registering
-				// here is what makes its servlet leg (.todo/532) a feature-gated
+				// here is what makes its servlet leg (.kb/clack.md) a feature-gated
 				// spelling of the same call instead of a new transport. The port and
 				// address are evaluated for their effects and discarded (the container
 				// owns both), and the answered handle is the constant 0: join returns

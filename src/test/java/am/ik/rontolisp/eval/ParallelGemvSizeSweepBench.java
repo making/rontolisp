@@ -3,13 +3,12 @@ package am.ik.rontolisp.eval;
 import java.util.Random;
 
 /**
- * {@code .todo/702}'s single measurement: whether the parallel f32 GEMV's ~41-42 Gelem/s
- * plateau ({@code .todo/488}'s README) is memory bandwidth or the parallel machinery
- * itself. A bandwidth ceiling has no reason to bind a 0.26 MB matrix and a 67 MB one
- * identically, so this sweeps square shapes from a size unambiguously cache-resident
- * (256x256) up past the shape that plateaus, and reports the parallel arm's Gelem/s at
- * every point in between -- no bf16, no model, so nothing here can be misread as a
- * comparison of widths.
+ * A single measurement: whether the parallel f32 GEMV's ~41-42 Gelem/s plateau
+ * ({@code .kb/simd-parallel.md}) is memory bandwidth or the parallel machinery itself. A
+ * bandwidth ceiling has no reason to bind a 0.26 MB matrix and a 67 MB one identically,
+ * so this sweeps square shapes from a size unambiguously cache-resident (256x256) up past
+ * the shape that plateaus, and reports the parallel arm's Gelem/s at every point in
+ * between -- no bf16, no model, so nothing here can be misread as a comparison of widths.
  *
  * <p>
  * Only the shipped f32 kernel ({@link VecSimdKernels#matvecIntoF}) is timed, serial and
@@ -24,8 +23,9 @@ import java.util.Random;
  * }</pre>
  *
  * Results and conditions (base commit, JIT, machine, load average, thread count) are
- * recorded in {@code .todo/702-.../README.md}, not here -- this file does not change once
- * the item closes.
+ * recorded in
+ * {@code .todo/artefacts/702-the-parallel-cap-is-the-machinery-or-memory-one-run-decides/README.md},
+ * not here -- this file does not change with them.
  */
 public final class ParallelGemvSizeSweepBench {
 

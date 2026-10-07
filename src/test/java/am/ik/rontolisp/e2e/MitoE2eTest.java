@@ -50,9 +50,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * wider, {@code migration-expressions} (the diff against the live schema, not a file),
  * {@code migrate-table}, and a re-diff that has to come back empty with the existing row
  * intact. Writing migration FILES ({@code generate-migrations}) is real on all three
- * backends too since {@code .todo/257} landed the directory-creation and unlink imports
- * -- this leg still exercises the DB-side workflow, which is the part all three share, so
- * a file-writing leg stays the re-verification trigger;</li>
+ * backends too, through the directory-creation and unlink imports -- this leg still
+ * exercises the DB-side workflow, which is the part all three share, so a file-writing
+ * leg stays the re-verification trigger;</li>
  * <li><b>{@code count-dao}</b> ({@code INTERPRETER ONLY}) -- see
  * {@link #countDaoIsUndefinedOnTheCompiledBackends()}.</li>
  * </ol>

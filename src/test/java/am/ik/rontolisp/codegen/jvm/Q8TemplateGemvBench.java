@@ -7,7 +7,9 @@ import java.util.Random;
  * kernels that ships in every {@code --simd} {@code .class}, reached through the real
  * bridge entries over headered arrays, so the header arithmetic is timed too and the
  * surrounding class is shown not to change an inlining decision. Same variants, same
- * shapes, same values; run by {@code .todo/672-.../bench.sh} under both JITs.
+ * shapes, same values; run by
+ * {@code .todo/artefacts/672-a-q8-0-quantized-weight-matrix-and-its-integer-dot-gemv/bench.sh}
+ * under both JITs.
  */
 public final class Q8TemplateGemvBench {
 

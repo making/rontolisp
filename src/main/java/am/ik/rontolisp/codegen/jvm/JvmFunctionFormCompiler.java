@@ -71,7 +71,7 @@ final class JvmFunctionFormCompiler {
 		}
 		// A run-time name resolution BOXES the resolved funcId as a function value
 		// (Object[]{Integer funcId}), so functionp answers t and the value prints
-		// its registered name (.todo/750). When the eval runtime exists
+		// its registered name. When the eval runtime exists
 		// (Ctx.evalStoreRef != null) its function namespace (_fenv, where
 		// (setf (symbol-function ...)) installs and fmakunbound leaves its tombstone)
 		// is probed first and decides on its own; without it _fenv is necessarily

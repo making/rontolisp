@@ -253,7 +253,7 @@ class WasmStringParamBoundaryE2eTest {
 		}
 	}
 
-	// .todo/793: a user (defun subseq ...) on a `cl` name the backend intercepts closed
+	// A user (defun subseq ...) on a `cl` name the backend intercepts closed
 	// the charvec gate (defunNames trusted the definition) even though the call site
 	// still compiles to the STANDARD subseq operator -- the definition never runs
 	// (ClRedefinitionWarnings) -- which reaches %SUBSEQ-RUNTIME assuming a charvec is
@@ -280,7 +280,7 @@ class WasmStringParamBoundaryE2eTest {
 				inst.exports.Go();
 				console.log(seen);
 				""";
-		assertThat(run(module, host, false, OptimizeLevel.SIZE, "gate793")).isEqualTo("bc");
+		assertThat(run(module, host, false, OptimizeLevel.SIZE, "intercepted-subseq")).isEqualTo("bc");
 	}
 
 	// A literal :string site at the TOP LEVEL stages into the same reserved block as one

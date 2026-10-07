@@ -133,12 +133,11 @@ final class JvmLinalgGpu {
 	private static final Map<String, String> EXT_KERNELS = Map.of(LispNames.LINALG_SUM, "gpuSumAxis",
 			LispNames.LINALG_AMAX, "gpuAmaxAxis", LispNames.LINALG_AMIN, "gpuAminAxis", LispNames.LINALG_TRANSPOSE,
 			"gpuTransposeAxes", LispNames.LINALG_CONCATENATE, "gpuConcatenate",
-			// softmax over its :axis (the fused tier, todo-499), and log-softmax over
-			// its own (todo-629).
+			// softmax over its :axis (the fused tier), and log-softmax over its own.
 			LispNames.LINALG_SOFTMAX, "gpuSoftmaxAxis", LispNames.LINALG_LOG_SOFTMAX, "gpuLogSoftmaxAxis");
 
 	/**
-	 * The FUSED tier's base-shape members ({@code .todo/499}): the compositions
+	 * The FUSED tier's base-shape members ({@code .kb/gpu.md}): the compositions
 	 * {@code torch.lisp} spells as one internal member each so the device can run them as
 	 * one pass -- the exact GELU and its adjoint, softmax's adjoint, log-softmax's
 	 * adjoint, layer-norm's normalization and its adjoint, and the dropout mask. Same
@@ -156,7 +155,7 @@ final class JvmLinalgGpu {
 			Map.entry(LispNames.LINALG_SCALED_MASKED_SOFTMAX, "gpuScaledMaskedSoftmax"),
 			Map.entry(LispNames.LINALG_SCALED_MASKED_SOFTMAX_GRAD, "gpuScaledMaskedSoftmaxGrad"),
 			// Layer-norm's affine folded into the pair, the adjoint answering two
-			// arrays (todo-634).
+			// arrays.
 			Map.entry(LispNames.LINALG_LAYER_NORM_AFFINE, "gpuLayerNormAffine"),
 			Map.entry(LispNames.LINALG_LAYER_NORM_AFFINE_GRAD, "gpuLayerNormAffineGrad"));
 

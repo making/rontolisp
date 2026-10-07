@@ -339,7 +339,7 @@
                    (setf (row-major-aref dst i) (row-major-aref staged i))))
                ;; single-float takes the bytes as they are; bfloat16 is
                ;; narrowed AS IT STREAMS by the same staged pass, never through
-               ;; a whole f32 tensor (.todo/487 step 4).
+               ;; a whole f32 tensor (.kb/checkpoint-readers.md).
                (let ((dst (checkpoint:make-tensor dims element-type)))
                  (checkpoint:stage-float32 (gguf::%rd-stream rd) dst)
                  (gguf::%advance rd (* 4 count))

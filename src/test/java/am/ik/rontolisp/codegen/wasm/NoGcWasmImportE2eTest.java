@@ -280,7 +280,7 @@ class NoGcWasmImportE2eTest {
 
 	@Test
 	void aPrintedLiteralReachesBothTheHostAndStdoutIntact() throws Exception {
-		// .todo/814: a spelling printed by a statement princ AND passed to a folded
+		// A spelling printed by a statement princ AND passed to a folded
 		// import is pushed as two constants at both sites. "both" is also read by
 		// length, so it keeps its header and both folded sites point past it;
 		// "only" is never read through a header, so it carries none. Either way

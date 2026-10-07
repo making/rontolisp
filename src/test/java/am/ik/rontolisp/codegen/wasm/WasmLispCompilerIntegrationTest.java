@@ -525,7 +525,7 @@ class WasmLispCompilerIntegrationTest {
 	// most was this backend's, because WasmArrayCompiler refuses the LITERAL bfloat16
 	// spelling precisely so an unrefused request cannot fall through to a boxed general
 	// array -- and the runtime designator walked around that guard and answered the boxed
-	// array anyway, a wrong number rather than a refusal (.todo/487).
+	// array anyway, a wrong number rather than a refusal.
 	@Test
 	void aRuntimeElementTypeDesignatorAnswersWhatTheLiteralSpellingAnswers() throws Exception {
 		for (int code : am.ik.rontolisp.ArrayElementTypes.specializedCodes()) {
@@ -1027,7 +1027,7 @@ class WasmLispCompilerIntegrationTest {
 	// The first-class concatenate must cost the TOTAL LENGTH, not the sum of the
 	// prefixes: (apply #'concatenate 'string lines) is the shape a caller reaches for
 	// over a file's lines, and the wrapper used to fold PAIRWISE through
-	// %string-concat (.todo/704, .kb/string-accumulate-cost.md). 4,096 pieces of 64
+	// %string-concat (.kb/string-accumulate-cost.md). 4,096 pieces of 64
 	// characters here: 19,037 ms under the fold, 23 ms sized once.
 	@Test
 	void aNaryConcatenateCostsTheTotalLengthAndNotTheSumOfThePrefixes() throws Exception {
@@ -1189,7 +1189,7 @@ class WasmLispCompilerIntegrationTest {
 	void coerceAndConcatenateKeepThePackedFloatElementType() throws Exception {
 		// The float widths are members of the same closed element-type code space the
 		// (unsigned-byte N) widths are, so the same designator rule builds the packed
-		// FLOAT array here (.todo/707). bfloat16 is the one width this backend does not
+		// FLOAT array here. bfloat16 is the one width this backend does not
 		// carry: its arm is compiled and DEAD, and reaching it signals the sentence
 		// UnsupportedFloatWidth names -- the same one a literal (make-array
 		// :element-type 'bfloat16) gets, since the refusal has to sit where the
@@ -1466,7 +1466,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
-		// Integer expression-tree fusion (WasmIntFusionCompiler, todo 194): a nested
+		// Integer expression-tree fusion (WasmIntFusionCompiler, .kb/wasm-int-fusion.md):
+		// a nested
 		// arithmetic/bitwise tree keeps its intermediates as raw i64 on the wasm stack
 		// and boxes only at the root, bailing per leaf / per overflow to a fallback
 		// that recomputes through the generic helpers. These pin the equivalences the
@@ -1524,7 +1525,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath() throws Exception {
-		// Todo 194 stage 3. Pins, in order: (1) flet one-liner bodies (over params and
+		// Fused local functions and unboxed locals. Pins, in order: (1) flet one-liner
+		// bodies (over params and
 		// inlinable defuns like rol32b) substitute into fused trees -- results identical
 		// to the generic call chain; (2) an flet function used as a VALUE (#'add2 via
 		// funcall and reduce) still exists as a closure; (3) labels recursion is
@@ -1599,7 +1601,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void fusedComparisonsAndRawLeafStoresMatchTheGenericPath() throws Exception {
-		// Todo 194 stage 4. Pins, in order: (1) fused raw i64 comparisons agree with
+		// Fused comparisons and raw leaf stores. Pins, in order: (1) fused raw i64
+		// comparisons agree with
 		// the generic _rat_cmp_bits path across the i64 promotion boundary (the +1 on
 		// most-positive-fixnum overflows into the limb tier, so the fast path bails)
 		// and (2) bail for a float / ratio operand, including through an unboxed
@@ -2546,7 +2549,7 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(interpreted.toString(java.nio.charset.StandardCharsets.UTF_8).trim());
 	}
 
-	// ffloor/fceiling/fround/ftruncate (todo-667): CLHS defines each as its integer twin
+	// ffloor/fceiling/fround/ftruncate: CLHS defines each as its integer twin
 	// with a FLOAT primary value, sharing the same exact quotient and remainder --
 	// LispMacroExpander.expandFFamily/lowerMvProducer, no separate backend lowering.
 	private static final String F_FAMILY_PROGRAM = """
@@ -2620,7 +2623,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
-		// todo-666: the one regime the sweep above declines on purpose (an infinite
+		// The one regime the sweep above declines on purpose (an infinite
 		// divisor), checked the same way -- against the interpreter, whose
 		// ExactRounding.infiniteDivisorQuotient and this backend's own
 		// _f64_fdiv-embedded arm were written from the same sign formula independently
@@ -3460,7 +3463,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcPrintedBooleansMatchTheInterpreter() throws Exception {
-		// .todo/817: a computed boolean prints as T/NIL on every backend -- the
+		// A computed boolean prints as T/NIL on every backend -- the
 		// predicates and t/nil answer BOOL, and princ/print of a BOOL writes the name
 		// where an INT renders digits. Joining BOOL with INT answers INT, so
 		// (princ (if p t 1)) still prints 1 where the interpreter prints T; that
@@ -3489,7 +3492,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcPrintEscapesQuotesAndBackslashesInStrings() throws Exception {
-		// The readable renderer owes the reader its escapes here too (todo 216):
+		// The readable renderer owes the reader its escapes here too:
 		// emitWriteStringEscaped writes the content as runs, one __write_stdout per
 		// unescaped stretch plus the single '\' literal, so nothing is allocated.
 		// princ stays the no-escape half.
@@ -3515,7 +3518,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noGcPrintedLiteralsFoldAtBothLevels() throws Exception {
-		// .todo/814: a statement (princ <literal>) writes its region as two
+		// A statement (princ <literal>) writes its region as two
 		// constants, a value-position one leaves the header address behind as the
 		// value as well, and print keeps its quotes and escapes. Every line below
 		// is byte-identical to the interpreter: the statement sites ("head", the
@@ -3642,7 +3645,8 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, noLiteral, "width", "100")).isEqualTo("5");
 		// Non-ASCII literals index and measure in CHARACTERS, like the other backends
-		// (.todo/813): "日本語" is 3 characters in 9 UTF-8 bytes, and the astral "😀"
+		// (.kb/characters-code-points.md): "日本語" is 3 characters in 9 UTF-8 bytes, and
+		// the astral "😀"
 		// is 1 character in 4 bytes.
 		String wide = """
 				(defun jlen (n) (length "日本語"))
@@ -4835,7 +4839,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void readSequenceIntoACharacterBufferCompilesAndRuns() throws Exception {
 		// Through the prelude splice: read-sequence reaches the %check-sequence-bounds
-		// prelude defun (.todo/932).
+		// prelude defun.
 		assertThat(compileAndRunPrelude("""
 				(with-input-from-string (s "abcdef")
 				  (let ((buf (make-array 4 :element-type 'character)))
@@ -4957,7 +4961,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun(defs + "(print (sort (list 3 1 2) (car (list 'lt))))")).isEqualTo("(1 2 3)");
 	}
 
-	// The _append copy is built iteratively (.todo/749): a first argument far
+	// The _append copy is built iteratively: a first argument far
 	// past any plausible stack answers instead of trapping, on the Preview 1
 	// module and on the component twin.
 	@Test
@@ -4968,7 +4972,7 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("7");
 	}
 
-	// mapcan/mapcon accumulate through a tail pointer (.todo/749): a long input
+	// mapcan/mapcon accumulate through a tail pointer: a long input
 	// list is linear rather than a stack exhaustion, on both WASM backends.
 	@Test
 	void mapcanMapconLongInput() throws Exception {
@@ -5187,7 +5191,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
 				;; The two .lnk parsers are upstream's bodies and seek a binary file
 				;; stream with file-position, which this backend now supports for real
-				;; (.kb/read-load-streams.md, .todo/916), so they parse a real fixture
+				;; (.kb/read-load-streams.md), so they parse a real fixture
 				;; instead of signalling. The fixture is BUILT here with write-byte --
 				;; the fixed 76 / 16-byte header / flags word a shortcut needs, then a
 				;; FileLocationInfo block whose local-offset names an empty local
@@ -5473,9 +5477,9 @@ class WasmLispCompilerIntegrationTest {
 		// JvmLispCompilerTest.compileAndRunUiopUnimplementedMacroDropsItsArgumentForms.
 		// The probe used to be with-current-directory; it grew its own expansion over
 		// call-with-current-directory, so the probe moved to a stream macro nothing
-		// implements yet -- with-input-file until .todo/359 gave it one over
-		// call-with-input-file, with-null-input until .todo/360 gave it one --
-		// with-saved-deferred-warnings (.todo/365's deferred-warnings stub) now.
+		// implements yet -- with-input-file until it got one over
+		// call-with-input-file, with-null-input until it got one --
+		// with-saved-deferred-warnings (over the deferred-warnings stub) now.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(print (handler-case (uiop:with-saved-deferred-warnings () (defun um-probe () 1))
 				         (uiop:not-implemented-error () :signalled)))
@@ -5535,7 +5539,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void uiopLispBuildPortableHalfCompileAndRun() throws Exception {
-		// .todo/365: the portable half of uiop/lisp-build -- the muffled-conditions
+		// The portable half of uiop/lisp-build -- the muffled-conditions
 		// macros (Java expansions over the call-with- defuns), call-around-hook,
 		// reify-simple-sexp round trip, the warnings-file plumbing and the condition
 		// classes -- runs on the compile path; the compile-file*/deferred-warnings
@@ -6967,7 +6971,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void deleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
-		// .todo/623: these five were silent no-ops on a vector/string (only their
+		// These five were silent no-ops on a vector/string (only their
 		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
 		// sequence, so they now route through remove/substitute's own vector/string
 		// handling.
@@ -6984,8 +6988,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void nsubstituteFamilyWritesThroughVectorArgument() throws Exception {
-		// .todo/773: the test above checks only the VALUE nsubstitute answers; ANSI
-		// expects the ARGUMENT itself to change, which .todo/623's plain reuse of
+		// The test above checks only the VALUE nsubstitute answers; ANSI
+		// expects the ARGUMENT itself to change, which a plain reuse of
 		// substitute's non-destructive form never did over a vector.
 		assertThat(compileAndRun("(let ((x (vector 1 2 1))) (nsubstitute 9 1 x) (print x))")).isEqualTo("#(9 2 9)");
 		assertThat(compileAndRun("(let ((x (vector 1 2 3))) (nsubstitute-if 0 #'oddp x) (print x))"))
@@ -7325,7 +7329,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (expt 1/2 2))")).isEqualTo("1/4");
 		assertThat(compileAndRun("(print (expt 1/2 -2))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (expt 2 -1))")).isEqualTo("1/2");
-		// An integer exponent beyond the i31 range is pow, not a trap (.todo/849):
+		// An integer exponent beyond the i31 range is pow, not a trap:
 		// the interpreter's rule, pinned on every backend.
 		assertThat(compileAndRun("(print (expt 2 4294967297))")).isEqualTo("Infinity");
 		assertThat(compileAndRun("(print (expt 2 -4294967297))")).isEqualTo("0.0");
@@ -8030,7 +8034,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun(CYCLIC_PRINT_PROGRAM)).isEqualTo(CYCLIC_PRINT_EXPECTED);
 	}
 
-	// The cons and vector arms' cycle guard (todo-585): a cdr chain that re-enters
+	// The cons and vector arms' cycle guard: a cdr chain that re-enters
 	// itself prints every element once and then the improper tail " . #" (Floyd's
 	// cycle detection over the chain); a cons or vector already on the current
 	// rendering path prints as "#" -- byte-identical to the interpreter and the JVM
@@ -8171,7 +8175,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void prin1EscapesQuotesAndBackslashesInStrings() throws Exception {
-		// *print-escape* = t escapes the embedded " and \ (todo 216); princ / ~a do not.
+		// *print-escape* = t escapes the embedded " and \; princ / ~a do not.
 		// A bare SYMBOL still prints verbatim -- the leading quote is the discriminator.
 		assertThat(compileAndRun("(prin1 \"{\\\"hello\\\":\\\"aaa\\\"}\")"))
 			.isEqualTo("\"{\\\"hello\\\":\\\"aaa\\\"}\"");
@@ -8198,7 +8202,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void internalStringConcatCopiesBytes() throws Exception {
-		// %string-concat is strings-only by contract (.todo/338): the runtime
+		// %string-concat is strings-only by contract: the runtime
 		// byte-copies both operands instead of rendering them through the value
 		// printer. Empty operands, multi-byte UTF-8, a mutable character vector
 		// operand, and the rebuild path every (setf (aref s i) c) spelling lowers
@@ -8919,7 +8923,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void writeSequenceString() throws Exception {
 		// Through the prelude splice: write-sequence reaches the %check-sequence-bounds
-		// prelude defun (.todo/932).
+		// prelude defun.
 		assertThat(
 				compileAndRunPrelude("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
 			.isEqualTo("bc");
@@ -9377,7 +9381,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void floatExactComparison() throws Exception {
 		// A float against an exact number compares exact values, like the
-		// interpreter (.todo/037): exact equality, a strict gap, -0.0,
+		// interpreter: exact equality, a strict gap, -0.0,
 		// infinities, and the unordered NaN. A NEAR tie -- a ratio strictly
 		// inside half an ulp of its own float, like 2/3 -- decides strictly
 		// too, through the same exact arm at any integer tier, limb included
@@ -9397,7 +9401,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void floatExactComparisonNearTie() throws Exception {
 		// A near tie compares exactly, like the interpreter and the JVM
-		// (.todo/037): 2/3 sits strictly inside half an ulp of its own float
+		// 2/3 sits strictly inside half an ulp of its own float
 		// (within 2^-54), so the f64 coercion rounds it to equality while the
 		// exact values differ -- the double is just below the ratio. Both the
 		// literal shape (which the double-literal call-site gate must route to
@@ -10679,7 +10683,7 @@ class WasmLispCompilerIntegrationTest {
 	void integerDecodeFloat() throws Exception {
 		// CLHS: the sign is an INTEGER and the significand is scaled to
 		// float-digits bits (53 for a normal double), not stripped of factors
-		// of two -- matches SBCL exactly (.todo/896). A normal double's
+		// of two -- matches SBCL exactly. A normal double's
 		// significand leaves the i31 range, like any other limb-tier integer,
 		// and the bignum path answers it exactly on this backend too.
 		assertThat(compileAndRunPrelude(
@@ -10722,7 +10726,7 @@ class WasmLispCompilerIntegrationTest {
 	void ldbTest() throws Exception {
 		// The ldb-test prelude over small integers: every intermediate is a
 		// scalar-small integer, so the whole pin stays in the exactly
-		// representable range (.todo/818).
+		// representable range.
 		assertThat(compileAndRunPrelude(
 				"(print (ldb-test (byte 4 4) 255)) (print (ldb-test (byte 4 4) 15)) (print (ldb-test (byte 8 0) 0)) (print (ldb-test (byte 4 0) 16)) (print (ldb-test (byte 4 4) -1)) (print (funcall #'ldb-test (byte 4 4) 255))"))
 			.isEqualTo("T\nNIL\nNIL\nNIL\nT\nT");
@@ -10780,7 +10784,7 @@ class WasmLispCompilerIntegrationTest {
 		// --no-gc used to coerce a mixed int/float comparison to f64, so an integer
 		// past 2^53 compared rounded: (= 9007199254740993 9007199254740992.0) was T
 		// and (> 9007199254740993 9007199254740992.0) was NIL. A mixed pair now
-		// compares exact values, like the interpreter (.todo/037): the float's exact
+		// compares exact values, like the interpreter: the float's exact
 		// binary value against the i64. Integers stay i64 and floats f64 (no ratios
 		// exist here), NaN stays unordered and infinities stay beyond every int.
 		String program = """
@@ -11697,19 +11701,19 @@ class WasmLispCompilerIntegrationTest {
 				(defun f-find (n) (find-symbol n))
 				(defun f-intern (n) (intern n))
 				(defun f-nontail (h) (let ((v (gethash "K" h))) v))
-				(setq mv427-tbl (make-hash-table :test 'equal))
-				(setf (gethash "K" mv427-tbl) "V")
-				(print (multiple-value-list (f-gethash mv427-tbl)))
+				(setq mvr-tbl (make-hash-table :test 'equal))
+				(setf (gethash "K" mvr-tbl) "V")
+				(print (multiple-value-list (f-gethash mvr-tbl)))
 				(print (multiple-value-list (f-gethash (make-hash-table))))
 				(print (multiple-value-list (f-floor 7 2)))
 				(print (multiple-value-list (f-find "MY-USER-FN")))
 				(print (multiple-value-list (f-intern "MY-USER-FN")))
 				(print (multiple-value-list (f-disp (make-array 3))))
-				(print (multiple-value-list (ctx-get "k" mv427-tbl)))
-				(print (multiple-value-list (f-cond mv427-tbl t)))
-				(print (multiple-value-list (f-cond mv427-tbl nil)))
-				(multiple-value-bind (v f) (ctx-get "k" mv427-tbl) (print (list v f)))
-				(print (multiple-value-list (f-nontail mv427-tbl)))
+				(print (multiple-value-list (ctx-get "k" mvr-tbl)))
+				(print (multiple-value-list (f-cond mvr-tbl t)))
+				(print (multiple-value-list (f-cond mvr-tbl nil)))
+				(multiple-value-bind (v f) (ctx-get "k" mvr-tbl) (print (list v f)))
+				(print (multiple-value-list (f-nontail mvr-tbl)))
 				""")).isEqualTo("(\"V\" T)\n(NIL NIL)\n(3 1)\n(MY-USER-FN :INTERNAL)\n(MY-USER-FN :INTERNAL)\n(NIL 0)\n"
 				+ "(\"V\" T)\n(\"V\" T)\n(NIL)\n(\"V\" T)\n(\"V\")");
 	}
@@ -12497,7 +12501,7 @@ class WasmLispCompilerIntegrationTest {
 		// The WASM twin of LispEvaluatorTest#evalBitVectorsAndBitOps: a bit vector is
 		// the general boxed array stamped with the remembered element type bit, and
 		// the eleven bit-* operators validate through bit-vector-p over
-		// row-major-aref (.todo/043). The operators are prelude defuns, so the
+		// row-major-aref. The operators are prelude defuns, so the
 		// program needs the CLI pipeline's splice here too.
 		assertThat(compileAndRunPrelude("""
 				(defvar *bv-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
@@ -12560,8 +12564,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void bitVectorPreservationAcrossSequenceOps() throws Exception {
-		// The WASM twin of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps
-		// (.todo/820). The operators are prelude defuns, so the program needs the CLI
+		// The WASM twin of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps.
+		// The operators are prelude defuns, so the program needs the CLI
 		// pipeline's splice here too.
 		assertThat(compileAndRunPrelude("""
 				(print
@@ -13539,7 +13543,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void sortNreverseStableSortKeepFillPointerAdjustableAndIdentity() throws Exception {
-		// .todo/623: sort/nreverse/stable-sort permute a vector/string in place, so a
+		// sort/nreverse/stable-sort permute a vector/string in place, so a
 		// fill-pointered or adjustable argument must keep its fill pointer, its
 		// adjustable flag AND its own identity -- not just the right values.
 		assertThat(compileAndRun("""
@@ -14083,8 +14087,8 @@ class WasmLispCompilerIntegrationTest {
 		// JVM through one prelude definition, so a divergence would mean the shared
 		// definition stopped being shared. The closing rename-file over a missing
 		// source answers :NO-RENAME on all four backends -- %rename-file answers nil
-		// when there is nothing to rename (real through the path_rename import since
-		// .todo/257) and the Lisp above it raises the file-error.
+		// when there is nothing to rename (real through the path_rename import) and the
+		// Lisp above it raises the file-error.
 		assertThat(compileAndRunPrelude(PATHNAME_ALGEBRA_PROGRAM)).isEqualTo(PATHNAME_ALGEBRA_EXPECTED);
 	}
 
@@ -14108,7 +14112,7 @@ class WasmLispCompilerIntegrationTest {
 			(print (funcall #'nstring-upcase (copy-seq "ab")))
 			(print (let ((s (make-string 3 :initial-element #\\a)))
 			         (list (eq s (nstring-upcase s)) s)))
-			;; A copy-seq result is a mutable character vector too (.todo/559 step 2),
+			;; A copy-seq result is a mutable character vector too,
 			;; so the destructive case family writes it in place like the interpreter.
 			(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
 			(print (list (lisp-implementation-type) (software-type) (software-version)))
@@ -14151,7 +14155,7 @@ class WasmLispCompilerIntegrationTest {
 		// answer for real. file-length is REAL on all four since the fd_filestat_get
 		// import landed (fileLengthAnswersTheSizeOfARealFile below), and so are the
 		// three write-side operators since the path_create_directory /
-		// path_unlink_file / path_rename imports landed (.todo/257): the directory is
+		// path_unlink_file / path_rename imports landed: the directory is
 		// created for real below, then a file in it is written, renamed, deleted and
 		// probed gone.
 		String code = """
@@ -14211,13 +14215,13 @@ class WasmLispCompilerIntegrationTest {
 	void uiopFilesystemProbeReadsAndMutations() throws Exception {
 		// The uiop/filesystem read side runs on this backend too -- probe-file* and
 		// truename* over probe-file, directory* over the fd_readdir listing -- and so
-		// does the mutating side now (.todo/257): ensure-all-directories-exist over
+		// does the mutating side now: ensure-all-directories-exist over
 		// %make-directories, rename-file-overwriting-target over %rename-file and
 		// delete-file-if-exists over %delete-file, while safe-file-write-date answers
 		// nil where file-write-date does. with-current-directory inherits chdir's
 		// signal. One deliberate remainder: delete-empty-directory over a DIRECTORY
 		// still signals -- preview1's path_unlink_file cannot remove directories
-		// (that needs the path_remove_directory import, out of .todo/257's scope),
+		// (that needs the path_remove_directory import, which is not wired),
 		// so the file-error below is the honest "could not remove it", caught here.
 		// The component twin runs the same program with the same expectation.
 		String code = """
@@ -14682,7 +14686,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void peekCharPushbackSurvivesReadLineAndReadOnPreview1() throws Exception {
-		// .todo/936: _read_line drains the peek-char pushback the way _read_char does;
+		// _read_line drains the peek-char pushback the way _read_char does;
 		// read already does (the whole %rd-* family scans through read-char).
 		assertThat(compileAndRunFrontEndWithDir(PeekPushbackFixture.program("peek.txt", "peek-rd.txt"), false))
 			.isEqualTo(PeekPushbackFixture.EXPECTED);
@@ -14697,8 +14701,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void readAndWriteSequenceSignalTypeErrorForABadSequenceOrBoundOnPreview1() throws Exception {
 		// The Preview 1 twin of
-		// LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound
-		// (.todo/932).
+		// LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound.
 		assertThat(compileAndRunWithDir(SequenceBoundsFixture.PROGRAM)).isEqualTo(SequenceBoundsFixture.EXPECTED);
 	}
 
@@ -15204,61 +15207,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	/**
-	 * .todo/918: a bidirectional ({@code :direction :io}) stream reads back what it just
-	 * wrote through one cursor, and {@code :if-exists :overwrite} writes from 0 without
+	 * A bidirectional ({@code :direction :io}) stream reads back what it just wrote
+	 * through one cursor, and {@code :if-exists :overwrite} writes from 0 without
 	 * truncating. The JVM twin is
 	 * {@code JvmLispCompilerTest#compileAndRunOpenDirectionIoAndOverwrite}.
 	 */
 	/**
-	 * .todo/919: element types wider and narrower than one octet, the twin of
+	 * Element types wider and narrower than one octet, the twin of
 	 * LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem (and of
 	 * JvmLispCompilerTest#compileAndRunWideAndNarrowElementTypes and ci-spec
 	 * wide-and-narrow-stream-element-types). Measured against sbcl.
 	 */
 	private static final String WIDE_ELEMENT_PROGRAM = """
-			(defun w919-drain (s)
+			(defun wbin-drain (s)
 			  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
 			      ((eq b :eof) (nreverse r))))
-			(defun w919-octets ()
-			  (with-open-file (i "w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+			(defun wbin-octets ()
+			  (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 8)) (wbin-drain i)))
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
 			  (dolist (v '(0 1 1)) (write-byte v o)))
-			(print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 1))
-			               (list (stream-element-type i) (file-length i) (w919-drain i)))
-			             (w919-octets)))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+			(print (list (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 1))
+			               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+			             (wbin-octets)))
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
 			  (dolist (v '(1 258)) (write-byte v o)))
-			(print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
-			               (list (stream-element-type i) (file-length i) (w919-drain i)))
-			             (w919-octets)))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+			(print (list (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
+			               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+			             (wbin-octets)))
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
 			  (dolist (v '(-1 5)) (write-byte v o)))
-			(print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 8))
-			               (list (stream-element-type i) (file-length i) (w919-drain i)))
-			             (w919-octets)))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+			(print (list (with-open-file (i "wbin.bin" :element-type '(signed-byte 8))
+			               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+			             (wbin-octets)))
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
 			  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
-			(print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 64))
-			               (list (stream-element-type i) (file-length i) (w919-drain i)))
-			             (w919-octets)))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+			(print (list (with-open-file (i "wbin.bin" :element-type '(signed-byte 64))
+			               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+			             (wbin-octets)))
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
 			  (write-byte 150 o))
-			(print (list (with-open-file (i "w919.bin" :element-type '(integer 100 200))
-			               (list (stream-element-type i) (file-length i) (w919-drain i)))
-			             (w919-octets)))
-			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			(print (list (with-open-file (i "wbin.bin" :element-type '(integer 100 200))
+			               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+			             (wbin-octets)))
+			(print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
 			         (list (file-length i) (read-byte i nil :partial))))
-			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+			(with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
 			  (write-sequence (vector 1 2 65535) o))
-			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			(print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
 			         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
 			               (file-position i :end) (read-byte i nil :eof))))
-			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			(print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
 			         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
 			           (list (read-sequence v i) (aref v 0) (aref v 2)))))
-			(print (with-open-file (s "w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+			(print (with-open-file (s "wbin.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
 			         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
-			(print (with-open-file (s "w919.bin") (stream-element-type s)))
+			(print (with-open-file (s "wbin.bin") (stream-element-type s)))
 			""";
 
 	private static final String WIDE_ELEMENT_EXPECTED = """
@@ -15417,28 +15420,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static final String OPEN_IO_PROGRAM = """
-			(with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
-			(let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))
+			(with-open-file (out "ioboth.txt" :direction :output) (write-string "abcdefghij" out))
+			(let ((s (open "ioboth.txt" :direction :io :if-exists :overwrite)))
 			  (write-string "wxyz" s)
 			  (print (file-position s))
 			  (file-position s :start)
 			  (print (read-line s nil))
 			  (print (file-length s))
 			  (close s))
-			(let ((s (open "io918.txt" :direction :io)))
+			(let ((s (open "ioboth.txt" :direction :io)))
 			  (write-string "abc" s)
 			  (file-position s :start)
 			  (print (read-line s nil))
 			  (close s))
-			(let ((s (open "io918.dat" :direction :io :element-type '(unsigned-byte 8))))
+			(let ((s (open "ioboth.dat" :direction :io :element-type '(unsigned-byte 8))))
 			  (dotimes (i 4) (write-byte (+ 65 i) s))
 			  (file-position s :start)
 			  (print (list (read-byte s) (read-byte s) (file-position s)))
 			  (close s))
-			(let ((s (open "io918.txt" :direction :output :if-exists :overwrite)))
+			(let ((s (open "ioboth.txt" :direction :output :if-exists :overwrite)))
 			  (write-string "Z" s)
 			  (close s))
-			(print (with-open-file (in "io918.txt") (read-line in)))
+			(print (with-open-file (in "ioboth.txt") (read-line in)))
 			""";
 
 	private static final String OPEN_IO_EXPECTED = "4\n\"wxyzefghij\"\n10\n\"abc\"\n(65 66 2)\n\"Zbc\"";
@@ -15462,7 +15465,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void uiopStreamFileContentsAndSafeIoCompilesAndRuns() throws Exception {
-		// .todo/359: the "give me the contents" half of uiop/stream on this backend
+		// The "give me the contents" half of uiop/stream on this backend
 		// too -- the same program as the JVM twin
 		// (JvmLispCompilerTest#compileAndRunUiopStreamFileContentsAndSafeIo) over
 		// relative names in the preopened working directory. The passes are the CLI
@@ -15470,37 +15473,37 @@ class WasmLispCompilerIntegrationTest {
 		// program needs the prelude splice AND the pushback-cell rewrite, in
 		// CompileFrontend's order -- then the --dir . run of compileAndRunWithDir.
 		String code = """
-				(uiop:with-output-file (out "w359s.txt")
+				(uiop:with-output-file (out "wconts.txt")
 				  (write-line "hello" out) (write-line "world" out))
-				(print (uiop:read-file-lines "w359s.txt"))
-				(print (uiop:read-file-line "w359s.txt" :at 1))
-				(uiop:with-output-file (out "w359f.txt")
-				  (write-line "(defun w359-f (x) (* x 2))" out)
+				(print (uiop:read-file-lines "wconts.txt"))
+				(print (uiop:read-file-line "wconts.txt" :at 1))
+				(uiop:with-output-file (out "wcontf.txt")
+				  (write-line "(defun wcont-f (x) (* x 2))" out)
 				  (write-line "42" out))
-				(print (uiop:read-file-forms "w359f.txt"))
-				(print (uiop:safe-read-file-form "w359f.txt" :at 1))
+				(print (uiop:read-file-forms "wcontf.txt"))
+				(print (uiop:safe-read-file-form "wcontf.txt" :at 1))
 				(print (uiop:with-output (o nil) (write-string "xyz" o)))
 				(print (uiop:with-input (s "ab") (read-char s)))
-				(uiop:copy-file "w359s.txt" "w359c.txt")
-				(print (uiop:read-file-string "w359c.txt"))
+				(uiop:copy-file "wconts.txt" "wcontc.txt")
+				(print (uiop:read-file-string "wcontc.txt"))
 				(print (uiop:safe-read-from-string "(+ 1 2)"))
 				(print (uiop:eval-input "(+ 1 2) (* 3 4)"))
 				(print (uiop:eval-thunk "(+ 1 2)"))
 				(print (uiop:standard-eval-thunk "(+ 1 2)"))
 				(print (uiop:with-safe-io-syntax (:package :cl) *package*))
-				(uiop:with-output-file (out "w359o.txt")
+				(uiop:with-output-file (out "wconto.txt")
 				  (uiop:println "a" out)
 				  (uiop:writeln '(1 2) :stream out)
 				  (uiop:format! out "n=~A~%" 7))
-				(print (uiop:read-file-lines "w359o.txt"))
+				(print (uiop:read-file-lines "wconto.txt"))
 				(print (uiop:with-output (o nil) (write-string "q" o)))
-				(uiop:with-input-file (in "w359o.txt")
+				(uiop:with-input-file (in "wconto.txt")
 				  (print (list (uiop:file-stream-p in) (uiop:file-or-synonym-stream-p in))))
 				""";
 		String expected = """
 				("hello" "world")
 				"world"
-				((DEFUN W359-F (X) (* X 2)) 42)
+				((DEFUN WCONT-F (X) (* X 2)) 42)
 				42
 				"xyz"
 				#\\a
@@ -15527,7 +15530,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void uiopTemporaryFilesStagingAndNullStreamsCompilesAndRuns() throws Exception {
-		// .todo/360: the temporary-file / staging / null-stream half of uiop/stream on
+		// The temporary-file / staging / null-stream half of uiop/stream on
 		// this backend too -- the same program as the JVM twin
 		// (JvmLispCompilerTest#compileAndRunUiopTemporaryFilesStagingAndNullStreams)
 		// over relative names in the preopened working directory. The passes are the
@@ -15653,7 +15656,7 @@ class WasmLispCompilerIntegrationTest {
 		wasmtime.copyFileToContainer(Transferable.of("boundary\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
 				root + "/-sibling/abs.txt");
 		wasmtime.copyFileToContainer(Transferable.of("relative\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-				path("rel-abs432.txt"));
+				path("rel-abs.txt"));
 		return root.toString();
 	}
 
@@ -15669,7 +15672,7 @@ class WasmLispCompilerIntegrationTest {
 			(print (probe-file (concatenate 'string *root* "/sub/absent.txt")))
 			(print (probe-file (concatenate 'string *root* "-sibling/abs.txt")))
 			(print (probe-file *root*))
-			(print (with-open-file (s "rel-abs432.txt") (read-line s)))
+			(print (with-open-file (s "rel-abs.txt") (read-line s)))
 			""";
 
 	private static String absolutePathExpected(String root) {
@@ -16153,7 +16156,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readConsumesExactlyOneDatum() throws Exception {
-		// todo-624: one datum's characters, the stream left after them. The compile
+		// One datum's characters, the stream left after them. The compile
 		// paths used to close an unterminated list at end of line SILENTLY -- "(a" on
 		// one line and "b)" on the next read as (A) then B.
 		assertThat(compileAndRunRead("""
@@ -16296,7 +16299,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	private static final String FILE_ERROR_PROGRAM = """
-			(defvar *fe-path* (concatenate 'string "fe890-missing/" "x.txt"))
+			(defvar *fe-path* (concatenate 'string "ferr-missing/" "x.txt"))
 			(defun fe-probe (thunk)
 			  (handler-case (progn (funcall thunk) :no-error)
 			    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
@@ -16314,15 +16317,15 @@ class WasmLispCompilerIntegrationTest {
 			  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""";
 
 	private static final String FILE_ERROR_EXPECTED = """
-			(:FILE-ERROR "fe890-missing/x.txt")
-			(:FILE-ERROR "fe890-missing/x.txt")
-			(:FILE-ERROR "fe890-missing/x.txt")
-			(:FILE-ERROR "fe890-missing/x.txt")
-			(:FILE-ERROR "fe890-missing/x.txt")
-			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
+			(:FILE-ERROR "ferr-missing/x.txt")
 
-			OPEN: cannot open file fe890-missing/x.txt
-			DELETE-FILE: cannot delete fe890-missing/x.txt
+			OPEN: cannot open file ferr-missing/x.txt
+			DELETE-FILE: cannot delete ferr-missing/x.txt
 			end of file""";
 
 	@Test
@@ -16651,7 +16654,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readWriteSequenceOverLetBoundByteBuffersTakesTheByteArm() throws Exception {
-		// compiler/SequenceIoNarrowing (.todo/338): a let-bound non-string buffer
+		// compiler/SequenceIoNarrowing: a let-bound non-string buffer
 		// skips the runtime stringp test and the character arm. The element stores
 		// below do not stand the narrowing down (they rebind nothing), while the
 		// string buffer keeps the shared expansion -- both spellings in one program.
@@ -16760,7 +16763,7 @@ class WasmLispCompilerIntegrationTest {
 	// loaded-machine spread crosses the bound intermittently on CI (parallel JUnit on
 	// 4 CPUs with a cold wasmtime), while a per-character fd_read regression misses
 	// the bound on EVERY attempt. The bound formula is unchanged; what changed after
-	// the plain 3-attempt retry of .todo/822 still failed once (CI run 35934234937:
+	// a plain 3-attempt retry still failed once (CI run 35934234937:
 	// 786 ms against a 734 ms bound, all attempts over) is how the attempts are
 	// POOLED: the cheapest string leg against the most generous byte leg. Contention
 	// only ever ADDS to a leg's time, so the min string leg is that leg's true cost
@@ -17376,7 +17379,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (eval '(let ((s (list 1 2 3))) (pop s) s)))")).isEqualTo("(2 3)");
 	}
 
-	// Complex numbers (.todo/753): every case mirrors the interpreter case of the
+	// Complex numbers: every case mirrors the interpreter case of the
 	// same name in LispEvaluatorTest (SBCL parity pinned there), print-compared so
 	// the WASM GC leg answers identically. The transcendental formulas (exp/log/sin
 	// over complex, phase) reuse the backend's software cores, so like every WASM
@@ -17466,7 +17469,7 @@ class WasmLispCompilerIntegrationTest {
 	void compileAndRunComplexArithmeticUnderRawLocals() throws Exception {
 		// A complex-carrying arithmetic tree in a let/setq value position must not
 		// take the int-fusion raw store: its bail fallback folds through the
-		// real-only _rat_* helpers, which signal for a holder (.todo/755).
+		// real-only _rat_* helpers, which signal for a holder.
 		assertThat(compileAndRun("(print (let ((v (+ #c(1 2) #c(3 4)))) v))")).isEqualTo("#C(4 6)");
 		assertThat(compileAndRun("(print (let ((v (- #c(4 6) #c(1 2)))) v))")).isEqualTo("#C(3 4)");
 		assertThat(compileAndRun("(print (let ((v (* #c(1 2) #c(3 4)))) v))")).isEqualTo("#C(-5 10)");
@@ -17475,7 +17478,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (let ((v (+ #c(1 2) 1))) v))")).isEqualTo("#C(2 2)");
 		assertThat(compileAndRun("(print (let ((v (+ #c(1 1/2) #c(1 1/3)))) v))")).isEqualTo("#C(2 5/6)");
 		assertThat(compileAndRun("(print (let ((v 0)) (setq v (+ #c(1 2) #c(3 4))) v))")).isEqualTo("#C(4 6)");
-		// The .todo/755 repro: the condition-report routing wraps the first print
+		// The original repro: the condition-report routing wraps the first print
 		// in the same implicit let, so this is the same path with a handler.
 		assertThat(compileAndRunEh(
 				"(print (+ #c(1 2) #c(3 4))) (print (handler-case (error \"x\") (error (e) (princ-to-string e))))"))
@@ -17824,7 +17827,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileAndRunComplexPhaseOnTheImaginaryAxis() throws Exception {
 		// The atan2 quadrant assembly answered the imaginary part ITSELF over a
-		// +0 real part (.todo/766); pi/2 is the constant it answers there, so the
+		// +0 real part; pi/2 is the constant it answers there, so the
 		// axis rows pin exactly like the interpreter, signed zeros included.
 		assertThat(Double.parseDouble(compileAndRun("(print (phase #c(0d0 1d0)))"))).isEqualTo(1.5707963267948966);
 		assertThat(Double.parseDouble(compileAndRun("(print (phase #c(0d0 3d0)))"))).isEqualTo(1.5707963267948966);
@@ -17875,7 +17878,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunComplexTypep() throws Exception {
-		// SBCL parity (.todo/754): a complex is of type complex (and of type
+		// SBCL parity: a complex is of type complex (and of type
 		// number) but not of type real; a real is not of type complex.
 		assertThat(compileAndRun("(print (typep #c(1 2) 'complex))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (typep #c(1 2) 'real))")).isEqualTo("NIL");
@@ -17941,7 +17944,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunComplexSignum() throws Exception {
-		// SBCL parity (.todo/754): the unit vector z/|z| in floats; a zero answers
+		// SBCL parity: the unit vector z/|z| in floats; a zero answers
 		// the canonicalization of its own parts. The (1 2) unit vector is closeness
 		// pinned (the scaled hypot rounds apart from Math.hypot in the last ulp).
 		assertThat(compileAndRun("(print (signum #c(3 4)))")).isEqualTo("#C(0.6 0.8)");
@@ -17957,7 +17960,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunComplexRealOnlyOperationsSignalCatchableErrors() throws Exception {
-		// Real-only by contract (.todo/754): a catchable type-error
+		// Real-only by contract: a catchable type-error
 		// (ehANonNumberArithmeticOperandSignalsATypeError); the test compares the
 		// message, like the ordering test above it.
 		assertThat(compileAndRunEh("""
@@ -18018,7 +18021,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void expFullDoubleRange() throws Exception {
-		// .todo/456: the software exp must hold its accuracy past |x| ~ 20 and answer
+		// The software exp must hold its accuracy past |x| ~ 20 and answer
 		// the edges exactly -- the old (P5(x/256))^256 core degraded to ~1e-3 relative
 		// by |x| = 100 and exploded to huge positives (even to Infinity) for large
 		// negative arguments, NaN-ing a masked softmax on WASM only.
@@ -18565,7 +18568,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (funcall #'denominator 1/2))")).isEqualTo("2");
 		assertThat(compileAndRun("(print (mapcar #'numerator (list 1/2 2/3)))")).isEqualTo("(1 2)");
 		// The wrong-type report through the first-class value still names the operator
-		// (.todo/972's naming applies whether the call is direct or through funcall).
+		// (the operator is named whether the call is direct or through funcall).
 		assertThat(compileAndRun("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -18965,7 +18968,7 @@ class WasmLispCompilerIntegrationTest {
 	void runtimePackageMemberTable() throws Exception {
 		// The JvmLispCompilerTest.compileAndRunRuntimePackageMemberTable twin: the
 		// %runtime-packages% member table, answering exactly like the interpreter's
-		// live registry (.todo/917).
+		// live registry.
 		assertThat(compileAndRunPrelude("""
 				(let ((p (make-package "WT-MT1" :use nil)))
 				  (print (multiple-value-list (find-symbol "FOO" p)))
@@ -19117,7 +19120,7 @@ class WasmLispCompilerIntegrationTest {
 	void gensymAcceptsANonNegativeIntegerSuffix() throws Exception {
 		// The wasm twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
 		// literal integer argument used to lower through the computed-prefix path
-		// unchecked, e.g. (gensym 5) printed "#:51" (todo a42).
+		// unchecked, e.g. (gensym 5) printed "#:51".
 		assertThat(
 				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
 			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
@@ -19457,7 +19460,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void quotedConstantsStaySymbolsWhileCodePositionAnswersTheValue() throws Exception {
-		// .todo/679: 'pi used to read as a double wherever the spelling appeared.
+		// 'pi used to read as a double wherever the spelling appeared.
 		// The names read as symbols now; this backend seeds the globals with its
 		// own values (see ClConstants), so code position still answers. The fixnum
 		// value legitimately differs from the JVM/interpreter one (an unboxed i31
@@ -19609,7 +19612,7 @@ class WasmLispCompilerIntegrationTest {
 		// A run-time name resolution boxes the resolved funcId as a closure struct, so
 		// functionp answers t, _fun_name prints the registered name, and the ladders
 		// dispatch -- the interpreter's answer on every shape
-		// (LispEvaluatorTest#runtimeResolvedDesignatorsAreFunctionValues, .todo/750).
+		// (LispEvaluatorTest#runtimeResolvedDesignatorsAreFunctionValues).
 		assertThat(compileAndRun(RUNTIME_DESIGNATOR_VALUE_PROGRAM)).isEqualTo(RUNTIME_DESIGNATOR_VALUE_OUTPUT);
 	}
 
@@ -21479,7 +21482,7 @@ class WasmLispCompilerIntegrationTest {
 		// arm
 		// it fell into the cons tail, which re-entered the printer on the same value and
 		// trapped with "call stack exhausted", losing the buffered stdout with it
-		// (todo 430). It prints the interpreter's unreadable tag instead, with the LIVE
+		// It prints the interpreter's unreadable tag instead, with the LIVE
 		// ENTRY COUNT read from the header car -- the same i31 hash-table-count reads.
 		assertThat(compileAndRun("""
 				(defparameter *h* (make-hash-table :test 'equal))
@@ -21655,7 +21658,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	// An eq table keys aggregates by identity: two instances with equal slots are two
 	// keys, a key mutated after insertion still finds its entry, and growing past the
-	// load factor keeps every identity key findable -- on every backend (.todo/444).
+	// load factor keeps every identity key findable -- on every backend.
 	void compileEqHashTableKeysAggregatesByIdentity() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct wpt x y)
@@ -21686,8 +21689,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	// An eql table compares numbers by type and value but aggregates by identity: a
-	// freshly built cons with equal contents is a MISS -- on every backend
-	// (.todo/444).
+	// freshly built cons with equal contents is a MISS -- on every backend.
 	void compileEqlHashTableKeysNumbersByValueButAggregatesByIdentity() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((h (make-hash-table :test 'eql)))
@@ -21751,7 +21753,7 @@ class WasmLispCompilerIntegrationTest {
 	// A closure now carries the identity-hash slot the same way a cons/vector/instance
 	// does (.kb/hash-tables.md, "The identity-hash slot"), so 100,000 distinct closure
 	// keys in one eq table stay hashed instead of sharing bucket 0 -- before the slot
-	// this was the same quadratic fill/lookup .todo/835 measured for conses. A packed
+	// this was the same quadratic fill/lookup conses used to have. A packed
 	// float-array key stays in bucket 0 by documented decision (nothing keys by one), so
 	// only a handful are mixed in here for correctness, not volume.
 	void compileEqHashTableWithManyClosureAndPackedArrayKeysStaysHashed() throws Exception {
@@ -22072,7 +22074,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileTorchFusedCompositions() throws Exception {
 		// TorchGradcheck.FUSED_PROGRAM on the wasm-GC backend: the fused torch nodes
-		// (todo-499) against the compositions they replaced, bit for bit.
+		// against the compositions they replaced, bit for bit.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
 	}
@@ -22089,7 +22091,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileTorchTransposeView() throws Exception {
 		// TorchGradcheck.VIEW_PROGRAM on the wasm-GC backend: the transpose view
-		// torch:matmul reads in place (todo-630) against the materialized transpose.
+		// torch:matmul reads in place against the materialized transpose.
 		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
 	}
@@ -22148,7 +22150,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileArefRejectsAWrongSubscriptCount() throws Exception {
-		// A packed float array (todo 479): the WASM backend's aref/aset applied a
+		// A packed float array: the WASM backend's aref/aset applied a
 		// mismatched subscript count positionally instead of checking it against the
 		// array's own rank, the same hole the JVM backend had
 		// (JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount). Without a
@@ -22179,8 +22181,8 @@ class WasmLispCompilerIntegrationTest {
 		// element at index 1 instead of rejecting the short subscript list. Call position
 		// ((aref m 0 2)) already reported both correctly on every backend (bare traps on
 		// WASM, per compileArefRejectsAWrongSubscriptCount above); this pins the
-		// function-value path to the interpreter/JVM's catchable report instead (todo
-		// a58), since the fold is a portable core-forms `error`, not the array compiler's
+		// function-value path to the interpreter/JVM's catchable report instead, since
+		// the fold is a portable core-forms `error`, not the array compiler's
 		// own bare-trap intrinsic. #'array-row-major-index shares the same fold and needs
 		// the same checks.
 		//
@@ -22216,7 +22218,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileFunctionValueArefBaresTheTypeErrorLayoutWithNoHandlerCase() throws Exception {
-		// #'aref/#'array-row-major-index as a function value (todo a58) construct a
+		// #'aref/#'array-row-major-index as a function value construct a
 		// type-error instance in their shared fold's bound check -- but only through the
 		// wrapper, never through ordinary call position (whose own bound check is a
 		// separate bare backend trap). compileFunctionValueArefChecksRankAndBounds above
@@ -22226,8 +22228,8 @@ class WasmLispCompilerIntegrationTest {
 		// pad, taking #'aref as a value used to compile a fold whose dead bound-check
 		// branch references a layout the narrower never baked -- "no layout was baked
 		// for instance type %class-TYPE-ERROR" -- on a program that never once
-		// mentions type-error (todo a66, found checking the wasm shape of that todo's
-		// setf-of-apply-aref fix below).
+		// mentions type-error (found checking the wasm shape of the setf-of-apply-aref
+		// fix below).
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
 				(print (apply #'aref *m* '(1 1)))
@@ -22238,8 +22240,8 @@ class WasmLispCompilerIntegrationTest {
 	void setfOfApplyArefIsTheRuntimeRankPlace() throws Exception {
 		// (setf (apply #'aref a subs) v) -- CLHS 5.1.2.5, what cffi's
 		// foreign-array-to-lisp spells for an array whose rank is a runtime value (the
-		// JVM twin: JvmFfiInteropCompilerTest#setfOfApplyArefIsTheRuntimeRankPlace, todo
-		// a66). This place's lazy expansion injects a (function array-row-major-index)
+		// JVM twin: JvmFfiInteropCompilerTest#setfOfApplyArefIsTheRuntimeRankPlace).
+		// This place's lazy expansion injects a (function array-row-major-index)
 		// reference the REFERENCE_GATED_FUNCTIONS wrapper gate's ordinary scan cannot
 		// see, since the expansion runs during codegen -- after the scan.
 		assertThat(compileAndRun("""
@@ -22267,7 +22269,7 @@ class WasmLispCompilerIntegrationTest {
 	void compileRowMajorArefReadsAndWritesAString() throws Exception {
 		// A string is a rank-1 array of characters in CL, so row-major-aref reads it
 		// like aref does -- both wasm backends were missing the string arm and trapped
-		// instead (.kb/string-write-runtime.md, todo 587). The write spelling
+		// instead (.kb/string-write-runtime.md). The write spelling
 		// (setf (row-major-aref v i) c) is the same %schar-set place aref/char/elt use:
 		// in place for a mutable buffer, a rebind that leaves the source constant for a
 		// literal.
@@ -23217,7 +23219,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
-		// A copy-seq/subseq result is a MUTABLE character vector (.todo/559 step 2), so
+		// A copy-seq/subseq result is a MUTABLE character vector, so
 		// a displaced view over it aliases real storage and a write through the view
 		// reaches the target -- the same answer the interpreter and SBCL give. The
 		// promote-on-write fallback this test used to pin applied only while such a
@@ -23283,7 +23285,7 @@ class WasmLispCompilerIntegrationTest {
 		// An equalp table's key fold runs AFTER the character-vector render: without
 		// it two same-content producer-built keys fold to two distinct vectors and
 		// never collide, while the literal spelling of the same key hits
-		// (.kb/hash-tables.md; found by the .todo/596 boundary sweep).
+		// (.kb/hash-tables.md; found by a boundary sweep).
 		assertThat(compileAndRun("""
 				(let ((h (make-hash-table :test 'equalp)))
 				  (setf (gethash (format nil "K~a" 1) h) 42)
@@ -23499,7 +23501,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileStringpOverACharVectorIsConstantTime() throws Exception {
-		// Todo 342. (stringp v) over a mutable character vector used to answer by
+		// (stringp v) over a mutable character vector used to answer by
 		// calling _charvec_to_str -- rendering all of v into a fresh string, then
 		// keeping one bit of the result -- so it was O(length v) and re-paid on every
 		// call: 200,000 calls cost 10.2 s for an 8192-character vector against 0.1 s
@@ -24106,8 +24108,8 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("-2.5");
 	}
 
-	// .todo/671 shipped widen-float-bits / narrow-float-bits to four backends and pinned
-	// each of them WITHOUT --simd, which is exactly the hole .todo/692 fell into: the
+	// widen-float-bits / narrow-float-bits shipped on four backends, each pinned
+	// WITHOUT --simd, and that is exactly where a --simd-only bug hid: the
 	// matrix that matters here is backend x --simd, not backend alone. Under --simd a
 	// packed float array's data field is a TYPE_VBLOCK of v128 lane groups instead of a
 	// $f32arr / $f64arr (.kb/vec.md, "Acceleration layer 3"), so the widen's destination
@@ -24602,7 +24604,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunPrintObjectMethodDefinedBelowItsFirstUse() throws Exception {
-		// Todo 445: a print-object method defined BELOW its first use used to trap
+		// A print-object method defined BELOW its first use used to trap
 		// with a cast failure (the whole-program registry routes the printer through
 		// the generic from the start, but the body global is assigned only when the
 		// defmethod form runs). The dispatcher now skips the not-yet-assigned body,
@@ -24618,7 +24620,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunNestedDefmethodCallBeforeItsFormFallsThrough() throws Exception {
-		// Todo 445, the general shape: a call before the nested defmethod form runs
+		// The general shape: a call before the nested defmethod form runs
 		// answers the default, and after it the new method.
 		assertThat(compileAndRun("""
 				(defclass wnd-late () ())
@@ -25533,7 +25535,7 @@ class WasmLispCompilerIntegrationTest {
 		// answer into an error (.kb/vec.md, "The four acceleration layers"). One `kind`
 		// picks the lane loop for a whole helper, so there is no mixed-width lane form:
 		// requireSameKind's arm forwards the call to the defun the helper replaced
-		// instead of trapping, which is what this compares against. Before .todo/720 the
+		// instead of trapping, which is what this compares against. Before that the
 		// --simd run trapped on `unreachable` here, and the assertion below was an exit
 		// code of 134.
 		assertThat(compileAndRunVec(MIXED_WIDTHS, true)).isEqualTo(compileAndRunVec(MIXED_WIDTHS, false));
@@ -25559,7 +25561,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	/**
-	 * The multi-accumulator gate ({@code .todo/480}), pinned on both sides. From
+	 * The multi-accumulator gate ({@code .kb/vec.md}), pinned on both sides. From
 	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
 	 * GEMV row folds four independent four-lane accumulators as
 	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
@@ -25606,9 +25608,9 @@ class WasmLispCompilerIntegrationTest {
 	 * into the tail region and they part company, 16777244 against 16777248 -- the
 	 * deliberate divergence pinned by
 	 * {@code wasmGcSimdPartialFinalGroupFoldsTheZeroPaddedGroupByDesign} and its
-	 * scalar-tail mirror ({@code .todo/758}, closed as a contract exception). So this
-	 * assertion pins what the backends do at a partial row, and is not evidence that a
-	 * partial row folds identically.
+	 * scalar-tail mirror (a contract exception, {@code .kb/vec.md}). So this assertion
+	 * pins what the backends do at a partial row, and is not evidence that a partial row
+	 * folds identically.
 	 */
 	@Test
 	void theMultiAccumulatorGateFiresAtTheSameColumnCountOnBothWasmBackends() throws Exception {
@@ -25681,7 +25683,7 @@ class WasmLispCompilerIntegrationTest {
 				+ " (v (vec:ones 1024 :element-type 'single-float)))"
 				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (vec:matvec m v) 0))))";
-		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// A GEMV row is NOT vec:dot's chain any more: above
 		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
 		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
 		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
@@ -25697,7 +25699,8 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void wasmGcSimdPartialFinalGroupFoldsTheZeroPaddedGroupByDesign() throws Exception {
-		// .todo/758, closed as a contract exception rather than a unification: at a
+		// A contract exception rather than a unification (.kb/vec.md, "The f32-reduction
+		// precision contract"): at a
 		// length that is not a multiple of the f32x4 lane count wasm-GC folds
 		// ceil(n/4) zero-padded groups with no scalar tail, while the interpreter,
 		// the JVM class and --no-gc run the lane loop to loopBound(n) and add the
@@ -26399,14 +26402,14 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(sum, false)).isEqualTo("16778239");
 		// mean rides on sum. linalg's matrix . vector is not a kernel of its own --
 		// LinalgSimdKernels/this builder both route it through the vec: GEMV kernel --
-		// so it moved with it in todo-480, four accumulators and all.
+		// so it moved with it, four accumulators and all.
 		String mean = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0)"
 				+ " (print (round (* 1024 (linalg:mean v)))))";
 		assertThat(compileAndRunVec(mean, true)).isEqualTo("16777984");
 		assertThat(compileAndRunVec(mean, false)).isEqualTo("16778239");
 		String gemv = "(let ((v (linalg:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0)"
 				+ " (print (round (aref (linalg:dot (linalg:reshape v '(1 1024)) v) 0))))";
-		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// A GEMV row is NOT vec:dot's chain any more: above
 		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
 		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
 		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
@@ -26524,7 +26527,7 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// The seeded generator's one fill loop (linalg:rand / randn / uniform) and Adam's
-	// fused element-wise update, todo-473's two members. Both are internal linalg:
+	// fused element-wise update. Both are internal linalg:
 	// members precisely so that this seam can reach them, and both are bit-identical at
 	// both widths -- the generator because linalg:seed promises one seed reproduces one
 	// sequence on every backend, the update because it keeps the defun's order of
@@ -27534,7 +27537,7 @@ class WasmLispCompilerIntegrationTest {
 		// limit used to pass _as_f64 (float contagion) and meet _int_val's UNNAMED
 		// INTEGER report, and a non-positive limit was never checked at all -- the
 		// float path silently scaled by a negative number and the integer path took an
-		// UNSIGNED remainder of it, both wrong values instead of a signal (.todo/981).
+		// UNSIGNED remainder of it, both wrong values instead of a signal.
 		String source = """
 				(defun te (thunk)
 				  (handler-case (funcall thunk)
@@ -30181,7 +30184,7 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("((UNSIGNED-BYTE 8) T T (3) T)");
 		// A rank-n shape (runtime-detected) and a fill-pointer combination keep the
 		// general boxed representation, but REMEMBER the element type they were asked
-		// for (todo-611).
+		// for.
 		assertThat(compileAndRun("(print (array-element-type (make-array '(2 2) :element-type '(unsigned-byte 8))))"))
 			.isEqualTo("(UNSIGNED-BYTE 8)");
 		assertThat(compileAndRun("""
@@ -30492,7 +30495,7 @@ class WasmLispCompilerIntegrationTest {
 		// The LEGAL CLHS upgrades the shipped corpus passes -- refusing an unrecognized
 		// element type would refuse ironclad's and chipz's 'fixnum, jzon's
 		// '(unsigned-byte 64) and cl-ppcre's '(or null fixnum). 'bit is NOT an upgrade:
-		// since .todo/043 a bit vector is the general array stamped bit, so
+		// a bit vector is the general array stamped bit, so
 		// array-element-type answers it back.
 		assertThat(compileAndRun("""
 				(print (list (array-element-type (make-array 2 :element-type 'bit))
@@ -30522,7 +30525,7 @@ class WasmLispCompilerIntegrationTest {
 	void compileSubseqOfAPackedFloatArrayKeepsTheWidth() throws Exception {
 		// %array-alike over a packed float array: the copy comes back a TYPE_FARRAY at
 		// the SAME width. It used to come back a general simple-vector -- the alike
-		// dispatch tested only the three packed integer types (.todo/719). Under --simd
+		// dispatch tested only the three packed integer types. Under --simd
 		// the data is a vblock and the width is its kind word, so the same program runs
 		// on both representations.
 		String source = """

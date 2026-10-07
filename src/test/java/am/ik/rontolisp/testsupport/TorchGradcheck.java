@@ -362,14 +362,14 @@ public final class TorchGradcheck {
 			""";
 
 	/**
-	 * The fused compositions (todo-499) against the torch-op compositions they replaced,
-	 * BIT for bit, on every backend: the exact {@code torch:gelu} and
-	 * {@code torch:layer-norm} are one node each over an internal {@code linalg} member
-	 * whose adjoint spells the tape's own backward, {@code torch:softmax}'s adjoint is
-	 * one member, and {@code torch:dropout}'s mask is one member over an explicit
-	 * generator state. Each is checked with a SECOND consumer of the input (a residual
-	 * add), which is what exercises the accumulated-gradient protocol: the fused adjoint
-	 * folds its contributions onto what the input already held, in the tape's order.
+	 * The fused compositions against the torch-op compositions they replaced, BIT for
+	 * bit, on every backend: the exact {@code torch:gelu} and {@code torch:layer-norm}
+	 * are one node each over an internal {@code linalg} member whose adjoint spells the
+	 * tape's own backward, {@code torch:softmax}'s adjoint is one member, and
+	 * {@code torch:dropout}'s mask is one member over an explicit generator state. Each
+	 * is checked with a SECOND consumer of the input (a residual add), which is what
+	 * exercises the accumulated-gradient protocol: the fused adjoint folds its
+	 * contributions onto what the input already held, in the tape's order.
 	 */
 	public static final String FUSED_PROGRAM = """
 			(defun fz-loss (y) (torch:sum (torch:mul y y)))
@@ -452,16 +452,16 @@ public final class TorchGradcheck {
 			(T T T)""";
 
 	/**
-	 * The transpose VIEW (todo-630): {@code torch:transpose} of the last two axes returns
-	 * a tensor whose data is not materialized, {@code torch:matmul} reads its source in
-	 * place through {@code linalg::%la-matmul-nd-ta} / {@code -tb} and routes the tape
-	 * edge to the source, and every other reader materializes it once. Each line prints T
-	 * against the SAME product through a materialized transpose
-	 * ({@code (torch:add view 0.0)} forces the copy and the view's own adjoint) --
-	 * forward and both gradients, bit for bit -- then the readers that must stay honest:
-	 * the shape, the printer, {@code torch:detach}, {@code torch:data} read twice, a view
-	 * made under {@code torch:no-grad} (no gradient reaches its source), and a
-	 * permutation that is NOT the last-two swap (eager, as before).
+	 * The transpose VIEW: {@code torch:transpose} of the last two axes returns a tensor
+	 * whose data is not materialized, {@code torch:matmul} reads its source in place
+	 * through {@code linalg::%la-matmul-nd-ta} / {@code -tb} and routes the tape edge to
+	 * the source, and every other reader materializes it once. Each line prints T against
+	 * the SAME product through a materialized transpose ({@code (torch:add view 0.0)}
+	 * forces the copy and the view's own adjoint) -- forward and both gradients, bit for
+	 * bit -- then the readers that must stay honest: the shape, the printer,
+	 * {@code torch:detach}, {@code torch:data} read twice, a view made under
+	 * {@code torch:no-grad} (no gradient reaches its source), and a permutation that is
+	 * NOT the last-two swap (eager, as before).
 	 */
 	public static final String VIEW_PROGRAM = """
 			(defun vw-loss (y) (torch:sum (torch:mul y y)))

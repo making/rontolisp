@@ -49,7 +49,7 @@ class LispFormatterTest {
 	@Test
 	void keepsASharpCLiteralIntact() {
 		// #C( is one lexeme (the dispatch plus its contents), so format keeps it
-		// glued and never splits it into "#C" and a list (.todo/751).
+		// glued and never splits it into "#C" and a list.
 		assertThat(LispFormatter.format("(setq z #C(1 2))\n")).isEqualTo("(setq z #C(1 2))\n");
 		assertThat(LispFormatter.format("(setq z #c(1/2 -1/3))\n")).isEqualTo("(setq z #c(1/2 -1/3))\n");
 	}
@@ -953,7 +953,7 @@ class LispFormatterTest {
 			// agent worktrees on disk must not get a different verdict -- or a
 			// different TEST COUNT -- from `./mvnw test` than one who does not, and a
 			// worktree mid-edit must never make the MAIN tree's suite fail on a file
-			// the main tree does not contain. See .todo/708.
+			// the main tree does not contain. See .kb/directory-rename.md, item 5.
 			.filter(path -> !path.toString().contains("/.claude/"))
 			.sorted(Comparator.comparing(Path::toString))
 			.toList()
@@ -995,7 +995,8 @@ class LispFormatterTest {
 	// Pins the corpus boundary above: without this, a new foreign directory the walk
 	// does not know about (a third stale-worktree-shaped mechanism, after /target/ and
 	// /ansi-test/suite/) inflates the parameterized test count silently, exactly as
-	// .claude/worktrees/ did (.todo/708). `git ls-files` is the ground truth for what
+	// .claude/worktrees/ did (.kb/directory-rename.md). `git ls-files` is the ground
+	// truth for what
 	// the repository itself tracks; the corpus also includes untracked fixtures (e.g.
 	// a fresh ansi-test checkout before it is git-ignored away above), so the bound is
 	// a small factor rather than equality.

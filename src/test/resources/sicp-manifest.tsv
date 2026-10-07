@@ -1,4 +1,4 @@
-# SICP sample corpus manifest (.todo/828): one row per file.
+# SICP sample corpus manifest: one row per file.
 # Corpus: https://sicp.sourceacademy.org/sicp.zip
 # sha256: 476c0904386f02db5cebfa8a11410e13e0d3fb92da513c376e50c6a16873d8fe (2026-09-18, 1586 .scm files under programs_scm/)
 # Generated 2026-09-18 from the interpreter + JVM + wasm (Preview 1) runs of
@@ -1306,11 +1306,11 @@ chapter4/section1/subsection7/27_evaluate_4_1_7_test_factorial.scm	scheme	ok
 chapter4/section1/subsection7/28_evaluate_4_1_7_test_append.scm	scheme	ok	
 chapter4/section1/subsection7/29_evaluate_4_1_7_test_map.scm	scheme	ok	
 chapter4/section2/subsection1/01_try_me_example.scm	scheme	ok	
-chapter4/section2/subsection1/02_try_me.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
-chapter4/section2/subsection1/03_unless.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
+chapter4/section2/subsection1/02_try_me.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable!
+chapter4/section2/subsection1/03_unless.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable!
 chapter4/section2/subsection1/04_xs_is_null.scm	scheme	ok	
-chapter4/section2/subsection1/05_unless_example.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
-chapter4/section2/subsection1/06_factorial_lazy.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
+chapter4/section2/subsection1/05_unless_example.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable!
+chapter4/section2/subsection1/06_factorial_lazy.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable!
 chapter4/section2/subsection1/07_factorial_unless_example.scm	scheme	ok	
 chapter4/section2/subsection2/01_functions_4_1_1_lazy.scm	scheme	ok	
 chapter4/section2/subsection2/02_eval_lazy_example.scm	fragment	lenient-error	

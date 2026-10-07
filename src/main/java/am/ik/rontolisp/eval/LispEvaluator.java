@@ -330,11 +330,12 @@ public final class LispEvaluator {
 	 * Memo of the BUILT-IN macro arms' expansions ({@link #evalBuiltinMacro}), keyed by
 	 * the call site's cons identity, exactly like {@link #userMacroExpansions} above: the
 	 * interpreter used to re-expand {@code cond}/{@code do}/{@code when}/{@code incf} and
-	 * a hundred more on EVERY evaluation -- 15% of run-time samples in the todo-598
-	 * profile -- where the three compile backends expand once at compile time. Only an
-	 * arm whose expander is a pure function of the form (nothing but the cons and
-	 * compile-time-constant flags; {@code LispMacroExpander} holds no mutable static
-	 * state) may go through this memo -- the arms whose expansion reads evaluator state
+	 * a hundred more on EVERY evaluation -- 15% of run-time samples in one profile
+	 * ({@code .kb/interpreter-expansion-memo.md}) -- where the three compile backends
+	 * expand once at compile time. Only an arm whose expander is a pure function of the
+	 * form (nothing but the cons and compile-time-constant flags;
+	 * {@code LispMacroExpander} holds no mutable static state) may go through this memo
+	 * -- the arms whose expansion reads evaluator state
 	 * ({@code error}/{@code warn}/{@code signal}/{@code cerror} and the
 	 * {@code restartRuntimeLoaded} gate, the {@code closRegistry} consumers, {@code setf}
 	 * and its user expanders, the print family's per-call {@code print-object} routing,
@@ -3368,7 +3369,7 @@ public final class LispEvaluator {
 				return stableSortValues(args);
 			}
 			// A string/vector argument sorts as a list of its elements and is written
-			// back into its own storage (Common Lisp sequences; .todo/623 keeps a
+			// back into its own storage (Common Lisp sequences; this keeps a
 			// fill-pointered/adjustable argument's fill pointer, adjustable flag and
 			// identity, matching every implementation that sorts a vector in place).
 			return Environment.seqResultDestructive(args.get(0),
@@ -6273,8 +6274,7 @@ public final class LispEvaluator {
 				}
 			}
 			// A Gray stream bypasses the shared expansion below, so the bounds check
-			// runs here instead -- the same defun, over the same evaluated values
-			// (.todo/932).
+			// runs here instead -- the same defun, over the same evaluated values.
 			LispVal grayCheckEnd = end == null ? LispNil.INSTANCE : end;
 			LispVal grayCheckCall = new LispCons(new LispSymbol(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL),
 					new LispCons(quoteValue(seq), new LispCons(quoteValue(start == null ? new LispInteger(0) : start),
@@ -7067,8 +7067,8 @@ public final class LispEvaluator {
 							// operator. A name with no colon cannot be a uiop member, and
 							// this path is the fall-through every ordinary call takes, so
 							// one indexOf here spares BOTH probes' splitQualified for
-							// (char s j) and (+ j 1) alike (4% of run-time samples in the
-							// todo-598 profile).
+							// (char s j) and (+ j 1) alike (4% of run-time samples in one
+							// profile, .kb/interpreter-expansion-memo.md).
 							if (sym.name().indexOf(':') > 0 && isUiopOperator(sym.name())) {
 								// First the ones with a real expansion -- the one
 								// dispatcher both compilers and FreeVarAnalyzer also
@@ -7716,7 +7716,7 @@ public final class LispEvaluator {
 			case LispNames.FTRUNCATE:
 				// (ffloor a [b]) -> (float (floor a [b])): the same exact quotient
 				// floor/ceiling/round/truncate already compute (the case above), with
-				// only the primary value floated (todo-667). The remainder, reached only
+				// only the primary value floated. The remainder, reached only
 				// through a multiple-value consumer, is handled by
 				// LispMacroExpander#lowerMvProducer before this dispatch is ever
 				// reached.
@@ -11068,8 +11068,8 @@ public final class LispEvaluator {
 		// also how a LIVE value is spliced back into a form for re-evaluation
 		// (quoteValue, four sites, one of them read-sequence's Gray-dispatch rebuild),
 		// so materializing an array here would hand a destructive operation a copy.
-		// This sharing is also the RULE, not a residual: since todo 579 both compile
-		// backends memoize a quoted datum to the same effect, so '#(1 2 3) is one
+		// This sharing is also the RULE, not a residual: both compile backends
+		// memoize a quoted datum to the same effect, so '#(1 2 3) is one
 		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
 		// .kb/quoted-data.md.
 		return singleValue(rest.car());
@@ -13179,7 +13179,7 @@ public final class LispEvaluator {
 			result = new LispCons(decorated.get(i)[1], result);
 		}
 		// A string/vector argument sorts as a list of its elements and is written
-		// back into its own storage, matching the SORT builtin above (.todo/623).
+		// back into its own storage, matching the SORT builtin above.
 		return Environment.seqResultDestructive(args.get(0), result);
 	}
 
@@ -14141,9 +14141,8 @@ public final class LispEvaluator {
 			// the
 			// freshly-built result back into the argument's own storage
 			// (seqResultDestructive, the sort/nreverse precedent) instead of answering it
-			// as a new sequence (.todo/773 -- .todo/623's plain seqResult reuse answered
-			// a
-			// fresh sequence here and left the argument unchanged).
+			// as a new sequence (the plain seqResult reuse once answered a fresh
+			// sequence here and left the argument unchanged).
 			return Environment.seqResultDestructive(original, result);
 		}
 		return Environment.seqResult(original, result);

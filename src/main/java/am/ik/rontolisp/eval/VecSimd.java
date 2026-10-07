@@ -460,8 +460,8 @@ public final class VecSimd {
 
 	/**
 	 * {@link #defineUnary} over a member with a fused bfloat16 element-wise kernel
-	 * (`.todo/747`): a bf16 operand runs the narrow kernel into a fresh bf16 vector,
-	 * every other width as above, and a MIXED pair declines to the defun.
+	 * ({@code .kb/bfloat16.md}): a bf16 operand runs the narrow kernel into a fresh bf16
+	 * vector, every other width as above, and a MIXED pair declines to the defun.
 	 */
 	private static void defineUnary(Environment globalEnv, LispEvaluator evaluator, String name, DoubleKernel1Into f64,
 			FloatKernel1Into f32, Bf16Kernel1Into bf16) {
@@ -804,12 +804,12 @@ public final class VecSimd {
 	/**
 	 * Whether any operand is a packed bfloat16 array. The members WITHOUT a fused bf16
 	 * kernel -- everything but the reductions' decode shape and the element-wise narrow
-	 * pairings (`.todo/747`) -- DECLINE the width, and the scalar {@code vec.lisp} defun
-	 * answers. Checked as its own early-out purely to keep the width switch below free of
-	 * a bf16 arm; the mismatch arms below decline the very same way (a {@code null}
-	 * kernel answer), since a bf16 operand beside an f32 one is a shape the oracle
-	 * computes happily and {@code --simd} may not turn it into an error -- nor may any
-	 * other mixed-width pairing it happily computes.
+	 * pairings -- DECLINE the width, and the scalar {@code vec.lisp} defun answers.
+	 * Checked as its own early-out purely to keep the width switch below free of a bf16
+	 * arm; the mismatch arms below decline the very same way (a {@code null} kernel
+	 * answer), since a bf16 operand beside an f32 one is a shape the oracle computes
+	 * happily and {@code --simd} may not turn it into an error -- nor may any other
+	 * mixed-width pairing it happily computes.
 	 * @param arrays the member's array operands
 	 * @return {@code true} when at least one is a bfloat16 array
 	 */

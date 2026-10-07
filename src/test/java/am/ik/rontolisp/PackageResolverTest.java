@@ -1268,7 +1268,7 @@ class PackageResolverTest {
 
 	@Test
 	void runtimePackageCreateDeleteRename() {
-		// The runtime tier (.todo/741): an empty package with a use list and
+		// The runtime tier (.kb/packages.md): an empty package with a use list and
 		// nicknames, all upcased like the reader would, rename replacing the
 		// nicknames, delete dropping the registration and its nicknames.
 		PackageResolver resolver = new PackageResolver();

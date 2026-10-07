@@ -166,7 +166,7 @@ class QuantizedMatrixTest {
 
 	@Test
 	void quantizeProducesGgmlsBytes() {
-		Random random = new Random(672);
+		Random random = new Random(0x5EEDL);
 		for (int[] shape : new int[][] { { 1, 32 }, { 3, 64 }, { 17, 256 }, { 64, 1024 } }) {
 			int n = shape[0] * shape[1];
 			float[] data = new float[n];
@@ -293,7 +293,7 @@ class QuantizedMatrixTest {
 
 	@Test
 	void readSequenceOnAQuantizedMatrixStillValidatesItsBoundTypes() {
-		// .todo/932's check defun measures its own length: a quantized matrix is
+		// read-sequence's check defun measures its own length: a quantized matrix is
 		// neither stringp nor arrayp, so without its own arm it fell into list-length
 		// and spuriously failed. Its transfers move block bytes no Lisp-level reader
 		// measures, so the range check stays the transfer arm's -- but a bad bound
@@ -389,7 +389,7 @@ class QuantizedMatrixTest {
 
 	@Test
 	void theQuantizedGemvIsCloseToTheBf16GemvOverTheDequantizedMatrix() {
-		// 7.6e-3 relative was the spike's number (.todo/672); the contract here is only
+		// 7.6e-3 relative was the spike's number; the contract here is only
 		// that the quantized path is a quantization error, not a bug: below 1e-2.
 		String program = fixture(256, 1024, "single-float") + """
 				(defparameter *q* (vec:matvec *m* *x*))

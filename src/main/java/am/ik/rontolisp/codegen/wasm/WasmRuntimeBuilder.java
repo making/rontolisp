@@ -34,11 +34,11 @@ final class WasmRuntimeBuilder {
 	 *
 	 * <p>
 	 * The recursive spelling allocated its result by recursing once per element, so a
-	 * long first argument exhausted the wasm stack rather than answering slowly
-	 * (.todo/749). The result is unchanged (a fresh spine, the tail shared). In EH mode a
-	 * first argument that is no list, or ends dotted, is {@code APPEND}'s type-error over
-	 * the atom the walk met ({@code _type_err_list} under its row); outside it the body
-	 * is unchanged and traps at the {@code ref.cast}.
+	 * long first argument exhausted the wasm stack rather than answering slowly. The
+	 * result is unchanged (a fresh spine, the tail shared). In EH mode a first argument
+	 * that is no list, or ends dotted, is {@code APPEND}'s type-error over the atom the
+	 * walk met ({@code _type_err_list} under its row); outside it the body is unchanged
+	 * and traps at the {@code ref.cast}.
 	 * @param identityHash whether a cons carries an identity hash
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
 	 * @param operatorId {@code APPEND}'s row, or 0 when the program cannot name it
@@ -1242,7 +1242,7 @@ final class WasmRuntimeBuilder {
 	// Pushes 1 (i32) when the (ref null eq) held in `local` is a bare symbol name --
 	// a TYPE_STRING whose bytes are NOT quote-framed, exactly what a symbol value is
 	// (WasmLispCompiler.TYPE_STRING's javadoc / .kb/wasm-gc-strings.md) -- equal to
-	// `literal` (ASCII only; QUOTE/FUNCTION are the only two callers, todo 626), 0
+	// `literal` (ASCII only; QUOTE/FUNCTION are the only two callers), 0
 	// otherwise. `literal`'s bytes are compared unrolled since both callers pass a
 	// short fixed string, which is cheaper here than building a throwaway TYPE_STRING
 	// and calling FUNC_STRING_EQ.
@@ -1288,9 +1288,9 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Emits the quote/function abbreviation check ahead of {@link #emitPrintConsList}'s
-	 * general loop (todo 626, CLHS 22.1.3.7): a cons cell {@code {car, cdr}} whose
-	 * {@code car} is the bare symbol name {@code "QUOTE"} / {@code "FUNCTION"} and whose
-	 * {@code cdr} is itself a cons cell {@code {x, null}} (a proper 2-element list --
+	 * general loop (CLHS 22.1.3.7): a cons cell {@code {car, cdr}} whose {@code car} is
+	 * the bare symbol name {@code "QUOTE"} / {@code "FUNCTION"} and whose {@code cdr} is
+	 * itself a cons cell {@code {x, null}} (a proper 2-element list --
 	 * {@code (QUOTE A B)} still prints in full) writes {@code '}/{@code #'} then
 	 * {@code x}'s rendering and returns through the SAME exit the function's own tail
 	 * uses ({@code emitRenderGuardExit}), before the caller's Floyd/loop code ever runs.
@@ -1855,7 +1855,7 @@ final class WasmRuntimeBuilder {
 			int pathGlobalIndex, int depthGlobalIndex, int stopSlot, int fastSlot, int seenSlot, int scanSlot) {
 		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addString("#");
 		emitRenderGuardEnter(w, depthMarker, pathGlobalIndex, depthGlobalIndex, scanSlot);
-		// The quote/function abbreviation (todo 626), checked before the general loop
+		// The quote/function abbreviation, checked before the general loop
 		// below claims stopSlot/fastSlot/seenSlot for their own purpose.
 		emitQuoteAbbrevCheck(w, st, 0, elementFunc, pathGlobalIndex, depthGlobalIndex, stopSlot, fastSlot, seenSlot);
 		// Floyd's cycle detection over the cdr chain: stop = the cell where the cycle
@@ -4363,7 +4363,7 @@ final class WasmRuntimeBuilder {
 
 		// A peek on this fd may have parked a whole code point in the one-slot
 		// pushback (a fd cannot be un-read): it opens the line, exactly as _read_char
-		// drains it (and _read_seq_chars does, .todo/936). The parked code point is
+		// drains it (and _read_seq_chars does). The parked code point is
 		// UTF-8-encoded into the staging area ahead of the fd bytes; a parked newline
 		// ends the (empty) line here instead, the way the loop's own newline break
 		// leaves the terminator out of the answer. Local 5 is the string-stream
@@ -5723,8 +5723,8 @@ final class WasmRuntimeBuilder {
 		// A leading '"' (0x22) discriminates a real string from a bare symbol name (the
 		// same test _princ_val makes). A STRING prints its readable form:
 		// _write_str_gc(str, 1, len - 1, esc = 1) re-frames the CONTENT in quotes and
-		// escapes every embedded " / \ on the way out, so the reader can read it back
-		// (todo 216). A SYMBOL has no frame and no escaping: (0, len, esc = 0).
+		// escapes every embedded " / \ on the way out, so the reader can read it
+		// back. A SYMBOL has no frame and no escaping: (0, len, esc = 0).
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		WasmEmitHelper.emitStrBytesArray(w);
@@ -5749,7 +5749,7 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		WasmEmitHelper.emitWriteStrGcCall(w);
 		w.write(Instruction.ELSE);
-		// A bare symbol name (todo 626): |...|-escape when CLHS 22.1.3.3 says the bare
+		// A bare symbol name: |...|-escape when CLHS 22.1.3.3 says the bare
 		// bytes would not read back as themselves, verbatim otherwise -- see
 		// buildSymEscGcBody's Javadoc. princ (buildPrincValBody, below) never escapes,
 		// so it keeps calling _write_str_gc directly.
@@ -6498,7 +6498,7 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(field);
 	}
 
-	// A rank-1 bit-stamped array prints #* when every element is 0/1 (.todo/820).
+	// A rank-1 bit-stamped array prints #* when every element is 0/1.
 	// Emitted as a BLOCK the general path follows: any check failing branches to
 	// its end (falling through to the displacement walk), while success writes
 	// "#*" + bits, exits the render guard and returns. The marker is read off
@@ -7050,7 +7050,7 @@ final class WasmRuntimeBuilder {
 		setLocal(w, lenSlot);
 
 		// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
-		// printed bit vector reads back as one (.todo/820). make-array never
+		// printed bit vector reads back as one. make-array never
 		// validates stores, so a non-bit element falls back to the general #()
 		// vector below. idxSlot/strideSlot/mSlot are free here (the len product
 		// loop is done, the element loop has not started); dataSlot still holds

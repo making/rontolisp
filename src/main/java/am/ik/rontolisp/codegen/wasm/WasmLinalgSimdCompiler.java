@@ -109,7 +109,7 @@ final class WasmLinalgSimdCompiler {
 			// (torch.bmm): the ikj lane loop of the DOT kernel's M.M case, once per
 			// batch.
 			Map.entry(LispNames.LINALG_MATMUL_ND, WasmLinalgSimdRuntimeBuilder.MATMUL_ND),
-			// The two members todo-473 moved onto this seam: the seeded generator's one
+			// The two members moved onto this seam: the seeded generator's one
 			// fill loop (linalg:rand / randn / uniform) and Adam's fused element-wise
 			// update (torch:adam / torch:adamw). Both are internal linalg: members
 			// precisely so that this compiler -- which claims linalg: call sites and

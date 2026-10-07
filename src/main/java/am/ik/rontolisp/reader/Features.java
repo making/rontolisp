@@ -292,7 +292,8 @@ public final class Features {
 	 * upper-cased member name, prefixed with {@code ":"} when the entry IS a keyword --
 	 * which, for a list entry, is exactly when it prints with a leading colon. A package
 	 * prefix is dropped because a rontolisp symbol does not carry its package
-	 * ({@code .todo/156}), so {@code FOO::X} and {@code BAR::X} are one name here.
+	 * ({@code .kb/reader-features.md}), so {@code FOO::X} and {@code BAR::X} are one name
+	 * here.
 	 */
 	private static String listedDesignator(String name) {
 		String text = name.startsWith("#:") ? name.substring(2) : name;

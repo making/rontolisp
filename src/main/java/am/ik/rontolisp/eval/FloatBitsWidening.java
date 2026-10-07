@@ -16,7 +16,7 @@ import am.ik.rontolisp.LispVal;
 
 /**
  * The interpreter arm of {@code rontolisp:widen-float-bits} / {@code
- * rontolisp:narrow-float-bits} (.todo/671): bulk conversion between a packed {@code
+ * rontolisp:narrow-float-bits}: bulk conversion between a packed {@code
  * (unsigned-byte 16)} vector of IEEE {@code :float16} or {@code :bfloat16} bit patterns
  * and an existing packed float array, row-major from a {@code :start} offset in whichever
  * side is the DESTINATION.
@@ -29,8 +29,8 @@ import am.ik.rontolisp.LispVal;
  * setElement} accessors: a 1.1B-element checkpoint tensor through a per-element virtual
  * call and a fresh {@code LispDouble} box per element does not reach the Gelem/s-class
  * throughput this primitive exists for (a tight primitive-array loop is what
- * {@code .todo/482}'s {@code Load.java} measured; the boxed path is orders of magnitude
- * slower and was never benchmarked as a candidate).
+ * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Load.java} measured; the
+ * boxed path is orders of magnitude slower and was never benchmarked as a candidate).
  *
  * <p>
  * The destination's/source's concrete packed-float width is dispatched with an EXHAUSTIVE
@@ -134,9 +134,9 @@ final class FloatBitsWidening {
 	 * element calls {@link BFloat16#bits(float)}, which Java's overload resolution picks
 	 * over the {@code double} arm without any implicit widening (an exact-type match is
 	 * always more specific), so no {@code float} ever crosses a {@code double} on its way
-	 * to the authority's own NaN handling. Until {@code .todo/746}'s census, this arm ran
-	 * a private copy of {@code bits(float)}'s own arithmetic instead of calling it, on
-	 * the (by-then stale) belief that calling {@code bits} here would auto-widen.
+	 * to the authority's own NaN handling. Until a census of the narrowing sites, this
+	 * arm ran a private copy of {@code bits(float)}'s own arithmetic instead of calling
+	 * it, on the (by-then stale) belief that calling {@code bits} here would auto-widen.
 	 * @param fnName the operator name, for error messages
 	 * @param args the argument list
 	 * @return {@code dst}
@@ -183,7 +183,7 @@ final class FloatBitsWidening {
 				else {
 					// A genuine double here (no widening happened to reach this branch),
 					// so BFloat16.bits's own double-domain NaN handling is exact -- this
-					// is the arm .todo/487 actually designed it for.
+					// is the arm it was designed for.
 					for (int i = 0; i < n; i++) {
 						out[start + i] = (short) BFloat16.bits(in[i]);
 					}

@@ -600,7 +600,7 @@ final class WasmQuoteCompiler {
 		// header = cons(dims, cons(cons(null, cons(null, marker)), data));
 		// cell = struct.new TYPE_CELL(header). The marker is 0 (nothing remembered),
 		// except a bit-vector literal (#*1011), which is stamped with the remembered
-		// element type bit like the frontend's lowering (.todo/043).
+		// element type bit like the frontend's lowering.
 		getBuckets(ctx, dimsSlot);
 		refNull(ctx);
 		refNull(ctx);

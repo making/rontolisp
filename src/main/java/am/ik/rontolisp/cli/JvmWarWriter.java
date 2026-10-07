@@ -30,8 +30,7 @@ import org.jspecify.annotations.Nullable;
  * their own {@code web.xml} (a filter, a security constraint, a {@code <session-config>})
  * can add one afterwards and the initializer keeps working -- verified against both
  * {@code metadata-complete="true"} and {@code <absolute-ordering/>}, neither of which
- * reaches an initializer declared in {@code WEB-INF/classes} (the {@code .todo/529}
- * spike).
+ * reaches an initializer declared in {@code WEB-INF/classes}.
  *
  * <p>
  * Every entry is stamped with {@link JvmJarWriter}'s fixed timestamp and written in a

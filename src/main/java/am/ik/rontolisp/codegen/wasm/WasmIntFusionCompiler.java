@@ -95,7 +95,7 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * An unboxed (dual-representation) local variable, todo 194 stage 3: {@code
+	 * An unboxed (dual-representation) local variable: {@code
 	 * i64Slot} holds the raw value and {@code shadowSlot} (an ordinary eqref local) holds
 	 * the module's raw-local SENTINEL (a private TYPE_CELL instance,
 	 * {@code Ctx.rawSentinelGlobalIndex}) while the raw value is authoritative. An
@@ -167,10 +167,10 @@ final class WasmIntFusionCompiler {
 	/**
 	 * A rank-1 {@code (aref a i)} leaf: the array evaluates once into a scratch local,
 	 * and the fast path reads the element RAW when the array is a packed integer vector
-	 * (todo 194 stage 2) -- no {@code _int_new} box, which for an out-of-i31
-	 * {@code (unsigned-byte 32)} element deletes a {@code TYPE_BIGNUM} allocation per
-	 * read. Any other array shape (or a non-i31 index) bails to the fallback, which
-	 * reruns the ordinary aref dispatch from the SAME locals.
+	 * -- no {@code _int_new} box, which for an out-of-i31 {@code (unsigned-byte 32)}
+	 * element deletes a {@code TYPE_BIGNUM} allocation per read. Any other array shape
+	 * (or a non-i31 index) bails to the fallback, which reruns the ordinary aref dispatch
+	 * from the SAME locals.
 	 *
 	 * <p>
 	 * The INDEX is an ordinary operand of the tree ({@link #arefLeaf}): a literal folds,
@@ -539,7 +539,7 @@ final class WasmIntFusionCompiler {
 	 * {@code isClosedIntTree} whitelist widened with calls to fusion-inlinable defuns, so
 	 * a {@code sigma0}-style wrapper over {@code rol32} qualifies). Registered by
 	 * {@link WasmLetCompiler} for the extent of the binding's body, consumed by
-	 * {@code classify} at {@code (funcall __FLETn_f ...)} sites -- todo 194 stage 3.
+	 * {@code classify} at {@code (funcall __FLETn_f ...)} sites.
 	 */
 	record LocalIntLambda(List<String> params, LispVal body) {
 	}
@@ -1815,12 +1815,11 @@ final class WasmIntFusionCompiler {
 	/**
 	 * Guards and unboxes every non-constant leaf ONCE, in registration (source) order and
 	 * the aref reads after the rest, into an i64 scratch local -- the fast path re-reads
-	 * the local at every occurrence. Before todo 194 stage 3 the guard was re-emitted at
-	 * every occurrence of a shared leaf, which made inlined local-function bodies (whose
-	 * parameters are used repeatedly) pay more in guards than they saved in dispatch.
-	 * Emitted directly inside the bail block: a failed guard branches to the fallback
-	 * ({@code br_if} at depth 0, or depth 1 from inside the ExprLeaf guard's own
-	 * {@code if}).
+	 * the local at every occurrence. The guard used to be re-emitted at every occurrence
+	 * of a shared leaf, which made inlined local-function bodies (whose parameters are
+	 * used repeatedly) pay more in guards than they saved in dispatch. Emitted directly
+	 * inside the bail block: a failed guard branches to the fallback ({@code br_if} at
+	 * depth 0, or depth 1 from inside the ExprLeaf guard's own {@code if}).
 	 */
 	private static void emitLeafUnboxes(List<Node> leaves, WasmLispCompiler.Ctx ctx) {
 		for (Node node : leaves) {

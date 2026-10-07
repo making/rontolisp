@@ -1,4 +1,4 @@
-;; Glue for the SICP amb-driver legs (.todo/856, SicpCorpusE2eTest#ambDrivers).
+;; Glue for the SICP amb-driver legs (SicpCorpusE2eTest#ambDrivers).
 ;; No corpus text below: everything here is written for the harness, following
 ;; SICP 4.1.2/4.1.3/4.3.3. Loaded AFTER the support files and
 ;; chapter4/section3/subsection3/16_driver_loop_amb.scm (minus its trailing

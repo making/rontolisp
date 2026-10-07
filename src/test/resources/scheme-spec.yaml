@@ -2487,7 +2487,7 @@ cases:
       (outer inner outer)
       (raised boom)
       (2 1)
-  # Ports (.todo/873): string ports, the optional port argument; Gauche 0.9.15 -r7 output.
+  # Ports: string ports, the optional port argument; Gauche 0.9.15 -r7 output.
   - name: string-ports-write-and-read
     source: |
       (define sp-out (open-output-string))
@@ -2679,7 +2679,7 @@ cases:
       "current-output-port: not a textual output port: 5"
       "current-input-port: not a textual input port: #<textual-output-port>"
       (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
-  # (scheme file) (.todo/874). Every path is built at run time under a random prefix: a
+  # (scheme file). Every path is built at run time under a random prefix: a
   # literal one would be folded at compile time (.kb/read-load-streams.md), and two runs
   # of this corpus at once must not share a file. Gauche 0.9.15 -r7 output.
   - name: file-ports-write-then-read
@@ -2972,7 +2972,7 @@ cases:
       (+ - (q 1/3))
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
-# ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
+# ci-spec.yaml's standalone: list. The dynamic-wind puts the wasm
 # module in EH mode, where the report is printable at all.
 standalone:
   - name: applying-false-reports-not-applicable

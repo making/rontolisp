@@ -7,17 +7,19 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles {@code rontolisp:float16-bits} / {@code rontolisp:bits-float16} (.todo/671):
- * sixteen bits fit an i31 fixnum, so -- like {@link WasmBFloat16Compiler} beside it --
- * this is a real primitive here, not a call-time signal the {@code %ieee754-*} quartet
- * needs (that pair's 32/64-bit unsigned model has no room in this numeric model).
+ * Compiles {@code rontolisp:float16-bits} / {@code rontolisp:bits-float16}: sixteen bits
+ * fit an i31 fixnum, so -- like {@link WasmBFloat16Compiler} beside it -- this is a real
+ * primitive here, not a call-time signal the {@code %ieee754-*} quartet needs (that
+ * pair's 32/64-bit unsigned model has no room in this numeric model).
  *
  * <p>
  * {@link #compileFromBits} (the DECODE direction, bits -&gt; real) is the magic-multiply
- * plus a MASKED "exponent field is all-ones" fixup -- {@code .todo/482}'s
- * {@code Load.java} shape, not {@code Dec.java}'s variant D as literally written (that
- * one's fixup mask was found wrong for NaN while building this; see the fixed
- * {@code Dec.java} and {@code .todo/482}'s README section 4 re-evaluation note).
+ * plus a MASKED "exponent field is all-ones" fixup -- the
+ * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Load.java} shape, not
+ * {@code Dec.java}'s variant D as literally written (that one's fixup mask was found
+ * wrong for NaN while building this; see the fixed {@code Dec.java} and the section 4
+ * re-evaluation note in
+ * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/README.md}).
  *
  * <p>
  * {@link #compileBits} (the ENCODE direction, real -&gt; bits, round-to-nearest-even) is
@@ -28,10 +30,10 @@ import am.ik.wasm.Instruction;
  * into arithmetic (a {@code shift}/{@code msb}/{@code biasedExpField} formula scaled by
  * the 0/1 {@code isSubnormal} flag, and the round-to-nearest-even increment as a 0/1
  * multiply) rather than nested branches -- verified exhaustively against the original
- * branchy port over all 2^32 float32 inputs (NaN payload included; {@code .todo/482}'s
- * {@code Enc.java} test harness) before being transliterated here. Two branchless
- * "magic-multiply" alternatives were tried and abandoned because they round
- * DENORMAL-target ties wrongly (same file).
+ * branchy port over all 2^32 float32 inputs (NaN payload included; the
+ * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java} test harness)
+ * before being transliterated here. Two branchless "magic-multiply" alternatives were
+ * tried and abandoned because they round DENORMAL-target ties wrongly (same file).
  *
  * <p>
  * Every intermediate value lives in an {@code i64} scratch slot (this compiler has no
@@ -378,13 +380,13 @@ final class WasmFloat16Compiler {
 	 * <b>Known simplification for a {@code double-float} source's {@code :bfloat16}
 	 * direction</b>: every element is demoted {@code f64 -> f32} once before the bf16
 	 * round, exactly like the {@code :float16} direction (whose JDK reference,
-	 * {@code Float.floatToFloat16}, only ever takes a {@code float}). {@code .todo/487}'s
+	 * {@code Float.floatToFloat16}, only ever takes a {@code float}).
 	 * {@code BFloat16.bits(double)} avoids this by checking the DOUBLE's own NaN bits
 	 * before narrowing, so a double source right at a bf16 rounding tie can answer one
 	 * ULP differently between backends; nothing here needs bit-for-bit parity with that
-	 * function today (NaN payload is "aside" throughout this primitive, per
-	 * {@code .todo/671}'s Verify section), so the simpler shape was kept rather than
-	 * porting {@code BFloat16}'s full 64-bit NaN detection into a fourth WASM arm.
+	 * function today (NaN payload is "aside" throughout this primitive), so the simpler
+	 * shape was kept rather than porting {@code BFloat16}'s full 64-bit NaN detection
+	 * into a fourth WASM arm.
 	 */
 	static void compileNarrow(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
@@ -707,9 +709,9 @@ final class WasmFloat16Compiler {
 	/**
 	 * The bf16 round-to-nearest-even narrow, over an f32 bit pattern already in
 	 * {@code doppel}: {@code (bits + 0x7fff + lsb) >>> 16}, NaN special-cased (a plain
-	 * bias-add can carry a heavy-payload NaN's low bits into the sign --
-	 * {@code .todo/482}'s {@code Enc.java} note). Leaves the encoded i32 (0..65535) on
-	 * the stack.
+	 * bias-add can carry a heavy-payload NaN's low bits into the sign -- the note in
+	 * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java}). Leaves the
+	 * encoded i32 (0..65535) on the stack.
 	 */
 	private static void emitBfloat16Encode(WasmLispCompiler.Ctx ctx, int doppel) {
 		loadI32(ctx, doppel);

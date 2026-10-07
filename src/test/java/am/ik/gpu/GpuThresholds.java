@@ -175,8 +175,8 @@ public final class GpuThresholds {
 	/**
 	 * Whether lazy results PAY on the device found -- what decides whether an
 	 * interceptor, in this process or in a compiled class's own copy of the library,
-	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, and Metal since
-	 * todo-495.
+	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, and Metal since its
+	 * command buffers became asynchronous.
 	 * @return {@code true} when an interceptor over this device runs with lazy results
 	 */
 	public static boolean lazyResultsPay() {
@@ -195,8 +195,8 @@ public final class GpuThresholds {
 	}
 
 	/**
-	 * Whether a {@code #bf16} matrix can be the weight of a device GEMV here
-	 * ({@code .todo/490}): {@code true} on CUDA, {@code false} on Metal.
+	 * Whether a {@code #bf16} matrix can be the weight of a device GEMV here:
+	 * {@code true} on CUDA, {@code false} on Metal.
 	 * @return {@code true} when the bfloat16 GEMV is live here
 	 */
 	public static boolean supportsBfloat16() {
@@ -205,8 +205,8 @@ public final class GpuThresholds {
 	}
 
 	/**
-	 * Whether a Q8_0 quantized matrix can be the weight of a device GEMV here
-	 * ({@code .todo/728}): {@code true} on CUDA, {@code false} on Metal.
+	 * Whether a Q8_0 quantized matrix can be the weight of a device GEMV here:
+	 * {@code true} on CUDA, {@code false} on Metal.
 	 * @return {@code true} when the Q8_0 GEMV is live here
 	 */
 	public static boolean supportsQuantized() {

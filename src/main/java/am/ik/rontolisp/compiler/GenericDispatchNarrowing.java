@@ -30,7 +30,7 @@ import org.jspecify.annotations.Nullable;
  * (and everything only they reach) by the reachability they already have. The motivating
  * case is chipz's {@code decompress}: the program's one call is
  * {@code (chipz:decompress nil 'chipz:gzip <ub8-vector>)}, and the artifact carried all
- * 18 {@code %DECOMPRESS} variants for it ({@code .todo}-332's inventory).
+ * 18 {@code %DECOMPRESS} variants for it.
  *
  * <h2>What makes a drop sound</h2>
  *

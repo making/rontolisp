@@ -529,9 +529,8 @@ final class WasmVecLoops {
 	 * keeps its single chain (see {@code .kb/vec.md}), so sharing one emitter would leave
 	 * {@code dot}'s call sites passing an accumulator count they never vary and a gate
 	 * they do not have -- and would invite the next reader to assume the two kernels are
-	 * still the same thing. They are not: as of {@code .todo/480} a GEMV row and a
-	 * {@code vec:dot} over the same values sum in DIFFERENT orders and may differ in the
-	 * last bits.
+	 * still the same thing. They are not: a GEMV row and a {@code vec:dot} over the same
+	 * values sum in DIFFERENT orders and may differ in the last bits.
 	 *
 	 * <p>
 	 * One accumulator is one dependency chain -- four lanes per add of four-cycle latency

@@ -320,14 +320,14 @@ final class JvmGpuTemplate {
 	 * The widths pair as the lane kernels pair them: a {@code double[]} or
 	 * {@code float[]} matrix against a vector of its own width, and a bfloat16
 	 * {@code short[]} matrix against a {@code float[]} vector into a {@code float[]}
-	 * result ({@code .todo/490}; the pairing {@code .kb/bfloat16.md} names). The bf16
-	 * array's header is TWO slots a dimension ({@code [rank, hi_0, lo_0, ...]}, data at
-	 * {@code 1 + 2 * rank}) -- read here by {@link #bf16Dim}, the one place in this
-	 * template that spells the layout, beside {@code JvmSimdVectorTemplate}'s own pair.
-	 * And a Q8_0 quantized {@code byte[]} matrix against a {@code float[]} vector
-	 * ({@code .todo/728}), whose int header {@link #qmDim} / {@link #qmOff} read -- the
-	 * third place that spells it, after {@code JvmQuantizedMatrixRuntimeBuilder} and
-	 * {@code JvmSimdVectorTemplate} ({@code .kb/quantized-matrix.md}).
+	 * result (the pairing {@code .kb/bfloat16.md} names). The bf16 array's header is TWO
+	 * slots a dimension ({@code [rank, hi_0, lo_0, ...]}, data at {@code 1 + 2 * rank})
+	 * -- read here by {@link #bf16Dim}, the one place in this template that spells the
+	 * layout, beside {@code JvmSimdVectorTemplate}'s own pair. And a Q8_0 quantized
+	 * {@code byte[]} matrix against a {@code float[]} vector, whose int header
+	 * {@link #qmDim} / {@link #qmOff} read -- the third place that spells it, after
+	 * {@code JvmQuantizedMatrixRuntimeBuilder} and {@code JvmSimdVectorTemplate}
+	 * ({@code .kb/quantized-matrix.md}).
 	 * @param w the matrix
 	 * @param x the vector
 	 * @return the packed result, or {@code null} when the device declined it
@@ -1875,7 +1875,7 @@ final class JvmGpuTemplate {
 		return v;
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier -------------------------------------------------------------
 
 	/**
 	 * {@code (linalg::%la-gelu x)}: the exact GELU as one pass over a packed operand, the

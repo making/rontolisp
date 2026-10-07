@@ -2,7 +2,7 @@
 ;;;;
 ;;;; Canonical shape; see .kb/uiop.md.
 ;;;;
-;;;; A rontolisp symbol is a STRING, not an interned object (.todo/156 A2), and
+;;;; A rontolisp symbol is a STRING, not an interned object, and
 ;;;; *package* folds at resolution time (.kb/packages.md), so this family splits
 ;;;; in two. The name-level questions the registry can serve are real here, over
 ;;;; the CL package operators every backend already carries; the surgery that

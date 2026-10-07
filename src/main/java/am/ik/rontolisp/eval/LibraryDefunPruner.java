@@ -284,7 +284,7 @@ public final class LibraryDefunPruner {
 		// %make-array-et is reached from make-array's runtime-:element-type lowering,
 		// which also runs inside the expression compilers.
 		// %call-with-input / %call-with-output are reached from uiop:with-input's /
-		// uiop:with-output's expansions the same way (.todo/359).
+		// uiop:with-output's expansions the same way.
 		//
 		// The surface facts are read off the LIVE forms, not the whole spliced program:
 		// a library splices whole, so a dead library defun spelling, say,

@@ -2786,13 +2786,13 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * {@code destructive} true (the {@code sort}/{@code nreverse}/{@code stable-sort}
-	 * precedent, {@code .todo/623}) writes the rebuilt string/vector back into
-	 * {@code __seq_in} via {@code (replace __seq_in <rebuild>)} and answers THAT CALL'S
-	 * result, instead of answering the fresh rebuild directly -- so a fill-pointered or
-	 * adjustable argument keeps its fill pointer, its adjustable flag AND its identity,
-	 * matching every implementation these three permute in place. Answering replace's own
-	 * result (not {@code __seq_in} forced) matters for a source-literal string, which
-	 * {@code replace} cannot write in place and answers a fresh copy for instead
+	 * precedent) writes the rebuilt string/vector back into {@code __seq_in} via
+	 * {@code (replace __seq_in <rebuild>)} and answers THAT CALL'S result, instead of
+	 * answering the fresh rebuild directly -- so a fill-pointered or adjustable argument
+	 * keeps its fill pointer, its adjustable flag AND its identity, matching every
+	 * implementation these three permute in place. Answering replace's own result (not
+	 * {@code __seq_in} forced) matters for a source-literal string, which {@code replace}
+	 * cannot write in place and answers a fresh copy for instead
 	 * ({@code .kb/string-write-runtime.md}); forcing {@code __seq_in} there would
 	 * silently answer the unsorted/unreversed literal. {@code false} (every other caller:
 	 * {@code remove}, {@code remove-if(-not)}, {@code remove-duplicates},
@@ -4483,7 +4483,7 @@ public final class LispMacroExpander {
 	// applied name, or null when the place is not this shape (placeParts is the place's
 	// OWN parts: (apply #'name array sub...), so placeParts.get(0) is APPLY itself).
 	// Shared with usesSetfApplyArrayRowMajorIndex below so the two can never drift apart
-	// on what counts as this place (todo a66): expandSetf runs LAZILY, from
+	// on what counts as this place: expandSetf runs LAZILY, from
 	// JvmExprCompiler/WasmExprCompiler's SETF case, at actual codegen time -- after the
 	// REFERENCE_GATED_FUNCTIONS wrapper gate has already scanned the surface program for
 	// every #'name it needs to see, so the (function array-row-major-index) this case
@@ -4502,7 +4502,7 @@ public final class LispMacroExpander {
 	 * array-row-major-index)} reference no scan of the SURFACE program can see. The
 	 * REFERENCE_GATED_FUNCTIONS wrapper gate in {@code Jvm/WasmLispCompiler} calls this
 	 * alongside its ordinary {@code (function name)} scan so the array-row-major-index
-	 * wrapper is injected whenever codegen is about to need it (todo a66), the same way
+	 * wrapper is injected whenever codegen is about to need it, the same way
 	 * {@code usesRestartSystem}/{@code mayCreateInstances} already see their own lazy
 	 * Pass-2 products coming.
 	 * @param program the program to scan
@@ -9103,12 +9103,12 @@ public final class LispMacroExpander {
 
 	/**
 	 * Like {@link #expandSubstitute(LispCons, boolean)}, but lets {@code nsubstitute}'s
-	 * vector/string arm ({@code .todo/773}) route through this same scan with
-	 * {@code destructive} true: the fresh string/vector the scan builds is then written
-	 * back into the argument's own storage ({@code seqResultDispatchForm}'s
-	 * {@code sort}/{@code nreverse} precedent) instead of answered as a new sequence, so
-	 * ANSI's "the argument itself changes" holds for a vector the way it already does for
-	 * a list's cons cells. {@code substitute} itself always passes {@code false}.
+	 * vector/string arm route through this same scan with {@code destructive} true: the
+	 * fresh string/vector the scan builds is then written back into the argument's own
+	 * storage ({@code seqResultDispatchForm}'s {@code sort}/{@code nreverse} precedent)
+	 * instead of answered as a new sequence, so ANSI's "the argument itself changes"
+	 * holds for a vector the way it already does for a list's cons cells.
+	 * {@code substitute} itself always passes {@code false}.
 	 * @param cons the substitute expression
 	 * @param arraysExist whether a general array can exist in this program
 	 * @param destructive whether the vector/string result must be written back into the
@@ -9198,8 +9198,8 @@ public final class LispMacroExpander {
 		// substitute's own vector/string handling: (substitute new old lst :test ...
 		// :key ...), but WRITES its fresh result back into lst's own storage
 		// (destructive true) rather than answering it as a new sequence -- ANSI expects
-		// the argument itself to change here (.todo/773), overturning the plain reuse of
-		// substitute's non-destructive form that .todo/623 first landed.
+		// the argument itself to change here, which is why this is not a plain reuse of
+		// substitute's non-destructive form.
 		List<LispVal> substParts = new ArrayList<>(parts);
 		substParts.set(0, new LispSymbol(LispNames.SUBSTITUTE));
 		substParts.set(1, newItem);
@@ -9218,13 +9218,13 @@ public final class LispMacroExpander {
 	 * or string has no cons cells to splice/{@code rplaca}, so CLHS's "a destructive
 	 * function may answer a fresh sequence" latitude routes it through
 	 * {@code nonListForm} (the corresponding {@code remove}/{@code substitute} family's
-	 * own vector/string handling) instead of silently no-op'ing ({@code .todo/623}). A
-	 * list argument keeps {@code listForm} unchanged. {@code seq} is bound to
-	 * {@code seqExpr} exactly once, and both forms must read {@code seq} rather than the
-	 * original expression, so the sequence argument is evaluated only once.
-	 * {@code arraysExist} false drops the vector test (no vector can reach here) -- the
-	 * {@code seqResultDispatchForm} precedent -- and a value that is no sequence at all
-	 * is {@code operator}'s {@code SEQUENCE} type-error.
+	 * own vector/string handling) instead of silently no-op'ing. A list argument keeps
+	 * {@code listForm} unchanged. {@code seq} is bound to {@code seqExpr} exactly once,
+	 * and both forms must read {@code seq} rather than the original expression, so the
+	 * sequence argument is evaluated only once. {@code arraysExist} false drops the
+	 * vector test (no vector can reach here) -- the {@code seqResultDispatchForm}
+	 * precedent -- and a value that is no sequence at all is {@code operator}'s
+	 * {@code SEQUENCE} type-error.
 	 */
 	private static LispVal deleteOrSubstituteDispatch(LispSymbol seq, LispVal seqExpr, LispVal listForm,
 			LispVal nonListForm, boolean arraysExist, @Nullable String operator) {
@@ -9279,12 +9279,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * Like {@link #expandSubstituteIf(LispCons, boolean, boolean)}, but lets
-	 * {@code nsubstitute-if}/{@code -if-not}'s vector/string arm ({@code .todo/773})
-	 * route through this same scan with {@code destructive} true, writing the fresh
-	 * string/vector result back into the argument's own storage instead of answering a
-	 * new sequence -- the {@link #expandSubstitute(LispCons, boolean, boolean)}
-	 * precedent. {@code substitute-if}/{@code -if-not} themselves always pass
-	 * {@code false}.
+	 * {@code nsubstitute-if}/{@code -if-not}'s vector/string arm route through this same
+	 * scan with {@code destructive} true, writing the fresh string/vector result back
+	 * into the argument's own storage instead of answering a new sequence -- the
+	 * {@link #expandSubstitute(LispCons, boolean, boolean)} precedent.
+	 * {@code substitute-if}/{@code -if-not} themselves always pass {@code false}.
 	 * @param cons the substitute-if / substitute-if-not expression
 	 * @param arraysExist whether a general array can exist in this program
 	 * @param negated whether the predicate's verdict is inverted (the {@code -if-not}
@@ -9391,7 +9390,7 @@ public final class LispMacroExpander {
 				!negated, bounds);
 		// A vector/string argument routes through substitute-if's own vector/string
 		// handling: (substitute-if new pred lst :key ...) / -if-not, but WRITES its
-		// fresh result back into lst's own storage (destructive true, .todo/773) rather
+		// fresh result back into lst's own storage (destructive true) rather
 		// than answering it as a new sequence.
 		List<LispVal> substIfParts = new ArrayList<>(parts);
 		substIfParts.set(0, new LispSymbol(negated ? LispNames.SUBSTITUTE_IF_NOT : LispNames.SUBSTITUTE_IF));
@@ -9440,7 +9439,7 @@ public final class LispMacroExpander {
 				elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), true);
 		// A vector/string argument has no cons cells to splice -- CLHS lets a destructive
 		// form answer a FRESH sequence instead, so it routes through remove's own
-		// vector/string handling: (remove item seq :test ... :key ...) (.todo/623).
+		// vector/string handling: (remove item seq :test ... :key ...).
 		List<LispVal> removeParts = new ArrayList<>(parts);
 		removeParts.set(0, new LispSymbol(LispNames.REMOVE));
 		removeParts.set(1, item);
@@ -9490,8 +9489,8 @@ public final class LispMacroExpander {
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteif",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))), true);
-		// A vector/string argument routes through remove-if's own vector/string handling
-		// (.todo/623): (remove-if pred seq).
+		// A vector/string argument routes through remove-if's own vector/string handling:
+		// (remove-if pred seq).
 		List<LispVal> removeIfParts = new ArrayList<>(parts);
 		removeIfParts.set(0, new LispSymbol(LispNames.REMOVE_IF));
 		removeIfParts.set(1, pred);
@@ -9542,7 +9541,7 @@ public final class LispMacroExpander {
 		LispVal listForm = expandDeleteFilter(pred, pred, seq, "__deleteifnot",
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))), false);
 		// A vector/string argument routes through remove-if-not's own vector/string
-		// handling (.todo/623): (remove-if-not pred seq).
+		// handling: (remove-if-not pred seq).
 		List<LispVal> removeIfNotParts = new ArrayList<>(parts);
 		removeIfNotParts.set(0, new LispSymbol(LispNames.REMOVE_IF_NOT));
 		removeIfNotParts.set(1, pred);
@@ -14187,9 +14186,9 @@ public final class LispMacroExpander {
 	 * upstream's own wrapper over {@code call-with-temporary-file}: the body becomes a
 	 * thunk taking the given {@code :stream} / {@code :pathname} variables, and the
 	 * function creates the file through {@code %temp-file-name}, runs the thunk, closes
-	 * the stream and deletes unless {@code :keep} (.todo/360). smart-buffer's disk-spill
-	 * path RUNS it (a multipart body past the memory limit is written to the temporary
-	 * file and its pathname handed back).
+	 * the stream and deletes unless {@code :keep}. smart-buffer's disk-spill path RUNS it
+	 * (a multipart body past the memory limit is written to the temporary file and its
+	 * pathname handed back).
 	 *
 	 * <pre>
 	 * (uiop:with-temporary-file (:stream s :pathname p :directory d :keep t) body...) -&gt;
@@ -14207,8 +14206,7 @@ public final class LispMacroExpander {
 	 * remaining options ({@code :suffix}, {@code :after}, {@code :external-format}) are
 	 * rejected rather than silently dropped: each one changes what the body sees.
 	 * @param cons the with-temporary-file expression
-	 * @param unwindProtect unused since .todo/360: {@code call-with-temporary-file} owns
-	 * the cleanup
+	 * @param unwindProtect unused: {@code call-with-temporary-file} owns the cleanup
 	 * @return the expanded expression
 	 */
 	public static LispVal expandUiopWithTemporaryFile(LispCons cons, boolean unwindProtect) {
@@ -21675,7 +21673,7 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.ARRAY_RANK, v), new LispInteger(1)));
 		// A bit vector IS the general boxed array stamped bit: rank-1 bit-stamped
 		// arrays answer the bit-vector class, every other array the vector/array
-		// narrowing (.todo/820). The stamp read is array-element-type, the same fact
+		// narrowing. The stamp read is array-element-type, the same fact
 		// bit-vector-p/typep answer from.
 		LispVal isBit = mvCall(LispNames.EQUAL, mvCall(LispNames.ARRAY_ELEMENT_TYPE, v), unspelledQuoteOf("BIT"));
 		LispVal vectorOrBit = makeIf(isBit, unspelledQuoteOf("BIT-VECTOR"), unspelledQuoteOf("VECTOR"));
@@ -23038,7 +23036,7 @@ public final class LispMacroExpander {
 				// #'write-sequence: their wrappers run the bounds check, which signals
 				// type-error for the same reason. #'read / #'read-from-string: their
 				// wrappers can read a #P"..." pathname instance, like the head case.
-				// #'aref / #'array-row-major-index (todo a58): the shared fold's per-axis
+				// #'aref / #'array-row-major-index: the shared fold's per-axis
 				// bound check and subscript-count check signal a type-error/simple-error
 				// the same way.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
@@ -25910,7 +25908,7 @@ public final class LispMacroExpander {
 		}
 		else {
 			// A nested default is assigned only when its defmethod form runs; until
-			// then the call falls through to the last resort (todo 445).
+			// then the call falls through to the last resort.
 			chain = makeIf(methodAssignedTest(defaultMethod.functionName()),
 					methodCall(defaultMethod, params, variadic),
 					fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback));
@@ -25929,7 +25927,7 @@ public final class LispMacroExpander {
 					: specializerTest(method, params, closRegistry);
 			if (closRegistry.isNestedMethodFunction(method.functionName())) {
 				// The body is assigned only when the defmethod form runs; until then
-				// the branch is skipped (todo 445).
+				// the branch is skipped.
 				List<LispVal> and = new java.util.ArrayList<>();
 				and.add(new LispSymbol(LispNames.AND));
 				and.add(methodAssignedTest(method.functionName()));
@@ -26110,7 +26108,7 @@ public final class LispMacroExpander {
 		LispVal fallbackGuard = nestedBranchGuard(generic, null, closRegistry, roles);
 		if (fallbackGuard != null) {
 			// A nested default is assigned only when its defmethod form runs; until
-			// then the call falls through to the last resort (todo 445).
+			// then the call falls through to the last resort.
 			chain = makeIf(fallbackGuard, chain,
 					fallbackOrNoApplicableMethod(generic.name(), params, generic.variadic(), builtinFallback));
 		}
@@ -26126,7 +26124,7 @@ public final class LispMacroExpander {
 			LispVal branchGuard = nestedBranchGuard(generic, rep, closRegistry, roles);
 			if (branchGuard != null) {
 				// A nested participant is assigned only when its defmethod form runs;
-				// until then the branch is skipped (todo 445). Conservative: the whole
+				// until then the branch is skipped. Conservative: the whole
 				// branch is skipped when ANY participant is unassigned, even when the
 				// remaining ones could still run.
 				List<LispVal> and = new java.util.ArrayList<>();
@@ -28181,8 +28179,8 @@ public final class LispMacroExpander {
 	 * conditional registers unconditionally (dispatch is static); when the guard is false
 	 * at run time its body global is never assigned, so calling it falls through to the
 	 * default or to no-applicable-method -- the branch is guarded on the body's
-	 * assignment (todo 445), which is also what the interpreter answers when the
-	 * defmethod never runs.
+	 * assignment ({@code .kb/clos.md}), which is also what the interpreter answers when
+	 * the defmethod never runs.
 	 */
 	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
 			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers,
@@ -32208,8 +32206,7 @@ public final class LispMacroExpander {
 		if (coerceResultIsBitVector(parts.get(2), closRegistry)) {
 			// A bit-vector result builds the stamped general array, not the T vector
 			// the family collapse above would answer: atomic 'bit-vector (or the
-			// simple- spelling) and any vector-family compound spelling a bit element
-			// (.todo/043).
+			// simple- spelling) and any vector-family compound spelling a bit element.
 			LispSymbol bx = new LispSymbol("__coerce_x");
 			return makeLet(bx.name(), parts.get(1), coerceToBitVectorBody(bx));
 		}
@@ -32218,7 +32215,7 @@ public final class LispMacroExpander {
 			// sequence one. A function is returned as is; a symbol resolves through
 			// symbol-function (signalling when unbound); a literal lambda list folds
 			// to (function ...) so the compilers build the closure. Anything else
-			// signals through symbol-function's type check (.todo/750).
+			// signals through symbol-function's type check.
 			return coerceToFunctionBody(parts.get(1));
 		}
 		LispVal complexTarget = quotedComplexTarget(parts.get(2));
@@ -32361,8 +32358,7 @@ public final class LispMacroExpander {
 		LispVal alreadyOfType = makeIf(mvCall(LispNames.TYPEP, x, spec), x, errorCall);
 		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, alreadyOfType);
 		// A computed designator naming FUNCTION coerces the value the way the literal
-		// 'function arm does; anything else falls through to the identity/typep tail
-		// (.todo/750).
+		// 'function arm does; anything else falls through to the identity/typep tail.
 		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x), identity);
 		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
 				: coerceToVectorBody(x, true);
@@ -32373,11 +32369,11 @@ public final class LispMacroExpander {
 		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY"), toVector,
 				functionArm);
 		// A computed designator means what the literal one means: an atomic
-		// bit-vector spelling builds the stamped array, like the literal arm above
-		// (.todo/043), and so does a computed COMPOUND spelling with a bit element
-		// ((vector bit) held in a variable -- the mirror of coerceResultIsBitVector,
-		// .todo/820). The element is read out of the held value: (cadr spec) naming
-		// bit under a vector-family head.
+		// bit-vector spelling builds the stamped array, like the literal arm above,
+		// and so does a computed COMPOUND spelling with a bit element
+		// ((vector bit) held in a variable -- the mirror of coerceResultIsBitVector).
+		// The element is read out of the held value: (cadr spec) naming bit under a
+		// vector-family head.
 		LispVal bitElement = callOf(LispNames.CAR, callOf(LispNames.CDR, spec));
 		LispVal bitElementIsBit = mvCall(LispNames.MEMBER, bitElement,
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(List.of(new LispSymbol("BIT"))))));
@@ -32453,7 +32449,7 @@ public final class LispMacroExpander {
 	 * (symbol-function __coerce_f)))}. A quoted literal lambda list folds to
 	 * {@code (function ...)} so the compilers build the closure directly; anything that
 	 * is neither a function nor a symbol signals through {@code symbol-function}'s type
-	 * check (.todo/750).
+	 * check.
 	 * @param value the coerced value form, evaluated once
 	 * @return the expanded expression
 	 */
@@ -33053,7 +33049,7 @@ public final class LispMacroExpander {
 	 * bit-stamped allocation. The shape is {@link #coerceToVectorBody}'s with the one
 	 * difference the representation requires -- the array is built with
 	 * {@code :element-type 'bit}, which every backend stamps -- so a coerced bit vector
-	 * answers {@code bit} from {@code array-element-type} like a made one (.todo/043).
+	 * answers {@code bit} from {@code array-element-type} like a made one.
 	 * @param x the (temp-bound) value form
 	 * @return the conversion body
 	 */
@@ -33341,9 +33337,9 @@ public final class LispMacroExpander {
 			// A tail-pointer splice of a fresh copy of each piece, not a left fold
 			// over append: folding copied the whole accumulator per piece
 			// (quadratic) through a call that itself recursed per element (linear
-			// stack depth), so a long walk was a slow crash rather than a slow call
-			// (.todo/749). The result is fully fresh, matching the first-class
-			// path's right fold piece for piece; a non-list piece is the operator's
+			// stack depth), so a long walk was a slow crash rather than a slow call.
+			// The result is fully fresh, matching the first-class path's right fold
+			// piece for piece; a non-list piece is the operator's
 			// type-error where the fold silently spliced it as a dotted tail.
 			case CONCATENATE -> listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					listToCons(List.of(new LispSymbol(LispNames.SETQ), piece, call)),
@@ -33776,7 +33772,7 @@ public final class LispMacroExpander {
 		boolean nilResult = isNilForm(resultTypeForm);
 		// A bit-vector result builds the stamped array, not the T vector the family
 		// collapse below would answer -- the same bit build the coerce literal arm
-		// uses (.todo/820). Atomic 'bit-vector / 'simple-bit-vector, or a
+		// uses. Atomic 'bit-vector / 'simple-bit-vector, or a
 		// vector-family compound spelling a bit element ((vector bit), ...).
 		if (isBitVectorResultType(resultTypeForm, resultType)) {
 			List<LispVal> mapList = new java.util.ArrayList<>(parts);
@@ -34266,8 +34262,8 @@ public final class LispMacroExpander {
 	 * renderer's own, so an instance nested at any depth reaches the generic. It
 	 * reproduces the raw cons rendering exactly -- one space before every element but the
 	 * first, {@code " . "} before a non-nil tail, and the same {@code (QUOTE x)}/
-	 * {@code (FUNCTION x)} to {@code 'x}/{@code #'x} abbreviation (todo 626) -- because
-	 * for a list holding no routed value the two must agree byte for byte. It also honors
+	 * {@code (FUNCTION x)} to {@code 'x}/{@code #'x} abbreviation -- because for a list
+	 * holding no routed value the two must agree byte for byte. It also honors
 	 * {@code *print-level*} (a separate counter from the guard's depth, which the
 	 * abbreviation is transparent to) and {@code *print-length*} ({@code ...} for the
 	 * unprinted rest when that rest is a cons), in lockstep with {@code %pc-walk}
@@ -34370,7 +34366,7 @@ public final class LispMacroExpander {
 	 * it when every printed element is 0/1 (validated over the
 	 * {@code *print-length*}-clamped prefix, with the same {@code ...} truncation); a
 	 * non-bit element falls back to the general rendering, since {@code make-array} never
-	 * validates stores (.todo/820).
+	 * validates stores.
 	 * <p>
 	 * <b>This is a width asked for BY NAME</b>, outside the sealed switch's reach -- the
 	 * {@code bfloat16} width was missing here once and rendered as a general
@@ -35504,13 +35500,13 @@ public final class LispMacroExpander {
 	 * cond below.
 	 *
 	 * <p>
-	 * The escape-on spelling also needs the {@code |...|} framing todo 626 gives
-	 * {@code prin1-to-string} of a symbol whose name is not upcase-invariant peeled back
-	 * off before the prefix match runs, since the tag prefix is always lowercase (an
-	 * unqualified tag now round-trips as {@code "|%struct-PT|"}) -- inlined here, not
-	 * delegated to the prelude's {@code %unescaped-symbol-text} twin, for the same reason
-	 * the strip itself is inlined (this expansion runs inside the compilers, after the
-	 * prelude splice pre-pass already ran).
+	 * The escape-on spelling also needs the {@code |...|} framing {@code prin1-to-string}
+	 * gives a symbol whose name is not upcase-invariant peeled back off before the prefix
+	 * match runs, since the tag prefix is always lowercase (an unqualified tag now
+	 * round-trips as {@code "|%struct-PT|"}) -- inlined here, not delegated to the
+	 * prelude's {@code %unescaped-symbol-text} twin, for the same reason the strip itself
+	 * is inlined (this expansion runs inside the compilers, after the prelude splice
+	 * pre-pass already ran).
 	 */
 	private static LispVal typeNameOf(LispVal obj) {
 		String prefix = "__ptn" + MV_COUNTER.getAndIncrement();
@@ -36009,7 +36005,7 @@ public final class LispMacroExpander {
 				return callOf(LispNames.INTEGERP, value);
 			case "BIT":
 				// bit = (integer 0 1): the one integer-family test the lattice entry
-				// above needs, or subtypep and typep disagree (.todo/180).
+				// above needs, or subtypep and typep disagree.
 				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.INTEGERP, value),
 						listToCons(List.of(new LispSymbol(LispNames.GE), value, new LispInteger(0))),
 						listToCons(List.of(new LispSymbol(LispNames.LE), value, new LispInteger(1)))));
@@ -36041,7 +36037,7 @@ public final class LispMacroExpander {
 				// unpinned rank-1 shape -- the same builder (typep x '(vector bit *))
 				// reaches, because it is literally the same set. The SIMPLE- spelling
 				// narrows to the simple arrays through %simple-array-p, like
-				// simple-vector above (.todo/043).
+				// simple-vector above.
 				return makeArrayTypeTest(value, new LispSymbol(LispNames.BIT), listToCons(List.of(new LispSymbol("*"))),
 						closRegistry, "SIMPLE-BIT-VECTOR".equals(name));
 			case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION":
@@ -36519,7 +36515,7 @@ public final class LispMacroExpander {
 				// with an unspecified element type, `simple-vector` with t.
 				//
 				// A SIMPLE- head narrows the result to the simple arrays -- the
-				// lattice edge todo-609 drew on the subtypep side.
+				// lattice edge on the subtypep side (SUBTYPEP_PARENTS).
 				String arrayHead = plainTypeName(head);
 				boolean simpleVector = "SIMPLE-VECTOR".equals(arrayHead);
 				boolean simpleSpelling = simpleVector || "SIMPLE-ARRAY".equals(arrayHead);
@@ -39279,7 +39275,7 @@ public final class LispMacroExpander {
 	 * designator can name any specialized width, so a mask that omits one leaves that
 	 * width's gate off and the allocation degrades to a boxed general array; this was one
 	 * of four hand-written copies that all said seven and all spelled six
-	 * ({@code .todo/487}).
+	 * ({@code .kb/bfloat16.md}).
 	 */
 	private static final int ALL_SPECIALIZED_ELEMENT_TYPE_CODES = ArrayElementTypes.ALL_SPECIALIZED_MASK;
 
@@ -39304,7 +39300,7 @@ public final class LispMacroExpander {
 			// bit): the stamp is read back through the same gated dispatch a
 			// make-array stamp is, so the literal must arm the gate the same way a
 			// literal :element-type does -- otherwise (bit-vector-p #*01) takes the
-			// lite element-type path and answers nil (.todo/043).
+			// lite element-type path and answers nil.
 			int mask = 0;
 			int code = array.elementTypeCode();
 			if (code != ArrayElementTypes.T) {
@@ -40204,9 +40200,9 @@ public final class LispMacroExpander {
 		// A one-element MUTABLE character vector, not (string c): the charvec
 		// normalizer every %string-concat operand already passes through renders it
 		// into the same one-character string, while (string c) routes through the
-		// generic value printer and pins it into every module with a rebuild site
-		// (todo 338). The value answers the same on every backend -- this is the
-		// shape expandMakeString lowers to, so no backend learns a new one.
+		// generic value printer and pins it into every module with a rebuild site.
+		// The value answers the same on every backend -- this is the shape
+		// expandMakeString lowers to, so no backend learns a new one.
 		LispVal mid = fmtCall(LispNames.MAKE_ARRAY, new LispInteger(1), new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("CHARACTER"))),
 				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), c);
@@ -41063,7 +41059,7 @@ public final class LispMacroExpander {
 		// mod(a,b) - b would round a second time and lose a tiny dividend entirely
 		// ((ceiling 1d-300 -7.0) is 1d-300, and mod is -7.0 there). A zero remainder
 		// takes rem's zero rather than a negated one: negating flips the sign of a zero,
-		// and the family's zero sign is settled (todo-652, .kb/linalg-simd.md).
+		// and the family's zero sign is settled (.kb/linalg-simd.md).
 		LispSymbol m = new LispSymbol(prefix + "_m");
 		LispVal ceilingRemainder = makeLet(m.name(), mvCall(LispNames.MOD, mvCall(LispNames.SUB, dividend), divisor),
 				listToCons(List.of(new LispSymbol(LispNames.IF), mvCall(LispNames.ZEROP, m),
@@ -41112,7 +41108,7 @@ public final class LispMacroExpander {
 					// lowering entirely: their quotient is the SAME exact integer, only
 					// floated for the value the caller sees, and their remainder is
 					// identical -- CLHS defines them by "the same operation, a FLOAT
-					// quotient" (todo-667). The comparison inside round's remainder
+					// quotient". The comparison inside round's remainder
 					// (below) must still see the exact integer, so only the emitted
 					// primary value is wrapped.
 					String rawOp = ((LispSymbol) cons.car()).name();
@@ -42311,13 +42307,13 @@ public final class LispMacroExpander {
 	 * (one or two arguments) in an ordinary (single-value) context into
 	 * {@code (float (op number [divisor]))} -- CLHS defines the four as
 	 * {@code floor}/{@code ceiling}/{@code round}/{@code truncate} with the SAME
-	 * operation but a FLOAT primary value (todo-667). The inner call keeps the exact
-	 * quotient: a two-argument inner form still hits {@code evalFloorFamilyDivision} (the
+	 * operation but a FLOAT primary value. The inner call keeps the exact quotient: a
+	 * two-argument inner form still hits {@code evalFloorFamilyDivision} (the
 	 * interpreter) or {@link #expandFloorFamilyDivisor} (the compilers), so the exact
-	 * division todo-660 bought is untouched -- only the RESULT is floated, matching SBCL
-	 * (a huge quotient like {@code (ffloor 1d300 7.0)} is then a float that itself cannot
-	 * be exact, exactly as CLHS specifies; the remainder beside it, reached only through
-	 * a multiple-value consumer, stays exact -- see {@link #lowerMvProducer}).
+	 * division is untouched -- only the RESULT is floated, matching SBCL (a huge quotient
+	 * like {@code (ffloor 1d300 7.0)} is then a float that itself cannot be exact,
+	 * exactly as CLHS specifies; the remainder beside it, reached only through a
+	 * multiple-value consumer, stays exact -- see {@link #lowerMvProducer}).
 	 * @param cons the f-family expression
 	 * @return the expanded expression
 	 */
@@ -42441,7 +42437,7 @@ public final class LispMacroExpander {
 			default -> "";
 		};
 		// A bit-vector result builds the stamped array, not the T vector the family
-		// below would answer -- the same bit build coerce uses (.todo/820).
+		// below would answer -- the same bit build coerce uses.
 		String atomicForBit = typeSpec instanceof LispSymbol s ? plainTypeName(s) : typeName;
 		if (isBitVectorResultType(parts.get(1), atomicForBit)) {
 			List<LispVal> bitCall = new java.util.ArrayList<>();
@@ -43825,11 +43821,11 @@ public final class LispMacroExpander {
 	 *
 	 * <p>
 	 * The three {@code simple-} names are EDGES here, not aliases of their general
-	 * counterpart ({@code .todo/609}): rontolisp does have non-simple arrays and strings
-	 * -- a fill pointer, an adjustable flag or a displacement makes one, and since
-	 * {@code .todo/604} {@code type-of} spells the difference ({@code (SIMPLE-VECTOR 4)}
-	 * vs {@code (VECTOR T 4)}) -- so {@code simple-vector} is strictly below
-	 * {@code vector} and the reverse direction must answer nil, as SBCL's does. Only
+	 * counterpart: rontolisp does have non-simple arrays and strings -- a fill pointer,
+	 * an adjustable flag or a displacement makes one, and {@code type-of} spells the
+	 * difference ({@code (SIMPLE-VECTOR 4)} vs {@code (VECTOR T 4)}) -- so
+	 * {@code simple-vector} is strictly below {@code vector} and the reverse direction
+	 * must answer nil, as SBCL's does. Only
 	 * {@code base-string}/{@code simple-base-string} stay aliases (of {@code string} /
 	 * {@code simple-string}), for the one-character-type reason
 	 * {@link #canonicalSubtypeName} states.
@@ -43925,12 +43921,12 @@ public final class LispMacroExpander {
 	 * a base-char.
 	 *
 	 * <p>
-	 * {@code simple-string}/{@code simple-vector}/{@code simple-array} were here until
-	 * {@code .todo/609} and did NOT qualify: simplicity is a real distinction in
-	 * rontolisp (a fill pointer, {@code :adjustable t} or a displacement makes a
-	 * non-simple array, and a string view/character vector is a non-simple STRING), so
-	 * the collapse made {@code (subtypep 'vector 'simple-vector)} answer t against both
-	 * SBCL and the specifier {@code type-of} builds. They are lattice EDGES now
+	 * {@code simple-string}/{@code simple-vector}/{@code simple-array} were once here and
+	 * did NOT qualify: simplicity is a real distinction in rontolisp (a fill pointer,
+	 * {@code :adjustable t} or a displacement makes a non-simple array, and a string
+	 * view/character vector is a non-simple STRING), so the collapse made
+	 * {@code (subtypep 'vector 'simple-vector)} answer t against both SBCL and the
+	 * specifier {@code type-of} builds. They are lattice EDGES now
 	 * ({@link #SUBTYPEP_PARENTS}).
 	 */
 	private static String canonicalSubtypeName(String plain) {
@@ -45094,9 +45090,9 @@ public final class LispMacroExpander {
 	 * FUNCTION at run time). The compiled backends must BOX such a resolution as a
 	 * function value (not the symbol), so the name registry has to be live and the print
 	 * table has to answer the name even though no compile-time gate can predict WHICH
-	 * funcId (.todo/750). Like {@code usesRuntimeFunctionDesignator} this scans the
-	 * pre-lowering spelling: the coerce-to-function lowering itself synthesizes a
-	 * computed symbol-function after the gates ran.
+	 * funcId. Like {@code usesRuntimeFunctionDesignator} this scans the pre-lowering
+	 * spelling: the coerce-to-function lowering itself synthesizes a computed
+	 * symbol-function after the gates ran.
 	 * @param program the top-level forms
 	 * @return {@code true} when a runtime-resolved designator can become a value
 	 */
@@ -45251,10 +45247,9 @@ public final class LispMacroExpander {
 	 * A clause HEAD is a type specifier or a key list, never a call, and reading one as a
 	 * call has now cost twice: {@code (handler-case b (error (e) use...))} parsed as
 	 * {@code (error <computed> ...)} and baked the whole per-class construction runtime
-	 * into every handler-case artifact (todo 316), the same misread class as the
-	 * tagbody-tag {@code CONTINUE} that put every chipz program into restart mode (todo
-	 * 315). Every scan that walks a program AS CODE shares this one skip so a third
-	 * cannot repeat it.
+	 * into every handler-case artifact, the same misread class as the tagbody-tag
+	 * {@code CONTINUE} that put every chipz program into restart mode. Every scan that
+	 * walks a program AS CODE shares this one skip so a third cannot repeat it.
 	 * @param member the operator's plain (package-stripped) name
 	 * @param cons the form
 	 * @return its evaluated sub-forms, or null when it is not a clause-bearing form
@@ -46979,7 +46974,7 @@ public final class LispMacroExpander {
 		}
 		// The alias spellings (canonicalSubtypeName) have no lattice edge of their
 		// own and reach the universe only here; the three simple- names come in
-		// through SUBTYPEP_PARENTS, which is where they became edges (.todo/609).
+		// through SUBTYPEP_PARENTS, which is where they are edges.
 		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
 				"EXTENDED-CHAR", "BASE-STRING", "SIMPLE-BASE-STRING", "CHARACTER", "STANDARD-OBJECT", "CONDITION",
 				"ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));

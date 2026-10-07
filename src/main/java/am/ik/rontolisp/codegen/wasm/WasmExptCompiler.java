@@ -22,7 +22,7 @@ import org.jspecify.annotations.Nullable;
  * counter is an i31, so the exact path is taken only for an i31 exponent: anything else
  * (a bignum of any tier) is the float {@code pow} below, the interpreter's rule for an
  * integer exponent beyond the int range ({@code (expt 2 4294967297)} is {@code Infinity},
- * not a trap -- and not a 2^30-iteration loop either, `.todo/849`).
+ * not a trap -- and not a 2^30-iteration loop either).
  *
  * <p>
  * Anything else -- a float base, a float exponent, a ratio exponent -- is the float

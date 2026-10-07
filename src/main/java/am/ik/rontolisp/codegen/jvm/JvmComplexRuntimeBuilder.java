@@ -1892,7 +1892,7 @@ final class JvmComplexRuntimeBuilder {
 			// |c|^2 goes to slot 10, NOT over c.re in slot 14: the quotient below reads
 			// c.re four more times, and writing the modulus there turned both parts into
 			// (s.re*|c|^2 + s.im*c.im)/|c|^2, which degenerates to the NUMERATOR
-			// whenever c.im is zero -- tan of a real answered sin of it (.todo/765).
+			// whenever c.im is zero -- tan of a real answered sin of it.
 			c.dload(14);
 			c.dload(14);
 			c.dmul();

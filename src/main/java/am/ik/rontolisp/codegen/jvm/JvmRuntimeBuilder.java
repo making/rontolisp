@@ -1316,7 +1316,7 @@ final class JvmRuntimeBuilder {
 		// if (val instanceof String) return _strEsc((String)val);
 		//
 		// The quote-framed content still needs its embedded " and \ escaped before it can
-		// be read back; _strEsc passes a bare symbol name through untouched (todo 216).
+		// be read back; _strEsc passes a bare symbol name through untouched.
 		code.labelBinding(ifNotFloat);
 		code.aload(0);
 		code.instanceOf(stringClass);
@@ -1410,12 +1410,11 @@ final class JvmRuntimeBuilder {
 	 * The JVM compile path stores a string as its content framed in {@code "} characters
 	 * and a symbol as its bare name, so the leading {@code "} is the discriminator: a
 	 * value that does not start with one is a symbol and is routed to {@code _symEsc}
-	 * ({@link #buildSymEscBody}, todo 626) rather than returned verbatim. For a real
-	 * string every {@code "} and {@code \} of the CONTENT is preceded by a {@code \}
-	 * (CLHS 22.1.3.4 -- the two syntax types the reader would otherwise choke on; a
-	 * newline stays literal), so {@code (read-from-string (prin1-to-string s))} is
-	 * {@code s} again. The escape set is the one {@code LispString.escape} applies on the
-	 * interpreter.
+	 * ({@link #buildSymEscBody}) rather than returned verbatim. For a real string every
+	 * {@code "} and {@code \} of the CONTENT is preceded by a {@code \} (CLHS 22.1.3.4 --
+	 * the two syntax types the reader would otherwise choke on; a newline stays literal),
+	 * so {@code (read-from-string (prin1-to-string s))} is {@code s} again. The escape
+	 * set is the one {@code LispString.escape} applies on the interpreter.
 	 *
 	 * <p>
 	 * The scan that decides whether anything needs escaping returns the argument
@@ -1748,8 +1747,8 @@ final class JvmRuntimeBuilder {
 		FieldRefEntry rcReal = java.util.Objects.requireNonNull(cplx.rcReal());
 		FieldRefEntry rcImag = java.util.Objects.requireNonNull(cplx.rcImag());
 		// The presence probe first: a lone class run without the travelling file
-		// falls through to the checks below without resolving the holder class
-		// (.todo/757) -- exact, since no holder can exist then.
+		// falls through to the checks below without resolving the holder class --
+		// exact, since no holder can exist then.
 		code.getstatic(java.util.Objects.requireNonNull(cplx.hasComplex()));
 		MethodCode.Label ifNoHolder = code.newLabel();
 		code.ifeq(ifNoHolder);
@@ -2179,10 +2178,10 @@ final class JvmRuntimeBuilder {
 	 *
 	 * <p>
 	 * The recursive spelling allocated its result by recursing once per element, so a
-	 * long first argument was a StackOverflowError rather than a slow call (.todo/749).
-	 * The result is unchanged (a fresh spine, the tail shared). A first argument that is
-	 * no list, or ends dotted, is {@code APPEND}'s {@code LIST} type-error over the atom
-	 * the walk met ({@link JvmOperandTypeRuntime}).
+	 * long first argument was a StackOverflowError rather than a slow call. The result is
+	 * unchanged (a fresh spine, the tail shared). A first argument that is no list, or
+	 * ends dotted, is {@code APPEND}'s {@code LIST} type-error over the atom the walk met
+	 * ({@link JvmOperandTypeRuntime}).
 	 */
 	static MethodCode buildAppendBody(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
 			ClassEntry objectClass) {

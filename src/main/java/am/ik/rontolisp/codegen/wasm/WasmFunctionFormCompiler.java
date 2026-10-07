@@ -69,7 +69,7 @@ final class WasmFunctionFormCompiler {
 		}
 		// A run-time name resolution BOXES the resolved funcId as a closure struct
 		// {funcId, null env} -- exactly the value #'name would have produced -- so
-		// functionp answers t and the value prints its registered name (.todo/750).
+		// functionp answers t and the value prints its registered name.
 		// The runtime function namespace (GLOBAL_FENV, where (setf
 		// (symbol-function ...)) installs and fmakunbound leaves its tombstone) is
 		// probed first and decides on its own; otherwise the compiled-function

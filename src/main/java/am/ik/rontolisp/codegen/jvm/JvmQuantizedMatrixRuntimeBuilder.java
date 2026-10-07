@@ -17,8 +17,9 @@ import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
  * ({@code .kb/quantized-matrix.md}): the {@code _qm*} helpers a program that can build
  * one carries. A compiled quantized matrix is a bare {@code byte[]} -- disjoint from
  * every shape the {@code instanceof} dispatch already tells apart, and one byte an
- * element, which is the whole reason the type exists ({@code .todo/672}: the packed
- * integer vector's {@code long[]} would store one byte in eight). Its layout is
+ * element, which is the whole reason the type exists ({@code .kb/quantized-matrix.md}:
+ * the packed integer vector's {@code long[]} would store one byte in eight). Its layout
+ * is
  *
  * <pre>
  * [0..3]  format code, little-endian int (1 = Q8_0)

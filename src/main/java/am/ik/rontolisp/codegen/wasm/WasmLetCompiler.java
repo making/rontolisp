@@ -100,7 +100,7 @@ final class WasmLetCompiler {
 		// (WasmLandingPad).
 		capturedInLet.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, letVarNames, ctx.regionMemo));
 
-		// Unboxed (dual-representation) locals, todo 194 stage 3: a binding that is
+		// Unboxed (dual-representation) locals: a binding that is
 		// never captured or special and has at least one integer-tree-shaped assignment
 		// (its init, or a setq/setf pair in the body) gets an i64 slot + a boxed shadow
 		// slot instead of an ordinary local. Every assignment funnels through
@@ -260,7 +260,7 @@ final class WasmLetCompiler {
 		// Register let-bound local functions (the __FLETn_f lambdas the flet lowering
 		// produces, .kb/flet-labels.md) whose bodies are closed integer-operation
 		// trees, so fused sites in the body substitute them instead of paying the
-		// funcall dispatch + box round trip (todo 194 stage 3). The binding is
+		// funcall dispatch + box round trip. The binding is
 		// immutable by construction (generated unique names, and the lowering never
 		// assigns them); the setf-family scan guards against a hand-written collision.
 		// Shadowed outer registrations are removed whatever the new binding's shape.

@@ -245,7 +245,7 @@ public final class PackageRegistry {
 			// out. See LispMacroExpander.makeTypeTest.
 			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "BROADCAST-STREAM", "TWO-WAY-STREAM", "ECHO-STREAM",
 			"CONCATENATED-STREAM", "READTABLE",
-			// Bit-vector types (no longer empty: since .todo/043 a bit vector is the
+			// Bit-vector types (no longer empty: a bit vector is the
 			// general array stamped with the remembered element type bit, with its
 			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The remaining four
 			// are empty types (nothing satisfies them, by the same must-not-become-
@@ -959,9 +959,9 @@ public final class PackageRegistry {
 				LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
 				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION,
 				// The IEEE binary16 scalar pair and the bulk widen/narrow over packed
-				// float arrays (eval.FloatBitsWidening), .todo/671.
+				// float arrays (eval.FloatBitsWidening).
 				LispNames.FLOAT16_BITS, LispNames.BITS_FLOAT16, LispNames.WIDEN_FLOAT_BITS, LispNames.NARROW_FLOAT_BITS,
-				// The UTF-8 codec pair (eval.LispPreludeLibrary), .todo/691. The same
+				// The UTF-8 codec pair (eval.LispPreludeLibrary). The same
 				// bare member names ALSO name flexi-streams:string-to-octets /
 				// flexi-streams:octets-to-string, a different pair of symbols with a
 				// wider (:external-format/:start/:end) surface -- prelude selection

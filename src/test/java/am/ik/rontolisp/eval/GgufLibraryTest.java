@@ -229,7 +229,7 @@ class GgufLibraryTest {
 	// AS IT STREAMS, never through a whole f32 transient; an F16 tensor goes through the
 	// chunk-sized f32 scratch. Every value in this fixture happens to fit eight mantissa
 	// bits, so all three come back unchanged -- which is the point of the fixture, not a
-	// property of the conversion (.todo/487 steps 3 and 4, .kb/bfloat16.md).
+	// property of the conversion (.kb/bfloat16.md).
 	@Test
 	void everyTensorTypeReadsIntoABfloat16Destination() {
 		String path = fixture.toString().replace("\\", "\\\\");

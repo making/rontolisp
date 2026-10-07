@@ -344,7 +344,7 @@ class WasmLispCompilerTest {
 			.hasMessageContaining("component");
 	}
 
-	// .todo/482's scope is the interpreter and the JVM. A width this backend does not
+	// This backend has no bfloat16 packed array. A width this backend does not
 	// carry has to be REFUSED where the representation is chosen, not misread: there is a
 	// TYPE_F32ARR and a TYPE_F64ARR and nothing else, so an unrefused bfloat16 request
 	// used to fall through to the general BOXED array and answer different numbers here

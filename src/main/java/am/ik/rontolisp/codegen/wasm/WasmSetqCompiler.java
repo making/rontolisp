@@ -81,8 +81,7 @@ final class WasmSetqCompiler {
 	/**
 	 * Statement-position {@code setq} (the value is discarded): an unboxed-local pair
 	 * skips the boxed re-read entirely -- the hot-loop store of a round temp then
-	 * allocates nothing (todo 194 stage 3). Every other pair compiles normally with its
-	 * value dropped.
+	 * allocates nothing. Every other pair compiles normally with its value dropped.
 	 */
 	static void compileForEffect(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();

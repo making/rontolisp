@@ -29,7 +29,7 @@ using namespace metal;
 // MPSMatrixMultiplication, which is in the OS and is 1.5-4.5x this kernel from n=512 up.
 // This kernel is what serves the batch axis MPS cannot be handed with a zero stride.
 //
-// A TRANSPOSED OPERAND IS READ IN PLACE (todo-631). `ta` / `tb` say that the operand's
+// A TRANSPOSED OPERAND IS READ IN PLACE. `ta` / `tb` say that the operand's
 // last two axes are exchanged: its M x K (or K x N) matrix is STORED K x M (or N x K),
 // and the kernel indexes it that way rather than being handed a gather's copy of it --
 // which is what the linear backward's `g . b^T` and `a^T . g` used to pay a whole strided
@@ -84,7 +84,7 @@ kernel void gemm_batched_f32(device const float* A [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------------------
-// THE RESIDENT TIER (.todo/494, the Apple half of .todo/491): the members whose CPU twin
+// THE RESIDENT TIER (the Apple half of gemm.cu's): the members whose CPU twin
 // is a LANE loop and which a round trip could therefore never win -- the equal-shape binary
 // ops and the comparison masks, the array-with-scalar forms, the three-way select behind
 // torch:masked-fill, the fused Adam update, the strided copy behind reshape / transpose /
@@ -576,8 +576,8 @@ static inline float map_op(int op, float x) {
     case 9: return sinh1(x);
     case 10: return cosh(x);
     case 11: return erf1(x);
-    // The four members the element-wise tier REFUSED as a round trip and takes since
-    // .todo/494 over a RESIDENT operand only, where there is no trip to pay for. The CPU
+    // The four members the element-wise tier REFUSED as a round trip and takes over a
+    // RESIDENT operand only, where there is no trip to pay for. The CPU
     // kernel computes each in f64 and narrows on the store; in float every one of them
     // lands on the same bits: a correctly rounded float sqrt IS the correctly rounded f64
     // sqrt narrowed to float (innocuous double rounding, and MTLMathModeSafe makes sqrt
@@ -701,7 +701,7 @@ kernel void gather_f32(device const float* A [[buffer(0)]],
 // half, which needs no accumulator and would have been exact, does not pay: on an M4 Max
 // the CPU fold is 85 us over 262144 f32 elements and 410 us over 1048576, against this
 // backend's ~150 and ~380 for the same shapes -- a tie at best, and a tie is a decline.
-// MetalGemm's fold threshold is therefore Long.MAX_VALUE. Since .todo/494 the fold IS a
+// MetalGemm's fold threshold is therefore Long.MAX_VALUE. The fold IS a
 // member over a RESIDENT operand (fold_f32, at the end of the file: the sum in software
 // binary64, so bit-identical after all; amax/amin as bit moves), because over an operand
 // that is already here the trip the refusal measured is not paid and the alternative is
@@ -814,7 +814,7 @@ kernel void scal_f32(device const float* A [[buffer(0)]],
 // WIDTH, and the two value scalars already narrowed on the host exactly as the CPU
 // narrows them. A select moves bits, so this is the CPU's result whatever the operands.
 //
-// THE MASK IS BOUND AS RAW WORDS and may be EITHER WIDTH (todo-645), the values and the
+// THE MASK IS BOUND AS RAW WORDS and may be EITHER WIDTH, the values and the
 // result single as ever. `linalg:where`'s test is `(/= m 0)` -- a NaN counts, a negative
 // zero does not -- which is "any bit but the sign set": an INTEGER test, so a `double[]`
 // mask needs no arithmetic this backend has no `double` for. It reads as two words a
@@ -930,7 +930,7 @@ kernel void fold_f32(device const float* A [[buffer(0)]],
   }
 }
 
-// --- THE FUSED TIER (todo-636) -----------------------------------------------------
+// --- THE FUSED TIER ----------------------------------------------------------------
 // The compositions `torch.lisp` spells as a chain of `linalg:` members -- the exact GELU
 // and its adjoint, the last-axis softmax and its adjoint, the last-axis log-softmax and
 // its adjoint, layer-norm's normalization and its adjoint -- each as ONE kernel. What a
@@ -1146,7 +1146,7 @@ kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
   }
 }
 
-// --- THE ATTENTION SCALE AND MASK (todo-643) ---------------------------------------
+// --- THE ATTENTION SCALE AND MASK -------------------------------------------------
 // `torch:softmax` over a score that was DIVIDED by a scalar and MASKED (`torch:div` then
 // `torch:masked-fill`, the attention head's own idiom) reaches the pair below with the two
 // eager members folded in: the operand is read as `(T)(x * sf)` or `(T)(x / sf)` and then
@@ -1170,7 +1170,7 @@ kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
 // pre-643 ones because their source is.
 //
 // THE MASK REACHES THE ROW KERNELS PACKED, one bit a cell, through `pack_mask` launched
-// into the same command buffer just before (todo-641 measured the cost of reading it as it
+// into the same command buffer just before (measured: the cost of reading it as it
 // is on CUDA: the row kernels run ONE THREAD PER ROW -- 16384 of them at the book's score
 // -- so a load per cell is exposed latency there where the element-wise `where` hid it
 // under four million threads, and the adjoint's mask pass cost more than the pass it
@@ -1178,10 +1178,10 @@ kernel void softmax_grad_f32(device const float* G [[buffer(0)]],
 // causal mask, and every last-axis score), a lane loads ONE word for its row and the
 // thirty-two lanes exchange bits by `simd_shuffle`: thirty-two loads a chunk become one.
 //
-// The mask may be EITHER WIDTH, and so may `where_f32`'s since todo-645, for the same
-// reason: "non-zero" is `linalg:where`'s `(/= m 0)` -- a NaN counts, a negative zero does
-// not -- which is "any bit but the sign set", an integer test that needs no arithmetic of
-// either width. (Until todo-645 the plain `where_f32` declined a `double[]` mask, so at
+// The mask may be EITHER WIDTH, and so may `where_f32`'s, for the same reason:
+// "non-zero" is `linalg:where`'s `(/= m 0)` -- a NaN counts, a negative zero does not --
+// which is "any bit but the sign set", an integer test that needs no arithmetic of either
+// width. (Before that widening the plain `where_f32` declined a `double[]` mask, so at
 // the book's shapes the chain's `torch:masked-fill` ran on the CPU over a materialized
 // score whenever the fold above declined the mask's SHAPE.)
 

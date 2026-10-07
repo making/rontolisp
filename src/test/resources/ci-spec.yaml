@@ -356,37 +356,36 @@ cases:
     # displaced view whose chain ends on a packed target. subseq's general-array arm
     # used to build a plain simple-vector for the last two, and threw outright on a
     # packed float array on the interpreter; the interpreter was fixed first
-    # (.todo/698) and the JVM / WASM %array-alike allocators after it (.todo/719),
-    # both keyed on the ELEMENT TYPE the source answers rather than its runtime class.
+    # and the JVM / WASM %array-alike allocators after it, both keyed on the ELEMENT TYPE the source answers rather than its runtime class.
     # No bfloat16 line: the wasm-GC backend has no packed bfloat16 representation.
     source: |
-      (let ((sq698-b (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
-        (vector-push-extend 65 sq698-b)
-        (vector-push-extend 66 sq698-b)
-        (print (type-of (subseq sq698-b 0 2)))
-        (print (rontolisp:octets-to-string (subseq sq698-b 0 (fill-pointer sq698-b)))))
-      (let ((sq698-h (make-array 4 :element-type '(unsigned-byte 16) :fill-pointer 0 :adjustable t)))
-        (vector-push-extend 65 sq698-h)
-        (print (type-of (subseq sq698-h 0 1))))
-      (let ((sq698-w (make-array 4 :element-type '(unsigned-byte 32) :fill-pointer 0 :adjustable t)))
-        (vector-push-extend 65 sq698-w)
-        (print (type-of (subseq sq698-w 0 1))))
-      (let ((sq698-s (make-array 4 :element-type 'single-float :fill-pointer 0 :adjustable t)))
-        (vector-push-extend 1.0 sq698-s)
-        (vector-push-extend 2.0 sq698-s)
-        (print (list (type-of (subseq sq698-s 0 2)) (subseq sq698-s 0 2))))
-      (let ((sq698-a (make-array 4 :element-type 'double-float :fill-pointer 0 :adjustable t)))
-        (vector-push-extend 1.0d0 sq698-a)
-        (print (list (type-of (subseq sq698-a 0 1)) (subseq sq698-a 0 1))))
-      (let ((sq698-d (make-array 3 :element-type 'double-float :initial-element 1.5d0)))
-        (print (list (type-of (subseq sq698-d 0 2)) (array-element-type (copy-seq sq698-d)) (subseq sq698-d 1))))
-      (let ((sq698-f (make-array 3 :element-type 'single-float :initial-element 1.5)))
-        (print (list (type-of (subseq sq698-f 0 2)) (subseq sq698-f 1))))
-      (let* ((sq698-t (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4)))
-             (sq698-v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to sq698-t :displaced-index-offset 1)))
-        (print (list (type-of (subseq sq698-v 0 2)) (subseq sq698-v 0 2))))
-      (let ((sq698-g (make-array 3 :fill-pointer 2 :initial-element 7)))
-        (print (list (type-of (subseq sq698-g 0 2)) (subseq sq698-g 0 2))))
+      (let ((sqpk-b (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 65 sqpk-b)
+        (vector-push-extend 66 sqpk-b)
+        (print (type-of (subseq sqpk-b 0 2)))
+        (print (rontolisp:octets-to-string (subseq sqpk-b 0 (fill-pointer sqpk-b)))))
+      (let ((sqpk-h (make-array 4 :element-type '(unsigned-byte 16) :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 65 sqpk-h)
+        (print (type-of (subseq sqpk-h 0 1))))
+      (let ((sqpk-w (make-array 4 :element-type '(unsigned-byte 32) :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 65 sqpk-w)
+        (print (type-of (subseq sqpk-w 0 1))))
+      (let ((sqpk-s (make-array 4 :element-type 'single-float :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 1.0 sqpk-s)
+        (vector-push-extend 2.0 sqpk-s)
+        (print (list (type-of (subseq sqpk-s 0 2)) (subseq sqpk-s 0 2))))
+      (let ((sqpk-a (make-array 4 :element-type 'double-float :fill-pointer 0 :adjustable t)))
+        (vector-push-extend 1.0d0 sqpk-a)
+        (print (list (type-of (subseq sqpk-a 0 1)) (subseq sqpk-a 0 1))))
+      (let ((sqpk-d (make-array 3 :element-type 'double-float :initial-element 1.5d0)))
+        (print (list (type-of (subseq sqpk-d 0 2)) (array-element-type (copy-seq sqpk-d)) (subseq sqpk-d 1))))
+      (let ((sqpk-f (make-array 3 :element-type 'single-float :initial-element 1.5)))
+        (print (list (type-of (subseq sqpk-f 0 2)) (subseq sqpk-f 1))))
+      (let* ((sqpk-t (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4)))
+             (sqpk-v (make-array 2 :element-type '(unsigned-byte 8) :displaced-to sqpk-t :displaced-index-offset 1)))
+        (print (list (type-of (subseq sqpk-v 0 2)) (subseq sqpk-v 0 2))))
+      (let ((sqpk-g (make-array 3 :fill-pointer 2 :initial-element 7)))
+        (print (list (type-of (subseq sqpk-g 0 2)) (subseq sqpk-g 0 2))))
       (print (rontolisp:octets-to-string (vector 65 66 67)))
     expected: |
       (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2))
@@ -547,7 +546,7 @@ cases:
       ;; The LEGAL CLHS upgrades the shipped corpus passes: ironclad and chipz
       ;; allocate 'fixnum, jzon '(unsigned-byte 64), cl-ppcre '(or null fixnum).
       ;; Refusing an unrecognized element type would refuse these. 'bit is NOT an
-      ;; upgrade: since .todo/043 a bit vector is the general array stamped bit.
+      ;; upgrade: a bit vector is the general array stamped bit.
       (print (list (array-element-type (make-array 2 :element-type 'bit))
                    (array-element-type (make-array 2 :element-type 'fixnum))
                    (array-element-type (make-array 2 :element-type '(unsigned-byte 64)))
@@ -2813,7 +2812,7 @@ cases:
   - name: append-long-first-argument
     source: |
       ;; A first argument far past any plausible stack: the copy is built
-      ;; iteratively on all four backends (.todo/749), so this answers instead
+      ;; iteratively on all four backends, so this answers instead
       ;; of overflowing. mapcan/mapcon accumulate through a tail pointer for
       ;; the same reason -- a left fold over the copy would be quadratic.
       (print (length (append (make-list 100000) nil)))
@@ -3012,8 +3011,8 @@ cases:
   #
   # The last row is the one an ordinary program can meet: the double 0.1 is a shade ABOVE
   # a tenth, so 1.0 divided by it is 9.9999999999999994..., whose floor is 9 and not the
-  # 10 that fl(1.0/0.1) rounds to. That is the same quantity mod already answers beside it
-  # (todo-659), and the pair used to contradict each other -- 10 with a remainder of 0.0
+  # 10 that fl(1.0/0.1) rounds to. That is the same quantity mod already answers beside it,
+  # and the pair used to contradict each other -- 10 with a remainder of 0.0
   # from floor, 0.0999...95 from mod. SBCL answers 10 and 0.0 for BOTH, self-consistently
   # through f64; rontolisp answers 9 and 0.0999...95 for both, self-consistently through
   # the exact rational. See .kb/linalg-simd.md, mod/rem.
@@ -3050,7 +3049,7 @@ cases:
       (3 4 2 4 -3)
       ((3 1) (4 -1.0) (2 0.0))
       ((9 0.09999999999999995) 0.09999999999999995 (2 0.09999999999999998))
-  # ffloor/fceiling/fround/ftruncate (todo-667): CLHS defines each as its integer twin
+  # ffloor/fceiling/fround/ftruncate: CLHS defines each as its integer twin
   # with a FLOAT primary value -- (ffloor 7 2) is 3.0 and 1, not (floor 7 2)'s 3 and 1.
   # The quotient stays the SAME exact rational the plain family answers (the row above),
   # only floated for the primary value, and the remainder is identical -- so a huge
@@ -3293,7 +3292,7 @@ cases:
       99
   - name: float-exact-comparison
     # A float against an exact number compares exact values on every backend
-    # (.todo/037), a ratio within an ulp of the float included: the double
+    # a ratio within an ulp of the float included: the double
     # 0.30000000000000004 is a little above the ratio its digits spell.
     source: |
       (print (= 2.0 2))
@@ -4409,7 +4408,7 @@ cases:
       :CI-PQL
       (:CL)
       ("CL" "CI-IMP-SRC")
-  # The runtime-tier package API (.todo/741): make-package / delete-package /
+  # The runtime-tier package API: make-package / delete-package /
   # rename-package / packagep / package-nicknames over one runtime package, the
   # catchable package-error failures with their :package slot, and the enumeration
   # family (find-all-symbols / apropos / do-all-symbols / do-symbols) over the
@@ -4488,7 +4487,7 @@ cases:
       CAR
       MAPCAR
       NIL
-  # The runtime package MEMBER table (.todo/917): a runtime package records what
+  # The runtime package MEMBER table: a runtime package records what
   # intern / export / import / shadowing-import / shadow put in it and what
   # unintern takes out, so find-symbol answers nil before an intern and the
   # symbol (with its status) after, use-package inherits an exported member, and
@@ -5347,7 +5346,7 @@ cases:
       3
       T
   - name: quoted-constants-read-as-symbols
-    # .todo/679: 'pi used to read as a double wherever the spelling appeared. The
+    # 'pi used to read as a double wherever the spelling appeared. The
     # names read as symbols now; each backend binds the global with its own value,
     # so code position still answers. The fixnum VALUE legitimately differs per
     # backend (unboxed i31 on WASM), so the assertions compare relatively.
@@ -5650,12 +5649,12 @@ cases:
       0
       1/3
       3/2
-  # Slice C (.todo/037): the logcount population count (negatives count 0
+  # The logcount population count (negatives count 0
   # bits), integer-decode-float's three values, and rationalize. Integer-valued
   # floats answer their exact integer through a fast path that runs BEFORE
-  # integer-decode-float (.todo/896 -- that function's significand is now the
-  # full (float-digits ax)-bit value, so its exponent is no longer reliably
-  # non-negative for a whole-number float), integers and ratios pass through,
+  # integer-decode-float (that function's significand is the full
+  # (float-digits ax)-bit value, so its exponent is not reliably non-negative
+  # for a whole-number float), integers and ratios pass through,
   # and a fractional float walks interval fractions over power-of-two
   # denominators past 2^52 (they trapped on WASM-GC while its ratio components
   # were i32, until 2026-10-03).
@@ -5726,7 +5725,7 @@ cases:
       -3/4
       333/1000
       1/10000000000
-  # Smalls (.todo/037 item 4): float-sign's sign-as-float (negative zero answers
+  # float-sign's sign-as-float (negative zero answers
   # -1.0) and float-digits' significand width (53 for every normal double,
   # fewer for a subnormal, 0 for a zero). Every row stays inside what every
   # backend holds: small integers and floats only, no limb-tier intermediates.
@@ -6365,7 +6364,7 @@ cases:
       0.9661051464753109
       -0.5984721441039564
   # A pure imaginary argument lands on the imaginary axis, where the WASM atan2
-  # quadrant assembly used to answer the imaginary part itself (.todo/766). pi/2
+  # quadrant assembly used to answer the imaginary part itself. pi/2
   # is the constant the assembly answers there and the log's magnitude is
   # hypot(0, 1) = 1, so both rows are exact on every backend.
   - name: pure-imaginary-phase-and-log-cross-backend-cases
@@ -6470,7 +6469,7 @@ cases:
   # optional signed integer exponent), so a run-time-scanned "2e3" is a FLOAT on
   # every backend, not a symbol whose print happens to coincide with one. The value
   # is pinned through = and floatp, never through printing the float: the float
-  # PRINTER's shape still diverges on wasm (the exponent spelling of .todo/046).
+  # PRINTER's shape still diverges on wasm (its exponent spelling).
   # Tokens that are not valid floats ("1e", "1e+", "e5", "1.2.3", ...) stay symbols.
   - name: runtime-read-exponent-float-tokens
     source: |
@@ -7150,7 +7149,7 @@ cases:
       ;; :test 'eq / 'eql key aggregates by identity on every backend: two
       ;; instances with equal slots are two keys, a key mutated after insertion
       ;; still finds its entry, and a freshly built cons with equal contents is a
-      ;; MISS (.todo/444). Numbers compare by type and value under eql.
+      ;; MISS. Numbers compare by type and value under eql.
       (defstruct ci-ipoint x y)
       (let ((q (make-hash-table :test 'eq)))
         (let ((p (make-ci-ipoint :x 1 :y 2))
@@ -7251,7 +7250,7 @@ cases:
       ;; table: every key is found, a cons mutated after insertion keeps its entry,
       ;; a fresh equal-looking aggregate is a miss, and remhash on half the conses
       ;; leaves the rest. On WASM the placement is the identity hash slot the
-      ;; objects carry, not a shared bucket (.todo/839).
+      ;; objects carry, not a shared bucket.
       (defstruct ci-wkey id)
       (defun ci-many-aggregate-keys (n)
         (let ((h (make-hash-table :test 'eq)) (v (make-hash-table :test 'equal))
@@ -8143,7 +8142,7 @@ cases:
       "abc"
       "ZQQ"
   # row-major-aref on a STRING: the read arm the interpreter and both wasm backends were
-  # missing (only the JVM answered it, .kb/string-write-runtime.md, todo 587), and the
+  # missing (only the JVM answered it, .kb/string-write-runtime.md), and the
   # write spelling (setf (row-major-aref v i) c) -- the same %schar-set place
   # aref/char/elt use, so a literal write REBINDS the place and leaves the source
   # constant untouched, and a make-string buffer is still written in place.
@@ -8951,7 +8950,7 @@ cases:
   # The GEMV row BELOW the four-accumulator gate. A row of 16 to 31 columns is at or
   # above VecSimdKernels' MATVEC_ROW_THRESHOLD (16), so every --simd backend takes the
   # lane path, and below MATVEC_ACC_THRESHOLD (32), so that path is the single
-  # accumulator chain it had before .todo/480. Nothing else in the suite reaches that
+  # accumulator chain it had before the four-accumulator gate. Nothing else in the suite reaches that
   # region: every other vec: case here is 2 to 6 elements, the two greedy-decode cases
   # are 128 and 64 columns (above the gate), and no example touches 16-31 except
   # transiently, as an attention V^T . att's sequence length grows through it.
@@ -9085,8 +9084,8 @@ cases:
   # captured closure, the JVM call site's lane-width guard takes the fallback branch, and a
   # wasm-GC helper forwards the call to the defun it replaced. This case is the pin, and it
   # matters most on the --simd leg (see "The E2E --simd axis"): both legs check these same
-  # lines, and before .todo/720 the two compiled --simd backends raised
-  # IllegalArgumentException / trapped on nearly every line below. Values are f32-exact
+  # lines, and the two compiled --simd backends used to raise
+  # IllegalArgumentException / trap on nearly every line below. Values are f32-exact
   # (integers, halves, quarters) so all four backends print them identically.
   - name: vec-mixed-width-declines-cross-backend
     source: |
@@ -9251,7 +9250,7 @@ cases:
   # sentence, and nothing else in this corpus would notice. Every other check over the
   # float kernels here compares a value, a shape or a length -- all of which agree
   # happily while a reduction order, an accumulator boundary or a routing decision moves
-  # one token underneath them (.todo/705, filed after a lane spent a build-and-bisect
+  # one token underneath them (a lane once spent a build-and-bisect
   # cycle deciding whether a src/main change had altered a model's output and could not
   # answer it from the repo).
   #
@@ -9417,8 +9416,8 @@ cases:
   # The same alarm through a gated linear recurrence instead of attention: per head a
   # kd x vd state matrix that decays, is corrected toward the current value by a
   # rank-1 update and is read out by the query -- llm/deltanet.lisp's gated-delta-rule,
-  # which is the layer kind Qwen3.5 uses and the path the incident behind .todo/705 was
-  # reported against. A transformer fixture would not have exercised it: the state is
+  # which is the layer kind Qwen3.5 uses and the path the build-and-bisect incident above
+  # was reported against. A transformer fixture would not have exercised it: the state is
   # carried ACROSS tokens, so an error at token 2 is still visible at the last one, which is
   # the failure mode attention's stateless recompute does not have. The weights are the
   # same generator from a fresh seed, and the case reuses the definitions above (this
@@ -10024,7 +10023,7 @@ cases:
     expected: |
       #<CI-CYC :NEXT #<CI-CYC :NEXT # :TAG 2> :TAG 1>
       #S(CI-KNOT :NEXT #)
-  # The cons and vector arms' cycle guard (todo-585), here exercised under the
+  # The cons and vector arms' cycle guard, here exercised under the
   # print-object route the geom case turned on for the whole concatenated program
   # (the %print-object-str walk carries the same guard as the raw renderers): a
   # cdr chain that re-enters itself prints every element once and then the
@@ -10345,7 +10344,7 @@ cases:
       (:ADAMW T T)
       (T T)
       T
-  # The fused compositions (todo-499): the exact torch:gelu and torch:layer-norm
+  # The fused compositions: the exact torch:gelu and torch:layer-norm
   # are one node each over an internal linalg member whose adjoint spells the
   # tape's own backward, torch:softmax's adjoint is one member, and
   # torch:dropout's mask is one member over an explicit generator state -- each
@@ -11361,8 +11360,8 @@ cases:
       " b)
         (print (get-output-stream-string s)))
       ;; and with NO components: a real broadcast stream over an empty list --
-      ;; not an integer and, since .todo/927 retired the discarding-sink
-      ;; representation, no longer a string-stream either.
+      ;; not an integer and, since the discarding-sink representation was
+      ;; retired, no longer a string-stream either.
       (print (list (typep (make-broadcast-stream) 'integer)
                    (streamp (make-broadcast-stream))
                    (typep (make-broadcast-stream) 'string-stream)))
@@ -11570,30 +11569,30 @@ cases:
       (:MAYBE :NONE)
       (CLOS-U-SUB "c" :POOLED T NIL)
       ("#<CLOS-U-SUB d>" "#<CLOS-U-SUB d>|#<CLOS-U-SUB d>")
-  - name: clos-print-object-method-defined-below-its-first-use-445
+  - name: clos-print-object-method-defined-below-its-first-use
     source: |
-      ;; Todo 445: a print-object method defined BELOW its first use. The
+      ;; A print-object method defined BELOW its first use. The
       ;; whole-program registry routes the printer through the generic from the very
       ;; first print, but the body global is assigned only when the defmethod form
       ;; runs -- so the dispatcher skips the not-yet-assigned body and the first
       ;; print renders the built-in text, like the interpreter (and CL). The general
       ;; shape second: a call before the nested defmethod form runs answers the
       ;; default, and after it the new method.
-      (defclass po445-late () ())
-      (let ((po445-o (make-instance 'po445-late)))
-        (print po445-o)
-        (defmethod print-object ((x po445-late) s) (format s "#<PO445!>"))
-        (print po445-o))
-      (defclass nd445-late () ())
-      (defgeneric nd445-greet (x))
-      (defmethod nd445-greet (x) "default")
-      (let ((nd445-o (make-instance 'nd445-late)))
-        (print (nd445-greet nd445-o))
-        (defmethod nd445-greet ((x nd445-late)) "special")
-        (print (nd445-greet nd445-o)))
+      (defclass pobelow-late () ())
+      (let ((pobelow-o (make-instance 'pobelow-late)))
+        (print pobelow-o)
+        (defmethod print-object ((x pobelow-late) s) (format s "#<POBELOW!>"))
+        (print pobelow-o))
+      (defclass ndbelow-late () ())
+      (defgeneric ndbelow-greet (x))
+      (defmethod ndbelow-greet (x) "default")
+      (let ((ndbelow-o (make-instance 'ndbelow-late)))
+        (print (ndbelow-greet ndbelow-o))
+        (defmethod ndbelow-greet ((x ndbelow-late)) "special")
+        (print (ndbelow-greet ndbelow-o)))
     expected: |
-      #<PO445-LATE>
-      #<PO445!>
+      #<POBELOW-LATE>
+      #<POBELOW!>
       "default"
       "special"
   - name: with-slots-write-only-unbound-slot-and-missing-slot
@@ -11787,18 +11786,18 @@ cases:
   - name: peek-char-pushback-survives-read-line-and-read
     # A peek-char pushback opens the next read-line instead of being dropped, on all
     # four backends: the WASM _read_line drains the one-slot pushback the way
-    # _read_char (and the bulk read-sequence character path) does (.todo/936). read
+    # _read_char (and the bulk read-sequence character path) does. read
     # already does -- the whole prelude %rd-* family scans through read-char. The
     # file-position after the peeked line ends where the descriptor is.
     source: |
-      (with-open-file (o "peek936.txt" :direction :output :if-exists :supersede)
+      (with-open-file (o "peekpb.txt" :direction :output :if-exists :supersede)
         (write-string "ab" o)
         (write-char #\Return o)
         (write-char #\Newline o)
         (write-string "cd" o)
         (write-char #\Newline o)
         (write-string "ef" o))
-      (with-open-file (s "peek936.txt")
+      (with-open-file (s "peekpb.txt")
         (print (read-char s))
         (print (peek-char nil s))
         (print (read-line s))
@@ -11809,9 +11808,9 @@ cases:
         (print (file-position s))
         (print (read-line s))
         (print (read-line s nil :eof)))
-      (with-open-file (o "peek936-rd.txt" :direction :output :if-exists :supersede)
+      (with-open-file (o "peekpb-rd.txt" :direction :output :if-exists :supersede)
         (write-string "(a b) (c)" o))
-      (with-open-file (s "peek936-rd.txt")
+      (with-open-file (s "peekpb-rd.txt")
         (print (peek-char nil s))
         (print (read s))
         (print (read s)))
@@ -11864,30 +11863,30 @@ cases:
     # A failed open lowers to the nil-answering %open-or-nil plus a %file-error on
     # the compile paths; the path is computed so no literal-path folding applies.
     source: |
-      (defvar *fe890-path* (concatenate 'string "fe890-missing/" "x.txt"))
-      (defun fe890-probe (thunk)
+      (defvar *ferr-path* (concatenate 'string "ferr-missing/" "x.txt"))
+      (defun ferr-probe (thunk)
         (handler-case (progn (funcall thunk) :no-error)
           (file-error (e) (list :file-error (namestring (file-error-pathname e))))
           (error () :other-error)))
-      (print (fe890-probe (lambda () (open *fe890-path*))))
-      (print (fe890-probe (lambda () (open *fe890-path* :direction :output))))
-      (print (fe890-probe (lambda () (with-open-file (s *fe890-path*) (read-line s)))))
-      (print (fe890-probe (lambda () (delete-file *fe890-path*))))
-      (print (fe890-probe (lambda () (rename-file *fe890-path* "y.txt"))))
-      (print (fe890-probe (lambda () (truename *fe890-path*))))
-      (handler-case (open *fe890-path*) (file-error (e) (princ e) (terpri)))
-      (handler-case (delete-file *fe890-path*) (file-error (e) (princ e) (terpri)))
+      (print (ferr-probe (lambda () (open *ferr-path*))))
+      (print (ferr-probe (lambda () (open *ferr-path* :direction :output))))
+      (print (ferr-probe (lambda () (with-open-file (s *ferr-path*) (read-line s)))))
+      (print (ferr-probe (lambda () (delete-file *ferr-path*))))
+      (print (ferr-probe (lambda () (rename-file *ferr-path* "y.txt"))))
+      (print (ferr-probe (lambda () (truename *ferr-path*))))
+      (handler-case (open *ferr-path*) (file-error (e) (princ e) (terpri)))
+      (handler-case (delete-file *ferr-path*) (file-error (e) (princ e) (terpri)))
       (with-input-from-string (s "")
         (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))
     expected: |
-      (:FILE-ERROR "fe890-missing/x.txt")
-      (:FILE-ERROR "fe890-missing/x.txt")
-      (:FILE-ERROR "fe890-missing/x.txt")
-      (:FILE-ERROR "fe890-missing/x.txt")
-      (:FILE-ERROR "fe890-missing/x.txt")
-      (:FILE-ERROR "fe890-missing/x.txt")
-      OPEN: cannot open file fe890-missing/x.txt
-      DELETE-FILE: cannot delete fe890-missing/x.txt
+      (:FILE-ERROR "ferr-missing/x.txt")
+      (:FILE-ERROR "ferr-missing/x.txt")
+      (:FILE-ERROR "ferr-missing/x.txt")
+      (:FILE-ERROR "ferr-missing/x.txt")
+      (:FILE-ERROR "ferr-missing/x.txt")
+      (:FILE-ERROR "ferr-missing/x.txt")
+      OPEN: cannot open file ferr-missing/x.txt
+      DELETE-FILE: cannot delete ferr-missing/x.txt
       end of file
   - name: ensure-directories-exist-signals-file-error-when-the-host-refuses
     # SBCL-verified: creating a directory THROUGH an existing plain file signals a
@@ -11920,7 +11919,7 @@ cases:
       "onetwo"
       "onetwo!"
   - name: composite-stream-constructors
-    # .todo/387: the composite-stream constructors are prelude Lisp over the Gray
+    # The composite-stream constructors are prelude Lisp over the Gray
     # protocol, so ONE definition serves every backend. Reading comes from the input
     # component, writing reaches the output one, a concatenated stream skips each
     # component at its end of file, and the accessors recover the components. The
@@ -11943,10 +11942,10 @@ cases:
         (let ((tw (make-two-way-stream i o)))
           (print (list (eq (two-way-stream-input-stream tw) i)
                        (eq (two-way-stream-output-stream tw) o)))))
-      (with-open-file (out "cs389.dat" :direction :output) (write-string "a" out))
-      (with-open-file (out "cs389.dat" :direction :output :if-exists :append)
+      (with-open-file (out "csprint.dat" :direction :output) (write-string "a" out))
+      (with-open-file (out "csprint.dat" :direction :output :if-exists :append)
         (write-string "b" out))
-      (with-open-file (in "cs389.dat") (print (read-line in)))
+      (with-open-file (in "csprint.dat") (print (read-line in)))
     expected: |
       "hi!"
       (#\a #\b "ab")
@@ -11955,7 +11954,7 @@ cases:
       "ab"
 
   - name: open-if-exists-if-does-not-exist-and-probe
-    # .todo/906: the whole :if-exists / :if-does-not-exist table plus :direction
+    # The whole :if-exists / :if-does-not-exist table plus :direction
     # :probe, as ONE shared lowering over probe-file + %file-error
     # (LispMacroExpander.lowerRuntimeOpenOptions) -- no backend learned a mode.
     # :if-exists is read only on an output open; :error and nil answer instead of
@@ -11967,27 +11966,27 @@ cases:
       ;; The corpus runs twice per backend in one directory (default and --simd),
       ;; and this case turns "the file is not there" into an answer, so it has to
       ;; start from that state rather than inherit the previous run's.
-      (uiop:delete-file-if-exists "gone906.txt")
-      (uiop:delete-file-if-exists "made906.txt")
-      (with-open-file (s "ie906.txt" :direction :output) (write-string "abc" s))
-      (print (with-open-file (s "ie906.txt" :if-exists :error) (read-line s)))
-      (print (with-open-file (s "ie906.txt" :if-exists :rename) (read-line s)))
-      (print (ie-try (lambda () (open "ie906.txt" :direction :output :if-exists :error))))
-      (print (open "ie906.txt" :direction :output :if-exists nil))
-      (print (ie-try (lambda () (open "gone906.txt" :direction :input))))
-      (print (open "gone906.txt" :direction :input :if-does-not-exist nil))
-      (print (ie-try (lambda () (open "gone906.txt" :direction :output :if-exists :append))))
-      (with-open-file (s "made906.txt" :direction :output :if-exists :append
+      (uiop:delete-file-if-exists "gonefs.txt")
+      (uiop:delete-file-if-exists "madefs.txt")
+      (with-open-file (s "iefs.txt" :direction :output) (write-string "abc" s))
+      (print (with-open-file (s "iefs.txt" :if-exists :error) (read-line s)))
+      (print (with-open-file (s "iefs.txt" :if-exists :rename) (read-line s)))
+      (print (ie-try (lambda () (open "iefs.txt" :direction :output :if-exists :error))))
+      (print (open "iefs.txt" :direction :output :if-exists nil))
+      (print (ie-try (lambda () (open "gonefs.txt" :direction :input))))
+      (print (open "gonefs.txt" :direction :input :if-does-not-exist nil))
+      (print (ie-try (lambda () (open "gonefs.txt" :direction :output :if-exists :append))))
+      (with-open-file (s "madefs.txt" :direction :output :if-exists :append
                          :if-does-not-exist :create)
         (write-string "z" s))
-      (print (with-open-file (s "made906.txt") (read-line s)))
+      (print (with-open-file (s "madefs.txt") (read-line s)))
       ;; A probe stream is closed from the start: the WASM backends read the
       ;; stream value's closed mark, the interpreter/JVM their stream table.
-      (let ((probed (open "ie906.txt" :direction :probe)))
+      (let ((probed (open "iefs.txt" :direction :probe)))
         (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
-      (print (open "gone906.txt" :direction :probe))
-      (print (and (open "gone906.txt" :direction :probe :if-does-not-exist :create) t))
-      (print (and (probe-file "gone906.txt") t))
+      (print (open "gonefs.txt" :direction :probe))
+      (print (and (open "gonefs.txt" :direction :probe :if-does-not-exist :create) t))
+      (print (and (probe-file "gonefs.txt") t))
     expected: |
       "abc"
       "abc"
@@ -12003,43 +12002,43 @@ cases:
       T
 
   - name: open-direction-io-and-if-exists-overwrite
-    # .todo/918: the two open MODES the existence guard could not express. An :io
+    # The two open MODES the existence guard could not express. An :io
     # stream is ONE cursor for reads, writes and file-position, so write + seek to
     # :start + read-line answers what was just written; :if-exists :overwrite writes
     # from 0 WITHOUT truncating. The interpreter and the JVM share
     # runtime/RontoIoFileStream, Preview 1 opens one fd with both rights, and the
     # component adapter writes through write-via-stream at its tracked offset.
     source: |
-      (with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
-      (let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))
+      (with-open-file (out "ioboth.txt" :direction :output) (write-string "abcdefghij" out))
+      (let ((s (open "ioboth.txt" :direction :io :if-exists :overwrite)))
         (write-string "wxyz" s)
         (print (file-position s))
         (file-position s :start)
         (print (read-line s nil))
         (print (file-length s))
         (close s))
-      (let ((s (open "io918.txt" :direction :io)))
+      (let ((s (open "ioboth.txt" :direction :io)))
         (write-string "abc" s)
         (file-position s :start)
         (print (read-line s nil))
         (close s))
-      (let ((s (open "io918.dat" :direction :io :element-type '(unsigned-byte 8))))
+      (let ((s (open "ioboth.dat" :direction :io :element-type '(unsigned-byte 8))))
         (dotimes (i 4) (write-byte (+ 65 i) s))
         (file-position s :start)
         (print (list (read-byte s) (read-byte s) (file-position s)))
         (close s))
-      (let ((s (open "io918.txt" :direction :output :if-exists :overwrite)))
+      (let ((s (open "ioboth.txt" :direction :output :if-exists :overwrite)))
         (write-string "Z" s)
         (close s))
-      (print (with-open-file (in "io918.txt") (read-line in)))
+      (print (with-open-file (in "ioboth.txt") (read-line in)))
       ;; A COMPUTED position designator resolves at run time -- the shape the Gray
       ;; streams dispatcher and #'file-position hand the primitive.
-      (let ((s (open "io918.txt" :direction :io :if-exists :overwrite))
+      (let ((s (open "ioboth.txt" :direction :io :if-exists :overwrite))
             (where :end))
         (let* ((moved (file-position s where)) (at (file-position s)))
           (print (list moved at)))
         (close s))
-      (print (open "io918.txt" :direction :io :if-exists nil))
+      (print (open "ioboth.txt" :direction :io :if-exists nil))
     expected: |
       4
       "wxyzefghij"
@@ -12051,7 +12050,7 @@ cases:
       NIL
 
   - name: stream-operators-clear-input-and-friends
-    # .todo/906: clear-input / file-string-length / interactive-stream-p /
+    # clear-input / file-string-length / interactive-stream-p /
     # stream-external-format / broadcast-stream-streams are prelude Lisp over what
     # every backend already has, so one definition answers on all four.
     # file-string-length is the UTF-8 byte length -- the one external format any of
@@ -12066,13 +12065,13 @@ cases:
                      (file-string-length o "abc")
                      (file-string-length o (string (code-char 233)))
                      (length (broadcast-stream-streams (make-broadcast-stream o))))))
-      (with-open-file (s "bytes906.dat" :direction :output :element-type '(unsigned-byte 8))
+      (with-open-file (s "bytesfs.dat" :direction :output :element-type '(unsigned-byte 8))
         (write-byte 65 s))
-      (with-open-file (a "bytes906.dat" :element-type '(unsigned-byte 8))
-        (with-open-file (b "bytes906.dat" :element-type '(unsigned-byte 8))
+      (with-open-file (a "bytesfs.dat" :element-type '(unsigned-byte 8))
+        (with-open-file (b "bytesfs.dat" :element-type '(unsigned-byte 8))
           (let ((c (make-concatenated-stream a b)))
             (print (list (read-byte c) (read-byte c) (read-byte c nil :eof))))))
-      (let ((s (open "bytes906.dat")))
+      (let ((s (open "bytesfs.dat")))
         (close s)
         (print (close s)))
       ;; A closed string stream is closed too, and a second close of a file
@@ -12081,13 +12080,13 @@ cases:
         (close o)
         (close i)
         (print (list (open-stream-p o) (open-stream-p i))))
-      (let ((a (open "bytes906.dat")))
+      (let ((a (open "bytesfs.dat")))
         (close a)
-        (let ((b (open "reuse906.txt" :direction :output :if-exists :supersede)))
+        (let ((b (open "reusefs.txt" :direction :output :if-exists :supersede)))
           (close a)
           (write-string "kept" b)
           (close b)))
-      (print (with-open-file (s "reuse906.txt") (read-line s)))
+      (print (with-open-file (s "reusefs.txt") (read-line s)))
     expected: |
       (NIL NIL NIL :UTF-8 1 3 2 1)
       (65 65 :EOF)
@@ -12096,46 +12095,46 @@ cases:
       "kept"
 
   - name: uiop-stream-file-contents-and-safe-io
-    # .todo/359: the "give me the contents" half of uiop/stream -- write a file,
+    # The "give me the contents" half of uiop/stream -- write a file,
     # read it back through every slurper, and round-trip through with-output to a
     # string. All four backends open relative paths against the process working
     # directory (the driver preopens it for both WASM legs), so literal relative
     # names are real opens everywhere, not compile-time bundles.
     source: |
-      (uiop:with-output-file (out "u359.txt") (write-line "hello" out) (write-line "world" out))
-      (print (uiop:read-file-lines "u359.txt"))
-      (print (uiop:read-file-line "u359.txt" :at 1))
-      (uiop:with-output-file (out "u359-forms.txt")
-        (write-line "(defun u359-f (x) (* x 2))" out)
+      (uiop:with-output-file (out "ucont.txt") (write-line "hello" out) (write-line "world" out))
+      (print (uiop:read-file-lines "ucont.txt"))
+      (print (uiop:read-file-line "ucont.txt" :at 1))
+      (uiop:with-output-file (out "ucont-forms.txt")
+        (write-line "(defun ucont-f (x) (* x 2))" out)
         (write-line "42" out))
-      (print (uiop:read-file-forms "u359-forms.txt"))
-      (print (uiop:read-file-form "u359-forms.txt" :at 1))
-      (print (uiop:safe-read-file-form "u359-forms.txt" :at 1))
+      (print (uiop:read-file-forms "ucont-forms.txt"))
+      (print (uiop:read-file-form "ucont-forms.txt" :at 1))
+      (print (uiop:safe-read-file-form "ucont-forms.txt" :at 1))
       (print (uiop:with-output (o nil) (write-string "xyz" o)))
       (print (uiop:output-string "abc"))
       (print (uiop:input-string "abc"))
       (print (uiop:with-input (s "ab") (read-char s)))
-      (uiop:copy-file "u359.txt" "u359-copy.txt")
-      (uiop:with-input-file (in "u359-copy.txt") (print (uiop:slurp-stream-string in)))
+      (uiop:copy-file "ucont.txt" "ucont-copy.txt")
+      (uiop:with-input-file (in "ucont-copy.txt") (print (uiop:slurp-stream-string in)))
       (print (uiop:safe-read-from-string "(+ 1 2)"))
       (print (uiop:eval-input "(+ 1 2) (* 3 4)"))
       (print (uiop:eval-thunk "(+ 1 2)"))
       (print (uiop:standard-eval-thunk "(+ 1 2)"))
-      (uiop:with-output-file (out "u359-out.txt")
+      (uiop:with-output-file (out "ucont-out.txt")
         (uiop:println "a" out)
         (uiop:writeln '(1 2) :stream out)
         (uiop:format! out "n=~A~%" 7)
         (uiop:safe-format! out "ok~%"))
-      (print (uiop:read-file-lines "u359-out.txt"))
+      (print (uiop:read-file-lines "ucont-out.txt"))
       (print (uiop:with-output (o nil) (write-string "q" o)))
-      (uiop:with-input-file (in "u359-out.txt")
+      (uiop:with-input-file (in "ucont-out.txt")
         (print (uiop:file-stream-p in))
         (print (uiop:file-or-synonym-stream-p in)))
       (uiop:finish-outputs)
     expected: |
       ("hello" "world")
       "world"
-      ((DEFUN U359-F (X) (* X 2)) 42)
+      ((DEFUN UCONT-F (X) (* X 2)) 42)
       42
       42
       "xyz"
@@ -12154,7 +12153,7 @@ cases:
       T
       T
   - name: uiop-temporary-files-staging-and-null-streams
-    # .todo/360: the temporary-file / staging / null-stream half of uiop/stream --
+    # The temporary-file / staging / null-stream half of uiop/stream --
     # call-with-temporary-file over %temp-file-name, with-temporary-file as its
     # wrapper (keep t keeps, the default deletes), tmpize-pathname, and the
     # staging rename. All four backends open relative paths against the process
@@ -12332,18 +12331,18 @@ cases:
       ;; path has to be resolved against the preopen whose name COVERS it (/tmp here)
       ;; rather than handed to the first preopened directory whole.
       (defvar *abs-dir* "/tmp")
-      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-432.txt"))
+      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-path.txt"))
       (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
       (print (with-open-file (in *abs-file*) (read-line in)))
       (print (probe-file *abs-file*))
-      (print (probe-file (concatenate 'string *abs-dir* "/ronto-absent-432.txt")))
-      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-432.lisp")
+      (print (probe-file (concatenate 'string *abs-dir* "/ronto-abs-absent.txt")))
+      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-path.lisp")
                        :direction :output)
         (write-line "(print \"loaded-by-absolute-path\")" out))
-      (load (concatenate 'string *abs-dir* "/ronto-abs-432.lisp"))
+      (load (concatenate 'string *abs-dir* "/ronto-abs-path.lisp"))
     expected: |
       "absolute"
-      #P"/tmp/ronto-abs-432.txt"
+      #P"/tmp/ronto-abs-path.txt"
       NIL
       "loaded-by-absolute-path"
   - name: directory-listing-and-uiop-walkers
@@ -12377,9 +12376,7 @@ cases:
       ;; probe-file* answers the parsed pathname (or its truename with
       ;; :truename), truename* is the nil-tolerant truename, directory* is
       ;; directory. The write side (ensure-all-directories-exist and friends)
-      ;; stays out of this case: it signals on both WASM backends until
-      ;; .todo/257 lands the mkdir/unlink/rename imports, so only the
-      ;; interpreter and the JVM pin it (LispEvaluatorTest and
+      ;; stays out of this case: only the interpreter and the JVM pin it (LispEvaluatorTest and
       ;; JvmLispCompilerTest).
       (print (uiop:probe-file* "dls-a.txt"))
       (print (uiop:probe-file* "dls-a.txt" :truename t))
@@ -12719,14 +12716,14 @@ cases:
       ; a long flat list does not recurse once per element (and equalp, whose cons
       ; arm already looped, is pinned alongside). subst keeps its structure
       ; sharing: a tree with no match answers identically.
-      (defun mk388 (n) (let ((out nil)) (dotimes (i n) (setq out (cons i out))) out))
-      (let ((a (mk388 10000)))
+      (defun mkcons (n) (let ((out nil)) (dotimes (i n) (setq out (cons i out))) out))
+      (let ((a (mkcons 10000)))
         (print (length (copy-tree a)))
         (print (length (subst 1 2 a)))
         (print (length (sublis '((2 . 1)) a)))
         (print (integerp (sxhash a)))
         (print (eq a (subst 9 -1 a)))
-        (print (equalp a (mk388 10000))))
+        (print (equalp a (mkcons 10000))))
       (print (copy-tree '(1 2 . 3)))
       (print (subst 'z 'b '(a b c)))
     expected: |
@@ -15850,7 +15847,7 @@ cases:
       (print (apn:apn-answer))
     expected: |
       42
-  # The uiop/package surgery family (.todo/361): the name-level questions the
+  # The uiop/package surgery family: the name-level questions the
   # registry serves are real on all four backends, and the symbol-identity
   # surgery signals not-implemented-error naming the operation with the "no
   # image to upgrade" reason. Only cross-backend-agreeing answers are pinned
@@ -16712,7 +16709,7 @@ cases:
       ;; The n-ary first-class concatenate: (apply #'concatenate 'string lines)
       ;; is the shape a caller writes, and it used to fold PAIRWISE through the
       ;; wrapper's reduce -- 495,920 lines of a tokenizer.json cost about 2.7e12
-      ;; character copies and never returned (.todo/704).
+      ;; character copies and never returned.
       (print (apply #'concatenate 'string (list "ab" "cd" "ef")))
       (print (funcall #'concatenate 'string "a" '(#\b #\c) #(#\d) nil "e"))
       (print (apply #'concatenate 'list (list '(1 2) #(3 4) "ab")))
@@ -16771,7 +16768,7 @@ cases:
       ;; holding it see each other's writes, a callee's write reaches its
       ;; caller, and the destructive bulk operators write in place. On the
       ;; compiled backends the subseq string lane answers a mutable character
-      ;; vector to make that true (.todo/559); a LITERAL stays immutable and a
+      ;; vector to make that true; a LITERAL stays immutable and a
       ;; write through a copy leaves the source constant untouched
       ;; (.kb/string-write-runtime.md).
       (print (let* ((s (copy-seq "abcdef")) (a s)) (setf (char s 0) #\X) (list s a)))
@@ -17778,53 +17775,53 @@ cases:
 
   - name: wide-and-narrow-stream-element-types
     source: |
-      ;; .todo/919: an integer element type opens a binary stream of sbcl's width
+      ;; An integer element type opens a binary stream of sbcl's width
       ;; (1/2/4/8 octets, ceil(bits/8) past 64; no packing, no bias), little-endian
       ;; and two's complement; stream-element-type answers the widened type and
       ;; file-length / file-position count elements. The output is sbcl's.
-      (defun w919-drain (s)
+      (defun wbin-drain (s)
         (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
             ((eq b :eof) (nreverse r))))
-      (defun w919-octets ()
-        (with-open-file (i "w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+      (defun wbin-octets ()
+        (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 8)) (wbin-drain i)))
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
         (dolist (v '(0 1 1)) (write-byte v o)))
-      (print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 1))
-                     (list (stream-element-type i) (file-length i) (w919-drain i)))
-                   (w919-octets)))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+      (print (list (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 1))
+                     (list (stream-element-type i) (file-length i) (wbin-drain i)))
+                   (wbin-octets)))
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
         (dolist (v '(1 258)) (write-byte v o)))
-      (print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
-                     (list (stream-element-type i) (file-length i) (w919-drain i)))
-                   (w919-octets)))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+      (print (list (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
+                     (list (stream-element-type i) (file-length i) (wbin-drain i)))
+                   (wbin-octets)))
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
         (dolist (v '(-1 5)) (write-byte v o)))
-      (print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 8))
-                     (list (stream-element-type i) (file-length i) (w919-drain i)))
-                   (w919-octets)))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+      (print (list (with-open-file (i "wbin.bin" :element-type '(signed-byte 8))
+                     (list (stream-element-type i) (file-length i) (wbin-drain i)))
+                   (wbin-octets)))
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
         (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
-      (print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 64))
-                     (list (stream-element-type i) (file-length i) (w919-drain i)))
-                   (w919-octets)))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+      (print (list (with-open-file (i "wbin.bin" :element-type '(signed-byte 64))
+                     (list (stream-element-type i) (file-length i) (wbin-drain i)))
+                   (wbin-octets)))
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
         (write-byte 150 o))
-      (print (list (with-open-file (i "w919.bin" :element-type '(integer 100 200))
-                     (list (stream-element-type i) (file-length i) (w919-drain i)))
-                   (w919-octets)))
-      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+      (print (list (with-open-file (i "wbin.bin" :element-type '(integer 100 200))
+                     (list (stream-element-type i) (file-length i) (wbin-drain i)))
+                   (wbin-octets)))
+      (print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
                (list (file-length i) (read-byte i nil :partial))))
-      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+      (with-open-file (o "wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
         (write-sequence (vector 1 2 65535) o))
-      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+      (print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
                (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
                      (file-position i :end) (read-byte i nil :eof))))
-      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+      (print (with-open-file (i "wbin.bin" :element-type '(unsigned-byte 16))
                (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
                  (list (read-sequence v i) (aref v 0) (aref v 2)))))
-      (print (with-open-file (s "w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+      (print (with-open-file (s "wbin.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
                (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
-      (print (with-open-file (s "w919.bin") (stream-element-type s)))
+      (print (with-open-file (s "wbin.bin") (stream-element-type s)))
     expected: |
       (((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
       (((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
@@ -17886,8 +17883,8 @@ cases:
 
   - name: read-and-write-sequence-signal-type-error-for-a-bad-sequence-or-bound
     # A dotted-list buffer, a negative, non-integer or symbolic bound, and a range
-    # outside the buffer are type-errors on all four backends (sbcl's answers;
-    # .todo/932). The shared read-sequence / write-sequence expansion checks before
+    # outside the buffer are type-errors on all four backends (sbcl's answers).
+    # The shared read-sequence / write-sequence expansion checks before
     # its packed / chars / element arms.
     source: |
       (print (handler-case (with-input-from-string (s "abc") (read-sequence '(a . b) s))
@@ -19746,7 +19743,7 @@ cases:
                (error () :no-working-directory)))
       ;; The two octet readers are real; the two .lnk parsers are upstream's bodies
       ;; and seek a binary file stream with file-position, which every backend
-      ;; supports now (.todo/916) -- so over the staged x.lnk
+      ;; supports -- so over the staged x.lnk
       ;; (CorpusFixtures.stageLnkFixture) they all answer upstream's structure,
       ;; WASI included.
       (print (handler-case (uiop:parse-windows-shortcut "x.lnk")
@@ -20121,7 +20118,7 @@ cases:
       (lopt-wr "lopt.dat" "two" :output :append)
       (print (lopt-rd "lopt.dat" 'character))
       (print (lopt-rd1 "lopt.dat" (list 'unsigned-byte 8)))
-      (print (load "no-such-439.lisp" :if-does-not-exist nil))
+      (print (load "lopt-no-such.lisp" :if-does-not-exist nil))
       (lopt-wr "lopt-ok.lisp" "(print 'lopt-loaded)" :output :supersede)
       (print (load "lopt-ok.lisp"))
     expected: |
@@ -20237,10 +20234,10 @@ cases:
       ;; supplies the system default, which chains into shared-initialize's
       ;; supplied-initarg fill (upstream ASDF's (apply 'reinitialize-instance
       ;; system keys)). An unsupplied slot keeps its value.
-      (defclass e442-p () ((n :initarg :n :reader e442-n) (m :initarg :m :initform 10)))
-      (let ((o (make-instance 'e442-p :n 1)))
+      (defclass clsurf-p () ((n :initarg :n :reader clsurf-n) (m :initarg :m :initform 10)))
+      (let ((o (make-instance 'clsurf-p :n 1)))
         (reinitialize-instance o :n 2)
-        (print (list (e442-n o) (slot-value o 'm))))
+        (print (list (clsurf-n o) (slot-value o 'm))))
     expected: |
       (2 10)
   - name: clos-computed-change-class
@@ -20250,37 +20247,37 @@ cases:
       ;; the generated %change-class-runtime dispatch: identity, shared slots,
       ;; the added slot's initform fill and supplied initargs all match the
       ;; literal spelling.
-      (defclass e442-base () ((n :initarg :n)))
-      (defclass e442-sub (e442-base) ((extra :initform 42)))
-      (let ((o (make-instance 'e442-base :n 1)) (cls 'e442-sub))
+      (defclass clsurf-base () ((n :initarg :n)))
+      (defclass clsurf-sub (clsurf-base) ((extra :initform 42)))
+      (let ((o (make-instance 'clsurf-base :n 1)) (cls 'clsurf-sub))
         (change-class o cls)
-        (let ((p (make-instance 'e442-base :n 5)))
-          (change-class p (find-class 'e442-sub) :n 7)
+        (let ((p (make-instance 'clsurf-base :n 5)))
+          (change-class p (find-class 'clsurf-sub) :n 7)
           (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
                        (slot-value p 'n)))))
     expected: |
-      (E442-SUB 1 42 7)
+      (CLSURF-SUB 1 42 7)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
       ;; shared cell of :allocation :class (per DECLARING class -- a re-declaring
       ;; subclass owns a new cell; accessor, slot-value and a runtime name all
       ;; read the cell), and standard-class as a typecase specifier.
-      (defclass e442-q () ((a :writer (setf e442-q-a) :reader e442-q-a :initform 1)
-                           (b :writer e442-set-b :reader e442-get-b :initform 0)))
-      (let ((o (make-instance 'e442-q)))
-        (setf (e442-q-a o) 5)
-        (e442-set-b 7 o)
-        (print (list (e442-q-a o) (e442-get-b o))))
-      (defclass e442-op () ((selfward :initform 'base-op :allocation :class :reader e442-selfward)))
-      (defclass e442-load-op (e442-op) ((selfward :initform 'load-dep :allocation :class)))
-      (defclass e442-r () ((a :initform 1 :allocation :class :accessor e442-r-a)))
-      (let ((x (make-instance 'e442-r)) (y (make-instance 'e442-r)) (nm 'a))
-        (setf (e442-r-a x) 9)
-        (print (list (e442-selfward (make-instance 'e442-op))
-                     (e442-selfward (make-instance 'e442-load-op))
-                     (e442-r-a y) (slot-value y 'a) (slot-value y nm))))
-      (print (typecase (find-class 'e442-op) (standard-class :meta) (t :other)))
+      (defclass clsurf-q () ((a :writer (setf clsurf-q-a) :reader clsurf-q-a :initform 1)
+                           (b :writer clsurf-set-b :reader clsurf-get-b :initform 0)))
+      (let ((o (make-instance 'clsurf-q)))
+        (setf (clsurf-q-a o) 5)
+        (clsurf-set-b 7 o)
+        (print (list (clsurf-q-a o) (clsurf-get-b o))))
+      (defclass clsurf-op () ((selfward :initform 'base-op :allocation :class :reader clsurf-selfward)))
+      (defclass clsurf-load-op (clsurf-op) ((selfward :initform 'load-dep :allocation :class)))
+      (defclass clsurf-r () ((a :initform 1 :allocation :class :accessor clsurf-r-a)))
+      (let ((x (make-instance 'clsurf-r)) (y (make-instance 'clsurf-r)) (nm 'a))
+        (setf (clsurf-r-a x) 9)
+        (print (list (clsurf-selfward (make-instance 'clsurf-op))
+                     (clsurf-selfward (make-instance 'clsurf-load-op))
+                     (clsurf-r-a y) (slot-value y 'a) (slot-value y nm))))
+      (print (typecase (find-class 'clsurf-op) (standard-class :meta) (t :other)))
     expected: |
       (5 7)
       (BASE-OP LOAD-DEP 9 9 9)
@@ -20305,7 +20302,7 @@ cases:
       (print (let ((s (make-string-input-stream "z")))
                (list (typep s 'file-stream) (typep s 'string-stream) (typep s 'stream))))
       (print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
-      (print (symbol-name (copy-symbol 'e443-sym)))
+      (print (symbol-name (copy-symbol 'stdnames-sym)))
       (print (list (handler-case (compile-file "x") (error (e) :cf))
                    (handler-case (compile-file-pathname "x") (error (e) :cfp))
                    (handler-case (remove-method 1 2) (error (e) :rm))
@@ -20313,11 +20310,11 @@ cases:
                      (error (e) :dbg))))
       (print-object 42 *standard-output*)
       (terpri)
-      (defclass e443-p () ())
-      (defmethod print-object ((x e443-p) s) (write-string "#<E443!>" s))
-      (print-object (make-instance 'e443-p) *standard-output*)
+      (defclass stdnames-p () ())
+      (defmethod print-object ((x stdnames-p) s) (write-string "#<STDNAMES!>" s))
+      (print-object (make-instance 'stdnames-p) *standard-output*)
       (terpri)
-      (print (make-instance 'e443-p))
+      (print (make-instance 'stdnames-p))
     expected: |
       2
       (NIL NIL)
@@ -20325,11 +20322,11 @@ cases:
       (T T NIL NIL)
       (NIL T T)
       T
-      "E443-SYM"
+      "STDNAMES-SYM"
       (:CF :CFP :RM :DBG)
       42
-      #<E443!>
-      #<E443!>
+      #<STDNAMES!>
+      #<STDNAMES!>
 
   - name: radix-directive-non-number
     source: |
@@ -20758,7 +20755,7 @@ cases:
   # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
   # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
   # an integer or float limit <= 0 is out of range either way. Both report under
-  # RANDOM's own registered REAL type, like a non-real limit above (.todo/981).
+  # RANDOM's own registered REAL type, like a non-real limit above.
   - name: random-limit-domain-violations-signal-a-type-error
     source: |
       (defun ci-rand-te (thunk)
@@ -22551,7 +22548,7 @@ cases:
       0.0
   - name: complex-imagpart-signed-zero
     # CLHS: (imagpart x) of a real IS (* 0 x) -- a negative float answers -0.0
-    # (SBCL), a positive one +0.0; eql tells the two zeros apart (.todo/819).
+    # (SBCL), a positive one +0.0; eql tells the two zeros apart.
     source: |
       (print (imagpart -1.0))
       (print (imagpart 1.0))
@@ -23537,7 +23534,7 @@ standalone:
           (unless (= i (rontolisp:bfloat16-bits (aref v i))) (incf bad)))
         (print bad))
       (print (vec:add #bf16(1.0 2.0) #bf16(3.0 4.0)))
-      ;; The fused element-wise kernels (`.todo/747`): bf16 x bf16 -> bf16, 300
+      ;; The fused element-wise kernels: bf16 x bf16 -> bf16, 300
       ;; elements so the lane loop runs on the --simd legs. Every value is exact at
       ;; the width or a shortest round-tripping print, so the interpreter, the JVM
       ;; and their --simd legs print this one list.
@@ -23843,7 +23840,7 @@ standalone:
       ((T T T NIL NIL NIL) (T T T NIL NIL NIL) (NIL NIL))
   # bit is (integer 0 1): a lattice edge below integer, with a typep test to
   # match, so the literal fold and the computed/runtime dispatch agree on all
-  # four backends (.todo/180). The lattice is edges only, so bit is NOT below
+  # four backends. The lattice is edges only, so bit is NOT below
   # unsigned-byte here (CL would answer T); that range reasoning is out of scope.
   - name: bit-type-lattice
     source: |
@@ -23882,7 +23879,7 @@ standalone:
   # The array predicate trio and the bounds check without signaling: each
   # predicate answers exactly what its typep specifier does, and
   # array-in-bounds-p never signals -- a non-array, a rank/subscript-count
-  # mismatch and any out-of-range subscript all answer nil (.todo/043).
+  # mismatch and any out-of-range subscript all answer nil.
   - name: array-predicates-and-in-bounds
     source: |
       (defvar *abp-sv* (make-array 4))
@@ -23923,7 +23920,7 @@ standalone:
   # A bit vector is the general boxed array stamped with the remembered element
   # type bit -- a #* literal or a (make-array ... :element-type 'bit), of any rank.
   # The predicates answer what their typep specifiers do, and the eleven bit-*
-  # operators validate through bit-vector-p and walk row-major-aref (.todo/043).
+  # operators validate through bit-vector-p and walk row-major-aref.
   - name: bit-vectors-and-bit-ops
     source: |
       (defvar *bvb-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
@@ -23971,7 +23968,7 @@ standalone:
     stdout: |
       ((T T T T NIL T NIL NIL) (T T NIL NIL T BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) T NIL) (#*0100 #*1110 #*1010 #*0101 #*1011 #*0001 #*1000 #*0010 #*1101 #*0111 #*1001) (T #*1010 #2A((0 1) (1 0))) (BIT BIT T T BIT))
   # The stamp survives the sequence operators, printing spells #* and class-of
-  # answers bit-vector (.todo/820).
+  # answers bit-vector.
   - name: bit-vector-preservation-across-sequence-ops
     source: |
       (print
@@ -24293,7 +24290,7 @@ standalone:
       ;; of "日" (U+65E5, E6 97 A5) as <0xE6>/<0x97>/<0xA5> tokens with ids
       ;; 3/4/5. tokenizer:decode on a prefix of that id list must DROP the
       ;; incomplete trailing sequence rather than show spurious bytes -- the
-      ;; policy tokenizer::%utf8-decode had before .todo/691 folded it onto
+      ;; policy tokenizer::%utf8-decode had before an earlier change folded it onto
       ;; rontolisp:octets-to-string, now restored via a length classifier
       ;; that answers "how many bytes", not "what character" (a round-trip
       ;; through the codec pair answers a different question and both holds

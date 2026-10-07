@@ -100,12 +100,12 @@ class GpuTest {
 	 * {@code CU_MEMPOOL_ATTR_USED_MEM_CURRENT} is scoped to the pool HANDLE it is asked
 	 * of, not the device, so a sibling process's allocations -- another surefire fork, or
 	 * anything else running on the machine at the same time -- do not move it at all
-	 * (.todo/481, seen only in a full {@code ./mvnw test} on a unified-memory machine,
-	 * where {@code cuMemGetInfo}'s free figure is the HOST's free memory too). Measured
-	 * on the GB10 with an unrelated process actively touching 8 GB of host memory
-	 * throughout a 1000-call run: {@code cuMemGetInfo} drifted 1.3 GB and the pool's own
-	 * count did not move at all. So this can be tight -- every leak test below is still
-	 * sized so that a real leak is orders of magnitude past it.
+	 * (seen only in a full {@code ./mvnw test} on a unified-memory machine, where
+	 * {@code cuMemGetInfo}'s free figure is the HOST's free memory too). Measured on the
+	 * GB10 with an unrelated process actively touching 8 GB of host memory throughout a
+	 * 1000-call run: {@code cuMemGetInfo} drifted 1.3 GB and the pool's own count did not
+	 * move at all. So this can be tight -- every leak test below is still sized so that a
+	 * real leak is orders of magnitude past it.
 	 */
 	private static final long POOL_DRIFT_BOUND = 64L << 20;
 
@@ -916,7 +916,7 @@ class GpuTest {
 	@Test
 	void aSingleFloatMatrixByVectorProductLandsOnTheDoubleAccumulatedOracle() {
 		// The kernel keeps a compensated float-float accumulator at f32 (a double until
-		// .todo/490, when the double FMA measured as this card's compute ceiling), which
+		// 2026-09-06, when the double FMA measured as this card's compute ceiling), which
 		// carries ~48 bits and lands on the scalar defun's widen-accumulate-narrow bits
 		// wherever a double would: measured, on every one of 1024 rows. A plain float
 		// accumulator (the lane kernel's width) lands 2.6e-7 away and on about a quarter
@@ -1030,7 +1030,7 @@ class GpuTest {
 		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, cols)).isFalse();
 		assertThat(y).containsOnly(0.0);
 		// The bfloat16 form, the same way round: accepted on the second sight of its own
-		// matrix, and every malformed call declined (.todo/490).
+		// matrix, and every malformed call declined.
 		short[] wb = new short[rows * cols], baseWb = new short[rows * cols];
 		float[] xf = new float[cols], yf = new float[rows], baseYf = new float[rows];
 		assertThat(Gpu.matvec(baseWb, 0, xf, 0, baseYf, 0, rows, cols)).isFalse();
@@ -1047,7 +1047,7 @@ class GpuTest {
 		assertThat(yf).containsOnly(0.0f);
 	}
 
-	// --- the bfloat16 matrix-by-vector product (.todo/490) ---------------------------
+	// --- the bfloat16 matrix-by-vector product --------------------------------------
 	// bf16 weights against f32 activations -- the CPU's fused pairing (.kb/bfloat16.md)
 	// -- on the device. The kernel decodes each pattern in its lane loop and is otherwise
 	// gemv_f32, so it is pinned as an EQUIVALENCE, the f32 kernel over the widened
@@ -1177,7 +1177,7 @@ class GpuTest {
 		}
 	}
 
-	// --- the Q8_0 matrix-by-vector product (.todo/728) --------------------------------
+	// --- the Q8_0 matrix-by-vector product -------------------------------------------
 	// ggml's blocks against an f32 activation -- the CPU's integer-dot pairing
 	// (.kb/quantized-matrix.md) -- on the device. Unlike the bf16 kernel this one is not
 	// an equivalence with gemv_f32 but the CONTRACT's own bits: the host quantizes the
@@ -1881,7 +1881,7 @@ class GpuTest {
 		assertThat(after).isEqualTo(held);
 	}
 
-	// --- lazy results and the resident tier (.todo/491) -------------------------------
+	// --- lazy results and the resident tier ------------------------------------------
 
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
@@ -1889,8 +1889,8 @@ class GpuTest {
 		DeviceResidency residency = Gpu.residency();
 		assumeTrue(residency != null, "lazy results are the CUDA backend's");
 		// And the mode PAYS here -- measured, a fifth off the training step -- which is
-		// what makes it the interceptors' mode on this backend (and, since todo-495, on
-		// Metal).
+		// what makes it the interceptors' mode on this backend (and, since the command
+		// buffers became asynchronous there, on Metal).
 		assertThat(java.util.Objects.requireNonNull(Gpu.device()).lazyResultsPay()).isTrue();
 		Gpu.releaseResident();
 		int n = 1 << 18;
@@ -2027,8 +2027,7 @@ class GpuTest {
 		}
 	}
 
-	// --- a lazy result allocates no host array (.todo/492)
-	// ------------------------------
+	// --- a lazy result allocates no host array ---------------------------------------
 
 	/**
 	 * A result STUB: the three-slot prefix a rank-2 caller keeps ahead of its elements.
@@ -2642,7 +2641,7 @@ class GpuTest {
 		}
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier ---------------------------------------------------------------
 
 	/**
 	 * The chain of device members a fused kernel replaces, run member by member at one
@@ -2980,7 +2979,7 @@ class GpuTest {
 			assertThat(ch.doubles(fused)).as("layer-norm grad single=%s", single).containsExactly(ch.doubles(lnNew));
 			assertThat(ch.doubles(fusedOld)).as("layer-norm grad onto old single=%s", single)
 				.containsExactly(ch.doubles(lnOld));
-			// layer-norm's AFFINE (todo-634): the normalization above, then the two
+			// layer-norm's AFFINE: the normalization above, then the two
 			// broadcast passes over the (len) weight and bias -- and its adjoint, whose
 			// two results are the plain adjoint over the broadcast g * weight and the zip
 			// g * norm. The plain pair is pinned to its own chain just above, so it is
@@ -3077,7 +3076,7 @@ class GpuTest {
 			}
 			double[] grad = layerNormGradReference(g, x, null, rows, len, eps, single);
 			double[] gradOld = layerNormGradReference(g, x, o, rows, len, eps, single);
-			// Layer-norm's AFFINE and its adjoint (todo-634) over a weight and bias of
+			// Layer-norm's AFFINE and its adjoint over a weight and bias of
 			// the row length: the forward's two broadcast passes, and backward the
 			// broadcast g * weight the normalization's own adjoint then walks, plus the
 			// zip g * norm the weight's gradient is folded from.
@@ -3268,7 +3267,7 @@ class GpuTest {
 			.isFalse();
 		assertThat(Gpu.softmaxGrad(a, 0, a, 0, null, 0, 0, out, 0, 256, big / 256, Gpu.BIN_SUB, 8.0)).isFalse();
 		assertThat(Gpu.layerNormGrad(a, 0, a, 0, shortArray, 0, out, 0, 256, big / 256, 1e-5)).isFalse();
-		// The affine pair (todo-634): a weight or bias shorter than the row, and a second
+		// The affine pair: a weight or bias shorter than the row, and a second
 		// result too short for the count.
 		int affLen = big / 256;
 		double[] par = new double[affLen], shortPar = new double[affLen - 1];

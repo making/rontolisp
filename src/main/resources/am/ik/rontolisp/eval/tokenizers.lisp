@@ -690,8 +690,8 @@ two tokens, so a generation loop accumulates bytes and decodes what is complete.
   ;; a lead byte, so a stray byte -- a real SentencePiece byte-fallback token
   ;; like <0xC0> is one -- is passed through immediately rather than held
   ;; waiting for continuation bytes that will never arrive. Mirrors
-  ;; examples/llm/llm.lisp's utf8-length (kept in step deliberately,
-  ;; .todo/691): both need the SAME lead-byte ranges, for the same reason.
+  ;; examples/llm/llm.lisp's utf8-length (kept in step deliberately): both
+  ;; need the SAME lead-byte ranges, for the same reason.
   (cond ((< b 128) 1)
         ((< b 194) 1)
         ((< b 224) 2)

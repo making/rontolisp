@@ -7,19 +7,19 @@ import java.util.Random;
  * ({@code .kb/quantized-matrix.md}) -- a {@code main}, not a test, run by
  * {@code .todo/artefacts/672-a-q8-0-quantized-weight-matrix-and-its-integer-dot-gemv/bench.sh}
  * under Graal and under C2 ({@code -XX:-UseJVMCICompiler}), because a Vector API kernel
- * that overruns C2's inlining budget runs boxed at 0.2x with no warning
- * ({@code .todo/482} round 2), and a number without its JIT beside it is not a number.
+ * that overruns C2's inlining budget runs boxed at 0.2x with no warning (measured on the
+ * bfloat16 kernels), and a number without its JIT beside it is not a number.
  *
  * <p>
  * The variants, per shape, all over the SAME gaussian weights (the f32 and bf16 arms hold
  * the values the Q8_0 blocks were quantized from):
  * <ul>
  * <li>{@code f32 lanes} -- the shipped f32 GEMV, the baseline every ratio is against;
- * <li>{@code bf16 fused} -- the shipped fused bfloat16 GEMV ({@code .todo/488});
+ * <li>{@code bf16 fused} -- the shipped fused bfloat16 GEMV;
  * <li>{@code q8 int-dot} -- the shipped Q8_0 kernel, the activation quantized per call as
  * the defun does it;
  * <li>{@code q8 sliced widens (probe)} -- the 2026-09-05 kernel, the same bits through
- * part-1 conversions, which C2 compiles as a {@code slice} each ({@code .todo/706});
+ * part-1 conversions, which C2 compiles as a {@code slice} each;
  * <li>the first three under {@code --parallel}.
  * </ul>
  * The checksum line asserts the Q8_0 kernel's answer equals a scalar transcription of the
@@ -132,7 +132,7 @@ public final class Q8GemvBench {
 	// to a byte[] and widened in the lane loop, and the upper halves reached by PART-1
 	// conversions -- each a `slice` (two rearranges and a blend) before the widen, which
 	// C2 compiles as written. 0.7x of the f32 GEMV under C2, 1.45x under Graal; the
-	// shipped kernel is the same bits at 1.9x / 1.45x (.todo/706). Timed only: its answer
+	// shipped kernel is the same bits at 1.9x / 1.45x. Timed only: its answer
 	// equals the shipped kernel's, but the checksum line reads the shipped one. The
 	// reduce-per-block shape this row replaced (5-6 Gelem/s on both JITs) is recorded in
 	// .todo/artefacts/672-.../README.md.

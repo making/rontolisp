@@ -190,7 +190,8 @@ public final class LinalgSimd {
 		// walk it routes to -- every attention layer and every torch:linear over a
 		// (B T C) activation.
 		define(globalEnv, evaluator, LispNames.LINALG_MATMUL_ND, 2, args -> matmulNd(args, parallel));
-		// The two members todo-473 moved onto this seam: the FUSED optimizer update
+		// The two members moved onto this seam (.kb/linalg-simd.md): the FUSED optimizer
+		// update
 		// (torch:adam / torch:adamw, 31% of a --gpu --simd training step as a boxed do
 		// loop) and the one fill loop behind linalg:rand / randn / uniform. Both are
 		// internal linalg: members precisely so that this seam -- which intercepts

@@ -46,12 +46,11 @@ import static org.assertj.core.api.Assertions.within;
  * claim -- and is taken only on the second unwritten sight of its matrix, and the
  * resident set EAGERLY holds that matrix and nothing else -- a measured decision -- with
  * the budget bounding it, a write invalidating it and a collected array freeing it. (6)
- * Lazily ({@code .todo/494}) a result stays in its slab until the host reads it, the
- * resident tier runs over it, and the members whose CPU twin computes in double land on
- * its bits through software binary64 -- the one claim no other backend has to make -- and
- * -- since todo-495 -- a call under the mode commits its command buffer and returns, the
- * wait moving to the first host touch, which is what made the mode the interceptors' own
- * here too.
+ * Lazily a result stays in its slab until the host reads it, the resident tier runs over
+ * it, and the members whose CPU twin computes in double land on its bits through software
+ * binary64 -- the one claim no other backend has to make -- and a call under the mode
+ * commits its command buffer and returns, the wait moving to the first host touch, which
+ * is what made the mode the interceptors' own here too.
  *
  * <h2>The claims that used to live only in {@link GpuTest}</h2>
  *
@@ -167,7 +166,7 @@ class MetalGpuTest {
 	void theAxisFoldIsDeclinedForItsSizeAtEveryWidth() {
 		// A refusal with two measurements behind it (gemm.metal): as a ROUND TRIP the
 		// amax/amin half loses to the CPU and the sum half could not be bit-identical in
-		// float. Since .todo/494 the fold is a member over a RESIDENT operand only (the
+		// float. The fold is a member over a RESIDENT operand only (the
 		// sum accumulated in software binary64), which
 		// theResidentTierIsOfferedOnlyOverAResidentOperandAndLandsOnTheCpuKernelsBits
 		// pins; for its size alone it declines at every width however big, and the guard
@@ -222,7 +221,7 @@ class MetalGpuTest {
 
 	@Test
 	void aTransposedOperandIsReadInPlaceAndFoldsOntoTheUntransposedProduct() {
-		// The transposed product (todo-631): the operand is STORED with its last two axes
+		// The transposed product: the operand is STORED with its last two axes
 		// exchanged and the kernel indexes it there rather than being handed a strided
 		// copy of it. The tile the fold reads is the same tile, so the claim is EQUALITY
 		// -- not a tolerance -- against the plain product of the transposed copy. Only
@@ -597,7 +596,7 @@ class MetalGpuTest {
 		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
 		assertThat(msl).contains("case " + Gpu.BIN_DIV + ": return x / y;");
 		assertThat(msl).contains("case " + Gpu.MAP_SQRT + ": {");
-		// The fold has an entry point since .todo/494 but NO size threshold: it is a
+		// The fold has an entry point but NO size threshold: it is a
 		// resident-operand member only, and the measured refusal of the round trip
 		// stands.
 		assertThat(device().thresholds().fold()).isEqualTo(Long.MAX_VALUE);
@@ -895,17 +894,15 @@ class MetalGpuTest {
 		assertThat(after).isEqualTo(held);
 	}
 
-	// --- lazy results and the resident tier, on Metal (2026-08-23, todo-494) ----------
-	// The Apple half of .todo/491, built, measured, NOT switched on for the interceptors
-	// until todo-495 made the command buffers asynchronous under it (.kb/gpu.md, "Lazy
-	// results and the resident tier on Metal", then "Asynchronous command buffers on
-	// Metal"): asked for,
-	// a member's result stays in its slab as the host array's DIRTY copy until the host
-	// first reads it, every operand a call uploads is kept as a clean one, and the
-	// members
-	// a round trip had refused run over a resident operand as launches with no copy. The
-	// slabs are the pool's, so the claims below are
-	// also claims about the pool: a released copy goes back to the free lists, not to the
+	// --- lazy results and the resident tier, on Metal (2026-08-23) ---------------------
+	// The Apple half of CUDA's lazy results, built, measured, NOT switched on for the
+	// interceptors until the command buffers became asynchronous under it (.kb/gpu.md,
+	// "Lazy results and the resident tier on Metal", then "Asynchronous command buffers
+	// on Metal"): asked for, a member's result stays in its slab as the host array's
+	// DIRTY copy until the host first reads it, every operand a call uploads is kept as a
+	// clean one, and the members a round trip had refused run over a resident operand as
+	// launches with no copy. The slabs are the pool's, so the claims below are also
+	// claims about the pool: a released copy goes back to the free lists, not to the
 	// device. And one claim that is this backend's alone: the members whose CPU twin
 	// computes in double land on its bits WITHOUT a double -- gemm.metal runs binary64 in
 	// software where float arithmetic cannot be the CPU's bits -- which the soft-f64 test
@@ -914,7 +911,7 @@ class MetalGpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void theInterceptorsRequestSwitchesLazyResultsOnHereAndTheDefaultStaysEager() {
-		// The decision of todo-494, reversed by todo-495 and pinned: lazy results pay on
+		// The first decision (eager), reversed and pinned: lazy results pay on
 		// this backend now that a call under the mode does not wait for its command
 		// buffer (.kb/gpu.md, "Asynchronous command buffers on Metal"), so the request
 		// the interceptors make switches the mode on -- while the library's default,
@@ -1170,7 +1167,7 @@ class MetalGpuTest {
 						.isEqualTo(Float.floatToRawIntBits(expected));
 				}
 			}
-			// where over a broadcast mask and a scalar y, at BOTH mask widths (todo-645):
+			// where over a broadcast mask and a scalar y, at BOTH mask widths:
 			// a double mask is not the hard decline every other double operand here is,
 			// because the mask is a predicate read as raw words -- the same bits, the
 			// same select, whichever width carried it. The cells cover every case the
@@ -1531,7 +1528,7 @@ class MetalGpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void theFusedTierLandsOnTheComposedDeviceChainsBits() {
-		// The whole claim of the tier (todo-636): a fused kernel IS the chain of device
+		// The whole claim of the tier: a fused kernel IS the chain of device
 		// members it replaces, rounding for rounding -- so its result is that chain's bit
 		// for bit, libm members included (kernel and chain call the same exp and the same
 		// erf1 at the same width, and the same software binary64 where the chain's
@@ -1650,7 +1647,7 @@ class MetalGpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void theLibmFreeFusedMembersAreTheSequentialReferencesBits() {
-		// A STRICTLY STRONGER claim than the tier's own test above (todo-665). That one
+		// A STRICTLY STRONGER claim than the tier's own test above. That one
 		// holds a fused kernel to the CHAIN OF DEVICE MEMBERS it replaces, rounding for
 		// rounding, both sides on this device. This one holds the members with NO LIBRARY
 		// FUNCTION in them to a SEQUENTIAL JAVA REPLAY of the same chain -- the row folds
@@ -1814,7 +1811,7 @@ class MetalGpuTest {
 	@Test
 	@ResourceLock(DEVICE_MEMORY)
 	void theScaledAndMaskedSoftmaxLandsOnTheComposedDeviceChainsBits() {
-		// The attention head's idiom (todo-643): torch:div then torch:masked-fill then
+		// The attention head's idiom: torch:div then torch:masked-fill then
 		// torch:softmax, folded into the softmax pair. The claim is the tier's -- the
 		// fused kernel IS the chain, rounding for rounding -- so the oracle is the chain
 		// run on the DEVICE: the scale through scal_f32, the mask's select on the host
@@ -1907,9 +1904,9 @@ class MetalGpuTest {
 		assertThat(Gpu.rngFill(new float[n], 0, n, 0, 0.0, 1.0, 11, 22, 33)).isFalse();
 	}
 
-	// --- the claims that lived only in GpuTest (todo-662) ------------------------------
+	// --- the claims that lived only in GpuTest -----------------------------------------
 	// GpuTest is gated on a DOUBLE-capable device, so its 57 tests skip in full on every
-	// Mac, and until this item nobody had put the two lists side by side. What follows is
+	// Mac, and for a long time nobody had put the two lists side by side. What follows is
 	// the half of that comparison that came back "the mechanism is here and nothing on
 	// this backend pins it". The verdict per test, and the reason for each claim that is
 	// NOT here, is in `.kb/gpu.md`, "What GpuTest claims, and where Metal answers it".
@@ -2379,9 +2376,8 @@ class MetalGpuTest {
 		// a member here" from "not resident yet", and because a later round that adds the
 		// kernels must come here to change the answer.
 		//
-		// This test exists because .kb/gpu.md said the opposite for a round: todo-495
-		// flipped lazyResultsPay on this backend and the note concluded the index tier
-		// and
+		// This test exists because .kb/gpu.md said the opposite for a round: once
+		// lazyResultsPay flipped on this backend the note concluded the index tier and
 		// the clip norm were therefore "reachable" and merely unpinned. They are not
 		// reachable; the mode was never what stood in the way.
 		Gpu.releaseResident();
@@ -2486,11 +2482,12 @@ class MetalGpuTest {
 		}
 	}
 
-	// --- result stubs on Metal (.todo/492's claims, todo-662) --------------------------
+	// --- result stubs on Metal
+	// ----------------------------------------------------------
 	// A result STUB is the three-slot prefix a rank-2 caller keeps ahead of its elements:
 	// the library takes it, allocates nothing on the host, and keeps the elements in a
 	// slab. That machinery is DeviceResidency's and therefore both backends', and since
-	// todo-495 flipped lazyResultsPay here it is what every compiled `--gpu` program's
+	// lazyResultsPay is true here it is what every compiled `--gpu` program's
 	// results are on this backend too -- but its four claims were pinned only in GpuTest,
 	// which skips in full on a Mac.
 
@@ -2843,7 +2840,7 @@ class MetalGpuTest {
 		};
 	}
 
-	// --- asynchronous command buffers (todo-495) ---------------------------------------
+	// --- asynchronous command buffers --------------------------------------------------
 
 	/**
 	 * A chain over resident operands, lazily: every call returns with its command buffer

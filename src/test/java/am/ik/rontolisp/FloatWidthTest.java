@@ -29,9 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * arm for a width no array can be.
  *
  * <p>
- * {@code .todo/683} step 3 wants a reflective test over the same {@code permits} clause
- * for a different property -- that every permit is REACHABLE from {@code make-array} --
- * and owns that half. This one asserts only the bijection.
+ * {@code eval/PackedFloatReachabilityTest} is the reflective test over the same
+ * {@code permits} clause for a different property -- that every permit is REACHABLE from
+ * {@code make-array}. This one asserts only the bijection.
  */
 class FloatWidthTest {
 

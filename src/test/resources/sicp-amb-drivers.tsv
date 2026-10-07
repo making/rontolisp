@@ -1,4 +1,4 @@
-# SICP amb driver legs (.todo/856): one row per stream-free embedded-amb sample
+# SICP amb driver legs: one row per stream-free embedded-amb sample
 # wired as a driver leg in SicpCorpusE2eTest#ambDrivers.
 # The composed program is the same for every leg: the corpus support files
 #   chapter4/section1/subsection3/02_true.scm

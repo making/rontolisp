@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 /**
  * Runs the SICP sample corpus ({@code https://sicp.sourceacademy.org/sicp.zip}, unpacked;
  * never checked in) on all four backends and requires the same output the interpreter
- * gives. The opt-in E2E of {@code .todo/828}.
+ * gives. Opt-in.
  *
  * <p>
  * Run it with:
@@ -106,8 +106,8 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code (amb? exp)} dispatch clause, {@code define-variable!} and any stream support
  * under {@code ambeval}; the lazy evaluator lacks its {@code eval} dispatch,
  * {@code eval-sequence}, {@code eval-definition}, the whole expression-syntax layer AND
- * {@code define-variable!} (2026-09-18, {@code .todo/856}: the "define-variable! only"
- * premise did not survive measurement -- no corpus file defines {@code self-evaluating?},
+ * {@code define-variable!} (2026-09-18: the "define-variable! only" premise did not
+ * survive measurement -- no corpus file defines {@code self-evaluating?},
  * {@code variable?}, {@code quoted?}, ... either); the query system lacks its whole
  * syntax layer ({@code assertion-to-be-added?}, {@code query-syntax-process}, ...).
  * Feeding them to a driver loop is follow-up work once those pieces exist; the manifest
@@ -368,10 +368,10 @@ class SicpCorpusE2eTest {
 	}
 
 	/**
-	 * The amb driver legs of {@code .todo/856}: every stream-free {@code embedded-amb}
-	 * sample in {@code /sicp-amb-drivers.tsv}, fed to the composed amb evaluator over
-	 * stdin with the interpreter as the reference -- the same four legs and the same
-	 * exit-0 plus byte-identical-stdout contract as a {@code scheme/ok} file.
+	 * The amb driver legs: every stream-free {@code embedded-amb} sample in
+	 * {@code /sicp-amb-drivers.tsv}, fed to the composed amb evaluator over stdin with
+	 * the interpreter as the reference -- the same four legs and the same exit-0 plus
+	 * byte-identical-stdout contract as a {@code scheme/ok} file.
 	 * @throws Exception if the composition cannot be read
 	 */
 	@TestFactory

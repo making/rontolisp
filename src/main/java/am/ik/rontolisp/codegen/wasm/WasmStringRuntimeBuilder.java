@@ -28,7 +28,7 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int PIPE = 0x7C;
 
-	// The non-constituent bytes _sym_esc_gc escapes for (todo 626), mirroring
+	// The non-constituent bytes _sym_esc_gc escapes for, mirroring
 	// LispSymbol.isBareConstituent's ASCII set on the interpreter (space, tab, newline,
 	// CR, form feed, then the reader's list/string/quote/comment/backquote/comma
 	// terminators, plus '|' and '\' themselves): ' ', '\t', '\n', '\r', '\f', '(', ')',
@@ -468,9 +468,9 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _sym_esc_gc} (FUNC_SYM_ESC_GC, todo 626): writes bytes
-	 * {@code [from, to)} of a BARE SYMBOL NAME (no package qualifier, no keyword/gensym
-	 * marker -- {@code _princ_val}'s arm strips those before this is ever reached, and
+	 * Builds {@code _sym_esc_gc} (FUNC_SYM_ESC_GC): writes bytes {@code [from, to)} of a
+	 * BARE SYMBOL NAME (no package qualifier, no keyword/gensym marker --
+	 * {@code _princ_val}'s arm strips those before this is ever reached, and
 	 * {@code _print_val}'s prin1 arm hands the whole name, marker included, but a marker
 	 * byte -- {@code :}, {@code #} -- is constituent and upcase-invariant so it never
 	 * triggers escaping on its own), {@code |...|}-framed with every embedded {@code |} /
@@ -1931,11 +1931,11 @@ final class WasmStringRuntimeBuilder {
 
 	/**
 	 * Builds {@code _subseq_str} (FUNC_SUBSEQ_STR): the string/list {@code subseq} lane
-	 * answering a MUTABLE character vector for a string input in either representation
-	 * (`.todo/559` step 2 -- a {@code copy-seq}/{@code subseq} result has a writable
-	 * identity, like the interpreter's and SBCL's). A character-vector input copies
-	 * elements {@code [start, end)} directly through {@code _arr_get} -- never rendering
-	 * the source, so chained slicing stays linear; anything else runs the byte-level
+	 * answering a MUTABLE character vector for a string input in either representation (a
+	 * {@code copy-seq}/{@code subseq} result has a writable identity, like the
+	 * interpreter's and SBCL's). A character-vector input copies elements
+	 * {@code [start, end)} directly through {@code _arr_get} -- never rendering the
+	 * source, so chained slicing stays linear; anything else runs the byte-level
 	 * {@code _subseq}, and a string result is converted once with {@code _str_to_cv}
 	 * while a list result passes through unchanged. The character-vector arm checks
 	 * {@code 0 <= start <= end <= (length seq)} first, with {@code _subseq}'s string
@@ -2177,8 +2177,8 @@ final class WasmStringRuntimeBuilder {
 	 * {@code end} defaults to the sequence length.
 	 * <p>
 	 * The string branch checks {@code 0 <= start <= end <= (length seq)} before
-	 * translating the character indices to byte offsets (todo a42): in EH mode a
-	 * violation throws the interpreter's exact
+	 * translating the character indices to byte offsets: in EH mode a violation throws
+	 * the interpreter's exact
 	 * {@code "SUBSEQ: invalid bounds S, E for string of length N"} type-error through
 	 * {@code _subseq_bad} ({@link #buildSubseqBadBody}); outside EH mode it is a bare
 	 * {@code unreachable}, like every other unchecked failure that backend takes (no tag

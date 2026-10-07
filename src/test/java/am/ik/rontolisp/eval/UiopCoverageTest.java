@@ -123,9 +123,9 @@ class UiopCoverageTest {
 		// expansion now, so the probe moved to a macro of a sub-package nothing
 		// implements yet; with-current-directory was the probe after that, until it grew
 		// its own expansion over call-with-current-directory, and with-input-file after
-		// that, until .todo/359 gave it one over call-with-input-file, and
-		// with-null-input after that, until .todo/360 gave it one -- with-saved-
-		// deferred-warnings (.todo/365's deferred-warnings stub) is the probe now.
+		// that, until it got one over call-with-input-file, and with-null-input after
+		// that, until it got one too -- with-saved-deferred-warnings (still a stub) is
+		// the probe now.
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		for (LispVal form : LispReader.readAllFromString("""
 				(handler-case (uiop:with-saved-deferred-warnings () (defun %uiop-probe () 1))

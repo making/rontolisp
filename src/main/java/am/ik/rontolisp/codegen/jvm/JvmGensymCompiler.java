@@ -41,7 +41,7 @@ final class JvmGensymCompiler {
 		if (args.size() == 2 && args.get(1) instanceof LispInteger n) {
 			// CL's other gensym shape: a non-negative integer IS the suffix (under the
 			// default "G" prefix), and it never touches the counter -- a compile-time
-			// constant, like the literal-string branch below (todo a42).
+			// constant, like the literal-string branch below.
 			if (n.value() < 0) {
 				throw new UnsupportedOperationException(
 						LispNames.GENSYM + " suffix must be a non-negative integer: " + cons.print());

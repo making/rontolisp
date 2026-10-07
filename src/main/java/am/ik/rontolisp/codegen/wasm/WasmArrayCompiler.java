@@ -600,8 +600,7 @@ final class WasmArrayCompiler {
 				// string, answered by subseq's stringp arm before this); bfloat16 has no
 				// packed representation on this backend; BIT is the general boxed array
 				// stamped bit (no packed bits anywhere), so a bit vector rebuilds
-				// through the general path below, which carries the source marker
-				// (.todo/820).
+				// through the general path below, which carries the source marker.
 				continue;
 			}
 			arms++;
@@ -623,7 +622,7 @@ final class WasmArrayCompiler {
 		// general: array.new buckets(nil, n) under a fresh 1-dim header cell. The
 		// meta marker is the source's own, not 0: a bit vector IS the general boxed
 		// array stamped bit, so the copy keeps the stamp the way adjust-array carries
-		// it (.todo/820). T is marker 0, so a plain vector is unchanged; a non-array
+		// it. T is marker 0, so a plain vector is unchanged; a non-array
 		// leaves markerSlot at its initial 0 for the same reason.
 		refNull(ctx);
 		getLocal(ctx, nSlot);
@@ -1628,7 +1627,7 @@ final class WasmArrayCompiler {
 		// bare (%aset a value) -- a rank-0 array holds its one element at row-major
 		// index 0, the twin of compileAref's (aref a) arm), computed before any
 		// arity-specific dispatch below so emitArefCheckRank always runs, even through
-		// the rank-1 fast paths (todo 479; see compileAref's matching comment). idxExpr
+		// the rank-1 fast paths (see compileAref's matching comment). idxExpr
 		// substitutes a literal 0 for the subscript expression that a 0-subscript call
 		// site does not have -- args.get(1) (the array) and args.get(args.size() - 1)
 		// (the value) already fall in the right place for both shapes, so no rewritten
@@ -2455,8 +2454,8 @@ final class WasmArrayCompiler {
 			ctx.writer.write(Instruction.ELSE);
 		}
 		// A bit vector is the general boxed array stamped bit: the stamp is the whole
-		// representation, so it reads back here rather than through a packed arm
-		// (.todo/043). Kept out of the range loop above, which ends at DOUBLE_FLOAT:
+		// representation, so it reads back here rather than through a packed arm.
+		// Kept out of the range loop above, which ends at DOUBLE_FLOAT:
 		// the loop would otherwise also grow a dead BFLOAT16 arm (marker 8 can never
 		// appear on this backend) into every bfloat16 program's bytes.
 		if ((ctx.typedArrayCodes & (1 << ArrayElementTypes.BIT)) != 0) {
@@ -2541,7 +2540,7 @@ final class WasmArrayCompiler {
 			case ArrayElementTypes.DOUBLE_FLOAT -> WasmEmitHelper.compileStringLiteral(LispNames.DOUBLE_FLOAT, ctx);
 			// Unspelled like character: the name is real run-time data the compiler
 			// synthesized, and bit is also a function name -- spelling it would arm
-			// the funcall-dispatch gate's name probes (.todo/043).
+			// the funcall-dispatch gate's name probes.
 			case ArrayElementTypes.BIT -> WasmEmitHelper.compileUnspelledLiteral(LispNames.BIT, ctx);
 			default -> {
 				WasmEmitHelper.compileStringLiteral(LispNames.UNSIGNED_BYTE, ctx);

@@ -12,8 +12,8 @@ import java.util.Random;
  * embedded in every {@code --simd} {@code .class}, and a stock OpenJDK runs that class
  * under C2. The kernels are a literal mirror of the interpreter's, so the two harnesses
  * should agree; a divergence would mean the surrounding class -- 4000 lines of other
- * kernels -- is changing an inlining decision, which is exactly the failure mode
- * {@code .todo/482} round 2 found.
+ * kernels -- is changing an inlining decision, which is exactly the failure mode the
+ * bfloat16 measurement found (the inlining cliff, {@code .kb/vec.md}).
  *
  * <p>
  * Both arms here go through the real bridge entries ({@code simdMatvecInto} /

@@ -31,7 +31,7 @@ every widened position. A computed argument compiles to
 `LispMacroExpander.strictStringDesignatorForm`
 (`(if (or (stringp g) (symbolp g) (characterp g)) (%princ-piece g) (error ...))`); a
 compile-time-known one costs nothing (`literalStringDesignator`). Pinned by the
-`string-designators-440` ci-spec case and the `stringDesignators` tests on all three engines.
+`string-designators` ci-spec case and the `stringDesignators` tests on all three engines.
 **Re-evaluate when** a new operator names a string designator in its CLHS entry: the change is
 one `normalizeStringDesignatorArg` call at its dispatch site, not a new coercion.
 

@@ -1753,8 +1753,7 @@ final class JvmEvalRuntimeBuilder {
 		// emitted only for a complex-capable program, so the travelling class
 		// stays out of every other constant pool. The presence probe first: a
 		// lone class run without the file beside it skips the test without
-		// resolving the holder class (.todo/757) -- exact, since no holder can
-		// exist then.
+		// resolving the holder class -- exact, since no holder can exist then.
 		if (this.k.complexValues()) {
 			ClassEntry complexClass = this.k.cp().classEntry("am/ik/rontolisp/runtime/RontoComplex");
 			MethodCode.Label noHolder = a.newLabel();

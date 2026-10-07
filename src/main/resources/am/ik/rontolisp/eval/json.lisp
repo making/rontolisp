@@ -30,8 +30,8 @@
 (defun rontolisp::%json-utf8p ()
   ;; Retained as NIL for backwards compatibility with any caller that
   ;; resolves the internal helper: every backend now indexes strings BY
-  ;; CODE POINT (todo 153), so %json-encode-char takes the direct
-  ;; (code-char cp) path below on every backend.
+  ;; CODE POINT (.kb/characters-code-points.md), so %json-encode-char takes
+  ;; the direct (code-char cp) path below on every backend.
   nil)
 
 (defun rontolisp::%json-char-string (code)
@@ -97,7 +97,7 @@
   ;; string-indexing cutover the WASM backends emitted the code point's UTF-8
   ;; bytes as one-byte characters and the UTF-16-indexed backends split a
   ;; supplementary code point into a surrogate pair here; now every backend
-  ;; indexes strings by code point (todo 153), so (code-char cp) suffices.
+  ;; indexes strings by code point, so (code-char cp) suffices.
   (rontolisp::%json-char-string cp))
 
 (defun rontolisp::%json-unicode-escape (s j n)

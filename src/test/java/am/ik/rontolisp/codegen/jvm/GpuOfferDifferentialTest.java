@@ -161,8 +161,8 @@ class GpuOfferDifferentialTest {
 	 * widths, so the harness could not build the operand a bfloat16 arm needs, and that
 	 * arm sat unreachable while looking covered ({@code .kb/vec.md})
 	 * @param quantized a Q8_0 {@code rontolisp:quantized-matrix} of the same values
-	 * ({@code .todo/728}) -- not a {@link FloatWidth}, since it is not a packed float
-	 * array on either path; {@code width} is then ignored
+	 * ({@code .kb/quantized-matrix.md}) -- not a {@link FloatWidth}, since it is not a
+	 * packed float array on either path; {@code width} is then ignored
 	 */
 	private record Operand(int[] dims, boolean resident, @Nullable FloatWidth width, boolean quantized) {
 		Operand(int... dims) {
@@ -334,7 +334,7 @@ class GpuOfferDifferentialTest {
 		cases.add(softmax("the mask is the trailing two axes", a, new Operand(R, C), 2L));
 		cases.add(softmax("the mask is the operand's own shape", a, new Operand(B, R, C), 2L));
 		cases.add(softmax("a leading extent-1 axis is dropped", a, new Operand(1, R, C), 2L));
-		// The shape .todo/650 was filed for: the mask is (batch 1 key) against a
+		// The shape that matters in practice: the mask is (batch 1 key) against a
 		// (batch query key) score, so the axis UNDER the leading one is extent 1 and the
 		// suffix rule turns it down. Measured at the acceptance ceiling and left as it
 		// is; what the rule must not do is differ between the two paths.
@@ -406,7 +406,7 @@ class GpuOfferDifferentialTest {
 				vector.asBfloat16()));
 		cases.add(matvec("a bfloat16 matrix against a double vector declines", matrix.asBfloat16(), vector.asDouble()));
 		cases.add(matvec("a mixed single/double pair declines", matrix.asSingle(), vector.asDouble()));
-		// The Q8_0 pairing (.todo/728): the quantized matrix against an f32 vector is
+		// The Q8_0 pairing: the quantized matrix against an f32 vector is
 		// taken, against a double one declined, on both paths.
 		cases.add(matvec("a quantized matrix against a single vector", matrix.asQuantized(), vector.asSingle()));
 		cases.add(

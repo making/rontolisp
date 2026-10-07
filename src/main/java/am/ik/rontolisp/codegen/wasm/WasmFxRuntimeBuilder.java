@@ -331,8 +331,7 @@ final class WasmFxRuntimeBuilder {
 	 * {@code _str_build} on the first call and caching it in the module global at
 	 * {@code tSymGlobalIndex}. The cached instance carries the same id (the intern offset
 	 * of "T") and bytes as a per-site build, so identity and printing are unchanged --
-	 * what changes is that a comparison returning true no longer allocates (todo 194
-	 * stage 3).
+	 * what changes is that a comparison returning true no longer allocates.
 	 */
 	static byte[] buildTSymBody(int tOffset, int tLength, int tSymGlobalIndex) {
 		BodyWriter b = new BodyWriter();

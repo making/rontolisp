@@ -1364,7 +1364,7 @@
               (linalg:exp (linalg:sub a (linalg:amax a :axis ax :keepdims t)))))
         (linalg:div e (linalg:sum e :axis ax :keepdims t)))))
 
-;; --- the fused compositions (todo-499, todo-629, 2026-09-02) -------------------------
+;; --- the fused compositions (2026-09-02) ---------------------------------------------
 ;; Nine internal members that spell, as ONE call each, a composition torch.lisp used to
 ;; spell as a chain of the members above: torch:softmax's adjoint, torch:log-softmax's,
 ;; the exact torch:gelu and its adjoint, torch:layer-norm's normalization and its adjoint,
@@ -1382,7 +1382,7 @@
 
 (defun linalg::%la-log-softmax-grad (g out ax)
   ;; torch:log-softmax's adjoint g - exp(out) * sum(g) along the normalized axis ax,
-  ;; with softmax(x) recovered as the exponent of the forward result (todo-629).
+  ;; with softmax(x) recovered as the exponent of the forward result.
   (linalg:sub g
    (linalg:mul (linalg:exp out) (linalg:sum g :axis ax :keepdims t))))
 
@@ -1479,7 +1479,7 @@
   ;; %la-layer-norm-grad's own chain, plus a second return: norm, the (linalg:div dev
   ;; sd) this pass already builds x's gradient from -- the same member boundary as
   ;; %la-layer-norm's own answer, and therefore the same bits, so a caller that needs
-  ;; both an input gradient and the forward's normalization (todo-644) gets it without
+  ;; both an input gradient and the forward's normalization gets it without
   ;; a second seven-pass walk over x. See %la-layer-norm-grad for what each binding is.
   (let* ((d (array-dimensions x))
          (ax (- (length d) 1))
@@ -1521,7 +1521,7 @@
   ;; and the WEIGHT the axis-0 folds of g * norm; norm is %la-layer-norm-grad-norm's
   ;; second return, the SAME (linalg:div dev sd) the forward's %la-layer-norm would
   ;; answer, read off the one pass this already makes over x rather than recomputed by
-  ;; a second call (todo-644): seven passes down to one, same member boundary, same
+  ;; a second call: seven passes down to one, same member boundary, same
   ;; bits. The bias's gradient is the folds of g and needs nothing from here.
   (let ((r (linalg::%la-layer-norm-grad-norm (linalg:mul g w) x eps old)))
     (list (car r) (linalg:mul g (car (cdr r))))))
@@ -2212,8 +2212,9 @@
   ;; 1 the sum of twelve draws minus 6 (linalg:randn's Irwin-Hall normal),
   ;; and 2 is lo + span * draw (linalg:uniform).
   ;;
-  ;; The three fills were the RNG half of todo-473's profile: a boxed do loop
-  ;; per element, with a boxed double per draw. Collapsing them into ONE
+  ;; The three fills were the RNG half of a --gpu --simd training step's profile
+  ;; (.kb/linalg-simd.md): a boxed do loop per element, with a boxed double per
+  ;; draw. Collapsing them into ONE
   ;; internal member is what puts them on the --simd seam, which intercepts
   ;; linalg: members and nothing else. The generator's rule itself does not
   ;; move -- this loop still calls %la-rng-next, so there is still exactly one
@@ -2287,7 +2288,7 @@
 ;; An internal member of the same kind as %la-im2col: a fused element-wise loop
 ;; that a library ABOVE this one calls once per parameter per step, put here
 ;; because the --simd seam intercepts linalg: members and nothing else
-;; (todo-473). torch::%o-adam-step holds the rule's documentation and is its
+;; (.kb/linalg-simd.md). torch::%o-adam-step holds the rule's documentation and is its
 ;; only caller; nothing in the numpy surface reaches this.
 
 (defun linalg::%la-adam-step (x g m v ps)

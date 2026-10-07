@@ -154,8 +154,7 @@ class PackedFloatReachabilityTest {
 	 * element type exactly as {@code make-array}'s {@code :element-type} does, so every
 	 * permit has to be reachable through it too -- and was not until 2026-09-06: the
 	 * result-type normalizer carried an INTEGER WIDTH beside the family, so the float
-	 * widths had nowhere to be and both operators silently answered a general vector
-	 * ({@code .todo/707}).
+	 * widths had nowhere to be and both operators silently answered a general vector.
 	 */
 	@Test
 	void everyPermitIsReachableThroughCoerceAndConcatenate() {

@@ -552,7 +552,7 @@ public final class LispArray implements LispVal {
 		try {
 			int rank = this.dimensions.length;
 			// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
-			// printed bit vector reads back as one (.todo/820). make-array never
+			// printed bit vector reads back as one. make-array never
 			// validates stores, so a non-bit element falls back to the general #()
 			// vector, which also loses the stamp on the read-back like a rank-n
 			// character array does.

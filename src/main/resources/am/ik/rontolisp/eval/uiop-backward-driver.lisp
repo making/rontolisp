@@ -1,6 +1,6 @@
 ;;;; uiop/backward-driver -- the two backward-compatibility aliases that are real
 ;;;; here. coerce-pathname is the DEPRECATED alias of parse-unix-namestring
-;;;; (.todo/357), and version-compatible-p is the ASDF 1-to-2.32 version check
+;;;; (.kb/uiop.md), and version-compatible-p is the ASDF 1-to-2.32 version check
 ;;;; written over parse-version and lexicographic<=. The other five members (the
 ;;;; configuration-directory search) stay not-implemented-error stubs: they need
 ;;;; uiop/configuration, which nothing implements yet. See .kb/uiop.md.

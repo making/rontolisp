@@ -277,18 +277,18 @@ class TokenizersLibraryTest {
 
 	/**
 	 * {@code tokenizer::%complete-byte-prefix} answers "how many bytes", not "what
-	 * character" -- it is FRAMING, deliberately kept separate from decoding (.todo/691).
-	 * Conflating the two questions is exactly the defect this item found and fixed twice
-	 * over: a round-trip-through-the-codec test looks like it could answer this instead,
-	 * but it holds back (or, worse, in {@code tokenizer:decode}, drops) a byte that leads
-	 * no valid sequence at all -- a real SentencePiece byte-fallback token, e.g.
-	 * {@code <0xC0>} -- rather than passing it through immediately, which is what a stray
-	 * one of those needs. This pins {@code tokenizer::%utf8-lead-length} BY VALUE over
-	 * the entire byte range so the classifier can never drift from what a byte-fallback
-	 * token actually needs, and so it stays byte-for-byte the SAME table
-	 * examples/llm/llm.lisp's utf8-length hand-writes independently (an example may reach
-	 * only {@code tokenizer:} public symbols, so the two cannot share the definition
-	 * itself -- .todo/691's close).
+	 * character" -- it is FRAMING, deliberately kept separate from decoding
+	 * ({@code .kb/characters-code-points.md}). Conflating the two questions is a defect
+	 * that was found and fixed twice over: a round-trip-through-the-codec test looks like
+	 * it could answer this instead, but it holds back (or, worse, in
+	 * {@code tokenizer:decode}, drops) a byte that leads no valid sequence at all -- a
+	 * real SentencePiece byte-fallback token, e.g. {@code <0xC0>} -- rather than passing
+	 * it through immediately, which is what a stray one of those needs. This pins
+	 * {@code tokenizer::%utf8-lead-length} BY VALUE over the entire byte range so the
+	 * classifier can never drift from what a byte-fallback token actually needs, and so
+	 * it stays byte-for-byte the SAME table examples/llm/llm.lisp's utf8-length
+	 * hand-writes independently (an example may reach only {@code tokenizer:} public
+	 * symbols, so the two cannot share the definition itself).
 	 */
 	@Test
 	void utf8LeadLengthIsHowManyBytesNotWhatCharacterOverEveryLeadByte() {

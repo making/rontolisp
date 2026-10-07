@@ -47,8 +47,7 @@ public final class LinalgKernelCallLayout {
 			new Extended(3, List.of("AXIS", "KEEPDIMS")), LispNames.LINALG_ARGMAX, new Extended(2, List.of("AXIS")),
 			LispNames.LINALG_ARGMIN, new Extended(2, List.of("AXIS")), LispNames.LINALG_CONCATENATE,
 			new Extended(2, List.of("AXIS")),
-			// softmax and log-softmax: device members in their :axis form only
-			// (todo-499, todo-629).
+			// softmax and log-softmax: device members in their :axis form only.
 			LispNames.LINALG_SOFTMAX, new Extended(2, List.of("AXIS")), LispNames.LINALG_LOG_SOFTMAX,
 			new Extended(2, List.of("AXIS")));
 

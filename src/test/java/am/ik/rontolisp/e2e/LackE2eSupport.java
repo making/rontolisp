@@ -102,7 +102,7 @@ final class LackE2eSupport {
 	 * The substrate exercise, compilable on every backend: the in-memory octet stream
 	 * first, then the disk spill inside a {@code handler-case} so a backend that cannot
 	 * spill reports the error instead of trapping. All four backends spill for real (the
-	 * WASM pair through the {@code path_create_directory} import, .todo/257).
+	 * WASM pair through the {@code path_create_directory} import).
 	 */
 	static final String SUBSTRATE_EXERCISE = """
 			(ql:quickload "smart-buffer")

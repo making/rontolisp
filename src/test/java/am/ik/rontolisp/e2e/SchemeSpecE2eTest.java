@@ -502,9 +502,8 @@ class SchemeSpecE2eTest {
 	/**
 	 * A read-eval-print loop over stdin -- the shape the book's chapter 4 evaluators
 	 * share -- fed three expressions through a real stdin pipe (not
-	 * {@code with-input-from-string}): what {@code .todo/832} gates for the second stage
-	 * of {@code .todo/828} (feeding the {@code embedded-*} samples to the evaluator the
-	 * corpus ships).
+	 * {@code with-input-from-string}): what feeding the SICP corpus's {@code embedded-*}
+	 * samples to the evaluator the corpus ships needs.
 	 */
 	@TestFactory
 	Stream<DynamicNode> driverLoopReadsThreeExpressionsFromStdinOnEveryBackend() {

@@ -54,8 +54,8 @@ class LinalgSimdTest {
 
 	/**
 	 * The dead-flag guard's discriminator: a named defun and the native kernel installed
-	 * over it print the SAME {@code #<function NAME>} text (todo 434 gave defuns names),
-	 * so the pair is told apart by the Java type -- {@link LispFunction} is the installed
+	 * over it print the SAME {@code #<function NAME>} text (a defun prints its name), so
+	 * the pair is told apart by the Java type -- {@link LispFunction} is the installed
 	 * kernel, {@link LispLambda} the {@code linalg.lisp} defun -- while the printed tag
 	 * stays pinned alongside.
 	 */
@@ -453,10 +453,10 @@ class LinalgSimdTest {
 		assertThat(eval(probe32("16777216.0", "(* 1024 (linalg:mean v))"), true).print()).isEqualTo("16777984");
 		assertThat(eval(probe32("16777216.0", "(* 1024 (linalg:mean v))"), false).print()).isEqualTo("16778239");
 		// linalg's matrix . vector is not a kernel of its own: LinalgSimdKernels.matvecF
-		// delegates to vec:matvec's, on every backend, so it moved with it in todo-480.
+		// delegates to vec:matvec's, on every backend, so it moves with it.
 		// The scalar path accumulates 16778239 in f64 and narrows on store: an odd
 		// multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
-		// A GEMV row is NOT vec:dot's chain any more (todo-480): above
+		// A GEMV row is NOT vec:dot's chain: above
 		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
 		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
 		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
@@ -855,7 +855,8 @@ class LinalgSimdTest {
 
 	@Test
 	void theAdamStepAndTheGeneratorFillAreInterceptedUnderSimd() {
-		// The dead-flag guard for todo-473's two members: a --simd run that silently
+		// The dead-flag guard for the Adam step and the generator fill: a --simd run that
+		// silently
 		// fell back would still pass every value assertion below.
 		for (String member : new String[] { "%la-adam-step", "%la-rng-fill" }) {
 			String form = "(linalg:zeros 1) #'linalg::" + member;

@@ -108,7 +108,7 @@ class SafetensorsLibraryTest {
 
 	// :element-type 'bfloat16 is the third destination (interpreter and JVM only; every
 	// other backend refuses the width by name). What each dtype costs to get there is
-	// the point, and it is NOT uniform -- the frozen interface in .todo/675 said the
+	// the point, and it is NOT uniform -- the frozen interface once said the
 	// values would be EQUAL to the single-float read because "widening is exact", which
 	// holds for a BF16 SOURCE and for nothing else:
 	//

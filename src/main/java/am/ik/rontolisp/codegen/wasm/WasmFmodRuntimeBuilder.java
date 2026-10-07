@@ -42,11 +42,11 @@ import am.ik.wasm.WasmWriter;
  * the JVM already answer.
  *
  * <p>
- * The sign of a ZERO remainder is todo-652's rule and survives unchanged: {@code -0.0}
- * only when the dividend is {@code -0.0} and the divisor is positive, {@code +0.0}
- * otherwise. It used to fall out of adding {@code +0.0} to the f64 quotient; with an
- * exact reduction there is no quotient to coerce, so the three-step re-derivation is
- * spelled out below exactly as the JVM's {@code _frem} spells it.
+ * The sign of a ZERO remainder survives unchanged: {@code -0.0} only when the dividend is
+ * {@code -0.0} and the divisor is positive, {@code +0.0} otherwise. It used to fall out
+ * of adding {@code +0.0} to the f64 quotient; with an exact reduction there is no
+ * quotient to coerce, so the three-step re-derivation is spelled out below exactly as the
+ * JVM's {@code _frem} spells it.
  */
 final class WasmFmodRuntimeBuilder {
 
@@ -192,7 +192,7 @@ final class WasmFmodRuntimeBuilder {
 		w.write(Instruction.END); // end |a| < |b| if
 		local(w, Instruction.SET_LOCAL, r);
 
-		// The sign of a zero (todo-652): a - b*q with an integer q, so a zero dividend
+		// The sign of a zero: a - b*q with an integer q, so a zero dividend
 		// leaves b*(+0) carrying the DIVISOR's sign and a nonzero dividend cancels
 		// against itself as IEEE's +0.0. `a - copysign(0.0, b)` is exactly that.
 		local(w, Instruction.GET_LOCAL, r);

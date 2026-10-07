@@ -226,7 +226,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 
 	static final int ERF = 42;
 
-	// The two members todo-473 moved onto this seam, both internal linalg: names and
+	// The two members moved onto this seam, both internal linalg: names and
 	// both _v_get / _v_set element loops: the seeded generator's one fill loop (behind
 	// linalg:rand / randn / uniform) and Adam's fused element-wise update (behind
 	// torch:adam / torch:adamw). Neither has a lane form -- the generator's state is

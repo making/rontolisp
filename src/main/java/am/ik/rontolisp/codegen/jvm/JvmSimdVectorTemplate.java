@@ -200,9 +200,8 @@ final class JvmSimdVectorTemplate {
 
 	static @Nullable Object simdAdd(@Nullable Object a, @Nullable Object b) {
 		if (a instanceof short[] bx) {
-			// bf16 x bf16 -> bf16, the one element-wise pairing with a kernel
-			// (`.todo/747`): the call site's width guard admits no other combination
-			// with a short[] operand.
+			// bf16 x bf16 -> bf16, the one element-wise pairing with a kernel: the call
+			// site's width guard admits no other combination with a short[] operand.
 			return addBf16(bx, asBf16(b));
 		}
 		if (a instanceof float[] fx) {
@@ -1187,7 +1186,7 @@ final class JvmSimdVectorTemplate {
 
 	private static @Nullable Object simdUnary(int op, @Nullable Object v) {
 		if (v instanceof short[] bx) {
-			// The four unary members with a bf16 lane loop (`.todo/747`); the call
+			// The four unary members with a bf16 lane loop; the call
 			// site's width guard admits a short[] for no other unary member.
 			int o = bf16Off(bx);
 			int n = bx.length - o;
@@ -4310,7 +4309,7 @@ final class JvmSimdVectorTemplate {
 	// Fusing the decode into the lane loop, rather than widening into an f32 scratch and
 	// reusing the f32 kernel, is the whole point: half the weight bytes for a decode that
 	// is one shift, so the kernel is bandwidth-bound where the f32 one is. The scratch
-	// route stores and reloads every element and loses on both JITs (.todo/488).
+	// route stores and reloads every element and loses on both JITs (.kb/bfloat16.md).
 	//
 	// One small method per width, and no decoder shared behind a flag: the probe that
 	// carried both a bf16 and an f16 decoder in one method overran C2's inlining budget
@@ -4393,7 +4392,7 @@ final class JvmSimdVectorTemplate {
 	 * bf16 sign, exponent and payload, so {@code u} is carried across untouched, forced
 	 * nonzero only when the payload was already all zero (which would otherwise read back
 	 * as an infinity, not a NaN). A plain {@code bits | 0x0040} -- this method's first
-	 * version, until {@code .todo/746}'s census found it -- forces the quiet bit
+	 * version, until the 2026-09-08 conversion census found it -- forces the quiet bit
 	 * unconditionally, which changes 126 of the 65536 patterns' payload rather than
 	 * carrying it across, exactly the bug {@code eval/FloatBitsWidening}'s own
 	 * float-array narrowing was fixed for on 2026-09-03 (that fix never reached this
@@ -4564,16 +4563,16 @@ final class JvmSimdVectorTemplate {
 	}
 
 	// --- bfloat16 (bf16) element-wise kernels ---------------------------------------
-	// bf16 x bf16 -> bf16, the one element-wise pairing `.todo/747` admits, mirrored
+	// bf16 x bf16 -> bf16, the one element-wise pairing with a kernel, mirrored
 	// operation for operation with `eval.VecSimdKernels`' over its bare-short[]
 	// representation: widen at `SPECIES_PREFERRED`, compute in f32, narrow on store
-	// through the branch-free lane form `.todo/696` measured, the scalar tail in index
+	// through the measured branch-free lane form, the scalar tail in index
 	// order. Only the members with a single-float lane loop are mirrored
 	// (`add`/`sub`/`mul`/`div` and `sqrt`/`abs`/`negative`/`reciprocal` with their
 	// `-into` siblings); the bridge entries above route a `short[]` operand here, and
 	// the call site's width guard admits no other combination with one. Bit-exact at
 	// any lane count. One small method per member -- the C2 inlining cliff
-	// (`.todo/482` round 2) is a rule about method size.
+	// (`.kb/vec.md`) is a rule about method size.
 
 	/**
 	 * The int species the element-wise bit arithmetic runs in: the same shape as
@@ -4597,9 +4596,9 @@ final class JvmSimdVectorTemplate {
 
 	/**
 	 * {@link #floatToBf16} as lanes: both arms computed, the NaN one blended in under a
-	 * mask, then an {@code I2S} narrowing store. Operation for operation the form
-	 * `.todo/696`'s harness sweeps against the scalar over all 2^32 f32 patterns with 0
-	 * mismatches.
+	 * mask, then an {@code I2S} narrowing store. Operation for operation the form swept
+	 * against the scalar over all 2^32 f32 patterns with 0 mismatches
+	 * ({@code .kb/bfloat16.md}).
 	 */
 	private static ShortVector narrowLanes(FloatVector v) {
 		IntVector bits = v.reinterpretAsInts();
@@ -4615,8 +4614,8 @@ final class JvmSimdVectorTemplate {
 
 	/**
 	 * {@code r[or+i] = x[ox+i] + y[oy+i]} over bf16 vectors, widened, added in f32,
-	 * narrowed on store -- the defun's answer bit for bit (`.todo/696` sweeps all
-	 * 65536x65536 operand pairs per operation with 0 mismatches).
+	 * narrowed on store -- the defun's answer bit for bit (swept over all 65536x65536
+	 * operand pairs per operation with 0 mismatches).
 	 */
 	private static void addIntoBf16(short[] r, short[] x, short[] y) {
 		int or = bf16Off(r);
@@ -4828,16 +4827,18 @@ final class JvmSimdVectorTemplate {
 	// FloatVector.SPECIES_128 are fixed, like FSPECIES_REDUCE. No threshold, no other
 	// accumulator split: a block is the unit and a row of one block runs the same lanes.
 	//
-	// Why f32 lanes: measured 2026-09-05 (.todo/672's README). One reduceLanes(ADD) plus
+	// Why f32 lanes: measured 2026-09-05 (.kb/quantized-matrix.md). One reduceLanes(ADD)
+	// plus
 	// a scalar double chain per block was latency-bound at 5-6 Gelem/s on one thread at
 	// every shape (level with the fused bf16 kernel at 4096x4096, below f32 under C2);
 	// double lanes through an int-to-double convertShape are not intrinsified by Graal 25
-	// and ran at 0.02 Gelem/s; convert(I2F) into f32 lanes is the shape .todo/482's
-	// Quant.java measured fast under both JITs. eval.VecSimdKernels mirrors these
+	// and ran at 0.02 Gelem/s; convert(I2F) into f32 lanes measured fast under both
+	// JITs (.todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Quant.java).
+	// eval.VecSimdKernels mirrors these
 	// operation for operation over its header-free representation. No FMA, deliberately:
 	// `acc + lane * p` is two roundings on both sides, and the defun has no fused form.
 	//
-	// Why no part-1 conversion anywhere (2026-09-06, .todo/706): a convertShape whose
+	// Why no part-1 conversion anywhere (2026-09-06): a convertShape whose
 	// part is not 0 is `slice(origin)` then the part-0 conversion, and `slice` is two
 	// rearranges and a blend over an iota shuffle -- which C2 compiles as written, ~4
 	// cycles a slice, and Graal folds into the widening instruction. The first kernel

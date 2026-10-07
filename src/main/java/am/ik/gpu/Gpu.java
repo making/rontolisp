@@ -52,15 +52,14 @@ import org.jspecify.annotations.Nullable;
  *
  * Every member keeps a copy of each operand and result on the device, keyed by the host
  * array's identity, so a chain of members uploads each array once; {@link #written} is
- * the caller's side of that contract. Since {@code .todo/491} a caller may also ask for
- * LAZY results ({@link #lazyResults}): a result then stays on the device and its host
- * array is filled only when the caller says the host is about to read it
- * ({@link #materialize}) -- the mode the rontolisp interceptors run in, having enumerated
- * every host read -- and the members whose CPU twin is a lane loop, which no round trip
- * could win, are offered over a resident operand ({@link #zip}, {@link #scale},
- * {@link #where}, {@link #adamStep}, the {@link #MAP_SQRT} maps). Off, which is the
- * default, every method below fills its {@code out} before it returns, as its javadoc
- * says.
+ * the caller's side of that contract. A caller may also ask for LAZY results
+ * ({@link #lazyResults}): a result then stays on the device and its host array is filled
+ * only when the caller says the host is about to read it ({@link #materialize}) -- the
+ * mode the rontolisp interceptors run in, having enumerated every host read -- and the
+ * members whose CPU twin is a lane loop, which no round trip could win, are offered over
+ * a resident operand ({@link #zip}, {@link #scale}, {@link #where}, {@link #adamStep},
+ * the {@link #MAP_SQRT} maps). Off, which is the default, every method below fills its
+ * {@code out} before it returns, as its javadoc says.
  *
  * <h2>Offsets, because the arrays have headers</h2>
  *
@@ -257,11 +256,11 @@ public final class Gpu {
 			MAP_ACOS = 7, MAP_ATAN = 8, MAP_SINH = 9, MAP_COSH = 10, MAP_ERF = 11;
 
 	/**
-	 * The four maps the element-wise tier REFUSED as a round trip and takes since
-	 * {@code .todo/491} over a RESIDENT operand only (the resident tier): one machine
-	 * instruction each, so no size makes the trip pay, and no trip is paid when the
-	 * operand is already there. Each computes in double and narrows on the store, so
-	 * unlike the twelve above they are BIT-IDENTICAL to the CPU kernels.
+	 * The four maps the element-wise tier REFUSED as a round trip and takes over a
+	 * RESIDENT operand only (the resident tier): one machine instruction each, so no size
+	 * makes the trip pay, and no trip is paid when the operand is already there. Each
+	 * computes in double and narrows on the store, so unlike the twelve above they are
+	 * BIT-IDENTICAL to the CPU kernels.
 	 */
 	public static final int MAP_SQRT = 12, MAP_ABS = 13, MAP_NEGATIVE = 14, MAP_SIGN = 15;
 
@@ -663,11 +662,11 @@ public final class Gpu {
 	 * updates in place ({@link #adamStep}, {@link #rngFill}) likewise. That is what lets
 	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
 	 * over the link, and it is the mode the interceptors run in where the device says it
-	 * pays ({@link #lazyResultsIfWorthwhile}: both backends, Metal since todo-495),
-	 * having enumerated every host read ({@code .kb/gpu.md}, "The two seams, and what
-	 * must report through them"). Off -- the default, and the contract every method's
-	 * javadoc states -- a result is in its array when the call returns. Switching off
-	 * brings every lazy result home first.
+	 * pays ({@link #lazyResultsIfWorthwhile}: both backends), having enumerated every
+	 * host read ({@code .kb/gpu.md}, "The two seams, and what must report through them").
+	 * Off -- the default, and the contract every method's javadoc states -- a result is
+	 * in its array when the call returns. Switching off brings every lazy result home
+	 * first.
 	 *
 	 * <p>
 	 * On Metal the mode is also what lets a call return WITHOUT waiting for its command
@@ -707,8 +706,8 @@ public final class Gpu {
 	 * {@link #lazyResults}, which is unconditional. The measurement lives in the backend,
 	 * not in the interceptor: a fifth off the training step on CUDA; on Metal a tie at
 	 * small shapes and a loss at large ones while every call waited for its command
-	 * buffer, and a step at 40% of the eager one since the buffers went asynchronous
-	 * (todo-495). Never runs the probe; applied when it runs.
+	 * buffer, and a step at 40% of the eager one since the buffers went asynchronous.
+	 * Never runs the probe; applied when it runs.
 	 */
 	public static void lazyResultsIfWorthwhile() {
 		lazyIfWorthwhile = true;
@@ -1212,8 +1211,8 @@ public final class Gpu {
 	}
 
 	/**
-	 * The policy every size-thresholded member shares since {@code .todo/491}: big enough
-	 * for the threshold in force, or an operand already resident.
+	 * The policy every size-thresholded member shares: big enough for the threshold in
+	 * force, or an operand already resident.
 	 */
 	private static boolean worthOrResident(GpuDevice device, long work, long threshold, Object a, Object b) {
 		return work >= threshold || device.resident(a) || device.resident(b);
@@ -1791,10 +1790,9 @@ public final class Gpu {
 	 * product's rounding error recovered with an fma, every addition a TwoSum -- which
 	 * carries ~48 bits and lands on the scalar defun's widen-accumulate-narrow bits on
 	 * every measured row (1024 of 1024, and every row of seven larger shapes). CUDA used
-	 * a double there too until 2026-09-06 ({@code .todo/490}), when the double FMA per
-	 * element measured as a compute ceiling on a GB10 that the bfloat16 kernel hit at
-	 * half the device's bandwidth ({@code gemm.cu}). Neither width is asserted as
-	 * byte-identity.
+	 * a double there too until 2026-09-06, when the double FMA per element measured as a
+	 * compute ceiling on a GB10 that the bfloat16 kernel hit at half the device's
+	 * bandwidth ({@code gemm.cu}). Neither width is asserted as byte-identity.
 	 * @param w the matrix, row-major, elements starting at {@code offsetW}
 	 * @param offsetW the index of {@code w}'s first element
 	 * @param x the vector, elements starting at {@code offsetX}
@@ -1838,18 +1836,18 @@ public final class Gpu {
 	/**
 	 * The bfloat16 sibling of
 	 * {@link #matvec(float[], int, float[], int, float[], int, int, int)}, and the width
-	 * a published checkpoint's weights arrive in ({@code .todo/490}): the matrix is a
-	 * {@code short[]} of bf16 bit patterns -- the top sixteen bits of an f32 each, two
-	 * bytes an element -- and the vector and the result are f32, the one pairing the
-	 * CPU's fused kernel has (bf16 weights against f32 activations,
-	 * {@code .kb/bfloat16.md}). The kernel widens each pattern in its lane loop, which is
-	 * exact, and is otherwise the f32 kernel: the same compensated accumulator, the same
-	 * order, so it lands where the f32 kernel lands over the widened matrix, bit for bit,
-	 * and its relation to the scalar defun is the f32 row's -- not a new precision class.
-	 * What the width buys is the bytes: a resident row streams half of what the f32 row
-	 * does, on a member whose cost IS that stream. The same residency rule, the same size
-	 * threshold (re-derived at this width, {@code .kb/gpu.md}), and a hard decline on a
-	 * device without the kernel ({@link GpuDevice#supportsBfloat16()}: Metal).
+	 * a published checkpoint's weights arrive in: the matrix is a {@code short[]} of bf16
+	 * bit patterns -- the top sixteen bits of an f32 each, two bytes an element -- and
+	 * the vector and the result are f32, the one pairing the CPU's fused kernel has (bf16
+	 * weights against f32 activations, {@code .kb/bfloat16.md}). The kernel widens each
+	 * pattern in its lane loop, which is exact, and is otherwise the f32 kernel: the same
+	 * compensated accumulator, the same order, so it lands where the f32 kernel lands
+	 * over the widened matrix, bit for bit, and its relation to the scalar defun is the
+	 * f32 row's -- not a new precision class. What the width buys is the bytes: a
+	 * resident row streams half of what the f32 row does, on a member whose cost IS that
+	 * stream. The same residency rule, the same size threshold (re-derived at this width,
+	 * {@code .kb/gpu.md}), and a hard decline on a device without the kernel
+	 * ({@link GpuDevice#supportsBfloat16()}: Metal).
 	 * @param w the matrix, row-major bf16 patterns, elements starting at {@code offsetW}
 	 * @param offsetW the index of {@code w}'s first element
 	 * @param x the vector, elements starting at {@code offsetX}
@@ -1878,19 +1876,18 @@ public final class Gpu {
 	/**
 	 * The Q8_0 sibling of
 	 * {@link #matvec(short[], int, float[], int, float[], int, int, int)}, and the width
-	 * a published {@code Q8_0} checkpoint's weights arrive in ({@code .todo/728}): the
-	 * matrix is a {@code byte[]} of ggml's blocks VERBATIM -- per block of 32 columns a
-	 * binary16 scale then 32 int8 quants, 34 bytes, row-major, {@code rows * cols / 32}
-	 * of them from byte {@code offsetW} -- and the vector and the result are f32, the one
-	 * pairing the CPU's integer-dot kernel has ({@code .kb/quantized-matrix.md}). Unlike
-	 * the other three widths this one is the scalar defun's BITS: the activation is
-	 * quantized on the host by the contract's rule ({@link #quantizeActivationQ8}) and
-	 * the kernel walks the defun's four f32 lane accumulators over the blocks in its
-	 * order ({@code gemm.cu}), so a device that takes the call answers exactly what the
-	 * CPU kernel would have. The same residency rule (the matrix's span is its byte
-	 * count), the same element threshold, and a hard decline where the device has no such
-	 * kernel ({@link GpuDevice#supportsQuantized()}: Metal) or {@code cols} is not whole
-	 * blocks.
+	 * a published {@code Q8_0} checkpoint's weights arrive in: the matrix is a
+	 * {@code byte[]} of ggml's blocks VERBATIM -- per block of 32 columns a binary16
+	 * scale then 32 int8 quants, 34 bytes, row-major, {@code rows * cols / 32} of them
+	 * from byte {@code offsetW} -- and the vector and the result are f32, the one pairing
+	 * the CPU's integer-dot kernel has ({@code .kb/quantized-matrix.md}). Unlike the
+	 * other three widths this one is the scalar defun's BITS: the activation is quantized
+	 * on the host by the contract's rule ({@link #quantizeActivationQ8}) and the kernel
+	 * walks the defun's four f32 lane accumulators over the blocks in its order
+	 * ({@code gemm.cu}), so a device that takes the call answers exactly what the CPU
+	 * kernel would have. The same residency rule (the matrix's span is its byte count),
+	 * the same element threshold, and a hard decline where the device has no such kernel
+	 * ({@link GpuDevice#supportsQuantized()}: Metal) or {@code cols} is not whole blocks.
 	 * @param w the matrix's blocks, row-major, starting at byte {@code offsetW}
 	 * @param offsetW the index of {@code w}'s first block byte
 	 * @param x the vector, elements starting at {@code offsetX}
@@ -1958,7 +1955,7 @@ public final class Gpu {
 		return out;
 	}
 
-	// --- the resident tier (.todo/491) -------------------------------------------------
+	// --- the resident tier ------------------------------------------------------------
 	// Members whose CPU twin is a lane loop, which a round trip cannot beat at any size
 	// (the element-wise tier's measurement) and which are therefore offered ONLY over an
 	// operand that is already resident -- where there is no trip, and the result stays
@@ -2550,7 +2547,7 @@ public final class Gpu {
 	 * ({@link #materialize}). Anything between the two is a caller's mistake and
 	 * declines.
 	 */
-	// --- the fused tier (.todo/499) -------------------------------------------------
+	// --- the fused tier --------------------------------------------------------------
 
 	/**
 	 * {@code out[i] = gelu(a[i])}, the exact GELU {@code x * (1 + erf(x / sqrt 2)) / 2}
@@ -2953,10 +2950,10 @@ public final class Gpu {
 	 * {@link #layerNorm}'s normalization AND {@code torch:layer-norm}'s own affine --
 	 * {@code norm * weight + bias} over a {@code (len)} weight and bias -- as one pass
 	 * per row, where the module ran the normalization and then two BROADCAST passes over
-	 * the whole activation (todo-634). Each parameter is read where the broadcast pass
-	 * read it and the two products round where the two members rounded, so BIT-IDENTICAL
-	 * to the CPU chain. Offered like {@link #layerNorm}; the parameters are two
-	 * {@code len}-long vectors and are not what decides.
+	 * the whole activation. Each parameter is read where the broadcast pass read it and
+	 * the two products round where the two members rounded, so BIT-IDENTICAL to the CPU
+	 * chain. Offered like {@link #layerNorm}; the parameters are two {@code len}-long
+	 * vectors and are not what decides.
 	 * @param x the operand, {@code rows} rows of {@code len} contiguous elements
 	 * @param offsetX the index of {@code x}'s first element
 	 * @param w the weight, {@code len} elements

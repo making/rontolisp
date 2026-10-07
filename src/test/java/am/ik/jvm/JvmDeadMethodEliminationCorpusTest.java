@@ -112,7 +112,7 @@ class JvmDeadMethodEliminationCorpusTest {
 		// The CLI's own pass pipeline, not a copy of it: CompileFrontendAccess calls
 		// CompileFrontend.expand, so the shaker decodes exactly the class the real CLI
 		// emits and no pass or ordering can drift out of this test again. It used to be
-		// spelled out here and had fallen ten passes behind (.todo/688); the OSR guard
+		// spelled out here and had fallen ten passes behind; the OSR guard
 		// kept its own copy eleven splices behind until 2026-09-19.
 		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(corpusSource(),
 				am.ik.rontolisp.reader.Features.JVM, false, false);

@@ -243,7 +243,7 @@ public final class BuiltinFunctionWrappers {
 		// either keeps the output it always had.
 		gated.add(LispNames.BOUNDP);
 		gated.add(LispNames.FBOUNDP);
-		// #'widen-float-bits / #'narrow-float-bits (.todo/671): the wrapper bodies call
+		// #'widen-float-bits / #'narrow-float-bits: the wrapper bodies call
 		// the JVM's _widenFloatBits/_narrowFloatBits helpers, emitted only for a
 		// program whose OWN source names widen-float-bits/narrow-float-bits
 		// (JvmLispCompiler's usesFloat16Bits scan) -- a program that only calls
@@ -260,7 +260,7 @@ public final class BuiltinFunctionWrappers {
 		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX));
 		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_ROWS));
 		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P));
-		// #'aref / #'array-row-major-index (todo a58): the shared fold's per-axis bound
+		// #'aref / #'array-row-major-index: the shared fold's per-axis bound
 		// check and subscript-count check construct a type-error/simple-error instance --
 		// machinery a program that never takes either operator as a value should not
 		// carry (and which the mayCreateInstances gate would not see coming -- it scans
@@ -2521,8 +2521,8 @@ public final class BuiltinFunctionWrappers {
 	// The packed FLOAT members of the closed element-type code space, in the order a
 	// generated dispatch reads them. Filtered out of ArrayElementTypes.specializedCodes()
 	// by asking the representation itself (ConcatenateForms.isPackedFloat), never by a
-	// list written here -- a second list of the float widths is exactly what .todo/707
-	// found missing from this file.
+	// list written here -- a hand-written list in this file once left the float widths
+	// out.
 	private static int[] packedFloatElementTypeCodes() {
 		int[] all = ArrayElementTypes.specializedCodes();
 		int[] floats = new int[all.length];
@@ -2803,7 +2803,7 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.LIST, List.of(LispNames.LAMBDA_REST, "r"), List.of(new LispSymbol("r"))),
 			// Complex numbers: (complex real &optional imag), the accessors and the
 			// predicates above. The wrapper calls the function, so #'complex works
-			// before any backend compiles the call itself (.todo/752, .todo/753).
+			// before any backend compiles the call itself.
 			unaryOptionalSecond(LispNames.COMPLEX), unary(LispNames.REALPART), unary(LispNames.IMAGPART),
 			unary(LispNames.CONJUGATE), unary(LispNames.PHASE),
 			ignoringEnvironment(LispNames.UPGRADED_COMPLEX_PART_TYPE, 1),
@@ -2843,7 +2843,7 @@ public final class BuiltinFunctionWrappers {
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BFLOAT16_BITS)),
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_BFLOAT16)),
 			// The IEEE binary16 scalar pair, same reasoning as bfloat16-bits above
-			// (.todo/671). widen-float-bits/narrow-float-bits forward their :start.
+			// widen-float-bits/narrow-float-bits forward their :start.
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FLOAT16_BITS)),
 			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16)),
 			floatBitsBulk(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS)),

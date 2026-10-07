@@ -212,7 +212,7 @@ class JvmLinalgGpuAccelCompilerTest {
 	 * Runs a {@code --gpu} class in a loader of its own and answers the bytes its SHIPPED
 	 * library holds resident when it ends -- the one observable that says a matrix
 	 * reached the device through the compiled bridge when the accepted answer is, by
-	 * contract, the defun's own bits ({@code .todo/728}).
+	 * contract, the defun's own bits ({@code .kb/quantized-matrix.md}).
 	 */
 	private long embeddedResidentBytes(byte[] classBytes) throws Exception {
 		Path classFile = this.tempDir.resolve("Test.class");
@@ -866,9 +866,9 @@ class JvmLinalgGpuAccelCompilerTest {
 		// accumulation, narrowed) prints 16778240 and the lane kernel 16778176. The
 		// device's compensated accumulator answers the DEFUN's figure, and only from the
 		// second sight of the matrix on -- so the chain is legible: (lane device).
-		// .todo/480 gave the lane rung four independent accumulators above 32 columns,
+		// The lane rung keeps four independent accumulators above 32 columns,
 		// so at 1024 columns it groups as sixteen lanes and answers 16778176 where it
-		// answered 16777984 before. The DEVICE rung is unmoved: it accumulates in
+		// a single accumulator chain answers 16777984. The DEVICE rung accumulates in
 		// double, like the defun, so it still prints 16778240 -- which is the whole
 		// point of the probe, and the reason the two rungs stay legible apart.
 		int rows = (int) Math.max(128, (am.ik.gpu.GpuThresholds.matvecMinElements() + 1023) / 1024);
@@ -887,7 +887,7 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(run(compileWithVec(program, false, false))).as("scalar").isEqualTo("(16778240 16778240)");
 	}
 
-	// --- the bfloat16 matrix-by-vector product (.todo/490) ---------------------------
+	// --- the bfloat16 matrix-by-vector product ----------------------------------------
 
 	static boolean takesBf16Matvec() {
 		return takesMatvec() && am.ik.gpu.GpuThresholds.supportsBfloat16();
@@ -944,7 +944,7 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(run(compileWithVec(program, false, false))).as("scalar").isEqualTo("(16778240 16778240)");
 	}
 
-	// --- the Q8_0 matrix-by-vector product (.todo/728) --------------------------------
+	// --- the Q8_0 matrix-by-vector product --------------------------------------------
 
 	static boolean takesQuantizedMatvec() {
 		return takesMatvec() && am.ik.gpu.GpuThresholds.supportsQuantized();
@@ -1156,7 +1156,7 @@ class JvmLinalgGpuAccelCompilerTest {
 			.isEqualTo(run(compileWithVec(program, false, true)));
 	}
 
-	// --- lazy results and the resident tier (.todo/491) -------------------------------
+	// --- lazy results and the resident tier -------------------------------------------
 
 	/**
 	 * The compiled half of the READER enumeration: every host read of packed-array
@@ -1223,13 +1223,13 @@ class JvmLinalgGpuAccelCompilerTest {
 	}
 
 	/**
-	 * The compiled half of {@code .todo/492}: a lazy result's host array is a STUB -- the
-	 * header alone -- and the elements are allocated only when something reads them. The
-	 * one observable the class output has is MEMORY, so the pin is a run of the class in
-	 * a JVM too small to hold the results: forty-eight 16 MB activations kept reachable
-	 * on a 256 MB heap, which fits only if none of them has a host array, with the one
-	 * that IS read landing on the oracle's bits -- and the same program without the flag
-	 * failing for want of heap, so the bound has teeth.
+	 * In the class output too ({@code .kb/gpu.md}), a lazy result's host array is a STUB
+	 * -- the header alone -- and the elements are allocated only when something reads
+	 * them. The one observable the class output has is MEMORY, so the pin is a run of the
+	 * class in a JVM too small to hold the results: forty-eight 16 MB activations kept
+	 * reachable on a 256 MB heap, which fits only if none of them has a host array, with
+	 * the one that IS read landing on the oracle's bits -- and the same program without
+	 * the flag failing for want of heap, so the bound has teeth.
 	 */
 	@Test
 	@EnabledIf("aDeviceIsAvailable")
@@ -1435,7 +1435,7 @@ class JvmLinalgGpuAccelCompilerTest {
 		}
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier --------------------------------------------------------------
 
 	@Test
 	void theFusedTierIsInTheEmitGate() {
@@ -1480,7 +1480,7 @@ class JvmLinalgGpuAccelCompilerTest {
 		// sentinel. Sized off the fold threshold -- as this was -- that arithmetic
 		// overflows there, Math.max hands back the floor of 256, and 256 x 384 sits under
 		// the fused threshold: every array-equal below then printed T from defun against
-		// defun. This is todo-495's fix, applied to the compiled sibling it missed.
+		// defun. LinalgGpuTest's FUSED_ROWS is sized the same way.
 		int rows = (int) Math.max(256, (am.ik.gpu.GpuThresholds.fusedMinElements() + 383) / 384);
 		int n = rows * 384;
 		assertThat(am.ik.gpu.GpuThresholds.acceptedForSize(am.ik.gpu.GpuThresholds.fusedMinElements(), n))

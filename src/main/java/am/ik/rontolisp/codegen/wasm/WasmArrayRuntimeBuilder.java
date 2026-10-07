@@ -844,7 +844,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code aref}/{@code %aset} evaluate the array once into a temp and call this once
 	 * their subscripts (and a store's value) are evaluated, before any arm reads or
 	 * stores, so the check runs regardless of which representation arm the value turns
-	 * out to be (todo 479; the JVM backend's
+	 * out to be (the JVM backend's
 	 * {@code _arrayCheckRank}/{@code _fvCheckRank}/{@code _ivCheckRank} chain, in
 	 * {@code JvmArrayRuntimeBuilder}, closes the same hole with the report the
 	 * interpreter gives, which the three-argument overload lands in EH mode).
@@ -1183,7 +1183,7 @@ final class WasmArrayRuntimeBuilder {
 		// elements are the target's and its element type is the target's, resolved the
 		// same way through the same chain (WasmArrayCompiler's
 		// emitRememberedElementType). Copying it here is therefore not a CHANGE of an
-		// existing array's element type (which .todo/619's invariant forbids) but the
+		// existing array's element type (an array's element type never changes) but the
 		// only way to keep the answer: once the displacement drops there is no chain
 		// left to walk. The JVM carries the same fact in its own header (7 -> 4 for a
 		// string view, else the chain end's slot 4 into the freed offset slot).

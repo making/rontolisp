@@ -155,7 +155,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
 	 * needs {@code RontoHashTable} beside it: the key fold for an {@code equalp} table,
 	 * and the tombstone machinery (tombstone/liveCount/liveValues/maybeCompact) every
-	 * table's put/remove/count/values helpers call since `.todo/855`.
+	 * table's put/remove/count/values helpers call.
 	 */
 	private boolean needsHashTableRuntime;
 
@@ -1670,10 +1670,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// dispatcher for every arity). A runtime apply needs no more than that -- an
 		// eval-free program holds no interpreted closure and no _fenv binding -- and it
 		// used to put the whole eval runtime in: (apply f l) over a parameter was
-		// 48 KB of class. The WASM backend has had the same tier since todo-315, over
-		// the same scan: an apply (or a multiple-value-call, whose expansion spreads
-		// through apply) whose literal #'f/'f target names a compiled function is a
-		// physical direct call (JvmApplyCompiler) and needs neither. The wrapper-name set
+		// 48 KB of class. The WASM backend has the same tier, over the same scan: an
+		// apply (or a multiple-value-call, whose expansion spreads through apply) whose
+		// literal #'f/'f target names a compiled function is a physical direct call
+		// (JvmApplyCompiler) and needs neither. The wrapper-name set
 		// counts only wrappers the #'name spelling itself injects; a misprediction is
 		// caught by the post-compile self-check (GROUP_APPLY).
 		Set<String> applyGateWrappers = BuiltinFunctionWrappers.wrapperNames();
@@ -1758,7 +1758,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
 		// during codegen (JvmExprCompiler's SETF case), to a (function
 		// array-row-major-index) reference no scan of the surface program above can see
-		// coming -- the scan has to be told (todo a66), the same way restartMode and
+		// coming -- the scan has to be told, the same way restartMode and
 		// mayCreateInstances are told about their own lazy Pass-2 products.
 		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
 			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
@@ -2193,7 +2193,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// class travels with any hash-using output -- and with nothing else, since no
 		// other program emits a call to it.
 		this.needsHashTableRuntime = usesEqualpHashTables || usesHashTables;
-		// widen-float-bits/narrow-float-bits (.todo/671) can touch a packed float array
+		// widen-float-bits/narrow-float-bits can touch a packed float array
 		// and a packed (unsigned-byte 16) vector it received only as a parameter (never
 		// a literal in THIS program's own AST, e.g. a reusable chunk-widening defun a
 		// reader calls with tensors it built elsewhere) -- symbol use alone must force
@@ -2302,7 +2302,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesComplex = am.ik.rontolisp.compiler.ComplexCapability.mayObserveComplex(program, closRegistry)
 				|| forcedGroups.contains(GROUP_COMPLEX);
 		this.needsComplexRuntime = usesComplex;
-		// The holder-presence probe (.todo/757): a class the gate opened can still
+		// The holder-presence probe (.kb/jvm-complex.md): a class the gate opened can
+		// still
 		// run where its travelling RontoComplex.class file is absent (a lone
 		// .class in a bare directory) when the program never observes a complex --
 		// the gate over-approximates (dead sqrt arms in an unpruned splice keep it
@@ -2803,8 +2804,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Servlet mode forces the same move with or without an export: the container's
 		// initializer reaches the top level through Class.forName(name, true, loader),
 		// and a war whose top level stayed in main deploys, finds the class, and 500s
-		// on every request with an unfilled handler slot (the .todo/529 spike measured
-		// exactly that failure).
+		// on every request with an unfilled handler slot (measured: exactly that
+		// failure).
 		boolean topLevelInClinit = !exportDecls.isEmpty() || this.servletMode;
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
@@ -3156,7 +3157,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				// A computed (symbol-function x) / (fdefinition x) boxes through _lookup,
 				// and so does a (coerce v 'function) over a literal function designator
 				// (or a computed result type, which can name FUNCTION at run time) --
-				// even in a program with no call site spelling the registry (.todo/750).
+				// even in a program with no call site spelling the registry.
 				|| LispMacroExpander.usesRuntimeFunctionBox(program);
 		// Which funcIds the _invoke_N dispatchers (and the _lookup registry) must be
 		// able to reach. Every method body has been emitted by now, so valueFuncIds is
@@ -3429,7 +3430,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
 						usesFloatArray, usesQuantized));
 			}
-			// widen-float-bits/narrow-float-bits (.todo/671): bulk f16/bf16 bit <->
+			// widen-float-bits/narrow-float-bits: bulk f16/bf16 bit <->
 			// packed-float conversion, over the same bare double[]/float[]/short[]/long[]
 			// backing the _fv*/_iv* helpers above use. Needs both tiers (a packed float
 			// array AND a packed (unsigned-byte 16) vector), which usesFloat16Bits
@@ -3583,7 +3584,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						cp.methodRef(thisClass, Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf))
 				: null;
 		// _strEsc: the *print-escape* escaping the readable renderer applies to a string
-		// value's content (todo 216). Always emitted -- _lispToString is unconditional.
+		// value's content. Always emitted -- _lispToString is unconditional.
 		Utf8Entry strEscName = cp.utf8Entry("_strEsc");
 		Utf8Entry strEscDescUtf = cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/String;");
 		MethodRefEntry strEscMethod = cp.methodRef(thisClass, strEscName, strEscDescUtf);
@@ -3591,7 +3592,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry stringIndexOfFrom = cp.methodRef(stringClass, "indexOf", "(II)I");
 		MethodRefEntry stringReplace = cp.methodRef(stringClass, "replace",
 				"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;");
-		// _symEsc: the |...|-escaping half of *print-escape* = t (todo 626), for a bare
+		// _symEsc: the |...|-escaping half of *print-escape* = t, for a bare
 		// symbol name -- _strEsc's own "this value is a symbol" arm routes here instead
 		// of returning the name verbatim.
 		Utf8Entry symEscName = cp.utf8Entry("_symEsc");
@@ -3601,7 +3602,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
 		// The quote/function abbreviation _consToString(Display) applies ahead of the
-		// general list loop (todo 626): a 2-element (QUOTE x)/(FUNCTION x) cell prints
+		// general list loop: a 2-element (QUOTE x)/(FUNCTION x) cell prints
 		// as 'x/#'x. objectEquals (Object.equals(Object)) is reused as the String
 		// receiver's equals -- invokevirtual dispatches virtually regardless of the
 		// methodref's declaring class.
@@ -4049,7 +4050,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, stdinReaderFieldName, stdinReaderFieldDesc);
 		if (usesComplex) {
-			// The holder-presence probe (.todo/757): whether the travelling
+			// The holder-presence probe: whether the travelling
 			// RontoComplex class resolved, set once in <clinit> below.
 			// Final (a JIT constant after class init), and attribute-free
 			// like every field a ClassDefinition declares. The <clinit> store
@@ -4451,7 +4452,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				tlFields.add(javaSignals.field());
 			}
 			MethodCode clinitCode = new MethodCode();
-			// The holder-presence probe's single initialization (.todo/757):
+			// The holder-presence probe's single initialization:
 			// _hasComplex is true when the travelling RontoComplex class
 			// loads, false when a lone class runs without it beside it (then
 			// every holder test takes its holder-less shape, which is exact
@@ -5580,7 +5581,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// never routes to a helper that was not injected.
 		//
 		// subseq/copy-seq/replace join the gate because subseq's string lane ANSWERS a
-		// mutable character vector now (.todo/559 step 2, _subseqCv): the result needs
+		// mutable character vector now (_subseqCv): the result needs
 		// the array runtime everywhere it flows, and replace's destructive arm is what
 		// writes through it. Without any of them (and none of the list's own producers)
 		// no character vector can exist and the immutable slice path still compiles.

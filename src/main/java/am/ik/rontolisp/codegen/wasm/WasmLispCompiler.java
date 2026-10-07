@@ -1079,7 +1079,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// wasi:filesystem's create-directory-at / unlink-file-at / rename-at. They are
 	// what %make-directories / %delete-file / %rename-file -- and therefore
 	// ensure-directories-exist, delete-file, rename-file and the uiop/filesystem
-	// mutating side -- run on (.todo/257).
+	// mutating side -- run on.
 	static final int FUNC_PATH_CREATE_DIRECTORY = 12; // imported
 
 	static final int FUNC_PATH_UNLINK_FILE = 13; // imported
@@ -1103,7 +1103,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_PRINT_F64_NO_NL = FUNC_PRINT_F64 + 1;
 
-	// The Schubfach shortest-decimal runtime behind the float printers (todo-431):
+	// The Schubfach shortest-decimal runtime behind the float printers:
 	// digit selection identical to Double.toString/Float.toString, so all four
 	// backends print byte-identical float text. Bodies in WasmSchubfachRuntimeBuilder,
 	// tables in SchubfachTables.
@@ -1174,7 +1174,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// The comparison as a bitmask (1 = lt, 2 = eq, 4 = gt, 0 = unordered): the numeric
 	// comparison operators AND the mask they accept, so a NaN operand fails every one
-	// of = < > <= >= -- which _rat_cmp's -1/0/1 signum cannot express (todo-108).
+	// of = < > <= >= -- which _rat_cmp's -1/0/1 signum cannot express.
 	static final int FUNC_RAT_CMP_BITS = FUNC_RAT_CMP + 1;
 
 	static final int FUNC_RAT_TRUNC = FUNC_RAT_CMP_BITS + 1;
@@ -1381,7 +1381,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// in quotes and escapes the embedded " / \. See the type comment.
 	static final int FUNC_WRITE_STR_GC = FUNC_STR_TO_MEM + 1;
 
-	// _sym_esc_gc (str, from, to, _unused) -> () (todo 626): prints bytes [from, to) of
+	// _sym_esc_gc (str, from, to, _unused) -> (): prints bytes [from, to) of
 	// a BARE SYMBOL NAME, |...|-framed with every embedded | / \ doubled when CLHS
 	// 22.1.3.3 says the bare spelling would not read back as itself (the empty name, a
 	// non-constituent byte, or an ASCII a-z byte -- see buildSymEscGcBody's Javadoc),
@@ -1652,14 +1652,14 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// _iv_set ((ref null eq) arr, i32 idx, i64 val): the packed integer-vector raw
 	// store -- width dispatch and the wrap-to-width truncation in one place, so a fused
-	// aset value can stay a raw i64 on the stack (todo 194 stage 2).
+	// aset value can stay a raw i64 on the stack.
 	static final int FUNC_IV_SET = FUNC_FX_REM + 1;
 
 	// _t_sym () -> eqref: the symbol t, built once (lazily) into a module global and
 	// returned on every subsequent call. Every emitTrue site (comparisons, predicates)
 	// used to rebuild it through _str_build, which ALLOCATED a fresh $str_bytes per
-	// true result -- a loop's termination test allocated on every iteration (todo 194
-	// stage 3). The cached instance has the same id (the intern offset of "T") and the
+	// true result -- a loop's termination test allocated on every iteration.
+	// The cached instance has the same id (the intern offset of "T") and the
 	// same bytes as a per-site build, so eq/eql/print behavior is unchanged.
 	static final int FUNC_T_SYM = FUNC_IV_SET + 1;
 
@@ -1882,7 +1882,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// holding the characters of an immutable TYPE_STRING -- the callable form of
 	// WasmArrayRuntimeBuilder.emitStringToCharVecCell. _subseq_str finishes its
 	// immutable-input arm with it so a subseq/copy-seq result carries a writable
-	// identity (.todo/559 step 2). Reuses the ((ref null eq)) -> (ref null eq)
+	// identity. Reuses the ((ref null eq)) -> (ref null eq)
 	// signature (TYPE_CALLABLE_BASE + 0); appended after the last fixed helper so no
 	// index above shifts.
 	static final int FUNC_STR_TO_CV = FUNC_STR_CHAR_REF + 1;
@@ -1938,8 +1938,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	// in at the call site) -- 1 for a string or a packed integer vector, else the dims
 	// buckets length. Reuses TYPE_BIG_SHIFT, the ((ref null eq), i32) -> (ref null eq)
 	// signature _arr_get also reuses, so no new type entry. Called from aref/%aset once
-	// the array is evaluated, right before any representation-specific arm reads it
-	// (todo 479); appended after the last fixed helper so no index above shifts.
+	// the array is evaluated, right before any representation-specific arm reads it;
+	// appended after the last fixed helper so no index above shifts.
 	static final int FUNC_ARR_CHECK_RANK = FUNC_ARR_FP + 1;
 
 	// _arr_undisplace ((ref null eq) header) -> (ref null eq): copies a DISPLACED view's
@@ -2523,7 +2523,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// --- the packed integer-vector types (always present) -------------------------
 	//
-	// A rank-1 (unsigned-byte 8|16|32) vector (todo 194 stage 2) is the BARE
+	// A rank-1 (unsigned-byte 8|16|32) vector is the BARE
 	// (array (mut i8|i16|i32)) value itself -- no struct wrapper and no dims (rank-1
 	// only; array.len is the length). Elements store masked to the width and read back
 	// unsigned (array.get_u; the i32 width widens with i64.extend_i32_u), which is what
@@ -2574,7 +2574,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int IARR_TYPE_LAST = TYPE_PATH_RENAME;
 
-	// The Schubfach float-printer runtime types (todo-431). Unconditional, like the
+	// The Schubfach float-printer runtime types. Unconditional, like the
 	// printer itself; the tree shaker removes what a program does not reach.
 	static final int TYPE_SCHUB_UMULHI = IARR_TYPE_LAST + 1; // (i64, i64) -> i64
 
@@ -2683,7 +2683,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// self-describing to the printer.
 	//
 	// The shape is 2 fields, BOTH mutable: field 1 because slots are written, field 0
-	// because change-class swaps an instance's layout in place (todo-199). Two other
+	// because change-class swaps an instance's layout in place. Two other
 	// struct types share the {i32, eqref} shape: TYPE_CLOSURE {const i32, const eqref},
 	// kept apart by rec-group identity (it is member 3 of the 5-member group), and
 	// TYPE_P1_FUTURE {mut i32, mut eqref} -- which a MUTABLE field 0 makes structurally
@@ -2759,7 +2759,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// exception unwind (.kb/wasm-gc-heap-pregrow.md) -- so the size follows the program
 	// instead of being guessed once. Measured on that stack: 3.3 MB of emitted defuns
 	// still collects at a 26.5 MiB heap and stops at 32 MiB, i.e. ~9x; 16x leaves the
-	// same ~2x margin over the live set that the todo-188 sweep found the plateau at.
+	// same ~2x margin over the live set that the heap-size sweep found the plateau at.
 	static final int GC_HEAP_PREGROW_CODE_FACTOR = 16;
 
 	/** The bump heap a program with no static data of its own still gets, in pages. */
@@ -2851,7 +2851,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// -- see FUNC_STR_FRESH). This is what retires the linear string heap leak.
 	static final int STRING_ID_CTR_ADDR = 156;
 
-	// Per-call snapshot cells for the --component canonical string ABI (todo 92 Tier 2):
+	// Per-call snapshot cells for the --component canonical string ABI:
 	// the appended cabi_realloc saves HEAP_PTR + the runtime intern count on its first
 	// call of an export invocation (ACTIVE flag), and the cabi_post_* post-return
 	// restores HEAP_PTR when the intern count is unchanged (interned tokens are permanent
@@ -3777,7 +3777,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A runtime apply -- a computed designator, a multiple-value-call, or a
 		// flet-bound/unknown literal target -- needs _apply and the SPREAD dispatcher,
 		// but NOT the _eval interpreter: an apply whose literal #'f/'f target names a
-		// compiled function is a physical direct call and needs neither (todo-315; it
+		// compiled function is a physical direct call and needs neither (it
 		// used to put the whole eval runtime into the artifact). The wrapper-name set
 		// counts only wrappers whose injection the apply site itself guarantees:
 		// unconditional catalog entries plus the reference-gated group (the #'name
@@ -3814,9 +3814,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// unreachable) and every entry function converts an uncaught throw back into a
 		// trap with a catch_all wrapper. A program without these forms is byte-identical
 		// to a build that never knew about EH (the usesStringOp gating precedent). The
-		// with-* macros and the usocket guard/with-* family count as triggers too (the
-		// todo-129 step-7 retrofit): their expansions ride unwind-protect /
-		// handler-case on WASM now, so a program using them needs the EH machinery --
+		// with-* macros and the usocket guard/with-* family count as triggers too: their
+		// expansions
+		// ride unwind-protect / handler-case on WASM now, so a program using them needs
+		// the EH machinery --
 		// and the `wasmtime -W exceptions=y` run flag.
 		// asyncMode implies EH mode: the async entry's reject path and the
 		// rejected-await re-signal throw on the $lisp-cond tag.
@@ -4106,7 +4107,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A :s-expr export parameter parses host-provided text with the embedded reader,
 		// so
 		// force the reader runtime on (FUNC_READ_EXPR must be a real body, not a stub).
-		// Applies to Preview 1 / no-wasi and (since todo 92 Tier 2) component non-serve;
+		// Applies to Preview 1 / no-wasi and component non-serve;
 		// serve mode's synthetic %http-dispatch export is :string-only.
 		boolean exportNeedsReader = !(this.component && this.serve) && exportDecls.stream()
 			.anyMatch(d -> d.paramTypes().contains(am.ik.rontolisp.compiler.BoundaryType.S_EXPR));
@@ -4119,7 +4120,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// runtime-interned symbol's offset matches literals in env lookups); it forces
 		// the real _intern body without pulling in the rest of the reader.
 		// uiop:symbol-call lowers to (funcall (intern ...) ...) inside the expression
-		// compiler, after this scan -- its pre-lowering spelling counts (todo-229).
+		// compiler, after this scan -- its pre-lowering spelling counts.
 		boolean usesIntern = usesRead || programUsesSymbol(program, LispNames.INTERN)
 				|| programUsesSymbol(program, LispNames.UIOP_SYMBOL_CALL)
 				// A computed find-symbol (call position or the reference-gated #'
@@ -4204,7 +4205,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
 		// during codegen (WasmExprCompiler's SETF case), to a (function
 		// array-row-major-index) reference no scan of the surface program above can see
-		// coming -- the scan has to be told (todo a66), the JVM gate mirrored.
+		// coming -- the scan has to be told, the JVM gate mirrored.
 		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
 			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
 		}
@@ -4546,7 +4547,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// print branch -- and its depth. A value already on the path, or the frame past
 		// RenderCycleGuard.MAX_RENDER_DEPTH, prints as "#" instead of exhausting the
 		// wasm stack, and the cons arm's chain-cycle detection rides the same pair.
-		// Unconditional since todo-585 -- the cons arm is in every module -- and
+		// Unconditional -- the cons arm is in every module -- and
 		// appended after the recursion counters for the same reason they are last.
 		int lastCounterGlobalIndex = identityHashSeqGlobalIndex >= 0 ? identityHashSeqGlobalIndex
 				: equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex
@@ -4641,7 +4642,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				stringTable.addBodyString(am.ik.rontolisp.compiler.OperandTypes.VECTOR_TYPE),
 				stringTable.addBodyString(am.ik.rontolisp.compiler.OperandTypes.ARRAY_TYPE),
 				stringTable.addBodyString(am.ik.rontolisp.compiler.OperandTypes.WILDCARD)) : null;
-		// The Schubfach float-printer tables (todo-431): ONE reader-owned blob whose one
+		// The Schubfach float-printer tables: ONE reader-owned blob whose one
 		// reader is the _schub_g body built later, so a program that never prints a
 		// float carries no table bytes. Appended here, BEFORE any user body
 		// compiles, so a user literal blob (a packed lookup table) stays the LAST
@@ -4691,7 +4692,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
 		Map<String, WasmFunctionInfo> functions = new HashMap<>();
-		// The fusion-inlinable defuns (todo 194 stage 2): a UNIQUELY-defined,
+		// The fusion-inlinable defuns: a UNIQUELY-defined,
 		// fixed-arity defun whose single body expression is a closed integer-operation
 		// tree over its parameters (WasmIntFusionCompiler.isInlinableDefun). A call to
 		// one inside a fused expression tree substitutes the body, so ironclad-style
@@ -5375,7 +5376,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// host-facing bump allocator __ronto_alloc and the _str_from_mem string builder.
 		// They precede the wrappers so the fixed FUNC_* constants are unaffected. In
 		// component (non-serve) mode the host reaches __ronto_alloc through the appended
-		// cabi_realloc instead of calling it directly (todo 92 Tier 2).
+		// cabi_realloc instead of calling it directly.
 		boolean exportUsesMemory = exportDecls.stream().anyMatch(WasmExportCompiler::usesMemory);
 		int exportHelperBase = userFuncBase() + numDefuns + numLambdas;
 		// A :string import result is written into linear memory by the host and boxed
@@ -5674,7 +5675,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Component-model exports (non-serve --component): scalars lift
 				// synchronously with no canonical options; :string/:s-expr lift through
 				// the canonical string ABI over the appended cabi_realloc / post-return
-				// / retptr-shim helpers (todo 92 Tier 2).
+				// / retptr-shim helpers.
 				// :bytes is a core-module transfer (Preview 1 / --no-wasi): the component
 				// boundary would have to lift it as a canonical-ABI list<u8>, which is
 				// its
@@ -5822,7 +5823,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					setTime, "_initialize", derivedFetch, envelopeExport, this.reentrant);
 		}
 
-		// Canonical string ABI for --component :string/:s-expr exports (todo 92 Tier 2):
+		// Canonical string ABI for --component :string/:s-expr exports:
 		// cabi_realloc (the host lowers string arguments through it; delegates to
 		// __ronto_alloc and snapshots the CABI_MARK_* cells), one retptr shim per
 		// :string/:s-expr-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -5974,7 +5975,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// as a function VALUE, and a (coerce v 'function) over a literal function
 		// designator (or a computed result type, which can name FUNCTION at run
 		// time) lowers to the same box -- so the name registry has to be live even
-		// when no funcall/apply call site spell it (.todo/750).
+		// when no funcall/apply call site spell it.
 		boolean runtimeFunctionBox = LispMacroExpander.usesRuntimeFunctionBox(program);
 		boolean registryLive = usesEval || usesRuntimeDesignator || usesApplyRuntime || designatorSymbolArrives
 				|| runtimeFunctionBox;
@@ -6255,7 +6256,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
 				registryCount++;
 			}
-			// Alias rows for INTERNAL names (todo-229): a runtime-interned symbol
+			// Alias rows for INTERNAL names : a runtime-interned symbol
 			// carries the single-colon external spelling (the 2-arg intern/find-symbol
 			// lowerings build it -- exportedness is registry knowledge the run time
 			// does not have), so an unexported PKG::NAME defun also answers to
@@ -6302,7 +6303,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nameLen} row per defun whose funcId MATERIALIZES as a callable value
 		// (valueFuncIds) -- printing names VALUES, never call targets -- EXCEPT that
 		// a runtime-resolved designator boxes a funcId no compile-time gate can
-		// predict: when the program boxes (usesRuntimeFunctionBox, .todo/750) the
+		// predict: when the program boxes (usesRuntimeFunctionBox) the
 		// table covers every DISPATCHABLE defun instead, so the boxed value prints
 		// its registered name. Rows come out in
 		// ascending funcId order (the defun index IS the funcId), which is what the
@@ -6489,7 +6490,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
 				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char
 				// /
-				// unread-char now (todo-624), so nothing calls the native
+				// unread-char now, so nothing calls the native
 				// one-datum-per-line
 				// helper any more. The index keeps its slot with the unused stub because
 				// removing a function would shift every later index and change the
@@ -7096,7 +7097,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// i32, so this six-i32 shape is the only new entry.
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32, Type.I32, Type.I32 },
 						new Type[] { Type.I32 });
-				// The Schubfach float-printer runtime (todo-431), in constant order.
+				// The Schubfach float-printer runtime, in constant order.
 				// TYPE_SCHUB_UMULHI: (i64, i64) -> i64
 				types.addFunc(new Type[] { Type.I64, Type.I64 }, new Type[] { Type.I64 });
 				// TYPE_SCHUB_G: (i32) -> (i64 g1, i64 g0)
@@ -7322,7 +7323,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (preview1FilePosition) {
 					types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				}
-				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
+				// Component string-ABI signatures, from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
 				// retptr shim per :string/:s-expr-returning export (the wrapper's
 				// params, a single i32 return pointer).
@@ -7937,7 +7938,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (ExportPlan p : exportPlans) {
 					fnDef.addFunction(p.typeIndex());
 				}
-				// Component string-ABI functions (todo 92 Tier 2): cabi_realloc, the
+				// Component string-ABI functions: cabi_realloc, the
 				// cabi_post_* post-returns, then the retptr shims, matching abiTypeBase.
 				if (componentStringAbi) {
 					int abiType = abiTypeBase;
@@ -8563,7 +8564,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
 				// array.
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
-				// _sym_esc_gc (FUNC_SYM_ESC_GC, todo 626): the |...|-escaping half of
+				// _sym_esc_gc (FUNC_SYM_ESC_GC): the |...|-escaping half of
 				// *print-escape* = t for a bare symbol name.
 				code.addFunction(WasmStringRuntimeBuilder.buildSymEscGcBody());
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
@@ -8979,7 +8980,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (byte[] body : exportBodies) {
 					code.addFunction(body);
 				}
-				// Component string-ABI bodies (todo 92 Tier 2), matching the function
+				// Component string-ABI bodies, matching the function
 				// section: cabi_realloc, one cabi_post_* per flat-result signature
 				// (identical bodies; the flat params are ignored), then the retptr
 				// shims.
@@ -9108,7 +9109,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Lift each wasm-export into a host-callable component-model export
 			// (synchronous canon lift; WAVE-invokable) alongside wasi:cli/run. Scalar
 			// exports lift with no canonical options; :string/:s-expr ones with the
-			// canonical string options over the appended ABI helpers (todo 92 Tier 2).
+			// canonical string options over the appended ABI helpers.
 			List<WasmExportCompiler.Decl> componentExportDecls = new ArrayList<>();
 			for (ExportPlan p : exportPlans) {
 				componentExportDecls.add(p.decl());
@@ -10088,7 +10089,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// True when the program contains a form that flips the module into EH mode: a
 	// catching/cleanup form, one of the with-* macros whose expansion rides
-	// unwind-protect on WASM (todo-129 step 7), or the usocket guard/with-* family
+	// unwind-protect on WASM, or the usocket guard/with-* family
 	// (the guard sits in the spliced usocket.lisp defun bodies, so any
 	// usocket-using program qualifies).
 	private static boolean programUsesEhForm(List<LispVal> program) {
@@ -10853,17 +10854,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * Uniquely-defined fixed-arity defuns whose single body expression is a closed
 		 * integer-operation tree over the parameters -- the fusion compiler substitutes
-		 * their bodies at fused call sites (todo 194 stage 2). Empty under
-		 * {@code --dynamic}.
+		 * their bodies at fused call sites. Empty under {@code --dynamic}.
 		 */
 		Map<String, DefunDecl> inlinableDefuns = Map.of();
 
 		/**
 		 * Let-bound local functions (the {@code __FLETn_f} lambdas flet lowers to) in
 		 * scope whose bodies are closed integer-operation trees -- the fusion compiler
-		 * substitutes them at {@code (funcall __FLETn_f ...)} sites (todo 194 stage 3).
-		 * Scoped by {@link WasmLetCompiler} (registered for the binding's body, restored
-		 * on exit); empty under {@code --dynamic}, like {@link #inlinableDefuns}.
+		 * substitutes them at {@code (funcall __FLETn_f ...)} sites. Scoped by
+		 * {@link WasmLetCompiler} (registered for the binding's body, restored on exit);
+		 * empty under {@code --dynamic}, like {@link #inlinableDefuns}.
 		 */
 		Map<String, WasmIntFusionCompiler.LocalIntLambda> localIntLambdas = Map.of();
 
@@ -12909,11 +12909,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Count of i64 scratch locals live in the CURRENT fused site (todo 194 stage 3:
-		 * the fusion compiler unboxes each expression leaf ONCE into an i64 local and
-		 * re-reads it, instead of re-running the guard at every occurrence). Sites
-		 * save/restore this watermark so slots are reused across sites;
-		 * {@link #maxI64Locals} keeps the high-water mark the declaration needs.
+		 * Count of i64 scratch locals live in the CURRENT fused site (the fusion compiler
+		 * unboxes each expression leaf ONCE into an i64 local and re-reads it, instead of
+		 * re-running the guard at every occurrence). Sites save/restore this watermark so
+		 * slots are reused across sites; {@link #maxI64Locals} keeps the high-water mark
+		 * the declaration needs.
 		 */
 		int nextI64Local = 0;
 
@@ -13021,7 +13021,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				break;
 			}
 		}
-		// #'aref / #'array-row-major-index (todo a58) construct a type-error instance in
+		// #'aref / #'array-row-major-index construct a type-error instance in
 		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
 		// never in ordinary call position -- whose own bound check is a separate bare
 		// backend trap -- so the bare symbol's presence TYPE_ERROR_SITES tests above is
@@ -13029,7 +13029,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// REFERENCE_GATED_FUNCTIONS wrapper gate itself keys on. (setf (apply #'aref
 		// ...) ...) / #'svref reaches the same fold through a (function
 		// array-row-major-index) reference injected lazily, after this scan, by the
-		// setf place's own expansion (todo a66) -- invisible to a plain symbol scan, so
+		// setf place's own expansion -- invisible to a plain symbol scan, so
 		// it needs its own check.
 		java.util.Set<String> arefFunctionValues = BuiltinFunctionWrappers.functionValueNames(program);
 		if (arefFunctionValues.contains(LispNames.AREF) || arefFunctionValues.contains(LispNames.ARRAY_ROW_MAJOR_INDEX)
@@ -13219,7 +13219,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry futureStr;
 
-		// The quote/function abbreviation marks (todo 626): emitPrintConsList writes
+		// The quote/function abbreviation marks: emitPrintConsList writes
 		// one of these instead of "(QUOTE " / "(FUNCTION " when the cons is a proper
 		// 2-element list headed by that symbol.
 		final StringEntry quoteMark;
@@ -13264,7 +13264,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		final StringEntry sfPrefix;
 
 		// Bit-vector printing: the "#*" prefix and the two bit spellings. A rank-1
-		// bit-stamped array prints #* when every element is 0/1 (.todo/820).
+		// bit-stamped array prints #* when every element is 0/1.
 		final StringEntry bitPrefix;
 
 		final StringEntry bitZero;
@@ -13282,7 +13282,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		final StringEntry slash;
 
-		// Float printing: the IEEE specials and the exponent marker (todo-108 group C).
+		// Float printing: the IEEE specials and the exponent marker.
 		final StringEntry nanStr;
 
 		final StringEntry infinityStr;

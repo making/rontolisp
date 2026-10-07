@@ -129,8 +129,8 @@ final class WasmSubseqCompiler {
 		}
 		List<LispVal> args = cons.toList();
 		// _subseq_str answers a MUTABLE character vector for a string input in either
-		// representation (a copy-seq/subseq result has a writable identity, .todo/559
-		// step 2); a cons chain passes through the byte-level _subseq unchanged.
+		// representation (a copy-seq/subseq result has a writable identity);
+		// a cons chain passes through the byte-level _subseq unchanged.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		if (args.size() >= 4) {

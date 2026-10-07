@@ -382,7 +382,7 @@ class ObjcNativeImageForeignConfigTest {
 			proto("MTLRenderCommandEncoder", "setVertexBytes:length:atIndex:"),
 			proto("MTLRenderCommandEncoder", "drawPrimitives:vertexStart:vertexCount:"),
 			proto("MTLRenderCommandEncoder", "endEncoding"), proto("CAMetalDrawable", "texture"),
-			// The rest of the shipped metal surface, which was an example until todo-565
+			// The rest of the shipped metal surface, which was once an example
 			// and is now the layer every metal: program stands on: the depth attachment
 			// (metal:attach :depth t, metal:depth-state, metal:pipeline's declaration
 			// and metal:frame's pass), additive blending (metal:pipeline :blend t), the
@@ -412,7 +412,7 @@ class ObjcNativeImageForeignConfigTest {
 			// metal:offscreen / metal:pixels: a frame with no window at all --
 			// drawn into a shared-storage texture, waited for rather than
 			// presented, and read back into an objc:data block. The whole reason
-			// the renderer above can be tested (todo-568).
+			// the renderer above can be tested.
 			proto("MTLCommandBuffer", "waitUntilCompleted"),
 			proto("MTLTexture", "getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
 			// The shipped scene package (eval/scene.lisp): the window's content view is

@@ -28,9 +28,9 @@ import am.ik.rontolisp.LispVal;
  * runtime to call into.
  *
  * <p>
- * The third round ({@code .todo/600}) added the {@code string-trim} family, a
- * PROGRAM-WRITTEN {@code (map 'string ...)} / {@code (coerce seq 'string)} (matched by
- * shape, so the sequence operators' own result conversion -- which carries
+ * The third round added the {@code string-trim} family, a PROGRAM-WRITTEN
+ * {@code (map 'string ...)} / {@code (coerce seq 'string)} (matched by shape, so the
+ * sequence operators' own result conversion -- which carries
  * {@link am.ik.rontolisp.LispNames#SEQ_STRING_RESULT} -- stays out) and the host
  * environment read behind {@code uiop:getenv}.
  *

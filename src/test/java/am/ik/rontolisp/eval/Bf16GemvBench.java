@@ -14,12 +14,12 @@ import jdk.incubator.vector.VectorSpecies;
  * it), because a number is only worth reading beside the JIT that produced it.
  *
  * <p>
- * <b>Why both JITs.</b> The {@code .todo/482} spike's own fused kernel carried a bf16 and
- * an f16 decoder in one method behind a boolean. Under Graal it ran at 1.51x of f32;
- * under C2 the same source ran at <b>0.20x</b> -- the method overran C2's inlining budget
- * for the Vector API call chain, every vector was boxed, and nothing warned. The cliff is
- * silent: same bits, five times slower. So every kernel number here is taken under Graal
- * (this box's default, CI's, and the native image's) and under C2
+ * <b>Why both JITs.</b> The bfloat16 spike's own fused kernel carried a bf16 and an f16
+ * decoder in one method behind a boolean. Under Graal it ran at 1.51x of f32; under C2
+ * the same source ran at <b>0.20x</b> -- the method overran C2's inlining budget for the
+ * Vector API call chain, every vector was boxed, and nothing warned. The cliff is silent:
+ * same bits, five times slower. So every kernel number here is taken under Graal (this
+ * box's default, CI's, and the native image's) and under C2
  * ({@code -XX:-UseJVMCICompiler}, what a stock OpenJDK runs a compiled {@code .class}
  * under), and a shape that is fast under one and boxed under the other is not done.
  *
@@ -37,13 +37,12 @@ import jdk.incubator.vector.VectorSpecies;
  *
  * <p>
  * Both arms accumulate exactly alike, because the equivalence contract (fused ==
- * widen-then-f32-kernel, bit for bit) is what makes these kernels safe: since
- * {@code .todo/480} landed that is FOUR f32 accumulators above
- * {@code MATVEC_ACC_THRESHOLD} columns and one below, with a two-rounding mul-then-add
- * (never {@code fma} -- wasm SIMD has no deterministic fused multiply-add, so a kernel
- * that needed one could not be mirrored there). Never compare a four-accumulator bf16
- * kernel with a one-accumulator f32 baseline; that flatters bf16 and the ratio will not
- * reproduce.
+ * widen-then-f32-kernel, bit for bit) is what makes these kernels safe: that is FOUR f32
+ * accumulators above {@code MATVEC_ACC_THRESHOLD} columns and one below, with a
+ * two-rounding mul-then-add (never {@code fma} -- wasm SIMD has no deterministic fused
+ * multiply-add, so a kernel that needed one could not be mirrored there). Never compare a
+ * four-accumulator bf16 kernel with a one-accumulator f32 baseline; that flatters bf16
+ * and the ratio will not reproduce.
  *
  * <pre>{@code
  * ./mvnw -o test-compile
@@ -79,10 +78,10 @@ public final class Bf16GemvBench {
 		}
 	}
 
-	// --- the .todo/482 probe shape, measured but NOT shipped -----------------------
-	// Four accumulators and a single-rounding fma, the shape .todo/482's probes used and
-	// the shape its 1.60x was measured in. The accumulators are now the shipped kernels'
-	// too (.todo/480); the FMA is not and never will be, because it removes a rounding
+	// --- the spike's probe shape, measured but NOT shipped -------------------------
+	// Four accumulators and a single-rounding fma, the shape the bfloat16 spike's probes
+	// used and the shape its 1.60x was measured in. The accumulators are now the shipped
+	// kernels' too; the FMA is not and never will be, because it removes a rounding
 	// and wasm has no deterministic one to mirror it with. So this arm is the upper
 	// bound the shipped kernels are measured against, and the gap between the two rows
 	// is what the second rounding costs. Never compare one of these against a
@@ -148,7 +147,7 @@ public final class Bf16GemvBench {
 
 	/**
 	 * The best of five rounds of {@code iterations} calls each, after eight warm-up calls
-	 * -- the shape {@code .todo/482}'s probes used, so the numbers compare.
+	 * -- the shape the bfloat16 spike's probes used, so the numbers compare.
 	 * @return nanoseconds per call
 	 */
 	private static long time(Variant v, int iterations) {
@@ -199,7 +198,7 @@ public final class Bf16GemvBench {
 			// has them, but a future one might not.
 			boolean acc4 = cols % (4 * L) == 0;
 			String[] names = { "f32 lanes", "bf16 fused", "bf16 widen+f32", "f32 lanes --parallel",
-					"bf16 fused --parallel", "f32 4acc+fma (todo-480)", "bf16 4acc+fma (todo-480)" };
+					"bf16 fused --parallel", "f32 4acc+fma (probe)", "bf16 4acc+fma (probe)" };
 			Variant[] variants = { () -> VecSimdKernels.matvecIntoF(r, wf, rows, cols, x, false),
 					() -> VecSimdKernels.matvecIntoBf16(r, wb, rows, cols, x, false), () -> {
 						VecSimdKernels.widenBf16Into(scratch, wb);

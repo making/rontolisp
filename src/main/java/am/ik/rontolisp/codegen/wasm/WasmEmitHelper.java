@@ -827,8 +827,8 @@ final class WasmEmitHelper {
 	 * a TYPE_STRING struct pointing at {@code "t"}, like any other symbol), so it prints
 	 * as {@code t} and is {@code eq} to a quoted {@code 't}, matching the interpreter.
 	 * Loaded through the {@code _t_sym} cache helper -- one shared instance with the
-	 * interned id, instead of a fresh {@code _str_build} allocation per true result (todo
-	 * 194 stage 3: a loop's termination test allocated every iteration).
+	 * interned id, instead of a fresh {@code _str_build} allocation per true result (a
+	 * loop's termination test used to allocate every iteration).
 	 */
 	static void emitTrue(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
@@ -1213,8 +1213,8 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * Emits {@code call FUNC_SYM_ESC_GC} (todo 626): {@code _print_val}'s bare-symbol arm
-	 * calls this instead of {@link #emitWriteStrGcCall} so a symbol name that is not
+	 * Emits {@code call FUNC_SYM_ESC_GC}: {@code _print_val}'s bare-symbol arm calls this
+	 * instead of {@link #emitWriteStrGcCall} so a symbol name that is not
 	 * upcase-invariant, or that holds a non-constituent byte, prints
 	 * {@code |...|}-framed. Same {@code (str, from, to, unused)} stack shape as
 	 * {@link #emitWriteStrGcCall}.

@@ -118,14 +118,14 @@ final class LinalgBlasKernels {
 	 * downcall is ~30 ns on the JVM, which a plain scalar triple loop beats up to about
 	 * 4x4x4. ONE number for every runtime. Inside a native image the FFM handle would
 	 * cost 6-7 us a call (SubstrateVM interprets a handle it did not see at build time,
-	 * {@code .todo/727}), and the thresholds were 2^15 / 2^17 there for two days; the
-	 * image now issues the four products through SubstrateVM's own AOT native-call route
-	 * instead ({@code src/native/java}, {@code Target_LinalgBlasKernels},
-	 * {@code .kb/native-downcalls.md}), ~90 ns a call with the three operands pinned, and
-	 * measured against the same binary's {@code --simd} lane kernel the library is within
-	 * 20% at the smallest shapes this admits (8x8, 4x4x4), level at 16x16 / 8x8x8 and
-	 * ahead from there -- the JVM's crossover. {@code JvmBlasTemplate} mirrors this
-	 * value.
+	 * {@code .kb/native-downcalls.md}), and the thresholds were 2^15 / 2^17 there for two
+	 * days; the image now issues the four products through SubstrateVM's own AOT
+	 * native-call route instead ({@code src/native/java},
+	 * {@code Target_LinalgBlasKernels}, {@code .kb/native-downcalls.md}), ~90 ns a call
+	 * with the three operands pinned, and measured against the same binary's
+	 * {@code --simd} lane kernel the library is within 20% at the smallest shapes this
+	 * admits (8x8, 4x4x4), level at 16x16 / 8x8x8 and ahead from there -- the JVM's
+	 * crossover. {@code JvmBlasTemplate} mirrors this value.
 	 */
 	private static final long MIN_WORK = 64;
 

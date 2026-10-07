@@ -42,8 +42,8 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void unwindProtectIsCompileError() { // The wasm-GC backends now catch via the
-											// exception-handling proposal (todo
-		// 129), but --no-gc keeps the clear rejection: no condition objects in its
+											// exception-handling proposal,
+		// but --no-gc keeps the clear rejection: no condition objects in its
 		// unboxed value model, and its contract is a zero-flag plain MVP module.
 		assertThatThrownBy(() -> compile("""
 				(defun up-f (n) (unwind-protect (* n 2) n))
@@ -53,7 +53,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void standardConstantsInCodePositionAnswerTheirLiterals() {
-		// .todo/679: the reader binds pi and the limit/float constants as symbols
+		// The reader binds pi and the limit/float constants as symbols
 		// (even under quote), and scalar mode has no globals -- so a code-position
 		// reference answers the literal directly (see ClConstants), with the WASM
 		// values. Quoted uses need no global either (quote carries no type there).
@@ -84,7 +84,7 @@ class NoGcWasmCompilerTest {
 	// A (defun (setf name) ...) used to die in extractDefun's name cast with a bare
 	// ClassCastException. It surfaces here because the prelude's bit/sbit writers
 	// splice in on any program spelling the symbol -- a quoted 'bit type
-	// specifier included (.todo/180) -- and the scalar lowering has no places to
+	// specifier included -- and the scalar lowering has no places to
 	// write through, so the answer is a clear refusal, not a cast.
 	@Test
 	void setfFunctionsAreRefusedOnTheNoGcBackend() {
@@ -110,7 +110,7 @@ class NoGcWasmCompilerTest {
 
 	// The bit-* array operators are prelude defuns over the general boxed array, and
 	// the scalar backend has no general array type: the spliced defun reaches the
-	// make-array refusal with its usual clear compile error (.todo/043).
+	// make-array refusal with its usual clear compile error.
 	@Test
 	void bitArrayOperatorsAreRefusedOnTheNoGcBackend() {
 		assertThatThrownBy(() -> compile("""
@@ -392,7 +392,7 @@ class NoGcWasmCompilerTest {
 	void sliceCLogcountCompilesToAPlainMvpModule() {
 		// logcount lowers to the scalar population-count loop (a negative operand
 		// complemented first), so a program calling it compiles on --no-gc instead
-		// of refusing (.todo/037 Slice C).
+		// of refusing.
 		byte[] module = compile("""
 				(defun lc-f (n) (logcount n))
 				(rontolisp:wasm-export 'lc-f :params '(:int) :returns :int)
@@ -408,7 +408,7 @@ class NoGcWasmCompilerTest {
 		// integer-decode-float's second and third values and rationalize's ratio
 		// answer have no representation in the scalar value model, so both are
 		// refused at compile time like rational -- never a silently dropped value,
-		// never a float masquerading as exact (.todo/037 Slice C).
+		// never a float masquerading as exact.
 		assertThatThrownBy(() -> compile("""
 				(defun idf-f (f) (integer-decode-float f))
 				(rontolisp:wasm-export 'idf-f :params '(:float) :returns :int)
@@ -427,8 +427,7 @@ class NoGcWasmCompilerTest {
 	void rejectsFloatSignAndFloatDigits() {
 		// float-sign's &optional lambda list and float-digits' floatp check have
 		// no scalar lowering, so both are refused at compile time like
-		// integer-decode-float above -- never a trap, never a wrong answer
-		// (.todo/037 smalls).
+		// integer-decode-float above -- never a trap, never a wrong answer.
 		assertThatThrownBy(() -> compile("""
 				(defun fs-f (f) (float-sign f))
 				(rontolisp:wasm-export 'fs-f :params '(:float) :returns :float)
@@ -447,7 +446,7 @@ class NoGcWasmCompilerTest {
 	void rejectsLdbTest() {
 		// ldb-test rides on ldb, whose expansion reads the bytespec cons back
 		// -- and the scalar value model has no cons -- so it is refused at
-		// compile time like deposit-field's field replacement (.todo/818) --
+		// compile time like deposit-field's field replacement --
 		// never a trap, never a wrong answer.
 		assertThatThrownBy(() -> compile("""
 				(defun lt-f (bs n) (ldb-test bs n))
@@ -517,7 +516,7 @@ class NoGcWasmCompilerTest {
 	void rejectsComplexNumbers() {
 		// The scalar backend is for pure numeric exports: a complex construction, a
 		// #C literal, or a complex-only operator is a compile-time refusal naming
-		// the form -- never a trap, never a wrong number (.todo/753).
+		// the form -- never a trap, never a wrong number.
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (complex n 2))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
@@ -551,7 +550,7 @@ class NoGcWasmCompilerTest {
 	void rejectsRational() {
 		// The scalar value model (unboxed i64/f64) has no ratio representation,
 		// so rational is refused at compile time -- never a trap, never a
-		// float masquerading as an exact answer (.todo/037 Slice B).
+		// float masquerading as an exact answer.
 		assertThatThrownBy(() -> compile("""
 				(defun f (n) (rational n))
 				(rontolisp:wasm-export 'f :params '(:float) :returns :float)

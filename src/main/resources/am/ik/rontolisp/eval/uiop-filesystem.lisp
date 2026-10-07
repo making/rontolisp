@@ -273,10 +273,10 @@
 
 ;;;; Mutating the tree. Each is Lisp over the one primitive the matching CL
 ;;;; operator already bottoms out in, so the write side is real wherever the
-;;;; primitive is -- and where it is not (both WASM backends, .todo/257) the
-;;;; call signals the SAME call-time error the primitive signals, with no
-;;;; second code path and no silent no-op. Re-evaluation trigger: .todo/257
-;;;; landing the preview1 mkdir/unlink/rename imports.
+;;;; primitive is: on all four backends, except removing a DIRECTORY on WASM
+;;;; (preview1 has no path_remove_directory import), where the call signals the
+;;;; SAME call-time error the primitive signals, with no second code path and no
+;;;; silent no-op (.kb/uiop.md).
 (defun uiop/filesystem:ensure-all-directories-exist (%eade-pathnames)
   (dolist (%eade-pathname %eade-pathnames)
     (when %eade-pathname

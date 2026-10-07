@@ -297,8 +297,8 @@ final class JvmExprCompiler {
 			// A packed #bf16(...) bfloat16 literal compiles to a native short[] with the
 			// two-slot dimension header (JvmPackedFloatWidth.BFLOAT16).
 			case am.ik.rontolisp.LispBFloat16Array fa -> JvmQuoteCompiler.compileBFloat16PackedLiteral(fa, ctx);
-			// A packed integer-vector literal compiles to its boxed general-array
-			// equivalent for now (todo 194 stage 2 follow-up on this backend).
+			// A packed integer-vector literal compiles to the native packed
+			// representation, a bare array with a width header.
 			case am.ik.rontolisp.LispIntVector iv -> JvmQuoteCompiler.compileLiteralIntVector(iv, ctx, className);
 			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
 		}

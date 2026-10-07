@@ -4105,12 +4105,11 @@ public final class LispNames {
 	 * is true.
 	 *
 	 * <p>
-	 * It exists because {@code array-dimension} refuses a string on the compile paths
-	 * ({@code .todo/464}) and because it must answer for EVERY string representation --
-	 * the immutable runtime string, the mutable character vector and the displaced string
-	 * view -- from one place per backend. Callers guard it with {@code stringp}, which is
-	 * how the string arm of a type test is reached at all; it is not asked about a
-	 * non-string.
+	 * It exists because {@code array-dimension} refuses a string on the compile paths and
+	 * because it must answer for EVERY string representation -- the immutable runtime
+	 * string, the mutable character vector and the displaced string view -- from one
+	 * place per backend. Callers guard it with {@code stringp}, which is how the string
+	 * arm of a type test is reached at all; it is not asked about a non-string.
 	 */
 	public static final String STRING_DIMENSION_INTERNAL = "%STRING-DIMENSION";
 
@@ -6645,8 +6644,7 @@ public final class LispNames {
 
 	/**
 	 * {@code linalg:concatenate}: the arrays of a list joined along an existing axis
-	 * ({@code torch:cat}). A device member since {@code .todo/491}, over a resident
-	 * input.
+	 * ({@code torch:cat}). A device member over a resident input ({@code .kb/gpu.md}).
 	 */
 	public static final String LINALG_CONCATENATE = "CONCATENATE";
 
@@ -6858,14 +6856,14 @@ public final class LispNames {
 	public static final String LINALG_SCATTER_ROWS = "%LA-SCATTER-ROWS";
 
 	/**
-	 * {@code linalg:softmax}: a device member since todo-499, in its {@code :axis} form.
+	 * {@code linalg:softmax}: a device member in its {@code :axis} form.
 	 */
 	public static final String LINALG_SOFTMAX = "SOFTMAX";
 
 	/**
 	 * {@code linalg::%la-softmax-grad} (INTERNAL): {@code torch:softmax}'s adjoint
 	 * {@code s * (g - sum(g * s))} along an axis, the composition it always was, spelled
-	 * as one member so the device can run it as one pass (todo-499).
+	 * as one member so the device can run it as one pass.
 	 */
 	public static final String LINALG_SOFTMAX_GRAD = "%LA-SOFTMAX-GRAD";
 
@@ -6885,15 +6883,14 @@ public final class LispNames {
 	public static final String LINALG_SCALED_MASKED_SOFTMAX_GRAD = "%LA-SCALED-MASKED-SOFTMAX-GRAD";
 
 	/**
-	 * {@code linalg:log-softmax}: a device member since todo-629, in its {@code :axis}
-	 * form.
+	 * {@code linalg:log-softmax}: a device member in its {@code :axis} form.
 	 */
 	public static final String LINALG_LOG_SOFTMAX = "LOG-SOFTMAX";
 
 	/**
 	 * {@code linalg::%la-log-softmax-grad} (INTERNAL): {@code torch:log-softmax}'s
 	 * adjoint {@code g - exp(out) * sum(g)} along an axis, the composition it always was,
-	 * spelled as one member so the device can run it as one pass (todo-629).
+	 * spelled as one member so the device can run it as one pass.
 	 */
 	public static final String LINALG_LOG_SOFTMAX_GRAD = "%LA-LOG-SOFTMAX-GRAD";
 
@@ -6901,7 +6898,7 @@ public final class LispNames {
 	 * {@code linalg::%la-gelu} (INTERNAL): the exact GELU {@code x * (1 + erf(x / sqrt
 	 * 2)) / 2} as the composition {@code torch:gelu} spelled in torch ops, now one member
 	 * with an adjoint of its own ({@link #LINALG_GELU_GRAD}) -- so a device can run each
-	 * as one pass (todo-499).
+	 * as one pass.
 	 */
 	public static final String LINALG_GELU = "%LA-GELU";
 
@@ -6917,7 +6914,7 @@ public final class LispNames {
 	 * {@code linalg::%la-layer-norm} (INTERNAL): {@code (x eps)}, the normalization
 	 * {@code (x - mean) / sqrt(var + eps)} over the last axis as {@code torch:layer-norm}
 	 * composed it from torch ops -- one member so a device can run it as one pass
-	 * (todo-499). Since todo-634 the module's own forward reaches
+	 * ({@code .kb/torch.md}). The module's own forward reaches
 	 * {@link #LINALG_LAYER_NORM_AFFINE} instead; this one stays for the shapes that
 	 * decline it and for the chain the fused member is pinned against.
 	 */
@@ -6935,7 +6932,7 @@ public final class LispNames {
 	 * {@code linalg::%la-layer-norm-affine} (INTERNAL): {@code (x w b eps)}, that
 	 * normalization AND the module's affine {@code norm * weight + bias} -- the two
 	 * BROADCAST passes over the whole activation that {@code torch:layer-norm} spelled as
-	 * two more tape nodes (todo-634).
+	 * two more tape nodes.
 	 */
 	public static final String LINALG_LAYER_NORM_AFFINE = "%LA-LAYER-NORM-AFFINE";
 
@@ -6954,8 +6951,8 @@ public final class LispNames {
 	 * inverted-dropout mask {@code (rand > p) / (1 - p)} drawn from the state vector
 	 * {@code st}, which is advanced IN PLACE to the generator's end state -- the three
 	 * members {@code torch:dropout} composed, as one, so a device can draw and scale the
-	 * mask in one pass (todo-499). The width rides as a CODE, like
-	 * {@link #LINALG_GATHER_STRIDED}'s -- {@link am.ik.rontolisp.FloatWidth#code()}.
+	 * mask in one pass. The width rides as a CODE, like {@link #LINALG_GATHER_STRIDED}'s
+	 * -- {@link am.ik.rontolisp.FloatWidth#code()}.
 	 */
 	public static final String LINALG_DROPOUT_MASK = "%LA-DROPOUT-MASK";
 
@@ -9500,16 +9497,16 @@ public final class LispNames {
 
 	/**
 	 * The internal {@code (%unescaped-symbol-text s)} helper: undoes the {@code |...|}
-	 * framing {@code prin1-to-string} now adds (todo 626) to a symbol name that is not
-	 * upcase-invariant, so a caller that reads a KNOWN, lowercase-prefixed internal tag
-	 * spelling back out of {@code prin1-to-string}'s text -- {@code type-of} and
-	 * {@code symbol-package} peeling {@code %struct-}/{@code %class-} off a
-	 * {@code %class-designator} answer -- keeps matching against the bare prefix rather
-	 * than a piped one. Strips exactly one leading and trailing {@code |} when present;
-	 * does not undo interior backslash-doubling, since neither prelude consumer's inputs
-	 * (a tag prefix and a reader-upcased type name) can contain a literal {@code |} or
-	 * {@code \} themselves. Not a substitute for {@link #PRIN1_TO_STRING_RAW}, which
-	 * exists to dodge the {@code print-object} REWRITE rather than the escaping itself.
+	 * framing {@code prin1-to-string} adds to a symbol name that is not upcase-invariant,
+	 * so a caller that reads a KNOWN, lowercase-prefixed internal tag spelling back out
+	 * of {@code prin1-to-string}'s text -- {@code type-of} and {@code symbol-package}
+	 * peeling {@code %struct-}/{@code %class-} off a {@code %class-designator} answer --
+	 * keeps matching against the bare prefix rather than a piped one. Strips exactly one
+	 * leading and trailing {@code |} when present; does not undo interior
+	 * backslash-doubling, since neither prelude consumer's inputs (a tag prefix and a
+	 * reader-upcased type name) can contain a literal {@code |} or {@code \} themselves.
+	 * Not a substitute for {@link #PRIN1_TO_STRING_RAW}, which exists to dodge the
+	 * {@code print-object} REWRITE rather than the escaping itself.
 	 */
 	public static final String UNESCAPED_SYMBOL_TEXT_INTERNAL = "%UNESCAPED-SYMBOL-TEXT";
 
@@ -10126,7 +10123,7 @@ public final class LispNames {
 	 * {@code rontolisp:string-to-octets}, a distinct symbol the same bare member name
 	 * serves since prelude selection matches by RESOLVED symbol, not by this String alone
 	 * -- {@code am.ik.rontolisp.eval.LispPreludeLibrary#process}) the language's own
-	 * encoder (.todo/691).
+	 * encoder.
 	 */
 	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
 
@@ -10134,7 +10131,7 @@ public final class LispNames {
 	 * {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder, AND (as
 	 * {@code rontolisp:octets-to-string}, a distinct symbol -- see
 	 * {@link #STRING_TO_OCTETS}) a thin public delegator to the native
-	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder (.todo/691).
+	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder.
 	 */
 	public static final String OCTETS_TO_STRING = "OCTETS-TO-STRING";
 
@@ -10218,9 +10215,9 @@ public final class LispNames {
 	// external symbol there, internal here) because float-features is a real upstream
 	// CL library and that is its own API's spelling. float-features has no f16 pair --
 	// float16-bits/bits-float16 and the bulk widen/narrow below are a rontolisp
-	// extension (.todo/671), so THEIR external home is the rontolisp: package itself
+	// extension, so THEIR external home is the rontolisp: package itself
 	// (see PackageRegistry's rontolispExternals), not float-features. Same reasoning
-	// puts bfloat16-bits/bits-bfloat16 (.todo/487) under rontolisp: too.
+	// puts bfloat16-bits/bits-bfloat16 under rontolisp: too.
 
 	/**
 	 * {@code rontolisp:float16-bits} -- a real narrowed to its IEEE binary16 bit pattern
@@ -10237,7 +10234,8 @@ public final class LispNames {
 	/**
 	 * {@code rontolisp:widen-float-bits} -- bulk-widens a packed {@code (unsigned-byte
 	 * 16)} vector of {@code :float16} or {@code :bfloat16} bit patterns into an existing
-	 * packed float array, row-major from a {@code :start} offset. See {@code .todo/671}.
+	 * packed float array, row-major from a {@code :start} offset. See
+	 * {@code .kb/bfloat16.md}.
 	 */
 	public static final String WIDEN_FLOAT_BITS = "WIDEN-FLOAT-BITS";
 
@@ -10732,7 +10730,7 @@ public final class LispNames {
 	 * expansion is upstream's own wrapper: it builds a thunk and calls
 	 * {@link #CALL_WITH_TEMPORARY_FILE}, which creates the file through
 	 * {@link #TEMP_FILE_NAME}, runs the thunk, closes, and deletes unless {@code :keep}
-	 * is true (.todo/360).
+	 * is true.
 	 */
 	public static final String WITH_TEMPORARY_FILE = "WITH-TEMPORARY-FILE";
 
@@ -10740,10 +10738,10 @@ public final class LispNames {
 	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_TEMPORARY_FILE;
 
 	/**
-	 * {@code uiop:call-with-temporary-file thunk} -- the real temporary-file function
-	 * (.todo/360): creates a uniquely-named file through {@link #TEMP_FILE_NAME}, runs
-	 * the thunk with the stream and/or pathname, and deletes unless {@code :keep}. Lisp
-	 * source ({@code uiop-stream.lisp}); {@link #WITH_TEMPORARY_FILE} and
+	 * {@code uiop:call-with-temporary-file thunk} -- the real temporary-file function:
+	 * creates a uniquely-named file through {@link #TEMP_FILE_NAME}, runs the thunk with
+	 * the stream and/or pathname, and deletes unless {@code :keep}. Lisp source
+	 * ({@code uiop-stream.lisp}); {@link #WITH_TEMPORARY_FILE} and
 	 * {@code tmpize-pathname} are wrappers over it.
 	 */
 	public static final String CALL_WITH_TEMPORARY_FILE = "CALL-WITH-TEMPORARY-FILE";

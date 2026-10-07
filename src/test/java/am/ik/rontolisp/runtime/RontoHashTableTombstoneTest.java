@@ -9,8 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Pins the tombstone representation a JVM {@code remhash} leaves behind
- * ({@code .todo/855}): a removed pair keeps its slot in the insertion-order list with a
- * tombstone for a key, counted under {@code #dead}, until half the list is dead.
+ * ({@code .kb/hash-tables.md}): a removed pair keeps its slot in the insertion-order list
+ * with a tombstone for a key, counted under {@code #dead}, until half the list is dead.
  */
 class RontoHashTableTombstoneTest {
 

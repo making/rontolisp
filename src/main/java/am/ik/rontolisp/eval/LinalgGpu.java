@@ -231,7 +231,7 @@ public final class LinalgGpu {
 				LinalgGpu::scatterRows);
 		define(globalEnv, evaluator, LispNames.LINALG_PKG + "::" + LispNames.LINALG_SUM_SQUARES, 2,
 				LinalgGpu::sumSquares);
-		// The FUSED tier (.todo/499): the compositions a transformer step spent a third
+		// The FUSED tier (.kb/gpu.md): the compositions a transformer step spent a third
 		// of its device time on, each as one pass -- linalg:softmax in its :axis form
 		// (the last axis), the exact torch:gelu and layer-norm's normalization through
 		// the internal members torch.lisp now calls, their three adjoints, and the
@@ -282,11 +282,11 @@ public final class LinalgGpu {
 
 	/**
 	 * Device residency, and its lazy results: the members keep a copy of each operand and
-	 * result on the device, keyed by the identity of the packed array's storage, and
-	 * since {@code .todo/491} a RESULT stays there until the host first reads it. So
-	 * every in-place write to a packed array has to reach the library before it happens,
-	 * and every host read has to let the library bring the bytes home first. Both go
-	 * through {@link FloatArrayAccessHook}: the records' element setter and the in-place
+	 * result on the device, keyed by the identity of the packed array's storage, and a
+	 * RESULT stays there until the host first reads it. So every in-place write to a
+	 * packed array has to reach the library before it happens, and every host read has to
+	 * let the library bring the bytes home first. Both go through
+	 * {@link FloatArrayAccessHook}: the records' element setter and the in-place
 	 * {@code --simd} kernels report writes, and the records' {@code data()} accessor --
 	 * the one way to a packed array's storage on this backend -- reports reads
 	 * ({@code .kb/gpu.md}, "The two seams, and what must report through them"). The
@@ -320,13 +320,12 @@ public final class LinalgGpu {
 	 * The widths pair as the CPU's fused kernels pair them ({@code .kb/bfloat16.md}): a
 	 * {@code #d} or {@code #f} matrix against a vector of ITS width, and a {@code #bf16}
 	 * matrix against an {@code #f} vector into an {@code #f} result -- bf16 weights, f32
-	 * activations, the one pairing a decode loop has ({@code .todo/490}). The fourth
-	 * matrix width is the Q8_0 {@code rontolisp:quantized-matrix} against an {@code #f}
-	 * vector ({@code .todo/728}), and it alone is the defun's BITS on the device
-	 * ({@code .kb/quantized-matrix.md}): the kernel computes the integer-dot contract
-	 * exactly, so the interpreter's answer is the same with the flag and without. Any
-	 * other pair declines to the rung below, which is what keeps {@code --gpu} unable to
-	 * turn an answer into an error.
+	 * activations, the one pairing a decode loop has. The fourth matrix width is the Q8_0
+	 * {@code rontolisp:quantized-matrix} against an {@code #f} vector, and it alone is
+	 * the defun's BITS on the device ({@code .kb/quantized-matrix.md}): the kernel
+	 * computes the integer-dot contract exactly, so the interpreter's answer is the same
+	 * with the flag and without. Any other pair declines to the rung below, which is what
+	 * keeps {@code --gpu} unable to turn an answer into an error.
 	 */
 	private static @Nullable LispVal matvec(List<LispVal> args) {
 		if (args.get(0) instanceof LispQuantizedMatrix qm) {
@@ -551,7 +550,7 @@ public final class LinalgGpu {
 		return end == null ? null : new LispDoubleFloatArray(end, new int[] { 3 });
 	}
 
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier -------------------------------------------------------------
 
 	/**
 	 * {@code (linalg:softmax a :axis ax)} over the LAST axis of a packed operand, as one
@@ -770,7 +769,7 @@ public final class LinalgGpu {
 	/**
 	 * {@code (linalg:log-softmax a :axis ax)} over the LAST axis of a packed operand, as
 	 * one pass per row where the chain ran six members. Any other axis, the whole-array
-	 * form, a boxed operand and a small one decline to the defun (todo-629).
+	 * form, a boxed operand and a small one decline to the defun.
 	 */
 	private static @Nullable LispVal logSoftmax(List<LispVal> args) {
 		LispFloatArray a = LinalgSimd.packed(args.get(0));
@@ -1559,10 +1558,10 @@ public final class LinalgGpu {
 
 	/**
 	 * {@code linalg:transpose} at both call shapes: the axes form (a rank-n permutation,
-	 * from the size threshold or over a resident operand) and -- since {@code .todo/491}
-	 * -- the plain form, the matrix transpose, over a resident operand only, as a strided
-	 * copy. Both pure copies, so bit-identical. The plain form over a vector or a rank
-	 * above 2 is the defun's (it answers the vector itself, and an error).
+	 * from the size threshold or over a resident operand) and the plain form, the matrix
+	 * transpose, over a resident operand only, as a strided copy. Both pure copies, so
+	 * bit-identical. The plain form over a vector or a rank above 2 is the defun's (it
+	 * answers the vector itself, and an error).
 	 */
 	private static @Nullable LispVal transpose(List<LispVal> args) {
 		if (args.size() == 2) {

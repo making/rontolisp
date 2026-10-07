@@ -467,7 +467,7 @@ mechanism.
 
 Pinned by `LispEvaluatorTest#withOpenFileComputedOptions*`,
 `JvmLispCompilerTest#compileAndRunComputedOpenOptions`, its WASM twin, ci-spec
-`computed-stream-options-439`.
+`computed-stream-options`.
 
 ## WASM: a path resolves against the PREOPEN TABLE, not fd 3
 `_path_dirfd` (`WasmIoRuntimeBuilder.buildPathDirFdBody`, via `emitDirFdAndPath` /

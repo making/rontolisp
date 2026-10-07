@@ -25,8 +25,8 @@ final class JvmNumberpCompiler {
 			// travelling class, so it is emitted only for a complex-capable
 			// program (`.kb/jvm-complex.md`). The presence probe first: a lone
 			// class run without the file beside it must not resolve the holder
-			// class it then never touches (.todo/757) -- exact, since no holder
-			// can exist then.
+			// class it then never touches -- exact, since no holder can exist
+			// then.
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			JvmComplexCompiler.emitNoHolderJump(ctx, className, notHolder);
 			ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx)).ior();

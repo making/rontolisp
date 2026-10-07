@@ -113,12 +113,12 @@ final class CudaGemm implements GpuDevice {
 			RNG_F64 = 6, RNG_F32 = 7;
 
 	/**
-	 * The RESIDENT tier's kernels ({@code .todo/491}), in the order {@link #resident}
-	 * holds them: the equal-shape binary op, the array-with-scalar form, the three-way
-	 * select and the fused Adam update, at each width. None of them is offered over a
-	 * round trip -- their CPU twins are lane loops, which the element-wise tier measured
-	 * a round trip cannot beat -- but every one is a launch with no copy over an operand
-	 * that is ALREADY on the device, and that is the only way {@link Gpu} offers them.
+	 * The RESIDENT tier's kernels, in the order {@link #resident} holds them: the
+	 * equal-shape binary op, the array-with-scalar form, the three-way select and the
+	 * fused Adam update, at each width. None of them is offered over a round trip --
+	 * their CPU twins are lane loops, which the element-wise tier measured a round trip
+	 * cannot beat -- but every one is a launch with no copy over an operand that is
+	 * ALREADY on the device, and that is the only way {@link Gpu} offers them.
 	 */
 	static final String[] KERNELS_RESIDENT = { "zip_f64", "zip_f32", "scal_f64", "scal_f32", "where_f64", "where_f32",
 			"adam_f64", "adam_f32", "copy_f64", "copy_f32", "take_f64", "take_f32", "scatter_f64", "scatter_f32",
@@ -129,13 +129,12 @@ final class CudaGemm implements GpuDevice {
 			SCATTER_F32 = 13, SUMSQ_F64 = 14, SUMSQ_F32 = 15;
 
 	/**
-	 * The FUSED tier's kernels ({@code .todo/499}), in the order {@link #fused} holds
-	 * them: the exact GELU and its adjoint, the last-axis softmax and its adjoint,
-	 * layer-norm's normalization and its adjoint, the inverted-dropout mask, and the
-	 * last-axis log-softmax and its adjoint ({@code .todo/629}), at each width. Each is
-	 * one pass where the {@code torch.lisp} composition ran a chain of members, and each
-	 * reproduces that chain's arithmetic rounding for rounding ({@code gemm.cu}, "The
-	 * FUSED tier").
+	 * The FUSED tier's kernels, in the order {@link #fused} holds them: the exact GELU
+	 * and its adjoint, the last-axis softmax and its adjoint, layer-norm's normalization
+	 * and its adjoint, the inverted-dropout mask, and the last-axis log-softmax and its
+	 * adjoint, at each width. Each is one pass where the {@code torch.lisp} composition
+	 * ran a chain of members, and each reproduces that chain's arithmetic rounding for
+	 * rounding ({@code gemm.cu}, "The FUSED tier").
 	 */
 	static final String[] KERNELS_FUSED = { "gelu_f64", "gelu_f32", "gelu_grad_f64", "gelu_grad_f32", "softmax_f64",
 			"softmax_f32", "softmax_grad_f64", "softmax_grad_f32", "layer_norm_f64", "layer_norm_f32",
@@ -145,7 +144,7 @@ final class CudaGemm implements GpuDevice {
 			// (2026-09-02).
 			"pack_mask_f64", "pack_mask_f32",
 			// Layer-norm's affine folded into the pair, the adjoint answering two
-			// results (todo-634).
+			// results.
 			"layer_norm_affine_f64", "layer_norm_affine_f32", "layer_norm_affine_grad_f64",
 			"layer_norm_affine_grad_f32" };
 
@@ -185,25 +184,24 @@ final class CudaGemm implements GpuDevice {
 	private static final Object NO_ARRAY = new Object();
 
 	/**
-	 * The GEMV behind {@code vec:matvec} ({@code .todo/475}): one warp per row over a
-	 * row-major matrix, accumulating in double at {@code #d} and in a compensated float
-	 * pair at {@code #f} ({@code gemm.cu}). The one member whose worth is decided by
-	 * residency rather than size -- see {@link #gemv}.
+	 * The GEMV behind {@code vec:matvec}: one warp per row over a row-major matrix,
+	 * accumulating in double at {@code #d} and in a compensated float pair at {@code #f}
+	 * ({@code gemm.cu}). The one member whose worth is decided by residency rather than
+	 * size -- see {@link #gemv}.
 	 */
 	static final String KERNEL_GEMV_F64 = "gemv_f64", KERNEL_GEMV_F32 = "gemv_f32";
 
 	/**
-	 * The bfloat16 GEMV ({@code .todo/490}): {@link #KERNEL_GEMV_F32} over a matrix
-	 * stored as bf16 bit patterns, decoded in the lane loop -- the same compensated
-	 * accumulator, half the bytes a row streams.
+	 * The bfloat16 GEMV: {@link #KERNEL_GEMV_F32} over a matrix stored as bf16 bit
+	 * patterns, decoded in the lane loop -- the same compensated accumulator, half the
+	 * bytes a row streams.
 	 */
 	static final String KERNEL_GEMV_BF16 = "gemv_bf16";
 
 	/**
-	 * The Q8_0 GEMV ({@code .todo/728}): {@code vec:matvec} over ggml's blocks as stored,
-	 * against an activation quantized on the host by the CPU contract's rule, computing
-	 * the scalar defun's bits -- eight threads a row, one lane a thread
-	 * ({@code gemm.cu}).
+	 * The Q8_0 GEMV: {@code vec:matvec} over ggml's blocks as stored, against an
+	 * activation quantized on the host by the CPU contract's rule, computing the scalar
+	 * defun's bits -- eight threads a row, one lane a thread ({@code gemm.cu}).
 	 */
 	static final String KERNEL_GEMV_Q8 = "gemv_q8_0";
 
@@ -1950,7 +1948,7 @@ final class CudaGemm implements GpuDevice {
 	 * @param host the host array that is being written
 	 * @return the array to write into
 	 */
-	// --- the fused tier (.todo/499) --------------------------------------------------
+	// --- the fused tier ---------------------------------------------------------------
 
 	@Override
 	public boolean gelu(double[] a, int oa, double[] c, int oc, int n) {
@@ -2228,8 +2226,8 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * Layer-norm's affine forward (todo-634): {@link #rowKernel}'s shape with the WEIGHT
-	 * and the BIAS as two more operands of {@code len} elements each rather than
+	 * Layer-norm's affine forward: {@link #rowKernel}'s shape with the WEIGHT and the
+	 * BIAS as two more operands of {@code len} elements each rather than
 	 * {@code rows * len} -- they are the module's parameters, so each is looked up,
 	 * staged and left resident like any operand and the thirteen launches of a step share
 	 * one upload.
@@ -2622,8 +2620,8 @@ final class CudaGemm implements GpuDevice {
 	 * that allocates nothing, and the mark it leaves is a residency entry with no buffer
 	 * ({@link DeviceResidency#offeredBefore}), so {@link #written} clears it exactly as
 	 * it would clear a copy. A model's weights -- read every step, written never -- are
-	 * resident from their second step on, which is what {@code .todo/475} measured the
-	 * whole item on.
+	 * resident from their second step on, which is what the GEMV's measurements were
+	 * taken on ({@code .kb/gpu.md}, "The GEMV, and the matrix that stays").
 	 * @return {@code true} when {@code y} was filled, {@code false} when the call
 	 * declined or the device failed -- in which case {@code y} is untouched
 	 */
@@ -2646,13 +2644,12 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * The bfloat16 sibling of {@link #gemvF} ({@code .todo/490}): the matrix is a
-	 * {@code short[]} of bf16 bit patterns, two bytes an element, and the vector and the
-	 * result are f32. The kernel widens each pattern in the lane loop (one shift, exact)
-	 * and is otherwise {@code gemv_f32} -- the same compensated accumulator, the same
-	 * order -- so it lands where the f32 kernel lands over the widened matrix, bit for
-	 * bit; what changes is that a resident row streams half the bytes. The same residency
-	 * rule.
+	 * The bfloat16 sibling of {@link #gemvF}: the matrix is a {@code short[]} of bf16 bit
+	 * patterns, two bytes an element, and the vector and the result are f32. The kernel
+	 * widens each pattern in the lane loop (one shift, exact) and is otherwise
+	 * {@code gemv_f32} -- the same compensated accumulator, the same order -- so it lands
+	 * where the f32 kernel lands over the widened matrix, bit for bit; what changes is
+	 * that a resident row streams half the bytes. The same residency rule.
 	 * @return {@code true} when {@code y} was filled
 	 */
 	@Override
@@ -2662,12 +2659,12 @@ final class CudaGemm implements GpuDevice {
 	}
 
 	/**
-	 * The Q8_0 sibling of {@link #gemvF} ({@code .todo/728}): the matrix is a
-	 * {@code byte[]} of ggml's blocks, 34 bytes a block of 32 columns, and the vector and
-	 * the result are f32. The kernel computes {@code vec::%matvec-quantized}'s bits
-	 * exactly ({@code gemm.cu}; the contract is {@code .kb/quantized-matrix.md}'s), so
-	 * this width joins the CPU kernel's bit-for-bit pin rather than the f32 row's
-	 * tolerance. The activation is quantized here on the HOST, by the contract's own rule
+	 * The Q8_0 sibling of {@link #gemvF}: the matrix is a {@code byte[]} of ggml's
+	 * blocks, 34 bytes a block of 32 columns, and the vector and the result are f32. The
+	 * kernel computes {@code vec::%matvec-quantized}'s bits exactly ({@code gemm.cu}; the
+	 * contract is {@code .kb/quantized-matrix.md}'s), so this width joins the CPU
+	 * kernel's bit-for-bit pin rather than the f32 row's tolerance. The activation is
+	 * quantized here on the HOST, by the contract's own rule
 	 * ({@link Gpu#quantizeActivationQ8}), and uploaded in place of the f32 vector: what
 	 * the device reads is a fifth of the vector's bytes, and no launch of its own is
 	 * spent on it. The same residency rule for the matrix, whose span is its BYTE count
@@ -2845,7 +2842,7 @@ final class CudaGemm implements GpuDevice {
 		return awaitLaunched(sync);
 	}
 
-	// --- the resident tier (.todo/491) -------------------------------------------------
+	// --- the resident tier ------------------------------------------------------------
 	// Four members whose CPU twin is a lane loop, which a round trip could never win and
 	// which Gpu therefore offers only over an operand that is ALREADY resident: the
 	// equal-shape binary op, the array-with-scalar form, linalg:where and the fused Adam

@@ -147,7 +147,7 @@ the KV cache another 0.4-0.6 s). The reading: a token streams every weight,
 1.1B x 4 bytes = 4.4 GB, so the parallel row is at the box's DRAM bandwidth --
 64 threads buy 4x not because the GEMV stops scaling but because the memory
 bus is the ceiling; the single thread, at 8.4 GB/s, is not bandwidth-bound.
-Halving the bytes (bf16 weights, `.todo/484` / `.todo/487`) is the lever, not
+Halving the bytes (bf16 weights, `.kb/bfloat16.md`) is the lever, not
 more threads.
 
 The same model as a GGUF -- one file, its tokenizer inside, read by the shipped
@@ -189,12 +189,12 @@ of Q8_0 blocks read straight into place) and its GEMVs running the integer-dot
 kernel. The prompt's 21 ids are the Python `tokenizers` library's for the same
 rendered string, and on a RAW completion -- no chat template on either side,
 "Once upon a time" -- the model's 64 ids are `llama.cpp`'s on the same BF16
-GGUF, token for token (`.todo/677`); the Q8_0 file agrees with it for 60 tokens
+GGUF, token for token; the Q8_0 file agrees with it for 60 tokens
 and then picks a different word (two Q8_0 kernels are two fold orders of the
 same 7.6e-3 quantization error, and this one is the scalar defun's bits, not
-ggml's; the method, the ids and the numbers are in `.todo/672`'s record).
+ggml's; the method, the ids and the numbers are in `.kb/quantized-matrix.md`).
 `-m chat`'s rendered prompt is byte-identical to `llama-cli`'s own served
-prompt for the same checkpoint (`.todo/701`, diffed against a Python `jinja2`
+prompt for the same checkpoint (diffed against a Python `jinja2`
 rendering of `tokenizer_config.json`'s `chat_template` and against
 `llama-cli`'s served prompt directly): `llama-cli --reasoning-budget 0` still
 opens a `[Start thinking]` block on this model because that flag is a
@@ -221,7 +221,7 @@ TinyLlama-1.1B   --simd --parallel   6.97 tok/s x 4.4 GB = 31 GB/s
 ```
 
 so the parallel leg is bandwidth-bound, not a property of one model, and the
-prediction for bf16 weights (`.todo/484` / `.todo/487`) is close to twice
+prediction for bf16 weights (`.kb/bfloat16.md`) is close to twice
 these rows, because they halve the bytes a token streams. Two
 things the real checkpoint taught that its `config.json` does not say: the
 vocabulary is 248070 (`vocab_size` 248320 is the padded embedding table, so
@@ -230,7 +230,7 @@ the sampler chooses among the tokenizer's ids only), and the answer ends at
 `<|endoftext|>` -- both stop generation, and neither does when it is part of
 the prompt. `tokenizer.json` (13 MB) is read by a byte-level JSON reader of
 this file's own, because `rontolisp:json-parse` over that text does not finish
-(`.todo/690`).
+(`.kb/string-index-cost.md`).
 
 ### LFM2.5-1.2B-Instruct
 
@@ -354,7 +354,7 @@ there were 3000 people in a town. The number of people who are in the town is
 loud on this model, but that flag does not turn the template's
 `enable_thinking` off -- `llama-cli --reasoning off` does, and with it the
 served prompt matches this file's rendered one token for token, empty
-`<think>` block included (`.todo/701`). Measured on dorian (JVM class output, f32 weights, develop
+`<think>` block included. Measured on dorian (JVM class output, f32 weights, develop
 `2275c000`, GraalVM 25.0.4, no other rontolisp run on the box -- its steady
 co-tenants, a `clickhouse-server` at ~17% of a core and a `mysqld`, keep the
 idle 1-minute load average at 0.3-0.9; the `loadavg` column is that figure
@@ -371,7 +371,7 @@ number that decides the `--parallel` row -- see below):
 
 The third value in each `--parallel` row and the default row were measured on
 2026-09-06 at `24d4dd80`, when the default became half the processors
-(`.todo/697`); the first two are the 2026-09-05 pair above. The rest of the
+(`.kb/simd-parallel.md`); the first two are the 2026-09-05 pair above. The rest of the
 sweep that day, same conditions, one run each: 9.55 tok/s at 16 threads, 7.58 at
 8, 5.50 at 4, 2.27 at 1. **The curve is flat from 16 to 32 and bends down at
 64** -- a GEMV is bandwidth-bound long before the last core, so the second half
@@ -386,8 +386,7 @@ TinyLlama reaches 39 GB/s on 32 threads (8.84 tok/s x 4.4 GB) and Qwen3.5-0.8B
 29 (9.18 x 3.2), so "the DRAM wall" is a per-model figure on this box, ordered
 by how the model streams its weights -- TinyLlama's big plain matvecs best,
 Qwen3.5's 576 small Gated DeltaNet reads per token worst -- which is what
-`.todo/678`'s lane predicted from the access shape before any of it was
-measured (`.todo/489` has the table).
+the access shape predicted before any of it was measured (`.kb/simd-parallel.md`).
 
 **Why the whole-box row is a trap, and what it really costs.** The rows of a
 GEMV are handed out to spinning workers and the caller waits for the last one,
@@ -420,7 +419,7 @@ render `*chatml*` -- no system turn at all** -- but the checkpoint's own
 `tokenizer_config.json` chat template unconditionally opens with
 `<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by
 Hugging Face<|im_end|>\n` whenever the first message is not already one, so
-every SmolLM2-Instruct chat answer was missing its system turn. `.todo/701`'s
+every SmolLM2-Instruct chat answer was missing its system turn. A
 diff against the checkpoint's own template (Python `jinja2` over
 `tokenizer_config.json`, and the identical field inside the GGUF; both agree
 with `llama.cpp`'s own served prompt) is what found it; the fallback now
@@ -490,8 +489,7 @@ parallel leg. **The serial leg moves 1.1-1.3x** (1.25-1.38x under C2,
 fused GEMV's own 1.5-2.0x, because a token is the GEMVs plus the attention, the norms,
 the logit argmax and the layer walk, none of which the width touches. The load halves
 on every model; that is the reader (BF16 file bits into a `#bf16` array in one
-`read-sequence`), not the kernels. The full per-thread tables with spreads are in
-`.todo/489`.
+`read-sequence`), not the kernels.
 
 One trap in the harness, since closed twice over: `-m chat` on a model whose row carries
 no chat template (TinyLlama-Chat is `model_type` `llama`, and the `llama` row has none)
@@ -503,14 +501,15 @@ reason, and its earlier "chat prompt" rows on this page should be read with it i
 ### bf16 weights on the device: `--gpu -w bf16`
 
 `--gpu` takes `vec:matvec` over a `#bf16` weight matrix on an NVIDIA card since
-2026-09-06 (`.todo/490`): the kernel decodes the stored patterns in its lane loop and is
+2026-09-06: the kernel decodes the stored patterns in its lane loop and is
 otherwise the single-float kernel, at half the bytes a resident row streams -- 2.2 ms
 against 4.3 for this model's 248320x1024 head, 229 GB/s ([the guide](../../doc/en/guides/gpu-acceleration.md)).
 Measured on the GB10 box (GraalVM 25, JVM class output, `-Xmx16g`, `-m chat -t 0 -n 64`
 on the cat prompt from the BF16 GGUF, three runs each, the 64 tokens byte-identical
-across all forty-eight). Re-measured whole on 2026-09-06 after `.todo/725` bounded the KV
-cache to the position reached (below), the two arms interleaved run by run on one build
-pair, load average under 1.8; it supersedes the post-`.todo/723` table, which is the
+across all forty-eight). Re-measured whole on 2026-09-06 after the KV cache was bounded
+to the position reached (below), the two arms interleaved run by run on one build
+pair, load average under 1.8; it supersedes the table taken after the residency-guard fix
+(below), which is the
 "before" row here:
 
 | Qwen3.5-0.8B | `--simd` | `--gpu --simd` | `--simd --parallel`, 16 threads | `--gpu --simd --parallel`, 16 |
@@ -523,7 +522,7 @@ pair, load average under 1.8; it supersedes the post-`.todo/723` table, which is
 Three readings. **The device leg is not GEMV-bound**: bf16 leads f32 by 1.3x with the
 flag, the same lever the CPU legs get, though the device streams half the bytes -- if the
 GEMV were the arm, halving its bytes would show up as more than the width shows anywhere
-else. Profiled a forward pass at a time (`.todo/718`, 2026-09-06: `nsys` per forward, JFR
+else. Profiled a forward pass at a time (2026-09-06: `nsys` per forward, JFR
 per function; the probes `decode-per-token.py` / `decode-jfr-agg.py` in
 `.todo/artefacts/123-gpu-acceleration/`), a steady forward WAS **45-46 ms under the flag,
 at one thread or sixteen, against 24 under `--simd --parallel` and 81 under `--simd`** --
@@ -533,15 +532,15 @@ prompt. Of the 45: the device kernels are 7.5 ms
 each waited for by the host form that reads its result; the driver calls on the calling
 thread 11.9 ms (7.9 in 229 downloads with the kernel waits inside them, 2.4 in 193 uploads
 -- 102 MB, the 24 KV-cache matrices at 4 MB each going up every token because they are
-written every token and read by four heads, since closed by `.todo/725` below -- and 1.1
+written every token and read by four heads, since closed by the KV-cache bound below -- and 1.1
 in launches and allocations); and this model's Gated DeltaNet loops on the host ~30 ms, where the same
 three functions cost 6.8 ms without the flag -- the residency guards the flag put in
 front of every store of the 128x128 state and every element of the boxed convolution loop
 were 40% of the arm's samples.
 
-**`.todo/723` took those 23 ms out and halved the arm** (2026-09-06, same box, same
-checkpoint, same method, medians of two 256-minus-64 rounds, the tokens byte-identical
-across every configuration measured): **50.7 / 51.8 ms a forward before, 25.0 / 25.1
+**Taking the guard off every typed store took those 23 ms out and halved the arm**
+(2026-09-06, same box, same checkpoint, same method, medians of two 256-minus-64
+rounds, the tokens byte-identical across every configuration measured): **50.7 / 51.8 ms a forward before, 25.0 / 25.1
 after**, against 27.6 / 31.7 -> 26.2 / 27.2 for `--simd --parallel` and 90.6 -> 88.7 for
 `--simd`. Two mechanisms. A typed `dotimes` called `_gpuWritten` on EVERY store and now
 reports each stored array once, at loop entry (`.kb/jvm-typed-loops.md`) -- 23 of the
@@ -562,14 +561,14 @@ steady and 11.0 is 22. That is the bias the note at the top of this section desc
 the harness has not had since 2026-09-07; the rows here are the printed figure of the day
 and compare with each other, not with a forward rate. **The two arms are now level on this box, the device one
 marginally ahead** (25.8 against 25.3 printed; 25.0 against 26.7 ms a forward) -- where
-before `.todo/723` `--simd --parallel` won 1.9x. Sixteen threads still buy the device arm
+before that fix `--simd --parallel` won 1.9x. Sixteen threads still buy the device arm
 almost nothing (26.2 against 25.8), for the reason the stories15M table below gives: the
 parallel workers and the driver compete for the cores. The width's own lever is
 intact on the CPU legs (1.2x on one thread, 1.1x on sixteen), as the table above found on
 the other box. **And the residency budget was never the constraint.** Under the
 interceptors the library keeps results on the device and its budget is the headroom
 rule -- everything the card has less an eighth -- so this 1.5 GB model sits resident from
-its second token; the 1 GB eager cap `.todo/490` was filed against applies only to an
+its second token; the 1 GB eager cap applies only to an
 embedder that leaves lazy results off. Forced below the model through the package-private
 seam (`.todo/artefacts/123-gpu-acceleration/ResidencyCliff.java`): a 512 MB budget --
 above the largest matrix, below the model -- decodes at **6.7-6.8 tok/s, BELOW `--simd`'s
@@ -581,7 +580,7 @@ evicted and the hit and miss counts, on the interpreter and the compiled class a
 (`.kb/gpu.md`, "A budget below the working set"). Nothing is printed while the budget
 holds, which on this box is every run.
 
-**`.todo/725`: the cache holds the positions the run has REACHED, and that is the
+**The KV cache holds the positions the run has REACHED, and that is the
 "after" row of the table above** (2026-09-06, same box, same checkpoint, same method).
 `attention` scored the WHOLE cache every token -- 4096 rows of keys and 4096 columns of
 values a head, when `pos` of them are non-zero and the rest is arithmetic over deliberate
@@ -610,7 +609,7 @@ have shrunk the 6.8 ms of bf16 GEMV. The device arm's lead over `--simd --parall
 with it (18.5 against 21.6 ms a forward; 33.6 against 31.2 printed), which supersedes the
 "the two arms are now level" reading above it.
 
-The route NOT taken, since `.todo/725` proposed it: a row-count argument on `vec:matvec`
+The route NOT taken, though it was the first one proposed: a row-count argument on `vec:matvec`
 itself. The value cache is TRANSPOSED, so its bound is a column bound and not a row bound
 -- one member would have needed two kinds of bound, on four backends times `--simd`,
 `--blas`, `--gpu`, `--parallel`, bf16 and Q8_0, plus a reference page in two languages --
@@ -618,19 +617,19 @@ for a caller that can express the same bound by allocating what it uses. The lib
 surface is unchanged; `vec.lisp` and `.kb/vec.md` do not mention this at all.
 
 **What a narrower weight width would now buy the device arm, measured** (2026-09-07,
-`.todo/726`, same box and method, two rounds): the forward is 16.6-16.9 ms at `-w bf16`
+same box and method, two rounds): the forward is 16.6-16.9 ms at `-w bf16`
 and 22.0-23.7 at `-w f32` -- the same 157 launches at twice the bytes cost 5.1-7.1 ms,
 against a kernel difference of 5.5-6.3 -- so the arm is linear in the GEMV kernel time,
 and a Q4_0 GEMV kernel measured at this model's shapes would take 4.5-5.1 ms off it
-(a ~12 ms forward, 1.4x), a Q8_0 one 2.7-3.4 (~13.5 ms, 1.2x). Q8_0 on the device is
-`.todo/728` -- the width the publisher's `Q8_0` file already loads at, whose GEMVs
-`--gpu` today declines to the CPU one and all; Q4_0 stays refused behind it, with the
+(a ~12 ms forward, 1.4x), a Q8_0 one 2.7-3.4 (~13.5 ms, 1.2x). Q8_0 on the device came
+next (below) -- the width the publisher's `Q8_0` file already loads at, whose GEMVs
+`--gpu` then declined to the CPU one and all; Q4_0 stays refused behind it, with the
 arithmetic in `.kb/gpu.md`, "What is deliberately NOT here".
 
 ### Q8_0 weights on the device: `--gpu` over the Q8_0 GGUF
 
 `--gpu` takes `vec:matvec` over a `rontolisp:quantized-matrix` on an NVIDIA card since
-2026-09-07 (`.todo/728`): the kernel streams ggml's 34-byte blocks as the file holds them,
+2026-09-07: the kernel streams ggml's 34-byte blocks as the file holds them,
 with the activation quantized on the host by the CPU kernel's own rule, and -- unlike the
 f32 and bf16 kernels, which land on the portable definition's bits in practice -- it IS
 those bits, on every row, because the width's CPU contract is bit-for-bit and the device
@@ -652,7 +651,7 @@ second half's rate is **64.9 / 64.9 tok/s over the Q8_0 file against 57.1 / 56.1
 BF16 one -- 15.4 ms a forward against 17.5-17.8, 1.14-1.16x**. By the 256-minus-64 method
 above, which subtracts everything a run pays once (the load, the JIT's warm-up, the
 prompt, the context creation and the weight upload), the increment a forward is **13.9 /
-13.9 ms against 16.7 / 16.7 -- 1.20x, 2.75 ms, what `.todo/726` predicted for the width
+13.9 ms against 16.7 / 16.7 -- 1.20x, 2.75 ms, what the measurement above predicted for the width
 (2.7-3.4 ms)** -- and the device-side GEMV a forward is 5.3 ms against bf16's 7.7
 (`.kb/gpu.md`; the 270 MB head at 190 GB/s). The Q8_0 file loads in 1.3 s against 2.1 (0.83
 GB of blocks read into place). On the CPU arms the width is level with bf16 on one thread
@@ -660,8 +659,8 @@ GB of blocks read into place). On the CPU arms the width is level with bf16 on o
 bytes pay (`.kb/quantized-matrix.md`, "What it costs"). **The tokens**: the Q8_0 file's 64
 and 256 positions are byte-identical between `--gpu --simd` and `--simd`, on one thread and
 sixteen, and round to round -- the flag changes no bit at this width -- and the Q8_0 and
-BF16 files part at position 40 (two widths, as `.todo/672` recorded on the raw
-completion).
+BF16 files part at position 40 (two widths, as on the raw
+completion above).
 
 **What the run found in this file** (2026-09-07): `split-gated-q`, which splits Qwen3.5's
 `attn_q` (`query | gate` per head) into `:wq` and `:gate`, rebuilt the halves with
@@ -738,8 +737,8 @@ Where a Qwen3.5-0.8B token's time would go, measured at the real shape with
 random weights (18 layers of dim 1024, 16 heads of 128, kernel 4; JVM class
 output under `--simd`, ONE thread, f32 weights; commit `594ddac9`, Graal JIT
 -- `UseJVMCICompiler` on -- on JDK 25.0.4, a Xeon E5-2697A v4; the numbers
-move with `.todo/480`, whose column gate sits exactly at this 128 x 128 GEMV
-shape):
+move with the four-accumulator GEMV row (`.kb/vec.md`), whose column gate sits
+exactly at this 128 x 128 GEMV shape):
 
 | per token | ms |
 | --- | --- |
@@ -801,15 +800,15 @@ interleaved runs, nothing pinned:
 | wasm-GC (`wasmtime`) | 1 | 0.4 tok/s | 125 tok/s | -- (no threads) | -- (no FFM) | -- |
 | interpreter (`java -jar`) | 1, or 20 under `--parallel` | ~15 s per token | 44 tok/s | 44 tok/s | 42 tok/s | -- |
 
-The two JVM `--gpu` cells were **re-measured on 2026-09-06 after `.todo/723`** (which
+The two JVM `--gpu` cells were **re-measured on 2026-09-06 after the residency-guard fix** (which
 stopped a typed `dotimes` reporting a residency guard per store) and rose about 1.2x, the
 story byte-identical: `--gpu --simd` 449 -> 555 tok/s and `--gpu --simd --parallel`
 425 -> 551, medians of five and three interleaved runs against the same build. The other
 columns did not move (`--simd --parallel` 657 before and 654 after, same rounds), so the
 recommendation below is unchanged; the rest of the table is still 2026-08-22's.
 
-The four accelerated JVM cells moved again the same day, when `.todo/725` bounded the KV
-cache to the position reached (see the Qwen section above) -- before and after taken
+The four accelerated JVM cells moved again the same day, when the KV cache was
+bounded to the position reached (see the Qwen section above) -- before and after taken
 together, medians of three interleaved runs on one build pair, all eight stories
 byte-identical: `--simd` 346 -> 348 tok/s, `--simd --parallel` at `RONTOLISP_THREADS=20`
 611 -> 660, `--gpu --simd` 508 -> 524, `--gpu --simd --parallel` 481 -> 515. **This model
@@ -839,7 +838,7 @@ softmax, RoPE, attention copies and KV-cache loops, ~60 ns an iteration of
 backend now compiles a `dotimes` of that shape to a primitive loop
 (`.kb/jvm-typed-loops.md`; the same values, ~30x on the softmax), and the GEMV
 kernel vectorizes a short row (the 48-wide attention head used to run scalar,
-`.kb/vec.md`); nothing in this file changed. `--gpu --simd` (555 since `.todo/723`) and
+`.kb/vec.md`); nothing in this file changed. `--gpu --simd` (555 since the residency-guard fix) and
 `--gpu --simd --parallel` (551) both still trail `--simd --parallel` (654): the
 device takes the big GEMVs but pays a synchronous download per call, and with the
 spinning worker threads also competing with its driver for the cores the
@@ -864,15 +863,15 @@ above.
 
 The `--simd` lane kernel streams the 60 MB of weights at ~20 GB/s, about 2.4 ms
 of a 3.0 ms token on one JVM thread; what is left is the attention's 72 small
-GEMVs and the kernel calls between them (`.todo/480` names the next lever: the
-GEMV row is one accumulator chain). `--simd --parallel` runs
+GEMVs and the kernel calls between them (the next lever then: the
+GEMV row was one accumulator chain, since split, `.kb/vec.md`). `--simd --parallel` runs
 every GEMV above ~2^15 multiply-adds -- all of them here, the 288x288
 projections included -- over a row range per thread, bit-identical to the
 serial kernel ([the guide](../../doc/en/guides/simd-acceleration.md#using-more-than-one-core---parallel));
 `RONTOLISP_THREADS=10` was slightly better than the 20 threads this box
 defaulted to when the table was measured, because the second ten cores are the
 small ones -- half the processors is what the default became on 2026-09-06
-(`.todo/697`), so 10 IS the default here now and that table's `--parallel`
+(`.kb/simd-parallel.md`), so 10 IS the default here now and that table's `--parallel`
 column is the explicit-20 one. `--gpu --simd` moves the GEMVs whose matrix is big enough and
 STAYS on the device -- the three feed-forward matrices per layer and the
 classifier head, two thirds of the multiply-adds; the 288x288 projections are a

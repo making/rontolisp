@@ -43,13 +43,13 @@
 ;;;;
 ;;;; Lite decisions shared by the whole half (each is one portable shape on all
 ;;;; four backends rather than a per-backend approximation):
-;;;; - `:element-type` defaults to `'character`, not upstream's
-;;;;   `*default-stream-element-type*`: that variable is .todo/360's and still a
-;;;;   nil stub, which the computed-option check behind `with-open-file` would
-;;;;   refuse at call time (.kb/read-load-streams.md).
-;;;; - `:external-format` defaults to `:utf-8`, not upstream's
-;;;;   `*utf-8-external-format*` (also .todo/360's): `open` drops it either way,
-;;;;   every backend reads UTF-8.
+;;;; - `:element-type` defaults to the literal `'character`, the value of
+;;;;   upstream's `*default-stream-element-type*` (defined below), so the
+;;;;   computed-option check behind `with-open-file` never sees a computed one
+;;;;   (.kb/read-load-streams.md).
+;;;; - `:external-format` defaults to `:utf-8`, the value of upstream's
+;;;;   `*utf-8-external-format*`: `open` drops it either way, every backend
+;;;;   reads UTF-8.
 ;;;; - `call-with-output-file` defaults `:if-exists` to `:supersede`, not
 ;;;;   upstream's `:error`: an `open` always truncates, so `:error` has no native
 ;;;;   spelling, and the lowering refuses it loudly rather than silently
@@ -119,7 +119,7 @@
 
 ;;;; Safe IO syntax. with-standard-io-syntax binds *package* to :cl-user; the
 ;;;; function rebinds it to the caller's package and pins the three reader
-;;;; controls upstream pins. Findings for this item (.todo/359):
+;;;; controls upstream pins. Findings:
 ;;;; - `*read-eval*` nil is honored by the interpreter's runtime read; the
 ;;;;   compiled runtime readers refuse `#.` unconditionally, which is stricter
 ;;;;   than upstream and therefore safe.
@@ -194,7 +194,7 @@
           (when (< %csts-end %csts-size) (return nil))))))
 
 ;; Binary both ways (upstream's element-type), truncating the target
-;; (upstream's :rename-and-delete, .todo/359 lite above).
+;; (upstream's :rename-and-delete; a lite decision above).
 (defun uiop/stream:concatenate-files (%cf-inputs %cf-output)
   (with-open-file (%cf-o %cf-output
                          :element-type '(unsigned-byte 8)
@@ -242,7 +242,7 @@
                            :count (uiop/utility:access-at-count %sssl-at))
                           %sssl-at))
 
-;; read, not read-preserving-whitespace (.todo/359 lite above). The sentinel is
+;; read, not read-preserving-whitespace (a lite decision above). The sentinel is
 ;; a fresh cons, so a file naming #:eof cannot end the read early the way
 ;; upstream's quoted sentinel can.
 (defun uiop/stream:slurp-stream-forms
@@ -347,9 +347,9 @@
 
 ;;;; Output helpers. finish-outputs flushes the named streams plus every
 ;;;; standard one; each flush is guarded, so a closed or missing stream is
-;;;; skipped, not fatal (upstream's contract). *stdout*/*stderr* are .todo/360's
-;;;; nil stubs today -- a nil designator flushes *standard-output*, which is
-;;;; harmless -- and turn real without touching this function.
+;;;; skipped, not fatal (upstream's contract). *stdout*/*stderr* are the raw
+;;;; startup streams (below); a nil designator flushes *standard-output*, which
+;;;; is harmless.
 (defun uiop/stream:finish-outputs (&rest %fo-streams)
   (dolist (%fo-s
            (append %fo-streams
@@ -399,7 +399,7 @@
            (uiop/stream:file-or-synonym-stream-p
             (symbol-value (synonym-stream-symbol %fossp-stream))))))
 
-;;;; Standard streams (.todo/360). These are the RAW underlying streams at
+;;;; Standard streams. These are the RAW underlying streams at
 ;;;; startup, distinct from *standard-output*: a program that captures
 ;;;; *standard-output* (with-output-to-string) and still wants the console has
 ;;;; the same escape hatch it has in SBCL -- *stdout* still names process
@@ -418,7 +418,7 @@
   (setq uiop/stream:*stderr* *error-output*)
   (values))
 
-;;;; Encodings (.todo/360). One lite decision, not eight: every backend reads
+;;;; Encodings. One lite decision, not eight: every backend reads
 ;;;; and writes UTF-8 and there is no external-format surface, so
 ;;;; *default-encoding* is :utf-8, *utf-8-external-format* is that, the two
 ;;;; hooks are the identity functions upstream installs, and detect-encoding
@@ -458,7 +458,7 @@
   (funcall uiop/stream:*encoding-external-format-hook*
            (or %ee-encoding uiop/stream:*default-encoding*)))
 
-;;;; Null device (.todo/360). null-device-pathname is /dev/null on unix (the
+;;;; Null device. null-device-pathname is /dev/null on unix (the
 ;;;; one os-cond arm that exists here); the with-null-* family is implemented
 ;;;; over streams rather than the device -- a string stream that always returns
 ;;;; EOF, and the zero-component broadcast stream make-broadcast-stream returns
@@ -481,7 +481,7 @@
   (declare (ignore %cw-no-et %cw-no-ef %cw-no-ie %cw-no-idne))
   (funcall %cw-no-fun (make-broadcast-stream)))
 
-;;;; Temporary files (.todo/360). call-with-temporary-file is the real
+;;;; Temporary files. call-with-temporary-file is the real
 ;;;; function, the one place the temporary-file mechanism lives; with-
 ;;;; temporary-file (a LispMacroExpander expansion) and tmpize-pathname are
 ;;;; wrappers over it. The uniqueness rule is %temp-file-name's (the prelude
