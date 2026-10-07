@@ -1093,6 +1093,17 @@ public final class LispEvaluator {
 	}
 
 	private void registerEval() {
+		// A Gray base class named as data before anything loaded gray.lisp --
+		// (find-class 'rontolisp:fundamental-stream), a subtypep or typep specifier --
+		// loads it at the lookup, as the compile paths splice it for any program naming
+		// one.
+		this.closRegistry.classMissLoader(name -> {
+			if (!GrayStreamsLibrary.namesBaseClass(name)) {
+				return false;
+			}
+			ensureGrayStreamsLoaded();
+			return true;
+		});
 		// The stream-argument-less print family resolves its destination through the
 		// current -- dynamic-first -- value of *standard-output*, so a
 		// (let ((*standard-output* stream)) ...) redirects it (the t default keeps the
@@ -6028,32 +6039,6 @@ public final class LispEvaluator {
 
 	private boolean httpReactorLoaded;
 
-	/**
-	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once, on the first
-	 * write to a CLOS-instance stream (or before the trivial-gray-streams shim system's
-	 * adapter, which subclasses it).
-	 */
-	/** Whether the defclass form names a rontolisp Gray base class as a superclass. */
-	private static final java.util.Set<String> GRAY_BASE_CLASSES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
-			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
-			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM);
-
-	private static boolean referencesGrayBaseClass(LispCons cons) {
-		java.util.List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons supers)) {
-			return false;
-		}
-		for (LispVal sup : supers.toList()) {
-			if (sup instanceof LispSymbol sym) {
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && GRAY_BASE_CLASSES.contains(qn.member())) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
 	private static final String GRAY_READ_BYTE_DISPATCH = GrayStreamsLibrary.READ_BYTE_DISPATCH;
 
 	private static final String GRAY_READ_CHAR_DISPATCH = GrayStreamsLibrary.READ_CHAR_DISPATCH;
@@ -6382,6 +6367,13 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once: on the first
+	 * write to a CLOS-instance stream, before a definition on a protocol generic, or on a
+	 * class lookup that misses a Gray base class name (the registry's class-miss loader:
+	 * a {@code defclass} superclass, a specializer, {@code find-class}, a type
+	 * specifier).
+	 */
 	private void ensureGrayStreamsLoaded() {
 		synchronized (this.libraryLoadLock) {
 			if (this.grayStreamsLoaded) {
@@ -8320,13 +8312,6 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefclass(LispCons cons, Environment env) {
-		// A defclass extending rontolisp's Gray base classes pulls gray.lisp in
-		// eagerly: the superclass must be registered before the expansion checks it
-		// (the write-string dispatch alone loads too late for a bare-protocol user
-		// class that never went through the trivial-gray-streams shim).
-		if (!this.grayStreamsLoaded && referencesGrayBaseClass(cons)) {
-			ensureGrayStreamsLoaded();
-		}
 		// A defclass extending a seeded MOP base class (a metaclass definition, a
 		// slot-definition subclass) needs the seeding before the superclass lookup; one
 		// carrying (:metaclass M) additionally loads the metaclass protocol, whose

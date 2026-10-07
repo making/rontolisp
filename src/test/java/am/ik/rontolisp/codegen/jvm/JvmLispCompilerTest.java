@@ -14090,6 +14090,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAGrayBaseClassNamedFirstIsKnown() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayBaseClassNamedFirstIsKnown.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			assertThat(compileAndRun(fixtureProgram(c.program()))).as(c.program()).isEqualTo(c.expected());
+		}
+	}
+
+	@Test
 	void compileAndRunStreampOfACompositeStreamBuiltInTheSameForm() throws Exception {
 		// The JVM twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm.
 		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM)))

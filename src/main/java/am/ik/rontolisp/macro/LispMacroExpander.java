@@ -13531,7 +13531,9 @@ public final class LispMacroExpander {
 		if (synonymStreams) {
 			tags.add(LispLayout.SYNONYM_STREAM_TAG);
 		}
-		if (closRegistry != null && closRegistry.findClass(GRAY_FUNDAMENTAL_STREAM_CLASS) != null) {
+		if (closRegistry != null) {
+			// descendantTags, not a findClass probe: the interpreter's lookup of a Gray
+			// base class loads gray.lisp, and a stream test is no reason to.
 			tags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
 		}
 		return tags;

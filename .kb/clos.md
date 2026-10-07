@@ -201,6 +201,10 @@ name in `(make-instance 'dog)` is NOT. `ClosRegistry.findClass` falls back from 
 normalized key to a UNIQUE base-name match across packages; two packages defining the same
 class name make the bare spelling unresolvable (qualify it). `slot-value` matches by slot base
 name likewise. `defmethod` stores the specializer as the FOUND class's canonical name.
+A miss consults `classMissLoader` before answering null, then repeats the lookup once: the
+interpreter installs one loading gray.lisp for a Gray base-class member name
+(`.kb/gray-streams.md`, "Interpreter dispatch"); the compile paths install none. A probe
+asking "is library X loaded" must therefore not be a `findClass` of X's class name.
 
 ## Setf methods and class-name aliases
 - `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)`: `normalizeSetfMethodForm`

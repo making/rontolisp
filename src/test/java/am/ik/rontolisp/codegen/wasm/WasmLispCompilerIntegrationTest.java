@@ -14998,6 +14998,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGrayBaseClassNamedFirstIsKnown() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aGrayBaseClassNamedFirstIsKnown, Preview 1
+		// and the component.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			for (boolean component : new boolean[] { false, true }) {
+				assertThat(compileAndRunFrontEndWithDir(c.program(), component)).as(c.program())
+					.isEqualTo(c.expected());
+			}
+		}
+	}
+
+	@Test
 	void streampOfACompositeStreamBuiltInTheSameForm() throws Exception {
 		// The wasm twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm,
 		// Preview 1 and the component.

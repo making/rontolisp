@@ -80,6 +80,11 @@ public final class GrayStreamsLibrary {
 			LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM,
 			LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_STREAM_MIXIN);
 
+	/** The protocol's base classes, by member name (UPPERCASE, like the set above). */
+	private static final java.util.Set<String> BASE_CLASS_NAMES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
+			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM);
+
 	static final String WRITE_STRING_DISPATCH = "%GRAY-WRITE-STRING-DISPATCH";
 
 	static final String WRITE_STRING_BOUNDS_DISPATCH = "%GRAY-WRITE-STRING-BOUNDS-DISPATCH";
@@ -515,6 +520,17 @@ public final class GrayStreamsLibrary {
 	static boolean isProtocolGeneric(String genericName) {
 		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(genericName);
 		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && PROTOCOL_NAMES.contains(qn.member());
+	}
+
+	/**
+	 * Whether a class name spells one of the protocol's base classes. By MEMBER, the test
+	 * {@link #usesProtocol} splices the library on, so the interpreter loads it for a
+	 * class lookup exactly where a compiled program carries the class.
+	 * @param name the class name as spelled
+	 * @return whether its member names a base class
+	 */
+	static boolean namesBaseClass(String name) {
+		return BASE_CLASS_NAMES.contains(member(name));
 	}
 
 	private static boolean referencesProtocol(LispVal form) {

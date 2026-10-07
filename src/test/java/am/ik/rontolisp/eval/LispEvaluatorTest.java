@@ -10806,6 +10806,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGrayBaseClassNamedFirstIsKnown() {
+		// The lookup of a Gray base class name loads gray.lisp, so a name used as data
+		// before any Gray write, defclass or protocol definition finds its class. Pinned
+		// on all four backends.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			assertThat(evalPrinted(c.program())).as(c.program()).isEqualTo(c.expected());
+		}
+	}
+
+	@Test
 	void streampOfACompositeStreamBuiltInTheSameForm() {
 		// The composite class loads while the predicate's argument runs, after the call
 		// form was reached; the answer still counts it. Pinned on all four backends.
