@@ -28,6 +28,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.StreamOperandErrorsFixture;
 import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
@@ -10712,6 +10713,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void loadAndTheStreamOperatorsSignalTheirCondition() {
+		// A missing file is a file-error carrying the designator, close and
+		// get-output-stream-string of a non-stream a STREAM type-error and
+		// make-string-input-stream of a non-string a STRING one, its bounds subseq's.
+		// Pinned on all four backends.
+		assertThat(evalPrinted(StreamOperandErrorsFixture.PROGRAM)).isEqualTo(StreamOperandErrorsFixture.EXPECTED);
+		assertThat(evalPrinted(StreamOperandErrorsFixture.REPORT_PROGRAM))
+			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
 	void scaleFloatRefusesANonFloatOrNonIntegerArgument() {
 		// A first argument that is no float and a second that is no integer are the
 		// type-error of FLOAT / INTEGER, the float refused first -- sbcl's answers,
@@ -12241,7 +12253,7 @@ class LispEvaluatorTest {
 		// :if-does-not-exist is real: a false value answers nil instead of signalling.
 		assertThat(eval("(load \"%s\" :if-does-not-exist nil)".formatted(missing))).isEqualTo(LispNil.INSTANCE);
 		assertThatThrownBy(() -> eval("(load \"%s\")".formatted(missing))).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("cannot read file");
+			.hasMessageContaining("LOAD: cannot open file " + missing);
 		assertThatThrownBy(() -> eval("(load \"%s\" :unknown t)".formatted(file))).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("unsupported option");
 	}
@@ -12584,7 +12596,7 @@ class LispEvaluatorTest {
 		Path missing = tempDir.resolve("nope.lisp");
 		assertThatThrownBy(() -> eval("(load \"" + missing.toString().replace("\\", "\\\\") + "\")"))
 			.isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("cannot read file");
+			.hasMessageContaining("LOAD: cannot open file " + missing);
 	}
 
 	@Test

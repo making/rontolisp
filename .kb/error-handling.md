@@ -1478,6 +1478,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 | `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
 | `(copy-list 5)` | `COPY-LIST: ... LIST` |
+| `(close 1)`, `(get-output-stream-string nil)` / `(make-string-input-stream 1)` | `CLOSE:` / `GET-OUTPUT-STREAM-STRING: ... STREAM` / `MAKE-STRING-INPUT-STREAM: ... STRING` |
 
 - **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
   `datum`/`expected-type` answered nothing on the interpreter (a raw
@@ -1488,6 +1489,25 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   interpreter's built-in goes through `Environment.requireListArgument`, and
   `%copy-list-runtime`'s non-list branch is `(%check-list x 'copy-list)` -- the same
   shared, instance-free funnel, so the fix costs nothing beyond one more table row.
+- **The stream operators that take a stream, not a designator** (measured 2026-10-07, SBCL 2.2.9):
+  `close` and `get-output-stream-string` of a non-stream are a `type-error` expecting `STREAM`,
+  `make-string-input-stream` of a non-string one expecting `STRING` (its bounds stay `subseq`'s).
+  Before: `(close 1)` answered `T` on the interpreter (a raw integer was taken as a handle; handle
+  1 is stdout's) and on both wasm backends (`_close` of fd 1), and was a `simple-error` on the JVM;
+  `(get-output-stream-string 1)` a `simple-error` (interpreter, JVM) or a cast-failure trap (wasm);
+  `(make-string-input-stream 1)` a `simple-error` (interpreter), an unnamed `type-error` (JVM) or a
+  trap (wasm), and its bad bounds the interpreter's own `simple-error` where the compile paths gave
+  `subseq`'s. Kind `STREAM` (funnel-typed rows `CLOSE`, `GET-OUTPUT-STREAM-STRING` after
+  `SCALE-FLOAT`, then `MAKE-STRING-INPUT-STREAM`, which wasm adds to `STRING_CHECKED`). Compiled:
+  shared lowerings -- `LispMacroExpander.checkedClose` (both backends' `close` case and wasm's
+  `%close-raw`; the inner call over its `__close_chk` temporary closes as before),
+  `expandGetOutputStreamString` and `expandMakeStringInputStream` (every argument bound first, a
+  literal string unchecked) -- each `(streamp v)` / `(stringp v)` then `%operand-type-error`.
+  SBCL's `get-output-stream-string` expects its internal `STRING-OUTPUT-STREAM` type; nothing
+  standard names it, so `STREAM` it is. `(close t)` -- `*standard-output*` holds `t` -- answers `T`
+  on all four (it was a `simple-error` or a trap); SBCL closes its stdout. Pinned by
+  `StreamOperandErrorsFixture` (ci-spec `load-and-stream-operators-signal-their-condition`).
+  Not covered: `get-output-stream-string` of a stream of another kind (`.todo/d98`).
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

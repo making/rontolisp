@@ -3360,7 +3360,7 @@ public final class LispEvaluator {
 			if (!errorIfMissing && !sourceReadable(path)) {
 				return LispNil.INSTANCE;
 			}
-			loadFile(LispNames.LOAD, path);
+			loadFile(LispNames.LOAD, path, null, this.features, args.get(0));
 			return LispTrue.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.PROVIDE, new LispFunction(LispNames.PROVIDE, args -> {
@@ -3763,6 +3763,17 @@ public final class LispEvaluator {
 	 * features WIDENED by that declaration (see {@code AsdfSystems.LispSystem#features}).
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features) {
+		loadFile(operator, rawPath, systemName, features, null);
+	}
+
+	/**
+	 * Loads one file, as {@link #loadFile(String, String, String, Features)} does; a
+	 * {@code load} call passes the designator it was given, which a file it cannot read
+	 * reports: the {@code file-error} carries it and the text is the compile paths'
+	 * ({@code LispMacroExpander.expandLoadFileErrorSignal}).
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features,
+			@Nullable LispVal designator) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
 		String source;
@@ -3773,6 +3784,11 @@ public final class LispEvaluator {
 			// CLHS load: a missing file under the default :if-does-not-exist t is a
 			// FILE-ERROR, so a handler naming the type catches it (the scheme front
 			// end's file-error? included).
+			if (designator != null) {
+				String message = LispMacroExpander.LOAD_FAILURE_PREFIX + rawPath;
+				throw new LispEvalException(message,
+						ClosRegistry.newFileErrorCondition(designator, new LispString(message)));
+			}
 			String message = operator + ": cannot read file " + resolved + ": " + ex.getMessage();
 			throw new LispEvalException(message,
 					ClosRegistry.newFileErrorCondition(new LispString(resolved), new LispString(message)));

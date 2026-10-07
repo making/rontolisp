@@ -11,7 +11,9 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 /**
  * Compiles the {@code load} built-in. The path argument is compiled to a runtime string
  * value, then the {@code _load} runtime helper reads the file, parses every top-level
- * datum, and evaluates each in the global environment via the {@code _eval} runtime.
+ * datum, and evaluates each in the global environment via the {@code _eval} runtime; it
+ * answers nil when the file cannot be opened, which the shared lowering around it turns
+ * into a {@code file-error} ({@code LispMacroExpander.expandLoadFileErrorSignal}).
  */
 final class JvmLoadCompiler {
 
@@ -29,6 +31,13 @@ final class JvmLoadCompiler {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("load expects 1 argument, got " + (parts.size() - 1));
+		}
+		// A file the load cannot open signals a file-error naming the designator; the
+		// expansion unwraps a pathname itself and comes back here for the raw call.
+		LispVal checked = LispMacroExpander.expandLoadFileErrorSignal(cons, ctx.mayUseInstances);
+		if (checked != null) {
+			JvmExprCompiler.compileExpr(checked, ctx, className);
+			return;
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		// A path built by a flipped producer (concatenate, format nil) is a mutable

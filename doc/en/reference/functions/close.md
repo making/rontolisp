@@ -2,7 +2,7 @@
 
 `(close stream)`
 
-Closes a stream previously returned by `open` and returns `t`. After closing, the stream handle is no longer valid and must not be used for further `read`/`read-line`/`write-line` calls; closing it again does nothing and returns `t`. Works on every backend. In most code you should prefer the `with-open-file` macro, which arranges the matching `close` for you even when the body exits early.
+Closes a stream previously returned by `open` and returns `t`. After closing, the stream handle is no longer valid and must not be used for further `read`/`read-line`/`write-line` calls; closing it again does nothing and returns `t`. A standard stream, `*standard-output*` included, survives the close, which returns `t`. Anything that is not a stream signals a `type-error` whose expected type is `stream`. Works on every backend. In most code you should prefer the `with-open-file` macro, which arranges the matching `close` for you even when the body exits early.
 
 ```console
 (let ((s (open "out.txt" :output)))

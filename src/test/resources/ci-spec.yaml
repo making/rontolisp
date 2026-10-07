@@ -1716,6 +1716,44 @@ cases:
       ((:TYPE-ERROR 1.5 INTEGER) (:TYPE-ERROR A INTEGER) (:TYPE-ERROR NIL INTEGER) (:TYPE-ERROR #C(1.0 2.0) INTEGER))
       ((12.0) (3.0) (0.0) (-0.75))
       ((0.0) (0.0) (0.0) (1.5))
+  # load of a missing file is a file-error carrying the designator; close and get-output-stream-string
+  # of a non-stream a STREAM type-error, make-string-input-stream of a non-string a STRING one and its
+  # bounds subseq's -- in call position and first class; a with-open-file whose open answers nil closes
+  # nothing. SBCL's answers but for get-output-stream-string's
+  # expected type (SBCL's internal STRING-OUTPUT-STREAM) and the standard stream a close leaves open
+  # (StreamOperandErrorsFixture.PROGRAM).
+  - name: load-and-stream-operators-signal-their-condition
+    source: |
+      (defvar *soe-1* (read-from-string "1"))
+      (defvar *soe-5* (read-from-string "5"))
+      (defvar *soe-nil* (read-from-string "nil"))
+      (defvar *soe-a* (read-from-string "a"))
+      (defvar *soe-missing* (concatenate 'string "soe-no-such-" "file.lisp"))
+      (defun soe-probe (thunk)
+        (handler-case (multiple-value-list (funcall thunk))
+          (type-error (c)
+            (if (symbolp (type-error-expected-type c))
+                (list :type-error (type-error-datum c) (type-error-expected-type c))
+                :type-error))
+          (file-error (c) (list :file-error (file-error-pathname c)))
+          (error () :other-error)))
+      (defmacro soe-row (&rest forms)
+        `(print (list ,@(mapcar (lambda (f) `(soe-probe (lambda () ,f))) forms))))
+      (soe-row (load *soe-missing*) (load "soe-no-such-file.lisp") (funcall #'load *soe-missing*) (load *soe-missing* :if-does-not-exist nil))
+      (soe-row (close *soe-1*) (close *soe-nil*) (close *soe-a*) (funcall #'close *soe-1*))
+      (soe-row (get-output-stream-string *soe-1*) (get-output-stream-string *soe-nil*) (funcall #'get-output-stream-string *soe-a*) (get-output-stream-string (make-string-output-stream)))
+      (soe-row (make-string-input-stream *soe-1*) (make-string-input-stream *soe-nil*) (funcall #'make-string-input-stream *soe-a*) (make-string-input-stream "abc" *soe-5*))
+      (soe-row (make-string-input-stream "abc" 2 1) (make-string-input-stream "abc" -1) (funcall #'make-string-input-stream "abc" 0 *soe-5*) (values (read-line (make-string-input-stream "abcdef" 1 3))))
+      (soe-row (close (make-string-output-stream)) (let ((s (make-string-input-stream "x"))) (close s) (close s)) (apply #'close (list *soe-5*)) (close *standard-output*))
+      (soe-row (with-open-file (s *soe-missing* :if-does-not-exist nil) s) (with-open-file (s *soe-missing* :direction :probe) s) (with-open-stream (s *soe-nil*) s) (with-open-file (s *soe-missing* :if-does-not-exist *soe-nil*) s))
+    expected: |
+      ((:FILE-ERROR "soe-no-such-file.lisp") (:FILE-ERROR "soe-no-such-file.lisp") (:FILE-ERROR "soe-no-such-file.lisp") (NIL))
+      ((:TYPE-ERROR 1 STREAM) (:TYPE-ERROR NIL STREAM) (:TYPE-ERROR A STREAM) (:TYPE-ERROR 1 STREAM))
+      ((:TYPE-ERROR 1 STREAM) (:TYPE-ERROR NIL STREAM) (:TYPE-ERROR A STREAM) (""))
+      ((:TYPE-ERROR 1 STRING) (:TYPE-ERROR NIL STRING) (:TYPE-ERROR A STRING) :TYPE-ERROR)
+      (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR ("bc"))
+      ((T) (T) (:TYPE-ERROR 5 STREAM) (T))
+      ((NIL) (NIL) (:TYPE-ERROR NIL STREAM) (NIL))
   - name: parse-integer-signals-a-parse-error
     source: |
       (defvar *pis-1* (read-from-string "1"))

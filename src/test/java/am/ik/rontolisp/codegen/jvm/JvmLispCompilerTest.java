@@ -17,6 +17,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.StreamOperandErrorsFixture;
 import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
@@ -13849,6 +13850,16 @@ class JvmLispCompilerTest {
 		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
 		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
 			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunLoadAndTheStreamOperatorsSignalTheirCondition() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#loadAndTheStreamOperatorsSignalTheirCondition.
+		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.PROGRAM))
+			.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.REPORT_PROGRAM))
+			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
 	}
 
 	@Test

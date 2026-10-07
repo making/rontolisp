@@ -5710,20 +5710,18 @@ public final class Environment implements Scope {
 								LispNames.MAKE_STRING_INPUT_STREAM + " expects 1 to 3 arguments, got " + args.size());
 					}
 					if (!(args.get(0) instanceof LispString str)) {
-						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + " expects a string");
+						throw OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING,
+								LispNames.MAKE_STRING_INPUT_STREAM);
 					}
 					String text = str.value();
-					// Bounds are CHARACTER positions (code points), not UTF-16 code units
-					// -- subseq's idiom, and the same one the compile paths get for free
-					// by expanding through subseq.
-					int cpLen = text.codePointCount(0, text.length());
-					int start = args.size() > 1 ? requireIndex(LispNames.MAKE_STRING_INPUT_STREAM, args.get(1)) : 0;
-					int end = (args.size() > 2 && !(args.get(2) instanceof LispNil))
-							? requireIndex(LispNames.MAKE_STRING_INPUT_STREAM, args.get(2)) : cpLen;
-					if (start < 0 || end > cpLen || start > end) {
-						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + ": invalid bounds " + start
-								+ ", " + end + " for string of length " + cpLen);
-					}
+					// Bounds are CHARACTER positions (code points), not UTF-16
+					// code units, refused with subseq's type-error: the compile
+					// paths expand the bounded call through subseq.
+					LispVal startArg = args.size() > 1 ? args.get(1) : new LispInteger(0);
+					LispVal endArg = args.size() > 2 ? args.get(2) : null;
+					checkBoundingIndices(str, startArg, endArg);
+					int start = subseqBound(startArg);
+					int end = endArg == null || endArg instanceof LispNil ? str.length() : subseqBound(endArg);
 					String bounded = text.substring(text.offsetByCodePoints(0, start), text.offsetByCodePoints(0, end));
 					long handle = nextStreamHandle.getAndIncrement();
 					streams.put(handle, new RontoStringInputStream(bounded));
@@ -5933,8 +5931,18 @@ public final class Environment implements Scope {
 		};
 		env.defineFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL,
 				new LispFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL, streamContents));
+		// The public name refuses a non-stream as SBCL does; a stream of
+		// another kind keeps the internal's error.
 		env.defineFunction(LispNames.GET_OUTPUT_STREAM_STRING,
-				new LispFunction(LispNames.GET_OUTPUT_STREAM_STRING, streamContents));
+				new LispFunction(LispNames.GET_OUTPUT_STREAM_STRING, args -> {
+					requireArgCount(LispNames.GET_OUTPUT_STREAM_STRING, args, 1);
+					LispVal stream = args.get(0);
+					if (!(isStreamValue(stream) || stream instanceof LispTrue || isSynonymStream(stream))) {
+						throw OperandTypeException.of(stream, OperandTypes.Kind.STREAM,
+								LispNames.GET_OUTPUT_STREAM_STRING);
+					}
+					return streamContents.apply(args);
+				}));
 		env.defineFunction(LispNames.FRESH_LINE, new LispFunction(LispNames.FRESH_LINE, args -> {
 			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
 			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
@@ -6409,6 +6417,14 @@ public final class Environment implements Scope {
 				// Closing a synonym stream closes the SYNONYM, not the stream it
 				// forwards to -- which is nothing to do (CLHS 21.1.3).
 				return LispTrue.INSTANCE;
+			}
+			if (args.get(0) instanceof LispTrue) {
+				// The standard-stream designator *standard-output* holds: a standard
+				// stream survives a close, below.
+				return LispTrue.INSTANCE;
+			}
+			if (!isStreamValue(args.get(0))) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.STREAM, LispNames.CLOSE);
 			}
 			if (!(streamTarget(args.get(0)) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
