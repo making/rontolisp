@@ -21195,6 +21195,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE_EXPECTED);
+	}
+
+	@Test
+	void aDefstructSlotAccessorHasASetfFunction() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER_EXPECTED);
+	}
+
+	@Test
+	void aSetfOfAStandardNameNoDefinitionMakesAPlaceIsStillRefused() {
+		// No program may define (setf length), so the place is refused when the form
+		// expands, as a limitation, not deferred to an undefined function.
+		assertThatThrownBy(() -> evalMulti("(let ((l (list 1 2))) (setf (length l) 3))"))
+			.hasMessageContaining("setf does not support place: LENGTH");
+	}
+
+	@Test
 	void theFunctionNameOperatorsTakeAComputedSetfFunctionName() {
 		// SBCL's answers. A list that is not (setf symbol) is no function name.
 		assertThat(printedLines("""

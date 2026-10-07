@@ -8275,6 +8275,15 @@ public final class LispEvaluator {
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
 				this.packageResolver::spellsAsExternal)) {
 			eval(form, env);
+			// A writable slot's accessor has its (setf accessor) function too. The
+			// compile path emits it only for a program that takes it; here it costs a
+			// binding, and defining it now keeps fboundp and fmakunbound exact.
+			if (form instanceof LispCons defun && defun.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()) && defun.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol accessor && LispMacroExpander.structWriterDefun(accessor.name(),
+							this.structAccessors, this.closRegistry) instanceof LispVal writer) {
+				eval(writer, env);
+			}
 		}
 		// A struct predicate bakes the descendant tags known when it was generated, so
 		// this (:include parent) definition has just widened every ancestor's tag set:

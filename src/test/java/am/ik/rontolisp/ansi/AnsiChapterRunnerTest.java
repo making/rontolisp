@@ -31,14 +31,14 @@ class AnsiChapterRunnerTest {
 		Files.createDirectories(chapter);
 		Files.writeString(chapter.resolve("load.lsp"), "(load \"test.lsp\")\n");
 		Files.writeString(chapter.resolve("test.lsp"),
-				"(deftest my-broken-test (setf (bogus-place x) 1) nil)\n" + "(deftest my-ok-test (+ 1 2) 3)\n");
+				"(deftest my-broken-test (setf (length x) 1) nil)\n" + "(deftest my-ok-test (+ 1 2) 3)\n");
 
 		String output = runChapter(suite, "mychapter", Path.of("ansi-test/rt-shim.lisp"));
 
 		assertThat(output).isEqualToNormalizingWhitespace("""
 				%%%FILE mychapter/test.lsp
 				%%%AT 0
-				ERROR MY-BROKEN-TEST UnsupportedOperationException: setf does not support place: BOGUS-PLACE
+				ERROR MY-BROKEN-TEST UnsupportedOperationException: setf does not support place: LENGTH
 				%%%AT 1
 				PASS MY-OK-TEST
 				%%%END 2

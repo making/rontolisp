@@ -12,13 +12,14 @@ slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLite
 
 - Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/
   `:print-object`/`:print-function`, a dropped docstring, parsed-but-ignored slot
-  `:type`/`:read-only`; anything else throws "DEFSTRUCT option is not supported".
+  `:type`, a `:read-only` slot (below); anything else throws "DEFSTRUCT option is not supported".
 - BOA `(:constructor name (lambda-list))` passes the lambda list verbatim; a slot matching a
   parameter (`boaParameterSymbols`) reads it, others evaluate their initform.
 - A struct name is a valid `defmethod` specializer (`ClosRegistry.registerStruct` /
   `findStructTag`; `structAncestorCount` ranks it, band 100-199, deeper first).
 - `:conc-name` takes a STRING DESIGNATOR, colon stripped. **Trap: keeping the colon yields
-  accessors no call site can name, surfacing as "setf does not support place: ...".**
+  accessors no call site can name, surfacing as `The function X is undefined` (a place: `(SETF
+  X)`, at run time, with a compile-time warning on the compile paths).**
 
 ## Hook points
 - Interpreter `LispEvaluator.evalDefstruct`.
@@ -126,12 +127,13 @@ general rank-1 vector but NOT one in a structure slot.
   reference scan, so that scan counts the UN-EXPANDED operator as the declaring reference.
 
 ## setf on accessors, and setf-functions
-No `defsetf`: `LispMacroExpander.expandSetf`'s place list is a hard-coded switch, and
+`LispMacroExpander.expandSetf`'s place list is a hard-coded switch (`defsetf` /
+`define-setf-expander` places are rewritten before it), and
 `expandDefstruct` records accessor -> 1-based slot position in a registry that is per-evaluator
 (`LispEvaluator.structAccessors`) and per-compilation (`Ctx.structAccessors`, threaded through
 `Ctx.Builder`), passed by the three dispatch sites. `push`/`pop`/`incf`/`decf`/`remf` emit
-un-expanded `(setf ...)` that re-dispatches there. Gap: the zero-arg `expandSetf(cons)` used by
-`macroexpand-1` sees an EMPTY registry, so macroexpand of a struct-place setf errors.
+un-expanded `(setf ...)` that re-dispatches there. The zero-arg `expandSetf(cons)` used by
+`macroexpand-1` sees an EMPTY registry, so it expands a struct place as the `(setf name)` call.
 
 `(defun (setf name) ...)` reuses that registry with sentinel
 `LispMacroExpander.SETF_FUNCTION_MARKER` (`-1`; real positions are `>= 1`). The writer installs
@@ -140,7 +142,41 @@ as `setfFunctionName(name)` = `%setf-<name>`, NOT in the ordinary function names
 `(funcall #'%setf-name val arg...)` -- **new value FIRST**. `#'(setf name)` resolves in
 `evalFunction` and both `Jvm/WasmFunctionFormCompiler`s (`setfFunctionPlaceName`); registration
 is `evalDefun` / `expandTopLevelDefinitions`, the latter also rewriting the defun name so Pass 1
-collects it ordinarily. Non-goal: `symbol-function`/`fboundp` of a `(setf ...)` name.
+collects it ordinarily. `fdefinition`/`fboundp`/`fmakunbound` of a `(setf ...)` name:
+[symbol-runtime-api.md](symbol-runtime-api.md).
+
+**A place nothing registers is the `(setf name)` call, late-bound** (CL): the default branch's
+last arm yields `(funcall #'(setf name) val arg...)`, new value first like the marker arm, so a
+writer defined after the expansion (the interpreter expands lazily and memoizes), installed by
+`(setf (fdefinition '(setf name)) fn)`, or absent -- `undefined-function` naming `(SETF NAME)` when
+the form runs, the compilers' undefined-function warning at compile time -- all behave as in
+SBCL. Two keep the expansion-time refusal `setf does not support place: X`: a name the `cl`
+package answers (`PackageRegistry.isClMemberName`; no program may define `(setf length)`, so
+it is a place rontolisp lacks), and every unknown place on `--no-gc` (`expandScalarSetf`: no
+function values there). Measured 2026-10-07: `(setf (zz-t 3) 5)` of an undefined `zz-t` was SBCL
+2.2.9 `(SETF ZZ-T)` at run time; interpreter, JVM, P1 and component refused at expansion.
+Pinned by `SetfFunctionNameFixture.UNKNOWN_PLACE`
+(`aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns` in the three backend suites) and
+`LispMacroExpanderTest#aPlaceNoDefinitionMakesIsTheSetfFunctionCall`.
+
+**A writable slot's accessor has a `(setf accessor)` function; a `:read-only` one has none.**
+`structWriterDefun` is `(defun %setf-ACC (new obj) <the place's checked store>)`, so it reports a
+non-instance as `(SETF ACC): ...` like the place. NOT in `expandDefstruct`'s output: the
+interpreter's `evalDefstruct` evaluates it beside each reader (a binding, and it keeps
+`fboundp`/`fmakunbound` exact); the compile path appends it in `expandTopLevelDefinitions`, ahead
+of the `%struct-type-error` scan, only for an accessor whose `(setf ACC)` list or `%setf-ACC`
+symbol the expanded program spells (`referencedStructWriterDefuns`) and no defun already
+defines -- a place is the inline `%obj-set`, so a program that only writes through places carries
+no writer. A computed `(fdefinition (list 'setf 'acc))` names none (`.todo/e13`). A `:read-only`
+slot (its own option, an `:include` override's, or the parent's -- `ClosRegistry.structReadOnlySlots`)
+registers `READ_ONLY_SLOT_MARKER` (`0`): a reader, no writer, and its place falls through to the
+late-bound call above, so `(setf (ro o) v)` signals `undefined-function` `(SETF RO)` as in SBCL. A
+`:type vector` struct already emitted its `%setf-` writer per slot; a read-only one now skips it.
+Measured 2026-10-07: `(fboundp '(setf zz-s-b))` / `#'(setf zz-s-b)` were SBCL T / a function,
+interpreter, JVM, P1 and component NIL / `The function (SETF ZZ-S-B) is undefined` (wasm outside
+EH mode: a trap); `(setf (ro o) v)` stored on all four. Pinned by
+`SetfFunctionNameFixture.STRUCT_WRITER` (`aDefstructSlotAccessorHasASetfFunction` in the three
+backend suites) and `LispMacroExpanderTest#aDefstructSlotWriterFunctionIsEmittedOnlyForAProgramThatTakesIt`.
 
 ## Package-qualified names
 Expansion is POST-resolution, so `(defstruct foo::point x)` generates

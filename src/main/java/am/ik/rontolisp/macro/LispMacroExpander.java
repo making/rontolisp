@@ -3763,10 +3763,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons) {
-		// The registry-less overload is the --no-gc backend's (and macroexpand-1's):
-		// stringsExist=false keeps (setf (aref v i) x) a bare %aset there, since that
-		// backend has no string values and no `stringp` to dispatch on.
-		return expandSetf(cons, java.util.Map.of(), EMPTY_CLOS_REGISTRY, false);
+		// The registry-less overload is macroexpand-1's (and expandScalarSetf's):
+		// stringsExist=false keeps (setf (aref v i) x) a bare %aset there, since the
+		// --no-gc backend has no string values and no `stringp` to dispatch on.
+		return expandSetf(cons, java.util.Map.of(), EMPTY_CLOS_REGISTRY, false, true);
+	}
+
+	/**
+	 * {@link #expandSetf(LispCons)} for the {@code --no-gc} backend, which has no
+	 * function values: a place no case knows is refused ({@code setf does not support
+	 * place}) instead of becoming the call of its {@code (setf name)} function.
+	 * @param cons the setf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandScalarSetf(LispCons cons) {
+		return expandSetf(cons, java.util.Map.of(), EMPTY_CLOS_REGISTRY, false, false);
 	}
 
 	/**
@@ -3781,7 +3792,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors) {
-		return expandSetf(cons, structAccessors, EMPTY_CLOS_REGISTRY, true);
+		return expandSetf(cons, structAccessors, EMPTY_CLOS_REGISTRY, true, true);
 	}
 
 	/**
@@ -3796,16 +3807,19 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			ClosRegistry closRegistry) {
-		return expandSetf(cons, structAccessors, closRegistry, true);
+		return expandSetf(cons, structAccessors, closRegistry, true, true);
 	}
 
 	/**
 	 * The shared implementation. {@code stringsExist} tells whether the target has string
 	 * values at all (false only for the {@code --no-gc} backend), which decides whether
-	 * an {@code (setf (aref var i) v)} place gets its string dispatch.
+	 * an {@code (setf (aref var i) v)} place gets its string dispatch;
+	 * {@code setfFunctions} whether a place no case knows becomes the call of its
+	 * {@code (setf name)} function (false only for the {@code --no-gc} backend, which has
+	 * no function values).
 	 */
 	private static LispVal expandSetf(LispCons cons, java.util.Map<String, Integer> structAccessors,
-			ClosRegistry closRegistry, boolean stringsExist) {
+			ClosRegistry closRegistry, boolean stringsExist, boolean setfFunctions) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 3) {
 			if (parts.size() % 2 == 0) {
@@ -3815,7 +3829,7 @@ public final class LispMacroExpander {
 			for (int i = 1; i < parts.size(); i += 2) {
 				forms.add(expandSetf(
 						(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1))),
-						structAccessors, closRegistry));
+						structAccessors, closRegistry, true, setfFunctions));
 			}
 			return makeProgn(forms);
 		}
@@ -3955,7 +3969,7 @@ public final class LispMacroExpander {
 							listToCons(List.of(new LispSymbol(LispNames.CONS), valVar, plistPlace))));
 					LispVal store = makeProgn(List.of(expandSetf(
 							(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), plistPlace, pushed)),
-							structAccessors, closRegistry, stringsExist), valVar));
+							structAccessors, closRegistry, stringsExist, setfFunctions), valVar));
 					yield makeLet(indVar.name(), placeParts.get(2), makeLet(valVar.name(), value,
 							makeLet(cellVar.name(), walk, makeIf(cellVar, update, store))));
 				}
@@ -4229,7 +4243,7 @@ public final class LispMacroExpander {
 
 				{
 					Integer structSlot = structAccessors.get(accessor);
-					if (structSlot != null) {
+					if (structSlot != null && structSlot != READ_ONLY_SLOT_MARKER) {
 						if (structSlot <= TYPED_VECTOR_SLOT_BASE && placeParts.size() == 2) {
 							// A :type vector struct accessor with a known slot index:
 							// inline the store as the aref place the %setf- writer defun
@@ -4267,7 +4281,25 @@ public final class LispMacroExpander {
 
 						yield expandSetfCarCdr(accessor, placeParts.get(1), value);
 					}
-					throw new UnsupportedOperationException("setf does not support place: " + accessor);
+					if (!setfFunctions || PackageRegistry.isClMemberName(accessor)) {
+						// A standard name no program may define a (setf name) function
+						// for (CLHS 11.1.2.1.2): a place this implementation does not
+						// support, refused here rather than deferred to an undefined
+						// function. So is every unknown place on the backend without
+						// function values.
+						throw new UnsupportedOperationException("setf does not support place: " + accessor);
+					}
+					// No definition makes it a place (yet): CL's (setf name) function,
+					// looked up when the form runs -- a writer defined later, installed
+					// by (setf fdefinition), or undefined, which signals there. A
+					// read-only defstruct slot lands here too: it has no writer.
+					List<LispVal> call = new java.util.ArrayList<>();
+					call.add(new LispSymbol(LispNames.FUNCALL));
+					call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+							listToCons(List.of(new LispSymbol(LispNames.SETF), placeParts.get(0))))));
+					call.add(value);
+					call.addAll(placeParts.subList(1, placeParts.size()));
+					yield listToCons(call);
 				}
 			};
 		}
@@ -4330,6 +4362,13 @@ public final class LispMacroExpander {
 	 * through every backend.
 	 */
 	public static final int SETF_FUNCTION_MARKER = -1;
+
+	/**
+	 * Registry marker for a {@code :read-only} {@code defstruct} slot's accessor: a
+	 * reader with no writer, so {@code (setf (accessor obj) v)} is the call of a
+	 * {@code (setf accessor)} function no definition supplies, as in CL.
+	 */
+	public static final int READ_ONLY_SLOT_MARKER = 0;
 
 	/**
 	 * Registry marker base for a {@code (:type (vector ...))} struct accessor whose slot
@@ -18397,6 +18436,9 @@ public final class LispMacroExpander {
 		// (:include parent (slot new-default) ...): the child's initform overrides for
 		// inherited slots, keyed by the slot's unqualified name.
 		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
+		// The inherited slots an (:include parent (slot default :read-only t)) makes
+		// read-only in this child.
+		Set<String> includeReadOnly = new java.util.HashSet<>();
 		boolean typedVector = false;
 		// The packed element width of a (:type (vector (unsigned-byte 8|16|32))) struct,
 		// or 0 for any other typed-vector element type (see the :TYPE case below).
@@ -18495,8 +18537,11 @@ public final class LispMacroExpander {
 							}
 							List<LispVal> ovParts = ovCons.toList();
 							PackageRegistry.QualifiedName ovQn = PackageRegistry.splitQualified(ovSlot.name());
-							includeOverrides.put(ovQn == null ? ovSlot.name() : ovQn.member(),
-									ovParts.size() >= 2 ? ovParts.get(1) : LispNil.INSTANCE);
+							String ovBase = ovQn == null ? ovSlot.name() : ovQn.member();
+							includeOverrides.put(ovBase, ovParts.size() >= 2 ? ovParts.get(1) : LispNil.INSTANCE);
+							if (slotOptionReadOnly(ovParts)) {
+								includeReadOnly.add(ovBase);
+							}
 						}
 					}
 					case ":PRINT-OBJECT", ":PRINT-FUNCTION" -> {
@@ -18577,6 +18622,8 @@ public final class LispMacroExpander {
 		// no-ops for the value model) and registered as a ClosRegistry side table so
 		// declaration-driven array emission can read an accessor's element kind.
 		List<LispVal> slotTypes = new java.util.ArrayList<>();
+		// The slots declared :read-only, by base name: their accessors get no writer.
+		Set<String> readOnlySlots = new java.util.HashSet<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
 		if (!slotSpecs.isEmpty() && slotSpecs.get(0) instanceof LispString) {
 			// (defstruct name "docstring" slot...): the documentation string is dropped.
@@ -18596,8 +18643,8 @@ public final class LispMacroExpander {
 					dflt = specParts.get(1);
 				}
 				// Slot options after the initform: :type is captured (as a declaration --
-				// it never changes the value model), :read-only is parsed and ignored;
-				// anything else is a hard error.
+				// it never changes the value model), :read-only leaves the accessor
+				// without a writer; anything else is a hard error.
 				for (int i = 2; i + 1 < specParts.size(); i += 2) {
 					if (!(specParts.get(i) instanceof LispSymbol opt)
 							|| (!":TYPE".equals(opt.name()) && !":READ-ONLY".equals(opt.name()))) {
@@ -18607,6 +18654,10 @@ public final class LispMacroExpander {
 					if (":TYPE".equals(opt.name())) {
 						slotType = specParts.get(i + 1);
 					}
+				}
+				if (slotOptionReadOnly(specParts)) {
+					PackageRegistry.QualifiedName roQn = PackageRegistry.splitQualified(s.name());
+					readOnlySlots.add(roQn == null ? s.name() : roQn.member());
 				}
 			}
 			else {
@@ -18641,6 +18692,10 @@ public final class LispMacroExpander {
 			List<LispVal> mergedDefaults = new java.util.ArrayList<>();
 			List<LispVal> mergedTypes = new java.util.ArrayList<>();
 			java.util.Map<String, LispVal> parentTypes = closRegistry.structSlotTypes(includeParent);
+			// A slot read-only in the parent stays read-only in the child (CLHS
+			// defstruct :include), and the child's override may make one read-only.
+			readOnlySlots.addAll(closRegistry.structReadOnlySlots(includeParent));
+			readOnlySlots.addAll(includeReadOnly);
 			for (int i = 0; i < parentLayout.slotNames().size(); i++) {
 				String inherited = parentLayout.slotNames().get(i);
 				mergedSyms.add(new LispSymbol(inherited));
@@ -18670,6 +18725,7 @@ public final class LispMacroExpander {
 		// struct is not a structure-object).
 		if (closRegistry != null && !typedVector) {
 			closRegistry.registerStruct(structName, includeParent, slotBases, slotDefaults);
+			closRegistry.registerStructReadOnlySlots(structName, readOnlySlots);
 		}
 		List<LispVal> forms = new java.util.ArrayList<>();
 		// (defun make-<base> (&key ((:slot slot) default)...) (%obj-new '%struct-<name>
@@ -18758,11 +18814,16 @@ public final class LispMacroExpander {
 		// there is no instance object to %obj-set.
 		for (int i = 0; i < slotSyms.size(); i++) {
 			String accessor = inPackage.apply(concName + affixFor(slotBases.get(i), base));
+			boolean readOnly = readOnlySlots.contains(slotBases.get(i));
 			if (typedVector) {
 				LispVal arefRead = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
 				forms.add(listToCons(
 						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, arefRead)));
-				LispSymbol newVal = new LispSymbol("__struct_newval");
+				if (readOnly) {
+					structAccessors.put(accessor, READ_ONLY_SLOT_MARKER);
+					continue;
+				}
+				LispSymbol newVal = new LispSymbol(STRUCT_NEWVAL_VAR);
 				LispVal writerParams = listToCons(List.<LispVal>of(newVal, obj));
 				LispVal arefPlace = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
 				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), arefPlace, newVal));
@@ -18773,7 +18834,10 @@ public final class LispMacroExpander {
 			else {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
 						checked ? checkedStructRead(obj, i, accessor, structName) : objRef(obj, i))));
-				structAccessors.put(accessor, i + 1);
+				// A writable slot's (setf accessor) function is NOT generated here: the
+				// place is the inline store, and the function is emitted only for a
+				// program that takes it (referencedStructWriterDefuns).
+				structAccessors.put(accessor, readOnly ? READ_ONLY_SLOT_MARKER : i + 1);
 				if (closRegistry != null && checked) {
 					closRegistry.registerStructAccessor(accessor, structName);
 				}
@@ -18911,6 +18975,122 @@ public final class LispMacroExpander {
 	}
 
 	private static final String STRUCT_VAR = "__struct";
+
+	/** The new-value parameter of a generated {@code defstruct} slot writer. */
+	private static final String STRUCT_NEWVAL_VAR = "__struct_newval";
+
+	/**
+	 * Whether a slot description's options -- the elements from index 2 of
+	 * {@code (slot initform option value ...)} -- declare it {@code :read-only} (a
+	 * generalized boolean, not evaluated).
+	 */
+	private static boolean slotOptionReadOnly(List<LispVal> specParts) {
+		for (int i = 2; i + 1 < specParts.size(); i += 2) {
+			if (specParts.get(i) instanceof LispSymbol opt && ":READ-ONLY".equals(opt.name())
+					&& !(specParts.get(i + 1) instanceof LispNil)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The {@code (setf accessor)} function of a writable {@code defstruct} slot accessor:
+	 * {@code (defun %setf-accessor (new obj) <the place's store>)}, the store the place
+	 * {@code (setf (accessor obj) new)} expands to, so the function checks its object as
+	 * the place does. Not part of {@link #expandDefstruct}'s output: the interpreter
+	 * defines it beside the reader, the compile path only for a program that takes the
+	 * function ({@link #referencedStructWriterDefuns}).
+	 * @param accessor the accessor name
+	 * @param structAccessors the place registry
+	 * @param closRegistry the registry naming the accessor's struct, or null
+	 * @return the defun, or null when the name is no writable instance-struct accessor
+	 */
+	public static @Nullable LispVal structWriterDefun(String accessor, java.util.Map<String, Integer> structAccessors,
+			@Nullable ClosRegistry closRegistry) {
+		Integer slot = structAccessors.get(accessor);
+		if (slot == null || slot < 1) {
+			return null;
+		}
+		LispSymbol newVal = new LispSymbol(STRUCT_NEWVAL_VAR);
+		LispSymbol obj = new LispSymbol(STRUCT_VAR);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(setfFunctionName(accessor)),
+				listToCons(List.<LispVal>of(newVal, obj)), checkedStructWrite(obj, slot - 1, newVal, accessor,
+						closRegistry == null ? null : closRegistry.structOfAccessor(accessor))));
+	}
+
+	/**
+	 * The {@link #structWriterDefun}s a program takes: one per writable slot accessor
+	 * whose {@code (setf accessor)} function the forms name -- {@code #'(setf accessor)},
+	 * a quoted {@code (setf accessor)}, or the {@code %setf-accessor} a designator was
+	 * rewritten to -- and that no defun of the program already defines. A place of the
+	 * accessor is the inline store, so a program that only writes through places gets
+	 * none.
+	 * @param program the expanded top-level forms
+	 * @param structAccessors the complete place registry
+	 * @param closRegistry the complete registry
+	 * @return the defuns to append, in name order
+	 */
+	static List<LispVal> referencedStructWriterDefuns(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
+		if (structAccessors.values().stream().noneMatch(slot -> slot >= 1)) {
+			return List.of();
+		}
+		java.util.Set<String> named = new java.util.TreeSet<>();
+		for (LispVal form : program) {
+			collectSetfFunctionNames(form, named);
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		java.util.Set<String> defined = null;
+		for (String accessor : named) {
+			LispVal writer = structWriterDefun(accessor, structAccessors, closRegistry);
+			if (writer == null) {
+				continue;
+			}
+			if (defined == null) {
+				defined = new java.util.HashSet<>();
+				for (LispVal form : program) {
+					if (form instanceof LispCons defun && defun.car() instanceof LispSymbol head
+							&& LispNames.DEFUN.equals(head.name()) && defun.cdr() instanceof LispCons rest
+							&& rest.car() instanceof LispSymbol name) {
+						defined.add(name.name());
+					}
+				}
+			}
+			if (!defined.contains(setfFunctionName(accessor))) {
+				out.add(writer);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Adds the place of every {@code (setf place)} function name {@code form} spells -- a
+	 * {@code (setf place)} list in any element position, or a {@code %setf-place} symbol.
+	 */
+	private static void collectSetfFunctionNames(LispVal form, java.util.Set<String> out) {
+		if (form instanceof LispSymbol sym) {
+			String place = ClosRegistry.setfPlaceOfFunctionName(sym.name());
+			if (place != null) {
+				out.add(place);
+			}
+			return;
+		}
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(cons);
+		if (setfPlace != null) {
+			out.add(setfPlace.name());
+			return;
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			collectSetfFunctionNames(cell.car(), out);
+			rest = cell.cdr();
+		}
+		collectSetfFunctionNames(rest, out);
+	}
 
 	/**
 	 * Collects the parameter symbols a BOA constructor lambda list binds, keyed by their
@@ -27253,6 +27433,9 @@ public final class LispMacroExpander {
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
 		}
+		// The (setf accessor) functions of the defstruct slots the program takes as
+		// functions, ahead of the scan below: each checks its object as the place does.
+		out.addAll(referencedStructWriterDefuns(out, structAccessors, closRegistry));
 		if (out.stream().anyMatch(f -> usesSymbol(f, LispNames.STRUCT_TYPE_ERROR_INTERNAL))) {
 			out.add(structTypeErrorDefun(signalMessages != SignalMessages.LAZY));
 		}
