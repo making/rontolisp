@@ -1832,8 +1832,9 @@ final class WasmBigIntRuntimeBuilder {
 	// "ASH: shift count too large: <count>" (a simple-error) where the module has the
 	// landing, and traps elsewhere. A zero stays zero at any count, and a right count
 	// clamps at the value's width, answering the sign word. A limb-tier count is past
-	// every feasible width, so it stands as +-2^62 -- its sign picks the side, and
-	// neither the width sum below nor the negation of the right side can overflow.
+	// every feasible width, so it stands as +-2^32 -- its sign picks the side; past the
+	// guard on the left, past any limb array's width on the right, and neither the
+	// width sum below nor the negation of the right side can overflow.
 	//
 	// tooLargePrefix: the interned quote-framed "ASH: shift count too large: ", or null
 	// where the guard traps (outside EH mode, or nothing spells ash). operatorGlobal:
@@ -1876,14 +1877,14 @@ final class WasmBigIntRuntimeBuilder {
 		b.i32c(1);
 		w.write(Instruction.I32_SUB);
 		b.arrayGet();
-		b.i32c(0);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.IF);
-		w.write(Type.I64);
-		b.i64c(-(1L << 62));
-		b.els();
-		b.i64c(1L << 62);
-		b.end();
+		// (sign | 1) << 32: -2^32 or 2^32
+		b.i32c(31);
+		w.write(Instruction.I32_SHR_S);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		b.i64c(1);
+		w.write(Instruction.I64_OR);
+		b.i64c(32);
+		w.write(Instruction.I64_SHL);
 		b.els();
 		b.get(1);
 		b.call(WasmLispCompiler.FUNC_INT_VAL);

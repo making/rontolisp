@@ -1476,13 +1476,19 @@ then refuses -- 256 MB at the edge), wasm-GC a count past 2^25 (`_big_ash`'s all
 - **JVM**: `_ash` throws a plain `RuntimeException` (`JvmNumericRuntimeBuilder.AshTooLargeRefs`),
   which the landing pad takes as a `simple-error`, from the huge-count arm and from the BigInteger
   tail's width check. The fused trees bail to `_ash` (`_fxAsh` refuses a count past the int range).
-- **wasm-GC**: `_big_ash` reads an i31 count inline and saturates a limb-tier count to +-2^62 by
+- **wasm-GC**: `_big_ash` reads an i31 count inline and saturates a limb-tier count to +-2^32 by
   its sign (both sides then run the existing code: the right clamp, the left guard), answers 0 for
   a zero value once the result does not fit an i64, and at the guard throws the message-only
   `(nil . "ASH: shift count too large: " ++ prin1(count))` payload after clearing the operator
   register (the throw skips the clear after the call). The gate is EH mode with `ash` reachable
   (spelled, or any name resolvable at run time); elsewhere the guard keeps its `unreachable`. The
   runtime's own `_big_ash` calls (rational, isqrt, the float conversions) shift by bounded counts.
+  The arms ship wherever a generic `ash` call keeps them (the type-test fold prunes them from a
+  fused site's fallback), so their bytes count: the saturation is arithmetic, `(sign | 1) << 32`,
+  because an `if` over two `i64.const +-2^62` left `WasmLispCompilerTest`'s
+  `theSizeLevelShrinksTheModuleAndTheDefaultLevelIsTheBareFlag` program 3,520 B at `--optimize=size`
+  against 3,514 B at the default level (2026-10-07; 3,433 / 3,499 before the arms, 3,502 / 3,514
+  after).
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of
