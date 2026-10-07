@@ -288,6 +288,9 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
   tombstoned binding (any name `fmakunbound` retired) is reported the same way, naming it: it
   used to apply the nil cell, `undefined-function` with `cell-error-name` NIL. The report is
   `_apply` of the operator SYMBOL and no arguments, before any argument form is evaluated.
+- **A nested defun a run-time name can reach takes the same path** (`Ctx.fenvForwarders` holds
+  its name too, its definition is the `%set-symbol-function`): `.kb/core-representation.md`, "A
+  nested defun a RUN-TIME name can reach".
 - **Divergences**: an eagerly-bound call site of a name that HAD a defun keeps the old function
   after a re-setf; `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,

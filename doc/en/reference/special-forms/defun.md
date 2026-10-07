@@ -96,7 +96,7 @@ A parameter whose name is proclaimed special (by [`defvar`](defvar.md)/[`defpara
 
 ## Below the top level
 
-A `defun` inside a function body or over a `let` defines the function when that form runs. Until then the name is undefined on every backend: [`fboundp`](../functions/fboundp.md) answers `nil`, and a call, `#'name` or `symbol-function` signals `undefined-function` naming the function.
+A `defun` inside a function body or over a `let` defines the function when that form runs. Until then the name is undefined on every backend: [`fboundp`](../functions/fboundp.md) answers `nil`, and a call, `#'name` or `symbol-function` signals `undefined-function` naming the function. A name built at run time (`intern`, `read-from-string`, `eval`) reaches the function as a literal one does, and [`fmakunbound`](../functions/fmakunbound.md) retires it for every reference, a direct call included, until the definition runs again.
 
 ```lisp
 (defun install () (defun late (x) (* x 2)))

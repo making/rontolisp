@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 import org.jspecify.annotations.Nullable;
 
@@ -72,15 +73,23 @@ public final class NestedDefunRedefinition {
 
 	/**
 	 * Rewrites the program so a top-level {@code defun} whose name is redefined by a
-	 * non-top-level {@code defun} resolves through its global variable.
+	 * non-top-level {@code defun} resolves through its global variable -- or, for a name
+	 * whose home is the run-time function namespace ({@link NestedDefunNamespace}),
+	 * through that namespace: the stand-in installs the renamed function there
+	 * ({@code %set-symbol-function}), and a {@code (setf (symbol-function 'n) ...)}
+	 * forwarder defun of the name is dropped, since the namespace already serves its call
+	 * sites and installing the forwarder would have it call itself.
 	 * @param program the whole program, after every pass that can introduce a top-level
 	 * defun of its own
+	 * @param namespaceHeld the nested-defun names whose home is the run-time function
+	 * namespace
 	 * @return the rewritten program, or the same list when no name has both spellings
 	 * @throws UnsupportedOperationException when such a name is ALSO declared a global
-	 * variable by a top-level {@code defvar}/{@code defparameter}/{@code defconstant} --
-	 * the function value and the variable's value would have to share one cell
+	 * variable by a top-level {@code defvar}/{@code defparameter}/{@code defconstant} and
+	 * its function is held by that global -- the function value and the variable's value
+	 * would have to share one cell
 	 */
-	public static List<LispVal> rewrite(List<LispVal> program) {
+	public static List<LispVal> rewrite(List<LispVal> program, Set<String> namespaceHeld) {
 		Set<String> nested = GlobalVarCollector.collectAllNestedDefunNames(program);
 		if (nested.isEmpty()) {
 			return program;
@@ -95,8 +104,11 @@ public final class NestedDefunRedefinition {
 		if (redefined.isEmpty()) {
 			return program;
 		}
-		rejectVariableCollision(program, redefined);
+		LinkedHashSet<String> variableHeld = new LinkedHashSet<>(redefined);
+		variableHeld.removeAll(namespaceHeld);
+		rejectVariableCollision(program, variableHeld);
 		rejectExportCollision(program, redefined);
+		Set<String> forwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
 		List<LispVal> rewritten = new ArrayList<>(program.size() + redefined.size());
 		for (LispVal expr : program) {
 			String name = topLevelDefunName(expr);
@@ -104,12 +116,17 @@ public final class NestedDefunRedefinition {
 				rewritten.add(expr);
 				continue;
 			}
+			boolean inNamespace = namespaceHeld.contains(name);
+			if (inNamespace && forwarders.contains(name)) {
+				continue;
+			}
 			LispCons defun = (LispCons) expr;
 			LispCons nameCell = (LispCons) defun.cdr();
 			String internal = INTERNAL_PREFIX + name;
 			rewritten.add(SourceProvenance.inherit(defun,
 					new LispCons(defun.car(), new LispCons(new LispSymbol(internal), nameCell.cdr()))));
-			rewritten.add(SourceProvenance.inherit(defun, assignFunctionValue(name, internal)));
+			rewritten.add(SourceProvenance.inherit(defun,
+					inNamespace ? installFunctionValue(name, internal) : assignFunctionValue(name, internal)));
 		}
 		return rewritten;
 	}
@@ -168,6 +185,16 @@ public final class NestedDefunRedefinition {
 						+ "one static definition, which a redefinable name does not have. Rename one of the two.");
 			}
 		}
+	}
+
+	/** {@code (%set-symbol-function 'name (function internal))}. */
+	private static LispCons installFunctionValue(String name, String internal) {
+		LispVal functionForm = new LispCons(new LispSymbol(LispNames.FUNCTION),
+				new LispCons(new LispSymbol(internal), LispNil.INSTANCE));
+		LispVal quotedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.SET_SYMBOL_FUNCTION_INTERNAL),
+				new LispCons(quotedName, new LispCons(functionForm, LispNil.INSTANCE)));
 	}
 
 	/** {@code (setq name (function internal))}. */

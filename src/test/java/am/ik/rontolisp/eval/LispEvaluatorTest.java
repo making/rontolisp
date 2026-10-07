@@ -21253,6 +21253,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aNestedDefunIsReachedByARunTimeNameAndRetiredByFmakunbound() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED_EXPECTED);
+	}
+
+	@Test
 	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() {
 		// The reference answer (SBCL's) for the compiled backends' twins of this name.
 		assertThat(printedLines(am.ik.rontolisp.NestedDefunNameFixture.PLAIN))

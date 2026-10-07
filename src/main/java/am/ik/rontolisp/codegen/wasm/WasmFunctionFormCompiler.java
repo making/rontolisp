@@ -270,9 +270,10 @@ final class WasmFunctionFormCompiler {
 
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {
 		if (ctx.fenvForwarders.contains(name)) {
-			// A name only (setf (symbol-function 'name) ...) binds: its value is what the
-			// setf installed, read when the reference runs -- an undefined-function
-			// before that -- never the forwarder defun.
+			// A name only (setf (symbol-function 'name) ...) binds, or a nested defun
+			// the namespace holds: its value is what the setf or the definition
+			// installed, read when the reference runs -- an undefined-function before
+			// that or after fmakunbound -- never the forwarder defun.
 			emitFenvRead(name, ctx);
 			return;
 		}

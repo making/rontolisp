@@ -105,11 +105,41 @@ P1, component before): `fboundp` NIL even after the definition ran, a call or pl
 `undefined-function` naming NIL, `#'` / `symbol-function` / `fdefinition` answered NIL, and a
 lexical of the same spelling shadowed the function at a call and at `#'` (`Not a function: 5`).
 The nested call no longer marks wasm's `runtimeDesignatorDispatch` (its designator is
-`#'name`, static). Still open: a COMPUTED name (`(funcall (intern "F"))`, `(fboundp (intern
-"F"))`, `symbol-function`) misses -- the registry and `_fenv` do not know the global -- and
-`fmakunbound` of the name leaves the global, so a call still runs (`.todo/e23`). Pinned by
-`NestedDefunNameFixture` (`aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore` in the three
-backend suites).
+`#'name`, static). Pinned by `NestedDefunNameFixture`
+(`aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore` in the three backend suites).
+
+**A nested defun a RUN-TIME name can reach lives in the function namespace, not the global**
+(all four backends, `.todo/e23`). The run-time lookups (a computed `funcall`/`apply`/`fboundp`/
+`symbol-function`/`fdefinition`, `_eval`) read `_fenv` / `GLOBAL_FENV` and the registry, never
+the global, and `fmakunbound`'s tombstone sits in the namespace where a call through the global
+never looks. `compiler/NestedDefunNamespace.heldNames` (both compilers, right before
+`NestedDefunRedefinition`) picks the names: every nested defun when the program evaluates data
+(`RuntimeNameProducers.anyNameResolvable`), else those a `DesignatorSpellings` spelling of which
+the program holds as a value -- a quoted symbol (not the first argument of `fboundp` /
+`symbol-function` / `fdefinition` / `funcall` / `apply`, which compile statically; a
+`symbol-function` place counts), a package walk's spelling, and beside a symbol builder a
+string / keyword / `#:` spelling; a `(setf p)` writer through `p`. Method bodies a `defmethod`
+under a `let` defines are excluded: the dispatcher reads their global and tests it for the
+method's having been added (the corpus's `clos-defmethod-lambda-list-congruence` failed with
+`No applicable method` when they moved). The held names join `Ctx.fenvForwarders`, so `#'name`,
+a direct call (`(funcall #'name ...)`), a literal `fboundp` / `symbol-function` / `fdefinition`
+and `_eval` read the namespace as for a setf-only symbol-function name
+(`.kb/symbol-runtime-api.md`); the definition compiles to `(%set-symbol-function 'name (lambda
+...))` (`NestedDefunNamespace.install`, the same lambda, so the uncaught report still names it),
+which also replaces a tombstone; the program gets the function namespace
+(`writesFunctionNamespace`). Its global stays allocated and unused. `NestedDefunRedefinition`'s
+stand-in for a held name is the same installation, a setf-only forwarder of the name is dropped
+(installed, it would call itself), and the `defvar` refusal no longer applies. Every other
+program compiles as before. Measured 2026-10-07 (SBCL 2.2.9 / interpreter answered; JVM, P1,
+component before): `(funcall (intern "F"))` / `symbol-function` signalled `undefined-function`,
+a computed `fboundp` answered NIL, after `fmakunbound` a call still ran and `fboundp` stayed NIL
+after the next definition, `eval '(f)` was undefined (a trap on wasm), a top-level defun a nested
+one redefines was undefined to a computed name, and `(setf (symbol-function 'f) ...)` of a nested
+name was invisible to a direct call (which was undefined until the setf). The ci-spec corpus as
+one program (it holds `eval`, so every nested defun moves) printed the same 5,890 lines on all
+four. Pinned by `NestedDefunNamespaceFixture`
+(`aNestedDefunIsReachedByARunTimeNameAndRetiredByFmakunbound` in the three backend suites) and
+`NestedDefunNamespaceTest`.
 
 **A name the program assigns with no lexical binding in scope is a global** (all four
 backends, 2026-10-04, `.todo/d02`, `.todo/d05`). CL leaves assigning an undeclared variable
@@ -146,7 +176,7 @@ ci-spec `a-global-assigned-only-inside-a-function`.
 (after every pass that can mint a top-level defun, before Pass 1): the top-level definition
 becomes `%top-defun$<name>` plus `(setq <name> (function %top-defun$<name>))`, so the name is a
 global variable only and the LAST executed assignment wins. Three REFUSALS: the name is also a
-top-level `defvar`/`defparameter`/`defconstant`; it is exported (`rontolisp:jvm-export` /
+top-level `defvar`/`defparameter`/`defconstant` (not for a name the namespace holds, above); it is exported (`rontolisp:jvm-export` /
 `rontolisp:wasm-export`); `--dynamic`, whose call sites ask the variable first for exactly
 `Ctx.nestedDefunNames` (`GlobalVarCollector.collectAllNestedDefunNames`, copied by
 `WasmAsyncEmit.freshCtx`) BEFORE the dynamic branch. Pins: the

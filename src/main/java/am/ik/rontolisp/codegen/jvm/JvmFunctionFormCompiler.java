@@ -124,9 +124,11 @@ final class JvmFunctionFormCompiler {
 
 	static void compileNamed(String name, JvmLispCompiler.Ctx ctx, String className) {
 		if (ctx.fenvForwarders.contains(name)) {
-			// A name only (setf (symbol-function 'name) ...) binds: its value is what the
-			// setf installed, read from _fenv when the reference runs -- an
-			// undefined-function before that -- never the forwarder defun.
+			// A name only (setf (symbol-function 'name) ...) binds, or a nested defun
+			// the namespace holds: its value is what the setf or the definition
+			// installed, read from _fenv when the reference runs -- an
+			// undefined-function before that or after fmakunbound -- never the
+			// forwarder defun.
 			JvmSymbolApiCompiler.compileFenvFunction(name, ctx, className);
 			return;
 		}

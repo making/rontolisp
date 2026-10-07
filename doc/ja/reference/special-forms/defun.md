@@ -96,7 +96,7 @@ Function expects 2 arguments, got 1
 
 ## トップレベル以外での定義
 
-関数本体の中や `let` の内側の `defun` は、そのフォームが実行されたときに関数を定義します。それまでは全バックエンドでその名前は未定義です。[`fboundp`](../functions/fboundp.md) は `nil` を返し、呼び出し、`#'name`、`symbol-function` はその関数名を持つ `undefined-function` を通知します。
+関数本体の中や `let` の内側の `defun` は、そのフォームが実行されたときに関数を定義します。それまでは全バックエンドでその名前は未定義です。[`fboundp`](../functions/fboundp.md) は `nil` を返し、呼び出し、`#'name`、`symbol-function` はその関数名を持つ `undefined-function` を通知します。実行時に作られた名前(`intern`、`read-from-string`、`eval`)もリテラルの名前と同じくその関数に届きます。[`fmakunbound`](../functions/fmakunbound.md) は、定義が再び実行されるまで、直接の呼び出しを含むすべての参照からその関数を失効させます。
 
 ```lisp
 (defun install () (defun late (x) (* x 2)))

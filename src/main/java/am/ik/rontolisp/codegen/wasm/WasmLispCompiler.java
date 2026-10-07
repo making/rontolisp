@@ -54,6 +54,7 @@ import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
+import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
 import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
@@ -3515,7 +3516,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
-		Set<String> fenvForwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
+		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -3577,7 +3578,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (.kb/core-representation.md, "The NAME half"). A no-op unless the two
 		// spellings actually meet, and placed after every pass that can introduce a
 		// top-level defun of its own (defstruct/defclass accessors, ShadowedBuiltins).
-		program = NestedDefunRedefinition.rewrite(program);
+		// A nested defun a run-time name can reach (a computed name, fmakunbound, eval)
+		// lives in the run-time function namespace instead of its global, so every
+		// reference reads it from there as for a setf-only symbol-function name
+		// (compiler/NestedDefunNamespace).
+		Set<String> namespaceNestedDefuns = NestedDefunNamespace.heldNames(program);
+		fenvForwarders.addAll(namespaceNestedDefuns);
+		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
 		// layout addresses are needed as constants before any body is compiled. Restart
@@ -3749,11 +3756,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
 		// ...)) whose raw place shape is scanned, since the %set-symbol-function
-		// lowering happens per expression, after this gate), so the dispatchers probe
-		// it before the registry. A reader-only program's GLOBAL_FENV stays empty.
+		// lowering happens per expression, after this gate, a nested defun the
+		// namespace holds), so the dispatchers probe it before the registry. A
+		// reader-only program's GLOBAL_FENV stays empty.
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				|| LispMacroExpander.usesSymbolFunctionWrite(program);
+				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty();
 		// Of those writers, the ones that can bind a name no definition in the program
 		// has: a call of such a name reads GLOBAL_FENV instead of compiling to the
 		// undefined-function signal alone (fmakunbound only retires, and a quoted
@@ -11473,10 +11481,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesFmakunbound = false;
 
 		/**
-		 * The names with a {@code (setf (symbol-function 'n) ...)} forwarder defun
-		 * ({@link LispMacroExpander#symbolFunctionForwarderNames}): {@code #'n} and a
-		 * literal {@code fboundp} read {@code GLOBAL_FENV} for them instead of the
-		 * forwarder.
+		 * The names whose function only {@code GLOBAL_FENV} holds: those with a
+		 * {@code (setf (symbol-function 'n) ...)} forwarder defun
+		 * ({@link LispMacroExpander#symbolFunctionForwarderNames}) and the nested defuns
+		 * a run-time name can reach ({@code compiler/NestedDefunNamespace}). {@code #'n}
+		 * and a literal {@code fboundp} read {@code GLOBAL_FENV} for them.
 		 */
 		Set<String> fenvForwarders = Set.of();
 

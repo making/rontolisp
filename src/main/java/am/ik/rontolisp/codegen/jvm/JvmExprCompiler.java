@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
+import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -478,13 +479,17 @@ final class JvmExprCompiler {
 	 * A non-top-level {@code defun}: the {@code (setq name (lambda ...))} it lowers to,
 	 * with the lambda keeping the name for the uncaught report -- the interpreter
 	 * installs a nested defun as a named function, and an anonymous lambda would hand its
-	 * failures to whatever function called it.
+	 * failures to whatever function called it. A name the run-time function namespace
+	 * holds ({@code compiler/NestedDefunNamespace}) installs the lambda there instead.
 	 */
 	private static void compileNestedDefun(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal lowered = LispMacroExpander.expandDefun(cons);
 		UncaughtReport.NestedDefun nested = UncaughtReport.nestedDefun(lowered);
 		if (nested != null) {
 			ctx.lambdaReportNames.put(nested.lambda(), nested.name());
+			if (ctx.fenvForwarders.contains(nested.name())) {
+				lowered = NestedDefunNamespace.install(nested);
+			}
 		}
 		compileExpr(lowered, ctx, className);
 	}

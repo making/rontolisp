@@ -5895,6 +5895,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aNestedDefunIsReachedByARunTimeNameAndRetiredByFmakunbound() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the function lived in a global
+		// only the compile-time references read, so a computed name missed it and
+		// fmakunbound left it callable.
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED_EXPECTED);
+	}
+
+	@Test
 	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a literal fboundp folded NIL
 		// for the name, and a call or reference before the definition ran read the

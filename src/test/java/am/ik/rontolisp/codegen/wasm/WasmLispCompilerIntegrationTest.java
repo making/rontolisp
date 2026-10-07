@@ -27221,6 +27221,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aNestedDefunIsReachedByARunTimeNameAndRetiredByFmakunbound() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED,
+						am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED_EXPECTED },
+				{ am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED,
+						am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED_EXPECTED },
+				{ am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED,
+						am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

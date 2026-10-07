@@ -18,12 +18,14 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -1988,7 +1990,11 @@ final class WasmExprCompiler {
 			case LispNames.DEFUN -> {
 				LispVal lowered = LispMacroExpander.expandDefun(cons);
 				WasmUncaughtLocations.nestedDefun(lowered, ctx);
-				WasmExprCompiler.compileExpr(lowered, ctx);
+				// A name the run-time function namespace holds
+				// (compiler/NestedDefunNamespace) installs the lambda there.
+				UncaughtReport.NestedDefun nested = UncaughtReport.nestedDefun(lowered);
+				WasmExprCompiler.compileExpr(nested != null && ctx.fenvForwarders.contains(nested.name())
+						? NestedDefunNamespace.install(nested) : lowered, ctx);
 			}
 			case LispNames.DEFSTRUCT ->
 				// Top-level defstructs are spliced into defuns before Pass 1; one
