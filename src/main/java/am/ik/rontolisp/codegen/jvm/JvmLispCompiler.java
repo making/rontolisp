@@ -1997,21 +1997,27 @@ public final class JvmLispCompiler implements LispCompiler {
 			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
 			boundSpecialVars.addAll(specialVars);
 		}
-		// The bound specials whose bound-ness the program probes and only a binding or
-		// an assignment gives a value: their _g$ starts as the UNBOUND marker, so boundp
-		// reads their variable instead of the eval mirror, which no binding writes
-		// (JvmDynVarRuntimeBuilder). A computed boundp dispatches its name over them
+		// The specials only a binding or an assignment gives a value
+		// (SpecialVarCollector.collectValueless): their _g$ starts as the UNBOUND marker,
+		// a store overwrites it, a binding saves and restores it like any value, and a
+		// read of it signals the unbound-variable naming the variable
+		// (JvmExprCompiler.compileSpecialRead) -- what the interpreter's read does. The
+		// bound ones whose bound-ness the program probes answer boundp from their
+		// variable instead of the eval mirror, which no binding writes
+		// (JvmDynVarRuntimeBuilder); a computed boundp dispatches its name over them
 		// through one shared runtime. Without the mirror, every global a literal boundp
-		// names and no definer gives a value carries it the same way.
+		// names and no definer gives a value carries its bound-ness the same way.
 		List<LispVal> probedForms = new ArrayList<>(compiledForms);
 		probedForms.addAll(closRegistry.conditionReports().values());
 		SequencedSet<String> unboundSpecials = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
 		unboundSpecials.retainAll(boundSpecialVars);
-		SequencedSet<String> unboundGlobals = new java.util.LinkedHashSet<>(unboundSpecials);
+		SequencedSet<String> probedGlobals = new java.util.LinkedHashSet<>(unboundSpecials);
 		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
-			unboundGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
-			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundGlobals);
+			probedGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, probedGlobals);
 		}
+		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
+		unboundGlobals.addAll(probedGlobals);
 		if (!unboundSpecials.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
 			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundSpecials, specialVars)) {
@@ -2020,7 +2026,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker = JvmDynVarRuntimeBuilder.unboundMarker(cp,
-				thisClass, unboundGlobals, globalFields);
+				thisClass, unboundGlobals, probedGlobals, globalFields);
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty()
 				|| !lispOnOtherThreads ? null
 						: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
@@ -4156,8 +4162,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		if (unboundMarker != null) {
-			// The UNBOUND marker a probed valueless global's _g$ starts as; set in
-			// <clinit> after the ThreadLocals.
+			// The UNBOUND marker a valueless global's _g$ starts as; set in <clinit>
+			// after the ThreadLocals.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, unboundMarker.fieldName(),
 					unboundMarker.fieldDesc());
 		}
@@ -4559,6 +4565,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
 						hm.code());
 			}
+		}
+		if (unboundMarker != null) {
+			// _bound: the read check of a global that starts as the UNBOUND marker.
+			JvmDynVarRuntimeBuilder.HelperMethod hm = unboundMarker.boundMethod();
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
+					hm.code());
 		}
 		if (mainCtx.conditionChannel.used || teTlField != null) {
 			// _tlMap, and _condTake/_condPut: the records a throwable carries, keyed by

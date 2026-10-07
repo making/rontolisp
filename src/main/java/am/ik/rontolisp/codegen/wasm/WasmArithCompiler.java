@@ -270,7 +270,7 @@ final class WasmArithCompiler {
 	/**
 	 * Whether a read of the variable can neither fail nor change anything where the site
 	 * is compiled: a lexical variable, a special this function binds, or a global whose
-	 * read tests for no UNBOUND marker ({@code WasmExprCompiler.emitUnboundAsNil}) and is
+	 * read tests for no UNBOUND marker ({@code WasmExprCompiler.emitCheckedRead}) and is
 	 * not read through a task's dynamic bindings.
 	 */
 	static boolean isQuietVariable(String name, WasmLispCompiler.Ctx ctx) {

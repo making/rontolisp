@@ -18027,13 +18027,16 @@ class LispEvaluatorTest {
 		// The reference answer the compiled backends' twins of this name are measured
 		// against: a special declared without a value is bound for the extent of any
 		// binding of it and unbound again after it, whatever a callee's setq, a set or
-		// an eval'd setq wrote inside the binding.
+		// an eval'd setq wrote inside the binding -- and a read of it while unbound
+		// signals the unbound-variable naming it.
 		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED);
 	}
 
 	@Test

@@ -166,6 +166,27 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void aSpecialWithoutAValueIsUnboundInAThreadThatDoesNotBindIt() throws Exception {
+		// The UNBOUND marker is the shared global default a thread without a binding
+		// reads through _dget, so its read signals there -- caught in the thread, and
+		// re-signalled by join-thread when not -- while the bindings alist hands it a
+		// value. The read used to answer nil (interpreter parity: ThreadTest's twin).
+		assertThat(compileAndRun("""
+				(defvar *tv*)
+				(defun tv-read () (handler-case *tv* (unbound-variable (c) (list :unbound (cell-error-name c)))))
+				(let ((*tv* :spawner))
+				  (print (list (tv-read)
+				               (rontolisp:join-thread (rontolisp:make-thread #'tv-read))
+				               (rontolisp:join-thread (rontolisp:make-thread #'tv-read (list (cons '*tv* :handed))))
+				               (handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () *tv*)))
+				                 (unbound-variable (c) (list :joined (cell-error-name c)))))))
+				(print (tv-read))
+				""", "ThreadUnboundProg")).isEqualTo("""
+				(:SPAWNER (:UNBOUND *TV*) :HANDED (:JOINED *TV*))
+				(:UNBOUND *TV*)""");
+	}
+
+	@Test
 	void bt2ShimSpawnsThroughThePrimitivesWithInitialBindings() throws Exception {
 		// clack's handler.lisp shape verbatim: a quote form and an already-evaluated
 		// stream value in :initial-bindings, plus the v1 spellings clack imports.

@@ -139,6 +139,25 @@ class ThreadTest {
 	}
 
 	@Test
+	void aSpecialWithoutAValueIsUnboundInAThreadThatDoesNotBindIt() {
+		// The reference answer JvmThreadTest's twin is measured against: a spawned thread
+		// sees none of the spawner's bindings, so a special without a value reads unbound
+		// there unless the bindings alist hands it one, and join-thread re-signals an
+		// uncaught read.
+		assertThat(evalAll(evaluator(), """
+				(defvar *tv*)
+				(defun tv-read () (handler-case *tv* (unbound-variable (c) (list :unbound (cell-error-name c)))))
+				(list (let ((*tv* :spawner))
+				        (list (tv-read)
+				              (rontolisp:join-thread (rontolisp:make-thread #'tv-read))
+				              (rontolisp:join-thread (rontolisp:make-thread #'tv-read (list (cons '*tv* :handed))))
+				              (handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () *tv*)))
+				                (unbound-variable (c) (list :joined (cell-error-name c))))))
+				      (tv-read))
+				""").print()).isEqualTo("((:SPAWNER (:UNBOUND *TV*) :HANDED (:JOINED *TV*)) (:UNBOUND *TV*))");
+	}
+
+	@Test
 	void destroyThreadOnAFinishedThreadAnswersTheHandle() {
 		assertThat(evalAll(evaluator(), """
 				(let ((th (rontolisp:make-thread (lambda () 1))))

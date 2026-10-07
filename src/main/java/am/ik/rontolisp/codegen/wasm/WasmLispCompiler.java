@@ -579,12 +579,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The index of {@code _lit_stage}, right after {@code _undefined_function}, so adding
+	 * The index of {@code _lit_stage}, right after {@code _unbound_variable}, so adding
 	 * it moves no fixed index -- only {@link #userFuncBase()}, which every consumer
 	 * already reads dynamically. Only meaningful when {@link #emitsLitStage} is set.
 	 */
 	private int litStageFuncBase() {
+		return unboundVariableFuncBase() + (this.emitsUnboundVariable ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code _unbound_variable}, right after {@code _undefined_function}, so
+	 * adding it moves no fixed index -- only {@link #userFuncBase()}. Only meaningful
+	 * when {@link #emitsUnboundVariable} is set.
+	 */
+	private int unboundVariableFuncBase() {
 		return undefinedFunctionFuncBase() + (this.emitsUndefinedFunction ? 1 : 0);
+	}
+
+	/**
+	 * The module index of {@code _unbound_variable}, the shared throw of the
+	 * {@code unbound-variable} a read of a global holding the UNBOUND marker signals
+	 * ({@code WasmRuntimeBuilder.buildUnboundVariableBody}), or {@code -1} when this
+	 * module carries none.
+	 * @return the function index, or -1
+	 */
+	int unboundVariableFuncIndex() {
+		return this.emitsUnboundVariable ? unboundVariableFuncBase() : -1;
 	}
 
 	/**
@@ -898,6 +918,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * and decided in the pre-pass, because it shifts {@link #userFuncBase()}.
 	 */
 	private boolean emitsUndefinedFunction;
+
+	/**
+	 * Whether this module carries {@code _unbound_variable}, the throw a read of a global
+	 * holding the UNBOUND marker reaches ({@code WasmExprCompiler.compileSymbolRef}): EH
+	 * mode, where a throw has a tag and a catcher, and a global that starts as the marker
+	 * ({@code Ctx.unboundGlobals}). Outside EH mode such a read traps in place. Decided
+	 * once that set is known and before any index is handed out, because it shifts
+	 * {@link #userFuncBase()}; a module whose every read sits inside a binding of its
+	 * variable carries an unreferenced function the shaker drops.
+	 */
+	private boolean emitsUnboundVariable;
 
 	/**
 	 * Whether this module carries {@code _lit_stage}, the linear-to-linear staging helper
@@ -3697,9 +3728,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a global whose variable carries its bound-ness reads that variable alone, so a
 		// program whose every boundp is such a literal probe does not (the tracked set is
 		// checked again once the runtime is injected).
-		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP) && LispMacroExpander
-			.boundpReachesMirror(program, GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
-					closRegistry.conditionReports().values(), specialVars, false));
+		SequencedSet<String> probedBeforeInjection = programUsesSymbol(program, LispNames.BOUNDP) ? GlobalVarCollector
+			.collectProbedUnboundBeforeInjection(program, closRegistry.conditionReports().values(), specialVars, false)
+				: new LinkedHashSet<>();
+		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
+				&& LispMacroExpander.boundpReachesMirror(program, probedBeforeInjection);
+		// Whether a read can find a global's UNBOUND marker (Ctx.unboundGlobals) and
+		// signal its unbound-variable: a special only a binding or an assignment gives a
+		// value, or a literally probed global without one.
+		boolean readsUnboundGlobal = !probedBeforeInjection.isEmpty()
+				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty();
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
 		// ...)) whose raw place shape is scanned, since the %set-symbol-function
@@ -3793,7 +3831,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
-				? usedLayoutTags(program, closRegistry, usesEval || usesRead) : java.util.Set.of();
+				? usedLayoutTags(program, closRegistry, usesEval || usesRead, readsUnboundGlobal) : java.util.Set.of();
 		// Whether this module carries _undefined_function: for a name fmakunbound
 		// retired,
 		// and for a direct call of a name no definition has (WasmFunctionCallCompiler's
@@ -4334,29 +4372,38 @@ public final class WasmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
-		// The dynamically bound specials whose bound-ness the program probes and only a
-		// binding or an assignment gives a value: _start seeds their module global with
-		// the UNBOUND marker, so boundp reads their variable instead of the eval mirror,
-		// which no binding writes (Ctx.unboundGlobals). A computed boundp dispatches its
-		// name over them through one shared runtime. Without the mirror, every global a
-		// literal boundp names and no definer gives a value carries it the same way.
+		// The specials only a binding or an assignment gives a value
+		// (SpecialVarCollector.collectValueless): _start seeds their module global with
+		// the UNBOUND marker, a store overwrites it, a binding saves and restores it like
+		// any value, and a read of it signals the unbound-variable naming the variable
+		// (Ctx.unboundGlobals, WasmExprCompiler.compileSymbolRef) -- what the
+		// interpreter's read does. The dynamically bound ones whose bound-ness the
+		// program probes answer boundp from their variable instead of the eval mirror,
+		// which no binding writes (Ctx.probedUnboundGlobals); a computed boundp
+		// dispatches its name over them through one shared runtime. Without the mirror,
+		// every global a literal boundp names and no definer gives a value carries its
+		// bound-ness the same way.
 		List<LispVal> compiledForms = new ArrayList<>(program);
 		compiledForms.addAll(injectedForms);
 		List<LispVal> probedForms = new ArrayList<>(compiledForms);
 		probedForms.addAll(closRegistry.conditionReports().values());
-		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectProbedValueless(probedForms, specialVars);
-		@Nullable SequencedSet<String> boundSpecials = unboundGlobals.isEmpty() && !this.reentrant ? null
+		SequencedSet<String> probedUnboundGlobals = SpecialVarCollector.collectProbedValueless(probedForms,
+				specialVars);
+		@Nullable SequencedSet<String> boundSpecials = probedUnboundGlobals.isEmpty() && !this.reentrant ? null
 				: SpecialVarCollector.collectDynamicallyBound(compiledForms, specialVars);
 		if (boundSpecials != null) {
-			unboundGlobals.retainAll(boundSpecials);
+			probedUnboundGlobals.retainAll(boundSpecials);
 		}
 		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
-			unboundGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
-			LispMacroExpander.requireBoundpOffMirror(compiledForms, unboundGlobals);
+			probedUnboundGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
+			LispMacroExpander.requireBoundpOffMirror(compiledForms, probedUnboundGlobals);
 		}
-		if (!unboundGlobals.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
+		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
+		unboundGlobals.addAll(probedUnboundGlobals);
+		this.emitsUnboundVariable = ehMode && !unboundGlobals.isEmpty();
+		if (!probedUnboundGlobals.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
-			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(unboundGlobals, specialVars)) {
+			for (LispVal segment : LispMacroExpander.boundpDynamicRuntime(probedUnboundGlobals, specialVars)) {
 				inject(segment, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
@@ -4797,6 +4844,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.namesArityOperators(this.emitsArityOpening)
 			.litStageFuncIndex(litStageFuncIndex())
 			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
+			.unboundVariableFuncIndex(unboundVariableFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
 			.numDefuns(defuns.size())
@@ -4820,6 +4868,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
 			.unboundGlobals(unboundGlobals)
+			.probedUnboundGlobals(probedUnboundGlobals)
 			.globalIndices(globalIndices)
 			.quoteGlobals(quoteGlobals)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
@@ -6466,14 +6515,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
 		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
-		// What _symbol_value throws for an unbound name: EH mode only, like the
-		// dispatchers' report, the typed unbound-variable where usedLayoutTags baked it.
-		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset,
-				ehMode ? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
+		// What _symbol_value and _unbound_variable throw for an unbound name: EH mode
+		// only, like the dispatchers' report, the typed unbound-variable where
+		// usedLayoutTags baked it.
+		final WasmRuntimeBuilder.@Nullable UnboundVariableReport unboundReport = ehMode
+				? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
 						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
 								layoutAddresses) : null,
 						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
-						this.usesIdentityHashTables) : null);
+						this.usesIdentityHashTables)
+				: null;
+		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset, unboundReport);
+		final byte[] unboundVariableBody = this.emitsUnboundVariable
+				? WasmRuntimeBuilder.buildUnboundVariableBody(Objects.requireNonNull(unboundReport)) : new byte[0];
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
 		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables);
 		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder
@@ -7771,6 +7825,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsUndefinedFunction) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE);
 				}
+				// The unbound-variable throw, right after it: reuses TYPE_WRITE_STR's
+				// (i32, i32) -> () signature, the name's (offset, length).
+				if (this.emitsUnboundVariable) {
+					fnDef.addFunction(TYPE_WRITE_STR);
+				}
 				// The literal :string staging helper, right after it: reuses
 				// TYPE_RD_MEMEQ's (i32, i32, i32) -> i32 signature, so no module gains a
 				// type entry for it either.
@@ -8809,6 +8868,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// order.
 				if (this.emitsUndefinedFunction) {
 					code.addFunction(undefinedFunctionBody);
+				}
+				// The unbound-variable throw body, in unboundVariableFuncBase() order.
+				if (this.emitsUnboundVariable) {
+					code.addFunction(unboundVariableBody);
 				}
 				// The literal :string staging helper, in litStageFuncBase() order.
 				if (this.emitsLitStage) {
@@ -11459,18 +11522,29 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> specialVars = Set.of();
 
 		/**
-		 * The globals whose module global carries their bound-ness: a probed valueless
-		 * special the program binds ({@code SpecialVarCollector.collectProbedValueless}),
-		 * and in a module without the eval mirror any global a literal {@code boundp}
-		 * names and no definer gives a value
-		 * ({@code GlobalVarCollector.collectProbedUnbound}). {@code _start} seeds each
-		 * global with the UNBOUND marker -- the raw-local sentinel
+		 * The globals whose module global carries their bound-ness: a special only a
+		 * binding or an assignment gives a value
+		 * ({@code SpecialVarCollector.collectValueless}), and in a module without the
+		 * eval mirror any global a literal {@code boundp} names and no definer gives a
+		 * value ({@code GlobalVarCollector.collectProbedUnbound}). {@code _start} seeds
+		 * each global with the UNBOUND marker -- the raw-local sentinel
 		 * ({@link #rawSentinelGlobalIndex}) -- before any user code; a store overwrites
-		 * it; a binding saves and restores it like any value; a read answers nil for it
-		 * ({@code WasmExprCompiler.emitUnboundAsNil}) and {@code boundp} nil
+		 * it; a binding saves and restores it like any value; a read outside a binding of
+		 * it signals the {@code unbound-variable} naming it
+		 * ({@code WasmExprCompiler.emitCheckedRead}) and {@code boundp} answers nil
 		 * ({@code WasmSymbolApiCompiler.compileGlobalBoundp}).
 		 */
 		Set<String> unboundGlobals = Set.of();
+
+		/**
+		 * The globals of {@link #unboundGlobals} a {@code boundp} answers from the
+		 * variable ({@code LispMacroExpander.dynamicFirstBoundp}): a probed valueless
+		 * special the program binds ({@code SpecialVarCollector.collectProbedValueless})
+		 * and the literally probed globals. Every other name's {@code boundp} probes the
+		 * eval mirror, which agrees for a global no binding changes. Iteration order is a
+		 * computed probe's chain order.
+		 */
+		Set<String> probedUnboundGlobals = Set.of();
 
 		/**
 		 * Maps a top-level global variable name to its module-level wasm global index.
@@ -11620,6 +11694,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * carries none ({@code WasmLispCompiler.emitsUndefinedFunction}).
 		 */
 		int undefinedFunctionFuncIndex = -1;
+
+		/**
+		 * The module index of {@code _unbound_variable}, or {@code -1} when this module
+		 * carries none ({@code WasmLispCompiler.emitsUnboundVariable}).
+		 */
+		int unboundVariableFuncIndex = -1;
 
 		/**
 		 * The complex block a site hands a complex arriving through a variable to, or
@@ -11797,6 +11877,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.arityNamedCallees = builder.arityNamedCallees;
 			this.litStageFuncIndex = builder.litStageFuncIndex;
 			this.undefinedFunctionFuncIndex = builder.undefinedFunctionFuncIndex;
+			this.unboundVariableFuncIndex = builder.unboundVariableFuncIndex;
 			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
 			this.importDecls = builder.importDecls;
@@ -11819,6 +11900,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
 			this.unboundGlobals = builder.unboundGlobals;
+			this.probedUnboundGlobals = builder.probedUnboundGlobals;
 			this.globalIndices = builder.globalIndices;
 			this.quoteGlobals = builder.quoteGlobals;
 			this.futureTypeIndex = builder.futureTypeIndex;
@@ -11986,6 +12068,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int undefinedFunctionFuncIndex = -1;
 
+			private int unboundVariableFuncIndex = -1;
+
 			private @Nullable WasmComplexBlock complexBlock;
 
 			private int[] litStageBytes = new int[1];
@@ -12029,6 +12113,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Set<String> unboundGlobals = Set.of();
+
+			private Set<String> probedUnboundGlobals = Set.of();
 
 			private Map<String, Integer> globalIndices = Map.of();
 
@@ -12134,6 +12220,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.arityNamedCallees = proto.arityNamedCallees;
 				this.litStageFuncIndex = proto.litStageFuncIndex;
 				this.undefinedFunctionFuncIndex = proto.undefinedFunctionFuncIndex;
+				this.unboundVariableFuncIndex = proto.unboundVariableFuncIndex;
 				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
 				this.importDecls = proto.importDecls;
@@ -12156,6 +12243,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.nestedDefunNames = proto.nestedDefunNames;
 				this.specialVars = proto.specialVars;
 				this.unboundGlobals = proto.unboundGlobals;
+				this.probedUnboundGlobals = proto.probedUnboundGlobals;
 				this.globalIndices = proto.globalIndices;
 				this.quoteGlobals = proto.quoteGlobals;
 				this.futureTypeIndex = proto.futureTypeIndex;
@@ -12458,6 +12546,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder unboundVariableFuncIndex(int unboundVariableFuncIndex) {
+				this.unboundVariableFuncIndex = unboundVariableFuncIndex;
+				return this;
+			}
+
 			Builder complexBlock(@Nullable WasmComplexBlock complexBlock) {
 				this.complexBlock = complexBlock;
 				return this;
@@ -12580,6 +12673,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder unboundGlobals(Set<String> unboundGlobals) {
 				this.unboundGlobals = unboundGlobals;
+				return this;
+			}
+
+			Builder probedUnboundGlobals(Set<String> probedUnboundGlobals) {
+				this.probedUnboundGlobals = probedUnboundGlobals;
 				return this;
 			}
 
@@ -12802,7 +12900,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * the pruner's class gates bail on.
 	 */
 	private java.util.@Nullable Set<String> usedLayoutTags(List<LispVal> program, ClosRegistry closRegistry,
-			boolean open) {
+			boolean open, boolean readsUnboundGlobal) {
 		if (open || this.dynamic) {
 			return null;
 		}
@@ -12886,8 +12984,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			// The same for an unbound name's unbound-variable, which _symbol_value's
-			// miss builds (WasmRuntimeBuilder.UnboundVariableReport).
-			if (symbols.contains(LispNames.SYMBOL_VALUE)) {
+			// miss and _unbound_variable build
+			// (WasmRuntimeBuilder.UnboundVariableReport).
+			if (symbols.contains(LispNames.SYMBOL_VALUE) || readsUnboundGlobal) {
 				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME);
 			}
 			// The same for a parse-integer's parse-error (lowerParseError).

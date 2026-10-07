@@ -409,9 +409,10 @@ final class JvmExprCompiler {
 	 * ({@code Ctx.threadScopedSpecials}) reads DYNAMIC-FIRST through {@code _dget} (this
 	 * thread's binding when one is active, else the {@code _g$} global default); every
 	 * other global -- a special a shallow binding sets, one that is never
-	 * {@code let}-bound -- stays a single {@code getstatic}, plus the UNBOUND-marker test
-	 * when its field carries its bound-ness
-	 * ({@link JvmDynVarRuntimeBuilder#unboundMarker}).
+	 * {@code let}-bound -- stays a single {@code getstatic}. A global whose field carries
+	 * its bound-ness ({@link JvmDynVarRuntimeBuilder#unboundMarker}) passes the value
+	 * through {@code _bound} with its name, which signals the {@code unbound-variable}
+	 * naming it for the UNBOUND marker.
 	 */
 	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && LispNames.MV_SPILL.equals(name)) {
@@ -427,26 +428,20 @@ final class JvmExprCompiler {
 			return;
 		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		if (dyn != null) {
-			java.lang.classfile.constantpool.FieldRefEntry tlField = dyn.fields().get(name);
-			if (tlField != null) {
-				ctx.body.getstatic(tlField);
-				ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
-				ctx.body.invokestatic(dyn.dget());
-				return;
-			}
+		java.lang.classfile.constantpool.FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
+		if (tlField != null) {
+			ctx.body.getstatic(tlField);
+			ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+			ctx.body.invokestatic(java.util.Objects.requireNonNull(dyn).dget());
 		}
-		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
-		// A global whose field carries its bound-ness reads its UNBOUND marker as nil.
+		else {
+			ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+		}
+		// A global whose field carries its bound-ness: the UNBOUND marker signals.
 		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
 		if (marker != null && marker.globals().contains(name)) {
-			ctx.body.dup();
-			ctx.body.getstatic(marker.field());
-			MethodCode.Label value = ctx.body.newLabel();
-			ctx.body.if_acmpne(value);
-			ctx.body.pop();
-			ctx.body.aconst_null();
-			ctx.body.labelBinding(value);
+			JvmEmitHelper.compileUnspelledLiteral(name, ctx);
+			ctx.body.invokestatic(marker.bound());
 		}
 	}
 

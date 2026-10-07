@@ -63,7 +63,7 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
   program by `lispOnOtherThreads` in `JvmLispCompiler` (`Ctx.threadScopedSpecials`; "One
   thread" below):
   - **One thread: shallow, WASM's shape.** The binding saves `_g$*` into a slot and sets it;
-    every read is the plain `getstatic` (plus the UNBOUND test for a tracked special), `setq`
+    every read is the plain `getstatic` (plus `_bound` for a special without a value), `setq`
     the plain `putstatic`. No `_d$` field, no helper.
   - **Another thread can run Lisp: thread-scoped.** The special also gets a
     `private static ThreadLocal _d$*`, created in `<clinit>`, **NEVER lazily** (a racy first
@@ -79,7 +79,8 @@ a cl symbol (registering it would perturb pinned introspection counts). Earmuffs
 - Both compiled backends bind a `let`'s variables one at a time, so a `let` whose later init
   runs code after a special binding is staged first (`.kb/parallel-let.md`).
 - Every read goes through `JvmExprCompiler.compileSpecialRead` (thread-scoped: `_dget`, this
-  thread's binding, else `_g$*`) -- in the binding method, a callee and a closure alike. `setq`
+  thread's binding, else `_g$*`; then `_bound` for a special without a value, "A read of a
+  special without a value" below) -- in the binding method, a callee and a closure alike. `setq`
   writes the active binding (`JvmSetqCompiler.emitGlobalStore`); with none it lands in `_g$*`.
 - **The body is a PROTECTED REGION of the unwind-protect machinery**
   (`JvmUnwindProtectCompiler.Region`, opened by `JvmLetCompiler`) whose cleanups are the
@@ -391,13 +392,14 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   its argument, which makes every such special tracked. A self-evaluating argument probes
   nothing. A program with none compiles byte-identically.
 - Representation: an UNBOUND marker in the GLOBAL cell until a global store overwrites it; a
-  binding saves and restores it like any value. JVM (`JvmDynVarRuntimeBuilder.unboundMarker`):
-  `_unbound`, a `new Object()` set in `<clinit>` with the tracked `_g$` seeded from it, `_dget`
-  reading it as nil, `_dbound(tl, global)` t for this thread's `_d$` cell or a non-marker global.
-  Wasm: the raw-local sentinel (`Ctx.unboundGlobals`), stored by `_start` before user code; a read
-  answers nil for it through an inline `ref.eq` (`WasmExprCompiler.emitUnboundAsNil`, ~15 B a
-  site), except in the binding's own frame, where the binding is active; `--reentrant` reads
-  the task cell first as before.
+  binding saves and restores it like any value. Since 2026-10-07 EVERY special without a value
+  carries it, probed or not ("A read of a special without a value" below); the tracked set is
+  the one `boundp` answers from the variable (`UnboundMarker.probed`,
+  `Ctx.probedUnboundGlobals`). JVM (`JvmDynVarRuntimeBuilder.unboundMarker`): `_unbound`, a
+  `new Object()` set in `<clinit>` with the `_g$` fields seeded from it, `_dbound(tl, global)` t
+  for this thread's `_d$` cell or a non-marker global. Wasm: the raw-local sentinel
+  (`Ctx.unboundGlobals`), stored by `_start` before user code; `--reentrant` reads the task
+  cell first as before.
 - `boundp` (`LispMacroExpander.dynamicFirstBoundp`): a literal tracked name is
   `(%global-boundp 'S)`; a computed name calls the shared, call-only `%boundp-dynamic`
   (`boundpDynamicRuntime`, a segmented name dispatch onto `%global-boundp`, the miss on
@@ -428,9 +430,8 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   Pins: `BoundpFunctionValueFixture` on `boundpAndFboundpAreFunctionValues` (`LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), ci-spec
   `boundp-and-fboundp-as-function-values`.
-- Still nil, not an error, for a read of a tracked special while unbound (a direct read,
-  `symbol-value`, `eval`), as for every unassigned global; a `progv` short of values binds nil
-  (both documented). Signalling instead, for every valueless `defvar`: `.todo/d85`.
+- A read of such a special while unbound signals ("A read of a special without a value"
+  below); a `progv` short of values still binds nil (documented; SBCL leaves it unbound).
 - Measured 2026-10-04 (before -> after). size-report, bench-report: byte-identical on P1,
   `--optimize=size`, component and JVM. Workers: byte-identical except hello-ningle and
   httpbin-ningle +1,255 B: lack's and alexandria's computed `boundp` track cl-ppcre's 14
@@ -442,6 +443,60 @@ for good: NIL inside `(let ((*x* 1)) ...)`, and T forever once a callee `setq`'d
   a tracked special: inside a binding unchanged (JVM 47 ms, wasm 93 ms), outside it JVM +3 ms,
   wasm +5%; 20M `boundp`: JVM 304 -> ~20 ms, wasm 1.3 -> ~0.12 s (a variable read where the
   mirror probe walked an alist).
+
+## A read of a special without a value (all four backends, 2026-10-07)
+
+**Invariant: a read of a special that has no value -- outside every binding of it and before
+any store -- signals the `unbound-variable` naming it, as the interpreter and SBCL do.** Landed
+with `.todo/d85`. Before, the compile paths read NIL there: only a `boundp`-tracked special had an
+unbound state at all, and its read turned the marker into nil.
+
+- The set (`SpecialVarCollector.collectValueless`): every special no `defvar` with a value,
+  `defparameter` or `defconstant` names anywhere (scope-blind) -- a `(defvar x)`, a `declaim` /
+  `proclaim` `special`, a local `(declare (special x))` alone -- and not a `cl` symbol; plus,
+  without the eval mirror, the literally probed globals ("Bound-ness" above). Each starts as the
+  UNBOUND marker. A special a definer gives a value reads as before, byte for byte; a non-special
+  global no probe names still reads nil before its first store.
+- `boundp` keeps the narrower probed set: every other name's `boundp` reads the mirror, which
+  agrees for a special no binding changes, so the eval gate and the computed `boundp` dispatch
+  are unchanged.
+- JVM: the read -- `getstatic`, or thread-scoped `_dget`, which hands the marker back -- passes
+  through `_bound(value, name)` (`JvmDynVarRuntimeBuilder.boundCode`; `ldc` + `invokestatic`, +5-6 B
+  a site): the value, or `RuntimeException("The variable NAME is unbound")`, the text the landing
+  pad recovers the class and name from. `_bound` has no line table, so the uncaught report names
+  the reading form (`UncaughtReportParityTest`). A special without a value is never a raw global.
+- Wasm (`WasmExprCompiler.emitCheckedRead`): a plain module global is tested BEFORE it is read --
+  `global.get g; global.get sentinel; ref.eq; if; [i32.const off; i32.const len; call
+  _unbound_variable;] unreachable; end; global.get g` (17-20 B in EH mode, 11 outside). EH mode
+  only: `_unbound_variable(off, len)` (`TYPE_WRITE_STR`'s signature, after `_undefined_function`)
+  builds the symbol and throws `UnboundVariableReport`'s condition -- typed where `usedLayoutTags`
+  bakes `unbound-variable` (a landing pad and a special without a value or a literal probe), the
+  message-only payload elsewhere. Outside EH mode the read traps, as `error` does there. A read in
+  the binding's own frame skips the test (`Ctx.boundSpecials`); `--reentrant` tests its per-task
+  read through a temp.
+- Measured 2026-10-07 (load average 7-22). Premise on SBCL 2.2.9 / interpreter / JVM / P1 /
+  component: `(defvar *dv*)` then `*dv*` and `(symbol-value '*dv*)` caught for `cell-error-name`:
+  `*DV*` / `*DV*` / NIL / NIL / NIL. Shapes, sizes before -> after (default `--optimize`, JVM
+  classes / P1 / component): jzon demo 585,908 / 468,924 / 477,515 -> +103 / +12 / +12; the
+  cl-ppcre E2E exercise 760,038 / 584,425 / 588,974 -> +753 / +1,387 / +1,388; the iterate one
+  1,383,854 / 1,087,173 / 1,094,224 -> +776 / +2,419 / +2,420; the trivia one 1,284,167 / 990,083
+  / 997,290 -> +159 / +506 / +507. A JVM inline test (`dup; getstatic _unbound; if_acmpne; ldc;
+  invokestatic`, 15-16 B a site) cost cl-ppcre +3,109 and iterate +4,101. A wasm shared check
+  (`global.get; i32.const off; call`, without the length) cost cl-ppcre +683, iterate +803,
+  trivia +48. Time, 20M reads of such a special in a loop, inside a binding another function
+  made, ms per round: JVM 8-9 before, 7-9 with `_bound`, 7-9 inline (the JIT inlines `_bound`);
+  wasm EH module 102-111 before, the shared check 133-141, read-then-test with the arm ending in
+  the call 112-123, test-then-read ending in the call 125-138, test-then-read ending in
+  `unreachable` 103-116 -- the shape taken; outside EH mode 109-123 both. A shared check at
+  `--optimize=size` was not taken: 0.6-1.4 KB (0.1-0.15%) on those programs for a second emission
+  and a new function type, and a call per read.
+- Byte identity: size-report (hello_world, pi_approx, zlib at off / default / size / component
+  and JVM; dom_reactor at the three `--no-wasi` levels and JVM) and bench-report (10 programs,
+  default / size / component / JVM): 59 outputs identical. examples: 254 of 269 compiles
+  identical; the 15 others hold a special without a value -- cl-ppcre's local declarations under
+  rove or ningle (roman, minesweeper-core-test, the three Workers checks, httpbin-ningle), jzon's
+  `*writer*` (httpbin-jzon), cffi's (cffi-sqlite) -- +12 to +873 B wasm, +103 to +914 B JVM, and
+  every one that runs prints what it did before. ci-spec: all 675 cases on all four backends.
 
 ## Local special declarations; a special is never captured (all four backends, 2026-10-05)
 
@@ -627,7 +682,8 @@ honored program-wide, so hundreds of its `let`s bind specials and each pays ~70 
 JVM shallow vs thread-scoped (ci-spec cannot pin it: its program holds `async-defun`s, so it is
 thread-scoped): `JvmLispCompilerTest#aSpecialIsBoundShallowUnlessAnotherThreadCanRunLispCode`
 (no `_d$`/ThreadLocal on one thread; every entry of the gate keeps them),
-`#onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker` (both shapes of `boundp`),
+`#aSpecialWithoutAValueCarriesTheUnboundMarkerAndOnlyAProbedBoundOneAsksDbound` (both shapes
+of `boundp`),
 `#compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable` (the collector, thread-scoped);
 threads released at once, each binding and reading its own value:
 `JvmExportTest#aSpecialAnExportBindsIsBoundPerCallingThread`,
@@ -669,13 +725,23 @@ Name dispatch: `NameDispatchFixture` (154 specials, two hash-colliding pairs) on
 `WasmLispCompilerTest#aNameDispatchArmIsAnOffsetCompare` (a 128-arm accessor < 32 B an arm),
 `NameDispatchTest`.
 
-Bound-ness without a value: `BoundpInBindingFixture` (SBCL's answers; a compile-path read
-while unbound) on `boundpAnswersInsideABindingOfASpecialWithoutAValue` (`LispEvaluatorTest`,
+Bound-ness without a value: `BoundpInBindingFixture` (SBCL's answers; a read while unbound,
+which signals) on `boundpAnswersInsideABindingOfASpecialWithoutAValue` (`LispEvaluatorTest`,
 `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` -- Preview 1 and component), ci-spec
-`boundp-of-a-special-inside-its-binding`; `JvmLispCompilerTest#onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker`,
+`boundp-of-a-special-inside-its-binding`; `JvmLispCompilerTest#aSpecialWithoutAValueCarriesTheUnboundMarkerAndOnlyAProbedBoundOneAsksDbound`,
 `#computedBoundpSitesDoNotEachPayForTheTrackedSpecials`, `#boundpOfASpecialWithoutAValueIsThreadScoped`;
 `WasmReentrantE2eTest#overlappedCallsEachSeeTheirOwnBindingOfASpecialWithoutAValue`;
 `SpecialVarCollectorTest#aProbedSpecialWithoutADefinersValueCarriesItsBoundnessInItsVariable`.
+
+A read of a special without a value: `UnboundVariableNameFixture` on
+`anUnboundVariableCarriesItsNameInTheCellErrorNameSlot` (`LispEvaluatorTest`,
+`JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest` -- Preview 1 and component) and ci-spec
+`unbound-variable-carries-its-name` (thread-scoped on the JVM: the ci-spec program holds
+`async-defun`s); `aSpecialWithoutAValueIsUnboundInAThreadThatDoesNotBindIt` (`ThreadTest`,
+`JvmThreadTest`); `WasmReentrantE2eTest#overlappedCallsEachReadTheirOwnBindingOfASpecialWithoutAValue`;
+`WasmLispCompilerIntegrationTest#anUncaughtReadOfASpecialWithoutAValueEndsTheProgram` (the trap
+outside EH mode, the report in it); `UncaughtReportParityTest#aReadOfASpecialWithoutAValueReportsWhereItIsRead`;
+`SpecialVarCollectorTest#everySpecialWithoutADefinersValueStartsUnbound`.
 
 Parameters: `aParameterNamedLikeASpecialBindsItDynamically` on `LispEvaluatorTest`,
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 and component), one

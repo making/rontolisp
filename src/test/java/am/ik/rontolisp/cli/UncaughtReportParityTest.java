@@ -117,6 +117,25 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void aReadOfASpecialWithoutAValueReportsWhereItIsRead() throws Exception {
+		// The compiled read used to answer nil and the program ran on to exit 0; it
+		// signals the interpreter's unbound-variable now, located at the form that reads
+		// in the function that reads it -- the check the value passes through carries no
+		// line of its own.
+		Path program = write("valueless.lisp", """
+				(defvar *valueless*)
+
+				(defun peek ()
+				  (list :peek
+				        *valueless*))
+
+				(peek)
+				""");
+		assertSameReport(program, "Unhandled condition: The variable *VALUELESS* is unbound",
+				"  at " + program + ":4 in PEEK");
+	}
+
+	@Test
 	void aStructAccessorOnANonInstanceReportsTheAccessorAndItsType() throws Exception {
 		// The report line itself, not only the location lines: it was the interpreter's
 		// primitive ("%OBJ-REF expects an instance, got 42") against the JVM's

@@ -152,6 +152,30 @@ class SpecialVarCollectorTest {
 	}
 
 	/**
+	 * The specials only a binding or an assignment gives a value, probed or not, whose
+	 * variable the compile paths start as the UNBOUND marker: a {@code defvar} without a
+	 * value, a {@code declaim}, a local declaration -- but no name a {@code defvar} with
+	 * a value, a {@code defparameter} or a {@code defconstant} names anywhere, even in a
+	 * body never run, and no {@code cl} symbol.
+	 */
+	@Test
+	void everySpecialWithoutADefinersValueStartsUnbound() {
+		SequencedSet<String> specials = new LinkedHashSet<>(
+				List.of("*A*", "*B*", "*C*", "*D*", "*E*", "LOC", "*PRINT-BASE*", "*STANDARD-OUTPUT*"));
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defvar *a*)
+				(defvar *b* nil)
+				(defparameter *c* 1)
+				(declaim (special *d*))
+				(defun q () (when (cond) (defvar *e* 2)))
+				(defun r () (declare (special loc)) (list *a* *d* loc *print-base*))
+				(setq *a* 1)
+				""");
+		assertThat(SpecialVarCollector.collectValueless(program, specials)).containsExactly("*A*", "*D*", "LOC");
+		assertThat(SpecialVarCollector.collectValueless(program, new LinkedHashSet<>())).isEmpty();
+	}
+
+	/**
 	 * What the eval gate reads before the runtime is injected: the probed specials
 	 * without a value that something binds, and whether any {@code boundp} reaches past
 	 * them to the mirror -- every occurrence of the symbol but a literal probe of one of

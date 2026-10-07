@@ -3664,6 +3664,35 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * {@code _unbound_variable(off, len)}: throws the {@code unbound-variable} naming the
+	 * symbol whose name is the string-table entry at {@code off} of {@code len} bytes --
+	 * the read of a global holding the UNBOUND marker
+	 * ({@code WasmExprCompiler.emitCheckedRead}). Never returns.
+	 * @param report what the throw builds
+	 * @return the body
+	 */
+	static byte[] buildUnboundVariableBody(UnboundVariableReport report) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// Locals after the name's (offset, length): the symbol and the message.
+		int symLocal = 2;
+		int msgLocal = 3;
+		w.write(1);
+		w.write(2);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		WasmEmitHelper.emitStrBuildCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(symLocal);
+		report.emitThrow(w, symLocal, msgLocal);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Closes a dispatcher the prologue opened in EH mode, ahead of the function's own
 	 * {@code end}: the dispatch's value is returned, and the two arms its non-function
 	 * branches land in follow it. Nothing outside EH mode.

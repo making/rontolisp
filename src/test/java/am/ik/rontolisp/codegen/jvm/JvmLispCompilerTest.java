@@ -20904,7 +20904,8 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
 		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
-		// A read of it while it has no value answers nil, never the marker.
+		// A read of it while it has no value signals the unbound-variable naming it,
+		// never answering the marker.
 		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE))
 			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED);
 		// A user definition under the shared dispatch's name (its segments extend it)
@@ -20958,13 +20959,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void onlyAProbedBoundSpecialWithoutAValueCarriesTheUnboundMarker() throws Exception {
+	void aSpecialWithoutAValueCarriesTheUnboundMarkerAndOnlyAProbedBoundOneAsksDbound() throws Exception {
 		// A literal probe of a bound special no definer gives a value reads its variable
 		// and never the mirror: on one thread its _g$ field, which the shallow binding
 		// sets, against the marker; where another thread can run Lisp code (here a host,
-		// through the export) _dbound over its ThreadLocal and global. A never-bound one
-		// carries the marker in its plain field, and a valued or never-probed special
-		// keeps the plain representation, so such a program compiles as it did.
+		// through the export) _dbound over its ThreadLocal and global. Every special
+		// without a value carries the marker in its _g$ field, probed or not, and its
+		// read passes the value through _bound, which signals for the marker; a special
+		// a definer gives a value keeps the plain representation and the plain read, so
+		// such a program compiles as it did.
 		String probe = "(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))";
 		byte[] tracked = new JvmLispCompiler("Test")
 			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(probe)));
@@ -20983,14 +20986,19 @@ class JvmLispCompilerTest {
 			.process(LispReader.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p))")));
 		assertThat(declaredFieldNames(neverBound)).contains("_unbound");
 		assertThat(declaredMethodNames(neverBound)).doesNotContain("_dbound", "_envLookup");
-		for (String untracked : List.of(
-				"(defvar *ub* 0) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))",
-				"(defvar *ub*) (defun ub-p () *ub*) (print (let ((*ub* 1)) (ub-p)))")) {
-			byte[] classBytes = new JvmLispCompiler("Test")
-				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(untracked)));
-			assertThat(declaredFieldNames(classBytes)).as(untracked).doesNotContain("_unbound");
-			assertThat(declaredMethodNames(classBytes)).as(untracked).doesNotContain("_dbound");
-		}
+		String unprobed = "(defvar *ub*) (defun ub-p () *ub*) (print (let ((*ub* 1)) (ub-p)))";
+		byte[] read = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(unprobed)));
+		assertThat(declaredFieldNames(read)).contains("_unbound");
+		assertThat(declaredMethodNames(read)).contains("_bound").doesNotContain("_dbound");
+		assertThat(ownCallsIn(read, "UB-P", "_bound")).isOne();
+		assertThat(runClass(read)).isEqualTo("1");
+		byte[] valued = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub* 0) (defun ub-p () (boundp '*ub*)) (defun ub-r () *ub*)"
+					+ " (print (let ((*ub* 1)) (list (ub-p) (ub-r))))")));
+		assertThat(declaredFieldNames(valued)).doesNotContain("_unbound");
+		assertThat(declaredMethodNames(valued)).doesNotContain("_dbound", "_bound");
+		assertThat(runClass(valued)).isEqualTo("(T 1)");
 	}
 
 	@Test

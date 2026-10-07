@@ -150,6 +150,29 @@ class WasmReentrantE2eTest {
 		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
 	}
 
+	// A read of a special declared without a value: each overlapped call reads its own
+	// binding across the suspend, and an export entered outside any binding reads the
+	// module global's UNBOUND marker, which signals an unbound-variable -- the read used
+	// to answer nil, which an :int result cannot carry.
+	private static final String UNBOUND_READ_MODULE = """
+			(rontolisp:wasm-import 'pause :from "env" :as "pause" :params '(:int) :returns :int :async t)
+			(defvar *ctx*)
+			(defun observe () *ctx*)
+			(rontolisp:async-defun work (n)
+			  (let ((*ctx* n))
+			    (rontolisp:await (pause n))
+			    (+ (* 1000 (observe)) *ctx*)))
+			(rontolisp:wasm-export 'work :params '(:int) :returns :int)
+			(defun peek () (handler-case (observe) (unbound-variable () -1) (error () -2)))
+			(rontolisp:wasm-export 'peek :params '() :returns :int)
+			""";
+
+	@Test
+	void overlappedCallsEachReadTheirOwnBindingOfASpecialWithoutAValue() throws Exception {
+		Path wasm = compile("unbound-read.wasm", UNBOUND_READ_MODULE);
+		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "-1");
+	}
+
 	// A binding the LOAD PATH makes is the load path's own, exactly like one an export
 	// call makes: an export the host enters from inside it reads the default. The top
 	// level compiles in contexts of its own, which bound the shared module global
