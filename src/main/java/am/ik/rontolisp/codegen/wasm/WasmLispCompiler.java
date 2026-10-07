@@ -4499,6 +4499,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _div_zero's text, interned HERE for the same reason as operandTexts above.
 		StringTable.StringEntry divZeroMessage = divZeroLanding
 				? stringTable.addBodyString("\"" + ClosRegistry.DIVISION_BY_ZERO_MESSAGE + "\"") : null;
+		// The head of what a left ash _big_ash cannot build signals, the count printed
+		// after it: EH mode, and ash reachable (spelled, or resolvable at run time). The
+		// runtime's own _big_ash calls (rational, isqrt, the float conversions) shift by
+		// bounded counts, so elsewhere the guard keeps its trap and the module its bytes.
+		StringTable.StringEntry ashTooLargePrefix = ehMode
+				&& (resolvesAnyName || programUsesSymbol(spelledDivisions, LispNames.ASH))
+						? stringTable.addBodyString("\"" + ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX + "\"")
+						: null;
 		// subseq's bounds-error text (_subseq, _subseq_str, %subseq-end), interned HERE
 		// for the same reason as operandTexts above: those bodies are built after the
 		// data segment's content is fixed. EH mode only: outside it the check is a bare
@@ -8495,7 +8503,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_OR));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_XOR));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigNotBody());
-				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAshBody());
+				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAshBody(ashTooLargePrefix, operandOpGlobalIndex,
+						this.usesIdentityHashTables));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigIntlenBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigLogbitpBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigGcdBody());

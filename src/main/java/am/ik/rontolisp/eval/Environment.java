@@ -3532,7 +3532,9 @@ public final class Environment implements Scope {
 		// feasible bit length, so a huge right shift saturates to the sign, while a
 		// huge left shift of a non-zero value cannot be represented
 		// (BigInteger.shiftLeft takes an int) and signals instead of answering a
-		// wrapped-around wrong value. Counts within the int range keep the
+		// wrapped-around wrong value -- as does one within the int range whose result
+		// would pass BigInteger's bit length, checked before shiftLeft allocates the
+		// array it would refuse. Counts within the int range keep the
 		// width-aware paths below: saturating at 64 is only valid for a fixnum --
 		// a bignum shifted right by 70 still has high bits (ASH.3).
 		env.defineFunction(LispNames.ASH, new LispFunction(LispNames.ASH, args -> {
@@ -3546,7 +3548,7 @@ public final class Environment implements Scope {
 				if (asBigInteger(args.get(0)).signum() == 0) {
 					return new LispInteger(0);
 				}
-				throw new LispEvalException(LispNames.ASH + ": shift count too large: " + b.value());
+				throw new LispEvalException(ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX + b.value());
 			}
 			long count = asLong(args.get(1));
 			if (count < Integer.MIN_VALUE) {
@@ -3556,7 +3558,7 @@ public final class Environment implements Scope {
 				if (asBigInteger(args.get(0)).signum() == 0) {
 					return new LispInteger(0);
 				}
-				throw new LispEvalException(LispNames.ASH + ": shift count too large: " + count);
+				throw new LispEvalException(ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX + count);
 			}
 			if (args.get(0) instanceof LispInteger i) {
 				long value = i.value();
@@ -3572,7 +3574,11 @@ public final class Environment implements Scope {
 					}
 				}
 			}
-			return normalizeBig(asBigInteger(args.get(0)).shiftLeft((int) count));
+			BigInteger value = asBigInteger(args.get(0));
+			if (value.signum() != 0 && value.bitLength() + count >= Integer.MAX_VALUE) {
+				throw new LispEvalException(ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX + count);
+			}
+			return normalizeBig(value.shiftLeft((int) count));
 		}));
 		env.defineFunction(LispNames.INTEGER_LENGTH, new LispFunction(LispNames.INTEGER_LENGTH, args -> {
 			requireArgCount(LispNames.INTEGER_LENGTH, args, 1);

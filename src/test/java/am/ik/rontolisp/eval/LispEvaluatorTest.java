@@ -20451,6 +20451,18 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
 	}
 
+	// A left shift by a count no backend can build a result for signals a simple-error
+	// naming the operator and the count -- the JVM signalled an arithmetic-error without
+	// the count, the wasm-GC backends trapped, and a count at the int range's edge
+	// reported the host's BigInteger text. The twins are
+	// JvmLispCompilerTest#compileAndRunARunawayAshCountSignalsASimpleError and
+	// WasmLispCompilerIntegrationTest#aRunawayAshCountSignalsASimpleError.
+	@Test
+	void aRunawayAshCountSignalsASimpleError() {
+		assertThat(printedLines(am.ik.rontolisp.AshCountFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.AshCountFixture.EXPECTED);
+	}
+
 	// A zero base to a complex power answered #C(NaN NaN) for every power: log 0 is
 	// -inf, multiplied into NaN parts. The twins are
 	// JvmLispCompilerTest#compileAndRunZeroBaseToAComplexPower and

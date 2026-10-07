@@ -27667,6 +27667,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aRunawayAshCountSignalsASimpleError() throws Exception {
+		// The LispEvaluatorTest#aRunawayAshCountSignalsASimpleError twin. EH mode (the
+		// program's handler-case): _big_ash trapped on a bignum count and on a left count
+		// past its allocation guard, past every handler.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.AshCountFixture.SOURCE,
+				am.ik.rontolisp.reader.Features.WASM, true, false);
+		assertThat(compileAndRunProgram(program)).isEqualTo(am.ik.rontolisp.AshCountFixture.EXPECTED);
+		assertThat(compileComponentAndRunProgram(program)).isEqualTo(am.ik.rontolisp.AshCountFixture.EXPECTED);
+	}
+
+	@Test
 	void zeroBaseToAComplexPower() throws Exception {
 		// The LispEvaluatorTest#zeroBaseToAComplexPower twin: the inline exp(w*log z)
 		// answered #C(NaN NaN) for a zero base and every power.

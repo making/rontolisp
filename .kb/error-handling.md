@@ -1280,9 +1280,10 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: the limb-tier boundaries (a left `ash` past the allocation
-  guard: `(ash 1 40000000)`) -- and everything outside EH mode. (A division by zero signals since
-  2026-10-04: "A division by zero signals division-by-zero".) (The array argument of an access and of an array-shape accessor is named since
+- **What still traps on wasm-GC**: the limb-tier boundaries (`_int_val`'s limb arm: a limb-sized
+  `random` limit) -- and everything outside EH mode. (A division by zero signals since
+  2026-10-04: "A division by zero signals division-by-zero"; a left `ash` past the allocation guard
+  since 2026-10-07: "A left `ash` that cannot be built signals a simple-error".) (The array argument of an access and of an array-shape accessor is named since
   2026-09-27, a vector without a fill pointer handed the fill-pointer surface since 2026-09-28: "A
   sequence, array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
   2026-09-26: "A wrong-type argument names its operator".)
@@ -1445,6 +1446,49 @@ component, JVM class and jar. The wasm arm is inline at each complex `expt` site
 keeping the complex group +144 B, jar +73 B (the arm, less a duplicated `atan2` call `_cpow` used to
 make). A 2M-iteration nonzero-base complex `expt` loop unchanged within noise on the interpreter,
 JVM and P1.
+
+## A left `ash` that cannot be built signals a simple-error
+**Invariant: a left `ash` of a non-zero value whose result the backend cannot build signals a
+CATCHABLE `simple-error` reporting `ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX` and the count
+as `prin1` prints it (`ASH: shift count too large: 1180591620717411303424`), byte-identical on all
+four backends (wasm-GC: in EH mode). A zero stays zero at any count; a right shift by any count
+answers the sign past the value's width.** Pinned by `AshCountFixture`
+(`LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#...aRunawayAshCountSignalsASimpleError`,
+P1 and component) and `ci-spec.yaml`'s `a-runaway-ash-count-signals-a-simple-error`.
+
+Measured 2026-10-07 (count from a variable, under `handler-case`):
+
+| Call | SBCL 2.2.9 | interpreter | JVM | P1, component |
+| --- | --- | --- | --- | --- |
+| `(ash 1 (expt 2 40))` | `HEAP-EXHAUSTED-ERROR` (a storage-condition, no `error` clause catches it) | `SIMPLE-ERROR` `ASH: shift count too large: N` | `ARITHMETIC-ERROR` `ash: shift count too large` | trap |
+| `(ash 1 (expt 2 70))` | `SIMPLE-ERROR` `can't represent result of left shift` | as above | as above | trap (`_int_val` on a limb count) |
+| `(ash 1 2147483647)` | computes (2^31 bits) | `ARITHMETIC-ERROR` `BigInteger would overflow supported range` | the same | trap (count past 2^25) |
+| `(ash 0 (expt 2 70))`, `(ash -5 (- (expt 2 70)))` | `0`, `-1` | `0`, `-1` | `0`, `-1` | trap |
+
+The class is SBCL's for the one runaway count it classifies; the text the interpreter's, which
+names the operator and the count as the operand reports do. Where the limit lies stays the
+backend's: interpreter and JVM refuse a result of `Integer.MAX_VALUE` bits or more
+(`bitLength + count`, checked before `BigInteger.shiftLeft` allocates the array its range check
+then refuses -- 256 MB at the edge), wasm-GC a count past 2^25 (`_big_ash`'s allocation guard), so
+`(ash 1 40000000)` signals there and computes elsewhere.
+
+- **Interpreter**: `Environment`'s `ash` throws a `LispEvalException` (a `simple-error`).
+- **JVM**: `_ash` throws a plain `RuntimeException` (`JvmNumericRuntimeBuilder.AshTooLargeRefs`),
+  which the landing pad takes as a `simple-error`, from the huge-count arm and from the BigInteger
+  tail's width check. The fused trees bail to `_ash` (`_fxAsh` refuses a count past the int range).
+- **wasm-GC**: `_big_ash` reads an i31 count inline and saturates a limb-tier count to +-2^32 by
+  its sign (both sides then run the existing code: the right clamp, the left guard), answers 0 for
+  a zero value once the result does not fit an i64, and at the guard throws the message-only
+  `(nil . "ASH: shift count too large: " ++ prin1(count))` payload after clearing the operator
+  register (the throw skips the clear after the call). The gate is EH mode with `ash` reachable
+  (spelled, or any name resolvable at run time); elsewhere the guard keeps its `unreachable`. The
+  runtime's own `_big_ash` calls (rational, isqrt, the float conversions) shift by bounded counts.
+  The arms ship wherever a generic `ash` call keeps them (the type-test fold prunes them from a
+  fused site's fallback), so their bytes count: the saturation is arithmetic, `(sign | 1) << 32`,
+  because an `if` over two `i64.const +-2^62` left `WasmLispCompilerTest`'s
+  `theSizeLevelShrinksTheModuleAndTheDefaultLevelIsTheBareFlag` program 3,520 B at `--optimize=size`
+  against 3,514 B at the default level (2026-10-07; 3,433 / 3,499 before the arms, 3,502 / 3,514
+  after).
 
 ## A wrong-type argument names its operator
 **Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of

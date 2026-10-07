@@ -1975,6 +1975,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunARunawayAshCountSignalsASimpleError() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#aRunawayAshCountSignalsASimpleError:
+		// _ash threw an arithmetic-error without the count, and a count at the int
+		// range's edge reported BigInteger's own text.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.AshCountFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.AshCountFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunZeroBaseToAComplexPower() throws Exception {
 		// The interpreter twin is LispEvaluatorTest#zeroBaseToAComplexPower: _cpow's
 		// exp(w*log z) answered #C(NaN NaN) for a zero base and every power.
