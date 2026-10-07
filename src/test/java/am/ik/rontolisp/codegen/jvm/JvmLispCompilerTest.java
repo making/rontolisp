@@ -5804,6 +5804,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin); the user macro goes through
+		// the macro-expansion pass the CLI runs first.
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_EXPECTED);
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART_EXPECTED);
+	}
+
+	@Test
 	void aSetfFunctionNameIsAFunctionNameInsideAClosure() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the closure's free-variable
 		// walk read (setf name) as a call and refused to capture NAME.

@@ -126,6 +126,62 @@ public final class UndefinedFunctionNameFixture {
 			+ " (UFR-CALL-NOPE UNDEFINED-FUNCTION) (UFR-CALL-NOPE UFR-REF-NOPE))";
 
 	/**
+	 * A macro or special operator taken as a function: a computed {@code funcall},
+	 * {@code apply}, {@code mapcar} and {@code #'name}, for a standard macro
+	 * ({@code when}, {@code defun}), a special operator ({@code if}, {@code let*}),
+	 * {@code while} and a user macro. SBCL signals {@code undefined-function} naming the
+	 * operator for each; the interpreter used to signal a {@code simple-error} where the
+	 * compiled backends already signalled the class. The report text is the compiled
+	 * backends' ({@code The function NAME is undefined}), so SBCL's own wording per
+	 * operator kind is not pinned. {@code symbol-function} of a macro is left out: SBCL
+	 * answers the macro's expander there. A literal {@code #'when} or {@code #'if} is a
+	 * compile-time error in SBCL, so only the computed designators and {@code #'while}
+	 * (undefined there) have SBCL's answer; the literal forms hold the four backends to
+	 * one another, signalling at the reference as an undefined name does.
+	 */
+	public static final String MACRO_OPERATOR = """
+			(defmacro ufm-macro (x) (list 'quote x))
+			(defun ufm-name (thunk)
+			  (handler-case (funcall thunk)
+			    (undefined-function (c) (cell-error-name c))))
+			(print (list (ufm-name (lambda () (funcall (car (list 'when)) t 1)))
+			             (ufm-name (lambda () (funcall (car (list 'defun)) 'ufm-x nil)))
+			             (ufm-name (lambda () (funcall (car (list 'if)) t 1 2)))
+			             (ufm-name (lambda () (funcall (car (list 'let*)) nil)))
+			             (ufm-name (lambda () (funcall (car (list 'while)) t)))
+			             (ufm-name (lambda () (funcall (car (list 'ufm-macro)) 1)))))
+			(print (list (ufm-name (lambda () (apply (car (list 'when)) '(t 1))))
+			             (ufm-name (lambda () (mapcar (car (list 'when)) '(1 2))))
+			             (ufm-name (lambda () (funcall 'when t 1)))
+			             (ufm-name (lambda () #'when))
+			             (ufm-name (lambda () #'if))
+			             (ufm-name (lambda () #'while))
+			             (ufm-name (lambda () #'ufm-macro))))
+			(print (handler-case (funcall (car (list 'when)) t 1)
+			         (error (c) (list (typep c 'cell-error) (princ-to-string c)))))
+			""";
+
+	/** What {@link #MACRO_OPERATOR} prints, one value per line. */
+	public static final String MACRO_OPERATOR_EXPECTED = String.join("\n", "(WHEN DEFUN IF LET* WHILE UFM-MACRO)",
+			"(WHEN WHEN WHEN WHEN IF WHILE UFM-MACRO)", "(T \"The function WHEN is undefined\")");
+
+	/** {@link #MACRO_OPERATOR} under a {@code handler-bind}. */
+	public static final String MACRO_OPERATOR_RESTART = """
+			(defvar *ufm-seen* nil)
+			(defun ufm-bound (thunk)
+			  (handler-case
+			      (handler-bind ((undefined-function (lambda (c) (push (cell-error-name c) *ufm-seen*))))
+			        (funcall thunk))
+			    (undefined-function (c) (cell-error-name c))))
+			(print (list (ufm-bound (lambda () (funcall (car (list 'when)) t 1)))
+			             (ufm-bound (lambda () #'if))
+			             *ufm-seen*))
+			""";
+
+	/** What {@link #MACRO_OPERATOR_RESTART} prints. */
+	public static final String MACRO_OPERATOR_RESTART_EXPECTED = "(WHEN IF (IF WHEN))";
+
+	/**
 	 * A {@code (setf name)} function no definition has, called through
 	 * {@code #'(setf name)} at top level, from a {@code defun} body and through
 	 * {@code apply}: the condition names {@code (setf name)}, as SBCL does, not the

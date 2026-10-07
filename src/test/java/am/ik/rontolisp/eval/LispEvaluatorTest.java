@@ -10122,7 +10122,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalSharpQuoteOfLetStarIsAnError() {
 		assertThatThrownBy(() -> eval("#'let*")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("is a macro or special operator, not a function");
+			.hasMessageContaining("The function LET* is undefined");
 	}
 
 	@Test
@@ -11185,7 +11185,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalFunctionOfSpecialOperatorThrows() {
 		assertThatThrownBy(() -> eval("#'defun")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("is a macro or special operator, not a function");
+			.hasMessageContaining("The function DEFUN is undefined");
 	}
 
 	@Test
@@ -16962,7 +16962,7 @@ class LispEvaluatorTest {
 	@Test
 	void defmacroHasNoFunctionValue() {
 		assertThatThrownBy(() -> evalMulti("(defmacro my-mac (x) x) #'my-mac")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("not a function");
+			.hasMessageContaining("The function MY-MAC is undefined");
 	}
 
 	@Test
@@ -21168,6 +21168,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
 			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
+	}
+
+	@Test
+	void aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name:
+		// undefined-function naming the operator, not a simple-error.
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART_EXPECTED);
 	}
 
 	@Test
