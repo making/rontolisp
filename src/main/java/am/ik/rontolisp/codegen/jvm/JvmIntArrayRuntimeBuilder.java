@@ -165,7 +165,8 @@ final class JvmIntArrayRuntimeBuilder {
 			.add(buildToGeneral(cp, octets, longArrayClass, arrayListClass, objectClass, alInit, alAdd, longValueOf));
 		methods.add(buildElementType(cp, octets, longArrayClass, objectClass, longValueOf, elementTypeDelegate));
 		methods.add(buildMake(cp, octets, longArrayClass, objectArrayClass, longClass, bigIntegerClass, numberClass,
-				longIntValue, longValueOf, numberLongValue, rtExClass, rtExInit, arrayMakeTyped));
+				longValueOf, numberLongValue, rtExClass, rtExInit, arrayMakeTyped,
+				cp.methodRef(selfClass, JvmArrayRuntimeBuilder.DIMS_TOTAL, JvmArrayRuntimeBuilder.DIMS_TOTAL_DESC)));
 		methods.add(buildRequireGeneral(cp, octets, longArrayClass, rtExClass, rtExInit));
 		return methods;
 	}
@@ -704,12 +705,13 @@ final class JvmIntArrayRuntimeBuilder {
 	// byte[] at width 8, a long[] otherwise -- filled with the masked integer init
 	// (default 0; a non-integer init is a type error). Any other dims shape (rank n)
 	// keeps the general boxed representation via _arrayMake, mirroring the
-	// interpreter's runtime rank check. Locals: 0=dims, 1=init, 2=width, 3=n, 4=arr,
-	// 5=i, 6..7=fill.
+	// interpreter's runtime rank check. The rank-1 length is _arrayDimsTotal's, which
+	// checks the dimension first. Locals: 0=dims, 1=init, 2=width, 3=n, 4=arr, 5=i,
+	// 6..7=fill.
 	private static ArrayMethod buildMake(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
 			ClassEntry objectArrayClass, ClassEntry longClass, ClassEntry bigIntegerClass, ClassEntry numberClass,
-			MethodRefEntry longIntValue, MethodRefEntry longValueOf, MethodRefEntry numberLongValue,
-			ClassEntry rtExClass, MethodRefEntry rtExInit, MethodRefEntry arrayMakeTyped) {
+			MethodRefEntry longValueOf, MethodRefEntry numberLongValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry arrayMakeTyped, MethodRefEntry dimsTotal) {
 		int dims = 0, init = 1, width = 2, n = 3, arr = 4, i = 5, fill = 6;
 		MethodCode a = new MethodCode();
 		MethodCode.Label tryList = a.newLabel();
@@ -718,10 +720,9 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(dims);
 		a.instanceOf(longClass);
 		a.ifeq(tryList);
-		// rank-1 shorthand: n = (int) dims
+		// rank-1 shorthand: n = _arrayDimsTotal(dims)
 		a.aload(dims);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
+		a.invokestatic(dimsTotal);
 		a.istore(n);
 		a.goto_(haveN);
 		// a one-element cons list of dims is rank 1 too: (n) with cdr nil
@@ -735,11 +736,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aaload();
 		a.ifnonnull(general);
 		a.aload(dims);
-		a.checkcast(objectArrayClass);
-		a.loadConstant(0);
-		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
+		a.invokestatic(dimsTotal);
 		a.istore(n);
 		a.goto_(haveN);
 		// rank n: the general representation (no fill pointer / adjustability at this

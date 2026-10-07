@@ -3358,7 +3358,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
-					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime));
+					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime, consShape));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and

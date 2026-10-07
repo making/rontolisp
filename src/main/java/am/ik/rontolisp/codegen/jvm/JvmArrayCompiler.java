@@ -203,12 +203,15 @@ final class JvmArrayCompiler {
 			// boxed path (.kb/vec.md, "Asking a packed array its width").
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue, ctx, className);
+			// Through make-array's wrapper: an initial element that is no real is
+			// _dbl's unnamed type-error, which the wrapper names as the interpreter's
+			// built-in seam does.
 			switch (packedProto) {
-				case LispBFloat16Array ignored -> invokeHelper(ctx, className,
+				case LispBFloat16Array ignored -> invokeNamedHelper(ctx, className,
 						JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-				case LispSingleFloatArray ignored -> invokeHelper(ctx, className,
+				case LispSingleFloatArray ignored -> invokeNamedHelper(ctx, className,
 						JvmFloatArrayRuntimeBuilder.SINGLE_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-				case LispDoubleFloatArray ignored -> invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
+				case LispDoubleFloatArray ignored -> invokeNamedHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
 						JvmFloatArrayRuntimeBuilder.MAKE_DESC);
 			}
 			return;

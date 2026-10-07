@@ -840,13 +840,29 @@ final class WasmArrayCompiler {
 	// The i31 shorthand is spelled HERE because it is three instructions and the shape
 	// nearly every allocation writes; the list arm -- two walks over the list, ~200 bytes
 	// -- is the shared _arr_dims / _arr_total pair, so a rank-n site costs a pair of
-	// calls instead of the loops (.kb/array-literals.md).
+	// calls instead of the loops (.kb/array-literals.md). _arr_dims checks every
+	// dimension it parses; in EH mode an i31 outside [0, array-dimension-limit) goes
+	// there too, to be reported -- one compare on the shorthand. Outside EH mode a
+	// negative or limit-sized i31 meets the allocation's own trap, and the site keeps
+	// its bytes.
 	private static void emitParseDims(WasmLispCompiler.Ctx ctx, int dimsSlot, int dimsArrSlot, int totalSlot) {
 		// if dims is an i31 (rank-1 shorthand: an integer) ...
 		getLocal(ctx, dimsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.IF, 0x40);
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			// ... outside [0, limit): _arr_dims reports it (and never returns)
+			getLocal(ctx, dimsSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, (int) am.ik.rontolisp.ClConstants.arraySizeLimit(true));
+			ctx.writer.write(Instruction.I32_GE_U);
+			ctx.writer.write(Instruction.IF, 0x40);
+			getLocal(ctx, dimsSlot);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_ARR_DIMS);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.END);
+		}
 		// dimsArr = array.new buckets (dims, 1); total = dims
 		getLocal(ctx, dimsSlot);
 		i32Const(ctx, 1);
@@ -857,7 +873,7 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		// dims is a cons list of sizes (any rank): the shared parse, then its product.
 		getLocal(ctx, dimsSlot);
-		callFixed(ctx, WasmLispCompiler.FUNC_ARR_DIMS);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_ARR_DIMS);
 		setLocal(ctx, dimsArrSlot);
 		getLocal(ctx, dimsArrSlot);
 		callFixed(ctx, WasmLispCompiler.FUNC_ARR_TOTAL);

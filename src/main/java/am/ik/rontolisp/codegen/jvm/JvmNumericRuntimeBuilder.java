@@ -778,8 +778,9 @@ final class JvmNumericRuntimeBuilder {
 				doubleValueOf, absDouble, rBig, rcClass, rcReal, rcImag, mathHypot, hasComplex));
 		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				signumDouble, rRatNum, biSignum, longValueOf, rcClass, rCsignum, hasComplex));
-		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
-				longValueOf, tlrCurrent, tlrNextDouble, ratArrClass, typeErrRefs));
+		methods.add(buildRandom(cp, nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
+				longValueOf, tlrCurrent, tlrNextDouble, ratArrClass, typeErrRefs, longClass, longValue, bigClass,
+				biSignum, rNorm));
 		methods.add(buildSelect(nMin, dBinary, rCmpb, CMPB_LT | CMPB_EQ, rcClass, typeErrRefs, hasComplex));
 		methods.add(buildSelect(nMax, dBinary, rCmpb, CMPB_GT | CMPB_EQ, rcClass, typeErrRefs, hasComplex));
 		methods.add(buildFloatSelect(nFmin, dFmod, MethodCode::dcmpg, MethodCode::ifle));
@@ -2006,11 +2007,13 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _random(Object limit): a non-negative random number below limit, of the same type
-	// as
-	// limit. d = Math.random() * (double) limit; a Double limit returns d, otherwise the
-	// truncated (long) d. Dispatching on the runtime type handles a float limit reaching
-	// random through a variable; using _dbl for the multiply also makes the integer path
-	// robust to a BigInteger limit.
+	// as limit. A Long limit -- the common one -- draws (long) (nextDouble() * limit)
+	// with no dispatch; a BigInteger limit draws uniformly with every bit random -- a
+	// candidate of the limit's width, drawn again while it is not below the limit (the
+	// interpreter's draw, .kb/random.md) -- where scaling a double leaves the low bits a
+	// fixed pattern and a (long) of it saturates. Anything else goes through _dbl: a
+	// Double limit returns nextDouble() * limit, any other number the (long) of it, and
+	// _dbl rejects a non-real.
 	//
 	// CLHS's domain is (OR (INTEGER 1) (FLOAT (0.0))): a ratio limit (a BigInteger[]
 	// here)
@@ -2019,11 +2022,70 @@ final class JvmNumericRuntimeBuilder {
 	// `.kb/error-handling.md` "A wrong-type argument names its operator") rather than
 	// teaching the shared operand-type table a compound type for this one operator
 	// (.todo/981).
-	private static NumericMethod buildRandom(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+	private static NumericMethod buildRandom(ConstantPool cp, Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
 			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
 			MethodRefEntry longValueOf, MethodRefEntry tlrCurrent, MethodRefEntry tlrNextDouble, ClassEntry ratArrClass,
-			TypeErrRefs typeErrRefs) {
+			TypeErrRefs typeErrRefs, ClassEntry longClass, MethodRefEntry longValue, ClassEntry bigClass,
+			MethodRefEntry biSignum, MethodRefEntry rNorm) {
 		MethodCode c = new MethodCode();
+		// A Long limit: reject <= 0, then (long) (nextDouble() * (double) limit).
+		c.aload(0);
+		c.instanceOf(longClass);
+		MethodCode.Label ifNotLong = c.newLabel();
+		c.ifeq(ifNotLong);
+		c.aload(0);
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
+		c.lstore(1);
+		c.lload(1);
+		c.lconst_0();
+		c.lcmp();
+		MethodCode.Label ifPositiveLong = c.newLabel();
+		c.ifgt(ifPositiveLong);
+		emitRealErrThrow(c, typeErrRefs);
+		c.labelBinding(ifPositiveLong);
+		c.lload(1);
+		c.l2d();
+		c.invokestatic(tlrCurrent);
+		c.invokevirtual(tlrNextDouble);
+		c.dmul();
+		c.d2l();
+		c.invokestatic(longValueOf);
+		c.areturn();
+		c.labelBinding(ifNotLong);
+		// A BigInteger limit: reject <= 0, then
+		// do draw = new BigInteger(limit.bitLength(), ThreadLocalRandom.current());
+		// while (draw.compareTo(limit) >= 0); return _norm(draw).
+		c.aload(0);
+		c.instanceOf(bigClass);
+		MethodCode.Label ifNotBig = c.newLabel();
+		c.ifeq(ifNotBig);
+		c.aload(0);
+		c.checkcast(bigClass);
+		c.invokevirtual(biSignum);
+		MethodCode.Label ifPositiveBig = c.newLabel();
+		c.ifgt(ifPositiveBig);
+		emitRealErrThrow(c, typeErrRefs);
+		c.labelBinding(ifPositiveBig);
+		MethodCode.Label redraw = c.newLabel();
+		c.labelBinding(redraw);
+		c.new_(bigClass);
+		c.dup();
+		c.aload(0);
+		c.checkcast(bigClass);
+		c.invokevirtual(cp.methodRef(bigClass, "bitLength", "()I"));
+		c.invokestatic(tlrCurrent);
+		c.invokespecial(cp.methodRef(bigClass, "<init>", "(ILjava/util/Random;)V"));
+		c.astore(1);
+		c.aload(1);
+		c.aload(0);
+		c.checkcast(bigClass);
+		c.invokevirtual(cp.methodRef(bigClass, "compareTo", "(Ljava/math/BigInteger;)I"));
+		c.ifge(redraw);
+		c.aload(1);
+		c.invokestatic(rNorm);
+		c.areturn();
+		c.labelBinding(ifNotBig);
 		c.aload(0);
 		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRatio = c.newLabel();

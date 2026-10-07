@@ -117,6 +117,15 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String DIMS = "_arrayDims";
 
+	/**
+	 * {@code _arrayDimsTotal(dims) -> int}: the element count of a {@code make-array}
+	 * dimensions argument, every dimension checked first ({@link #buildDimsTotal}). Every
+	 * allocating helper calls it before it parses the argument.
+	 */
+	static final String DIMS_TOTAL = "_arrayDimsTotal";
+
+	static final String DIMS_TOTAL_DESC = "(Ljava/lang/Object;)I";
+
 	static final String DIMS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	// _arrayCheckRank(arr, given): the array's own rank (its header dims length, or 1 for
@@ -349,7 +358,8 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER,
+			DIMS_TOTAL);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
@@ -359,7 +369,8 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
-			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.SubseqRuntime subseqRuntime) {
+			ClassEntry selfClass, boolean usesFloatArray, JvmOperandTypeRuntime.SubseqRuntime subseqRuntime,
+			JvmOperandTypeRuntime.ConsShape consShape) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
@@ -417,6 +428,8 @@ final class JvmArrayRuntimeBuilder {
 		LongEntry nilSentinel = cp.entries().longEntry(NIL_SENTINEL);
 
 		List<ArrayMethod> methods = new ArrayList<>();
+		MethodRefEntry dimsTotal = cp.methodRef(selfClass, DIMS_TOTAL, DIMS_TOTAL_DESC);
+		methods.add(buildDimsTotal(cp, selfClass, consShape));
 
 		// _arrayMake(dims, init, fp, adj):
 		// list = new ArrayList(); build the Object[] dimension sizes and the total
@@ -430,7 +443,7 @@ final class JvmArrayRuntimeBuilder {
 		m.dup();
 		m.invokespecial(alInit);
 		m.astore(list);
-		emitParseDims(m, objectClass, longClass, objectArrayClass, longIntValue, dims, dimsArr, total, cur, n, idx);
+		emitParseDims(m, objectClass, objectArrayClass, dimsTotal, dims, dimsArr, total, cur, n, idx);
 		emitResolveFillPointer(m, longClass, longIntValue, rtExClass, rtExInit, cp, fp, dimsArr, total, fpVal, v);
 		// PACKED fast path: no fill pointer, not adjustable, and the initial element is
 		// nil or an integer (excluding the sentinel value, which must stay
@@ -1351,8 +1364,7 @@ final class JvmArrayRuntimeBuilder {
 		md.dup();
 		md.invokespecial(alInit);
 		md.astore(mdList);
-		emitParseDims(md, objectClass, longClass, objectArrayClass, longIntValue, mdDims, mdDimsArr, mdTotal, mdCur,
-				mdN, mdIdx);
+		emitParseDims(md, objectClass, objectArrayClass, dimsTotal, mdDims, mdDimsArr, mdTotal, mdCur, mdN, mdIdx);
 		// off = offsetArg == null ? 0 : ((Long) offsetArg).intValue()
 		MethodCode.Label offGiven = md.newLabel();
 		MethodCode.Label offDone = md.newLabel();
@@ -3211,15 +3223,23 @@ final class JvmArrayRuntimeBuilder {
 
 	// Parses a make-array dimensions argument in the local dims (a Long for the rank-1
 	// shorthand, otherwise a cons list of Longs) into an Object[] of boxed Long sizes
-	// (dimsArr) and the int total element count (total). cur/n/idx are scratch slots.
-	private static void emitParseDims(MethodCode m, ClassEntry objectClass, ClassEntry longClass,
-			ClassEntry objectArrayClass, MethodRefEntry longIntValue, int dims, int dimsArr, int total, int cur, int n,
-			int idx) {
+	// (dimsArr) and the int total element count (total), which _arrayDimsTotal answers
+	// after checking every dimension -- so the parse below meets only valid ones.
+	// cur/n/idx are scratch slots.
+	private static void emitParseDims(MethodCode m, ClassEntry objectClass, ClassEntry objectArrayClass,
+			MethodRefEntry dimsTotal, int dims, int dimsArr, int total, int cur, int n, int idx) {
 		m.aload(dims);
-		m.instanceOf(longClass);
-		MethodCode.Label notLong = m.newLabel();
-		m.ifeq(notLong);
-		// 1-D integer shorthand: dimsArr = {dims}; total = ((Long) dims).intValue()
+		m.invokestatic(dimsTotal);
+		m.istore(total);
+		m.aload(dims);
+		m.instanceOf(objectArrayClass);
+		MethodCode.Label list = m.newLabel();
+		m.ifne(list);
+		MethodCode.Label afterDims = m.newLabel();
+		// nil is the rank-0 shape: an empty dimsArr.
+		m.aload(dims);
+		m.ifnull(list);
+		// 1-D integer shorthand: dimsArr = {dims}
 		m.loadConstant(1);
 		m.anewarray(objectClass);
 		m.dup();
@@ -3227,15 +3247,10 @@ final class JvmArrayRuntimeBuilder {
 		m.aload(dims);
 		m.aastore();
 		m.astore(dimsArr);
-		m.aload(dims);
-		m.checkcast(longClass);
-		m.invokevirtual(longIntValue);
-		m.istore(total);
-		MethodCode.Label afterDims = m.newLabel();
 		m.goto_(afterDims);
 		// cons list of dimensions: first count the length (n), then copy the sizes
-		// into dimsArr while multiplying total.
-		m.labelBinding(notLong);
+		// into dimsArr.
+		m.labelBinding(list);
 		m.loadConstant(0);
 		m.istore(n);
 		m.aload(dims);
@@ -3257,8 +3272,6 @@ final class JvmArrayRuntimeBuilder {
 		m.iload(n);
 		m.anewarray(objectClass);
 		m.astore(dimsArr);
-		m.loadConstant(1);
-		m.istore(total);
 		m.loadConstant(0);
 		m.istore(idx);
 		m.aload(dims);
@@ -3276,15 +3289,6 @@ final class JvmArrayRuntimeBuilder {
 		m.loadConstant(0);
 		m.aaload();
 		m.aastore();
-		// total *= ((Long) dimsArr[idx]).intValue()
-		m.iload(total);
-		m.aload(dimsArr);
-		m.iload(idx);
-		m.aaload();
-		m.checkcast(longClass);
-		m.invokevirtual(longIntValue);
-		m.imul();
-		m.istore(total);
 		// cur = cdr(cur)
 		m.aload(cur);
 		m.checkcast(objectArrayClass);
@@ -3294,6 +3298,136 @@ final class JvmArrayRuntimeBuilder {
 		m.iinc(idx, 1);
 		m.goto_(fillLoop);
 		m.labelBinding(afterDims);
+	}
+
+	/**
+	 * Builds {@code _arrayDimsTotal(Object dims) -> int}: the element count of a
+	 * {@code make-array} dimensions argument -- a {@code Long} for the rank-1 shorthand,
+	 * a proper list of them for any rank, nil for rank 0 -- after checking every
+	 * dimension, as the interpreter's {@code Environment.parseDimensions} does. A
+	 * dimension that is no {@code Long} in {@code [0, array-dimension-limit)} -- a
+	 * {@code BigInteger}, a negative, a float, any other value -- and the first running
+	 * product at or past {@code array-total-size-limit} throw
+	 * {@code _opTypeErr(_oob(datum, limit), "MAKE-ARRAY", FUNNEL_TYPE)}, the report an
+	 * out-of-range subscript gives; a dotted list's tail is {@code MAKE-ARRAY}'s
+	 * {@code LIST} type-error. The rank-1 {@code Long} is two compares.
+	 * @param cp the constant pool
+	 * @param selfClass the program class
+	 * @param consShape what tells a cons from the other {@code Object[]} values
+	 * @return the method
+	 */
+	private static ArrayMethod buildDimsTotal(ConstantPool cp, ClassEntry selfClass,
+			JvmOperandTypeRuntime.ConsShape consShape) {
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		MethodRefEntry longValue = cp.methodRef(longClass, "longValue", "()J");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		long limit = am.ik.rontolisp.ClConstants.arraySizeLimit(false);
+		LongEntry limitEntry = cp.entries().longEntry(limit);
+		// Slots: 0 = dims, 1 = the list cursor, 2 = the cursor as a cons, 3 = its car,
+		// 4-5 = the running product, 6-7 = the dimension.
+		int dims = 0, cur = 1, cell = 2, head = 3, total = 4, size = 6;
+		MethodCode a = new MethodCode();
+		MethodCode.Label notLong = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label notCons = a.newLabel();
+		MethodCode.Label badDims = a.newLabel();
+		MethodCode.Label badHead = a.newLabel();
+		MethodCode.Label badTotal = a.newLabel();
+		a.aload(dims);
+		a.instanceOf(longClass);
+		a.ifeq(notLong);
+		emitLongDimension(a, dims, size, longClass, longValue, limitEntry, badDims);
+		a.lload(size);
+		a.l2i();
+		a.ireturn();
+		a.labelBinding(notLong);
+		a.lconst_1();
+		a.lstore(total);
+		a.aload(dims);
+		a.astore(cur);
+		a.labelBinding(loop);
+		a.aload(cur);
+		a.ifnull(done);
+		consShape.emitTest(a, cur, cell, head, notCons);
+		a.aload(head);
+		a.instanceOf(longClass);
+		a.ifeq(badHead);
+		emitLongDimension(a, head, size, longClass, longValue, limitEntry, badHead);
+		a.lload(total);
+		a.lload(size);
+		a.lmul();
+		a.lstore(total);
+		a.lload(total);
+		a.ldc(limitEntry);
+		a.lcmp();
+		a.ifge(badTotal);
+		a.aload(cell);
+		a.loadConstant(1);
+		a.aaload();
+		a.astore(cur);
+		a.goto_(loop);
+		a.labelBinding(done);
+		a.lload(total);
+		a.l2i();
+		a.ireturn();
+		// Not a cons: the argument itself is no dimension, or a dotted list ends here.
+		a.labelBinding(notCons);
+		a.aload(cur);
+		a.aload(dims);
+		a.if_acmpeq(badDims);
+		a.aload(cur);
+		a.ldc(cp.stringEntry(OperandTypes.Kind.LIST.name()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		emitMakeArrayThrow(a, cp, selfClass);
+		a.labelBinding(badDims);
+		a.aload(dims);
+		emitOutOfLimitThrow(a, cp, selfClass, limit);
+		a.labelBinding(badHead);
+		a.aload(head);
+		emitOutOfLimitThrow(a, cp, selfClass, limit);
+		a.labelBinding(badTotal);
+		a.lload(total);
+		a.invokestatic(longValueOf);
+		emitOutOfLimitThrow(a, cp, selfClass, limit);
+		return new ArrayMethod(cp.utf8Entry(DIMS_TOTAL), cp.utf8Entry(DIMS_TOTAL_DESC), a);
+	}
+
+	// The Long in local slot as a long in sizeSlot, branching to bad unless it is in
+	// [0, limit).
+	private static void emitLongDimension(MethodCode a, int slot, int sizeSlot, ClassEntry longClass,
+			MethodRefEntry longValue, LongEntry limit, MethodCode.Label bad) {
+		a.aload(slot);
+		a.checkcast(longClass);
+		a.invokevirtual(longValue);
+		a.lstore(sizeSlot);
+		a.lload(sizeSlot);
+		a.lconst_0();
+		a.lcmp();
+		a.iflt(bad);
+		a.lload(sizeSlot);
+		a.ldc(limit);
+		a.lcmp();
+		a.ifge(bad);
+	}
+
+	// throw _opTypeErr(_oob(datum, limit), "MAKE-ARRAY", FUNNEL_TYPE) over the datum on
+	// the stack.
+	private static void emitOutOfLimitThrow(MethodCode a, ConstantPool cp, ClassEntry selfClass, long limit) {
+		a.ldc(cp.entries().intEntry((int) limit));
+		a.invokestatic(
+				JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.OOB, JvmOperandTypeRuntime.OOB_DESC));
+		emitMakeArrayThrow(a, cp, selfClass);
+	}
+
+	// throw _opTypeErr(error, "MAKE-ARRAY", FUNNEL_TYPE) over the error on the stack.
+	private static void emitMakeArrayThrow(MethodCode a, ConstantPool cp, ClassEntry selfClass) {
+		a.ldc(cp.stringEntry(OperandTypes.MAKE_ARRAY));
+		a.ldc(cp.stringEntry(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.athrow();
 	}
 
 	// Pushes the int product of the boxed Long dimension sizes of the header in

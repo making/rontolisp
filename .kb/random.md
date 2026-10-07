@@ -22,6 +22,18 @@ optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispM
   inline site) must also agree on the DOMAIN check -- a ratio limit, or an integer/float limit
   `<= 0` -- since two of the four bypass `_random` for performance and drew from an unchecked
   limit until `.todo/981` (`.kb/error-handling.md`, "`random`'s domain").
+- **A bignum limit draws uniformly with every bit random, by rejection, on all four backends**:
+  a candidate of the limit's bit width (wasm: as many limbs as the limit, the top one masked to
+  the top limb's width), drawn again while it is not below the limit -- fewer than two candidates
+  on average, no division. Interpreter `Environment`'s `RANDOM` and the JVM's `_random`
+  (`new BigInteger(limit.bitLength(), ThreadLocalRandom.current())`), wasm `_rand_big`
+  (`WasmRandomCompiler.buildRandBigBody`, `FUNC_RAND_BIG`; `_limb_cmp` then `_limb_new`). The site
+  tests `ref.test TYPE_BIGINT` only once the limit is known to be no float, and the site's one
+  draw has seeded the generator before `_rand_big` steps it. Measured 2026-10-07 before
+  (`.todo/e00`): the interpreter scaled a double up by the limit (53 random bits; for `(1+ (expt
+  10 30))` no odd draw in 64), the JVM's `(long)` of the same saturated at `Long.MAX_VALUE`, and
+  wasm trapped in `_int_val`'s limb arm. `_random` now opens with a `Long` arm (no `_dbl`
+  dispatch, the same formula), then the `BigInteger` one, then the old path for the rest.
 - Trap: a fused site draws exactly ONCE, in the prologue before any guard, and the fallback only
   READS it -- a drawing fallback re-emits twice for a substituted parameter used twice, so
   `(defun dif (x) (- x x))` over `(dif (random lim))` would stop answering 0.
@@ -41,7 +53,9 @@ optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispM
 ci-spec `random-deterministic-properties`; `WasmLispCompilerIntegrationTest`'s four `noWasi*` /
 `aWasiBuildDrawsFromTheInModuleGenerator...` cases;
 `WasmImportCompilerTest#underHostRandomTheEntropyApiReachesTheHostAndAnUnusedImportIsStillShaken`;
-`LispEvaluatorTest` / `JvmLispCompilerTest` `random` cases. The domain check: ci-spec
+`LispEvaluatorTest` / `JvmLispCompilerTest` `random` cases. The bignum draw: ci-spec
+`random-of-a-bignum-limit-draws-uniformly-below-it` and the
+`aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull` triple. The domain check: ci-spec
 `random-limit-domain-violations-signal-a-type-error` and the
 `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
 triple (`.kb/error-handling.md`, "`random`'s domain").

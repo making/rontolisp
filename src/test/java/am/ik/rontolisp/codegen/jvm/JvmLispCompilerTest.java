@@ -1369,6 +1369,47 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull() throws Exception {
+		// The evaluator twin is aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull. A
+		// bignum or non-integer dimension parsed as an empty list (a rank-0 array), a
+		// long one was truncated to an int, and a bignum random limit saturated at
+		// Long.MAX_VALUE.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *big* (expt 2 100))
+				(print (te (lambda () (make-array *big*))))
+				(print (te (lambda () (make-array (list 2 *big*)))))
+				(print (te (lambda () (make-array -1))))
+				(print (te (lambda () (make-array 1.5))))
+				(print (te (lambda () (make-array (list 1073741819 3)))))
+				(print (te (lambda () (make-array '(2 . 3)))))
+				(print (te (lambda () (make-array *big* :element-type 'double-float))))
+				(print (te (lambda () (make-array (expt 2 40) :element-type '(unsigned-byte 8)))))
+				(let ((ok t) (odd nil) (even nil))
+				  (dotimes (i 64)
+				    (let ((r (random *big*)))
+				      (unless (and (integerp r) (<= 0 r) (< r *big*)) (setq ok nil))
+				      (if (oddp r) (setq odd t) (setq even t))))
+				  (print (list ok odd even)))
+				(print (te (lambda () (random (- *big*)))))
+				""")).isEqualTo(
+				"""
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1.5 is not of type (INTEGER 0 (2147483639))" 1.5 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3221225457 is not of type (INTEGER 0 (2147483639))" 3221225457 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3 is not of type LIST" 3 LIST)
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1099511627776 is not of type (INTEGER 0 (2147483639))" 1099511627776 (INTEGER 0 (2147483639)))
+						(T T T)
+						("RANDOM: The value -1267650600228229401496703205376 is not of type REAL" -1267650600228229401496703205376 REAL)""");
+	}
+
+	@Test
 	void oneArgumentCallsCheckTheirArgument() throws Exception {
 		// The evaluator twin is oneArgumentCallsCheckTheirArgument.
 		assertThat(compileAndRun("""

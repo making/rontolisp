@@ -1700,6 +1700,8 @@ public final class Environment implements Scope {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.ADJUST_ARRAY + ": :initial-element and :initial-contents cannot both be given");
 			}
+			// A dimension it refuses is MAKE-ARRAY's, as the compiled adjust-array -- a
+			// make-array of the new shape -- reports it.
 			int[] dims = parseDimensions(args.get(1));
 			if (displacedToArg != null && !(displacedToArg instanceof LispNil)) {
 				// CLHS forbids :initial-element / :initial-contents beside :displaced-to:
@@ -2101,21 +2103,44 @@ public final class Environment implements Scope {
 	// Parses a make-array dimensions argument (an integer for rank 1, or a list of
 	// integers) into a dimension-size array. Any rank >= 0 is supported: the EMPTY list
 	// -- (make-array nil) / (make-array '()) -- is the rank-0 array, one element reached
-	// with no subscripts.
+	// with no subscripts. Every dimension is checked to be an integer below
+	// array-dimension-limit, and the running product of the dimensions below
+	// array-total-size-limit, before anything is allocated: one outside is the
+	// operator's type-error naming (INTEGER 0 (limit)) -- the datum the dimension, or the
+	// first partial product past the limit, as SBCL reports it -- and a dotted list's
+	// tail a LIST one. The compiled backends check the same way (.kb/error-handling.md,
+	// "A make-array dimension").
 	private static int[] parseDimensions(LispVal dimsVal) {
-		if (dimsVal instanceof LispInteger n) {
-			return new int[] { (int) n.value() };
+		String operator = LispNames.MAKE_ARRAY;
+		long limit = am.ik.rontolisp.ClConstants.arraySizeLimit(false);
+		if (!(dimsVal instanceof LispCons) && !(dimsVal instanceof LispNil)) {
+			return new int[] { dimension(dimsVal, limit, operator) };
 		}
-		if (dimsVal instanceof LispCons || dimsVal instanceof LispNil) {
-			List<LispVal> list = (dimsVal instanceof LispCons cons) ? cons.toList() : List.of();
-			int[] dims = new int[list.size()];
-			for (int i = 0; i < list.size(); i++) {
-				dims[i] = (int) asLong(list.get(i));
+		List<Integer> dims = new ArrayList<>();
+		long total = 1;
+		LispVal cur = dimsVal;
+		while (cur instanceof LispCons cell) {
+			int size = dimension(cell.car(), limit, operator);
+			total *= size;
+			if (total >= limit) {
+				throw OperandTypeException.outOfRange(new LispInteger(total), limit, operator);
 			}
-			return dims;
+			dims.add(size);
+			cur = cell.cdr();
 		}
-		throw new LispEvalException(
-				LispNames.MAKE_ARRAY + " expects an integer or list of dimensions, got " + dimsVal.print());
+		if (!(cur instanceof LispNil)) {
+			throw OperandTypeException.of(cur, OperandTypes.Kind.LIST, operator);
+		}
+		return dims.stream().mapToInt(Integer::intValue).toArray();
+	}
+
+	// One make-array dimension: an integer in [0, limit), else the operator's type-error
+	// naming (INTEGER 0 (limit)).
+	private static int dimension(LispVal value, long limit, String operator) {
+		if (value instanceof LispInteger n && n.value() >= 0 && n.value() < limit) {
+			return (int) n.value();
+		}
+		throw OperandTypeException.outOfRange(value, limit, operator);
 	}
 
 	private static LispArray requireArray(String fn, LispVal val) {
@@ -3215,10 +3240,16 @@ public final class Environment implements Scope {
 				if (b.value().signum() <= 0) {
 					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
-				// Scale a [0,1) random fraction across the bignum range, then floor.
-				return normalizeBig(new java.math.BigDecimal(b.value())
-					.multiply(java.math.BigDecimal.valueOf(ThreadLocalRandom.current().nextDouble()))
-					.toBigInteger());
+				// Uniform with every bit drawn: a candidate of the limit's width, drawn
+				// again while it is not below the limit. A double scaled up draws 53 bits
+				// and leaves the rest a fixed pattern. The compiled backends draw the
+				// same way (.kb/random.md).
+				BigInteger draw;
+				do {
+					draw = new BigInteger(b.value().bitLength(), ThreadLocalRandom.current());
+				}
+				while (draw.compareTo(b.value()) >= 0);
+				return normalizeBig(draw);
 			}
 			if (limit instanceof LispRatio) {
 				throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);

@@ -2169,6 +2169,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_RAT_DIV_F64 = FUNC_RAT_MUL_F64 + 1;
 
+	// _rand_big ((ref null eq) limit) -> (ref null eq): random of a limb-tier limit,
+	// drawn uniformly below it (WasmRandomCompiler.buildRandBigBody). Reuses the unary
+	// callable signature; appended after the last fixed helper so no index above
+	// shifts, and shaken when no random site can meet a limb-tier limit.
+	static final int FUNC_RAND_BIG = FUNC_RAT_DIV_F64 + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2199,7 +2205,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_RAT_DIV_F64 + 1;
+	static final int FUNC_VEC_BASE = FUNC_RAND_BIG + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2218,10 +2224,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
 	// landing (_type_err_of), the fill-pointer check (_fp_hdr), the ratio-to-double
 	// conversion (_rat_to_f64), the division-by-zero landing (_div_zero), the subseq
-	// bounds landing (_subseq_bad), the bounds check (_ck_bounds) and the four exact
-	// prefix steps (_rat_add_f64 .. _rat_div_f64) -- plus, under --simd, the vec: SIMD
-	// block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_RAT_DIV_F64 + 1;
+	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
+	// prefix steps (_rat_add_f64 .. _rat_div_f64) and the limb-tier random draw
+	// (_rand_big) -- plus, under --simd, the vec: SIMD block. Use userFuncBase(), which
+	// adds that offset.
+	static final int FUNC_USER_BASE = FUNC_RAND_BIG + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7695,6 +7702,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				for (int i = 0; i < 4; i++) {
 					fnDef.addFunction(TYPE_RAT_STEP_F64);
 				}
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rand_big (limit) -> value
+															// (FUNC_RAND_BIG)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8604,8 +8613,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						subseqBoundsForLength));
 				// flipped-producer mutable-result wrap body (FUNC_TO_MUT_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildToMutStrBody());
-				// shared make-array dimension parse bodies (FUNC_ARR_DIMS/FUNC_ARR_TOTAL)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrDimsBody());
+				// shared make-array dimension parse bodies
+				// (FUNC_ARR_DIMS/FUNC_ARR_TOTAL);
+				// the parse checks every dimension under the caller's operator in EH mode
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrDimsBody(ehMode ? operandOpGlobalIndex : -1));
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrTotalBody());
 				// shared :fill-pointer resolution body (FUNC_ARR_FP)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
@@ -8727,6 +8738,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_SUB, Instruction.F64_SUB));
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_MUL, Instruction.F64_MUL));
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatStepF64Body(FUNC_RAT_DIV, Instruction.F64_DIV));
+				// the limb-tier random draw (FUNC_RAND_BIG): shaken with its sites.
+				code.addFunction(WasmRandomCompiler.buildRandBigBody(ehMode));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
