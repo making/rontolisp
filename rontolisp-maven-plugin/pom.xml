@@ -58,6 +58,16 @@
 		<rontolisp.version>${project.version}</rontolisp.version>
 		<maven.version>3.9.9</maven.version>
 		<spring-boot.version>4.1.1</spring-boot.version>
+		<!--
+			Every plugin a jar project's `package` binds, pinned rather than left to the
+			running Maven's default bindings. MavenBuildE2eTest's offline consumer build
+			declares these same versions, so it resolves exactly what this module's own
+			`install` executed, whatever Maven runs it.
+		-->
+		<maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+		<maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
+		<maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
 	</properties>
 
 	<dependencies>
@@ -136,8 +146,18 @@
 		<plugins>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>${maven-resources-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.13.0</version>
+				<version>${maven-compiler-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>${maven-jar-plugin.version}</version>
 			</plugin>
 			<plugin>
 				<groupId>am.ik.maven</groupId>
@@ -159,11 +179,21 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.5.2</version>
+				<version>${maven-surefire-plugin.version}</version>
 				<configuration>
 					<systemPropertyVariables>
-						<!-- The version MavenBuildE2eTest looks for in the local repository. -->
+						<!--
+							What MavenBuildE2eTest's shelled-out builds run on: the Maven running
+							this build and the local repository it seeded. Never an `mvn` on PATH,
+							whose default bindings move with the machine's Maven.
+						-->
 						<rontolisp.plugin.version>${project.version}</rontolisp.plugin.version>
+						<rontolisp.plugin.e2e.maven.home>${maven.home}</rontolisp.plugin.e2e.maven.home>
+						<rontolisp.plugin.e2e.local.repository>${settings.localRepository}</rontolisp.plugin.e2e.local.repository>
+						<rontolisp.plugin.e2e.maven-resources-plugin>${maven-resources-plugin.version}</rontolisp.plugin.e2e.maven-resources-plugin>
+						<rontolisp.plugin.e2e.maven-compiler-plugin>${maven-compiler-plugin.version}</rontolisp.plugin.e2e.maven-compiler-plugin>
+						<rontolisp.plugin.e2e.maven-surefire-plugin>${maven-surefire-plugin.version}</rontolisp.plugin.e2e.maven-surefire-plugin>
+						<rontolisp.plugin.e2e.maven-jar-plugin>${maven-jar-plugin.version}</rontolisp.plugin.e2e.maven-jar-plugin>
 					</systemPropertyVariables>
 				</configuration>
 			</plugin>

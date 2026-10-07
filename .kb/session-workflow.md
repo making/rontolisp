@@ -15,6 +15,18 @@ needs `./mvnw install -DskipTests` first, and its own `install` is what `MavenBu
 (`-Drontolisp.plugin.e2e=true`) needs. `rontolisp-native/` is the wasmtime precompile shim and
 the runner stub a native executable is made of (`.kb/native-output.md`).
 
+`MavenBuildE2eTest` shells out to the Maven running it (`${maven.home}`) on its local repository
+(`${settings.localRepository}`), and its offline jar fixture declares the
+`maven-{resources,compiler,surefire,jar}-plugin.version` the module's pom pins -- all passed by
+the module's surefire configuration. Measured 2026-10-07: runner image `ubuntu-24.04`
+20261004.327 moved `/usr/bin/mvn` 3.9.16 -> 3.10.0, and the test, then taking `mvn` from PATH
+and each plugin's newest version in the local repository, picked `maven-jar-plugin` 3.5.1 -- a
+jar without its dependencies, left by an online fixture build that only computed its lifecycle
+-- so the offline `package` failed. The pinned versions are the ones the module's own `install`
+executes in full, so the offline build resolves under any runner Maven. Rejected: pre-resolving
+in the workflow (CI only, the local run stays broken) and dropping `-o` (network-bound, still
+the PATH Maven).
+
 ## Waiting for a long run
 
 **Never detach a test run and end the turn to wait for it.** Nothing wakes up to read the

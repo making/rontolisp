@@ -1,6 +1,5 @@
 package am.ik.rontolisp.maven;
 
-import java.io.File;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -9,17 +8,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.stream.Stream;
 
 import org.apache.catalina.startup.Tomcat;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,7 +33,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * ordering declaration order cannot break, and only a real build can say so.
  * <p>
  * Opt-in ({@code -Drontolisp.plugin.e2e=true}), because it shells out to Maven and needs
- * this plugin -- and the rontolisp it embeds -- already installed:
+ * this plugin -- and the rontolisp it embeds -- already installed. Every shelled-out
+ * build runs on the Maven running this test and the local repository it uses (the
+ * module's surefire configuration passes both), never an {@code mvn} found on PATH: a
+ * machine's Maven moves on its own schedule, and its default bindings with it.
  *
  * <pre>
  * ./mvnw install -DskipTests
@@ -54,14 +52,8 @@ class MavenBuildE2eTest {
 	@Test
 	void aRealBuildCompilesTheLispBeforeTheJavaAndJarsBoth() throws Exception {
 		Ready ready = assumeReady();
-		Map<String, String> plugins = lifecyclePluginVersions(ready.localRepository());
-		assumeTrue(plugins != null, "a lifecycle plugin the offline fixture declares is not in the local"
-				+ " repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install -DskipTests` first");
-		Path maven = ready.maven();
-		String version = ready.version();
-
-		writeProject(version, plugins);
-		run(maven, this.project, "-o", "-q", "package");
+		writeProject(ready.version(), ready.lifecyclePlugins());
+		run(this.project, ready.maven("-o", "-q", "package"));
 
 		Path jar = this.project.resolve("target/consumer-1.0.0.jar");
 		assertThat(jar).exists();
@@ -70,11 +62,11 @@ class MavenBuildE2eTest {
 		assertThat(entries(jar)).contains("com/example/Kernels.class", "app/App.class",
 				"am/ik/rontolisp/runtime/RontoFloatArray.class");
 		assertThat(entries(jar)).noneMatch(entry -> entry.contains("scale-helpers"));
-		assertThat(run(javaExecutable(), this.project, "-cp", jar.toString(), "app.App").lines().toList())
-			.containsExactly("12.0", "5.0");
+		assertThat(run(this.project, List.of(javaExecutable().toString(), "-cp", jar.toString(), "app.App")).lines()
+			.toList()).containsExactly("12.0", "5.0");
 
 		// And the second build compiles nothing, because nothing is stale.
-		assertThat(run(maven, this.project, "-o", "package")).contains("Nothing to compile");
+		assertThat(run(this.project, ready.maven("-o", "package"))).contains("Nothing to compile");
 	}
 
 	private void writeProject(String version, Map<String, String> plugins) throws Exception {
@@ -118,10 +110,12 @@ class MavenBuildE2eTest {
 				""");
 		// The source-set plugin needs no dependency, source-directory declaration, or
 		// jar configuration. Every lifecycle plugin this `package` binds is declared with
-		// the newest version the local repository holds: the build runs offline, and the
-		// running Maven's own default bindings -- which change between Maven versions
-		// (3.9.16 moved maven-jar-plugin from 3.4.1 to 3.5.0) -- would name a version the
-		// seeding build may never have downloaded.
+		// the version this module's own build pins, so the offline build resolves only
+		// what the seeding `install` executed in full. Neither a Maven's default bindings
+		// (3.9.16 moved maven-jar-plugin from 3.4.1 to 3.5.0, 3.10.0 to 3.5.1) nor the
+		// newest version the local repository holds will do: an online build that only
+		// computed a lifecycle -- the failing-build legs below -- leaves a plugin's jar
+		// without its dependencies.
 		Files.writeString(this.project.resolve("pom.xml"),
 				"""
 						<project xmlns="http://maven.apache.org/POM/4.0.0">
@@ -183,7 +177,7 @@ class MavenBuildE2eTest {
 	void aWarProjectPackagesAWarThatServesOnTomcat() throws Exception {
 		Ready ready = assumeReady();
 		writeWarProject(ready.version(), "war", true);
-		run(ready.maven(), this.project, "-q", "package");
+		run(this.project, ready.maven("-q", "package"));
 
 		Path war = this.project.resolve("target/warconsumer-1.0.0.war");
 		assertThat(war).exists();
@@ -224,7 +218,7 @@ class MavenBuildE2eTest {
 		Ready ready = assumeReady();
 		writeWarProject(ready.version(), "war", false);
 
-		ProcessResult result = runAllowingFailure(ready.maven(), this.project, "package");
+		ProcessResult result = runAllowingFailure(this.project, ready.maven("package"));
 		assertThat(result.status()).isNotZero();
 		assertThat(result.output()).contains("rontolisp.servlet").contains("packaging");
 	}
@@ -234,7 +228,7 @@ class MavenBuildE2eTest {
 		Ready ready = assumeReady();
 		writeWarProject(ready.version(), "jar", true);
 
-		ProcessResult result = runAllowingFailure(ready.maven(), this.project, "package");
+		ProcessResult result = runAllowingFailure(this.project, ready.maven("package"));
 		assertThat(result.status()).isNotZero();
 		assertThat(result.output()).contains("rontolisp.servlet").contains("<packaging>war</packaging>");
 	}
@@ -300,61 +294,44 @@ class MavenBuildE2eTest {
 	private Ready assumeReady() {
 		assumeTrue("true".equals(System.getProperty("rontolisp.plugin.e2e")),
 				"the Maven build E2E is opt-in (it shells out to Maven): pass -Drontolisp.plugin.e2e=true");
-		Optional<Path> maven = maven();
-		assumeTrue(maven.isPresent(),
-				"no Maven executable found (mvn on PATH, MAVEN_HOME, or the ./mvnw distribution)");
 		String version = System.getProperty("rontolisp.plugin.version");
-		assumeTrue(version != null, "rontolisp.plugin.version is unset");
-		Path localRepository = Path.of(System.getProperty("user.home"), ".m2", "repository");
-		Path installed = localRepository.resolve(Path.of("am", "ik", "rontolisp", "rontolisp-maven-plugin", version,
-				"rontolisp-maven-plugin-" + version + ".jar"));
+		String mavenHome = System.getProperty("rontolisp.plugin.e2e.maven.home");
+		String localRepository = System.getProperty("rontolisp.plugin.e2e.local.repository");
+		assumeTrue(version != null && mavenHome != null && localRepository != null,
+				"run through this module's pom, whose surefire configuration names the plugin version,"
+						+ " the Maven and the local repository");
+		Path maven = Path.of(mavenHome, "bin", "mvn");
+		assumeTrue(Files.isExecutable(maven), "no Maven executable at " + maven);
+		Path installed = Path.of(localRepository, "am", "ik", "rontolisp", "rontolisp-maven-plugin", version,
+				"rontolisp-maven-plugin-" + version + ".jar");
 		assumeTrue(Files.isRegularFile(installed),
 				"the plugin is not in the local repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install`");
-		return new Ready(maven.get(), version, localRepository);
+		Map<String, String> lifecyclePlugins = new LinkedHashMap<>();
+		for (String artifactId : List.of("maven-resources-plugin", "maven-jar-plugin", "maven-surefire-plugin",
+				"maven-compiler-plugin")) {
+			String pinned = System.getProperty("rontolisp.plugin.e2e." + artifactId);
+			assumeTrue(pinned != null, "rontolisp.plugin.e2e." + artifactId + " is unset");
+			lifecyclePlugins.put(artifactId, pinned);
+		}
+		return new Ready(maven, Path.of(localRepository), version, lifecyclePlugins);
 	}
 
 	/**
-	 * The newest version of each lifecycle plugin the offline fixture's {@code
-	 * package} binds, keyed by artifact id, or null when the local repository holds none
-	 * of one of them. The running Maven's default bindings cannot be trusted to name a
-	 * downloadable version -- they change between Maven versions (3.9.16 moved
-	 * {@code maven-jar-plugin} from 3.4.1 to 3.5.0) -- so the fixture declares exactly
-	 * what the repository holds, which the module's own {@code install} seeded: every
-	 * plugin here runs during that build. The newest is taken because a repository that
-	 * has seen several wrapper bumps holds several versions, and any of them resolves.
+	 * The Maven running this test, the local repository it uses, this plugin's version,
+	 * and the version this module's build pins for each lifecycle plugin the offline
+	 * fixture declares, keyed by artifact id.
 	 */
-	private static @Nullable Map<String, String> lifecyclePluginVersions(Path localRepository) throws Exception {
-		Map<String, String> versions = new LinkedHashMap<>();
-		for (String artifactId : List.of("maven-resources-plugin", "maven-jar-plugin", "maven-surefire-plugin",
-				"maven-compiler-plugin")) {
-			Optional<String> newest = newestVersion(localRepository, artifactId);
-			if (newest.isEmpty()) {
-				return null;
-			}
-			versions.put(artifactId, newest.get());
-		}
-		return versions;
-	}
+	private record Ready(Path mavenExecutable, Path localRepository, String version,
+			Map<String, String> lifecyclePlugins) {
 
-	private static Optional<String> newestVersion(Path localRepository, String artifactId) throws Exception {
-		Path plugin = localRepository.resolve("org")
-			.resolve("apache")
-			.resolve("maven")
-			.resolve("plugins")
-			.resolve(artifactId);
-		if (!Files.isDirectory(plugin)) {
-			return Optional.empty();
+		List<String> maven(String... arguments) {
+			List<String> command = new ArrayList<>();
+			command.add(this.mavenExecutable.toString());
+			command.add("-Dmaven.repo.local=" + this.localRepository);
+			command.addAll(List.of(arguments));
+			return command;
 		}
-		try (Stream<Path> versions = Files.list(plugin)) {
-			return versions.filter(Files::isDirectory)
-				.map(path -> path.getFileName().toString())
-				.filter(version -> Files
-					.isRegularFile(plugin.resolve(version).resolve(artifactId + "-" + version + ".jar")))
-				.max(Comparator.naturalOrder());
-		}
-	}
 
-	private record Ready(Path maven, String version, Path localRepository) {
 	}
 
 	private record ProcessResult(int status, String output) {
@@ -366,49 +343,18 @@ class MavenBuildE2eTest {
 		}
 	}
 
-	private static Optional<Path> maven() {
-		List<Path> candidates = new ArrayList<>();
-		String path = System.getenv("PATH");
-		if (path != null) {
-			for (String directory : path.split(File.pathSeparator)) {
-				candidates.add(Path.of(directory, "mvn"));
-			}
-		}
-		String home = System.getenv("MAVEN_HOME");
-		if (home != null) {
-			candidates.add(Path.of(home, "bin", "mvn"));
-		}
-		// The ./mvnw wrapper's own downloaded distribution, which is what a machine that
-		// only ever builds through the wrapper has.
-		Path wrapper = Path.of(System.getProperty("user.home"), ".m2", "wrapper", "dists");
-		if (Files.isDirectory(wrapper)) {
-			try (Stream<Path> tree = Files.walk(wrapper, 4)) {
-				tree.filter(candidate -> candidate.endsWith(Path.of("bin", "mvn"))).forEach(candidates::add);
-			}
-			catch (Exception ignored) {
-				// Fall through to whatever the other candidates found.
-			}
-		}
-		return candidates.stream().filter(Files::isExecutable).findFirst();
-	}
-
 	private static Path javaExecutable() {
 		return Path.of(System.getProperty("java.home"), "bin", "java");
 	}
 
-	private static String run(Path executable, Path directory, String... arguments) throws Exception {
-		ProcessResult result = runAllowingFailure(executable, directory, arguments);
-		assertThat(result.status())
-			.describedAs("%s %s exited %d:%n%s", executable, List.of(arguments), result.status(), result.output())
+	private static String run(Path directory, List<String> command) throws Exception {
+		ProcessResult result = runAllowingFailure(directory, command);
+		assertThat(result.status()).describedAs("%s exited %d:%n%s", command, result.status(), result.output())
 			.isZero();
 		return result.output();
 	}
 
-	private static ProcessResult runAllowingFailure(Path executable, Path directory, String... arguments)
-			throws Exception {
-		List<String> command = new ArrayList<>();
-		command.add(executable.toString());
-		command.addAll(List.of(arguments));
+	private static ProcessResult runAllowingFailure(Path directory, List<String> command) throws Exception {
 		Process process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true).start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		int status = process.waitFor();
