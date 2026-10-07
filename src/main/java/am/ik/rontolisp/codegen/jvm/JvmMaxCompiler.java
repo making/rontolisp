@@ -25,8 +25,8 @@ final class JvmMaxCompiler {
 						ctx.numOp(JvmNumericRuntimeBuilder.MAX), ctx, className);
 				return;
 			}
-			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
+			JvmArithCompiler.compileUnboxedOperands(args.subList(1, 3), ctx, className, i -> {
+			});
 			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMAX));
 			JvmEmitHelper.boxDouble(ctx);
 		}

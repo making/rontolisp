@@ -319,8 +319,9 @@ are on at `--optimize=off` and `--optimize=default` alike:
   function it resolves at run time — spells its nil-passing read inline, 17
   bytes a site, instead of calling one shared reader.
 
-`--optimize=size` declines all three. Nothing the program computes changes —
-the fast paths only ever existed as alternatives to what stays — but the
+`--optimize=size` declines all three. Nothing the program computes changes, nor
+the order its output and errors happen in — the fast paths only ever existed as
+alternatives to what stays — but the
 arithmetic now runs through the generic helpers and every `car`/`cdr` is a
 call, so the price is real, and how much you pay depends on how integer-heavy
 the program is (the shared reader alone costs 1-3% on a list-traversal loop):

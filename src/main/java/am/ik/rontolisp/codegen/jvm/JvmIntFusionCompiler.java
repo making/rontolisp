@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
 
@@ -77,6 +78,14 @@ final class JvmIntFusionCompiler {
 	/** How many nested defun/local-function body substitutions a tree may perform. */
 	private static final int MAX_INLINE_DEPTH = 4;
 
+	/**
+	 * How many leaf checks the boundaries of one site may run between them
+	 * ({@link #planOrder}): a tree whose nested operations complete in front of one
+	 * observable leaf after another would re-check them at each, so past this the site
+	 * declines, and the generic per-operation path keeps the order by construction.
+	 */
+	private static final int MAX_ORDER_CHECKS = 2 * MAX_EXPR_LEAVES;
+
 	private JvmIntFusionCompiler() {
 	}
 
@@ -116,6 +125,9 @@ final class JvmIntFusionCompiler {
 
 		final LispVal expr;
 
+		/** The caller's temporary holding the value, at a site evaluated in order. */
+		int callSlot = -1;
+
 		int paramSlot = -1;
 
 		int longSlot = -1;
@@ -148,6 +160,9 @@ final class JvmIntFusionCompiler {
 	private static final class ArefLeaf implements Node {
 
 		final LispVal arrayExpr;
+
+		/** The caller's temporary holding the array, at a site evaluated in order. */
+		int callSlot = -1;
 
 		/**
 		 * The source site of the {@code aref} form, 0 without one ({@link OpNode});
@@ -197,6 +212,9 @@ final class JvmIntFusionCompiler {
 		/** The limit expression, or {@code null} when {@link #limitConst} is it. */
 		@Nullable final LispVal limitExpr;
 
+		/** The caller's temporary holding the limit, at a site evaluated in order. */
+		int callSlot = -1;
+
 		final long limitConst;
 
 		int limitParam = -1;
@@ -234,6 +252,15 @@ final class JvmIntFusionCompiler {
 	private static final class RawLeaf implements Node {
 
 		final RawLocal src;
+
+		/**
+		 * The caller's temporaries holding the snapshot, at a site evaluated in order.
+		 */
+		int callRaw = -1;
+
+		int callShadow = -1;
+
+		int callFlag = -1;
 
 		int rawParam = -1;
 
@@ -359,6 +386,8 @@ final class JvmIntFusionCompiler {
 
 		private int nextId;
 
+		private int nextProbeId;
+
 		/**
 		 * Set when any raw local is read boxed: the {@code _ubRead} helper is emitted
 		 * (and shaken back out with its callers when they turn out unreachable).
@@ -382,7 +411,20 @@ final class JvmIntFusionCompiler {
 			return this.cmpMask >= 0;
 		}
 
+		/** Whether this is a site's probe ({@link #probeFor}), not its fused method. */
+		boolean isProbe() {
+			return this.cmpMask == PROBE;
+		}
+
 	}
+
+	/**
+	 * The {@link Pending#cmpMask} of a probe: its root's arguments are what it applies.
+	 */
+	private static final int PROBE = -2;
+
+	/** The synthetic root a probe's applications hang under. */
+	private static final String PROBE_ROOT = "%probe";
 
 	/**
 	 * Per-site classification state: the registered leaves, plus what makes raw-local
@@ -398,15 +440,35 @@ final class JvmIntFusionCompiler {
 		final Set<String> assignedNames = new HashSet<>();
 
 		/**
+		 * What the classified tree does, in the order the interpreter does it: each
+		 * leaf's evaluation, and each application -- an operation, an aref read, a
+		 * {@code random} draw -- once its operands are evaluated. An inlined body's
+		 * applications follow its arguments' evaluation, as a call's do.
+		 */
+		final List<Event> events = new ArrayList<>();
+
+		/**
+		 * Each application's form at the caller's level ({@link #top} when it was built).
+		 */
+		final Map<Node, LispVal> origins = new java.util.IdentityHashMap<>();
+
+		/** What every classification of this site shares ({@link Ordering}). */
+		final Ordering ordering;
+
+		/** The innermost caller-level form being classified. */
+		@Nullable LispVal top;
+
+		/**
 		 * The owner code ({@link JvmSourceSites#owner}) the forms being classified belong
 		 * to: the compiling method's function, and an inlined defun's own while its body
 		 * is classified.
 		 */
 		int owner;
 
-		Site(LispVal expr, JvmLispCompiler.Ctx ctx) {
+		Site(LispVal expr, JvmLispCompiler.Ctx ctx, Ordering ordering) {
 			collectAssignedNames(expr, this.assignedNames);
 			this.owner = ctx.siteOwner;
+			this.ordering = ordering;
 		}
 
 		private static void collectAssignedNames(LispVal form, Set<String> out) {
@@ -449,8 +511,9 @@ final class JvmIntFusionCompiler {
 			// (`.kb/jvm-complex.md`).
 			return false;
 		}
-		Site site = new Site(cons, ctx);
-		Node root = classify(cons, ctx, Map.of(), site, 0);
+		Classified classified = classifyOrdered(cons, ctx, site -> classify(cons, ctx, Map.of(), site, 0));
+		Node root = classified.root();
+		Site site = classified.site();
 		if (!(root instanceof OpNode)) {
 			return false;
 		}
@@ -463,8 +526,9 @@ final class JvmIntFusionCompiler {
 			// generic call keeps owning that shape (and its emission stays byte-stable).
 			return false;
 		}
+		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
 		MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
-		pushLeaves(site.leaves, ctx, className);
+		pushLeaves(classified, lineFree, ctx, className);
 		ctx.body.invokestatic(ref);
 		return true;
 	}
@@ -525,24 +589,27 @@ final class JvmIntFusionCompiler {
 			// doubles); fusing it would change nothing for the better.
 			return false;
 		}
-		Site site = new Site(cons, ctx);
-		Node left = classify(parts.get(1), ctx, Map.of(), site, 0);
-		if (left == null) {
+		Classified classified = classifyOrdered(cons, ctx, site -> {
+			Node left = classify(parts.get(1), ctx, Map.of(), site, 0);
+			Node right = left == null ? null : classify(parts.get(2), ctx, Map.of(), site, 0);
+			return right == null ? null : new OpNode(CMP_ROOT, List.of(java.util.Objects.requireNonNull(left), right),
+					sourceSite(cons, ctx, site));
+		});
+		if (!(classified.root() instanceof OpNode root)) {
 			return false;
 		}
-		Node right = classify(parts.get(2), ctx, Map.of(), site, 0);
-		if (right == null) {
-			return false;
-		}
+		Site site = classified.site();
+		Node left = root.args().get(0);
+		Node right = root.args().get(1);
 		if (countOps(left) + countOps(right) > MAX_OPS || site.leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
 		}
 		if (left instanceof ExprLeaf && right instanceof ExprLeaf) {
 			return false;
 		}
-		Node root = new OpNode(CMP_ROOT, List.of(left, right), sourceSite(cons, ctx, site));
+		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
 		MethodRefEntry ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
-		pushLeaves(site.leaves, ctx, className);
+		pushLeaves(classified, lineFree, ctx, className);
 		ctx.body.invokestatic(ref);
 		return true;
 	}
@@ -753,8 +820,9 @@ final class JvmIntFusionCompiler {
 			// for a holder instead of answering complex -- `.kb/jvm-complex.md`).
 			// The boxed value lands in the shadow instead, which is then
 			// authoritative.
-			Site site = new Site(expr, ctx);
-			Node root = classify(expr, ctx, Map.of(), site, 0);
+			Classified classified = classifyOrdered(expr, ctx, site -> classify(expr, ctx, Map.of(), site, 0));
+			Node root = classified.root();
+			Site site = classified.site();
 			if (root instanceof ConstLeaf c) {
 				// A tree folded to a literal: the raw value directly.
 				JvmEmitHelper.emitRawLong(c.value(), ctx);
@@ -764,11 +832,12 @@ final class JvmIntFusionCompiler {
 			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
 					&& site.leaves.size() <= MAX_EXPR_LEAVES) {
 				MethodCode.Label @Nullable [] step = emitRawStepFastPath(root, ctx, target);
+				boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
 				MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
 				if (step != null) {
 					ctx.body.labelBinding(step[0]);
 				}
-				pushLeaves(site.leaves, ctx, className);
+				pushLeaves(classified, lineFree, ctx, className);
 				ctx.body.invokestatic(ref);
 				// Dispatch on the VALUE's type, not on which path computed it: a Long
 				// is the raw representation whichever path answered it.
@@ -1073,6 +1142,26 @@ final class JvmIntFusionCompiler {
 	 * nodes and add nothing.
 	 */
 	@Nullable private static Node classify(LispVal expr, JvmLispCompiler.Ctx ctx, Map<String, Node> env, Site site, int depth) {
+		if (!env.isEmpty() || !(expr instanceof LispCons)) {
+			return classifyHere(expr, ctx, env, site, depth);
+		}
+		if (site.ordering.opaque.contains(expr)) {
+			// A form whose application must happen where it stands (OrderPlan): the
+			// caller evaluates it, in order, like any other leaf.
+			return registerLeaf(new ExprLeaf(expr), site);
+		}
+		@Nullable LispVal outerTop = site.top;
+		site.top = expr;
+		try {
+			return classifyHere(expr, ctx, env, site, depth);
+		}
+		finally {
+			site.top = outerTop;
+		}
+	}
+
+	@Nullable private static Node classifyHere(LispVal expr, JvmLispCompiler.Ctx ctx, Map<String, Node> env, Site site,
+			int depth) {
 		List<Node> leaves = site.leaves;
 		if (expr instanceof LispInteger i) {
 			return new ConstLeaf(i.value());
@@ -1097,15 +1186,15 @@ final class JvmIntFusionCompiler {
 					if (shared == null) {
 						shared = new RawLeaf(raw);
 						site.sharedRawLeaves.put(sym.name(), shared);
-						registerLeaf(shared, leaves);
+						registerLeaf(shared, site);
 					}
 					return shared;
 				}
-				return registerLeaf(new RawLeaf(raw), leaves);
+				return registerLeaf(new RawLeaf(raw), site);
 			}
 		}
 		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol sym)) {
-			return registerLeaf(new ExprLeaf(expr), leaves);
+			return registerLeaf(new ExprLeaf(expr), site);
 		}
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
@@ -1121,7 +1210,7 @@ final class JvmIntFusionCompiler {
 		if (LispNames.RANDOM.equals(op) && arity == 1 && env.isEmpty()) {
 			RandomLeaf leaf = randomLeaf(parts, ctx, sourceSite(cons, ctx, site));
 			if (leaf != null) {
-				return registerLeaf(leaf, leaves);
+				return applied(registerLeaf(leaf, site), site);
 			}
 		}
 		if (LispNames.LDB.equals(op) && arity == 2) {
@@ -1131,10 +1220,13 @@ final class JvmIntFusionCompiler {
 					&& LispNames.BYTE.equals(specHead.name()) && spec.cdr() instanceof LispCons sCell
 					&& sCell.car() instanceof LispInteger && sCell.cdr() instanceof LispCons pCell
 					&& pCell.car() instanceof LispInteger && pCell.cdr() instanceof am.ik.rontolisp.LispNil) {
-				return classify(SourceProvenance.inherit(cons, LispMacroExpander.expandLdb(cons)), ctx, env, site,
-						depth);
+				// One expansion per form, so a classification repeated with a form made
+				// opaque (OrderPlan) meets the same conses again.
+				LispVal expanded = site.ordering.expansions.computeIfAbsent(cons, form -> SourceProvenance
+					.inherit((LispCons) form, LispMacroExpander.expandLdb((LispCons) form)));
+				return classify(expanded, ctx, env, site, depth);
 			}
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 		}
 		if (LispNames.FUNCALL.equals(op) && arity >= 1 && parts.get(1) instanceof LispSymbol fvar
 				&& !env.containsKey(fvar.name()) && depth < MAX_INLINE_DEPTH) {
@@ -1175,19 +1267,19 @@ final class JvmIntFusionCompiler {
 		if (!fusable) {
 			// Inside an inlined body every form must classify; at the top level it is
 			// an ordinary guarded leaf.
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 		}
 		if (JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			// The double-literal routing predicate the per-op compilers read: such a
 			// node takes the unboxed-double path today and keeps it (as a leaf here).
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 		}
 		for (int i = 1; i < parts.size(); i++) {
 			// An immediate big-integer or ratio literal makes the fast path pointless
 			// (the guard would fail every time); the generic compiler owns those.
 			if (parts.get(i) instanceof am.ik.rontolisp.LispBigInteger
 					|| parts.get(i) instanceof am.ik.rontolisp.LispRatio) {
-				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 			}
 		}
 		List<Node> args = new ArrayList<>(arity);
@@ -1199,11 +1291,11 @@ final class JvmIntFusionCompiler {
 			args.add(arg);
 		}
 		int sourceSite = sourceSite(cons, ctx, site);
-		return switch (op) {
+		return applied(switch (op) {
 			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
 			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
 			default -> makeOp(op, args, sourceSite);
-		};
+		}, site);
 	}
 
 	/**
@@ -1217,13 +1309,15 @@ final class JvmIntFusionCompiler {
 			Site site, int depth) {
 		int size = LispMacroExpander.maskSignedFieldSize(cons);
 		if (size < 1 || size > 64) {
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(cons), site.leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(cons), site) : null;
 		}
 		Node arg = classify(cons.toList().get(2), ctx, env, site, depth);
 		if (arg == null) {
 			return null;
 		}
-		return makeOp(LispNames.MASK_SIGNED_FIELD, List.of(new ConstLeaf(size), arg), sourceSite(cons, ctx, site));
+		return applied(
+				makeOp(LispNames.MASK_SIGNED_FIELD, List.of(new ConstLeaf(size), arg), sourceSite(cons, ctx, site)),
+				site);
 	}
 
 	/**
@@ -1350,6 +1444,7 @@ final class JvmIntFusionCompiler {
 			}
 		}
 		int mark = leaves.size();
+		int eventMark = site.events.size();
 		Map<String, Node> callEnv = new HashMap<>();
 		Node substituted = null;
 		for (int i = 0; i < params.size(); i++) {
@@ -1372,6 +1467,7 @@ final class JvmIntFusionCompiler {
 		}
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
+			site.events.subList(eventMark, site.events.size()).clear();
 		}
 		return substituted;
 	}
@@ -1384,9 +1480,10 @@ final class JvmIntFusionCompiler {
 	private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, int sourceSite, JvmLispCompiler.Ctx ctx,
 			Site site, int depth) {
 		ArefLeaf leaf = new ArefLeaf(arrayExpr, sourceSite);
-		registerLeaf(leaf, site.leaves);
+		registerLeaf(leaf, site);
 		leaf.indexNode = arefIndexNode(indexExpr, ctx, site, depth);
-		return leaf;
+		// The read applies once the array and the index are evaluated.
+		return applied(leaf, site);
 	}
 
 	/**
@@ -1401,7 +1498,7 @@ final class JvmIntFusionCompiler {
 				|| (indexExpr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
 						&& LispNames.RANDOM.equals(head.name()) && cons.toList().size() == 2);
 		if (!resolvable) {
-			return registerLeaf(new ExprLeaf(indexExpr), site.leaves);
+			return registerLeaf(new ExprLeaf(indexExpr), site);
 		}
 		Node node = classify(indexExpr, ctx, Map.of(), site, depth);
 		if (!(node instanceof ConstLeaf || node instanceof ExprLeaf || node instanceof RawLeaf
@@ -1436,9 +1533,23 @@ final class JvmIntFusionCompiler {
 		return new RandomLeaf(limit, 0, sourceSite);
 	}
 
-	private static Node registerLeaf(Node leaf, List<Node> leaves) {
-		leaves.add(leaf);
+	private static Node registerLeaf(Node leaf, Site site) {
+		site.leaves.add(leaf);
+		site.events.add(new Event(leaf, false));
 		return leaf;
+	}
+
+	/**
+	 * Records an application -- an operation, an aref read, a draw -- at this point of
+	 * the interpreter's order, with the caller-level form it can be made opaque as. A
+	 * folded constant applies nothing.
+	 */
+	private static Node applied(Node node, Site site) {
+		if (node instanceof OpNode || node instanceof ArefLeaf || node instanceof RandomLeaf) {
+			site.events.add(new Event(node, true));
+			site.origins.put(node, java.util.Objects.requireNonNull(site.top));
+		}
+		return node;
 	}
 
 	@Nullable private static LispVal inlineArefOperand(LispVal operand, List<String> params, List<LispVal> args) {
@@ -1643,6 +1754,479 @@ final class JvmIntFusionCompiler {
 		}
 	}
 
+	// ------------------------------------------------------------ evaluation order
+
+	/**
+	 * What every classification of one site shares while {@link #classifyOrdered} repeats
+	 * it: the caller-level forms kept as ordinary leaves, and each expansion made, so a
+	 * repeat meets the same conses.
+	 */
+	private static final class Ordering {
+
+		final Set<LispVal> opaque = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+		final Map<LispVal, LispVal> expansions = new java.util.IdentityHashMap<>();
+
+	}
+
+	/** One step of the interpreter's order: a leaf's evaluation, or an application. */
+	private record Event(Node node, boolean applies) {
+	}
+
+	/** A site classified so that its call keeps the interpreter's order. */
+	private record Classified(Site site, @Nullable Node root, OrderPlan plan) {
+	}
+
+	/**
+	 * The checks a site's call runs between its leaves (`.kb/jvm-int-fusion.md`, "The
+	 * interpreter's order"), and the caller-level forms the next classification must keep
+	 * opaque.
+	 */
+	private record OrderPlan(Map<Node, Boundary> boundaries, Set<LispVal> demote, int checks) {
+	}
+
+	/**
+	 * The check before a leaf whose evaluation can be observed, while applications are
+	 * pending in front of it. Passing it proves that the applications may wait for the
+	 * fused method; failing it calls the probe, which applies them through the generic
+	 * helpers -- signalling where the interpreter signals -- before the leaf runs.
+	 */
+	private record Boundary(List<Node> probeRoots, Guard guard) {
+	}
+
+	private sealed interface Guard permits PendingGuard, LeafGuard {
+
+	}
+
+	/**
+	 * The pending applications cannot signal: every leaf they read is a {@code Long},
+	 * every divisor among them non-zero and every shift count no larger than an
+	 * {@code int}; {@code never} when a literal operand makes one always signal.
+	 */
+	private record PendingGuard(List<Node> integers, List<Node> nonZero, List<Node> counts,
+			boolean never) implements Guard {
+	}
+
+	/**
+	 * The leaf cannot signal and changes nothing: it is integer arithmetic over these
+	 * quiet variables ({@link ArgumentOrder#integerArithmeticVariables}), each of which
+	 * holds a {@code Long}. The pending applications then stay pending.
+	 */
+	private record LeafGuard(List<String> variables) implements Guard {
+	}
+
+	/**
+	 * Classifies a site until its plan asks for nothing more to be kept opaque: an
+	 * application that must happen where it stands and that no check can stand in for
+	 * becomes an ordinary leaf of the next classification.
+	 */
+	private static Classified classifyOrdered(LispVal form, JvmLispCompiler.Ctx ctx,
+			java.util.function.Function<Site, @Nullable Node> classifier) {
+		Ordering ordering = new Ordering();
+		while (true) {
+			Site site = new Site(form, ctx, ordering);
+			Node root = classifier.apply(site);
+			OrderPlan plan = root == null ? new OrderPlan(Map.of(), Set.of(), 0) : planOrder(site, ctx);
+			if (plan.demote().isEmpty()) {
+				return plan.checks() > MAX_ORDER_CHECKS ? new Classified(site, null, plan)
+						: new Classified(site, root, plan);
+			}
+			ordering.opaque.addAll(plan.demote());
+		}
+	}
+
+	/**
+	 * Walks the site's events in the interpreter's order and places a {@link Boundary}
+	 * before every leaf whose evaluation can be observed while applications are pending:
+	 * the fused call evaluates every leaf before it applies anything, which is the
+	 * interpreter's order only where nothing in between can tell.
+	 */
+	private static OrderPlan planOrder(Site site, JvmLispCompiler.Ctx ctx) {
+		Map<Node, Boundary> boundaries = new java.util.IdentityHashMap<>();
+		Set<LispVal> demote = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<Node> pending = new ArrayList<>();
+		int checks = 0;
+		for (Event event : site.events) {
+			if (event.applies()) {
+				pending.add(event.node());
+				continue;
+			}
+			LispVal evaluated = evaluatedForm(event.node());
+			if (evaluated == null || pending.isEmpty()
+					|| ArgumentOrder.isQuiet(evaluated, name -> JvmArithCompiler.isQuietVariable(name, ctx))) {
+				continue;
+			}
+			List<Node> roots = maximal(pending);
+			PendingGuard guard = pendingGuard(roots);
+			if (guard != null) {
+				boundaries.put(event.node(), new Boundary(roots, guard));
+				checks += guard.integers().size() + guard.nonZero().size() + guard.counts().size();
+				pending.clear();
+				continue;
+			}
+			List<String> variables = ArgumentOrder.integerArithmeticVariables(evaluated,
+					name -> JvmArithCompiler.isQuietVariable(name, ctx));
+			if (variables != null && pending.stream().noneMatch(RandomLeaf.class::isInstance)) {
+				boundaries.put(event.node(), new Boundary(roots, new LeafGuard(variables)));
+				checks += variables.size();
+				continue;
+			}
+			// No check stands in for these: an aref read sees what the leaf may store, a
+			// draw is never repeated, and a computed divisor or shift count is not a
+			// leaf to test. Each is applied where it stands, by the ordinary emission.
+			for (Node item : pending) {
+				if (item instanceof RandomLeaf || variables == null && !guardable(item)) {
+					demote.add(java.util.Objects.requireNonNull(site.origins.get(item)));
+				}
+			}
+		}
+		return new OrderPlan(boundaries, demote, checks);
+	}
+
+	/** What evaluating the leaf runs at the call site, or null when nothing does. */
+	private static @Nullable LispVal evaluatedForm(Node leaf) {
+		return switch (leaf) {
+			case ExprLeaf l -> l.expr;
+			case ArefLeaf l -> l.arrayExpr;
+			case RandomLeaf l -> l.limitExpr;
+			default -> null;
+		};
+	}
+
+	/** The pending applications no other pending one contains. */
+	private static List<Node> maximal(List<Node> pending) {
+		Set<Node> inside = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (Node item : pending) {
+			for (Node child : children(item)) {
+				collectSubtree(child, inside);
+			}
+		}
+		List<Node> roots = new ArrayList<>();
+		for (Node item : pending) {
+			if (!inside.contains(item)) {
+				roots.add(item);
+			}
+		}
+		return roots;
+	}
+
+	private static List<Node> children(Node node) {
+		return switch (node) {
+			case OpNode op -> op.args();
+			case ArefLeaf leaf -> List.of(java.util.Objects.requireNonNull(leaf.indexNode));
+			default -> List.of();
+		};
+	}
+
+	private static void collectSubtree(Node node, Set<Node> out) {
+		if (out.add(node)) {
+			for (Node child : children(node)) {
+				collectSubtree(child, out);
+			}
+		}
+	}
+
+	/**
+	 * Every node under {@code roots}, each once, in the order a walk of the trees meets
+	 * it: what the emitted checks follow, so the same program always compiles to the same
+	 * bytes (`.kb/emitted-output-determinism.md`).
+	 */
+	private static List<Node> inTreeOrder(List<Node> roots) {
+		Set<Node> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<Node> nodes = new ArrayList<>();
+		for (Node root : roots) {
+			walkInTreeOrder(root, seen, nodes);
+		}
+		return nodes;
+	}
+
+	private static void walkInTreeOrder(Node node, Set<Node> seen, List<Node> out) {
+		if (seen.add(node)) {
+			out.add(node);
+			for (Node child : children(node)) {
+				walkInTreeOrder(child, seen, out);
+			}
+		}
+	}
+
+	/**
+	 * Whether an application's signals are decided by the leaves it reads: an operation
+	 * whose divisor or shift count, if it has one, is a literal or a leaf. An aref read
+	 * and a draw are not.
+	 */
+	private static boolean guardable(Node item) {
+		if (!(item instanceof OpNode op)) {
+			return false;
+		}
+		if (LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op()) || LispNames.ASH.equals(op.op())) {
+			Node operand = op.args().get(1);
+			return operand instanceof ConstLeaf || operand instanceof ExprLeaf || operand instanceof RawLeaf;
+		}
+		return true;
+	}
+
+	/**
+	 * The check that the applications under {@code roots} cannot signal, or null when one
+	 * of them is not {@link #guardable}.
+	 */
+	private static @Nullable PendingGuard pendingGuard(List<Node> roots) {
+		List<Node> nodes = inTreeOrder(roots);
+		List<Node> integers = new ArrayList<>();
+		List<Node> nonZero = new ArrayList<>();
+		List<Node> counts = new ArrayList<>();
+		boolean never = false;
+		for (Node node : nodes) {
+			switch (node) {
+				case ExprLeaf ignored -> integers.add(node);
+				case RawLeaf ignored -> integers.add(node);
+				case ArefLeaf ignored -> {
+					return null;
+				}
+				case RandomLeaf ignored -> {
+					return null;
+				}
+				case OpNode op -> {
+					if (!guardable(op)) {
+						return null;
+					}
+					boolean divides = LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op());
+					if (divides || LispNames.ASH.equals(op.op())) {
+						Node operand = op.args().get(1);
+						if (operand instanceof ConstLeaf c) {
+							never |= divides ? c.value() == 0 : c.value() > Integer.MAX_VALUE;
+						}
+						else {
+							(divides ? nonZero : counts).add(operand);
+						}
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		return new PendingGuard(integers, nonZero, counts, never);
+	}
+
+	/**
+	 * Evaluates the site's leaves for its call: pushed one after the other as today when
+	 * the plan has no boundary -- the emission is then what it always was -- and through
+	 * temporaries otherwise, each boundary's check run before its leaf.
+	 */
+	private static void pushLeaves(Classified classified, boolean lineFree, JvmLispCompiler.Ctx ctx, String className) {
+		List<Node> leaves = classified.site().leaves;
+		Map<Node, Boundary> boundaries = classified.plan().boundaries();
+		if (boundaries.isEmpty()) {
+			pushLeaves(leaves, ctx, className);
+			return;
+		}
+		for (Node leaf : leaves) {
+			Boundary boundary = boundaries.get(leaf);
+			if (boundary != null) {
+				emitBoundary(boundary, leaves, lineFree, ctx, className);
+			}
+			evaluateLeaf(leaf, ctx, className);
+		}
+		for (Node leaf : leaves) {
+			pushLeafTemps(leaf, ctx);
+		}
+	}
+
+	/** One leaf evaluated into the caller's temporaries, in its place in the order. */
+	private static void evaluateLeaf(Node node, JvmLispCompiler.Ctx ctx, String className) {
+		switch (node) {
+			case ExprLeaf leaf -> {
+				JvmExprCompiler.compileExpr(leaf.expr, ctx, className);
+				leaf.callSlot = ctx.allocTemp();
+				ctx.body.astore(leaf.callSlot);
+			}
+			case ArefLeaf leaf -> {
+				JvmExprCompiler.compileExpr(leaf.arrayExpr, ctx, className);
+				leaf.callSlot = ctx.allocTemp();
+				ctx.body.astore(leaf.callSlot);
+			}
+			case RandomLeaf leaf -> {
+				if (leaf.limitExpr != null) {
+					JvmExprCompiler.compileExpr(leaf.limitExpr, ctx, className);
+					leaf.callSlot = ctx.allocTemp();
+					ctx.body.astore(leaf.callSlot);
+				}
+			}
+			case RawLeaf leaf -> {
+				leaf.callRaw = ctx.allocTemp();
+				ctx.allocTemp();
+				emitRawLoad(leaf.src, ctx);
+				ctx.body.lstore(leaf.callRaw);
+				leaf.callShadow = ctx.allocTemp();
+				emitShadowLoad(leaf.src, ctx);
+				ctx.body.astore(leaf.callShadow);
+				leaf.callFlag = ctx.allocTemp();
+				emitFlagLoad(leaf.src, ctx);
+				ctx.body.istore(leaf.callFlag);
+			}
+			default -> throw new IllegalStateException("not a registered leaf: " + node);
+		}
+	}
+
+	/** A leaf's temporaries as the fused method's (or a probe's) arguments. */
+	private static void pushLeafTemps(Node node, JvmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case ExprLeaf leaf -> ctx.body.aload(leaf.callSlot);
+			case ArefLeaf leaf -> ctx.body.aload(leaf.callSlot);
+			case RandomLeaf leaf -> {
+				if (leaf.limitExpr != null) {
+					ctx.body.aload(leaf.callSlot);
+				}
+			}
+			case RawLeaf leaf -> ctx.body.lload(leaf.callRaw).aload(leaf.callShadow).iload(leaf.callFlag);
+			default -> throw new IllegalStateException("not a registered leaf: " + node);
+		}
+	}
+
+	/** The boundary's check, and the probe call it falls into when the check fails. */
+	private static void emitBoundary(Boundary boundary, List<Node> siteLeaves, boolean lineFree,
+			JvmLispCompiler.Ctx ctx, String className) {
+		MethodCode.Label checked = ctx.body.newLabel();
+		if (!(boundary.guard() instanceof PendingGuard pending && pending.never())) {
+			MethodCode.Label fails = ctx.body.newLabel();
+			emitGuard(boundary.guard(), fails, ctx, className);
+			ctx.body.goto_(checked);
+			ctx.body.labelBinding(fails);
+		}
+		Probe probe = probeFor(boundary.probeRoots(), siteLeaves, lineFree, ctx);
+		for (Node leaf : probe.leaves()) {
+			pushLeafTemps(leaf, ctx);
+		}
+		ctx.body.invokestatic(probe.ref());
+		ctx.body.labelBinding(checked);
+	}
+
+	private static void emitGuard(Guard guard, MethodCode.Label fails, JvmLispCompiler.Ctx ctx, String className) {
+		switch (guard) {
+			case PendingGuard pending -> {
+				for (Node leaf : pending.integers()) {
+					emitIsLong(leaf, fails, ctx);
+				}
+				for (Node leaf : pending.nonZero()) {
+					emitLongValue(leaf, ctx);
+					ctx.body.lconst_0().lcmp().ifeq(fails);
+				}
+				for (Node leaf : pending.counts()) {
+					emitLongValue(leaf, ctx);
+					JvmEmitHelper.emitRawLong(Integer.MAX_VALUE, ctx);
+					ctx.body.lcmp().ifgt(fails);
+				}
+			}
+			case LeafGuard leafGuard -> {
+				for (String name : leafGuard.variables()) {
+					RawLocal raw = resolveRaw(name, ctx);
+					if (raw != null) {
+						MethodCode.Label isLong = ctx.body.newLabel();
+						emitFlagLoad(raw, ctx);
+						ctx.body.ifne(isLong);
+						emitShadowLoad(raw, ctx);
+						ctx.body.instanceOf(ctx.longClass).ifeq(fails);
+						ctx.body.labelBinding(isLong);
+					}
+					else {
+						JvmExprCompiler.compileSymbolRef(new LispSymbol(name), ctx);
+						ctx.body.instanceOf(ctx.longClass).ifeq(fails);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Branches to {@code fails} unless the leaf's value, as evaluated, is a {@code Long}.
+	 */
+	private static void emitIsLong(Node node, MethodCode.Label fails, JvmLispCompiler.Ctx ctx) {
+		if (node instanceof RawLeaf leaf) {
+			MethodCode.Label isLong = ctx.body.newLabel();
+			ctx.body.iload(leaf.callFlag).ifne(isLong);
+			ctx.body.aload(leaf.callShadow).instanceOf(ctx.longClass).ifeq(fails);
+			ctx.body.labelBinding(isLong);
+			return;
+		}
+		ctx.body.aload(((ExprLeaf) node).callSlot).instanceOf(ctx.longClass).ifeq(fails);
+	}
+
+	/** The raw {@code long} of a leaf {@link #emitIsLong} has passed. */
+	private static void emitLongValue(Node node, JvmLispCompiler.Ctx ctx) {
+		if (node instanceof RawLeaf leaf) {
+			MethodCode.Label boxed = ctx.body.newLabel();
+			MethodCode.Label done = ctx.body.newLabel();
+			ctx.body.iload(leaf.callFlag).ifeq(boxed);
+			ctx.body.lload(leaf.callRaw).goto_(done);
+			ctx.body.labelBinding(boxed);
+			ctx.body.aload(leaf.callShadow);
+			JvmEmitHelper.unboxLong(ctx);
+			ctx.body.labelBinding(done);
+			return;
+		}
+		ctx.body.aload(((ExprLeaf) node).callSlot);
+		JvmEmitHelper.unboxLong(ctx);
+	}
+
+	/** A probe's method, and the site's leaves it takes, in its parameter order. */
+	private record Probe(MethodRefEntry ref, List<Node> leaves) {
+	}
+
+	/**
+	 * The probe applying {@code roots} through the generic helpers, minting it once per
+	 * structure as {@link #methodFor} mints a fused method: {@code _fxp$N}, void, over
+	 * the leaves the roots read, in the site's order.
+	 */
+	private static Probe probeFor(List<Node> roots, List<Node> siteLeaves, boolean lineFree, JvmLispCompiler.Ctx ctx) {
+		List<Node> applied = lineFree ? roots.stream().map(JvmIntFusionCompiler::withoutSites).toList() : roots;
+		Set<Node> reads = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (Node root : applied) {
+			collectSubtree(root, reads);
+		}
+		List<Node> leaves = new ArrayList<>();
+		for (Node leaf : siteLeaves) {
+			if (reads.contains(leaf)) {
+				leaves.add(leaf);
+			}
+		}
+		State state = java.util.Objects.requireNonNull(ctx.fusedState);
+		StringBuilder desc = new StringBuilder("(");
+		for (Node leaf : leaves) {
+			desc.append(leaf instanceof RawLeaf ? "JLjava/lang/Object;I" : "Ljava/lang/Object;");
+		}
+		desc.append(")V");
+		StringBuilder key = new StringBuilder("probe|").append(desc);
+		for (Node root : applied) {
+			key.append('|');
+			appendKey(root, leaves, key);
+		}
+		MethodRefEntry existing = state.byKey.get(key.toString());
+		if (existing != null) {
+			return new Probe(existing, leaves);
+		}
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxp$" + state.nextProbeId++);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(state.className), nameUtf8, descUtf8);
+		state.byKey.put(key.toString(), ref);
+		state.pending.add(new Pending(ref, nameUtf8, descUtf8, new OpNode(PROBE_ROOT, applied, 0), leaves, PROBE));
+		return new Probe(ref, leaves);
+	}
+
+	/**
+	 * A probe's body: each of its applications through the generic helpers, under its own
+	 * operator and site, its value dropped. One that signals signals here, before the
+	 * caller evaluates the leaf the probe stands in front of.
+	 */
+	private static void emitProbeBody(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
+		int slot = assignParameters(pending.leaves());
+		ctx.nextLocal = slot;
+		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
+		for (Node root : ((OpNode) pending.root()).args()) {
+			emitFallback(root, ctx, className);
+			ctx.body.pop();
+		}
+		ctx.body.return_();
+	}
+
 	// ------------------------------------------------------------- method body pass
 
 	/**
@@ -1652,27 +2236,12 @@ final class JvmIntFusionCompiler {
 	 * bail, and the generic-helper fallback.
 	 */
 	static void emitMethodBody(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
-		State state = java.util.Objects.requireNonNull(ctx.fusedState);
-		// Parameter slots in leaf order.
-		int slot = 0;
-		for (Node leaf : pending.leaves()) {
-			switch (leaf) {
-				case ExprLeaf l -> l.paramSlot = slot++;
-				case ArefLeaf l -> l.arrParam = slot++;
-				case RandomLeaf l -> {
-					if (l.limitExpr != null) {
-						l.limitParam = slot++;
-					}
-				}
-				case RawLeaf l -> {
-					l.rawParam = slot;
-					slot += 2;
-					l.shadowParam = slot++;
-					l.flagParam = slot++;
-				}
-				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
-			}
+		if (pending.isProbe()) {
+			emitProbeBody(pending, ctx, className);
+			return;
 		}
+		State state = java.util.Objects.requireNonNull(ctx.fusedState);
+		int slot = assignParameters(pending.leaves());
 		ctx.nextLocal = slot;
 		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
 		MethodCode.Label bails = ctx.body.newLabel();
@@ -1815,6 +2384,30 @@ final class JvmIntFusionCompiler {
 			fallbackBails = doubleBails;
 		}
 		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+	}
+
+	/** Parameter slots in leaf order; answers the first free slot. */
+	private static int assignParameters(List<Node> leaves) {
+		int slot = 0;
+		for (Node leaf : leaves) {
+			switch (leaf) {
+				case ExprLeaf l -> l.paramSlot = slot++;
+				case ArefLeaf l -> l.arrParam = slot++;
+				case RandomLeaf l -> {
+					if (l.limitExpr != null) {
+						l.limitParam = slot++;
+					}
+				}
+				case RawLeaf l -> {
+					l.rawParam = slot;
+					slot += 2;
+					l.shadowParam = slot++;
+					l.flagParam = slot++;
+				}
+				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
+			}
+		}
+		return slot;
 	}
 
 	/**

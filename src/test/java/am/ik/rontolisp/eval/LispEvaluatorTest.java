@@ -20419,6 +20419,21 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
 	}
 
+	// The reference for the order an operation's arguments are evaluated and its
+	// application signals in, which the compiled backends' fast paths (the unboxed float
+	// paths, integer fusion, the two-argument log) kept only in part. The twins are
+	// JvmLispCompilerTest#compileAndRunFastPathsKeepTheInterpretersEvaluationOrder and
+	// WasmLispCompilerIntegrationTest#fastPathsKeepTheInterpretersEvaluationOrder.
+	@Test
+	void fastPathsKeepTheInterpretersEvaluationOrder() {
+		assertThat(printedLines(am.ik.rontolisp.FastPathEvaluationOrderFixture.SIGNALS_SOURCE))
+			.isEqualTo(am.ik.rontolisp.FastPathEvaluationOrderFixture.SIGNALS_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.FastPathEvaluationOrderFixture.VALUES_SOURCE))
+			.isEqualTo(am.ik.rontolisp.FastPathEvaluationOrderFixture.VALUES_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.FastPathEvaluationOrderFixture.COMPLEX_SOURCE))
+			.isEqualTo(am.ik.rontolisp.FastPathEvaluationOrderFixture.COMPLEX_EXPECTED);
+	}
+
 	// The reference for a complex reaching an operation that spells a float literal, the
 	// compiled backends' unboxed float path. The twins are
 	// JvmLispCompilerTest#compileAndRunComplexBesideAFloatLiteral and

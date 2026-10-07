@@ -176,8 +176,8 @@ final class JvmMathFnCompiler {
 				});
 				return;
 			}
-			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
+			JvmArithCompiler.compileUnboxedOperands(args.subList(1, 3), ctx, className, i -> {
+			});
 			ctx.body.invokestatic(ctx.mathOp(ATAN2));
 			JvmEmitHelper.boxDouble(ctx);
 			return;
@@ -187,15 +187,31 @@ final class JvmMathFnCompiler {
 			// Either logarithm may itself have left the real domain, so both go
 			// through the gated _cu1 and the quotient through _cdiv -- the same pair
 			// of helpers (/ (log n) (log base)) would reach with a complex operand.
-			compileLogThroughU1(args.get(1), ctx, className);
-			compileLogThroughU1(args.get(2), ctx, className);
+			if (am.ik.rontolisp.compiler.ArgumentOrder.isQuiet(args.get(2),
+					operand -> JvmArithCompiler.isQuietVariable(operand, ctx))) {
+				compileLogThroughU1(args.get(1), ctx, className);
+				compileLogThroughU1(args.get(2), ctx, className);
+			}
+			else {
+				// A base whose evaluation can be observed runs before the number's
+				// logarithm can signal: (log n b) applies once both are evaluated.
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				ctx.body.swap();
+				ctx.body.loadConstant(JvmComplexRuntimeBuilder.U1_LOG);
+				ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
+				ctx.body.swap();
+				ctx.body.loadConstant(JvmComplexRuntimeBuilder.U1_LOG);
+				ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
+			}
 			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.DIV));
 			return;
 		}
-		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG));
-		JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG)).ddiv();
+		// Both arguments are evaluated before either logarithm is taken, the base's
+		// evaluation included (JvmArithCompiler.compileUnboxedOperands).
+		JvmArithCompiler.compileUnboxedOperands(args.subList(1, 3), ctx, className,
+				i -> ctx.body.invokestatic(ctx.mathOp(LispNames.LOG)));
+		ctx.body.ddiv();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 

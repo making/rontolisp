@@ -280,7 +280,8 @@ NaN -- the one documented place where that answer survives.
   syntactic-steering corner min/max has always had.
 - `(log n base)` is `compileLogBase`: the quotient of two logarithms, with the
   complex-capable spelling running both through `compileLogOf` and dividing
-  with `_c_div`, and the real one through `WasmTranscendentalCompiler.compileArg`
+  with `_c_div` (a base whose evaluation can be observed is evaluated first, before the
+  number's logarithm can signal), and the real one through `WasmTranscendentalCompiler.compileArg`
   into a plain `f64.div` -- so `(log 8 2)` pulls in no complex runtime at all. Whether
   a site is complex-capable is `LispMacroExpander.escapesToComplex` over BOTH
   arguments, the predicate the JVM's gate reads.

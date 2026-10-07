@@ -48,6 +48,57 @@ enclosing expression's pending operands.
   `JvmLispCompilerTest.aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong` (an `LMUL` in a
   fused method; default and size levels print SBCL's values, `testsupport/MaskSignedFieldProgram`).
 
+## The interpreter's order
+The call evaluates every leaf before the method applies anything, which is the
+interpreter's order only where nothing between an application and a later leaf can tell
+(`.kb/argument-evaluation-order.md`, "An operation applies after its operands"). Until
+2026-10-07 nothing checked: `(+ (* 2 a) (progn (princ "x") 1))` printed before `*` signalled,
+`(+ (aref v 0) (progn (setf (aref v 0) 99) 1))` read the stored 99, an exit leaf left
+before `*` could signal, and `(+ (* 2 a) (car x))` reported `car`.
+
+- **Events.** Classification records, in the interpreter's order, each leaf's evaluation
+  and each application -- an operation, an aref read, a draw -- with the caller-level form
+  it came from (`Site.events`, `Site.origins`; an inlined body's applications follow its
+  arguments, as a call's do).
+- **Boundaries** (`planOrder`). Before a leaf whose evaluation is observable (not a
+  constant or a quiet variable) while applications are pending, the call site runs a check:
+  - `PendingGuard`, when every pending application is an operation whose divisor or shift
+    count is a literal or a leaf: the leaves they read are `Long`s, the divisors non-zero,
+    the counts no larger than an `int` -- then they cannot signal. The pending set clears.
+  - `LeafGuard`, when the leaf is integer arithmetic over quiet variables (in practice an
+    aref index, `(aref v (+ i 1))`): those variables are `Long`s -- then the leaf cannot
+    signal or change anything and the applications stay pending; an aref read keeps its
+    raw read in the method.
+  - Anything else -- an aref read before a leaf that may store, a `random` draw, a
+    `mod`/`rem`/`ash` over a computed divisor or count -- is made opaque: an ordinary leaf
+    evaluated in place by the ordinary emission (`classifyOrdered` repeats the
+    classification until nothing more is asked; `Ordering.expansions` keeps an `ldb`
+    expansion's conses stable across repeats; a site whose root is asked declines).
+- **A failed check calls the probe** `_fxp$N` (void, outlined and shared by structure like
+  `_fx$N`): the pending applications through the generic helpers under their own
+  operators and sites, values dropped. One that signals signals there; otherwise the leaf
+  runs and the fused method later answers through its fallback.
+- **Emission.** A site with no boundary pushes its leaves as before. With one, every leaf
+  goes into a temporary in order, each boundary's check runs before its leaf, and the
+  temporaries are pushed at the end. A site whose checks would run more than
+  `MAX_ORDER_CHECKS` leaf tests (nested operations completing in front of one observable
+  leaf after another re-check their leaves at each) declines fusion.
+
+Why this shape: the checks are the fused method's own guards (`instanceof Long`, a zero
+divisor, a shift count), so a passing check is work the method repeats and the JIT shares
+once both are inlined, and a temporary is no machine work; the generic helpers run only
+when a check fails. Rejected: cutting the tree at each observable leaf (a box per cut, the
+allocation fusion exists to remove), calling a probe that recomputes the pending subtree
+raw on every evaluation (duplicate arithmetic on the hot path), making every pending aref
+read opaque (a boxed read in UTF-8 and MD5 loops), and declining fusion for such trees.
+Census 2026-10-07 (scratch instrumentation of the JVM classification, 248 programs of
+`examples/`, `bench-report` and `size-report`, shared library code counted once per
+program, every global counted as observable): 159,287 fused sites, 4,737 with an
+application pending before an observable leaf -- 5,765 integer operations, 1,002 `ash` by
+a literal, 1,158 by a leaf count and 341 by a computed one (all `ldb`/`dpb` over a
+run-time byte spec), 31 `mod` by a literal, 502 aref reads (mostly in front of an
+arithmetic aref index: UTF-8 decoding, MD5), no draw and no computed divisor.
+
 ## Entry points beyond plain trees
 - **Fused comparisons** (`= < > <= >=`, binary): `_fx$N` returning a raw `int`; generic
   `_cmpb`-with-mask on the fallback. **Condition position** (`if`/`while`, hence
@@ -137,7 +188,9 @@ limit (`.kb/jvm-method-size-limits.md`) -- past 255 slots `astore 256/257/258` t
 of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`;
 `JvmLibraryMethodSizeTest`; ci-spec `fused-integer-expression-trees`,
 `flet-fusion-and-unboxed-locals`, `fused-comparisons-and-raw-leaf-stores`,
-`fused-random-and-aref-leaves`.
+`fused-random-and-aref-leaves`. The order: `FastPathEvaluationOrderFixture`
+(`.compileAndRunFastPathsKeepTheInterpretersEvaluationOrder`, both levels) and ci-spec
+`fast-paths-keep-the-evaluation-order`.
 
 ## Unfinished
 - The store dispatch re-boxes a raw local's fast-path value at every assignment; a raw-returning

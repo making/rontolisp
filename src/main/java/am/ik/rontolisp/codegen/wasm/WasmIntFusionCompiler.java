@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import org.jspecify.annotations.Nullable;
@@ -55,6 +56,14 @@ final class WasmIntFusionCompiler {
 	private static final int MAX_EXPR_LEAVES = 32;
 
 	private static final int MAX_OPS = 64;
+
+	/**
+	 * How many leaf checks the boundaries of one site may run between them
+	 * ({@code planOrder}): a tree whose nested operations complete in front of one
+	 * observable leaf after another would re-check them at each, so past this the site
+	 * declines, and the generic per-operation path keeps the order by construction.
+	 */
+	private static final int MAX_ORDER_CHECKS = 2 * MAX_EXPR_LEAVES;
 
 	private WasmIntFusionCompiler() {
 	}
@@ -239,8 +248,28 @@ final class WasmIntFusionCompiler {
 		 */
 		@Nullable String bodyOwner;
 
-		Site(LispVal expr) {
+		/**
+		 * What the classified tree does, in the order the interpreter does it: each
+		 * leaf's evaluation, and each application -- an operation, an aref read -- once
+		 * its operands are evaluated. An inlined body's applications follow its
+		 * arguments' evaluation, as a call's do.
+		 */
+		final List<Event> events = new ArrayList<>();
+
+		/**
+		 * Each application's form at the caller's level ({@link #top} when it was built).
+		 */
+		final java.util.Map<Node, LispVal> origins = new java.util.IdentityHashMap<>();
+
+		/** What every classification of this site shares ({@link Ordering}). */
+		final Ordering ordering;
+
+		/** The innermost caller-level form being classified. */
+		@Nullable LispVal top;
+
+		Site(LispVal expr, Ordering ordering) {
 			collectAssignedNames(expr, this.assignedNames);
+			this.ordering = ordering;
 		}
 
 		private static void collectAssignedNames(LispVal form, java.util.Set<String> out) {
@@ -281,12 +310,12 @@ final class WasmIntFusionCompiler {
 			// (the JVM twin's identical gate, `.kb/jvm-complex.md`).
 			return false;
 		}
-		Site site = new Site(cons);
-		List<Node> leaves = site.leaves;
-		Node root = classify(cons, ctx, java.util.Map.of(), site, 0);
-		if (!(root instanceof OpNode)) {
+		Classified classified = classifyOrdered(cons, ctx,
+				site -> nodes(classify(cons, ctx, java.util.Map.of(), site, 0)));
+		if (classified == null || !(classified.roots().get(0) instanceof OpNode root)) {
 			return false;
 		}
+		List<Node> leaves = classified.site().leaves;
 		int ops = countOps(root);
 		if (ops > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
@@ -300,7 +329,7 @@ final class WasmIntFusionCompiler {
 		// boxed fallback } -- a bail (guard or overflow) discards the partial i64
 		// stack on its way to $bail and recomputes generically.
 		int savedI64 = ctx.nextI64Local;
-		evalLeaves(leaves, ctx);
+		evalLeaves(classified, ctx);
 		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.writeRefType(true, Type.EQ.code());
@@ -381,16 +410,17 @@ final class WasmIntFusionCompiler {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
-		Site site = new Site(cons);
-		List<Node> leaves = site.leaves;
-		Node left = classify(parts.get(1), ctx, java.util.Map.of(), site, 0);
-		if (left == null) {
+		Classified classified = classifyOrdered(cons, ctx, site -> {
+			Node left = classify(parts.get(1), ctx, java.util.Map.of(), site, 0);
+			Node right = left == null ? null : classify(parts.get(2), ctx, java.util.Map.of(), site, 0);
+			return right == null ? List.of() : List.of(java.util.Objects.requireNonNull(left), right);
+		});
+		if (classified == null) {
 			return false;
 		}
-		Node right = classify(parts.get(2), ctx, java.util.Map.of(), site, 0);
-		if (right == null) {
-			return false;
-		}
+		List<Node> leaves = classified.site().leaves;
+		Node left = classified.roots().get(0);
+		Node right = classified.roots().get(1);
 		if (countOps(left) + countOps(right) > MAX_OPS || leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
 		}
@@ -401,7 +431,7 @@ final class WasmIntFusionCompiler {
 		// right; i64 compare; br $done } boxed fallback -> _rat_cmp_bits & mask } end;
 		// then the shared i32 -> t/nil boxing.
 		int savedI64 = ctx.nextI64Local;
-		evalLeaves(leaves, ctx);
+		evalLeaves(classified, ctx);
 		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I32);
@@ -448,10 +478,14 @@ final class WasmIntFusionCompiler {
 			// holder instead of answering complex.
 			return false;
 		}
-		Site site = new Site(expr);
-		List<Node> leaves = site.leaves;
-		Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
-		if (root == null || root instanceof ExprLeaf) {
+		Classified classified = classifyOrdered(expr, ctx,
+				site -> nodes(classify(expr, ctx, java.util.Map.of(), site, 0)));
+		if (classified == null) {
+			return false;
+		}
+		List<Node> leaves = classified.site().leaves;
+		Node root = classified.roots().get(0);
+		if (root instanceof ExprLeaf) {
 			return false;
 		}
 		if (root instanceof ConstLeaf c) {
@@ -467,7 +501,7 @@ final class WasmIntFusionCompiler {
 		// block $done (result i64) { block $bail { leaf unboxes; fast; br $done }
 		// fallback -> boxed; unbox with the store semantics } end
 		int savedI64 = ctx.nextI64Local;
-		evalLeaves(leaves, ctx);
+		evalLeaves(classified, ctx);
 		ctx.fxLitTempSlot = -1;
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I64);
@@ -637,9 +671,10 @@ final class WasmIntFusionCompiler {
 				ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 				return;
 			}
-			Site site = new Site(expr);
-			List<Node> leaves = site.leaves;
-			Node root = classify(expr, ctx, java.util.Map.of(), site, 0);
+			Classified classified = classifyOrdered(expr, ctx,
+					site -> nodes(classify(expr, ctx, java.util.Map.of(), site, 0)));
+			List<Node> leaves = classified == null ? List.of() : classified.site().leaves;
+			Node root = classified == null ? null : classified.roots().get(0);
 			if (root instanceof ConstLeaf c) {
 				// A tree folded to a literal: the raw value directly, no blocks.
 				ctx.writer.write(Instruction.I64_CONST);
@@ -649,10 +684,10 @@ final class WasmIntFusionCompiler {
 				emitNullShadow(target, ctx);
 				return;
 			}
-			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
+			if (classified != null && (root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
 					&& leaves.size() <= MAX_EXPR_LEAVES) {
 				int savedI64 = ctx.nextI64Local;
-				evalLeaves(leaves, ctx);
+				evalLeaves(classified, ctx);
 				ctx.fxLitTempSlot = -1;
 				// block $done { block $bail { unboxes; fast; raw store; null shadow;
 				// br $done } fallback -> shadow store } end
@@ -881,6 +916,27 @@ final class WasmIntFusionCompiler {
 	@org.jspecify.annotations.Nullable
 	private static Node classify(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env, Site site,
 			int depth) {
+		if (!env.isEmpty() || !(expr instanceof LispCons)) {
+			return classifyLocated(expr, ctx, env, site, depth);
+		}
+		if (site.ordering.opaque.contains(expr)) {
+			// A form whose application must happen where it stands (OrderPlan): the
+			// leaf evaluation runs it, in order, like any other leaf.
+			return registerLeaf(new ExprLeaf(expr), site);
+		}
+		@Nullable LispVal outerTop = site.top;
+		site.top = expr;
+		try {
+			return classifyLocated(expr, ctx, env, site, depth);
+		}
+		finally {
+			site.top = outerTop;
+		}
+	}
+
+	@org.jspecify.annotations.Nullable
+	private static Node classifyLocated(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env,
+			Site site, int depth) {
 		SourceLocation location = expr instanceof LispCons ? SourceProvenance.locate(expr) : null;
 		if (location == null || location.file() == null) {
 			return classifyHere(expr, ctx, env, site, depth);
@@ -925,15 +981,15 @@ final class WasmIntFusionCompiler {
 					if (shared == null) {
 						shared = new RawLeaf(raw);
 						site.sharedRawLeaves.put(sym.name(), shared);
-						registerLeaf(shared, leaves);
+						registerLeaf(shared, site);
 					}
 					return shared;
 				}
-				return registerLeaf(new RawLeaf(raw), leaves);
+				return registerLeaf(new RawLeaf(raw), site);
 			}
 		}
 		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol sym)) {
-			return registerLeaf(new ExprLeaf(expr), leaves);
+			return registerLeaf(new ExprLeaf(expr), site);
 		}
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
@@ -945,7 +1001,9 @@ final class WasmIntFusionCompiler {
 			// references, which the slot-based ArefLeaf cannot express;
 			// classifyInlineAref
 			// handles the parameter-shaped case below.
-			return registerLeaf(new ArefLeaf(parts.get(1), parts.get(2), site.source, site.sourceOwner), leaves);
+			// The read applies once the array and the index are evaluated.
+			return applied(registerLeaf(new ArefLeaf(parts.get(1), parts.get(2), site.source, site.sourceOwner), site),
+					site);
 		}
 		if (LispNames.LDB.equals(op) && arity == 2) {
 			// (ldb (byte s p) x) with a literal byte spec lowers to its pure
@@ -955,9 +1013,13 @@ final class WasmIntFusionCompiler {
 					&& LispNames.BYTE.equals(specHead.name()) && spec.cdr() instanceof LispCons sCell
 					&& sCell.car() instanceof LispInteger && sCell.cdr() instanceof LispCons pCell
 					&& pCell.car() instanceof LispInteger && pCell.cdr() instanceof am.ik.rontolisp.LispNil) {
-				return classify(LispMacroExpander.expandLdb(cons), ctx, env, site, depth);
+				// One expansion per form, so a classification repeated with a form made
+				// opaque (OrderPlan) meets the same conses again.
+				LispVal expanded = site.ordering.expansions.computeIfAbsent(cons,
+						form -> LispMacroExpander.expandLdb((LispCons) form));
+				return classify(expanded, ctx, env, site, depth);
 			}
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 		}
 		if (LispNames.FUNCALL.equals(op) && arity >= 1 && parts.get(1) instanceof LispSymbol fvar
 				&& !env.containsKey(fvar.name()) && depth < MAX_INLINE_DEPTH) {
@@ -991,10 +1053,10 @@ final class WasmIntFusionCompiler {
 			// sign-extends. Any other size is a leaf the lowering owns.
 			int size = LispMacroExpander.maskSignedFieldSize(cons);
 			if (size < 1 || size > 64) {
-				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 			}
 			Node arg = classify(parts.get(2), ctx, env, site, depth);
-			return arg == null ? null : makeOp(op, List.of(new ConstLeaf(size), arg), site);
+			return arg == null ? null : applied(makeOp(op, List.of(new ConstLeaf(size), arg), site), site);
 		}
 		boolean fusable = switch (op) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR ->
@@ -1007,7 +1069,7 @@ final class WasmIntFusionCompiler {
 			// Inside an inlined body every form must classify (an unfusable form would
 			// compile in the CALLER's scope and break hygiene); at the top level it is
 			// an ordinary guarded leaf.
-			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 		}
 		for (int i = 1; i < parts.size(); i++) {
 			// A literal double keeps the node on the existing f64 literal path; any
@@ -1015,7 +1077,7 @@ final class WasmIntFusionCompiler {
 			// pointless -- the generic compiler owns those shapes.
 			if (parts.get(i) instanceof LispDouble || parts.get(i) instanceof am.ik.rontolisp.LispBigInteger
 					|| parts.get(i) instanceof am.ik.rontolisp.LispRatio) {
-				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
+				return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), site) : null;
 			}
 		}
 		List<Node> args = new ArrayList<>(arity);
@@ -1026,11 +1088,11 @@ final class WasmIntFusionCompiler {
 			}
 			args.add(arg);
 		}
-		return switch (op) {
+		return applied(switch (op) {
 			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)), site);
 			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), site);
 			default -> makeOp(op, args, site);
-		};
+		}, site);
 	}
 
 	/**
@@ -1130,12 +1192,13 @@ final class WasmIntFusionCompiler {
 				if (arr != null && idx != null) {
 					SourceLocation location = SourceProvenance.locate(bodyCons);
 					boolean located = location != null && location.file() != null;
-					return registerLeaf(new ArefLeaf(arr, idx, located ? bodyCons : site.source,
-							located ? (owner != null ? owner : site.bodyOwner) : site.sourceOwner), leaves);
+					return applied(registerLeaf(new ArefLeaf(arr, idx, located ? bodyCons : site.source,
+							located ? (owner != null ? owner : site.bodyOwner) : site.sourceOwner), site), site);
 				}
 			}
 		}
 		int mark = leaves.size();
+		int eventMark = site.events.size();
 		java.util.Map<String, Node> callEnv = new java.util.HashMap<>();
 		Node substituted = null;
 		for (int i = 0; i < params.size(); i++) {
@@ -1159,13 +1222,28 @@ final class WasmIntFusionCompiler {
 		}
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
+			site.events.subList(eventMark, site.events.size()).clear();
 		}
 		return substituted;
 	}
 
-	private static Node registerLeaf(Node leaf, List<Node> leaves) {
-		leaves.add(leaf);
+	private static Node registerLeaf(Node leaf, Site site) {
+		site.leaves.add(leaf);
+		site.events.add(new Event(leaf, false));
 		return leaf;
+	}
+
+	/**
+	 * Records an application -- an operation, an aref read -- at this point of the
+	 * interpreter's order, with the caller-level form it can be made opaque as. A folded
+	 * constant applies nothing.
+	 */
+	private static Node applied(Node node, Site site) {
+		if (node instanceof OpNode || node instanceof ArefLeaf) {
+			site.events.add(new Event(node, true));
+			site.origins.put(node, java.util.Objects.requireNonNull(site.top));
+		}
+		return node;
 	}
 
 	/**
@@ -1214,44 +1292,495 @@ final class WasmIntFusionCompiler {
 	 * argument order; a raw-local leaf snapshots its (i64, shadow) pair so a later leaf's
 	 * side effect cannot change what this read observes.
 	 */
-	private static void evalLeaves(List<Node> leaves, WasmLispCompiler.Ctx ctx) {
-		for (Node node : leaves) {
-			if (node instanceof ExprLeaf leaf) {
-				WasmExprCompiler.compileExpr(leaf.expr, ctx);
-				leaf.slot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(leaf.slot);
+	private static void evalLeaves(Classified classified, WasmLispCompiler.Ctx ctx) {
+		java.util.Map<Node, Boundary> boundaries = classified.plan().boundaries();
+		for (Node node : classified.site().leaves) {
+			Boundary boundary = boundaries.get(node);
+			if (boundary != null) {
+				emitBoundary(boundary, ctx);
 			}
-			else if (node instanceof ArefLeaf aref) {
-				WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
-				aref.arrSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(aref.arrSlot);
-				WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
-				aref.idxSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(aref.idxSlot);
+			evalLeaf(node, ctx);
+		}
+	}
+
+	private static void evalLeaf(Node node, WasmLispCompiler.Ctx ctx) {
+		if (node instanceof ExprLeaf leaf) {
+			WasmExprCompiler.compileExpr(leaf.expr, ctx);
+			leaf.slot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(leaf.slot);
+		}
+		else if (node instanceof ArefLeaf aref) {
+			WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
+			aref.arrSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(aref.arrSlot);
+			WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
+			aref.idxSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(aref.idxSlot);
+		}
+		else if (node instanceof RawLeaf raw) {
+			if (raw.src.counted()) {
+				// A counted loop variable cannot be assigned anywhere in the loop, so
+				// there is nothing a later leaf could change: the leaf IS the slot,
+				// snapshot-free and guard-free.
+				raw.snapI64 = raw.src.i64Slot();
+				return;
 			}
-			else if (node instanceof RawLeaf raw) {
-				if (raw.src.counted()) {
-					// A counted loop variable cannot be assigned anywhere in the loop,
-					// so there is nothing a later leaf could change: the leaf IS the
-					// slot, snapshot-free and guard-free.
-					raw.snapI64 = raw.src.i64Slot();
-					continue;
+			raw.snapI64 = ctx.allocI64Temp();
+			raw.snapShadow = ctx.allocTemp();
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(raw.src.i64Slot());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writeI64LocalIndex(raw.snapI64);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(raw.src.shadowSlot());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(raw.snapShadow);
+		}
+	}
+
+	// ------------------------------------------------------------ evaluation order
+
+	/**
+	 * What every classification of one site shares while {@link #classifyOrdered} repeats
+	 * it: the caller-level forms kept as ordinary leaves, and each expansion made, so a
+	 * repeat meets the same conses.
+	 */
+	private static final class Ordering {
+
+		final java.util.Set<LispVal> opaque = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+		final java.util.Map<LispVal, LispVal> expansions = new java.util.IdentityHashMap<>();
+
+	}
+
+	/** One step of the interpreter's order: a leaf's evaluation, or an application. */
+	private record Event(Node node, boolean applies) {
+	}
+
+	/** A site classified so that its leaf evaluation keeps the interpreter's order. */
+	private record Classified(Site site, List<Node> roots, OrderPlan plan) {
+	}
+
+	/**
+	 * The checks a site runs between its leaves (`.kb/wasm-int-fusion.md`, "The
+	 * interpreter's order"), the caller-level forms the next classification must keep
+	 * opaque, and how many operations the checks' probes apply between them.
+	 */
+	private record OrderPlan(java.util.Map<Node, Boundary> boundaries, java.util.Set<LispVal> demote, int probed,
+			int checks) {
+	}
+
+	/**
+	 * The check before a leaf whose evaluation can be observed, while applications are
+	 * pending in front of it. Passing it proves that the applications may wait for the
+	 * fused evaluation; failing it runs the probe, which applies them through the generic
+	 * helpers -- signalling where the interpreter signals -- before the leaf runs.
+	 */
+	private record Boundary(List<Node> probeRoots, Guard guard) {
+	}
+
+	private sealed interface Guard permits PendingGuard, LeafGuard {
+
+	}
+
+	/**
+	 * The pending applications cannot signal: every leaf they read is an i31 or a
+	 * {@code TYPE_BIGNUM}, every divisor among them non-zero and every shift count no
+	 * larger than an {@code i32}; {@code never} when a literal operand makes one always
+	 * signal.
+	 */
+	private record PendingGuard(List<Node> integers, List<Node> nonZero, List<Node> counts,
+			boolean never) implements Guard {
+	}
+
+	/**
+	 * The leaf cannot signal and changes nothing: it is integer arithmetic over these
+	 * quiet variables ({@code ArgumentOrder.integerArithmeticVariables}), each of which
+	 * holds an i31 or a {@code TYPE_BIGNUM}. The pending applications then stay pending.
+	 */
+	private record LeafGuard(List<String> variables) implements Guard {
+	}
+
+	/** One root as the classifier's result list: empty when the form did not classify. */
+	private static List<Node> nodes(@Nullable Node root) {
+		return root == null ? List.of() : List.of(root);
+	}
+
+	/**
+	 * Classifies a site until its plan asks for nothing more to be kept opaque: an
+	 * application that must happen where it stands and that no check can stand in for
+	 * becomes an ordinary leaf of the next classification. Null when the form does not
+	 * classify, when the probes would apply more operations than the tree has room for
+	 * ({@code MAX_OPS}) -- each probe is emitted inline -- or when the checks would run
+	 * more than {@code MAX_ORDER_CHECKS} leaf tests: the generic per-operation path keeps
+	 * the order by construction.
+	 */
+	private static @Nullable Classified classifyOrdered(LispVal form, WasmLispCompiler.Ctx ctx,
+			java.util.function.Function<Site, List<Node>> classifier) {
+		Ordering ordering = new Ordering();
+		while (true) {
+			Site site = new Site(form, ordering);
+			List<Node> roots = classifier.apply(site);
+			if (roots.isEmpty()) {
+				return null;
+			}
+			OrderPlan plan = planOrder(site, ctx);
+			if (plan.demote().isEmpty()) {
+				return plan.probed() > MAX_OPS || plan.checks() > MAX_ORDER_CHECKS ? null
+						: new Classified(site, roots, plan);
+			}
+			ordering.opaque.addAll(plan.demote());
+		}
+	}
+
+	/**
+	 * Walks the site's events in the interpreter's order and places a {@link Boundary}
+	 * before every leaf whose evaluation can be observed while applications are pending:
+	 * the fused evaluation evaluates every leaf before it applies anything, which is the
+	 * interpreter's order only where nothing in between can tell.
+	 */
+	private static OrderPlan planOrder(Site site, WasmLispCompiler.Ctx ctx) {
+		java.util.Map<Node, Boundary> boundaries = new java.util.IdentityHashMap<>();
+		java.util.Set<LispVal> demote = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<Node> pending = new ArrayList<>();
+		int probed = 0;
+		int checks = 0;
+		for (Event event : site.events) {
+			if (event.applies()) {
+				pending.add(event.node());
+				continue;
+			}
+			if (pending.isEmpty() || !observable(event.node(), ctx)) {
+				continue;
+			}
+			List<Node> roots = maximal(pending);
+			PendingGuard guard = pendingGuard(roots);
+			if (guard != null) {
+				boundaries.put(event.node(), new Boundary(roots, guard));
+				probed += probedOps(roots);
+				checks += guard.integers().size() + guard.nonZero().size() + guard.counts().size();
+				pending.clear();
+				continue;
+			}
+			List<String> variables = leafGuardVariables(event.node(), ctx);
+			if (variables != null) {
+				boundaries.put(event.node(), new Boundary(roots, new LeafGuard(variables)));
+				probed += probedOps(roots);
+				checks += variables.size();
+				continue;
+			}
+			// No check stands in for these: an aref read sees what the leaf may store,
+			// and a computed divisor or shift count is not a leaf to test. Each is
+			// applied where it stands, by the ordinary emission.
+			for (Node item : pending) {
+				if (!guardable(item)) {
+					demote.add(java.util.Objects.requireNonNull(site.origins.get(item)));
 				}
-				raw.snapI64 = ctx.allocI64Temp();
-				raw.snapShadow = ctx.allocTemp();
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writeI64LocalIndex(raw.src.i64Slot());
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writeI64LocalIndex(raw.snapI64);
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(raw.src.shadowSlot());
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 			}
 		}
+		return new OrderPlan(boundaries, demote, probed, checks);
+	}
+
+	/**
+	 * Whether evaluating the leaf can be observed: anything but a constant or a quiet
+	 * read.
+	 */
+	private static boolean observable(Node leaf, WasmLispCompiler.Ctx ctx) {
+		java.util.function.Predicate<String> quiet = name -> WasmArithCompiler.isQuietVariable(name, ctx);
+		return switch (leaf) {
+			case ExprLeaf l -> !ArgumentOrder.isQuiet(l.expr, quiet);
+			case ArefLeaf l -> !ArgumentOrder.isQuiet(l.arrayExpr, quiet) || !ArgumentOrder.isQuiet(l.indexExpr, quiet);
+			default -> false;
+		};
+	}
+
+	/**
+	 * The variables whose integer values prove that evaluating the leaf can neither
+	 * signal nor change anything, or null when no such check exists.
+	 */
+	private static @Nullable List<String> leafGuardVariables(Node leaf, WasmLispCompiler.Ctx ctx) {
+		java.util.function.Predicate<String> quiet = name -> WasmArithCompiler.isQuietVariable(name, ctx);
+		return switch (leaf) {
+			case ExprLeaf l -> ArgumentOrder.integerArithmeticVariables(l.expr, quiet);
+			case ArefLeaf l -> ArgumentOrder.isQuiet(l.arrayExpr, quiet)
+					? ArgumentOrder.integerArithmeticVariables(l.indexExpr, quiet) : null;
+			default -> null;
+		};
+	}
+
+	/** The pending applications no other pending one contains. */
+	private static List<Node> maximal(List<Node> pending) {
+		java.util.Set<Node> inside = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (Node item : pending) {
+			if (item instanceof OpNode op) {
+				for (Node child : op.args()) {
+					collectSubtree(child, inside);
+				}
+			}
+		}
+		List<Node> roots = new ArrayList<>();
+		for (Node item : pending) {
+			if (!inside.contains(item)) {
+				roots.add(item);
+			}
+		}
+		return roots;
+	}
+
+	private static void collectSubtree(Node node, java.util.Set<Node> out) {
+		if (out.add(node) && node instanceof OpNode op) {
+			for (Node child : op.args()) {
+				collectSubtree(child, out);
+			}
+		}
+	}
+
+	/**
+	 * Every node under {@code roots}, each once, in the order a walk of the trees meets
+	 * it: what the emitted checks follow, so the same program always compiles to the same
+	 * bytes (`.kb/emitted-output-determinism.md`).
+	 */
+	private static List<Node> inTreeOrder(List<Node> roots) {
+		java.util.Set<Node> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<Node> nodes = new ArrayList<>();
+		for (Node root : roots) {
+			walkInTreeOrder(root, seen, nodes);
+		}
+		return nodes;
+	}
+
+	private static void walkInTreeOrder(Node node, java.util.Set<Node> seen, List<Node> out) {
+		if (seen.add(node)) {
+			out.add(node);
+			if (node instanceof OpNode op) {
+				for (Node child : op.args()) {
+					walkInTreeOrder(child, seen, out);
+				}
+			}
+		}
+	}
+
+	/** How many operations a probe over these roots applies (an aref read counts one). */
+	private static int probedOps(List<Node> roots) {
+		int ops = 0;
+		for (Node node : inTreeOrder(roots)) {
+			if (node instanceof OpNode op) {
+				ops += Math.max(1, op.args().size() - 1);
+			}
+			else if (node instanceof ArefLeaf) {
+				ops++;
+			}
+		}
+		return ops;
+	}
+
+	/**
+	 * Whether an application's signals are decided by the leaves it reads: an operation
+	 * whose divisor or shift count, if it has one, is a literal or a leaf. An aref read
+	 * is not.
+	 */
+	private static boolean guardable(Node item) {
+		if (!(item instanceof OpNode op)) {
+			return false;
+		}
+		if (LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op()) || LispNames.ASH.equals(op.op())) {
+			Node operand = op.args().get(1);
+			return operand instanceof ConstLeaf || operand instanceof ExprLeaf || operand instanceof RawLeaf;
+		}
+		return true;
+	}
+
+	/**
+	 * The check that the applications under {@code roots} cannot signal, or null when one
+	 * of them is not {@link #guardable}.
+	 */
+	private static @Nullable PendingGuard pendingGuard(List<Node> roots) {
+		List<Node> nodes = inTreeOrder(roots);
+		List<Node> integers = new ArrayList<>();
+		List<Node> nonZero = new ArrayList<>();
+		List<Node> counts = new ArrayList<>();
+		boolean never = false;
+		for (Node node : nodes) {
+			switch (node) {
+				case ExprLeaf ignored -> integers.add(node);
+				case RawLeaf leaf -> {
+					if (!leaf.src.counted()) {
+						integers.add(node);
+					}
+				}
+				case ArefLeaf ignored -> {
+					return null;
+				}
+				case OpNode op -> {
+					if (!guardable(op)) {
+						return null;
+					}
+					boolean divides = LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op());
+					if (divides || LispNames.ASH.equals(op.op())) {
+						Node operand = op.args().get(1);
+						if (operand instanceof ConstLeaf c) {
+							never |= divides ? c.value() == 0 : c.value() > Integer.MAX_VALUE;
+						}
+						else {
+							(divides ? nonZero : counts).add(operand);
+						}
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		return new PendingGuard(integers, nonZero, counts, never);
+	}
+
+	/**
+	 * The boundary's check, and the probe it falls into when the check fails:
+	 * {@code block $checked { block $fails { checks; br $checked } probe }}, the probe
+	 * being each pending root's generic fallback with its value dropped.
+	 */
+	private static void emitBoundary(Boundary boundary, WasmLispCompiler.Ctx ctx) {
+		boolean never = boundary.guard() instanceof PendingGuard pending && pending.never();
+		if (!never) {
+			ctx.writer.write(Instruction.BLOCK, 0x40);
+			ctx.writer.write(Instruction.BLOCK, 0x40);
+			emitGuard(boundary.guard(), ctx);
+			ctx.writer.write(Instruction.BR, 1);
+			ctx.writer.write(Instruction.END);
+		}
+		for (Node root : boundary.probeRoots()) {
+			emitFallback(root, ctx);
+			ctx.writer.write(Instruction.DROP);
+		}
+		if (!never) {
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+	/** The checks, each branching to the probe ({@code br_if 0}) when it fails. */
+	private static void emitGuard(Guard guard, WasmLispCompiler.Ctx ctx) {
+		switch (guard) {
+			case PendingGuard pending -> {
+				for (Node leaf : pending.integers()) {
+					emitIsFastInteger(leaf, ctx);
+					ctx.writer.write(Instruction.I32_EQZ);
+					ctx.writer.write(Instruction.BR_IF, 0);
+				}
+				for (Node leaf : pending.nonZero()) {
+					emitFastIntegerValue(leaf, ctx);
+					ctx.writer.write(Instruction.I64_EQZ);
+					ctx.writer.write(Instruction.BR_IF, 0);
+				}
+				for (Node leaf : pending.counts()) {
+					emitFastIntegerValue(leaf, ctx);
+					ctx.writer.write(Instruction.I64_CONST);
+					ctx.writer.writeSignedLeb128(Integer.MAX_VALUE);
+					ctx.writer.write(Instruction.I64_GT_S);
+					ctx.writer.write(Instruction.BR_IF, 0);
+				}
+			}
+			case LeafGuard leafGuard -> {
+				for (String name : leafGuard.variables()) {
+					RawLocal raw = ctx.rawLocals.get(name);
+					if (raw != null && raw.counted()) {
+						continue;
+					}
+					if (raw != null) {
+						// The raw slot is authoritative, or the shadow is a fast-tier
+						// integer.
+						emitShadowIsSentinel(raw.shadowSlot(), ctx);
+						emitIsFastIntegerRef(() -> {
+							ctx.writer.write(Instruction.GET_LOCAL);
+							ctx.writer.writeUnsignedLeb128(raw.shadowSlot());
+						}, ctx);
+						ctx.writer.write(Instruction.I32_OR);
+					}
+					else {
+						emitIsFastIntegerRef(() -> WasmExprCompiler.compileSymbolRef(new LispSymbol(name), ctx), ctx);
+					}
+					ctx.writer.write(Instruction.I32_EQZ);
+					ctx.writer.write(Instruction.BR_IF, 0);
+				}
+			}
+		}
+	}
+
+	/**
+	 * The i32 truth of "the leaf's evaluated value is an i31 or a {@code TYPE_BIGNUM}".
+	 */
+	private static void emitIsFastInteger(Node node, WasmLispCompiler.Ctx ctx) {
+		if (node instanceof RawLeaf raw) {
+			emitShadowIsSentinel(raw.snapShadow, ctx);
+			emitIsFastIntegerRef(() -> {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
+			}, ctx);
+			ctx.writer.write(Instruction.I32_OR);
+			return;
+		}
+		int slot = ((ExprLeaf) node).slot;
+		emitIsFastIntegerRef(() -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+		}, ctx);
+	}
+
+	/**
+	 * The i32 truth of "the reference {@code push} pushes is an i31 or a
+	 * {@code TYPE_BIGNUM}".
+	 */
+	private static void emitIsFastIntegerRef(Runnable push, WasmLispCompiler.Ctx ctx) {
+		push.run();
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		push.run();
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.I32_OR);
+	}
+
+	/** The i64 of a leaf {@link #emitIsFastInteger} has passed. */
+	private static void emitFastIntegerValue(Node node, WasmLispCompiler.Ctx ctx) {
+		if (node instanceof RawLeaf raw) {
+			if (raw.src.counted()) {
+				writeI64LocalRead(raw.snapI64, ctx);
+				return;
+			}
+			emitShadowIsSentinel(raw.snapShadow, ctx);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.I64);
+			writeI64LocalRead(raw.snapI64, ctx);
+			ctx.writer.write(Instruction.ELSE);
+			emitRefFastIntegerValue(raw.snapShadow, ctx);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
+		emitRefFastIntegerValue(((ExprLeaf) node).slot, ctx);
+	}
+
+	// The i64 of the i31 or TYPE_BIGNUM in slot.
+	private static void emitRefFastIntegerValue(int slot, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I64);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

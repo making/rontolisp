@@ -189,7 +189,8 @@ emitted more than once. Another is integer expression-tree fusion: a nested
 shared method that runs the whole tree as raw `long` arithmetic and boxes only
 the result, with the generic per-operation chain kept alongside as the fallback
 for anything that is not a machine-word integer at run time -- again the same
-values, and a class that carries each tree twice. The third is the copy of the
+values, with output and errors in the interpreter's order, and a class that
+carries each tree twice. The third is the copy of the
 dispatch method that tail calls through a function value go through (above), one
 per argument count those calls use. `--optimize=size` keeps only the ordinary
 emissions; a program with none of these shapes compiles to the same class at both

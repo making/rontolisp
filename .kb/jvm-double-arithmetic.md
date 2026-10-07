@@ -26,9 +26,14 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   `NoSuchMethodError`, not a wrong answer), which is disproportionate -- the budget
   still catches what it was built for.
 - `JvmArithCompiler.compileUnboxedOperand` pushes literals raw (an integer literal as
-  `(double) v`) and inlines an interior `+ - * / mod rem` node, so only the outermost node boxes.
-  Users: `JvmArithCompiler`, `JvmComparisonCompiler`, `JvmMathFnCompiler`, `JvmAbsCompiler`,
-  `JvmExptCompiler`. Unrecognised operands compile as ordinary expressions.
+  `(double) v`) and inlines an interior `+ - * / mod rem` node, so only the outermost node boxes;
+  the inlined node runs under its own operator and source site, so its `_dbl` reports it, not
+  the operation it is an operand of. Users: `JvmArithCompiler`, `JvmComparisonCompiler`,
+  `JvmMathFnCompiler`, `JvmAbsCompiler`, `JvmExptCompiler`. Unrecognised operands compile as
+  ordinary expressions. A site with more than one operand pushes them through
+  `compileUnboxedOperands`, which holds back a conversion that can fail until every later
+  observable operand ran (`.kb/argument-evaluation-order.md`, "An operation applies after its
+  operands").
 - In a program that may observe a complex, a site whose operands may hold one takes
   `JvmFloatOperands` instead: the same raw arithmetic when no operand is a holder, the generic
   helpers when one is, each operation applied where the interpreter applies it

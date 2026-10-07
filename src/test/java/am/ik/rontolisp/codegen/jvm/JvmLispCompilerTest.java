@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.rontolisp.FastPathEvaluationOrderFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -2002,6 +2003,43 @@ class JvmLispCompilerTest {
 				am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.JVM,
 				false, false)))
 			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFastPathsKeepTheInterpretersEvaluationOrder() throws Exception {
+		// The twin of LispEvaluatorTest#fastPathsKeepTheInterpretersEvaluationOrder. The
+		// unboxed double path converted an operand before the operation's later operands
+		// ran and reported an inner operation under the outer one's operator, a fused
+		// tree evaluated every leaf before applying anything -- after a later leaf's
+		// output, exit or store -- and the two-argument log took the number's logarithm
+		// before its base was evaluated. Both levels: size declines fusion.
+		String[][] fixtures = {
+				{ FastPathEvaluationOrderFixture.SIGNALS_SOURCE, FastPathEvaluationOrderFixture.SIGNALS_EXPECTED },
+				{ FastPathEvaluationOrderFixture.VALUES_SOURCE, FastPathEvaluationOrderFixture.VALUES_EXPECTED },
+				{ FastPathEvaluationOrderFixture.COMPLEX_SOURCE, FastPathEvaluationOrderFixture.COMPLEX_EXPECTED } };
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			for (String[] fixture : fixtures) {
+				assertThat(compileAndRun(fixtureProgram(fixture[0]), level)).as("level %s", level)
+					.isEqualTo(fixture[1]);
+			}
+		}
+	}
+
+	private static List<LispVal> fixtureProgram(String source) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source, am.ik.rontolisp.reader.Features.JVM, false,
+				false);
+	}
+
+	private String compileAndRun(List<LispVal> program, OptimizeLevel level) throws Exception {
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(level).build();
+		byte[] classBytes = compiler.compile(program);
+		Files.write(tempDir.resolve("Test.class"), classBytes);
+		for (Map.Entry<String, byte[]> travelling : compiler.runtimeClassFiles().entrySet()) {
+			Path target = tempDir.resolve(travelling.getKey());
+			Files.createDirectories(Objects.requireNonNull(target.getParent()));
+			Files.write(target, travelling.getValue());
+		}
+		return runClass(classBytes);
 	}
 
 	@Test
