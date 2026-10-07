@@ -4258,20 +4258,12 @@ public final class LispMacroExpander {
 						}
 						if (structSlot <= SETF_FUNCTION_MARKER) {
 							// (setf (name args...) val) -> (funcall #'%setf-name val
-							// args...):
-							// the CL setf-function convention passes the new value as the
-							// first
-							// argument (it is the last required param of the setf lambda
-							// list).
-							List<LispVal> call = new java.util.ArrayList<>();
-							call.add(new LispSymbol(LispNames.FUNCALL));
-							call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
-									new LispSymbol(setfFunctionName(accessor)))));
-							call.add(value);
-							for (int i = 1; i < placeParts.size(); i++) {
-								call.add(placeParts.get(i));
-							}
-							yield listToCons(call);
+							// args...): the CL setf-function convention passes the new
+							// value as the first argument (it is the last required param
+							// of the setf lambda list). A definition makes the writer, so
+							// the call is bound to it directly.
+							yield setfFunctionCall(cons, new LispSymbol(setfFunctionName(accessor)),
+									placeParts.subList(1, placeParts.size()), value, false);
 						}
 						// (setf (point-x p) val) -> (%obj-set p <index> val), checked
 						yield checkedStructWrite(placeParts.get(1), structSlot - 1, value, accessor,
@@ -4293,17 +4285,109 @@ public final class LispMacroExpander {
 					// looked up when the form runs -- a writer defined later, installed
 					// by (setf fdefinition), or undefined, which signals there. A
 					// read-only defstruct slot lands here too: it has no writer.
-					List<LispVal> call = new java.util.ArrayList<>();
-					call.add(new LispSymbol(LispNames.FUNCALL));
-					call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
-							listToCons(List.of(new LispSymbol(LispNames.SETF), placeParts.get(0))))));
-					call.add(value);
-					call.addAll(placeParts.subList(1, placeParts.size()));
-					yield listToCons(call);
+					yield setfFunctionCall(cons, listToCons(List.of(new LispSymbol(LispNames.SETF), placeParts.get(0))),
+							placeParts.subList(1, placeParts.size()), value, true);
 				}
 			};
 		}
 		throw new UnsupportedOperationException("setf expects a symbol or accessor form as place");
+	}
+
+	private static final String SETF_ARG_VAR = "__setf_arg";
+
+	/**
+	 * The call of a setf function, {@code (funcall #'name value arg...)}, evaluating as
+	 * CLHS 5.1.2.9 has it: the place's arguments left to right, then the value, then the
+	 * function. The call itself evaluates the value first, so where that is observable
+	 * the arguments are bound to temporaries ahead of it. It is not observable when the
+	 * value is a constant, when every argument is, or when every subform is a constant or
+	 * a read (a variable, {@code #'name}). A variable on one side alone is not enough:
+	 * the other side may assign it, directly or through a closure. So a site with no side
+	 * effect in it -- the common accessor write of a variable or a literal -- stays the
+	 * bare call.
+	 *
+	 * <p>
+	 * {@code lookedUpWhenRun} is the place no definition makes: its function is found
+	 * when the form runs and may be undefined, so the value moves ahead of it too and any
+	 * subform with an effect binds every non-constant one. A writer a definition makes is
+	 * called directly on the compile paths, and the interpreter's lookup can differ only
+	 * if the place's own subforms redefine it.
+	 * @param setfForm the whole setf form, which the temporaries' names must not capture
+	 * @param name the function's name: the {@code %setf-} writer or the
+	 * {@code (setf name)} list
+	 * @param args the place's argument forms
+	 * @param value the value form
+	 * @param lookedUpWhenRun whether the function is looked up when the form runs
+	 * @return the call, in a {@code let*} of the temporaries when it needs them
+	 */
+	private static LispVal setfFunctionCall(LispCons setfForm, LispVal name, List<LispVal> args, LispVal value,
+			boolean lookedUpWhenRun) {
+		boolean argsConstant = args.stream().allMatch(LispMacroExpander::isOrderFreeConstant);
+		boolean quiet = args.stream().allMatch(LispMacroExpander::isEffectFreeRead) && isEffectFreeRead(value);
+		boolean ordered = quiet || (!lookedUpWhenRun && (argsConstant || isOrderFreeConstant(value)));
+		List<LispVal> bindings = new ArrayList<>();
+		java.util.function.Supplier<LispSymbol> temps = freshTemps(SETF_ARG_VAR, setfForm);
+		List<LispVal> callArgs = new ArrayList<>(args.size());
+		for (LispVal arg : args) {
+			callArgs.add(ordered || isOrderFreeConstant(arg) ? arg : bind(temps.get(), arg, bindings));
+		}
+		LispVal callValue = ordered || !lookedUpWhenRun || isOrderFreeConstant(value) ? value
+				: bind(temps.get(), value, bindings);
+		List<LispVal> call = new ArrayList<>(args.size() + 3);
+		call.add(new LispSymbol(LispNames.FUNCALL));
+		call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), name)));
+		call.add(callValue);
+		call.addAll(callArgs);
+		LispVal body = listToCons(call);
+		return bindings.isEmpty() ? body
+				: listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+	}
+
+	/** Adds {@code (temp form)} to {@code bindings} and answers {@code temp}. */
+	private static LispSymbol bind(LispSymbol temp, LispVal form, List<LispVal> bindings) {
+		bindings.add(listToCons(List.of(temp, form)));
+		return temp;
+	}
+
+	/**
+	 * Whether a form is a constant, which evaluates to the same value with no effect
+	 * wherever it is moved: a self-evaluating object, {@code nil}, {@code t}, a keyword,
+	 * {@code (quote datum)}. The macro-side twin of the compile paths'
+	 * {@code ArgumentOrder.isOrderIndependent}.
+	 */
+	private static boolean isOrderFreeConstant(LispVal form) {
+		if (form instanceof LispCons cons) {
+			return cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name());
+		}
+		if (form instanceof LispSymbol sym) {
+			return sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name());
+		}
+		return true;
+	}
+
+	/**
+	 * Whether a form has no effect: a constant, a variable read or {@code #'name}. Two
+	 * such forms give the same values in either order, since neither assigns anything.
+	 */
+	private static boolean isEffectFreeRead(LispVal form) {
+		return isOrderFreeConstant(form) || form instanceof LispSymbol || (form instanceof LispCons cons
+				&& cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name()));
+	}
+
+	/**
+	 * Temporary names {@code base1}, {@code base2}, ... skipping every name {@code form}
+	 * already mentions, so no temporary captures a variable of the form it is bound in.
+	 */
+	private static java.util.function.Supplier<LispSymbol> freshTemps(String base, LispCons form) {
+		int[] next = { 1 };
+		return () -> {
+			String name;
+			do {
+				name = base + next[0]++;
+			}
+			while (mentionsSymbol(form, name));
+			return new LispSymbol(name);
+		};
 	}
 
 	/**

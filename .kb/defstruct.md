@@ -139,8 +139,9 @@ un-expanded `(setf ...)` that re-dispatches there. The zero-arg `expandSetf(cons
 `LispMacroExpander.SETF_FUNCTION_MARKER` (`-1`; real positions are `>= 1`). The writer installs
 as `setfFunctionName(name)` = `%setf-<name>`, NOT in the ordinary function namespace;
 `expandSetf`'s default branch expands `(setf (name arg...) val)` to
-`(funcall #'%setf-name val arg...)` -- **new value FIRST**. `#'(setf name)` resolves in
-`evalFunction` and both `Jvm/WasmFunctionFormCompiler`s (`setfFunctionPlaceName`); registration
+`(funcall #'%setf-name val arg...)` -- **new value FIRST** in the call, the arguments
+evaluated before it where that is observable ([argument-evaluation-order.md](argument-evaluation-order.md)).
+`#'(setf name)` resolves in `evalFunction` and both `Jvm/WasmFunctionFormCompiler`s (`setfFunctionPlaceName`); registration
 is `evalDefun` / `expandTopLevelDefinitions`, the latter also rewriting the defun name so Pass 1
 collects it ordinarily. `fdefinition`/`fboundp`/`fmakunbound` of a `(setf ...)` name:
 [symbol-runtime-api.md](symbol-runtime-api.md).
