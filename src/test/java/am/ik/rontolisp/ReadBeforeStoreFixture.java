@@ -10,9 +10,9 @@ package am.ik.rontolisp;
  * after the store, and a global assigned before every read. The compiled backends used to
  * read NIL in place of every signal (the {@code setq} global started as nil), and the
  * arithmetic over it then failed with a type error. The expected text is SBCL's. Shared
- * by the backend suites, so every backend is held to one expected text. The ci-spec
- * corpus has no row of it: its JVM class sits at its constant-pool tripwire
- * ({@code .kb/quoted-data.md}).
+ * by the backend suites, so every backend is held to one expected text;
+ * {@code ci-spec.yaml}'s {@code a-global-read-before-its-first-store-signals} runs the
+ * program on the native binary.
  */
 public final class ReadBeforeStoreFixture {
 

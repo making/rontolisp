@@ -41,8 +41,8 @@ CONSTANT.
 ## The JVM table
 Until 2026-09-27 each datum was a volatile static field `_qd$N`, three constant-pool
 entries apiece (`Fieldref`, `NameAndType`, name). Those were the one per-SITE pool cost in
-the ci-spec corpus class (`JvmDeadMethodEliminationCorpusTest`, `--optimize=off`), whose 52,000
-tripwire kept forcing ci-spec rows to be cut. Measured 2026-09-27, linux-x64, JDK 25:
+the ci-spec corpus class (`JvmDeadMethodEliminationCorpusTest`, `--optimize=off`), whose tripwire,
+52,000 then, kept forcing ci-spec rows to be cut. Measured 2026-09-27, linux-x64, JDK 25:
 
 | corpus class | fields | table |
 | --- | ---: | ---: |
@@ -56,15 +56,16 @@ The pool at 51,945 held 19,358 `Utf8`, 10,258 `NameAndType`, 10,057 `String`, 6,
 names and string literals, each deduped class-wide (3,548 are quote-framed string literals,
 the runtime's string representation, 907 of them spelling a symbol name that is also
 there bare -- a representation cost, not a site cost), and the 6,131 own-class
-`Methodref`s are one per callee (1,333 `_lambda_N`, 615 `_fx$N`, ...). The 52,000 tripwire
-stays: past 65,534 the class now splits instead of failing (`.kb/jvm-method-size-limits.md`),
-so what it guards is that the corpus class stays ONE class, the shape its run-and-compare
-covers; the split's placement is pinned by the split tests. Since 2026-09-29 every level's
-class is written with a pool of its own holding only what its members reference; at
+`Methodref`s are one per callee (1,333 `_lambda_N`, 615 `_fx$N`, ...). The tripwire stays
+(52,000 until 2026-10-07, 54,000 since): past 65,534 the class now splits instead of failing
+(`.kb/jvm-method-size-limits.md`), so what it guards is that the corpus class stays ONE class,
+the shape its run-and-compare covers; the split's placement is pinned by the split tests. It is
+an alarm well below that ceiling, not a budget a ci-spec row has to fit. Since 2026-09-29 every
+level's class is written with a pool of its own holding only what its members reference; at
 `--optimize=off` that dropped 35 entries of the corpus class's 44,118 (CLI, the same day).
-Measured 2026-10-07, the class as the test builds it (build info included): 51,966 at 676
-cases; `.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program) took it to 52,052
-(+86), so that row stayed out of the corpus; develop at `48dcda102` (677 cases) stood at 52,004.
+Measured 2026-10-07, the class as the test builds it (build info included): 52,004 at 677
+cases, past the 52,000 the tripwire then stood at, which is when it moved to 54,000; 52,097 at
+678, with `.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program, +93) back in.
 
 Other costs of the change:
 
