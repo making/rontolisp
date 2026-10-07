@@ -47,7 +47,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
   [`macroexpand`](../reference/functions/macroexpand.md) は `expanded-p` を、
   [`subtypep`](../reference/functions/subtypep.md) は `valid-p` を、
   [`read-from-string`](../reference/functions/read-from-string.md) は
-  停止インデックスを返します。
+  停止インデックスを、[`read-line`](../reference/functions/read-line.md) は
+  `missing-newline-p` を返します。
 
 ## 非局所脱出
 

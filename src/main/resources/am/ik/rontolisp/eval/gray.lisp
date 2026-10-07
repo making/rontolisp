@@ -33,10 +33,12 @@
 ;; stream-read-line / stream-peek-char / stream-read-char-no-hang return the
 ;; keyword :eof at end of stream; the built-in dispatch translates that into
 ;; the eof-error-p / eof-value contract (signalling end-of-file like the
-;; handle-based built-ins). stream-read-line answers a partial last line as
-;; that line; :eof means "no characters left at all". Primary values only -- no
-;; (values line missing-newline-p) pair crosses a function boundary on the
-;; compile backends.
+;; handle-based built-ins). stream-read-line answers (values line
+;; missing-newline-p) -- a partial last line with a true second value -- and
+;; :eof when no characters are left at all; a method's ("" t), the standard
+;; Gray spelling of end of file, is end of file too. Its values reach read-line
+;; through %quiet-values / %quiet-multiple-value-list, so they cost a program
+;; with no multiple-value consumer nothing.
 
 (defclass rontolisp:fundamental-stream () ())
 
@@ -173,12 +175,13 @@
                c))))
 
 (defun rontolisp::%gray-default-read-line (stream)
-  (let ((acc "") (result nil) (done nil))
+  (let ((acc "") (result nil) (missing nil) (done nil))
     (do ()
-        (done result)
+        (done (if (eq result :eof) :eof (%quiet-values result missing)))
       (let ((c (rontolisp::%gray-read-char-1 stream)))
         (cond ((eq c :eof)
                (setq result (if (string= acc "") :eof acc))
+               (setq missing t)
                (setq done t))
               ((char= c #\Newline)
                (setq result acc)
@@ -654,8 +657,17 @@
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
   (let ((target (%stream-target (or stream *standard-input*))))
     (if (%obj-p target)
-        (let ((l (rontolisp:stream-read-line target)))
-          (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
+        (let* ((vals
+                (%quiet-multiple-value-list
+                 (rontolisp:stream-read-line target)))
+               (l (car vals))
+               (missing (car (cdr vals))))
+          ;; :eof is this protocol's end of file, a ("" t) the standard Gray one.
+          (if (if (eq l :eof)
+                  t
+                  (if missing (if (stringp l) (= (length l) 0) nil) nil))
+              (%quiet-values (if eof-error-p (error 'end-of-file) eof-value) t)
+              (%quiet-values l missing)))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)

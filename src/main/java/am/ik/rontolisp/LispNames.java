@@ -8785,6 +8785,36 @@ public final class LispNames {
 	public static final String READ_FROM_STRING_END = "%READ-FROM-STRING-END";
 
 	/**
+	 * {@code (%read-line-pair &optional stream)}: the line {@code read-line} reads from
+	 * the stream designator, as a cons {@code (line . missing-newline-p)} -- the second
+	 * value true when end of file ended the line -- or nil at end of file. What the
+	 * multiple-value lowering of a {@code read-line} producer reads both values off
+	 * ({@code LispMacroExpander.lowerMvProducer}), so a single-valued call keeps the
+	 * one-value built-in and pays nothing for the second value.
+	 */
+	public static final String READ_LINE_PAIR_INTERNAL = "%READ-LINE-PAIR";
+
+	/**
+	 * {@code (%quiet-values form...)}: {@code values} for library source whose extra
+	 * values only a program's OWN multiple-value consumer can observe. It does not by
+	 * itself give a compiled program the multiple-value channel: with one (the program
+	 * uses a multiple-value operator) it is {@code values}, without one it is
+	 * {@code prog1} -- every form evaluated, the first answered
+	 * ({@code LispMacroExpander.injectMvSpillGlobal}). The interpreter always has the
+	 * channel, so there it is {@code values}.
+	 */
+	public static final String QUIET_VALUES_INTERNAL = "%QUIET-VALUES";
+
+	/**
+	 * {@code (%quiet-multiple-value-list form)}: the consumer twin of
+	 * {@link #QUIET_VALUES_INTERNAL} -- {@code multiple-value-list} in a program with the
+	 * multiple-value channel, {@code (list form)} without one. A call, not a binding
+	 * form, so every pass that walks the program before the choice is made reads it as
+	 * what it is in either spelling.
+	 */
+	public static final String QUIET_MULTIPLE_VALUE_LIST_INTERNAL = "%QUIET-MULTIPLE-VALUE-LIST";
+
+	/**
 	 * The prelude defun behind a {@code read-from-string} call that passes more than the
 	 * string: CL's whole lambda list ({@code eof-error-p}, {@code eof-value},
 	 * {@code :start}, {@code :end}, {@code :preserve-whitespace}) over the {@code read}

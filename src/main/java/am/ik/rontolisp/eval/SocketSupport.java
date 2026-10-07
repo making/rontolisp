@@ -443,6 +443,17 @@ final class SocketSupport {
 	 * @return the line, or {@code null} when the peer closed before any byte arrived
 	 */
 	static @Nullable String readLine(Socket socket) {
+		TerminatedLine line = readTerminatedLine(socket);
+		return line == null ? null : line.text();
+	}
+
+	/**
+	 * {@link #readLine(Socket)}, saying whether the peer's close -- not a {@code \n} --
+	 * ended the line ({@link TerminatedLine}).
+	 * @param socket the connected socket
+	 * @return the line, or {@code null} when the peer closed before any byte arrived
+	 */
+	static @Nullable TerminatedLine readTerminatedLine(Socket socket) {
 		try {
 			InputStream in = socket.getInputStream();
 			ByteArrayOutputStream line = new ByteArrayOutputStream();
@@ -456,7 +467,7 @@ final class SocketSupport {
 			}
 			byte[] bytes = line.toByteArray();
 			int length = (bytes.length > 0 && bytes[bytes.length - 1] == '\r') ? bytes.length - 1 : bytes.length;
-			return new String(bytes, 0, length, StandardCharsets.UTF_8);
+			return new TerminatedLine(new String(bytes, 0, length, StandardCharsets.UTF_8), b < 0);
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("read-line: " + ex.getMessage());

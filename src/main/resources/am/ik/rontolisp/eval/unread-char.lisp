@@ -111,12 +111,19 @@
 ;; ordinary shape, and answering the line without it would be silently short by
 ;; one character. A pushed-back newline ends the line right there.
 (defun rontolisp::%unread-read-line (stream eof-error-p eof-value)
+  ;; The line's missing-newline-p rides along: the rest's, or t when the parked
+  ;; character was the last one.
   (let ((c (rontolisp::%unread-char-take stream)))
     (if c
         (if (char= c #\Newline)
-            ""
-            (let ((rest (read-line stream nil nil)))
-              (if rest (concatenate 'string (string c) rest) (string c))))
+            (%quiet-values "" nil)
+            (let* ((vals
+                    (%quiet-multiple-value-list (read-line stream nil nil)))
+                   (rest (car vals)))
+              (if rest
+                  (%quiet-values (concatenate 'string (string c) rest)
+                                 (car (cdr vals)))
+                  (%quiet-values (string c) t))))
         (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%unread-listen (stream)

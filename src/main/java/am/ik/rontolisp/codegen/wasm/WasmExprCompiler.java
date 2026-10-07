@@ -1269,6 +1269,9 @@ final class WasmExprCompiler {
 					WasmEmitHelper.emitToMutStrCall(ctx);
 				}
 			}
+			case LispNames.READ_LINE_PAIR_INTERNAL ->
+				compileExpansion(WasmReadLineCompiler.pairExpansion(cons), ctx, tail);
+			case WasmReadLineCompiler.LINE_END_FLAG -> WasmReadLineCompiler.compileLineEndFlag(ctx);
 			case LispNames.READ_CHAR -> {
 				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
 				if (typed != null) {

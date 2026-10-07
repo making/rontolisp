@@ -86,6 +86,16 @@ public final class HttpRequestBodyStream extends InputStream {
 	 * @return the line (possibly empty), or {@code null} at end of stream
 	 */
 	public @Nullable String readLine() {
+		TerminatedLine line = readTerminatedLine();
+		return line == null ? null : line.text();
+	}
+
+	/**
+	 * {@link #readLine}, saying whether end of file ended the line
+	 * ({@link TerminatedLine}).
+	 * @return the line, or {@code null} at end of stream
+	 */
+	@Nullable TerminatedLine readTerminatedLine() {
 		if (this.index >= this.octets.length) {
 			return null;
 		}
@@ -98,7 +108,7 @@ public final class HttpRequestBodyStream extends InputStream {
 		if (cp == '\r' && this.index < this.octets.length && this.octets[this.index] == '\n') {
 			this.index++;
 		}
-		return line.toString();
+		return new TerminatedLine(line.toString(), cp < 0 || (cp == '\r' && this.index >= this.octets.length));
 	}
 
 	/**

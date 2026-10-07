@@ -3648,9 +3648,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
+		// %read-line-pair, the read under a read-line producer's multiple-value lowering,
+		// exists only where one was lowered: a settled defun tail already spells it, and
+		// a consumer lowers its producer during Pass 2 -- in a program with the channel
+		// that names read-line.
+		final boolean usesReadLinePairs = programUsesSymbol(program, LispNames.READ_LINE_PAIR_INTERNAL)
+				|| (LispMacroExpander.declaresMvSpill(program) && programUsesSymbol(program, LispNames.READ_LINE));
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
-						stringLengthForIo, stringSubstring, stringConcat, usesArrays)
+						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs)
 				: null;
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
@@ -3705,7 +3711,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
 					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
-					usesQuantized, this.needsIoStreamRuntime)
+					usesQuantized, this.needsIoStreamRuntime, usesReadLinePairs)
 			.methods();
 		if (flushStreamsMethod != null) {
 			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));

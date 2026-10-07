@@ -16,6 +16,7 @@ import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ReadLineValuesFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StreamOperandErrorsFixture;
 import am.ik.rontolisp.FormatSpelledNumbersFixture;
@@ -220,6 +221,10 @@ class JvmLispCompilerTest {
 	}
 
 	private String compileAndRun(List<LispVal> program) throws Exception {
+		return compileAndRun(program, "");
+	}
+
+	private String compileAndRun(List<LispVal> program, String stdin) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
@@ -238,7 +243,8 @@ class JvmLispCompilerTest {
 			Method main = clazz.getMethod("main", String[].class);
 
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			try (var _ = ThreadStdio.out(baos)) {
+			try (var _ = ThreadStdio.out(baos);
+					var _ = ThreadStdio.in(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
 				main.invoke(null, (Object) new String[0]);
 			}
 			return baos.toString().trim();
@@ -5560,6 +5566,50 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
 				StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlineP() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readLineAnswersMissingNewlineP.
+		String file = this.tempDir.resolve("rl.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.program(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.EXPECTED);
+		String kinds = this.tempDir.resolve("rk.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.fileKindsProgram(kinds), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.FILE_KINDS_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.TAIL_AND_SOCKET_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.TAIL_AND_SOCKET_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePAfterAnUnreadCharacter() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.UNREAD_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.UNREAD_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePOfAGrayStream() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.GRAY_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.GRAY_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.GRAY_EOF_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.GRAY_EOF_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePOfStandardInput() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.STDIN_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false), ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.STDIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.ASYNC_STDIN_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false),
+				ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EXPECTED);
 	}
 
 	@Test

@@ -45,6 +45,9 @@ public final class RontoIoFileStream extends Writer {
 
 	private final RandomAccessFile file;
 
+	/** Whether end of file ended the line {@link #readLine()} last answered. */
+	private boolean lineMissingNewline;
+
 	/**
 	 * Opens the file for reading and writing and positions it as the mode asks.
 	 *
@@ -144,6 +147,7 @@ public final class RontoIoFileStream extends Writer {
 	public String readLine() throws IOException {
 		int cp = readCodePoint();
 		if (cp < 0) {
+			this.lineMissingNewline = true;
 			return "";
 		}
 		StringBuilder line = new StringBuilder();
@@ -151,14 +155,29 @@ public final class RontoIoFileStream extends Writer {
 			line.appendCodePoint(cp);
 			cp = readCodePoint();
 		}
+		boolean missing = cp < 0;
 		if (cp == '\r') {
 			long here = this.file.getFilePointer();
 			int next = this.file.read();
-			if (next != '\n') {
+			if (next < 0) {
+				missing = true;
+			}
+			else if (next != '\n') {
 				this.file.seek(here);
 			}
 		}
+		this.lineMissingNewline = missing;
 		return line.toString();
+	}
+
+	/**
+	 * Whether end of file -- not a terminator -- ended the line {@link #readLine()} last
+	 * answered: {@code read-line}'s second value, missing-newline-p. A {@code \r} the
+	 * file ends on ends its line as end of file does, the way the WASM backends answer.
+	 * @return true when end of file ended the last line
+	 */
+	public boolean lastLineMissingNewline() {
+		return this.lineMissingNewline;
 	}
 
 	/**

@@ -48,7 +48,8 @@ Lisp:
   `expanded-p`,
   [`subtypep`](../reference/functions/subtypep.md) does answer `valid-p`, and
   [`read-from-string`](../reference/functions/read-from-string.md) does answer
-  the stop index.
+  the stop index, and [`read-line`](../reference/functions/read-line.md) does
+  answer `missing-newline-p`.
 
 ## Non-local exit
 

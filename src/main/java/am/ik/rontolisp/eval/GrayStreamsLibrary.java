@@ -229,11 +229,77 @@ public final class GrayStreamsLibrary {
 				body = rest;
 			}
 		}
+		boolean ownReadLine = definesOwnReadLineMethod(program);
 		for (String helper : usedHelpers) {
-			out.add(dispatchDefun(helper));
+			LispVal defun = dispatchDefun(helper);
+			out.add(ownReadLine && READ_LINE_DISPATCH.equals(helper) ? consumingMethodValues(defun) : defun);
 		}
 		out.addAll(body);
 		return out;
+	}
+
+	/**
+	 * The read-line dispatch helper with its {@code %quiet-multiple-value-list} spelled
+	 * {@code multiple-value-list}: a program's own {@code stream-read-line} method may
+	 * end the stream with the standard Gray {@code ("" t)}, which the helper can tell
+	 * from an empty line only by the second value -- so that program needs the
+	 * multiple-value channel whether or not it consumes a value itself.
+	 */
+	private static LispVal consumingMethodValues(LispVal form) {
+		if (form instanceof am.ik.rontolisp.LispCons cons) {
+			LispVal car = cons.car() instanceof am.ik.rontolisp.LispSymbol sym
+					&& LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL.equals(sym.name())
+							? new am.ik.rontolisp.LispSymbol(LispNames.MULTIPLE_VALUE_LIST)
+							: consumingMethodValues(cons.car());
+			return new am.ik.rontolisp.LispCons(car, consumingMethodValues(cons.cdr()));
+		}
+		return form;
+	}
+
+	/**
+	 * Whether the program defines a {@code stream-read-line} method of its own -- on
+	 * either protocol's generic, specialized on a class outside the two library packages
+	 * (gray.lisp's and the trivial-gray-streams shim's defaults, and a bundled library's
+	 * stream, answer {@code :eof} at end of stream).
+	 */
+	private static boolean definesOwnReadLineMethod(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (definesOwnReadLineMethod(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean definesOwnReadLineMethod(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof am.ik.rontolisp.LispSymbol op && LispNames.DEFMETHOD.equals(member(op.name()))
+				&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+				&& rest.car() instanceof am.ik.rontolisp.LispSymbol name
+				&& LispNames.GRAY_STREAM_READ_LINE.equals(member(name.name()))) {
+			for (LispVal part = rest.cdr(); part instanceof am.ik.rontolisp.LispCons cell; part = cell.cdr()) {
+				if (cell.car() instanceof am.ik.rontolisp.LispCons lambdaList) {
+					return lambdaList.car() instanceof am.ik.rontolisp.LispCons specialized
+							&& specialized.cdr() instanceof am.ik.rontolisp.LispCons classCell
+							&& classCell.car() instanceof am.ik.rontolisp.LispSymbol className
+							&& !isLibraryPackage(className.name());
+				}
+			}
+			return false;
+		}
+		for (LispVal part = cons; part instanceof am.ik.rontolisp.LispCons cell; part = cell.cdr()) {
+			if (definesOwnReadLineMethod(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isLibraryPackage(String name) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn != null && (LispNames.RONTOLISP_PKG.equals(qn.pkg()) || "TRIVIAL-GRAY-STREAMS".equals(qn.pkg()));
 	}
 
 	/**

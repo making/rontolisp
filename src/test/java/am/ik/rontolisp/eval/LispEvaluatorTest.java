@@ -27,6 +27,7 @@ import am.ik.rontolisp.RadixRangeFixture;
 import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ReadLineValuesFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
 import am.ik.rontolisp.StreamOperandErrorsFixture;
 import am.ik.rontolisp.FormatSpelledNumbersFixture;
@@ -877,6 +878,48 @@ class LispEvaluatorTest {
 	void unreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() {
 		assertThat(printedOutput(StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM))
 			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void readLineAnswersMissingNewlineP(@TempDir Path tempDir) {
+		String file = tempDir.resolve("rl.txt").toString().replace("\\", "\\\\");
+		assertThat(printedOutput(ReadLineValuesFixture.program(file))).isEqualTo(ReadLineValuesFixture.EXPECTED);
+		String kinds = tempDir.resolve("rk.txt").toString().replace("\\", "\\\\");
+		assertThat(printedOutput(ReadLineValuesFixture.fileKindsProgram(kinds)))
+			.isEqualTo(ReadLineValuesFixture.FILE_KINDS_EXPECTED);
+		assertThat(printedOutput(ReadLineValuesFixture.TAIL_AND_SOCKET_PROGRAM))
+			.isEqualTo(ReadLineValuesFixture.TAIL_AND_SOCKET_EXPECTED);
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePAfterAnUnreadCharacter() {
+		assertThat(printedOutput(ReadLineValuesFixture.UNREAD_PROGRAM))
+			.isEqualTo(ReadLineValuesFixture.UNREAD_EXPECTED);
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePOfAGrayStream() {
+		assertThat(printedOutput(ReadLineValuesFixture.GRAY_PROGRAM)).isEqualTo(ReadLineValuesFixture.GRAY_EXPECTED);
+		assertThat(printedOutput(ReadLineValuesFixture.GRAY_EOF_PROGRAM))
+			.isEqualTo(ReadLineValuesFixture.GRAY_EOF_EXPECTED);
+	}
+
+	@Test
+	void readLineAnswersMissingNewlinePOfStandardInput() {
+		assertThat(printedOverStdin(ReadLineValuesFixture.STDIN_PROGRAM, ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.STDIN_EXPECTED);
+		assertThat(printedOverStdin(ReadLineValuesFixture.ASYNC_STDIN_PROGRAM, ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EXPECTED);
+	}
+
+	private static String printedOverStdin(String program, String stdin) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos),
+				new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString(StandardCharsets.UTF_8).trim();
 	}
 
 	private static String printedOutput(String program) {
@@ -26189,7 +26232,8 @@ class LispEvaluatorTest {
 				        (let ((s "z")) (uiop:with-input (s) (read-char s)))))
 				""".formatted(dir)).print()).isEqualTo("((\"made\") \"made\n\" (\"made\") #\\z)");
 		// Slurping a stream closes it (upstream's contract); the linewise copy
-		// ends every line with a terpri (read-line answers one value).
+		// ends a line with a terpri unless the input's end ended it (read-line's
+		// missing-newline-p), as upstream's does.
 		assertThat(evalMulti("""
 				(list (uiop:slurp-stream-lines (make-string-input-stream "a\\nb"))
 				      (uiop:slurp-stream-line (make-string-input-stream "a\\nb") :at 1)
@@ -26199,7 +26243,7 @@ class LispEvaluatorTest {
 				      (let ((out (make-string-output-stream)))
 				        (uiop:copy-stream-to-stream (make-string-input-stream "p\\nq") out :linewise t)
 				        (get-output-stream-string out)))
-				""").print()).isEqualTo("((\"a\" \"b\") \"b\" ((+ 1 2) 3) 3 \"xy\" \"p\nq\n\")");
+				""").print()).isEqualTo("((\"a\" \"b\") \"b\" ((+ 1 2) 3) 3 \"xy\" \"p\nq\")");
 		// The copy pair is binary both ways, truncating the target.
 		assertThat(evalMulti("""
 				(let ((a "%1$s/a.bin") (b "%1$s/b.bin") (c "%1$s/c.bin"))

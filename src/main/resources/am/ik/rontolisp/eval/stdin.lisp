@@ -104,7 +104,9 @@
               (char acc 0))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-line-f ()
-  (let ((acc "") (got nil) (done nil))
+  ;; The line and read-line's missing-newline-p: t when the end of input, not a
+  ;; newline, ended it -- and beside the nil at end of input.
+  (let ((acc "") (got nil) (done nil) (newline nil))
     (while (not done)
       (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
         (if (null c)
@@ -112,14 +114,18 @@
             (progn
               (setq got t)
               (if (= (char-code c) 10)
-                  (setq done t)
+                  (progn
+                    (setq newline t)
+                    (setq done t))
                   (setq acc (concatenate 'string acc (%princ-piece c))))))))
     (if got
-        (let ((len (length acc)))
-          (if (and (> len 0) (= (char-code (char acc (- len 1))) 13))
-              (subseq acc 0 (- len 1))
-              acc))
-        nil)))
+        (let* ((len (length acc))
+               (line
+                (if (and (> len 0) (= (char-code (char acc (- len 1))) 13))
+                    (subseq acc 0 (- len 1))
+                    acc)))
+          (%quiet-values line (not newline)))
+        (%quiet-values nil t))))
 
 ;;; --- the stdin-or-raw helpers: the seam sockets.lisp's and stdin-dispatch.lisp's
 ;;; dispatchers share. A nil stream designator is stdin; anything else is a native

@@ -41,7 +41,7 @@ final class JvmSocketRuntimeBuilder {
 	record SocketRuntime(List<SocketMethod> methods, ClassEntry socketClass, ClassEntry serverSocketClass,
 			MethodRefEntry socketGetInputStream, MethodRefEntry socketGetOutputStream, MethodRefEntry socketClose,
 			MethodRefEntry serverSocketClose, MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine,
-			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar) {
+			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar, @Nullable MethodRefEntry sockReadLinePair) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -95,6 +95,8 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_READ_LINE_METHOD = "_sockReadLine";
 
 	private static final String SOCK_READ_LINE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_READ_LINE_PAIR_METHOD = "_sockReadLinePair";
 
 	private static final String SOCK_WRITE_LINE_METHOD = "_sockWriteLine";
 
@@ -398,7 +400,7 @@ final class JvmSocketRuntimeBuilder {
 
 	static SocketRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry stringClass, ClassEntry longClass,
 			MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
-			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime) {
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime, boolean readLinePairs) {
 		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
 				longValueOf, longValue, stringLength, stringSubstring, stringConcat, arrayRuntime);
 		List<SocketMethod> methods = new ArrayList<>();
@@ -427,16 +429,23 @@ final class JvmSocketRuntimeBuilder {
 		methods.add(new SocketMethod(cp.utf8Entry(TCP_SET_TIMEOUT_METHOD), cp.utf8Entry(TCP_SET_TIMEOUT_DESC),
 				builder.buildTcpSetTimeout()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_LINE_METHOD), cp.utf8Entry(SOCK_READ_LINE_DESC),
-				builder.buildSockReadLine()));
+				builder.buildSockReadLine(false)));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_LINE_METHOD), cp.utf8Entry(SOCK_WRITE_LINE_DESC),
 				builder.buildSockWriteLine()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_STRING_METHOD), cp.utf8Entry(SOCK_WRITE_STRING_DESC),
 				builder.buildSockWriteString()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_CHAR_METHOD), cp.utf8Entry(SOCK_READ_CHAR_DESC),
 				builder.buildSockReadChar()));
+		// _readLinePair's socket arm, only where the stream runtime emits that helper.
+		MethodRefEntry sockReadLinePair = null;
+		if (readLinePairs) {
+			methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_LINE_PAIR_METHOD), cp.utf8Entry(SOCK_READ_LINE_DESC),
+					builder.buildSockReadLine(true)));
+			sockReadLinePair = cp.methodRef(thisClass, SOCK_READ_LINE_PAIR_METHOD, SOCK_READ_LINE_DESC);
+		}
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
 				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,
-				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef);
+				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef, sockReadLinePair);
 	}
 
 	/**
@@ -936,9 +945,12 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _sockReadLine(Object socket) -> Object}. Reads bytes up to a {@code \n}
 	 * (exclusive, one trailing {@code \r} stripped), decodes UTF-8 and wraps the line
 	 * with the internal {@code '"'} prefix/suffix; returns {@code null} (nil) when the
-	 * peer closed before any byte arrived.
+	 * peer closed before any byte arrived. With {@code pair} it is
+	 * {@code _sockReadLinePair}, answering the cons {@code (line . missing-newline-p)} --
+	 * {@code "T"} when the peer's close ended the line -- for
+	 * {@code JvmIoRuntimeBuilder}'s {@code _readLinePair}.
 	 */
-	private MethodCode buildSockReadLine() {
+	private MethodCode buildSockReadLine(boolean pair) {
 		// Slots: 0=socket, 1=in (InputStream), 2=baos, 3=b (int), 4=bytes, 5=len (int)
 		MethodCode code = new MethodCode();
 		// in = ((Socket) socket).getInputStream();
@@ -1004,6 +1016,13 @@ final class JvmSocketRuntimeBuilder {
 		code.istore(5);
 		code.labelBinding(ifEmpty);
 		code.labelBinding(ifNoCr);
+		if (pair) {
+			// return new Object[] {line, b < 0 ? "T" : null};
+			code.iconst_2();
+			code.anewarray(this.cp.classEntry("java/lang/Object"));
+			code.dup();
+			code.iconst_0();
+		}
 		// return "\"".concat(new String(bytes, 0, len, UTF_8)).concat("\"");
 		code.ldc(this.quoteStr);
 		code.new_(this.stringClassRef);
@@ -1016,6 +1035,21 @@ final class JvmSocketRuntimeBuilder {
 		code.invokevirtual(this.stringConcat);
 		code.ldc(this.quoteStr);
 		code.invokevirtual(this.stringConcat);
+		if (pair) {
+			code.aastore();
+			code.dup();
+			code.iconst_1();
+			code.iload(3);
+			MethodCode.Label closed = code.newLabel();
+			code.iflt(closed);
+			code.aconst_null();
+			MethodCode.Label stored = code.newLabel();
+			code.goto_(stored);
+			code.labelBinding(closed);
+			code.ldc(this.cp.stringEntry("T"));
+			code.labelBinding(stored);
+			code.aastore();
+		}
 		code.areturn();
 		return code;
 	}

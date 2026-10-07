@@ -83,6 +83,10 @@ public final class MutableStringProducers {
 			// non-socket read-line through -- the public name may be rewritten away
 			// before this scan runs, so the alias keeps the gate on.
 			LispNames.READ_LINE_RAW_INTERNAL,
+			// The read under a read-line producer's multiple-value lowering: a settled
+			// function tail spells it in place of the read-line it lowered, before
+			// this scan runs.
+			LispNames.READ_LINE_PAIR_INTERNAL,
 			// The fold-produced fresh-string constant: the pure-builtin fold may have
 			// folded every producer NAME away, leaving only (%str-fresh ...) forms,
 			// and those need the wrap (and, on the JVM, the array runtime) exactly
