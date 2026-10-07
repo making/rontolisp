@@ -2323,8 +2323,22 @@ overflow) and trapped on wasm; `(make-array -1)` was `make-array: -1` / an unnam
   datum and type compared against `array-dimension-limit`, not printed) and the
   `aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull` triple (`LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), each pinning its own LIMIT.
-- Not covered: `make-list` of a bignum length is an unnamed `INTEGER` type-error interpreted and
-  runs without end on the JVM and wasm (`.todo/e01`).
+- **`make-list`'s length is checked the same way**, under `MAKE-LIST` (the table's last row, also
+  in `INDEXED`), before anything is consed. Interpreted, `Environment`'s `make-list` calls the same
+  `dimension`. Compiled, `LispMacroExpander.expandMakeList` hands the length to
+  `(%check-dimension n 'make-list)` -- `_ckBound` against the limit through the operator's wrapper
+  on the JVM, `_idx_in` under the register on wasm (a trap outside EH mode), the integer re-boxed --
+  and skips it for a literal in `[0, 1073741823)`. Call order is CL's: length, then
+  `:initial-element`, then the check; the expansion binds the length first (`__ml_n`) unless either
+  form is a literal or quoted datum. Closed 2026-10-07 (`.todo/e01`). Measured before, the length
+  through a variable under `handler-case`: `(make-list (expt 2 100))` was an unnamed
+  `... is not of type INTEGER` interpreted, ran out of heap on the JVM (`-Xmx512m`, under 20 s) and
+  gave no answer in 20 s on P1 / component; `-1` answered nil on all four; `2.5` and a symbol were
+  the unnamed `INTEGER` error interpreted, while compiled `2.5` answered a 3-element list and a
+  symbol was `<=`'s `REAL` type-error; `:initial-element`'s form ran before the length's compiled.
+  SBCL 2.2.9 reports `(UNSIGNED-BYTE 58)` for all of these. Pinned by `ci-spec.yaml`'s
+  `make-list-length-outside-the-limit-signals-a-type-error` and the
+  `aMakeListLengthOutsideTheLimitIsATypeError` triple.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in

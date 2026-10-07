@@ -19922,6 +19922,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aMakeListLengthOutsideTheLimitIsATypeError() {
+		// A make-list length is checked as a make-array dimension is: one outside
+		// (INTEGER 0 (array-dimension-limit)) -- a bignum, a negative, a non-integer --
+		// is MAKE-LIST's type-error, before anything is consed, and only after the
+		// length and then the :initial-element form have run, as any call's arguments
+		// do. The twins are the same-named tests in JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *big* (expt 2 100))
+				(defvar *x* 'a)
+				(defvar *n* 3)
+				(print (te (lambda () (make-list *big*))))
+				(print (te (lambda () (make-list -1))))
+				(print (te (lambda () (make-list (- *n* 4)))))
+				(print (te (lambda () (make-list 2.5 :initial-element *x*))))
+				(print (te (lambda () (make-list *x*))))
+				(print (te (lambda () (make-list array-dimension-limit))))
+				(print (te (lambda () (funcall #'make-list *big* :initial-element *x*))))
+				(print (list (make-list *n* :initial-element *x*) (make-list 0) (make-list (- *n* 1))))
+				(defvar *log* nil)
+				(print (te (lambda () (make-list (progn (push :len *log*) -1) :initial-element (progn (push :elem *log*) *x*)))))
+				(print (reverse *log*))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo(
+				"""
+						("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 2.5 is not of type (INTEGER 0 (2147483639))" 2.5 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value A is not of type (INTEGER 0 (2147483639))" A (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 2147483639 is not of type (INTEGER 0 (2147483639))" 2147483639 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						((A A A) NIL (NIL NIL))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						(:LEN :ELEM)""");
+	}
+
+	@Test
 	void oneArgumentCallsCheckTheirArgument() {
 		// A one-argument call compares or folds nothing, but its argument is checked
 		// like any other: (+ x), (* x) and the bitwise family answered x unexamined on

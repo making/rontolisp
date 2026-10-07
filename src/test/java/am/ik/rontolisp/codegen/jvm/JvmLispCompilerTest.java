@@ -1410,6 +1410,47 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aMakeListLengthOutsideTheLimitIsATypeError() throws Exception {
+		// The evaluator twin is aMakeListLengthOutsideTheLimitIsATypeError. The length
+		// counted down a do loop: a bignum ran out of heap, a negative answered nil, a
+		// float counted past zero and a symbol was <='s REAL type-error; an
+		// :initial-element form ran before the length.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (progn (funcall thunk) :no-error)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *big* (expt 2 100))
+						(defvar *x* 'a)
+						(defvar *n* 3)
+						(print (te (lambda () (make-list *big*))))
+						(print (te (lambda () (make-list -1))))
+						(print (te (lambda () (make-list (- *n* 4)))))
+						(print (te (lambda () (make-list 2.5 :initial-element *x*))))
+						(print (te (lambda () (make-list *x*))))
+						(print (te (lambda () (make-list array-dimension-limit))))
+						(print (te (lambda () (funcall #'make-list *big* :initial-element *x*))))
+						(print (list (make-list *n* :initial-element *x*) (make-list 0) (make-list (- *n* 1))))
+						(defvar *log* nil)
+						(print (te (lambda () (make-list (progn (push :len *log*) -1) :initial-element (progn (push :elem *log*) *x*)))))
+						(print (reverse *log*))
+						"""))
+			.isEqualTo(
+					"""
+							("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 2.5 is not of type (INTEGER 0 (2147483639))" 2.5 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value A is not of type (INTEGER 0 (2147483639))" A (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 2147483639 is not of type (INTEGER 0 (2147483639))" 2147483639 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+							((A A A) NIL (NIL NIL))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							(:LEN :ELEM)""");
+	}
+
+	@Test
 	void oneArgumentCallsCheckTheirArgument() throws Exception {
 		// The evaluator twin is oneArgumentCallsCheckTheirArgument.
 		assertThat(compileAndRun("""

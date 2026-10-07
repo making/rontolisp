@@ -100,12 +100,12 @@ final class WasmOperandTypes {
 
 	/**
 	 * The element accesses whose sites check a subscript against its bound in EH mode
-	 * ({@code _idx_in}), and {@code make-array}, whose dimensions are checked against the
-	 * array size limit the same way: a table naming any of them gives the shared landing
-	 * its index arm ({@link Operators#indexed}).
+	 * ({@code _idx_in}), and {@code make-array} and {@code make-list}, whose dimensions
+	 * and length are checked against the array size limit the same way: a table naming
+	 * any of them gives the shared landing its index arm ({@link Operators#indexed}).
 	 */
 	private static final java.util.List<String> INDEXED = java.util.List.of("AREF", OperandTypes.SETF_AREF,
-			"ROW-MAJOR-AREF", OperandTypes.SETF_ROW_MAJOR_AREF, OperandTypes.MAKE_ARRAY);
+			"ROW-MAJOR-AREF", OperandTypes.SETF_ROW_MAJOR_AREF, OperandTypes.MAKE_ARRAY, OperandTypes.MAKE_LIST);
 
 	private static java.util.Map<String, java.util.List<String>> loweredTo() {
 		java.util.Map<String, java.util.List<String>> map = new java.util.HashMap<>();

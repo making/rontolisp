@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -772,6 +773,28 @@ final class JvmArrayCompiler {
 			return;
 		}
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.TO_MUT_STR, JvmArrayRuntimeBuilder.TO_MUT_STR_DESC);
+	}
+
+	/**
+	 * {@code (%check-dimension x 'op)}: {@code x} when it is an integer in
+	 * {@code [0, array-dimension-limit)}, else {@code op}'s
+	 * {@code (INTEGER 0 (array-dimension-limit))} type-error -- {@code _ckBound} against
+	 * the limit under the operator's wrapper, the check {@code _arrayDimsTotal} makes of
+	 * a {@code make-array} dimension. Answers the integer re-boxed.
+	 */
+	static void compileCheckDimension(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.body.ldc(ctx.cp.entries().intEntry((int) ClConstants.arraySizeLimit(false)));
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispMacroExpander.checkOperator(cons);
+		try {
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_BOUND));
+		}
+		finally {
+			ctx.operator = outer;
+		}
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
 	}
 
 	/**

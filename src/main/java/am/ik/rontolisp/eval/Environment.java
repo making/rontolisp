@@ -2134,8 +2134,8 @@ public final class Environment implements Scope {
 		return dims.stream().mapToInt(Integer::intValue).toArray();
 	}
 
-	// One make-array dimension: an integer in [0, limit), else the operator's type-error
-	// naming (INTEGER 0 (limit)).
+	// One make-array dimension or make-list length: an integer in [0, limit), else the
+	// operator's type-error naming (INTEGER 0 (limit)).
 	private static int dimension(LispVal value, long limit, String operator) {
 		if (value instanceof LispInteger n && n.value() >= 0 && n.value() < limit) {
 			return (int) n.value();
@@ -4539,8 +4539,9 @@ public final class Environment implements Scope {
 			requireMinArgCount(LispNames.MAKE_LIST, args, 1);
 			// (make-list n &key initial-element): n cells sharing the ONE element value
 			// (nil by default). quri's ip-addr= pads an abbreviated IPv6 address with
-			// (make-list (- 9 len) :initial-element 0).
-			long n = asLong(args.get(0));
+			// (make-list (- 9 len) :initial-element 0). The length is checked as a
+			// make-array dimension is, before anything is consed.
+			int n = dimension(args.get(0), ClConstants.arraySizeLimit(false), LispNames.MAKE_LIST);
 			LispVal element = LispNil.INSTANCE;
 			if ((args.size() - 1) % 2 != 0) {
 				throw new LispEvalException(LispNames.MAKE_LIST + " expects (size &key initial-element)");
@@ -4553,7 +4554,7 @@ public final class Environment implements Scope {
 				element = args.get(i + 1);
 			}
 			LispVal result = LispNil.INSTANCE;
-			for (long i = 0; i < n; i++) {
+			for (int i = 0; i < n; i++) {
 				result = new LispCons(element, result);
 			}
 			return result;

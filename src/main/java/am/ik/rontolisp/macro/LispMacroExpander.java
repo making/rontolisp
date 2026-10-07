@@ -8442,30 +8442,55 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (make-list n) into a do loop that conses n nil elements. The CL
-	 * {@code :initial-element} keyword is not supported.
+	 * Expands (make-list n) into a do loop that conses n elements -- nil, or the one
+	 * {@code :initial-element} value. The length goes through {@code %check-dimension},
+	 * so one outside {@code (INTEGER 0 (array-dimension-limit))} -- a bignum, a negative,
+	 * a non-integer -- is {@code make-list}'s type-error before anything is consed; a
+	 * literal inside every backend's limit needs no check. The forms run as a call's
+	 * arguments do -- the length, then the element, then the check -- so the length is
+	 * bound first unless one of the two is a literal, whose place in the order nothing
+	 * can observe.
 	 * @param cons the make-list expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMakeList(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		LispVal length = parts.get(1);
+		LispSymbol n = new LispSymbol("__ml_n");
 		LispSymbol i = new LispSymbol("__ml_i");
 		LispSymbol acc = new LispSymbol("__ml_acc");
 		LispSymbol elem = new LispSymbol("__ml_elem");
 		// The element is bound OUTSIDE the loop so its form runs once, like CL's
 		// single evaluation of :initial-element -- every cell shares that one value.
 		LispVal element = makeListInitialElement(cons, parts);
+		boolean bindLength = element != null && !isOrderFree(length) && !isOrderFree(element);
+		LispVal checked = bindLength ? n : length;
+		if (!(checked instanceof LispInteger literal && literal.value() >= 0
+				&& literal.value() < ClConstants.arraySizeLimit(true))) {
+			checked = checkOf(LispNames.CHECK_DIMENSION_INTERNAL, checked, LispNames.MAKE_LIST);
+		}
 		// (do ((__ml_i n (- __ml_i 1)) (__ml_acc nil (cons ELEM __ml_acc)))
 		// ((<= __ml_i 0) __ml_acc))
 		LispVal iStep = listToCons(List.of(new LispSymbol(LispNames.SUB), i, new LispInteger(1)));
 		LispVal accStep = listToCons(
 				List.of(new LispSymbol(LispNames.CONS), element == null ? LispNil.INSTANCE : elem, acc));
-		LispVal bindings = listToCons(List.of(listToCons(List.of(i, parts.get(1), iStep)),
-				listToCons(List.of(acc, LispNil.INSTANCE, accStep))));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(i, checked, iStep)), listToCons(List.of(acc, LispNil.INSTANCE, accStep))));
 		LispVal endTest = listToCons(List.of(new LispSymbol(LispNames.LE), i, new LispInteger(0)));
 		LispVal endClause = listToCons(List.of(endTest, acc));
 		LispVal loop = expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
-		return element == null ? loop : makeLet(elem.name(), element, loop);
+		if (element == null) {
+			return loop;
+		}
+		LispVal filled = makeLet(elem.name(), element, loop);
+		return bindLength ? makeLet(n.name(), length, filled) : filled;
+	}
+
+	// A form whose evaluation has no effect and reads nothing a neighbouring form can
+	// change: a self-evaluating literal or a quoted datum.
+	private static boolean isOrderFree(LispVal form) {
+		return isSelfEvaluatingLiteral(form) || (form instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name()));
 	}
 
 	/**

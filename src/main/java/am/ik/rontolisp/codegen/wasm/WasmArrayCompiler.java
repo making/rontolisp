@@ -9,6 +9,7 @@ import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.compiler.UnsupportedFloatWidth;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -855,7 +856,7 @@ final class WasmArrayCompiler {
 			// ... outside [0, limit): _arr_dims reports it (and never returns)
 			getLocal(ctx, dimsSlot);
 			WasmEmitHelper.castI31GetS(ctx);
-			i32Const(ctx, (int) am.ik.rontolisp.ClConstants.arraySizeLimit(true));
+			i32Const(ctx, (int) ClConstants.arraySizeLimit(true));
 			ctx.writer.write(Instruction.I32_GE_U);
 			ctx.writer.write(Instruction.IF, 0x40);
 			getLocal(ctx, dimsSlot);
@@ -3553,6 +3554,22 @@ final class WasmArrayCompiler {
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	/**
+	 * {@code (%check-dimension x 'op)}: {@code x} when it is an integer in
+	 * {@code [0, array-dimension-limit)}, else {@code op}'s
+	 * {@code (INTEGER 0 (array-dimension-limit))} type-error in EH mode, a trap outside
+	 * it -- {@code _idx_in} against the limit under the operator's register, the check
+	 * {@code _arr_dims} makes of a {@code make-array} dimension. Answers the integer
+	 * re-boxed.
+	 */
+	static void compileCheckDimension(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		i32Const(ctx, (int) ClConstants.arraySizeLimit(true));
+		WasmOperandTypes.withOperator(ctx, LispMacroExpander.checkOperator(cons),
+				() -> WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_IDX_IN));
+		boxI31(ctx);
 	}
 
 	private static void i32Const(WasmLispCompiler.Ctx ctx, int value) {

@@ -2257,6 +2257,7 @@ final class JvmExprCompiler {
 			case LispNames.CHECK_LIST_INTERNAL -> JvmNullPredCompiler.compileCheckList(cons, ctx, className);
 			case LispNames.CHECK_STRING_INTERNAL -> JvmCharCompiler.compileCheckString(cons, ctx, className);
 			case LispNames.CHECK_INDEX_INTERNAL -> JvmCharCompiler.compileCheckIndex(cons, ctx, className);
+			case LispNames.CHECK_DIMENSION_INTERNAL -> JvmArrayCompiler.compileCheckDimension(cons, ctx, className);
 			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> JvmCharCompiler.compileOperandTypeError(cons, ctx, className);
 			case LispNames.CHECK_SEQUENCE_INTERNAL -> JvmCharCompiler.compileCheckSequence(cons, ctx, className);
 			case LispNames.CHECK_BOUNDS_INTERNAL -> JvmSubseqCompiler.compileCheckBounds(cons, ctx, className);

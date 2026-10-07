@@ -280,9 +280,16 @@ public final class OperandTypes {
 	 * {@code (INTEGER 0 (array-dimension-limit))}, or a product of dimensions past
 	 * {@code array-total-size-limit}, lands as an out-of-range subscript does
 	 * ({@link #indexType} of the limit), a dotted dimension list's tail {@code LIST}.
-	 * Last in the table, after {@link #MAKE_STRING_INPUT_STREAM}.
+	 * After {@link #MAKE_STRING_INPUT_STREAM}.
 	 */
 	public static final String MAKE_ARRAY = "MAKE-ARRAY";
+
+	/**
+	 * {@code make-list}, funnel-typed: a length outside
+	 * {@code (INTEGER 0 (array-dimension-limit))} lands as a {@link #MAKE_ARRAY}
+	 * dimension does. Last in the table, after {@link #MAKE_ARRAY}.
+	 */
+	public static final String MAKE_LIST = "MAKE-LIST";
 
 	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
@@ -417,6 +424,8 @@ public final class OperandTypes {
 		order.add(MAKE_STRING_INPUT_STREAM);
 		OPERATOR_TYPES.put(MAKE_ARRAY, FUNNEL_TYPE);
 		order.add(MAKE_ARRAY);
+		OPERATOR_TYPES.put(MAKE_LIST, FUNNEL_TYPE);
+		order.add(MAKE_LIST);
 		OPERATORS = List.copyOf(order);
 	}
 
