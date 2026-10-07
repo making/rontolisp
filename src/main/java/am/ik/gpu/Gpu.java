@@ -677,7 +677,7 @@ public final class Gpu {
 	 * it wrote -- or of any result computed from one -- as the
 	 * {@code IllegalStateException} this mode already reserves for a result the host has
 	 * no other copy of; a result the failed buffer only read is intact
-	 * ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
+	 * ({@code .kb/gpu.md}, "Asynchronous command buffers").
 	 *
 	 * <p>
 	 * Never runs the probe: the wish is recorded and applied to the device the moment it

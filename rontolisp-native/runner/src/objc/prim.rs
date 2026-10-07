@@ -1,7 +1,7 @@
 //! The `objc` primitive layer on a `--native` output: the `rlobjc` `p_*` imports
 //! `objc-native-primitives.lisp` declares, which `objc.lisp` -- the whole vocabulary,
-//! the same file every target runs -- is written over (`.kb/objc.md`, "The primitive
-//! layer"). Nothing here decides a rule: every conversion and every ownership decision
+//! the same file every target runs -- is written over (`.kb/objc.md`, "Layers").
+//! Nothing here decides a rule: every conversion and every ownership decision
 //! is Lisp's. What the host does is what only the host can: look the runtime up, make one
 //! call by an encoding the caller hands over, and count the references a pointer value
 //! holds, releasing the collector's share when the value dies.

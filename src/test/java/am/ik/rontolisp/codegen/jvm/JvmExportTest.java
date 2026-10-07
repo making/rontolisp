@@ -686,7 +686,7 @@ class JvmExportTest {
 	void theHandleClassFilesTravelOnlyWithALibraryThatDeclaresOne() throws Exception {
 		// The artifact stays dependency-free: the handle's class files are written beside
 		// the program's own class, at their canonical names so two libraries agree on the
-		// type (.kb/jvm-export.md, "Where the handle type comes from").
+		// type (.kb/jvm-export.md, "What travels").
 		List<LispVal> withHandle = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(defun echo (v) v)
 				(rontolisp:jvm-export 'echo :params '(:float-vector) :returns :float-vector)

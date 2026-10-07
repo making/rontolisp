@@ -28,7 +28,7 @@ class CliStackTest {
 		// method runs (other tests in the class call it first), and a compiled frame is
 		// smaller than an interpreted one, so a fixed constant picked once can stop
 		// overflowing a 1 MiB thread once the suite runs warm (.kb/interpreter-stack.md,
-		// "a depth that overflowed once can fit later in the same JVM").
+		// "The numbers").
 		int[] overflowDepth = new int[1];
 		Throwable[] control = new Throwable[1];
 		Thread thread = new Thread(null, () -> {

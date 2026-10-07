@@ -7979,7 +7979,8 @@ public final class LispEvaluator {
 				// to. A float divides exactly here, so the quotient is the mathematical
 				// integer CLHS asks for at any magnitude -- a bignum past the long
 				// range, like every other numeric operator -- and the remainder beside
-				// it stays rem/mod (.kb/linalg-simd.md, "mod/rem"). The one-argument
+				// it stays rem/mod (.kb/linalg-simd.md, "mod / rem and the floor
+				// family"). The one-argument
 				// form falls through to the ordinary built-in function.
 				LispVal[] operands = floorFamilyOperands(cons);
 				if (operands != null) {
@@ -12048,10 +12049,12 @@ public final class LispEvaluator {
 			Environment clauseEnv = new Environment(env);
 			// Bind the protected form's full value list to the :no-error variable list,
 			// missing values as nil and surplus values dropped -- the same shape
-			// multiple-value-bind uses (.kb/multiple-values.md, "missing -> nil,
-			// surplus evaluated and dropped"). The variable list here is the
+			// multiple-value-bind uses (.kb/multiple-values.md, "handler-case's :no-error
+			// clause is
+			// a multiple-value consumer"). The variable list here is the
 			// required-only shape; &optional/&rest/&key are not accepted in this
-			// backend (see .kb/multiple-values.md, "The :no-error variable list").
+			// backend (see .kb/multiple-values.md, "handler-case's :no-error clause is a
+			// multiple-value consumer").
 			if (clauseParts.get(1) instanceof LispCons varList) {
 				List<LispVal> varVals = varList.toList();
 				for (int i = 0; i < varVals.size(); i++) {
@@ -13255,7 +13258,8 @@ public final class LispEvaluator {
 					LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
 		}
 		// The body is code of no function: a condition in its own forms names none, the
-		// hop line names the async function (.kb/error-handling.md, "Which function").
+		// hop line names the async function (.kb/error-handling.md, "An uncaught
+		// condition reports ONE line").
 		LispVal thunk = args.get(0) instanceof LispLambda lambda ? asyncBody(lambda) : args.get(0);
 		// The body's values are captured where it completes: the channel holds its
 		// extra values the moment the thunk returns, on the thread that ran it, and

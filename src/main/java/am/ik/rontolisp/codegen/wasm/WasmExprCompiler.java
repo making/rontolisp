@@ -1163,7 +1163,8 @@ final class WasmExprCompiler {
 			// every flipped producer emits (a no-op unless the producer flip is on);
 			// the %princ-piece / %prin1-piece aliases the expander builds its own
 			// pieces with are the same routed conversion WITHOUT it
-			// (.kb/string-write-runtime.md, "The fourth round").
+			// (.kb/string-write-runtime.md, "Allocated strings are mutable with
+			// identity").
 			case LispNames.PRINC_TO_STRING -> {
 				compilePrintOperator(cons, ctx, () -> WasmPrincToStringCompiler.compile(cons, ctx));
 				WasmEmitHelper.emitToMutStrCall(ctx);

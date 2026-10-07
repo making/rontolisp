@@ -434,8 +434,8 @@
            ;; The frame is closed out even when FN signals. An encoder released
            ;; without endEncoding is a Metal ASSERTION, and an assertion is an
            ;; abort() -- it kills the process from under the callback guard that
-           ;; caught the Lisp error a moment earlier (.kb/objc.md, "A frame that
-           ;; signals"). So the cleanup ends the encoder, presents whatever was
+           ;; caught the Lisp error a moment earlier (.kb/objc.md, "Metal"). So the cleanup ends the
+           ;; encoder, presents whatever was
            ;; drawn and commits; a half-drawn frame is a picture, an aborted
            ;; process is not.
            (let ((encoder

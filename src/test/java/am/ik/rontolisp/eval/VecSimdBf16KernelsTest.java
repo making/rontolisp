@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code THRESHOLD = 128} and {@code MATVEC_ROW_THRESHOLD = 16} lane gates, serially and
  * with the rows split across {@code --parallel} threads. Because the equivalence is exact
  * there is nothing to relax on a wider host: the bf16 decode is pinned to four lanes for
- * exactly the reason {@code FSPECIES_REDUCE} is (see {@code .kb/vec.md}, "The lane-count
- * pin").
+ * exactly the reason {@code FSPECIES_REDUCE} is (see {@code .kb/vec.md}, "The
+ * f32-reduction precision contract").
  *
  * <p>
  * {@code codegen.jvm.JvmSimdVectorTemplateBf16Test} asserts the same equivalence for the

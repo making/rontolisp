@@ -400,7 +400,7 @@ class SceneOffscreenRenderTest {
 		// metal:frame used to leave the render command encoder un-ended when the body
 		// signalled. An encoder released without endEncoding is a Metal ASSERTION and
 		// an assertion is an abort(): the native binary died on the fourth such frame
-		// while java -jar happened to outlive it (.kb/objc.md, "A frame that signals").
+		// while java -jar happened to outlive it (.kb/objc.md, "Metal").
 		// The abort is timing-dependent; the COMMIT is not. An un-committed frame never
 		// reaches the texture at all, so the previous frame's red box survives it; a
 		// frame that was closed out cleared the texture on its way through.

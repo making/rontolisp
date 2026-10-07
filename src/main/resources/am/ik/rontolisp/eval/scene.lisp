@@ -19,7 +19,7 @@
 ;; scene:offscreen is the same viewer with no window, drawing into a texture
 ;; scene:snapshot reads back. It exists because no test may open a window, and
 ;; because it is the SAME scene::%render an offscreen frame is evidence about
-;; what a window shows (.kb/geom.md, "How the renderer is tested").
+;; what a window shows (.kb/geom.md, "The renderer: metal and scene").
 ;;
 ;; THE DESIGN POINT, and the reason this file is shaped the way it is: no
 ;; triangle is touched by Lisp during a frame. A solid's model-space mesh

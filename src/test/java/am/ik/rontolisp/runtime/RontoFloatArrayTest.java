@@ -251,9 +251,9 @@ class RontoFloatArrayTest {
 	/**
 	 * The {@code --gpu} seam, exercised without a device: a lazy result's host array is
 	 * the HEADER ALONE and the elements live in a backing the residency guard answers
-	 * ({@code .kb/gpu.md}, "A lazy result allocates no host array"). Every host read of a
-	 * handle must therefore read what the guard answers, and every host write must land
-	 * on it — which is what {@link GpuOwner} stands in for here.
+	 * ({@code .kb/gpu.md}, "Lazy results"). Every host read of a handle must therefore
+	 * read what the guard answers, and every host write must land on it — which is what
+	 * {@link GpuOwner} stands in for here.
 	 */
 	@Test
 	void aHostReadGoesThroughTheOwnerClassResidencyGuard() {

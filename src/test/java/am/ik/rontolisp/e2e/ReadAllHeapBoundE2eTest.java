@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * to, plus one transcode buffer on the JVM. Until 2026-09-26 an octet was a {@code long}
  * on both: a 256 MiB body peaked at 6.2 GB of live heap on the interpreter (the chunks
  * and their join, plus five body-sized decode intermediates) and 3.4 GB on the JVM
- * ({@code .kb/fetch-http.md}, "Throughput").
+ * ({@code .kb/fetch-http.md}, "--native").
  */
 class ReadAllHeapBoundE2eTest {
 

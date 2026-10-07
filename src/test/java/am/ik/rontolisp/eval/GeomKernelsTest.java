@@ -19,12 +19,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * {@link GeomKernels} against the {@code geom.lisp} defuns it replaces. The natives are
- * ALWAYS on ({@code .kb/geom.md}, "The interpreter's native readers"), and the whole
- * licence for that is that they answer what the defuns answer -- so every case here runs
- * one expression twice, once with the natives installed and once with
- * {@code setGeomKernels(false)}, and compares the PRINTED value. Printing a packed
- * {@code single-float} array renders every element, so an equal string is element-for-
- * element equality and a one-ULP drift fails.
+ * ALWAYS on ({@code .kb/geom.md}, "The Java kernels"), and the whole licence for that is
+ * that they answer what the defuns answer -- so every case here runs one expression
+ * twice, once with the natives installed and once with {@code setGeomKernels(false)}, and
+ * compares the PRINTED value. Printing a packed {@code single-float} array renders every
+ * element, so an equal string is element-for- element equality and a one-ULP drift fails.
  *
  * <p>
  * The cases are chosen for the seams a transcription gets wrong: exponent syntax, a

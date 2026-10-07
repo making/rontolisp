@@ -5341,7 +5341,8 @@ class JvmLispCompilerTest {
 		// so the nested definition was written to a store nothing read and the call
 		// after (redefiner) still answered TOP. The top-level definition is renamed and
 		// its function value assigned to the global in its place, so the one variable
-		// carries both answers in order (.kb/core-representation.md, "The NAME half").
+		// carries both answers in order (.kb/core-representation.md, "Three-pass
+		// compilation").
 		assertThat(compileAndRun("(defun over () 'top)" + "(defun redefiner () (defun over () 'nested) 'done)"
 				+ "(print (over)) (print (redefiner)) (print (over))"))
 			.isEqualTo("TOP\nDONE\nNESTED");
@@ -24913,7 +24914,7 @@ class JvmLispCompilerTest {
 	void theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue() throws Exception {
 		// A tail that stays direct -- a self call the lowering made a loop -- carries no
 		// trampoline at all: no _tramp, no value tail, no unwrap, the class the
-		// pre-trampoline emitter wrote (.kb/scheme-frontend.md, "Not a trampoline"). One
+		// pre-trampoline emitter wrote (.kb/scheme-frontend.md, "Tail-call groups"). One
 		// whose tail leaves through the variable the callee arrived in is a value tail,
 		// and the same program runs a depth the plain call chain overflows on the JVM's
 		// sized worker.

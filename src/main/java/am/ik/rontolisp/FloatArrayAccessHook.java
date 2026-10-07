@@ -40,8 +40,8 @@ import org.jspecify.annotations.Nullable;
  * listener installed either seam answers its argument. So the record's {@code storage()}
  * is the identity the device is keyed on and the one thing the device is handed, and
  * {@code data()} is what the host reads; an in-place kernel that reports a write names
- * {@code storage()}, never the array {@code data()} gave it ({@code .kb/gpu.md}, "A lazy
- * result allocates no host array").
+ * {@code storage()}, never the array {@code data()} gave it ({@code .kb/gpu.md}, "Lazy
+ * results").
  *
  * <p>
  * Lives in the root package, which depends on nothing, as a plain static hook rather than

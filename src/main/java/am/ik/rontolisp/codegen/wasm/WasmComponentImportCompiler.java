@@ -2148,7 +2148,8 @@ final class WasmComponentImportCompiler {
 		// Stages a `list<u8>`-typed argument -- a WIT list of bytes, which is what a
 		// `stream<u8>` write carries too. A packed (unsigned-byte 8) vector crosses as
 		// the RAW octets it holds; anything else is the string spelling of a byte
-		// string (`.kb/wit.md`, "list<u8> = string") and stages exactly as a `string`
+		// string (`.kb/wit.md`, "The settled type mapping") and stages exactly as a
+		// `string`
 		// parameter does. The distinction matters because the string staging UTF-8
 		// ENCODES: without this arm every octet >= 0x80 would double on the way out.
 		private void emitStageBytesParam(int slot) {

@@ -317,7 +317,7 @@ class HttpHandlerTest {
 	@Test
 	void aMountedRequestSplitsScriptNameAndPathInfo() {
 		// The interpreter's native environment construction makes the same split the
-		// other two make (.kb/http-server.md, "The invariant"): the raw mount prefix
+		// other two make (.kb/http-server.md, "Invariant"): the raw mount prefix
 		// comes off the target BEFORE percent-decoding, :script-name is its decode,
 		// :request-uri stays the full raw target, and a non-prefix scriptName degrades
 		// to the root-mounted split rather than signalling.

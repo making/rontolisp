@@ -396,8 +396,10 @@ class LispMacroExpanderTest {
 		// expander builds its own string PIECES with the same rendering -- every ~a /
 		// ~s / ~d, map 'string's per-ELEMENT accumulator, a condition's default
 		// message -- and spelling those with the public name had measured 17-80% on the
-		// whole string-building family (.kb/string-write-runtime.md, "The fourth
-		// round"). The pieces name the internal %princ-piece / %prin1-piece instead; if
+		// whole string-building family (.kb/string-write-runtime.md, "Allocated strings
+		// are mutable
+		// with identity"). The pieces name the internal %princ-piece / %prin1-piece
+		// instead; if
 		// a public name comes back into an expansion, that cost comes back with it.
 		String pieces = expandOne("(format nil \"~a ~s ~d ~c\" a b c d)");
 		assertThat(pieces).contains("%PRINC-PIECE").contains("%PRIN1-PIECE");

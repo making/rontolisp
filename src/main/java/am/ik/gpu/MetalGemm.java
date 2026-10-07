@@ -89,7 +89,7 @@ import static am.ik.gpu.MetalDriver.L;
  * {@link #lazyResultsPay}). It did not pay while every call waited: a tie at the
  * notebook's shapes and a loss at the book's. The other half of that loss was memory --
  * on unified memory the pool and the heap share the machine -- and the lazy budgets below
- * are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal").
+ * are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command buffers").
  *
  * @see Gpu
  * @see MetalDriver
@@ -211,8 +211,8 @@ final class MetalGemm implements GpuDevice {
 	 * operand is a memcpy of it plus a lane loop, which crosses it between 2^18 and 2^19
 	 * -- yet the training step measured fastest with the floor HERE, lower than that,
 	 * because a declined member costs a materialize, the CPU loop and the re-upload of
-	 * its result around it ({@code .kb/gpu.md}, "Lazy results and the resident tier on
-	 * Metal").
+	 * its result around it ({@code .kb/gpu.md}, "Residency and the GEMV on this
+	 * backend").
 	 */
 	static final long MIN_RESIDENT_ELEMENTS = 1L << 14;
 
@@ -293,8 +293,8 @@ final class MetalGemm implements GpuDevice {
 	 * step at the book's shapes holds tens of gigabytes of activations reachable until
 	 * its backward, and a budget below that flushed them as fast as they were made --
 	 * measured, 195 GB of flushes over 13 steps and a step a third slower than the pure
-	 * pool ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal"), the trap
-	 * the CUDA half hit at a 1 GB budget.
+	 * pool ({@code .kb/gpu.md}, "Asynchronous command buffers"), the trap the CUDA half
+	 * hit at a 1 GB budget ("Lazy results").
 	 */
 	private static final long LAZY_HEADROOM_SHARE = 8, LAZY_HEADROOM_FLOOR = 512L << 20;
 
@@ -845,11 +845,9 @@ final class MetalGemm implements GpuDevice {
 	}
 
 	/**
-	 * The index tier and the clip norm are CUDA-only. Both halves exist to keep a lazy
-	 * result from coming home, and this backend does not run lazily -- on unified memory
-	 * the copy home is a memcpy, which measured a tie at the notebook's shapes and a loss
-	 * at the book's ({@code .kb/gpu.md}, "Lazy results and the resident tier on Metal")
-	 * -- so there is nothing here for them to save.
+	 * The index tier and the clip norm are CUDA-only: their kernels were never written
+	 * for this backend, so every member of both declines ({@code .kb/gpu.md}, "What is
+	 * deliberately NOT here").
 	 */
 	@Override
 	public boolean take(int mode, double[] a, int oa, int lenA, double[] c, int oc, int[] idx, int n, int slab) {
@@ -2384,7 +2382,7 @@ final class MetalGemm implements GpuDevice {
 	 * call it is worth 13% of the forward and a quarter of the adjoint at the book's
 	 * shapes, and it does not move the step at all, because the host round trips it
 	 * removes had already been removed generically at the compiled call site. The kernels
-	 * are not kept. {@code .kb/gpu.md}, "Layer-norm's affine on Metal", has the numbers
+	 * are not kept. {@code .kb/gpu.md}, "Three further Metal findings", has the numbers
 	 * and the condition that would reopen it.
 	 * @return {@code false}, always
 	 */
@@ -2762,9 +2760,9 @@ final class MetalGemm implements GpuDevice {
 	/**
 	 * {@code true}: with the command buffers asynchronous the mode pays -- measured, the
 	 * training step at the book's shapes goes 4.80 -> 1.81 s and the notebook's width
-	 * 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers on Metal"). It
-	 * was {@code false} while every call waited for its command buffer and the mode was a
-	 * tie at small shapes and a loss at large ones.
+	 * 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers"). It was
+	 * {@code false} while every call waited for its command buffer and the mode was a tie
+	 * at small shapes and a loss at large ones.
 	 */
 	@Override
 	public boolean lazyResultsPay() {

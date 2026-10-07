@@ -1392,7 +1392,7 @@ public final class UserMacroExpander {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& macroEval.isUserMacro(sym.name())) {
 			// The expansion stands where the call stood: it keeps the call's position
-			// (.kb/source-positions.md, "Half 2"), so code a macro built still reports
+			// (.kb/source-positions.md, "Phase 2"), so code a macro built still reports
 			// the line of the call that built it.
 			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 		}

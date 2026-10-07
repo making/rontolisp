@@ -22,7 +22,7 @@ import org.jspecify.annotations.Nullable;
  * rather than saturating. Computing the quotient as a double instead rounds twice (the
  * division rounds, then the narrowing clamps), and the remainder derived from that
  * quotient breaks {@code quotient*divisor + remainder = number}, which CLHS states
- * outright. See {@code .kb/linalg-simd.md}, "mod/rem".
+ * outright. See {@code .kb/linalg-simd.md}, "mod / rem and the floor family".
  */
 final class ExactRounding {
 
@@ -65,7 +65,8 @@ final class ExactRounding {
 	 * is not a rational, so {@link #rationalOf} declines on it): with a finite nonzero
 	 * dividend, {@code a/b} is an infinitesimal whose magnitude is always under 1/2, so
 	 * truncate and round are always 0, and floor/ceiling read off whether the dividend
-	 * and the divisor agree in sign. See {@code .kb/linalg-simd.md}, "mod/rem".
+	 * and the divisor agree in sign. See {@code .kb/linalg-simd.md}, "mod / rem and the
+	 * floor family".
 	 * @param a the dividend
 	 * @param b the divisor
 	 * @param mode {@link #TRUNCATE}, {@link #FLOOR}, {@link #CEILING} or {@link #ROUND}

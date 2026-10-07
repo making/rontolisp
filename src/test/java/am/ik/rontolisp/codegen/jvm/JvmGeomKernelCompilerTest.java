@@ -34,8 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * twice, once with the bridge and once with {@code geomKernels(false)}, run in the same
  * JVM and compared as PRINTED values, which render a packed array element for element.
  * That is {@code eval/GeomKernelsTest}'s shape for the interpreter ({@code .kb/geom.md},
- * "The interpreter's native kernels"); a kernel that rounds differently is a bug here,
- * not a tolerance.
+ * "The Java kernels"); a kernel that rounds differently is a bug here, not a tolerance.
  */
 class JvmGeomKernelCompilerTest {
 

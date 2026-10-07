@@ -29,7 +29,7 @@ import org.jspecify.annotations.Nullable;
  * backend-independent and ships everywhere, while this half is {@code objc:}-dependent
  * and macOS-only. It ships anyway, the way {@code appkit.lisp} does -- the binary is what
  * people install, and a binary user who has {@code geom} and cannot draw with it is in a
- * strange position ({@code .kb/objc.md}, "Where the line goes").
+ * strange position ({@code .kb/objc.md}, "appkit: where the line goes").
  *
  * <p>
  * Consumers, the {@link AppKitLibrary} pair:

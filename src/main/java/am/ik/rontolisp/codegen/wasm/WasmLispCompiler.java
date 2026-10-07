@@ -3575,7 +3575,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// at run time, and only a global variable can hold both answers: the top-level
 		// definition is renamed and an assignment of its function value takes its place,
 		// so the name resolves through the variable like every other non-top-level defun
-		// (.kb/core-representation.md, "The NAME half"). A no-op unless the two
+		// (.kb/core-representation.md, "Three-pass compilation"). A no-op unless the two
 		// spellings actually meet, and placed after every pass that can introduce a
 		// top-level defun of its own (defstruct/defclass accessors, ShadowedBuiltins).
 		// A nested defun a run-time name can reach (a computed name, fmakunbound, eval)

@@ -66,8 +66,8 @@ final class WasmFloat16Compiler {
 	 * at the widen destination / narrow source. The two scalar arms are told apart at
 	 * RUNTIME by {@code ref.test $f32arr}; {@link #VBLOCK} is a COMPILE-time fact
 	 * ({@code ctx.simd}), because a {@code --simd} module has one representation for both
-	 * widths and a default module cannot even declare the type ({@code .kb/vec.md},
-	 * "Acceleration layer 3").
+	 * widths and a default module cannot even declare the type ({@code .kb/vec.md}, "The
+	 * four acceleration layers").
 	 */
 	private enum Layout {
 

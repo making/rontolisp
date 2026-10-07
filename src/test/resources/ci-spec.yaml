@@ -10007,7 +10007,7 @@ cases:
   # instance already on the current rendering path -- or the frame past the
   # 256-frame depth cap -- prints as "#", CL's *print-level* cutoff marker,
   # instead of a StackOverflowError / exhausted wasm stack, identically on all
-  # four backends (.kb/pretty-printer.md, "A cyclic instance graph").
+  # four backends (.kb/pretty-printer.md, "A cyclic value prints finitely").
   - name: print-cyclic-instance-graph
     source: |
       (defclass ci-cyc () ((next :initform nil :accessor ci-cyc-next)
@@ -10029,7 +10029,7 @@ cases:
   # cdr chain that re-enters itself prints every element once and then the
   # improper tail " . #" (the chain's cycle is detected up front); a cons or
   # vector already on the current rendering path prints as "#". Identical on all
-  # four backends (.kb/pretty-printer.md, "A cyclic cons").
+  # four backends (.kb/pretty-printer.md, "A cyclic value prints finitely").
   - name: print-cyclic-cons
     source: |
       (let ((cc-x (list 1)))

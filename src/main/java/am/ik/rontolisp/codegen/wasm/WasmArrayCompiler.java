@@ -141,8 +141,8 @@ final class WasmArrayCompiler {
 			// the representation is chosen; an unanswered one falls through to the
 			// general BOXED array below and the program answers different numbers here
 			// than on the interpreter -- a wrong number rather than a crash
-			// (.kb/bfloat16.md, "A guard on one spelling of an operation is not a
-			// guard").
+			// (.kb/array-literals.md, "A RUNTIME :element-type reaches the same array a
+			// literal one does").
 			switch (packedProto) {
 				case LispBFloat16Array ignored -> {
 					// A CALL-TIME signal rather than a compile error, the shape the

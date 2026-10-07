@@ -100,11 +100,11 @@ final class JvmGpuRuntimeBuilder {
 	 * {@code --gpu}:
 	 * {@code _gpuInited != 0 ? <Program>$GpuBridge.gpuWritten(array) : array} -- and
 	 * writes into what it ANSWERS, which is the array itself or, for a result stub, the
-	 * backing the library holds its elements in ({@code .kb/gpu.md}, "A lazy result
-	 * allocates no host array"). Before the first device member nothing can be resident,
-	 * so a write before {@code _gpuInit} has run needs no bridge at all -- the guard
-	 * keeps such a program from loading the library for nothing, and it is the fast path:
-	 * a write before the first device call costs a {@code getstatic} and a branch.
+	 * backing the library holds its elements in ({@code .kb/gpu.md}, "Lazy results").
+	 * Before the first device member nothing can be resident, so a write before
+	 * {@code _gpuInit} has run needs no bridge at all -- the guard keeps such a program
+	 * from loading the library for nothing, and it is the fast path: a write before the
+	 * first device call costs a {@code getstatic} and a branch.
 	 */
 	static final String WRITTEN_METHOD = "_gpuWritten";
 

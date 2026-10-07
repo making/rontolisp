@@ -37,7 +37,7 @@ import org.jspecify.annotations.Nullable;
  * extent {@code scene} sizes an axis triad by 30 s. Nine minutes, and nothing else in the
  * load reached a second. These four are what scales with the FILE rather than with the
  * scene, and each is one loop over a million things the interpreter charges ~16 us a
- * float for ({@code .kb/geom.md}, "Measured"). With them the same load is 1.2 s.
+ * float for ({@code .kb/geom.md}, "The Java kernels"). With them the same load is 1.2 s.
  *
  * <p>
  * The JVM backend has the same four over its own CALL SITES since 2026-08-31

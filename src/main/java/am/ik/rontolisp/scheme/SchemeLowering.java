@@ -1512,7 +1512,7 @@ final class SchemeLowering {
 	// is,
 	// so it is the most expensive helper a program can reach, and a literal's type is
 	// known
-	// here (.kb/scheme-frontend.md, "Size").
+	// here.
 	private static @Nullable LispVal displayOfALiteral(Call call, Builtin builtin) {
 		if (!builtin.entry().name().equals("display") || call.operands().size() != 1) {
 			return null;

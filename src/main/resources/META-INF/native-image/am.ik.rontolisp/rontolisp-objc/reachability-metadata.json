@@ -27,7 +27,7 @@
     "newBufferWithBytes:length:options: and drawPrimitives:vertexStart:vertexCount:, and",
     "metal:pixels' readback, MTLTexture's getBytes:bytesPerRow:fromRegion:mipmapLevel: -- an",
     "MTLRegion (six NSUIntegers) by value, the widest struct argument in the table (.kb/geom.md,",
-    "\"How the renderer is tested\"), and AVFAudio's for examples/macos/audio.lisp, just before",
+    "\"The renderer: metal and scene\"), and AVFAudio's for examples/macos/audio.lisp, just before",
     "class_addIvar: initStandardFormatWithSampleRate:channels: (void*(void*,void*,jdouble,jint)),",
     "enableManualRenderingMode:format:maximumFrameCount:error: (jboolean(void*,void*,jlong,void*,",
     "jint,void*)), renderOffline:toBuffer:error: (jlong(void*,void*,jint,void*,void*)) and",

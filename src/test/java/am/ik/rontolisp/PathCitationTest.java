@@ -10,8 +10,10 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -56,6 +58,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * fact or measurement itself, or points at the {@code .kb/} file holding it; an item
  * number means nothing to a reader once the item closes.
  * {@link #noTodoItemIsCitedOutsideTheNotes()} fails on one.
+ *
+ * <p>
+ * <b>A section title cited from source must be a heading of the file it is cited
+ * from.</b> Outside {@code .kb/} and {@code .todo/}, a comment that names a note and
+ * quotes a title after it points at a section by name, and a heading that is renamed or
+ * split takes the pointer with it without breaking any path.
+ * {@link #everyQuotedSectionTitleInSourceIsAHeadingOfThatNote()} resolves each one: the
+ * quoted words, markup stripped and case ignored, must open a heading, so a title may be
+ * shortened to its leading words but may not be reworded. A citation that is a bold
+ * paragraph label or a table row rather than a heading names the heading it sits under.
  *
  * <p>
  * <b>What is not scanned, and why.</b> {@code .todo/artefacts/} and
@@ -153,6 +165,25 @@ class PathCitationTest {
 	 */
 	private static final Pattern KB_INDEX_LINK = Pattern
 		.compile("\\[([a-zA-Z0-9._-]+\\.md)]\\(([a-zA-Z0-9._-]+\\.md)\\)");
+
+	/**
+	 * A note's path followed by a quoted title: the path, an optional closing
+	 * {@code @code} brace, backtick or parenthesis, then a comma or whitespace and the
+	 * title in double quotes. The separator is required so a string literal that ends
+	 * right after a note's name is not read as opening a title.
+	 */
+	private static final Pattern KB_SECTION_CITATION = Pattern
+		.compile("\\.kb/([A-Za-z0-9_.-]+\\.md)[}`)]*(?:,\\s*|\\s+)\"([^\"\\\\\\n]{1,120})\"");
+
+	/**
+	 * A line break inside a comment, with the comment leader that starts the next line: a
+	 * citation wraps across lines and its title is read as if it had not.
+	 */
+	private static final Pattern COMMENT_LINE_BREAK = Pattern.compile("[ \\t]*\\R[ \\t]*(?://+!?|\\*|;+|#+)?[ \\t]*");
+
+	private static final Pattern HEADING_LINE = Pattern.compile("^#{1,6}\\s+(.*?)\\s*$");
+
+	private static final Pattern CODE_TAG_WRAPPER = Pattern.compile("\\{@code\\s+([^}]*)}");
 
 	@Test
 	void everyCitedRepositoryPathResolves() throws IOException {
@@ -287,6 +318,74 @@ class PathCitationTest {
 		}
 	}
 
+	@Test
+	void everyQuotedSectionTitleInSourceIsAHeadingOfThatNote() throws IOException {
+		Map<String, List<String>> headings = new HashMap<>();
+		List<String> unresolved = new ArrayList<>();
+		for (Path file : filesScannedForItems()) {
+			if (file.getFileName().toString().endsWith(".json")) {
+				continue;
+			}
+			String text;
+			try {
+				text = Files.readString(file);
+			}
+			catch (CharacterCodingException binary) {
+				continue;
+			}
+			if (!text.contains(".kb/")) {
+				continue;
+			}
+			StringBuilder joined = new StringBuilder();
+			List<Integer> lineOf = new ArrayList<>();
+			int line = 1;
+			int from = 0;
+			Matcher breaks = COMMENT_LINE_BREAK.matcher(text);
+			while (breaks.find()) {
+				for (int i = from; i < breaks.start(); i++) {
+					joined.append(text.charAt(i));
+					lineOf.add(line);
+				}
+				joined.append(' ');
+				lineOf.add(line);
+				line += (int) breaks.group().chars().filter(c -> c == '\n').count();
+				from = breaks.end();
+			}
+			for (int i = from; i < text.length(); i++) {
+				joined.append(text.charAt(i));
+				lineOf.add(line);
+			}
+			Matcher citation = KB_SECTION_CITATION.matcher(joined);
+			while (citation.find()) {
+				String note = citation.group(1);
+				List<String> noteHeadings = headings.computeIfAbsent(note, PathCitationTest::normalizedHeadings);
+				if (!opensAHeading(citation.group(2), noteHeadings)) {
+					unresolved.add(file + ":" + lineOf.get(citation.start()) + ": .kb/" + note + ", \""
+							+ citation.group(2) + "\"");
+				}
+			}
+		}
+		assertThat(unresolved)
+			.as("A quoted section title in source is not a heading of the note it names (or the note "
+					+ "does not exist). Quote the words a heading opens with; for a paragraph label or a table row, "
+					+ "name the heading it sits under.")
+			.isEmpty();
+	}
+
+	@Test
+	void aQuotedTitleMustOpenAHeadingAfterMarkupAndCaseAreIgnored() {
+		List<String> modRem = List.of(normalizeTitle("`mod` / `rem` and the floor family"));
+		List<String> buffers = List.of(normalizeTitle("Asynchronous command buffers"));
+		assertThat(opensAHeading("mod / rem", modRem)).isTrue();
+		assertThat(opensAHeading("{@code mod} / rem and the floor", modRem)).isTrue();
+		assertThat(opensAHeading("Asynchronous  COMMAND buffers", buffers)).isTrue();
+		assertThat(opensAHeading("Asynchronous command buffers on Metal", buffers)).isFalse();
+		assertThat(opensAHeading("command buffers", buffers)).isFalse();
+		assertThat(KB_SECTION_CITATION.matcher("(.kb/gpu.md, \"Tests\")").find()).isTrue();
+		assertThat(KB_SECTION_CITATION.matcher("{@code .kb/gpu.md}, \"Tests\"").find()).isTrue();
+		assertThat(KB_SECTION_CITATION.matcher("\"see .kb/gpu.md\").isEmpty()").find()).isFalse();
+	}
+
 	/**
 	 * {@link #everyCitedRepositoryPathResolves()} and
 	 * {@link #everyRelativeLinkInTheNotesResolves()} fail when a link points at nothing;
@@ -409,6 +508,49 @@ class PathCitationTest {
 			return false;
 		}
 		return ABSENT_ON_PURPOSE.stream().noneMatch(absent -> token.equals(absent) || token.startsWith(absent + "/"));
+	}
+
+	/** A quoted title opens a heading when, normalized, it is a prefix of one. */
+	private static boolean opensAHeading(String title, List<String> normalizedHeadings) {
+		String wanted = normalizeTitle(title);
+		return !wanted.isEmpty() && normalizedHeadings.stream().anyMatch(heading -> heading.startsWith(wanted));
+	}
+
+	/**
+	 * Lower case, single spaces, no backticks and no {@code @code} wrapper: how a heading
+	 * is written in markdown and how a comment quotes it differ in exactly these.
+	 */
+	private static String normalizeTitle(String title) {
+		String unwrapped = CODE_TAG_WRAPPER.matcher(title).replaceAll("$1").replace("`", "");
+		return unwrapped.replaceAll("\\s+", " ").strip().toLowerCase(Locale.ROOT);
+	}
+
+	/**
+	 * The normalized headings of the note {@code .kb/<note>}, outside code fences; empty
+	 * if there is no such note.
+	 */
+	private static List<String> normalizedHeadings(String note) {
+		Path file = Path.of(".kb", note);
+		if (!Files.isRegularFile(file)) {
+			return List.of();
+		}
+		List<String> headings = new ArrayList<>();
+		boolean fenced = false;
+		try {
+			for (String text : Files.readAllLines(file)) {
+				if (text.startsWith("```")) {
+					fenced = !fenced;
+				}
+				Matcher heading = HEADING_LINE.matcher(text);
+				if (!fenced && heading.matches()) {
+					headings.add(normalizeTitle(heading.group(1)));
+				}
+			}
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+		return headings;
 	}
 
 	private static String normalize(String token) {

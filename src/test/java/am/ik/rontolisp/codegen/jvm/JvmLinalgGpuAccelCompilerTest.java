@@ -372,7 +372,7 @@ class JvmLinalgGpuAccelCompilerTest {
 		// own reads through the same guards. So a chain whose only fallback is the defun
 		// must not carry one -- materializing there drags home a score whose first
 		// reader is another device member, which stages it straight back
-		// (.kb/gpu.md, "The chapter-2 step re-measured").
+		// (.kb/gpu.md, "The decline that was only a materialize").
 		String add = """
 				(defparameter *a* (linalg:zeros '(2 2)))
 				(defparameter *b* (linalg:zeros '(2 2)))
