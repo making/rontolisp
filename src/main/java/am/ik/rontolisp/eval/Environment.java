@@ -1404,25 +1404,23 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.AREF + " expects an array and subscripts");
 			}
 			long[] values = subscriptValues(args, 1, args.size());
-			if (args.get(0) instanceof LispFloatArray fa) {
+			LispVal target = rankedArray(LispNames.AREF, args.get(0), values.length);
+			if (target instanceof LispFloatArray fa) {
 				return fa.aref(boundedSubscripts(args, 1, values, fa.dims()));
 			}
-			if (args.get(0) instanceof LispQuantizedMatrix qm) {
+			if (target instanceof LispQuantizedMatrix qm) {
 				// Dequantize-on-read: q * scale, a double (.kb/quantized-matrix.md).
 				return new LispDouble(qm.aref(boundedSubscripts(args, 1, values, qm.dims())));
 			}
-			if (args.get(0) instanceof LispIntVector iv) {
-				if (values.length != 1) {
-					throw new LispEvalException(LispNames.AREF + ": a packed integer vector is rank 1");
-				}
+			if (target instanceof LispIntVector iv) {
 				return new LispInteger(iv.elementAt(inBounds(args.get(1), values[0], iv.length())));
 			}
 			// A string is a rank-1 array of characters in CL, so (aref s i) reads like
 			// (char s i). Writing still goes through %schar-set (the schar setf place).
-			if (args.get(0) instanceof LispString && values.length == 1) {
+			if (target instanceof LispString) {
 				return charRef(LispNames.AREF, args);
 			}
-			LispArray array = requireArray(LispNames.AREF, args.get(0));
+			LispArray array = (LispArray) target;
 			return array.aref(boundedSubscripts(args, 1, values, array.dimensions()));
 		}));
 		env.defineFunction(LispNames.ARRAY_DIMENSIONS, new LispFunction(LispNames.ARRAY_DIMENSIONS, args -> {
@@ -1447,11 +1445,12 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.ASET + " expects an array, subscripts and a value");
 			}
 			LispVal value = args.get(args.size() - 1);
-			// Each subscript's type, then the value's, then the bounds: the order every
-			// compiled store checks them in (the subscripts at the site, the value and
-			// the bounds in the store).
+			// Each subscript's type, the array's and its rank, then the value's, then the
+			// bounds: the order every compiled store checks them in (the subscripts at
+			// the site, the rank after them, the value and the bounds in the store).
 			long[] values = subscriptValues(args, 1, args.size() - 1);
-			if (args.get(0) instanceof LispFloatArray fa) {
+			LispVal target = rankedArray(LispNames.ASET, args.get(0), values.length);
+			if (target instanceof LispFloatArray fa) {
 				// Coerce to a double (a non-real is a type error), narrow-store it (f32
 				// for single-float), and return the value AS STORED (read back widened),
 				// so the effective element value is consistent across backends and
@@ -1461,25 +1460,22 @@ public final class Environment implements Scope {
 				fa.aset(element, subs);
 				return fa.aref(subs);
 			}
-			if (args.get(0) instanceof LispQuantizedMatrix) {
+			if (target instanceof LispQuantizedMatrix) {
 				throw new LispEvalException(quantizedImmutable(LispNames.ASET));
 			}
-			if (args.get(0) instanceof LispIntVector iv) {
+			if (target instanceof LispIntVector iv) {
 				// Mask-store to the element width and return the value AS STORED, so the
 				// effective element value is consistent across backends and widths.
-				if (values.length != 1) {
-					throw new LispEvalException(LispNames.ASET + ": a packed integer vector is rank 1");
-				}
 				long element = exactIntElement(LispNames.ASET, value);
 				return new LispInteger(iv.setElement(inBounds(args.get(1), values[0], iv.length()), element));
 			}
 			// A string is a rank-1 character array: (setf (aref s i) c) mutates in
 			// place like the schar setf place (cl-ppcre builds two-char strings with
 			// make-array + aset).
-			if (args.get(0) instanceof LispString str && values.length == 1) {
+			if (target instanceof LispString str) {
 				return storeStringChar(LispNames.ASET, str, args.get(1), values[0], value);
 			}
-			LispArray array = requireArray(LispNames.ASET, args.get(0));
+			LispArray array = (LispArray) target;
 			array.aset(value, boundedSubscripts(args, 1, values, array.dimensions()));
 			return value;
 		}));
@@ -2083,17 +2079,11 @@ public final class Environment implements Scope {
 	/**
 	 * The subscripts {@code args[from, ...)} checked PER AXIS, each against its own
 	 * dimension, first failing axis first: a column past its dimension is out of range
-	 * even when the row-major index it folds to is not. A count that is not the rank is
-	 * left to the array's own rank check.
+	 * even when the row-major index it folds to is not. {@link #rankedArray} has matched
+	 * the count to the rank.
 	 */
 	private static int[] boundedSubscripts(List<LispVal> args, int from, long[] values, int[] dims) {
 		int[] subs = new int[values.length];
-		if (values.length != dims.length) {
-			for (int k = 0; k < values.length; k++) {
-				subs[k] = (int) values[k];
-			}
-			return subs;
-		}
 		for (int k = 0; k < values.length; k++) {
 			subs[k] = inBounds(args.get(from + k), values[k], dims[k]);
 		}
@@ -2141,6 +2131,38 @@ public final class Environment implements Scope {
 			return (int) n.value();
 		}
 		throw OperandTypeException.outOfRange(value, limit, operator);
+	}
+
+	/**
+	 * The array an {@code aref} or {@code %aset} accesses, checked after its subscripts'
+	 * types: a value that is no array is {@code fn}'s {@code ARRAY} type-error, and an
+	 * array whose rank is not the subscript count the unnamed
+	 * {@link OperandTypes#rankType} one, for the built-in seam to name -- the report and
+	 * the order every compiled access gives ({@code .kb/error-handling.md}, "A rank
+	 * mismatch").
+	 * @param fn the accessor's name
+	 * @param val the operand
+	 * @param subscripts the subscript count the call spells
+	 * @return the operand: a string, a packed or quantized array or a {@link LispArray}
+	 */
+	private static LispVal rankedArray(String fn, LispVal val, int subscripts) {
+		int rank;
+		if (val instanceof LispString || val instanceof LispIntVector) {
+			rank = 1;
+		}
+		else if (val instanceof LispFloatArray fa) {
+			rank = fa.dims().length;
+		}
+		else if (val instanceof LispQuantizedMatrix qm) {
+			rank = qm.dims().length;
+		}
+		else {
+			rank = requireArray(fn, val).dimensions().length;
+		}
+		if (rank != subscripts) {
+			throw OperandTypeException.notOfType(val, OperandTypes.rankType(subscripts));
+		}
+		return val;
 	}
 
 	private static LispArray requireArray(String fn, LispVal val) {

@@ -2226,7 +2226,8 @@ on wasm-GC even in EH mode.
   silently answered `m`'s row-major element 3 instead of naming the out-of-range column, and
   `(apply #'aref m '(1))` silently answered the row-major element at index 1 instead of rejecting
   the short subscript list. The fold now rejects a subscript COUNT that does not match the rank
-  with a plain (non-`type-error`) `error` reading `aref: expected N subscripts, got M`, and checks
+  (since 2026-10-07 the rank `type-error` of "A rank mismatch" below; it was a plain `error`
+  reading `aref: expected N subscripts, got M`), and checks
   each subscript against its own dimension inside the loop, signalling the same `type-error` the
   call-position path does -- byte-identical text, catchable the same way, on the interpreter, JVM
   and both wasm backends (`#'aref`'s call-position bound check is a separate, already-correct
@@ -2241,22 +2242,75 @@ on wasm-GC even in EH mode.
   JVM at the speed levels (`(* 2 (aref m 1))` answered `2` on a 2x2 array of ones) and reported a
   `nil`/`2.0` subscript as `(INTEGER 0 (n))`, and wasm-GC's `_arr_check_rank` trapped on any rank
   mismatch even in EH mode. The JVM leaf now guards the rank and its fallback runs the ordinary
-  checks; EH-mode `_arr_check_rank` signals the JVM's `aref: expected N subscripts, got M`
-  (`OperandTypes.RANK_MISMATCH_PREFIX`/`_INFIX`, interned where the operator table names `AREF`
-  or `(SETF AREF)`), the instance-less payload a handler takes as a `simple-error`. Pinned by
+  checks; EH-mode `_arr_check_rank` signals the mismatch where it trapped. Pinned by
   `ArefRankAndSubscriptChecksFixture` (`LispEvaluatorTest`, `JvmLispCompilerTest` both levels,
-  `WasmLispCompilerIntegrationTest` every level and component). Still different (`.todo/e21`):
-  the interpreter signals a `program-error`, the compiled backends a `simple-error`; a packed
-  integer vector or a string given two subscripts reports otherwise interpreted; and the ordinary
-  compiled emission checks the array and its rank before it evaluates and type-checks the
-  subscripts, where the interpreter (and now a fused aref) does the reverse -- `(aref m nil)` on
-  a 2x2 array is `INTEGER` interpreted, the rank compiled.
-  - **SBCL 2.2.9 is no oracle here** (measured 2026-10-07): a compiled `(aref v x)` over an
-    array of unknown type, at any safety, and `(funcall #'aref m 1)` read a rank-2 array
-    row-major without a rank check; two or more subscripts against another rank signal a
-    `type-error` expecting `(ARRAY * (* *))`; a `nil` or `2.0` subscript signals
-    `invalid-array-index-error` expecting `(INTEGER 0 (n))`. The project keeps its own
-    contract: the rank checked, a non-integer subscript `INTEGER`.
+  `WasmLispCompilerIntegrationTest` every level and component). The report and the order: next
+  section.
+
+## A rank mismatch is a type-error over the array
+**Invariant: an `aref`, `(setf aref)`, `#'aref` or `#'array-row-major-index` whose subscript count
+is not its array's rank reports `OP: The value A is not of type T` -- a catchable `type-error`
+whose datum is the ARRAY and whose expected type `T` is the array of the rank the subscripts
+spell (`OperandTypes.rankType`): `VECTOR` for one subscript, `(ARRAY * NIL)` for none,
+`(ARRAY * (* *))` for two -- byte-identical on all four backends (wasm-GC: in EH mode). Every
+argument form is evaluated first (CL's left-to-right call), then: each subscript's type
+(`INTEGER`), the array's (`ARRAY`), its rank, a store's value (a packed store's coercion), the
+bounds.** Closed 2026-10-07 (`.todo/e21`). Before: the interpreter threw `program-error`
+`aref: expected 2 subscripts, got 1` (`LispArray.flatIndex`'s `IllegalArgumentException`), the
+compiled backends a `simple-error` of the same text; a packed integer vector given two subscripts
+was `AREF: a packed integer vector is rank 1` and a string `... is not of type ARRAY` interpreted;
+and the ordinary compiled emission checked the array and its rank right after evaluating the
+array, so `(aref m (+ nil 1))` reported the rank instead of `+`'s error, `(aref m nil)` the rank
+instead of `INTEGER`, and `(setf (aref m (f) 0 0) (g))` never called `f` or `g` (JVM) or `g`
+(wasm).
+
+- **Why a `type-error`, and these types**: SBCL 2.2.9 signals exactly this where it checks
+  (two or more subscripts against another rank, a constant subscript it can see), spelling one
+  subscript's type `VECTOR`; the project's other operand refusals are `type-error`s naming the
+  operator, so a `type-error` handler written for SBCL catches the same thing here. Rejected:
+  keeping the `simple-error` (one text already on three backends, but a class SBCL never
+  signals for this, and it named `aref` under `array-row-major-index` too).
+- **Why subscripts before the array** (SBCL checks the array first where it checks at all): on
+  the compiled backends the subscripts are evaluated after the array and each is type-checked
+  where it is evaluated, so checking the rank last needs only the array's reference again; the
+  other order would keep every subscript unchecked in a temp, then check them after the rank. The
+  interpreter and the fused integer trees already checked in this order.
+- **Interpreter**: `Environment.rankedArray` after `subscriptValues` in `AREF` and `%ASET`
+  (`OperandTypeException.notOfType(array, rankType(n))`, named by the built-in seam); the
+  per-representation `flatIndex` checks stay as internal guards no access reaches.
+- **JVM**: the site evaluates the array (`dup`/`astore` into a temp), the subscripts (each
+  `_ckIdx`) and a store's value, then reloads the array through the `java:` host guard and
+  `_*CheckRank` under the operator's wrapper (`JvmArrayCompiler.emitRankCheck`) and pops the
+  answer; the read/store helper then coerces and bounds as before. One shared tail
+  (`JvmArrayRuntimeBuilder.emitRankCheckAndReturn`, three copies before) throws
+  `_rankErr(arr, n)`, which builds the type and calls `_teOf`; the quantized `_qmAref2`/`_qmArefN`
+  throw it too. **Hot path**: the same one `_*CheckRank` call per access, plus a local store, load
+  and pop; the type is built only on the refusal path.
+- **wasm-GC**: `_arr_check_rank`'s mismatch (EH mode, the operator table naming `AREF` or
+  `(SETF AREF)`: `WasmArrayRuntimeBuilder.RankNames`, the three symbols interned only there)
+  sets the register from `given`, conses the type in a loop and lands `_type_err_of`. Sites: a
+  rank-2+ read evaluates its subscripts ONCE before the packed/general split (each arm compiled
+  them before) and then checks; a rank-0/1 read that reports bounds hands the rank to `_idx_ref`
+  (`given | id << 8`, an i31), which checks the subscript's type, then calls `_arr_check_rank`,
+  then the bound -- so its hot path makes the same two calls (`_arr_check_rank` from the site and
+  `_idx_ref`) it made before; a caller that checked the array already passes `ANY_RANK`, which
+  skips the nested call (a compare, no call). A store checks after its value is evaluated, in the
+  packed-float and general arms of the speed-level dispatch (one runs); the packed-integer arm is
+  rank 1 by construction at its one subscript and checks nothing. A pinned `(unsigned-byte n)`
+  store with no subscript takes the generic path: the kinded arm coerces the value before the
+  check could run. Outside EH mode the check still traps; a rank-1 or rank-2 general flat-index
+  computation that runs before it may trap first on a short dims array -- a trap either way, and
+  never a read or store before the check.
+- **SBCL 2.2.9 is no oracle for WHEN** (measured 2026-10-07): a compiled `(aref v x)` over an
+  array of unknown type, at any safety, and `(funcall #'aref m 1)` read a rank-2 array row-major
+  without a rank check; a `nil` or `2.0` subscript signals `invalid-array-index-error` expecting
+  `(INTEGER 0 (n))`; `(aref m nil)` with a constant `nil` reports `m` not a `VECTOR`, the array
+  first. The project keeps its own contract: the rank always checked, a non-integer subscript
+  `INTEGER`, subscripts first.
+- Pinned by `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE` (the three suites above),
+  `*FunctionValueAref*ChecksRankAndBounds` (the `#'` rows) and
+  `JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount`.
+
 - **`elt` of a LIST outside it** (closed 2026-09-28, `.todo/a59`): `(elt '(1 2) 5)` answered
   `NIL` and `(elt '(1 2) -1)` `1` on all four backends -- the list arm was `(nth idx seq)` -- and
   `(setf (elt l -1) v)` stored into the first cell. The list arm is now `(car (%elt-cell seq idx))`,

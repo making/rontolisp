@@ -482,26 +482,31 @@ final class JvmArrayCompiler {
 
 	static void compileAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		// The array expression is evaluated exactly once (side effects run once, not
-		// once per branch below): pushed here, then run through _*CheckRank, whose
-		// contract is "return arr unchanged on a match, throw on a rank mismatch" -- so
-		// the validated reference is what every branch below reads its subscripts
-		// against. subscriptCount is the ORIGINAL number of subscripts at this call site
-		// (0 for a bare (aref a), which reads a rank-0 array's single element), computed
-		// before any arity-specific rewriting below.
+		// Every argument form runs before anything is checked, as CL evaluates a call's
+		// arguments: the array expression once (left on the stack for the read, its
+		// reference kept in a temp), then each subscript, checked as an integer where it
+		// is evaluated. Only then the array and its rank (emitRankCheck), and the read
+		// helper checks the bounds -- the interpreter's order (.kb/error-handling.md, "A
+		// rank mismatch"). subscriptCount is the ORIGINAL number of subscripts at this
+		// call site (0 for a bare (aref a), which reads a rank-0 array's single element),
+		// computed before any arity-specific rewriting below.
 		int subscriptCount = args.size() - 2;
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitArefArrayCheck(ctx, className, subscriptCount);
+		int arrSlot = ctx.allocTemp();
+		ctx.body.dup();
+		ctx.body.astore(arrSlot);
 		if (subscriptCount == 0) {
 			// (aref a): a rank-0 array holds its one element at row-major index 0, so
 			// the empty Horner fold is the constant 0 (the arm WasmArrayCompiler has).
 			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1,
 					JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
 					JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (subscriptCount == 1) {
 			compileSubscript(args.get(2), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1,
 					JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
 					JvmArrayRuntimeBuilder.AREF1_DESC);
@@ -509,12 +514,14 @@ final class JvmArrayCompiler {
 		else if (subscriptCount == 2) {
 			compileSubscript(args.get(2), ctx, className);
 			compileSubscript(args.get(3), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
 					JvmArrayRuntimeBuilder.AREF2_DESC);
 		}
 		else {
 			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
 					JvmArrayRuntimeBuilder.AREFN_DESC);
@@ -522,11 +529,36 @@ final class JvmArrayCompiler {
 	}
 
 	/**
+	 * An access's check of its array, once its other arguments are evaluated and on the
+	 * stack above the array: the array, reloaded from {@code arrSlot}, goes through the
+	 * Java host array guard and {@code _*CheckRank} ({@link #emitArefArrayCheck}), and
+	 * the answer is dropped. The read or store helper the caller invokes next takes the
+	 * array from below the other arguments, as before; a hot site pays the one check call
+	 * it paid when the check came first, and a load, a store and a pop the JIT folds.
+	 * @param ctx the compile context, its operator the access's
+	 * @param className the class the helpers live in
+	 * @param arrSlot the temp holding the array
+	 * @param lispName the access the host guard names
+	 * @param subscriptCount the subscripts the site spells
+	 */
+	private static void emitRankCheck(JvmLispCompiler.Ctx ctx, String className, int arrSlot, String lispName,
+			int subscriptCount) {
+		ctx.body.aload(arrSlot);
+		emitHostArrayGuard(ctx, lispName);
+		JvmEmitHelper.compileLong(subscriptCount, ctx);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		ctx.body.pop();
+	}
+
+	/**
 	 * {@code aref}'s check of the array on the stack, which it leaves there: a Java host
 	 * array is refused, then the rank must be {@code subscriptCount} ({@code _*CheckRank}
-	 * under the operator's wrapper, which throws {@code aref: expected N subscripts, got
-	 * M}). Shared with the fused integer tree's fallback, which reads a rank-1 aref
-	 * outside the form ({@code JvmIntFusionCompiler}).
+	 * under the operator's wrapper, which throws the operator's type-error over the
+	 * array, {@code OperandTypes.rankType}). For the fused integer tree's fallback, which
+	 * reads a rank-1 aref outside the form after computing and checking its index
+	 * ({@code JvmIntFusionCompiler}).
 	 * @param ctx the compile context, its operator the access's
 	 * @param className the class the helpers live in
 	 * @param subscriptCount the subscripts the site spells
@@ -664,20 +696,20 @@ final class JvmArrayCompiler {
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
-		// Same "evaluate the array once, run it through _*CheckRank, keep the validated
-		// reference" shape as compileAref above; see that method's comment.
+		// The order compileAref above evaluates and checks in, the value evaluated with
+		// the other arguments before the rank check; the store helper then coerces the
+		// value and checks the bounds.
 		int subscriptCount = args.size() - 3;
 		LispVal value = args.get(args.size() - 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		emitHostArrayGuard(ctx, LispNames.ASET);
-		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
-		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
-				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
-				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		int arrSlot = ctx.allocTemp();
+		ctx.body.dup();
+		ctx.body.astore(arrSlot);
 		if (subscriptCount == 0) {
 			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
 			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
 					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
 					JvmArrayRuntimeBuilder.ASET1_DESC);
@@ -685,6 +717,7 @@ final class JvmArrayCompiler {
 		else if (subscriptCount == 1) {
 			compileSubscript(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
 					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
 					JvmArrayRuntimeBuilder.ASET1_DESC);
@@ -693,6 +726,7 @@ final class JvmArrayCompiler {
 			compileSubscript(args.get(2), ctx, className);
 			compileSubscript(args.get(3), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
 					JvmArrayRuntimeBuilder.ASET2_DESC);
@@ -700,6 +734,7 @@ final class JvmArrayCompiler {
 		else {
 			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
 			invokeNamedHelper(ctx, className,
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
 					JvmArrayRuntimeBuilder.ASETN_DESC);

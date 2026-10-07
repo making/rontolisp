@@ -135,7 +135,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 			ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr, MethodRefEntry sbAppendInt,
 			MethodRefEntry sbToString, MethodRefEntry stringLastIndexOf, MethodRefEntry stringSubstring,
 			MethodRefEntry stringEquals, MethodRefEntry bf16Value, MethodRefEntry bf16Bits,
-			MethodRefEntry systemArraycopy, MethodRefEntry ckBound) {
+			MethodRefEntry systemArraycopy, MethodRefEntry ckBound, MethodRefEntry rankErr) {
 
 	}
 
@@ -179,7 +179,8 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 				self(cp, selfClass, JvmFloatArrayRuntimeBuilder.BF16_BITS, JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC),
 				cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
 						"(Ljava/lang/Object;ILjava/lang/Object;II)V"),
-				self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND, JvmOperandTypeRuntime.CK_BOUND_DESC));
+				self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND, JvmOperandTypeRuntime.CK_BOUND_DESC),
+				self(cp, selfClass, JvmArrayRuntimeBuilder.RANK_ERR, JvmArrayRuntimeBuilder.RANK_ERR_DESC));
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildInt(r));
 		methods.add(buildPutInt(r));
@@ -219,22 +220,6 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.ldc(r.cp().stringEntry(message));
 		a.invokespecial(r.rtExInit());
 		a.athrow();
-	}
-
-	/** Stack: {@code (..., String prefix, int n) -> (..., String)}: prefix + n. */
-	private static void appendIntToString(MethodCode a, Refs r, int prefixSlot, int nSlot, String suffix) {
-		a.new_(r.sbClass());
-		a.dup();
-		a.invokespecial(r.sbInit());
-		a.aload(prefixSlot);
-		a.invokevirtual(r.sbAppendStr());
-		a.iload(nSlot);
-		a.invokevirtual(r.sbAppendInt());
-		if (!suffix.isEmpty()) {
-			a.ldc(r.cp().stringEntry(suffix));
-			a.invokevirtual(r.sbAppendStr());
-		}
-		a.invokevirtual(r.sbToString());
 	}
 
 	/** Throws a RuntimeException whose message is the String on the stack. */
@@ -404,7 +389,10 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		headerInt(a, r, 3, 4);
 		a.loadConstant(2);
 		a.if_icmpeq(rank2);
-		throwMessage(a, r, "aref: expected 1 subscripts, got 2");
+		a.aload(0);
+		a.loadConstant(2);
+		a.invokestatic(r.rankErr());
+		a.athrow();
 		a.labelBinding(rank2);
 		headerInt(a, r, 3, 12);
 		a.istore(6);
@@ -430,7 +418,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 
 	// _qmArefN(arr, subs): the Horner fold over the header dims, each subscript checked
 	// against its own dimension. Locals: 0=arr, 1=subs, 2=a, 3=subsArr, 4=rank, 5=flat,
-	// 6=k, 7=d, 8=s, 9=msg.
+	// 6=k, 7=d, 8=s.
 	private static ArrayMethod buildArefN(Refs r) {
 		MethodCode a = new MethodCode();
 		a.aload(0);
@@ -446,15 +434,11 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.arraylength();
 		a.iload(4);
 		a.if_icmpeq(rankOk);
-		a.ldc(r.cp().stringEntry("aref: expected "));
-		a.astore(9);
+		a.aload(0);
 		a.aload(3);
 		a.arraylength();
-		a.istore(8);
-		appendIntToString(a, r, 9, 4, " subscripts, got ");
-		a.astore(9);
-		appendIntToString(a, r, 9, 8, "");
-		throwStackMessage(a, r, 9);
+		a.invokestatic(r.rankErr());
+		a.athrow();
 		a.labelBinding(rankOk);
 		a.loadConstant(0);
 		a.istore(5);

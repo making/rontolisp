@@ -107,7 +107,8 @@ class QuantizedMatrixTest {
 			.hasMessageContaining("a quantized matrix is immutable");
 		assertThatThrownBy(() -> eval(program + "(aref *m* 2 0)"))
 			.hasMessageContaining("AREF: The value 2 is not of type (INTEGER 0 (2))");
-		assertThatThrownBy(() -> eval(program + "(aref *m* 0)")).hasMessageContaining("expected 2 subscripts");
+		assertThatThrownBy(() -> eval(program + "(aref *m* 0)"))
+			.hasMessage("AREF: The value #<quantized-matrix q8-0 (2 32)> is not of type VECTOR");
 	}
 
 	@Test

@@ -22153,8 +22153,7 @@ class WasmLispCompilerIntegrationTest {
 		// array's own rank, the same hole the JVM backend had
 		// (JvmLispCompilerTest#compileAndRunArefRejectsAWrongSubscriptCount). Without a
 		// catching form a mismatch traps; with one it signals the interpreter/JVM's
-		// "aref: expected N subscripts, got M"
-		// (arefChecksItsArraysRankAndItsSubscriptsType).
+		// type-error over the array (arefChecksItsArraysRankAndItsSubscriptsType).
 		compileAndExpectTrap(
 				"(print (aref (make-array (list 2 2 2) :initial-element 0.0d0 :element-type 'double-float) 0 1))");
 		// The same hole existed for a general (non-packed) array and for %aset -- both
@@ -22204,15 +22203,15 @@ class WasmLispCompilerIntegrationTest {
 				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
 				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
 				""";
-		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
-				am.ik.rontolisp.reader.Features.WASM, true, false)))
-			.isEqualTo("""
-					4
-					("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-					(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
-					3
-					("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-					(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(source, am.ik.rontolisp.reader.Features.WASM, true, false))).isEqualTo(
+					"""
+							4
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("AREF: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)
+							3
+							("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("ARRAY-ROW-MAJOR-INDEX: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)""");
 	}
 
 	@Test
@@ -27209,6 +27208,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String program = am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER;
+		String expected = am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.
@@ -28198,18 +28209,24 @@ class WasmLispCompilerIntegrationTest {
 	void arefChecksItsArraysRankAndItsSubscriptsType() throws Exception {
 		// The twin of LispEvaluatorTest#arefChecksItsArraysRankAndItsSubscriptsType. A
 		// rank mismatch trapped in _arr_check_rank where the handler should have taken
-		// it. Every level (size declines fusion), P1 and component.
-		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
-				am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true,
-				false);
-		for (OptimizeLevel level : OptimizeLevel.values()) {
-			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
-					"arc-" + level + ".wasm"))
-				.as("level %s", level)
-				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+		// it, and a call checked the rank before it evaluated its subscripts. Every level
+		// (size declines fusion), P1 and component.
+		String[][] fixtures = {
+				{ am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE,
+						am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED, "arc" },
+				{ am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_SOURCE,
+						am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_EXPECTED, "aro" } };
+		for (String[] fixture : fixtures) {
+			List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(fixture[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false);
+			for (OptimizeLevel level : OptimizeLevel.values()) {
+				assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+						fixture[2] + "-" + level + ".wasm"))
+					.as("%s level %s", fixture[2], level)
+					.isEqualTo(fixture[1]);
+			}
+			assertThat(compileComponentAndRunProgram(program)).as("%s component", fixture[2]).isEqualTo(fixture[1]);
 		}
-		assertThat(compileComponentAndRunProgram(program)).as("component")
-			.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
 	}
 
 	@Test

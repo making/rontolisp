@@ -20646,10 +20646,10 @@ class LispEvaluatorTest {
 		assertThat(printedLines(source)).isEqualTo("""
 				4
 				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+				("AREF: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)
 				3
 				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+				("ARRAY-ROW-MAJOR-INDEX: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)""");
 	}
 
 	// A division by an exact zero through every integer and ratio path signals a
@@ -20716,6 +20716,8 @@ class LispEvaluatorTest {
 	void arefChecksItsArraysRankAndItsSubscriptsType() {
 		assertThat(printedLines(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_SOURCE))
+			.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_EXPECTED);
 	}
 
 	// The reference for the order an operation's arguments are evaluated and its
@@ -21243,6 +21245,13 @@ class LispEvaluatorTest {
 		// the value ran first.
 		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER))
 			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED);
 	}
 
 	@Test

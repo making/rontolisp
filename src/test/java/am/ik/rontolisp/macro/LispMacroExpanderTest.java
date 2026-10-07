@@ -488,6 +488,17 @@ class LispMacroExpanderTest {
 				"(LET* ((|__setf_arg2| |__setf_arg1|) (|__setf_arg3| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg3| |__setf_arg2|))");
 	}
 
+	@Test
+	void aGethashPlaceKeepsAnEffectfulDefaultAheadOfTheValue() {
+		// The default is never stored but is a subform of the place: it runs between the
+		// table and the value. A constant or a read has no effect to keep.
+		Map<String, Integer> none = new HashMap<>();
+		assertThat(expandedSetf("(setf (gethash k h) v)", none)).isEqualTo("(%PUTHASH K H V)");
+		assertThat(expandedSetf("(setf (gethash k h 0) (f))", none)).isEqualTo("(%PUTHASH K H (F))");
+		assertThat(expandedSetf("(setf (gethash k h d) (f))", none)).isEqualTo("(%PUTHASH K H (F))");
+		assertThat(expandedSetf("(setf (gethash k h (g)) (f))", none)).isEqualTo("(%PUTHASH K H (PROGN (G) (F)))");
+	}
+
 	private static String expandedSetf(String source, Map<String, Integer> structAccessors) {
 		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
 		return LispMacroExpander.expandSetf(form, structAccessors, new ClosRegistry()).print();

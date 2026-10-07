@@ -53,9 +53,30 @@ form assigning the argument variable redirected the write; `(setf (undefined (f 
 (`aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue` in the three backend suites) and
 `LispMacroExpanderTest#aSetfFunctionPlaceBindsItsArgumentsOnlyWhereTheOrderIsObservable`.
 
-Not this rule (measured the same day, SBCL left to right): `(setf (gethash k h) v)` on P1
-and the component evaluates `v` before `h`, and the gethash place's default subform is never
-evaluated on any backend.
+## Sibling: a `gethash` place evaluates key, table, default, then the value
+
+**`(setf (gethash key table [default]) value)` and a `gethash` read evaluate their operands
+left to right on every backend**, the place's default included though a write never stores
+it. Until 2026-10-07 the interpreter and the JVM never evaluated a `setf` default
+(`LispMacroExpander.expandSetf` lowered the place to `(%puthash key table value)` and dropped
+it), and P1 and the component evaluated `%puthash`'s value before its table and a read's
+default before its table (`(setf (gethash (f "a") (f "b" h)) (f "c" 2))` was SBCL 2.2.9 and
+interpreter/JVM `abc`, P1/component `acb`; the read `(gethash (f "a") (f "b" h) (f "x" 0))`
+was `abx` and, on P1/component, `axb`).
+
+- `expandSetf`: a constant or a read default is dropped, as before; any other default leads the
+  value, `(%puthash key table (progn default value))`, so no temporary is bound.
+- `WasmHashTableCompiler.compilePut` / `compileGet`: the table is evaluated into a temporary
+  ahead of the value / default, and its type check follows them (a non-table signals after the
+  value ran, as in SBCL), unless the order is unobservable -- the later operand a constant, or
+  both a variable or constant (`isOrderFreeAfterTable`). Those sites emit what they did
+  before; the JVM, being stack-based, was already in order.
+- `incf`/`push` through such a place bind the default once with `PlaceTemps`, so it already ran.
+
+Pinned by `GethashPlaceOrderFixture.EVALUATION_ORDER` (`aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault`
+in the three backend suites; the fixture also covers a variable the value or default
+reassigns, and a non-table with a traced value) and
+`LispMacroExpanderTest#aGethashPlaceKeepsAnEffectfulDefaultAheadOfTheValue`.
 
 ## An operation applies after its operands
 
