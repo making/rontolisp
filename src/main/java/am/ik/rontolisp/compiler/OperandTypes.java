@@ -271,9 +271,25 @@ public final class OperandTypes {
 
 	/**
 	 * {@code make-string-input-stream}, funnel-typed: its string lands {@code STRING};
-	 * its bounds are {@code subseq}'s. Last in the table.
+	 * its bounds are {@code subseq}'s. After {@link #STREAM_OPERATORS}.
 	 */
 	public static final String MAKE_STRING_INPUT_STREAM = "MAKE-STRING-INPUT-STREAM";
+
+	/**
+	 * {@code make-array}, funnel-typed: a dimension outside
+	 * {@code (INTEGER 0 (array-dimension-limit))}, or a product of dimensions past
+	 * {@code array-total-size-limit}, lands as an out-of-range subscript does
+	 * ({@link #indexType} of the limit), a dotted dimension list's tail {@code LIST}.
+	 * After {@link #MAKE_STRING_INPUT_STREAM}.
+	 */
+	public static final String MAKE_ARRAY = "MAKE-ARRAY";
+
+	/**
+	 * {@code make-list}, funnel-typed: a length outside
+	 * {@code (INTEGER 0 (array-dimension-limit))} lands as a {@link #MAKE_ARRAY}
+	 * dimension does. Last in the table, after {@link #MAKE_ARRAY}.
+	 */
+	public static final String MAKE_LIST = "MAKE-LIST";
 
 	/**
 	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
@@ -406,6 +422,10 @@ public final class OperandTypes {
 		}
 		OPERATOR_TYPES.put(MAKE_STRING_INPUT_STREAM, FUNNEL_TYPE);
 		order.add(MAKE_STRING_INPUT_STREAM);
+		OPERATOR_TYPES.put(MAKE_ARRAY, FUNNEL_TYPE);
+		order.add(MAKE_ARRAY);
+		OPERATOR_TYPES.put(MAKE_LIST, FUNNEL_TYPE);
+		order.add(MAKE_LIST);
 		OPERATORS = List.copyOf(order);
 	}
 

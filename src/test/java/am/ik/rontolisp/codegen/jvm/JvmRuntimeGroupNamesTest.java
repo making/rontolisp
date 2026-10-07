@@ -37,7 +37,8 @@ class JvmRuntimeGroupNamesTest {
 
 		List<JvmArrayRuntimeBuilder.ArrayMethod> emitted = new ArrayList<>(
 				JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, selfClass, false,
-						new JvmOperandTypeRuntime.SubseqRuntime(cp, selfClass, null, new ArrayList<>())));
+						new JvmOperandTypeRuntime.SubseqRuntime(cp, selfClass, null, new ArrayList<>()),
+						JvmOperandTypeRuntime.ConsShape.of(cp, null, false)));
 		emitted.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToString, lispToDisplayString, selfClass,
 				new JvmRuntimeBuilder.RenderGuardRefs(cp.fieldRef(selfClass, "_renderPath", "[Ljava/lang/Object;"),
 						cp.fieldRef(selfClass, "_renderDepth", "I"), objectClass, cp.stringEntry("#"))));

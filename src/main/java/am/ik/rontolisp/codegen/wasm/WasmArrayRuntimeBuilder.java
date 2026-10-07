@@ -519,24 +519,49 @@ final class WasmArrayRuntimeBuilder {
 	 * rank -- as a fresh buckets array of i31 sizes. Two list walks (count, then copy),
 	 * which is why it is a callee: every {@code make-array} shape parses its dimensions
 	 * the same way, and the walk used to be spelled at every one of them.
+	 *
+	 * <p>
+	 * Every dimension is checked first, as the interpreter's
+	 * {@code Environment.parseDimensions} checks it: one that is no integer in
+	 * {@code [0, array-dimension-limit)}, and the first running product (an i64) at or
+	 * past {@code array-total-size-limit}, go through {@code _idx_in} against the limit
+	 * -- the operator's {@code (INTEGER 0 (limit))} type-error in EH mode, a trap outside
+	 * it -- and a dotted list's tail is the operator's {@code LIST} type-error. A site
+	 * keeps the in-range i31 shorthand inline and hands an out-of-range one here, to the
+	 * i31 arm's check. The operator register the caller set is re-armed before each check
+	 * ({@code _idx_in} clears it on success).
+	 * @param operatorGlobal the operator register in EH mode, else -1
 	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
-	static byte[] buildArrDimsBody() {
+	static byte[] buildArrDimsBody(int operatorGlobal) {
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		// locals: 1 = cur, 2 = buckets (ref null eq); 3 = n, 4 = idx (i32).
-		w.write(2);
+		boolean eh = operatorGlobal >= 0;
+		int limit = (int) am.ik.rontolisp.ClConstants.arraySizeLimit(true);
+		// locals: 1 = cur, 2 = buckets (ref null eq); 3 = n, 4 = idx, 5 = the caller's
+		// operator register (i32); 6 = the running product (i64).
+		w.write(3);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
-		w.write(2);
+		w.write(3);
 		w.write(Type.I32);
-		int curSlot = 1, bucketsSlot = 2, nSlot = 3, idxSlot = 4;
+		w.write(1);
+		w.write(Type.I64);
+		int curSlot = 1, bucketsSlot = 2, nSlot = 3, idxSlot = 4, opSlot = 5, totalSlot = 6;
+		if (eh) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+			set(w, opSlot);
+		}
 		// The rank-1 shorthand: an integer is a one-element shape.
 		get(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.IF, 0x40);
+		get(w, 0);
+		emitDimensionCheck(w, eh, operatorGlobal, opSlot, limit);
+		w.write(Instruction.DROP);
 		get(w, 0);
 		i32(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
@@ -565,11 +590,35 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// buckets = array.new_default n, then buckets[idx] = (nth idx dims)
+		// The walk ended on something other than nil: the argument itself is no
+		// dimension (no cons at all), or a dotted list's tail is no list.
+		get(w, curSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, nSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, 0);
+		emitDimensionCheck(w, eh, operatorGlobal, opSlot, limit);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		if (eh) {
+			rearm(w, operatorGlobal, opSlot);
+			get(w, curSlot);
+			call(w, WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+		}
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		// buckets = array.new_default n, then buckets[idx] = (nth idx dims), each
+		// checked and its running product with it
 		get(w, nSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, bucketsSlot);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1L);
+		set(w, totalSlot);
 		i32(w, 0);
 		set(w, idxSlot);
 		get(w, 0);
@@ -580,6 +629,24 @@ final class WasmArrayRuntimeBuilder {
 		get(w, nSlot);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
+		// total *= the checked dimension; past the limit, the product is the culprit
+		get(w, curSlot);
+		consGet(w, 0);
+		emitDimensionCheck(w, eh, operatorGlobal, opSlot, limit);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		get(w, totalSlot);
+		w.write(Instruction.I64_MUL);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(totalSlot);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128((long) limit);
+		w.write(Instruction.I64_GE_U);
+		w.write(Instruction.IF, 0x40);
+		get(w, totalSlot);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		emitDimensionCheck(w, eh, operatorGlobal, opSlot, limit);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
 		buckets(w, bucketsSlot);
 		get(w, idxSlot);
 		get(w, curSlot);
@@ -600,6 +667,23 @@ final class WasmArrayRuntimeBuilder {
 		get(w, bucketsSlot);
 		w.write(Instruction.END);
 		return out.toByteArray();
+	}
+
+	// Checks the dimension on the stack against the limit through _idx_in, leaving it
+	// unboxed (i32): in EH mode under the caller's operator, re-armed first.
+	private static void emitDimensionCheck(WasmWriter w, boolean eh, int operatorGlobal, int opSlot, int limit) {
+		i32(w, limit);
+		if (eh) {
+			rearm(w, operatorGlobal, opSlot);
+		}
+		call(w, WasmLispCompiler.FUNC_IDX_IN);
+	}
+
+	// operator register = the value the caller set, saved in opSlot
+	private static void rearm(WasmWriter w, int operatorGlobal, int opSlot) {
+		get(w, opSlot);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
 	}
 
 	/**

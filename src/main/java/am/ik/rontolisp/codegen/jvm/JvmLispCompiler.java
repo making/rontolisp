@@ -2316,6 +2316,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				{ JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_RADIX, JvmOperandTypeRuntime.CK_RADIX_DESC },
+				{ JvmOperandTypeRuntime.CK_BOUND, JvmOperandTypeRuntime.CK_BOUND_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC } }) {
 			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));
@@ -3358,7 +3359,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
 			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
-					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime));
+					objectClass, objectArrayClass, thisClass, usesFloatArray, subseqRuntime, consShape));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and

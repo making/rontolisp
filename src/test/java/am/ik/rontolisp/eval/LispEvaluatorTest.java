@@ -19916,6 +19916,102 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull() {
+		// A make-array dimension outside (INTEGER 0 (array-dimension-limit)) -- a
+		// bignum, a negative, a non-integer -- or a product of dimensions past
+		// array-total-size-limit is MAKE-ARRAY's type-error; a random of a bignum limit
+		// draws every bit of its answer (a double scaled up draws 53 bits). The twins
+		// are the same-named tests in JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *big* (expt 2 100))
+				(print (te (lambda () (make-array *big*))))
+				(print (te (lambda () (make-array (list 2 *big*)))))
+				(print (te (lambda () (make-array -1))))
+				(print (te (lambda () (make-array 1.5))))
+				(print (te (lambda () (make-array (list 1073741819 3)))))
+				(print (te (lambda () (make-array '(2 . 3)))))
+				(print (te (lambda () (make-array *big* :element-type 'double-float))))
+				(print (te (lambda () (make-array (expt 2 40) :element-type '(unsigned-byte 8)))))
+				(let ((ok t) (odd nil) (even nil))
+				  (dotimes (i 64)
+				    (let ((r (random *big*)))
+				      (unless (and (integerp r) (<= 0 r) (< r *big*)) (setq ok nil))
+				      (if (oddp r) (setq odd t) (setq even t))))
+				  (print (list ok odd even)))
+				(print (te (lambda () (random (- *big*)))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo(
+				"""
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1.5 is not of type (INTEGER 0 (2147483639))" 1.5 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3221225457 is not of type (INTEGER 0 (2147483639))" 3221225457 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3 is not of type LIST" 3 LIST)
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1099511627776 is not of type (INTEGER 0 (2147483639))" 1099511627776 (INTEGER 0 (2147483639)))
+						(T T T)
+						("RANDOM: The value -1267650600228229401496703205376 is not of type REAL" -1267650600228229401496703205376 REAL)""");
+	}
+
+	@Test
+	void aMakeListLengthOutsideTheLimitIsATypeError() {
+		// A make-list length is checked as a make-array dimension is: one outside
+		// (INTEGER 0 (array-dimension-limit)) -- a bignum, a negative, a non-integer --
+		// is MAKE-LIST's type-error, before anything is consed, and only after the
+		// length and then the :initial-element form have run, as any call's arguments
+		// do. The twins are the same-named tests in JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *big* (expt 2 100))
+				(defvar *x* 'a)
+				(defvar *n* 3)
+				(print (te (lambda () (make-list *big*))))
+				(print (te (lambda () (make-list -1))))
+				(print (te (lambda () (make-list (- *n* 4)))))
+				(print (te (lambda () (make-list 2.5 :initial-element *x*))))
+				(print (te (lambda () (make-list *x*))))
+				(print (te (lambda () (make-list array-dimension-limit))))
+				(print (te (lambda () (funcall #'make-list *big* :initial-element *x*))))
+				(print (list (make-list *n* :initial-element *x*) (make-list 0) (make-list (- *n* 1))))
+				(defvar *log* nil)
+				(print (te (lambda () (make-list (progn (push :len *log*) -1) :initial-element (progn (push :elem *log*) *x*)))))
+				(print (reverse *log*))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo(
+				"""
+						("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 2.5 is not of type (INTEGER 0 (2147483639))" 2.5 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value A is not of type (INTEGER 0 (2147483639))" A (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 2147483639 is not of type (INTEGER 0 (2147483639))" 2147483639 (INTEGER 0 (2147483639)))
+						("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						((A A A) NIL (NIL NIL))
+						("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						(:LEN :ELEM)""");
+	}
+
+	@Test
 	void oneArgumentCallsCheckTheirArgument() {
 		// A one-argument call compares or folds nothing, but its argument is checked
 		// like any other: (+ x), (* x) and the bitwise family answered x unexamined on

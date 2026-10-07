@@ -31,6 +31,9 @@ array limits vary by backend:
 | `most-negative-fixnum` | `Long.MIN_VALUE` | `-(1L << 30)` |
 | `array-dimension-limit` / `array-total-size-limit` | `2147483639` | `(1L << 30) - 1` |
 
+The array limits are `ClConstants.arraySizeLimit(wasm)`, which `make-array`'s dimension check
+reads on every backend (`.kb/error-handling.md`, "A make-array dimension").
+
 Everything else (`pi`, floats, `char-code-limit` `0x110000`,
 `internal-time-units-per-second` `1000`, the 8-symbol `lambda-list-keywords`
 list) is one value everywhere.

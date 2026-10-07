@@ -191,6 +191,17 @@ public final class ClConstants {
 	}
 
 	/**
+	 * The backend's {@code array-dimension-limit}, which is also its
+	 * {@code array-total-size-limit}: a dimension, and the product of an array's
+	 * dimensions, is below it.
+	 * @param wasm whether the value is for a WASM backend
+	 * @return the limit
+	 */
+	public static long arraySizeLimit(boolean wasm) {
+		return wasm ? (1L << 30) - 1 : 2147483639L;
+	}
+
+	/**
 	 * The constant VALUE for the member name, or {@code null} when the name is not one.
 	 *
 	 * <p>
@@ -212,7 +223,7 @@ public final class ClConstants {
 			return new LispInteger(wasm ? -(1L << 30) : Long.MIN_VALUE);
 		}
 		if (LispNames.ARRAY_DIMENSION_LIMIT.equals(member) || LispNames.ARRAY_TOTAL_SIZE_LIMIT.equals(member)) {
-			return new LispInteger(wasm ? (1L << 30) - 1 : 2147483639L);
+			return new LispInteger(arraySizeLimit(wasm));
 		}
 		if (LispNames.CHAR_CODE_LIMIT.equals(member)) {
 			return new LispInteger(0x110000);

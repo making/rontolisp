@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.LispBFloat16Array;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -203,12 +204,15 @@ final class JvmArrayCompiler {
 			// boxed path (.kb/vec.md, "Asking a packed array its width").
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			compileKeywordValueOrNull(initValue, ctx, className);
+			// Through make-array's wrapper: an initial element that is no real is
+			// _dbl's unnamed type-error, which the wrapper names as the interpreter's
+			// built-in seam does.
 			switch (packedProto) {
-				case LispBFloat16Array ignored -> invokeHelper(ctx, className,
+				case LispBFloat16Array ignored -> invokeNamedHelper(ctx, className,
 						JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-				case LispSingleFloatArray ignored -> invokeHelper(ctx, className,
+				case LispSingleFloatArray ignored -> invokeNamedHelper(ctx, className,
 						JvmFloatArrayRuntimeBuilder.SINGLE_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
-				case LispDoubleFloatArray ignored -> invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
+				case LispDoubleFloatArray ignored -> invokeNamedHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
 						JvmFloatArrayRuntimeBuilder.MAKE_DESC);
 			}
 			return;
@@ -769,6 +773,28 @@ final class JvmArrayCompiler {
 			return;
 		}
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.TO_MUT_STR, JvmArrayRuntimeBuilder.TO_MUT_STR_DESC);
+	}
+
+	/**
+	 * {@code (%check-dimension x 'op)}: {@code x} when it is an integer in
+	 * {@code [0, array-dimension-limit)}, else {@code op}'s
+	 * {@code (INTEGER 0 (array-dimension-limit))} type-error -- {@code _ckBound} against
+	 * the limit under the operator's wrapper, the check {@code _arrayDimsTotal} makes of
+	 * a {@code make-array} dimension. Answers the integer re-boxed.
+	 */
+	static void compileCheckDimension(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.body.ldc(ctx.cp.entries().intEntry((int) ClConstants.arraySizeLimit(false)));
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispMacroExpander.checkOperator(cons);
+		try {
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_BOUND));
+		}
+		finally {
+			ctx.operator = outer;
+		}
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
 	}
 
 	/**

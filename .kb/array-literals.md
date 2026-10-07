@@ -220,7 +220,10 @@ Three quarters of a site was the DIMENSION parse, now three shared callees in
 `WasmArrayRuntimeBuilder` at fixed indices after `FUNC_TO_MUT_STR`, reusing existing callable
 signatures so no type index moves: `_arr_dims`, `_arr_total`, `_arr_fp`. Every allocating
 shape shares them. **The i31 shorthand stays INLINE, on purpose** — `emitParseDims` still
-spells `(make-array n)` as `ref.test i31` + `array.new`; only the list arm calls. Per-site
+spells `(make-array n)` as `ref.test i31` + `array.new`; only the list arm calls. In EH mode
+the shorthand adds one unsigned compare against the array size limit and hands an i31 outside
+it to `_arr_dims`, which checks every dimension (`.kb/error-handling.md`, "A make-array
+dimension"); outside EH mode the site is unchanged. Per-site
 raw wasm at `--optimize=size`, before -> after: general 247 -> 78; with
 `:fill-pointer`+`:adjustable` 340 -> 84; packed `double-float` 222 -> 53; packed
 `(unsigned-byte 8)` 242 -> 73. Program savings 0.4-3.1%.

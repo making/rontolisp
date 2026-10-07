@@ -2284,6 +2284,62 @@ on wasm-GC even in EH mode.
   ([subseq-runtime.md](subseq-runtime.md), "Bounds check"). A bound that is no integer takes
   the same refusal, not an `INTEGER` operand check: it is outside its range like any other.
 
+## A make-array dimension
+**Invariant: every `make-array` dimension is an integer in `[0, array-dimension-limit)` and the
+running product of the dimensions is below `array-total-size-limit`, checked before anything is
+allocated; one outside reports `MAKE-ARRAY: The value D is not of type (INTEGER 0 (LIMIT))` as a
+catchable `type-error` (datum the dimension, or the FIRST partial product at or past the limit, as
+SBCL reports it; expected type the list), a dotted dimension list's tail `MAKE-ARRAY: ... is not of
+type LIST`, on all four backends (wasm-GC: in EH mode).** LIMIT is the backend's own
+(`ClConstants.arraySizeLimit`: 2147483639 interpreter/JVM, 1073741823 wasm), so the text differs in
+that number only; SBCL 2.2.9 spells the type `(MOD 4611686018427387901)` (`(OR LIST (MOD ...))` for
+a non-list argument), the same set. Closed 2026-10-07 (`.todo/e00`). Measured before, the argument
+through a variable under `handler-case`: `(make-array (expt 2 100))` was a `simple-error`
+interpreted, `#0ANIL` (a rank-0 array: a non-`Long` parsed as an empty list) on the JVM and both
+wasm backends; a float or symbol dimension the same rank-0 array compiled; `(make-array (expt 2
+40))` answered `(0)` interpreted (an `int` cast) and claimed `(1099511627776)` on the JVM;
+`(make-array '(100000 100000))` answered on the interpreter and the JVM (an `int` product
+overflow) and trapped on wasm; `(make-array -1)` was `make-array: -1` / an unnamed `-1`.
+- **Interpreter**: `Environment.parseDimensions` (one walk, `long` product,
+  `OperandTypeException.outOfRange(datum, limit, MAKE-ARRAY)`). `adjust-array`'s new dimensions go
+  through it too and report under `MAKE-ARRAY`, as the compiled `adjust-array` (a `make-array` of
+  the new shape) does.
+- **JVM**: `_arrayDimsTotal(dims) -> int` (`JvmArrayRuntimeBuilder.buildDimsTotal`) checks and
+  answers the element count; `_arrayMake`, `_arrayMakeDisplaced` (via `emitParseDims`), `_ivMake`
+  and the three `_fvMake` widths call it before parsing, which then meets only valid dimensions.
+  It throws `_opTypeErr(_oob(d, limit), "MAKE-ARRAY", FUNNEL)` itself, so no wrapper is needed.
+  The packed float makes are invoked through `MAKE-ARRAY`'s wrapper so a non-real
+  `:initial-element` reports `MAKE-ARRAY: ... REAL` as the interpreter's seam names it (it was
+  an unnamed `NUMBER` there once `MAKE-ARRAY` joined the table).
+- **wasm-GC**: `_arr_dims` checks each dimension and the i64 product through `_idx_in` against
+  the limit, re-arming the operator register it saved at entry before each call (`_idx_in`
+  clears it on success), and lands a dotted tail in `_type_err_list`. The inline i31 shorthand
+  stays inline; in EH mode it adds one unsigned compare and hands an out-of-range i31 to
+  `_arr_dims` to be reported. Outside EH mode the site keeps its bytes: a negative i31 meets
+  `array.new`'s own trap, every other bad dimension `_idx_in`'s.
+- `MAKE-ARRAY` is the last row of `OperandTypes.operators()` (funnel-typed) and in
+  `WasmOperandTypes.INDEXED`, so a module spelling it carries the index arm.
+- Pinned by `ci-spec.yaml`'s `make-array-dimensions-outside-the-limit-signal-a-type-error` (the
+  datum and type compared against `array-dimension-limit`, not printed) and the
+  `aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull` triple (`LispEvaluatorTest`,
+  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`), each pinning its own LIMIT.
+- **`make-list`'s length is checked the same way**, under `MAKE-LIST` (the table's last row, also
+  in `INDEXED`), before anything is consed. Interpreted, `Environment`'s `make-list` calls the same
+  `dimension`. Compiled, `LispMacroExpander.expandMakeList` hands the length to
+  `(%check-dimension n 'make-list)` -- `_ckBound` against the limit through the operator's wrapper
+  on the JVM, `_idx_in` under the register on wasm (a trap outside EH mode), the integer re-boxed --
+  and skips it for a literal in `[0, 1073741823)`. Call order is CL's: length, then
+  `:initial-element`, then the check; the expansion binds the length first (`__ml_n`) unless either
+  form is a literal or quoted datum. Closed 2026-10-07 (`.todo/e01`). Measured before, the length
+  through a variable under `handler-case`: `(make-list (expt 2 100))` was an unnamed
+  `... is not of type INTEGER` interpreted, ran out of heap on the JVM (`-Xmx512m`, under 20 s) and
+  gave no answer in 20 s on P1 / component; `-1` answered nil on all four; `2.5` and a symbol were
+  the unnamed `INTEGER` error interpreted, while compiled `2.5` answered a 3-element list and a
+  symbol was `<=`'s `REAL` type-error; `:initial-element`'s form ran before the length's compiled.
+  SBCL 2.2.9 reports `(UNSIGNED-BYTE 58)` for all of these. Pinned by `ci-spec.yaml`'s
+  `make-list-length-outside-the-limit-signals-a-type-error` and the
+  `aMakeListLengthOutsideTheLimitIsATypeError` triple.
+
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
 keyword position signal a CATCHABLE `program-error` carrying one text -- `REMOVE expects keyword

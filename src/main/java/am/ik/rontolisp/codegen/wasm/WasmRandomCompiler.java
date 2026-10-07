@@ -6,6 +6,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import am.ik.wasm.WasmWriter;
 
 /**
  * Compiles the {@code random} built-in function for WASM. The draw is a SplitMix64 step
@@ -35,7 +36,9 @@ import am.ik.wasm.Type;
  * The float path masks the low 32 bits of the draw to {@code [0, 2^31)} for its fraction;
  * the integer path masks all 64 bits to {@code [0, 2^63)}, so an integer limit beyond the
  * i31 fixnum range (a {@code TYPE_BIGNUM} box) works and the result normalizes through
- * {@code _int_new}.
+ * {@code _int_new}. A limb-tier limit ({@code TYPE_BIGINT}) is the shared
+ * {@code _rand_big}'s ({@link #buildRandBigBody}), tested only once the limit is known to
+ * be no float.
  *
  * <p>
  * A limit proven a float ({@link WasmLispCompiler#isDefinitelyDouble}) compiles straight
@@ -120,6 +123,17 @@ final class WasmRandomCompiler {
 				WasmEmitHelper.castFloatGetF64(ctx);
 			});
 			ctx.writer.write(Instruction.ELSE);
+			// A limb-tier limit draws in _rand_big, which no i64 remainder can serve.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAND_BIG);
+			ctx.writer.write(Instruction.ELSE);
 			if (WasmEmitHelper.checksConsFields(ctx)) {
 				// EH mode: a limit that is no real is RANDOM's type-error, through
 				// _as_f64 under the operator's register.
@@ -161,9 +175,156 @@ final class WasmRandomCompiler {
 			ctx.writer.write(Instruction.I64_REM_U);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
-			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.END); // limb-tier if
+			ctx.writer.write(Instruction.END); // float if
 			ctx.nextI64Local = savedI64;
 		}
+	}
+
+	/**
+	 * Builds {@code _rand_big (limit) -> value} ({@link WasmLispCompiler#FUNC_RAND_BIG}):
+	 * {@code random} of a limb-tier limit, uniform below it with every bit drawn. A
+	 * candidate is as many limbs of generator output as the limit has, the top one masked
+	 * to the top limb's width, so it is below twice the limit; one at or past the limit
+	 * is drawn again ({@code _limb_cmp}), fewer than two candidates on average, and the
+	 * one kept is canonicalized by {@code _limb_new}. The interpreter and the JVM draw
+	 * the same way ({@code .kb/random.md}); no division is reached. A negative limit is
+	 * RANDOM's {@code REAL} type-error in EH mode (the site sets the register), a trap
+	 * outside it. The site has drawn once before calling, so the generator is seeded.
+	 * @param ehMode whether the module lands type-errors
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * {@code TYPE_CALLABLE_BASE + 0})
+	 */
+	static byte[] buildRandBigBody(boolean ehMode) {
+		java.io.ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		int limit = 0, limitLimbs = 1, draw = 2, n = 3, i = 4, mask = 5, scratch = 6;
+		// locals: 1 = the limit's limbs, 2 = the candidate (ref null $limbs); 3 = n,
+		// 4 = i, 5 = the top limb's mask (i32); 6 = scratch (i64)
+		w.writeUnsignedLeb128(3);
+		w.writeUnsignedLeb128(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
+		w.writeUnsignedLeb128(3);
+		w.write(Type.I32);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.I64);
+		get(w, limit);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+		w.writeUnsignedLeb128(0);
+		set(w, limitLimbs);
+		get(w, limitLimbs);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		set(w, n);
+		// mask = the top limb's width as ones (0 for a zero top limb); a negative top
+		// limb is a negative limit, refused
+		get(w, limitLimbs);
+		get(w, n);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(mask);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (ehMode) {
+			get(w, limit);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_REAL);
+		}
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		i32(w, -1);
+		get(w, mask);
+		w.write(Instruction.I32_CLZ);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0);
+		get(w, mask);
+		w.write(Instruction.SELECT);
+		set(w, mask);
+		// draw candidates until one is below the limit
+		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		get(w, n);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		set(w, draw);
+		i32(w, 0);
+		set(w, i);
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// draw[i] = the high half of one generator step
+		get(w, draw);
+		get(w, i);
+		WasmIoRuntimeBuilder.emitSplitMix64Next(w, x -> x.writeUnsignedLeb128(scratch));
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(32L);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// draw[n - 1] &= mask
+		get(w, draw);
+		get(w, n);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		get(w, draw);
+		get(w, n);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		get(w, mask);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		// below the limit: the answer
+		get(w, draw);
+		get(w, limitLimbs);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIMB_CMP);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		get(w, draw);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIMB_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	private static void get(WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+	}
+
+	private static void set(WasmWriter w, int slot) {
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+	}
+
+	private static void i32(WasmWriter w, int value) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(value);
 	}
 
 	/**

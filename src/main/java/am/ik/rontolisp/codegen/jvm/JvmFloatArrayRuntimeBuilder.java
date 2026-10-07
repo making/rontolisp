@@ -243,12 +243,14 @@ final class JvmFloatArrayRuntimeBuilder {
 		methods.add(buildDims(cp, refs, objectClass, longValueOf, arrayDims));
 		methods.add(buildCheckRank(cp, refs, longClass, longIntValue, rtExClass, rtExInit, arrayCheckRank));
 		methods.add(buildLength(cp, refs, longValueOf, toGeneral, lengthHelper));
+		MethodRefEntry dimsTotal = cp.methodRef(selfClass, JvmArrayRuntimeBuilder.DIMS_TOTAL,
+				JvmArrayRuntimeBuilder.DIMS_TOTAL_DESC);
 		methods.add(buildMake(cp, DOUBLE, MAKE, refs, objectArrayClass, longClass, numberClass, longIntValue,
-				numberDoubleValue, dbl));
+				numberDoubleValue, dbl, dimsTotal));
 		methods.add(buildMake(cp, SINGLE, SINGLE_MAKE, refs, objectArrayClass, longClass, numberClass, longIntValue,
-				numberDoubleValue, dbl));
+				numberDoubleValue, dbl, dimsTotal));
 		methods.add(buildMake(cp, BFLOAT16, BFLOAT16_MAKE, refs, objectArrayClass, longClass, numberClass, longIntValue,
-				numberDoubleValue, dbl));
+				numberDoubleValue, dbl, dimsTotal));
 		methods.add(buildElementType(cp, refs));
 		methods.add(buildRequireGeneral(cp, refs, rtExClass, rtExInit));
 		methods.add(buildBf16Value(cp, doubleClass, floatClass));
@@ -974,16 +976,21 @@ final class JvmFloatArrayRuntimeBuilder {
 	// dimension header, filled with coerce(init) (default 0.0, narrowed to the width).
 	// dims is a Long (rank-1 shorthand) or a cons list of Longs. Always produces a packed
 	// array of the chosen width (the compiler routes here only for a packed
-	// :element-type without fill-pointer/adjustable/displacement). Locals: 0=dims,
-	// 1=init, 2..3=initVal, 4=rank, 5=total, 6=arr, 7=cur, 8=k, 9=off, 10=i, 11=dim,
-	// 12=initBits (bfloat16: the pattern, narrowed once rather than per element).
+	// :element-type without fill-pointer/adjustable/displacement). The element count
+	// is _arrayDimsTotal's, which checks every dimension first, ahead of the initial
+	// element as the interpreter checks them. Locals: 0=dims, 1=init, 2..3=initVal,
+	// 4=rank, 5=total, 6=arr, 7=cur, 8=k, 9=off, 10=i, 11=dim, 12=initBits (bfloat16:
+	// the pattern, narrowed once rather than per element).
 	private static ArrayMethod buildMake(ConstantPool cp, JvmPackedFloatWidth w, String name, Refs refs,
 			ClassEntry objectArrayClass, ClassEntry longClass, ClassEntry numberClass, MethodRefEntry longIntValue,
-			MethodRefEntry numberDoubleValue, MethodRefEntry dbl) {
+			MethodRefEntry numberDoubleValue, MethodRefEntry dbl, MethodRefEntry dimsTotal) {
 		int dims = 0, init = 1, initVal = 2, rank = 4, total = 5, arr = 6, cur = 7, k = 8, off = 9, i = 10, dim = 11,
 				initBits = 12;
 		MethodRefEntry arraysFillShort = cp.methodRef(cp.classEntry("java/util/Arrays"), "fill", "([SIIS)V");
 		MethodCode a = new MethodCode();
+		a.aload(dims);
+		a.invokestatic(dimsTotal);
+		a.istore(total);
 		// initVal = init == null ? 0.0 : ((Number) _dbl(init)).doubleValue()
 		MethodCode.Label haveInit = a.newLabel();
 		MethodCode.Label initDone = a.newLabel();
@@ -1010,12 +1017,8 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(dims);
 		a.instanceOf(longClass);
 		a.ifeq(listCase);
-		// rank-1 shorthand: total = (int) dims; arr = new [width][off + total];
-		// arr[0]=1; dim 0 = total; off = dataOffset(1)
-		a.aload(dims);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.istore(total);
+		// rank-1 shorthand: arr = new [width][off + total]; arr[0]=1; dim 0 = total;
+		// off = dataOffset(1)
 		a.loadConstant(1);
 		a.istore(rank);
 		a.loadConstant(w.dataOffset(1));
@@ -1034,12 +1037,10 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.istore(dim);
 		w.storeDim(a, arr, k, dim);
 		a.goto_(fill);
-		// cons list of dims: count rank + product, then allocate and write header
+		// cons list of dims: count the rank, then allocate and write header
 		a.labelBinding(listCase);
 		a.loadConstant(0);
 		a.istore(rank);
-		a.loadConstant(1);
-		a.istore(total);
 		a.aload(dims);
 		a.astore(cur);
 		MethodCode.Label countLoop = a.newLabel();
@@ -1049,15 +1050,6 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.instanceOf(objectArrayClass);
 		a.ifeq(countDone);
 		a.iinc(rank, 1);
-		a.iload(total);
-		a.aload(cur);
-		a.checkcast(objectArrayClass);
-		a.loadConstant(0);
-		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.imul();
-		a.istore(total);
 		a.aload(cur);
 		a.checkcast(objectArrayClass);
 		a.loadConstant(1);

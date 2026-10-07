@@ -1742,6 +1742,15 @@ public final class LispNames {
 	public static final String CHECK_INDEX_INTERNAL = "%CHECK-INDEX";
 
 	/**
+	 * The {@code %check-dimension} internal: {@code (%check-dimension x 'op)} answers
+	 * {@code x} when it is an integer in {@code [0, array-dimension-limit)} and otherwise
+	 * signals {@code op}'s {@code (INTEGER 0 (array-dimension-limit))} type-error, the
+	 * report a {@code make-array} dimension outside the limit gets. Compile path only:
+	 * {@code make-list}'s length.
+	 */
+	public static final String CHECK_DIMENSION_INTERNAL = "%CHECK-DIMENSION";
+
+	/**
 	 * The {@code %check-character} internal: {@code (%check-character x 'op)} answers
 	 * {@code x} when it is a character and otherwise signals {@code op}'s
 	 * {@code CHARACTER} type-error -- unnamed when {@code op} is nil. Compile path only,
