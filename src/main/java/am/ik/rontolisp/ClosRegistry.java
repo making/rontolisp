@@ -157,6 +157,14 @@ public final class ClosRegistry {
 	public static final String DIVISION_BY_ZERO_MESSAGE = "Division by zero";
 
 	/**
+	 * What a left {@code ash} whose result the backend cannot build reports, followed by
+	 * the count as {@code prin1} prints it -- a {@code simple-error} on every backend,
+	 * never the host's own text ({@code BigInteger would overflow supported range}) or a
+	 * trap.
+	 */
+	public static final String ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX = "ASH: shift count too large: ";
+
+	/**
 	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
 	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
 	 * {@code compile-file} leaves {@code failure-p} alone for it.

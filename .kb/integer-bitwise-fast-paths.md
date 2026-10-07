@@ -21,8 +21,9 @@ costs a Long->BigInteger->Long round trip per op (5x on SHA-256).
   answers the sign, a huge left shift of a non-zero value signals (it cannot be
   represented -- `BigInteger.shiftLeft` takes an `int`). Saturating at 64 is valid
   for a fixnum only -- a bignum shifted right by 70 still has high bits (ASH.3).
-  (WASM-GC traps a left count past 2^25; the `--no-gc` scalar backend wraps a huge
-  LEFT count it cannot represent and only saturates the right side.)
+  What the signal is, on every backend: [error-handling.md](error-handling.md), "A left
+  `ash` that cannot be built signals a simple-error". (The `--no-gc` scalar backend wraps
+  a huge LEFT count it cannot represent and only saturates the right side.)
 - `integer-length` = `BigInteger.bitLength`; negatives `64 - numberOfLeadingZeros(~x)`.
 - `logbitp` at/past the sign bit reads the SIGN; a negative index keeps the BigInteger path.
 - `LispMacroExpander.expandLdb`/`expandDpb`/`expandMaskField` fold a literal byte spec,

@@ -20465,6 +20465,43 @@ cases:
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
       DIVISION-BY-ZERO
+  - name: a-runaway-ash-count-signals-a-simple-error
+    source: |
+      ;; A left shift by a count no backend can build a result for -- past the int
+      ;; range, a bignum count, the int range's own edge -- signals a CATCHABLE
+      ;; simple-error naming the operator and the count on every backend; a zero
+      ;; stays zero and a right shift answers the sign. The rows are
+      ;; AshCountFixture's.
+      (defvar *ci-ac-40* (expt 2 40))
+      (defvar *ci-ac-70* (expt 2 70))
+      (defvar *ci-ac-int-max* 2147483647)
+      (defvar *ci-ac-wide* (expt 10 30))
+      (defvar *ci-ac-one* 1)
+      (defun ci-ac (thunk)
+        (handler-case (list :value (funcall thunk))
+          (simple-error (e) (list :simple-error (princ-to-string e) (typep e 'arithmetic-error)))
+          (error (e) (list :other (type-of e) (princ-to-string e)))))
+      (print (ci-ac (lambda () (ash 1 *ci-ac-40*))))
+      (print (ci-ac (lambda () (ash 1 *ci-ac-70*))))
+      (print (ci-ac (lambda () (ash *ci-ac-wide* *ci-ac-40*))))
+      (print (ci-ac (lambda () (ash -1 *ci-ac-int-max*))))
+      (print (ci-ac (lambda () (ash 0 *ci-ac-70*))))
+      (print (ci-ac (lambda () (ash -5 (- *ci-ac-70*)))))
+      (print (ci-ac (lambda () (ash *ci-ac-wide* (- *ci-ac-70*)))))
+      (print (ci-ac (lambda () (+ *ci-ac-one* (ash *ci-ac-one* *ci-ac-40*)))))
+      (print (ci-ac (lambda () (funcall #'ash *ci-ac-one* *ci-ac-70*))))
+      (print (ci-ac (lambda () (ash 1 1180591620717411303424))))
+    expected: |
+      (:SIMPLE-ERROR "ASH: shift count too large: 1099511627776" NIL)
+      (:SIMPLE-ERROR "ASH: shift count too large: 1180591620717411303424" NIL)
+      (:SIMPLE-ERROR "ASH: shift count too large: 1099511627776" NIL)
+      (:SIMPLE-ERROR "ASH: shift count too large: 2147483647" NIL)
+      (:VALUE 0)
+      (:VALUE -1)
+      (:VALUE 0)
+      (:SIMPLE-ERROR "ASH: shift count too large: 1099511627776" NIL)
+      (:SIMPLE-ERROR "ASH: shift count too large: 1180591620717411303424" NIL)
+      (:SIMPLE-ERROR "ASH: shift count too large: 1180591620717411303424" NIL)
   - name: operand-type-errors-name-the-operator-wherever-it-compiles
     source: |
       ;; A wrong-type operand's report names the same operator on every backend

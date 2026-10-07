@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the limb (arbitrary-precision) exact-integer runtime. An exact integer outside
@@ -1827,9 +1828,18 @@ final class WasmBigIntRuntimeBuilder {
 
 	// _big_ash(x, count): arithmetic shift at any tier. A left shift whose result
 	// still fits i64 stays inline; anything wider goes through the limb shifters. A
-	// left count past 2^25 traps (a runaway allocation guard); a right count clamps at
-	// the value's width, answering the sign word.
-	static byte[] buildBigAshBody() {
+	// left count past 2^25 of a non-zero value is a runaway allocation: it signals
+	// "ASH: shift count too large: <count>" (a simple-error) where the module has the
+	// landing, and traps elsewhere. A zero stays zero at any count, and a right count
+	// clamps at the value's width, answering the sign word. A limb-tier count is past
+	// every feasible width, so it stands as +-2^62 -- its sign picks the side, and
+	// neither the width sum below nor the negation of the right side can overflow.
+	//
+	// tooLargePrefix: the interned quote-framed "ASH: shift count too large: ", or null
+	// where the guard traps (outside EH mode, or nothing spells ash). operatorGlobal:
+	// the operator register the signal clears, or -1.
+	static byte[] buildBigAshBody(WasmLispCompiler.StringTable.@Nullable StringEntry tooLargePrefix, int operatorGlobal,
+			boolean identityHash) {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		// params 0=x, 1=count. locals: 2=c, 3=va, 4=m (i64), 5=arr (ref null eq)
@@ -1840,8 +1850,45 @@ final class WasmBigIntRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		final int c = 2, va = 3, m = 4, arr = 5;
 
+		// c = the count: an i31 read inline (_int_val's own first arm), a limb-tier one
+		// saturated by its top limb's sign, anything else through _int_val
+		b.get(1);
+		b.refTest(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		b.get(1);
+		b.refCast(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I64_EXTEND_S_I32);
+		b.els();
+		b.get(1);
+		b.refTest(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		b.get(1);
+		b.call(WasmLispCompiler.FUNC_LIMB_OF);
+		b.set(arr);
+		b.get(arr);
+		b.refCast(WasmLispCompiler.TYPE_LIMBS);
+		b.get(arr);
+		b.refCast(WasmLispCompiler.TYPE_LIMBS);
+		b.arrayLen();
+		b.i32c(1);
+		w.write(Instruction.I32_SUB);
+		b.arrayGet();
+		b.i32c(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		b.i64c(-(1L << 62));
+		b.els();
+		b.i64c(1L << 62);
+		b.end();
+		b.els();
 		b.get(1);
 		b.call(WasmLispCompiler.FUNC_INT_VAL);
+		b.end();
+		b.end();
 		b.set(c);
 		b.get(c);
 		b.i64c(0);
@@ -1870,12 +1917,25 @@ final class WasmBigIntRuntimeBuilder {
 		b.call(WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.RETURN);
 		b.end();
+		// a zero stays zero at any count (a limb-tier value is never zero)
+		b.get(va);
+		w.write(Instruction.I64_EQZ);
+		b.ifVoid();
+		b.i32c(0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		b.end();
 		b.end();
 		b.get(c);
 		b.i64c(1L << 25);
 		w.write(Instruction.I64_GT_S);
 		b.ifVoid();
-		w.write(Instruction.UNREACHABLE);
+		if (tooLargePrefix != null) {
+			emitTooLargeThrow(w, tooLargePrefix, operatorGlobal, identityHash);
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
 		b.end();
 		b.get(0);
 		b.call(WasmLispCompiler.FUNC_LIMB_OF);
@@ -1935,6 +1995,38 @@ final class WasmBigIntRuntimeBuilder {
 		b.call(WasmLispCompiler.FUNC_LIMB_NEW);
 		b.end();
 		return b.toByteArray();
+	}
+
+	// Throws the instance-less (nil . "ASH: shift count too large: <count>") payload on
+	// $lisp-cond -- what (error "...") throws, which a handler takes as a simple-error
+	// and the entry landing pad reports as the message -- the count (param 1) as prin1
+	// prints it. The operator register the call set is cleared first, since the throw
+	// skips the clear after the call.
+	private static void emitTooLargeThrow(WasmWriter w, WasmLispCompiler.StringTable.StringEntry prefix,
+			int operatorGlobal, boolean identityHash) {
+		if (operatorGlobal >= 0) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+		}
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(prefix.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(prefix.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
 
 	// _big_intlen(x): Common Lisp integer-length at any tier -- the magnitude bit

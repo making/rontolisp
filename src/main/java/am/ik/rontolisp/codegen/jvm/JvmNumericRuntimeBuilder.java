@@ -572,7 +572,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodRefEntry objEquals = cp.methodRef(objectClass, "equals", "(" + OBJ + ")Z");
 		MethodRefEntry aeInit = cp.methodRef(arithEx, "<init>", "(Ljava/lang/String;)V");
 		StringEntry divZeroStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
-		StringEntry ashTooLargeStr = cp.stringEntry("ash: shift count too large");
+		StringEntry ashTooLargeStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX);
 		StringEntry rationalNonFiniteStr = cp.stringEntry("rational of a non-finite float is undefined");
 		StringEntry roundingNonFiniteStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 
@@ -829,7 +829,11 @@ final class JvmNumericRuntimeBuilder {
 			.add(buildLogOp(nLogxor, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biXor, MethodCode::lxor));
 		methods.add(buildLogNot(nLognot, dUnary, longClass, longValue, longValueOf, rBig, rNorm, biNot));
 		methods.add(buildAsh(nAsh, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biShiftLeft, biSignum,
-				arithEx, aeInit, ashTooLargeStr));
+				biBitLength,
+				new AshTooLargeRefs(rteClass, cp.methodRef(rteClass, "<init>", "(Ljava/lang/String;)V"),
+						cp.methodRef(stringClass, "valueOf", "(" + OBJ + ")Ljava/lang/String;"),
+						cp.methodRef(stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;"), ashTooLargeStr,
+						cp.entries().longEntry(Integer.MAX_VALUE))));
 		methods.add(buildIntegerLength(nIntLen, dUnary, longClass, longValue, longValueOf, rBig, biBitLength, longNlz));
 		methods.add(buildLogbitp(nLogbitp, dCmp, longClass, longValue, rBig, biTestBit));
 		methods.add(buildFixedDec(cp, nFixDec, dFixDec, mathClass, longClass, numberClass, numDoubleValue, rDbl));
@@ -3591,14 +3595,15 @@ final class JvmNumericRuntimeBuilder {
 	// count is compared as a long FIRST and only narrowed once the comparison proves the
 	// narrowing exact: narrowing first wraps a huge negative count positive and builds a
 	// monster bignum (MISC.47/.48). Past Integer.MAX_VALUE a zero value stays zero and
-	// anything else is a runaway allocation, which signals.
+	// anything else is a runaway allocation, which signals -- as does a count within the
+	// int range whose result would pass BigInteger's bit length, checked on the
+	// BigInteger tail before shiftLeft allocates the array it would refuse.
 	//
 	// Locals: 0=a, 1=count, 2/3=long a, 4=int count, 6/7=long result, 8/9=long count.
 	// All are pre-initialized so every path reaching a slow tail carries the same frame.
 	private static NumericMethod buildAsh(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
 			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
-			MethodRefEntry biShiftLeft, MethodRefEntry biSignum, ClassEntry arithEx, MethodRefEntry aeInit,
-			StringEntry tooLargeStr) {
+			MethodRefEntry biShiftLeft, MethodRefEntry biSignum, MethodRefEntry biBitLength, AshTooLargeRefs tooLarge) {
 		MethodCode c = new MethodCode();
 		c.lconst_0();
 		c.lstore(2);
@@ -3698,6 +3703,25 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifOverflow);
 		c.aload(0);
 		c.invokestatic(rBig);
+		// bitLength + count past the int range: BigInteger cannot hold the result, so a
+		// non-zero value signals
+		c.dup();
+		c.invokevirtual(biBitLength);
+		c.i2l();
+		c.iload(4);
+		c.i2l();
+		c.ladd();
+		c.ldc(tooLarge.intMax());
+		c.lcmp();
+		MethodCode.Label ifFits = c.newLabel();
+		c.iflt(ifFits);
+		c.dup();
+		c.invokevirtual(biSignum);
+		c.ifeq(ifFits);
+		c.pop();
+		MethodCode.Label throwTooLarge = c.newLabel();
+		c.goto_(throwTooLarge);
+		c.labelBinding(ifFits);
 		c.iload(4);
 		c.invokevirtual(biShiftLeft);
 		c.invokestatic(rNorm);
@@ -3739,10 +3763,16 @@ final class JvmNumericRuntimeBuilder {
 		c.invokevirtual(biSignum);
 		MethodCode.Label ifZero = c.newLabel();
 		c.ifeq(ifZero);
-		c.new_(arithEx);
+		// a simple-error naming the count: a plain RuntimeException, which a landing
+		// pad takes as one
+		c.labelBinding(throwTooLarge);
+		c.new_(tooLarge.exceptionClass());
 		c.dup();
-		c.ldc(tooLargeStr);
-		c.invokespecial(aeInit);
+		c.ldc(tooLarge.prefix());
+		c.aload(1);
+		c.invokestatic(tooLarge.valueOf());
+		c.invokevirtual(tooLarge.concat());
+		c.invokespecial(tooLarge.init());
 		c.athrow();
 		c.labelBinding(ifZero);
 		c.lconst_0();
@@ -4005,6 +4035,24 @@ final class JvmNumericRuntimeBuilder {
 		c.aload(1);
 		c.instanceOf(longClass);
 		c.ifeq(slow);
+	}
+
+	/**
+	 * What {@code _ash} throws for a left shift it cannot build: a
+	 * {@code RuntimeException} whose text is
+	 * {@link am.ik.rontolisp.ClosRegistry#ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX} and the
+	 * count.
+	 *
+	 * @param exceptionClass {@code java/lang/RuntimeException}
+	 * @param init its {@code (String)} constructor
+	 * @param valueOf {@code String.valueOf(Object)}
+	 * @param concat {@code String.concat}
+	 * @param prefix the message prefix
+	 * @param intMax {@code Integer.MAX_VALUE} as a {@code long}, the bit length no result
+	 * may reach
+	 */
+	record AshTooLargeRefs(ClassEntry exceptionClass, MethodRefEntry init, MethodRefEntry valueOf,
+			MethodRefEntry concat, StringEntry prefix, LongEntry intMax) {
 	}
 
 	/**
