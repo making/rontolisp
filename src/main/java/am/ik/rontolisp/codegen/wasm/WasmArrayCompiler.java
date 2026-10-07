@@ -3967,21 +3967,29 @@ final class WasmArrayCompiler {
 	// out-of-range index (the interpreter/JVM signal an error on the same condition).
 	// Leaves one i64 on the stack.
 	static void emitPackedIntRead(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		emitPackedIntRead(ctx, arrSlot, () -> {
+			getLocal(ctx, idxSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+		});
+	}
+
+	// The same read over an index pushIndex pushes as an i32 (a fused tree's raw index).
+	static void emitPackedIntRead(WasmLispCompiler.Ctx ctx, int arrSlot, Runnable pushIndex) {
 		getLocal(ctx, arrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I64);
-		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I8ARR);
+		emitIntArrGetU(ctx, arrSlot, pushIndex, WasmLispCompiler.TYPE_I8ARR);
 		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, arrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I64);
-		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I16ARR);
+		emitIntArrGetU(ctx, arrSlot, pushIndex, WasmLispCompiler.TYPE_I16ARR);
 		ctx.writer.write(Instruction.ELSE);
-		emitIntArrGetU(ctx, arrSlot, idxSlot, WasmLispCompiler.TYPE_I32ARR);
+		emitIntArrGetU(ctx, arrSlot, pushIndex, WasmLispCompiler.TYPE_I32ARR);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -4090,12 +4098,11 @@ final class WasmArrayCompiler {
 
 	// [ ] -> [i64]: data[idx] zero-extended (array.get_u for the sub-i32 widths, a plain
 	// array.get for i32 -- its element IS the raw 32 bits -- then i64.extend_i32_u).
-	private static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int type) {
+	private static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, Runnable pushIndex, int type) {
 		getLocal(ctx, arrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(type);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
+		pushIndex.run();
 		if (type == WasmLispCompiler.TYPE_I32ARR) {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		}

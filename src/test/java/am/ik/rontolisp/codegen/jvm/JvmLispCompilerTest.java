@@ -24554,6 +24554,71 @@ class JvmLispCompilerTest {
 		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 	}
 
+	private static final String ARITHMETIC_INDEX_PROGRAM = """
+			(defun two-octets (v i) (logior (ash (logand (aref v i) 31) 6) (logand (aref v (+ i 1)) 63)))
+			(defun indirect (v w i) (+ 1 (aref v (aref w (+ i 1)))))
+			(defun next (v i) (* 2 (aref v (+ i 1))))
+			(defun report (thunk) (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+			(defparameter *u8* (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(195 169 2 1)))
+			(defparameter *g* (vector 195 169 2 1))
+			(print (list (two-octets *u8* 0) (two-octets *g* 0) (indirect *u8* *u8* 1) (indirect *g* *u8* 2)))
+			(print (list (next *u8* 2) (next *g* -1) (next (make-array 2 :fill-pointer 2 :initial-contents '(5 6)) 0)))
+			(print (report (lambda () (next *u8* 3))))
+			(print (report (lambda () (next *u8* 9223372036854775807))))
+			(print (report (lambda () (next *u8* "a"))))
+			(print (report (lambda () (next "abcd" 0))))
+			(print (report (lambda () (indirect *u8* *g* 2))))""";
+
+	private static final String ARITHMETIC_INDEX_EXPECTED = """
+			(233 233 3 170)
+			(2 390 12)
+			"AREF: The value 4 is not of type (INTEGER 0 (4))"
+			"AREF: The value 9223372036854775808 is not of type (INTEGER 0 (4))"
+			"+: The value \\"a\\" is not of type NUMBER"
+			"*: The value #\\\\b is not of type NUMBER"
+			170""";
+
+	@Test
+	void anArithmeticArefIndexIsComputedInsideTheFusedTree() throws Exception {
+		// (aref v (+ i 1)) inside a fused tree: the index is part of the tree, computed
+		// raw before the read, so the call site neither computes it through a fused site
+		// of its own nor checks its variables in front of it (a probe). An index that
+		// overflows, is no integer or is out of range answers through the fallback what
+		// the size level (no fused site) answers.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(ARITHMETIC_INDEX_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		for (String function : List.of("TWO-OCTETS", "INDIRECT", "NEXT")) {
+			List<String> called = invokedMethodNames(fast, function);
+			assertThat(called).as(function).filteredOn(name -> name.startsWith("_fx$")).hasSize(1);
+			assertThat(called).as(function).noneMatch(name -> name.startsWith("_fxp$"));
+		}
+		assertThat(runClass(fast)).isEqualTo(ARITHMETIC_INDEX_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(ARITHMETIC_INDEX_EXPECTED);
+	}
+
+	/** The methods {@code method}'s body invokes, in order. */
+	private static List<String> invokedMethodNames(byte[] classBytes, String method) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.methods()
+			.stream()
+			.filter(m -> m.methodName().stringValue().equals(method))
+			.flatMap(m -> m.code().orElseThrow().elementStream())
+			.filter(java.lang.classfile.instruction.InvokeInstruction.class::isInstance)
+			.map(e -> ((java.lang.classfile.instruction.InvokeInstruction) e).name().stringValue())
+			.toList();
+	}
+
 	private static final String COUNTED_STEP_PROGRAM = """
 			(defun step-up (n)
 			  (let ((i (- 9223372036854775807 2)))

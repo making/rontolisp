@@ -125,10 +125,10 @@ filled at the SITE, so each evaluation yields a fresh, independently mutable vec
 
 ## Unboxed fast paths (wasm-GC)
 Machinery: [wasm-int-fusion.md](wasm-int-fusion.md).
-- `(aref a i)` in a fused tree is an `ArefLeaf`: array/index evaluate once into scratch locals,
-  the fast path guards `testIntVector` + i31 index and reads `array.get_u` -> raw i64 (no
-  `_int_new`), any other shape bailing to `WasmArrayCompiler.emitAref1FromSlots` from the SAME
-  locals.
+- `(aref a i)` in a fused tree is an `ArefLeaf`: the array evaluates once into a scratch local
+  and the index is an operand of the tree, the fast path guards `testIntVector` + i31 index and
+  reads `array.get_u` -> raw i64 (no `_int_new`), any other shape bailing to
+  `WasmArrayCompiler.emitAref1FromSlots` from the SAME array.
 - `(setf (aref packed i) <integer tree>)` compiles the value RAW
   (`WasmIntFusionCompiler.tryCompileRaw`) and stores through `_iv_set`; in statement position
   (`WasmExprCompiler.compileForEffect`) the value is never materialized, so the hot-loop store

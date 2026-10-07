@@ -165,21 +165,28 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * A rank-1 {@code (aref a i)} leaf: the array and index evaluate once into scratch
-	 * locals, and the fast path reads the element RAW when the array is a packed integer
-	 * vector (todo 194 stage 2) -- no {@code _int_new} box, which for an out-of-i31
+	 * A rank-1 {@code (aref a i)} leaf: the array evaluates once into a scratch local,
+	 * and the fast path reads the element RAW when the array is a packed integer vector
+	 * (todo 194 stage 2) -- no {@code _int_new} box, which for an out-of-i31
 	 * {@code (unsigned-byte 32)} element deletes a {@code TYPE_BIGNUM} allocation per
 	 * read. Any other array shape (or a non-i31 index) bails to the fallback, which
 	 * reruns the ordinary aref dispatch from the SAME locals.
+	 *
+	 * <p>
+	 * The INDEX is an ordinary operand of the tree ({@link #arefLeaf}): a literal folds,
+	 * an unboxed local reads its snapshot and an arithmetic index is computed raw before
+	 * the read, so {@code (aref a (+ i 1))} boxes no index; the fallback computes it
+	 * generically.
 	 */
 	private static final class ArefLeaf implements Node {
 
 		final LispVal arrayExpr;
 
-		final LispVal indexExpr;
+		@Nullable Node indexNode;
 
 		int arrSlot = -1;
 
+		/** The fallback's boxed index, unless the index is an expression leaf's own. */
 		int idxSlot = -1;
 
 		int i64Slot = -1;
@@ -189,9 +196,8 @@ final class WasmIntFusionCompiler {
 
 		final @Nullable String owner;
 
-		ArefLeaf(LispVal arrayExpr, LispVal indexExpr, @Nullable LispCons source, @Nullable String owner) {
+		ArefLeaf(LispVal arrayExpr, @Nullable LispCons source, @Nullable String owner) {
 			this.arrayExpr = arrayExpr;
-			this.indexExpr = indexExpr;
 			this.source = source;
 			this.owner = owner;
 		}
@@ -1001,9 +1007,7 @@ final class WasmIntFusionCompiler {
 			// references, which the slot-based ArefLeaf cannot express;
 			// classifyInlineAref
 			// handles the parameter-shaped case below.
-			// The read applies once the array and the index are evaluated.
-			return applied(registerLeaf(new ArefLeaf(parts.get(1), parts.get(2), site.source, site.sourceOwner), site),
-					site);
+			return arefLeaf(new ArefLeaf(parts.get(1), site.source, site.sourceOwner), parts.get(2), ctx, site, depth);
 		}
 		if (LispNames.LDB.equals(op) && arity == 2) {
 			// (ldb (byte s p) x) with a literal byte spec lowers to its pure
@@ -1192,8 +1196,10 @@ final class WasmIntFusionCompiler {
 				if (arr != null && idx != null) {
 					SourceLocation location = SourceProvenance.locate(bodyCons);
 					boolean located = location != null && location.file() != null;
-					return applied(registerLeaf(new ArefLeaf(arr, idx, located ? bodyCons : site.source,
-							located ? (owner != null ? owner : site.bodyOwner) : site.sourceOwner), site), site);
+					return arefLeaf(
+							new ArefLeaf(arr, located ? bodyCons : site.source,
+									located ? (owner != null ? owner : site.bodyOwner) : site.sourceOwner),
+							idx, ctx, site, depth);
 				}
 			}
 		}
@@ -1225,6 +1231,24 @@ final class WasmIntFusionCompiler {
 			site.events.subList(eventMark, site.events.size()).clear();
 		}
 		return substituted;
+	}
+
+	/**
+	 * Registers a rank-1 aref leaf and classifies its index. The leaf registers BEFORE
+	 * its index, so the array evaluates first and the index's own leaves after it -- the
+	 * generic {@code (aref a i)} argument order -- and the index's operations apply
+	 * before the read, in the interpreter's order.
+	 */
+	@org.jspecify.annotations.Nullable
+	private static Node arefLeaf(ArefLeaf leaf, LispVal indexExpr, WasmLispCompiler.Ctx ctx, Site site, int depth) {
+		registerLeaf(leaf, site);
+		Node index = classify(indexExpr, ctx, java.util.Map.of(), site, depth);
+		if (index == null) {
+			return null;
+		}
+		leaf.indexNode = index;
+		// The read applies once the array and the index are evaluated.
+		return applied(leaf, site);
 	}
 
 	private static Node registerLeaf(Node leaf, Site site) {
@@ -1268,11 +1292,14 @@ final class WasmIntFusionCompiler {
 		return null;
 	}
 
-	/** Counts fused operations (an n-ary node left-folds into arity - 1 binary ops). */
+	/**
+	 * Counts fused operations (an n-ary node left-folds into arity - 1 binary ops), an
+	 * aref index's among them.
+	 */
 	private static int countOps(Node node) {
 		return switch (node) {
 			case ExprLeaf ignored -> 0;
-			case ArefLeaf ignored -> 0;
+			case ArefLeaf leaf -> countOps(java.util.Objects.requireNonNull(leaf.indexNode));
 			case RawLeaf ignored -> 0;
 			case ConstLeaf ignored -> 0;
 			case OpNode op -> {
@@ -1288,7 +1315,7 @@ final class WasmIntFusionCompiler {
 	/**
 	 * Evaluates every non-constant leaf ONCE, left to right (the same observable order as
 	 * the generic path's argument evaluation), into scratch locals both paths read. An
-	 * aref leaf evaluates its array then its index, exactly like the generic aref
+	 * aref leaf evaluates its array, its index's leaves following it -- the generic aref
 	 * argument order; a raw-local leaf snapshots its (i64, shadow) pair so a later leaf's
 	 * side effect cannot change what this read observes.
 	 */
@@ -1315,10 +1342,6 @@ final class WasmIntFusionCompiler {
 			aref.arrSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(aref.arrSlot);
-			WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
-			aref.idxSlot = ctx.allocTemp();
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(aref.idxSlot);
 		}
 		else if (node instanceof RawLeaf raw) {
 			if (raw.src.counted()) {
@@ -1489,11 +1512,17 @@ final class WasmIntFusionCompiler {
 	 * read.
 	 */
 	private static boolean observable(Node leaf, WasmLispCompiler.Ctx ctx) {
-		java.util.function.Predicate<String> quiet = name -> WasmArithCompiler.isQuietVariable(name, ctx);
+		LispVal evaluated = evaluatedForm(leaf);
+		return evaluated != null
+				&& !ArgumentOrder.isQuiet(evaluated, name -> WasmArithCompiler.isQuietVariable(name, ctx));
+	}
+
+	/** What evaluating the leaf runs, or null when nothing does. */
+	private static @Nullable LispVal evaluatedForm(Node leaf) {
 		return switch (leaf) {
-			case ExprLeaf l -> !ArgumentOrder.isQuiet(l.expr, quiet);
-			case ArefLeaf l -> !ArgumentOrder.isQuiet(l.arrayExpr, quiet) || !ArgumentOrder.isQuiet(l.indexExpr, quiet);
-			default -> false;
+			case ExprLeaf l -> l.expr;
+			case ArefLeaf l -> l.arrayExpr;
+			default -> null;
 		};
 	}
 
@@ -1502,23 +1531,17 @@ final class WasmIntFusionCompiler {
 	 * signal nor change anything, or null when no such check exists.
 	 */
 	private static @Nullable List<String> leafGuardVariables(Node leaf, WasmLispCompiler.Ctx ctx) {
-		java.util.function.Predicate<String> quiet = name -> WasmArithCompiler.isQuietVariable(name, ctx);
-		return switch (leaf) {
-			case ExprLeaf l -> ArgumentOrder.integerArithmeticVariables(l.expr, quiet);
-			case ArefLeaf l -> ArgumentOrder.isQuiet(l.arrayExpr, quiet)
-					? ArgumentOrder.integerArithmeticVariables(l.indexExpr, quiet) : null;
-			default -> null;
-		};
+		LispVal evaluated = evaluatedForm(leaf);
+		return evaluated == null ? null : ArgumentOrder.integerArithmeticVariables(evaluated,
+				name -> WasmArithCompiler.isQuietVariable(name, ctx));
 	}
 
 	/** The pending applications no other pending one contains. */
 	private static List<Node> maximal(List<Node> pending) {
 		java.util.Set<Node> inside = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 		for (Node item : pending) {
-			if (item instanceof OpNode op) {
-				for (Node child : op.args()) {
-					collectSubtree(child, inside);
-				}
+			for (Node child : children(item)) {
+				collectSubtree(child, inside);
 			}
 		}
 		List<Node> roots = new ArrayList<>();
@@ -1530,9 +1553,17 @@ final class WasmIntFusionCompiler {
 		return roots;
 	}
 
+	private static List<Node> children(Node node) {
+		return switch (node) {
+			case OpNode op -> op.args();
+			case ArefLeaf leaf -> List.of(java.util.Objects.requireNonNull(leaf.indexNode));
+			default -> List.of();
+		};
+	}
+
 	private static void collectSubtree(Node node, java.util.Set<Node> out) {
-		if (out.add(node) && node instanceof OpNode op) {
-			for (Node child : op.args()) {
+		if (out.add(node)) {
+			for (Node child : children(node)) {
 				collectSubtree(child, out);
 			}
 		}
@@ -1555,10 +1586,8 @@ final class WasmIntFusionCompiler {
 	private static void walkInTreeOrder(Node node, java.util.Set<Node> seen, List<Node> out) {
 		if (seen.add(node)) {
 			out.add(node);
-			if (node instanceof OpNode op) {
-				for (Node child : op.args()) {
-					walkInTreeOrder(child, seen, out);
-				}
+			for (Node child : children(node)) {
+				walkInTreeOrder(child, seen, out);
 			}
 		}
 	}
@@ -1784,13 +1813,14 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * Guards and unboxes every non-constant leaf ONCE, in registration (source) order,
-	 * into an i64 scratch local -- the fast path re-reads the local at every occurrence.
-	 * Before todo 194 stage 3 the guard was re-emitted at every occurrence of a shared
-	 * leaf, which made inlined local-function bodies (whose parameters are used
-	 * repeatedly) pay more in guards than they saved in dispatch. Emitted directly inside
-	 * the bail block: a failed guard branches to the fallback ({@code br_if} at depth 0,
-	 * or depth 1 from inside the ExprLeaf guard's own {@code if}).
+	 * Guards and unboxes every non-constant leaf ONCE, in registration (source) order and
+	 * the aref reads after the rest, into an i64 scratch local -- the fast path re-reads
+	 * the local at every occurrence. Before todo 194 stage 3 the guard was re-emitted at
+	 * every occurrence of a shared leaf, which made inlined local-function bodies (whose
+	 * parameters are used repeatedly) pay more in guards than they saved in dispatch.
+	 * Emitted directly inside the bail block: a failed guard branches to the fallback
+	 * ({@code br_if} at depth 0, or depth 1 from inside the ExprLeaf guard's own
+	 * {@code if}).
 	 */
 	private static void emitLeafUnboxes(List<Node> leaves, WasmLispCompiler.Ctx ctx) {
 		for (Node node : leaves) {
@@ -1823,33 +1853,6 @@ final class WasmIntFusionCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.writeUnsignedLeb128(0);
 				ctx.writer.write(Instruction.END);
-				leaf.i64Slot = ctx.allocI64Temp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writeI64LocalIndex(leaf.i64Slot);
-			}
-			// The raw element read: bail unless the array is a packed integer vector
-			// AND the index an i31; then read data[idx] unsigned as an i64.
-			else if (node instanceof ArefLeaf leaf) {
-				WasmArrayCompiler.testIntVector(ctx, leaf.arrSlot);
-				ctx.writer.write(Instruction.I32_EQZ);
-				ctx.writer.write(Instruction.BR_IF, 0);
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(leaf.idxSlot);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-				ctx.writer.writeHeapType(Type.I31.code());
-				ctx.writer.write(Instruction.I32_EQZ);
-				ctx.writer.write(Instruction.BR_IF, 0);
-				if (WasmArrayCompiler.reportsBounds(ctx)) {
-					// An out-of-range index bails too, to the fallback's checked read,
-					// which reports it rather than trapping here.
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(leaf.idxSlot);
-					WasmEmitHelper.castI31GetS(ctx);
-					WasmArrayCompiler.emitPackedIntLen(ctx, leaf.arrSlot);
-					ctx.writer.write(Instruction.I32_GE_U);
-					ctx.writer.write(Instruction.BR_IF, 0);
-				}
-				WasmArrayCompiler.emitPackedIntRead(ctx, leaf.arrSlot, leaf.idxSlot);
 				leaf.i64Slot = ctx.allocI64Temp();
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writeI64LocalIndex(leaf.i64Slot);
@@ -1899,6 +1902,108 @@ final class WasmIntFusionCompiler {
 				ctx.writeI64LocalIndex(raw.snapI64);
 			}
 		}
+		// The aref reads last: an index reads the other leaves' values.
+		java.util.Set<Node> read = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		for (Node node : leaves) {
+			if (node instanceof ArefLeaf) {
+				emitArefReads(node, read, ctx);
+			}
+		}
+	}
+
+	/**
+	 * Reads the aref leaves under {@code node} raw, in the order their values are needed:
+	 * an aref in another's index is read before the read that indexes with it.
+	 */
+	private static void emitArefReads(Node node, java.util.Set<Node> read, WasmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case OpNode op -> {
+				for (Node arg : op.args()) {
+					emitArefReads(arg, read, ctx);
+				}
+			}
+			case ArefLeaf leaf -> {
+				if (read.add(leaf)) {
+					emitArefReads(java.util.Objects.requireNonNull(leaf.indexNode), read, ctx);
+					emitArefRead(leaf, ctx);
+				}
+			}
+			default -> {
+			}
+		}
+	}
+
+	/**
+	 * The raw element read: bail unless the array is a packed integer vector AND the
+	 * index an i31 -- computed raw when it is an operation, itself able to bail -- then
+	 * read {@code data[idx]} unsigned as an i64.
+	 */
+	private static void emitArefRead(ArefLeaf leaf, WasmLispCompiler.Ctx ctx) {
+		WasmArrayCompiler.testIntVector(ctx, leaf.arrSlot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
+		Runnable pushIndex;
+		if (index instanceof ConstLeaf c) {
+			if (c.value() < I31_MIN || c.value() > I31_MAX) {
+				ctx.writer.write(Instruction.BR, 0);
+			}
+			pushIndex = () -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128((int) c.value());
+			};
+		}
+		else {
+			int slot;
+			if (index instanceof OpNode) {
+				emitFast(index, ctx);
+				slot = ctx.allocI64Temp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writeI64LocalIndex(slot);
+			}
+			else {
+				slot = rawSlotOf(index);
+			}
+			// An i31 is [-2^30, 2^30): offset by 2^30, it is below 2^31 unsigned.
+			writeI64LocalRead(slot, ctx);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(-I31_MIN);
+			ctx.writer.write(Instruction.I64_ADD);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(2 * -I31_MIN);
+			ctx.writer.write(Instruction.I64_GE_U);
+			ctx.writer.write(Instruction.BR_IF, 0);
+			pushIndex = () -> {
+				writeI64LocalRead(slot, ctx);
+				ctx.writer.write(Instruction.I32_WRAP_I64);
+			};
+		}
+		if (WasmArrayCompiler.reportsBounds(ctx)) {
+			// An out-of-range index bails too, to the fallback's checked read, which
+			// reports it rather than trapping here.
+			pushIndex.run();
+			WasmArrayCompiler.emitPackedIntLen(ctx, leaf.arrSlot);
+			ctx.writer.write(Instruction.I32_GE_U);
+			ctx.writer.write(Instruction.BR_IF, 0);
+		}
+		WasmArrayCompiler.emitPackedIntRead(ctx, leaf.arrSlot, pushIndex);
+		leaf.i64Slot = ctx.allocI64Temp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(leaf.i64Slot);
+	}
+
+	private static final long I31_MIN = -(1L << 30);
+
+	private static final long I31_MAX = (1L << 30) - 1;
+
+	/** The i64 slot a leaf index's unboxed value is in. */
+	private static int rawSlotOf(Node index) {
+		return switch (index) {
+			case ExprLeaf l -> l.i64Slot;
+			case RawLeaf l -> l.snapI64;
+			case ArefLeaf l -> l.i64Slot;
+			default -> throw new IllegalStateException("not a slot-resolved index: " + index);
+		};
 	}
 
 	private static void writeI64LocalRead(int i64Slot, WasmLispCompiler.Ctx ctx) {
@@ -2136,13 +2241,28 @@ final class WasmIntFusionCompiler {
 			// unfused (aref a i) call would (the read is pure, so recomputing it in
 			// the fallback is safe).
 			case ArefLeaf leaf -> {
+				// The index first, generically -- an expression leaf's is its own slot.
+				Node index = java.util.Objects.requireNonNull(leaf.indexNode);
+				int idxSlot;
+				if (index instanceof ExprLeaf l) {
+					idxSlot = l.slot;
+				}
+				else {
+					emitFallback(index, ctx);
+					if (leaf.idxSlot < 0) {
+						leaf.idxSlot = ctx.allocTemp();
+					}
+					idxSlot = leaf.idxSlot;
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(idxSlot);
+				}
 				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(leaf.source, leaf.owner,
 						ctx);
 				// Under AREF's name: the fallback runs away from the aref form, and an
 				// out-of-range index reports the access.
 				WasmOperandTypes.withOperator(ctx, LispNames.AREF, () -> {
 					WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
-					WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot, false);
+					WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, idxSlot, false);
 				});
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
