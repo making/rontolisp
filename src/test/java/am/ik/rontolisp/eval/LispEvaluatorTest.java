@@ -21248,6 +21248,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
 	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() {
 		// The reference answer (SBCL's) for the compiled backends' twins of this name.
 		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL))

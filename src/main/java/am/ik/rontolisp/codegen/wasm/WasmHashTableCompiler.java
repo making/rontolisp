@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
@@ -135,6 +136,15 @@ final class WasmHashTableCompiler {
 		// key -> keySlot
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int keySlot = setTemp(ctx);
+		// The operands run key, table, default (CLHS 3.1.2.1.2.3), and a table that is no
+		// table signals after the default ran. A site whose order cannot be seen keeps
+		// the default ahead of the table.
+		boolean tableFirst = args.size() > 3 && !isOrderFreeAfterTable(args.get(3), args.get(2));
+		int tableSlot = -1;
+		if (tableFirst) {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			tableSlot = setTemp(ctx);
+		}
 		// default -> dfltSlot
 		if (args.size() > 3) {
 			WasmExprCompiler.compileExpr(args.get(3), ctx);
@@ -145,7 +155,7 @@ final class WasmHashTableCompiler {
 		}
 		int dfltSlot = setTemp(ctx);
 		// header (count . buckets)
-		int headerSlot = headerSlot(args.get(2), ctx);
+		int headerSlot = tableFirst ? headerSlotOf(tableSlot, ctx) : headerSlot(args.get(2), ctx);
 		int foldTagSlot = emitFoldKey(ctx, headerSlot, keySlot);
 		// The tag hoisted out of the bucket walk: every entry is compared by it.
 		int tagSlot = ctx.usesIdentityHashTables ? emitTestTag(ctx, headerSlot) : -1;
@@ -187,9 +197,23 @@ final class WasmHashTableCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int keySlot = setTemp(ctx);
-		WasmExprCompiler.compileExpr(args.get(3), ctx);
-		int valSlot = setTemp(ctx);
-		int headerSlot = headerSlot(args.get(2), ctx);
+		// The operands run key, table, value, and a table that is no table signals after
+		// the value ran. A site whose order cannot be seen keeps the value ahead of the
+		// table.
+		int valSlot;
+		int headerSlot;
+		if (isOrderFreeAfterTable(args.get(3), args.get(2))) {
+			WasmExprCompiler.compileExpr(args.get(3), ctx);
+			valSlot = setTemp(ctx);
+			headerSlot = headerSlot(args.get(2), ctx);
+		}
+		else {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			int tableSlot = setTemp(ctx);
+			WasmExprCompiler.compileExpr(args.get(3), ctx);
+			valSlot = setTemp(ctx);
+			headerSlot = headerSlotOf(tableSlot, ctx);
+		}
 		// The key as written, which a fresh entry of a folding table keeps.
 		int origSlot = -1;
 		if (foldingEntries(ctx)) {
@@ -599,6 +623,24 @@ final class WasmHashTableCompiler {
 		}
 		castCellGet0(ctx);
 		return setTemp(ctx);
+	}
+
+	// The header of a table already evaluated into tableSlot, checked as a table.
+	private static int headerSlotOf(int tableSlot, WasmLispCompiler.Ctx ctx) {
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			emitTableCheck(ctx, tableSlot);
+		}
+		getLocal(ctx, tableSlot);
+		castCellGet0(ctx);
+		return setTemp(ctx);
+	}
+
+	// Whether the table operand may be evaluated after the operand that follows it in
+	// the source with no observable difference: that operand is a constant, or both are
+	// reads (a read assigns nothing, so neither sees the other).
+	private static boolean isOrderFreeAfterTable(LispVal later, LispVal table) {
+		return ArgumentOrder.isOrderIndependent(later) || (later instanceof LispSymbol
+				&& (table instanceof LispSymbol || ArgumentOrder.isOrderIndependent(table)));
 	}
 
 	// Emits a fresh header cons (count, empty buckets array) onto the stack. In a module

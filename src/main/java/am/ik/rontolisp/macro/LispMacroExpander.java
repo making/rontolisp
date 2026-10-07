@@ -3872,10 +3872,12 @@ public final class LispMacroExpander {
 				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
 				case LispNames.GETHASH ->
 					// (setf (gethash key table [default]) val) -> (%puthash key table
-					// val).
-					// The optional default in the place is only used by gethash in read
-					// position, so it is dropped here.
-					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2), value));
+					// val). The default is never stored, but it is a subform of the
+					// place: it runs between the table and the value, so one with an
+					// effect leads the value form. A constant or a read is dropped.
+					listToCons(List.of(new LispSymbol(LispNames.PUTHASH), placeParts.get(1), placeParts.get(2),
+							placeParts.size() > 3 && !isEffectFreeRead(placeParts.get(3))
+									? makeProgn(List.of(placeParts.get(3), value)) : value));
 				case LispNames.APPLY -> {
 					// (setf (apply #'aref array sub... tail-list) val) -- CLHS 5.1.2.5,
 					// the spelling cffi's foreign-array-to-lisp uses for a rank decided

@@ -5891,6 +5891,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
 	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): a direct call, a place and #'
 		// of such a name compiled as undefined.

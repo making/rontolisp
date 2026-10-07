@@ -27208,6 +27208,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		String program = am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER;
+		String expected = am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.
