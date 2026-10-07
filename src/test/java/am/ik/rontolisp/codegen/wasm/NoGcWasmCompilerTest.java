@@ -97,6 +97,17 @@ class NoGcWasmCompilerTest {
 			.hasMessageContaining("--no-gc");
 	}
 
+	// The other backends call the (setf name) function of a place no definition makes;
+	// this one has no function values, so the place stays a refusal naming it.
+	@Test
+	void anUnknownSetfPlaceIsRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun put-it (x) (setf (foo x) 1) x)
+				(rontolisp:wasm-export 'put-it :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("setf does not support place: FOO");
+	}
+
 	// The bit-* array operators are prelude defuns over the general boxed array, and
 	// the scalar backend has no general array type: the spliced defun reaches the
 	// make-array refusal with its usual clear compile error (.todo/043).

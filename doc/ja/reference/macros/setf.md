@@ -20,7 +20,7 @@
 (let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
 ```
 
-組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`、または総称関数版の `(defmethod (setf name) ...)` — [defmethod](../special-forms/defmethod.md) 参照) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。 `(setf (symbol-function 'name) fn)` / `(setf (fdefinition 'name) fn)` はグローバルな関数定義をインストールします（[symbol-function](../functions/symbol-function.md) 参照）。
+組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`、または総称関数版の `(defmethod (setf name) ...)` — [defmethod](../special-forms/defmethod.md) 参照) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。どの定義も place にしていない演算子の place も、同じく `(setf name)` 関数の呼び出しになり、Common Lisp と同様にフォームの実行時に関数を探します。関数はファイルの後方で定義しても、`(setf (fdefinition '(setf name)) fn)` で設定してもかまいません。関数がなければ、そのフォームは `(setf name)` を名前とする `undefined-function` を通知します（コンパイラはコンパイル時に警告します）。サポートされた place ではない Common Lisp の標準名、たとえば `(setf (length x) 3)` は、フォームの展開時に拒否されます（`setf does not support place: LENGTH`）。 `(setf (symbol-function 'name) fn)` / `(setf (fdefinition 'name) fn)` はグローバルな関数定義をインストールします（[symbol-function](../functions/symbol-function.md) 参照）。
 
 ```lisp
 (defvar *mode* :xml)

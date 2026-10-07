@@ -5819,6 +5819,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the place was refused when
+		// the program compiled.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE_EXPECTED);
+	}
+
+	@Test
+	void aDefstructSlotAccessorHasASetfFunction() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER_EXPECTED);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
 		// (setf name) and the landing pad reads the list back as the name.

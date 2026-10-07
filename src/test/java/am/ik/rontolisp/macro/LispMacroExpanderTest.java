@@ -419,6 +419,46 @@ class LispMacroExpanderTest {
 		assertThat(injectsStringWriteRuntime("(defun f (v) (car v))")).isFalse();
 	}
 
+	@Test
+	void aDefstructSlotWriterFunctionIsEmittedOnlyForAProgramThatTakesIt() {
+		// A place of the accessor stays the inline store; only a reference to the
+		// function itself makes the program carry its defun, and a read-only slot has
+		// none to carry.
+		String struct = "(defstruct sw a (b 0 :read-only t)) ";
+		assertThat(definedFunctionNames(struct + "(setf (sw-a (make-sw)) 1)"))
+			.noneMatch(name -> name.startsWith(LispMacroExpander.setfFunctionName("")));
+		assertThat(definedFunctionNames(struct + "(funcall #'(setf sw-a) 1 (make-sw)) (fboundp '(setf sw-b))"))
+			.contains(LispMacroExpander.setfFunctionName("SW-A"))
+			.doesNotContain(LispMacroExpander.setfFunctionName("SW-B"));
+	}
+
+	@Test
+	void aPlaceNoDefinitionMakesIsTheSetfFunctionCall() {
+		// CL looks the (setf name) function up when the form runs; a standard name no
+		// program may define stays a refusal.
+		LispCons place = (LispCons) LispReader.readAllFromString("(setf (foo x) (bar))").get(0);
+		assertThat(LispMacroExpander.expandSetf(place, new HashMap<>(), new ClosRegistry()).print())
+			.isEqualTo("(FUNCALL #'(SETF FOO) (BAR) X)");
+		LispCons standard = (LispCons) LispReader.readAllFromString("(setf (length x) 1)").get(0);
+		org.assertj.core.api.Assertions
+			.assertThatThrownBy(() -> LispMacroExpander.expandSetf(standard, new HashMap<>(), new ClosRegistry()))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("setf does not support place: LENGTH");
+	}
+
+	private static List<String> definedFunctionNames(String source) {
+		List<String> names = new ArrayList<>();
+		for (LispVal form : LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry())) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name) {
+				names.add(name.name());
+			}
+		}
+		return names;
+	}
+
 	private static boolean injectsStringWriteRuntime(String source) {
 		return LispMacroExpander
 			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry())

@@ -1746,6 +1746,9 @@ public final class ClosRegistry {
 
 	private final Map<String, Map<String, LispVal>> structSlotTypes = new LinkedHashMap<>();
 
+	/** Struct name to the base names of its {@code :read-only} slots. */
+	private final Map<String, Set<String>> structReadOnlySlots = new LinkedHashMap<>();
+
 	/**
 	 * Alias name (normalized) to the CANONICAL name of the class it names -- what
 	 * {@code (setf (find-class 'alias) (find-class 'target))} registers. The target is
@@ -1955,6 +1958,30 @@ public final class ClosRegistry {
 			exact = this.structSlotTypes.get(qn.member());
 		}
 		return exact == null ? Map.of() : exact;
+	}
+
+	/**
+	 * Records which of a {@code defstruct}'s slots are {@code :read-only} -- what an
+	 * {@code :include} child inherits.
+	 * @param structName the struct name as spelled in the defstruct
+	 * @param slotBaseNames the package-stripped names of its read-only slots
+	 */
+	public void registerStructReadOnlySlots(String structName, Set<String> slotBaseNames) {
+		this.structReadOnlySlots.put(normalize(structName), Set.copyOf(slotBaseNames));
+	}
+
+	/**
+	 * The package-stripped names of a struct's {@code :read-only} slots, inherited ones
+	 * included. Empty for a struct with none, or one never registered.
+	 * @param structName the struct name as spelled
+	 * @return the read-only slot base names
+	 */
+	public Set<String> structReadOnlySlots(String structName) {
+		Set<String> exact = this.structReadOnlySlots.get(normalize(structName));
+		if (exact == null && PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
+			exact = this.structReadOnlySlots.get(qn.member());
+		}
+		return exact == null ? Set.of() : exact;
 	}
 
 	/**

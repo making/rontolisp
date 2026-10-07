@@ -7,7 +7,7 @@ Defines a structure type named `name` and returns the name symbol. Each `slot` i
 - `make-name (&key slot...)` — the constructor; slots are supplied as keyword arguments, an unknown keyword is an error
 - `name-p (object)` — the type predicate, `t` for instances of this structure only
 - `copy-name (object)` — a shallow copier
-- `name-slot (object)` — one accessor per slot; accessors are also `setf`-able places, so `setf`/`incf`/`push` on `(name-slot obj)` work
+- `name-slot (object)` — one accessor per slot; accessors are also `setf`-able places, so `setf`/`incf`/`push` on `(name-slot obj)` work, and each has its `(setf name-slot)` function (new value first), which `#'(setf name-slot)`, `fdefinition` and `fboundp` see
 
 An accessor, its `setf` place and the copier signal a `type-error` when the object is not a structure instance. The report names the function and the type, and `type-error-datum`/`type-error-expected-type` answer the object and the structure name. Any structure instance passes the check, so an instance of another structure type is not rejected. On the wasm-GC backends the error is catchable only in a module compiled in exception-handling mode (a program with a catching form); elsewhere it traps, as every runtime failure there does.
 
@@ -20,7 +20,7 @@ An accessor, its `setf` place and the copier signal a `type-error` when the obje
 
 Because the generated names are plain functions they are first-class (`#'point-x`, `mapcar`, `funcall`). On the compilation path `defstruct` is only supported as a top-level form; the interpreter also accepts it in the REPL and via `load`. Under a [user-defined package](../packages.md#user-defined-packages-defpackage) the generated names are interned as internal symbols of that package (`geo::make-pt`); listing them in a `defpackage` `:export` clause is not supported.
 
-An instance is a first-class structure object, not a list: `print` shows it in the standard `#S(NAME :SLOT value ...)` syntax, `consp`/`listp` are `nil` on instances, and `equal` compares instances slot-wise (Common Lisp compares distinct structures as unequal). The options syntax `(defstruct (name option...) slot...)` supports `(:constructor name)`, `(:conc-name prefix)`, `(:predicate name)`, `(:copier name)`, `(:include parent (slot new-default) ...)`, `(:type (vector ...))`, `(:print-object fn)` and `(:print-function fn)` on every backend, and a documentation string before the slots is accepted and dropped. A BOA constructor -- `(:constructor name (lambda-list))` -- is supported in a lite form: a slot named by the lambda list reads that parameter, and every other slot evaluates its initform in the constructor body. Slot options `:type` and `:read-only` are parsed and ignored. The struct name is usable as a [`defmethod`](defmethod.md) parameter specializer, and the runtime `eval` of a compiled program knows neither `defstruct` nor accessor `setf` places (calling the generated functions from `eval` works).
+An instance is a first-class structure object, not a list: `print` shows it in the standard `#S(NAME :SLOT value ...)` syntax, `consp`/`listp` are `nil` on instances, and `equal` compares instances slot-wise (Common Lisp compares distinct structures as unequal). The options syntax `(defstruct (name option...) slot...)` supports `(:constructor name)`, `(:conc-name prefix)`, `(:predicate name)`, `(:copier name)`, `(:include parent (slot new-default) ...)`, `(:type (vector ...))`, `(:print-object fn)` and `(:print-function fn)` on every backend, and a documentation string before the slots is accepted and dropped. A BOA constructor -- `(:constructor name (lambda-list))` -- is supported in a lite form: a slot named by the lambda list reads that parameter, and every other slot evaluates its initform in the constructor body. The slot option `:type` is parsed and ignored. A `:read-only` slot -- `(slot default :read-only t)`, also in an `:include` slot-override, and inherited by an `:include` child -- has a reader and no writer: `(fboundp '(setf name-slot))` is `nil`, and `(setf (name-slot obj) v)` calls that undefined function, which signals `undefined-function` when the form runs, as in Common Lisp (the compilers warn at compile time). The struct name is usable as a [`defmethod`](defmethod.md) parameter specializer, and the runtime `eval` of a compiled program knows neither `defstruct` nor accessor `setf` places (calling the generated functions from `eval` works).
 
 `(:include parent)` is single struct inheritance: the parent's slots come first (so its accessors, its predicate and `(typep x 'parent)` all work on a child instance), and the child adds its own after them. A trailing slot-override -- `(:include parent (slot new-default) ...)` -- re-defaults one inherited slot in THIS child's layout (the parent's own default is untouched); the slot keeps its inherited index, so the parent's accessors still read it. Overriding a slot the parent does not define is an error. `(:type (vector ...))` makes the "instance" a plain vector instead of a structure object: the element type is dropped (rontolisp vectors are generic), accessors are `aref` reads and `setf`-able places, the copier is `copy-seq`, and since there is no structure tag such a type has no predicate, no `#S(...)` syntax and cannot be a `defmethod` specializer (Common Lisp agrees -- a typed struct is not a `structure-object`). `:include` on a `:type` struct is an error.
 
@@ -53,6 +53,14 @@ The same `#S(NAME :SLOT value ...)` syntax is also read back: a `#S(...)` litera
 (defstruct point x (y 10))
 (list #S(POINT :X 1 :Y 2) #S(POINT :X 7) (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
 ; => (#S(POINT :X 1 :Y 2) #S(POINT :X 7 :Y 10) T)
+```
+
+```lisp
+(defstruct account owner (balance 0))
+(setq a (make-account :owner "ann"))
+(funcall #'(setf account-balance) 10 a)
+(mapcar #'(setf account-owner) '("bob") (list a))
+(list (account-owner a) (account-balance a)) ; => ("bob" 10)
 ```
 
 ```lisp

@@ -8489,7 +8489,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// setf of a variable -> setq; setf of an (aref v i) place -> %aset. The
 			// scalar
 			// backend has no structs/CLOS, so the no-registry expansion is exactly right.
-			case LispNames.SETF -> LispMacroExpander.expandSetf(cons);
+			case LispNames.SETF -> LispMacroExpander.expandScalarSetf(cons);
 			case LispNames.ONE_PLUS -> LispMacroExpander.expandOnePlus(cons);
 			case LispNames.ONE_MINUS -> LispMacroExpander.expandOneMinus(cons);
 			case LispNames.ZEROP -> LispMacroExpander.expandZerop(cons);
