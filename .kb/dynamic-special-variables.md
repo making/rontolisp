@@ -791,8 +791,8 @@ outside EH mode, the report in it); `UncaughtReportParityTest#aReadOfASpecialWit
 
 A read of a global before its first store: `ReadBeforeStoreFixture` on
 `aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable` (`LispEvaluatorTest`, `JvmLispCompilerTest`,
-`WasmLispCompilerIntegrationTest` -- Preview 1 and component) and ci-spec
-`a-global-read-before-its-first-store-signals`;
+`WasmLispCompilerIntegrationTest` -- Preview 1 and component; no ci-spec row: the corpus class sat
+at its constant-pool tripwire, `.kb/quoted-data.md`);
 `JvmLispCompilerTest#aGlobalCarriesTheUnboundMarkerOnlyWhereAReadCanComeBeforeItsFirstStore`,
 `WasmLispCompilerTest#aGlobalCarriesTheUnboundCheckOnlyWhereAReadCanComeBeforeItsFirstStore`;
 `ReadBeforeStoreTest`.

@@ -62,6 +62,9 @@ so what it guards is that the corpus class stays ONE class, the shape its run-an
 covers; the split's placement is pinned by the split tests. Since 2026-09-29 every level's
 class is written with a pool of its own holding only what its members reference; at
 `--optimize=off` that dropped 35 entries of the corpus class's 44,118 (CLI, the same day).
+Measured 2026-10-07, the class as the test builds it (build info included): 51,966 at 676
+cases; `.todo/e03`'s thirty-line row (`ReadBeforeStoreFixture`'s program) took it to 52,052
+(+86), so that row stayed out of the corpus; develop at `48dcda102` (677 cases) stood at 52,004.
 
 Other costs of the change:
 
