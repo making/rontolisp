@@ -32,6 +32,7 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
+import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
@@ -1004,6 +1005,10 @@ final class JvmExprCompiler {
 			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
 				JvmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx, className);
 			case LispNames.FENV_FUNCTION_INTERNAL -> JvmSymbolApiCompiler.compileFenvFunction(cons, ctx, className);
+			case LispNames.SETF_FUNCTION_SYMBOL_INTERNAL ->
+				JvmSymbolApiCompiler.compileSetfFunctionSymbol(cons, ctx, className);
+			case LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL ->
+				JvmSymbolApiCompiler.compileUndefinedSetfFunction(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE -> JvmSymbolApiCompiler.compileSymbolValue(cons, ctx, className);
 			case LispNames.SET -> JvmSymbolApiCompiler.compileSet(cons, ctx, className);
 			// Only a COMPUTED designator reaches here: PackageResolver folds a
@@ -1385,8 +1390,13 @@ final class JvmExprCompiler {
 						ctx, className);
 			case LispNames.MAKE_BROADCAST_STREAM ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, className);
-			case LispNames.FDEFINITION ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandFdefinition(cons), ctx, className);
+			case LispNames.FDEFINITION -> {
+				// A name built at run time may be a (setf place) list.
+				LispCons computed = RuntimeFunctionNames.fdefinitionCall(cons,
+						ctx.functions.containsKey(LispNames.FDEFINITION_INTERNAL));
+				JvmExprCompiler.compileExpr(computed != null ? computed : LispMacroExpander.expandFdefinition(cons),
+						ctx, className);
+			}
 			case LispNames.MASK_FIELD ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
 			case LispNames.SCALE_FLOAT ->

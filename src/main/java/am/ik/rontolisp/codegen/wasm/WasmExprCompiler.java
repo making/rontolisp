@@ -18,6 +18,7 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
@@ -1236,6 +1237,9 @@ final class WasmExprCompiler {
 			case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
 			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx);
 			case LispNames.FENV_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileFenvFunction(cons, ctx);
+			case LispNames.SETF_FUNCTION_SYMBOL_INTERNAL -> WasmSymbolApiCompiler.compileSetfFunctionSymbol(cons, ctx);
+			case LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL ->
+				WasmSymbolApiCompiler.compileUndefinedSetfFunction(cons, ctx);
 			// Only a COMPUTED designator reaches here: PackageResolver folds a
 			// literal
 			// one to the quoted package keyword before the compiler ever sees it
@@ -1648,7 +1652,12 @@ final class WasmExprCompiler {
 					ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)), ctx, tail);
 			case LispNames.MAKE_BROADCAST_STREAM ->
 				compileExpansion(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, tail);
-			case LispNames.FDEFINITION -> compileExpansion(LispMacroExpander.expandFdefinition(cons), ctx, tail);
+			case LispNames.FDEFINITION -> {
+				// A name built at run time may be a (setf place) list.
+				LispCons computed = RuntimeFunctionNames.fdefinitionCall(cons,
+						ctx.functions.containsKey(LispNames.FDEFINITION_INTERNAL));
+				compileExpansion(computed != null ? computed : LispMacroExpander.expandFdefinition(cons), ctx, tail);
+			}
 			case LispNames.MASK_FIELD -> compileExpansion(LispMacroExpander.expandMaskField(cons), ctx, tail);
 			case LispNames.SCALE_FLOAT -> compileExpansion(LispMacroExpander.expandScaleFloat(cons), ctx, tail);
 			case LispNames.CLASS_OF -> compileExpansion(LispMacroExpander.expandClassOf(cons, true,

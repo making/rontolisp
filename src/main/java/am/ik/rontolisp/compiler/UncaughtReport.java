@@ -1,5 +1,6 @@
 package am.ik.rontolisp.compiler;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
@@ -119,14 +120,17 @@ public final class UncaughtReport {
 	 * The name a location line calls a function by, given the name it was defined under:
 	 * the program's own spelling where a lowering renamed it -- a method body is its
 	 * generic function ({@code %AREA--m0} is {@code AREA}), a top-level defun a nested
-	 * one redefines keeps its name ({@link NestedDefunRedefinition}). One mapping for
-	 * every backend, so their lines stay identical.
+	 * one redefines keeps its name ({@link NestedDefunRedefinition}), and a
+	 * {@code (setf name)} function is that list, not the internal name it is stored under
+	 * ({@link ClosRegistry#functionNameForReport}). One mapping for every backend, so
+	 * their lines stay identical.
 	 * @param defined the name the function was defined under
 	 * @return the name to report
 	 */
 	public static String functionName(String defined) {
 		String generic = LispMacroExpander.genericOfMethodFunction(defined);
-		return generic != null ? generic : NestedDefunRedefinition.originalName(defined);
+		return ClosRegistry
+			.functionNameForReport(generic != null ? generic : NestedDefunRedefinition.originalName(defined));
 	}
 
 	/**

@@ -60,6 +60,24 @@ class WasmReportLocationsTest {
 
 	@Test
 	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aSetfFunctionIsNamedByTheNameTheProgramWrote() throws Exception {
+		// The line named the internal name the writer is stored under, %setf-RPT-W.
+		Path program = write("setf-function.lisp", """
+				(defun (setf rpt-w) (v x)
+				  (declare (ignore x))
+				  (error "cannot store ~a" v))
+
+				(print (ignore-errors (funcall #'(setf rpt-w) 0 0)))
+				(funcall #'(setf rpt-w) 1 2)
+				""");
+		assertSameLines(program, "Unhandled condition: cannot store 1", "  at " + program + ":3 in (SETF RPT-W)");
+		List<String> expected = List.of("Unhandled condition: cannot store 1",
+				"  at " + program + ":1 in (SETF RPT-W)");
+		assertThat(wasmReport(program, "--report-locations=function")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 	void functionGranularityNamesTheFunctionAndTheLineItsDefinitionStartsOn() throws Exception {
 		Path program = write("app.lisp", """
 				(defun parse (s)

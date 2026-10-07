@@ -311,13 +311,47 @@ under `%setf-NAME` (`LispMacroExpander.setfFunctionName`), so the list maps onto
   definition of `%setf-N`). A miss reports `(SETF N)` through `ClosRegistry.functionNameForReport`;
   the JVM's `%fenv-function` miss now throws the static text for that (it concatenated the
   symbol at run time, so a retired forwarder name reported `|%setf-N|`).
-- **Not done: a list built at run time** on the compile paths (`(fdefinition (list 'setf x))`):
-  the JVM throws a raw `ClassCastException`, P1 and the component trap -- mapping it needs the
-  `%setf-` name built and interned at run time on every such site (`.todo/e13`).
+- **Compile paths, a list built at run time** (`compiler/RuntimeFunctionNames`): three prelude
+  helpers, `%function-name` (a `(setf place)` list -> `(%setf-function-symbol place)`, anything
+  else itself), `%fdefinition` (an unbound `(setf place)` -> `(%undefined-setf-function place)`,
+  the backend's own undefined-function signal naming the list) and `%fmakunbound` (answers the
+  name given). The expression compilers of both backends call them in place of the operator
+  for a COMPUTED argument (`mayBeComputedName`: not quoted, not `#'`, not a constant, not an
+  `intern`/`find-symbol`/`make-symbol`/`gensym`/`gentemp` call) where the program defines the
+  helper: `fboundp` and `%set-symbol-function` (so `(setf (symbol-function x) fn)` too, as the
+  interpreter) wrap the name in `%function-name`, `fdefinition` / `fmakunbound` become the
+  helper call; a `(%function-name ...)` argument is never wrapped again, which is how the
+  helpers' own bodies call the operators. `#'fboundp` / `#'fdefinition` / `#'fmakunbound`
+  bodies are the computed call, so they map too. `%setf-function-symbol`: JVM
+  `"%setf-".concat(place)`, wasm the prefix and `_str_to_mem` of the place in the heap scratch
+  through `_intern` (so it joins `usesIntern`).
+- **Selection** (`RuntimeFunctionNames.sites`, the prelude's surface fact and a
+  `LibraryDefunPruner` synthesized root): a computed site of one of the operators (or the
+  operator as a function value), AND a way for the run time to hold `SETF` as data -- quoted
+  (backquote reads as quote; the argument of `(fboundp '(setf n))` excluded, it is mapped at
+  compile time), a `"SETF"` string with a symbol builder, or a data evaluator
+  (`RuntimeNameProducers`). Otherwise nothing is spliced and the program compiles as before
+  (checked by `cmp` on a computed-`fboundp` program, `.class` / P1 / component, 2026-10-07).
+- **Reachability**: in a program that defines `%function-name`, a `%setf-PLACE` function gets
+  a registry row wherever PLACE is spelled (`DesignatorSpellings.matched`'s `setfNamesBuilt`,
+  both backends), and every writable defstruct slot gets its writer defun
+  (`referencedStructWriterDefuns`). A place assembled out of computed pieces is the
+  `RuntimeNameProducers` carve-out.
+- **Divergence kept**: a direct call or place of a name only a computed `(setf fdefinition)`
+  installs (`(setf (fdefinition (list 'setf 'n)) fn)` then `(setf (n x) v)`) is the compiled
+  call-time undefined-function, as for a symbol installed through a computed name; the quoted
+  spelling gets the setf-only forwarder.
 - Measured 2026-10-07 (SBCL 2.2.9 / interpreter / JVM / P1 / component): before, `(fdefinition
-  '(setf n))` was `FDEFINITION expects a symbol` / `ClassCastException` / trap / trap.
+  '(setf n))` was `FDEFINITION expects a symbol` / `ClassCastException` / trap / trap; a list
+  built at run time, after that change, `(1 2)` / `(1 2)` / `ClassCastException` / `Not a
+  function: (SETF N)` trap / the same trap, and the same for `fboundp`, `fmakunbound` and
+  `(setf fdefinition)`.
 - Pinned by `SetfFunctionNameFixture.DESIGNATOR` (`theFunctionNameOperatorsTakeASetfFunctionName`
-  in the three backend suites); the run-time list by
+  in the three backend suites) and `.COMPUTED_DESIGNATOR`
+  (`theFunctionNameOperatorsTakeASetfFunctionNameBuiltAtRunTime`, P1 and the component in the
+  wasm one); the selection by
+  `LispPreludeLibraryTest#theRunTimeSetfFunctionNameHelpersAreSplicedOnlyWhereSuchANameCanReachAnOperator`;
+  the interpreter's refusal of a list that is no function name by
   `LispEvaluatorTest#theFunctionNameOperatorsTakeAComputedSetfFunctionName`.
 
 ### `set` / `(setf (symbol-value name) value)` for a computed name (`.todo/852`)

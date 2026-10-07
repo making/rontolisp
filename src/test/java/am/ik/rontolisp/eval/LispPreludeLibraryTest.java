@@ -65,6 +65,32 @@ class LispPreludeLibraryTest {
 	// more than the string is rewritten onto it inside the expression compilers, and
 	// #'read-from-string calls it where the value can be handed more than one argument.
 	@Test
+	void theRunTimeSetfFunctionNameHelpersAreSplicedOnlyWhereSuchANameCanReachAnOperator() {
+		// A (setf name) list built at run time needs the symbol SETF: quoted data, a
+		// string a symbol builder interns, or a data evaluator. Without one, or without
+		// a computed function name to hand it to, nothing is spliced.
+		List<String> helpers = List.of("%FUNCTION-NAME", "%FDEFINITION", "%FMAKUNBOUND");
+		for (String none : List.of("(defun f (x) (fboundp x))", "(defun f (x) (list (fdefinition x) \"SETF\"))",
+				"(defun f (x) (fboundp (intern x))) (print 'setf)",
+				"(defun f (x) (fboundp x)) (print (fboundp '(setf g)))",
+				"(defun f (x) (fmakunbound (find-symbol x))) (print '(setf g))")) {
+			assertThat(splicedNames(none)).as(none).doesNotContainAnyElementsOf(helpers);
+		}
+		assertThat(splicedNames("(defun f (x) (fboundp (list 'setf x)))")).as("fboundp")
+			.contains("%FUNCTION-NAME")
+			.doesNotContain("%FDEFINITION", "%FMAKUNBOUND");
+		assertThat(splicedNames("(defun f (x) (fdefinition `(setf ,x)))")).as("fdefinition")
+			.contains("%FUNCTION-NAME", "%FDEFINITION");
+		assertThat(splicedNames("(defun f (x) (fmakunbound (read-from-string x)))")).as("fmakunbound")
+			.contains("%FUNCTION-NAME", "%FMAKUNBOUND");
+		assertThat(splicedNames("(defun f (x) (setf (fdefinition (list (intern \"SETF\") x)) #'car))"))
+			.as("(setf fdefinition)")
+			.contains("%FUNCTION-NAME");
+		assertThat(splicedNames("(print (mapcar #'fdefinition (list (list 'setf 'g))))")).as("#'fdefinition")
+			.contains("%FUNCTION-NAME", "%FDEFINITION");
+	}
+
+	@Test
 	void theFullReadFromStringIsSplicedOnlyWhereACallCanPassMoreThanTheString() {
 		String helper = "%READ-FROM-STRING-FULL";
 		for (String oneArgument : List.of("(print (read-from-string \"a\"))",

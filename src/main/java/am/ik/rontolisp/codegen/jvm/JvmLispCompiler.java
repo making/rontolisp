@@ -5316,6 +5316,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			return all;
 		}
 		Set<Integer> rows = new HashSet<>();
+		boolean setfNamesBuilt = functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL);
 		if (registryLive) {
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 				if (callOnly.contains(entry.getKey())) {
@@ -5326,7 +5327,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				// BUILDER present) the framed string literal and the two package-less
 				// symbol spellings. The list is shared with the WASM twin
 				// (compiler.DesignatorSpellings) so the two cannot drift.
-				if (DesignatorSpellings.anySpelled(entry.getKey(), spelledLiterals, symbolBuilders)) {
+				if (DesignatorSpellings.anySpelled(entry.getKey(), spelledLiterals, symbolBuilders, setfNamesBuilt)) {
 					rows.add(entry.getValue().funcId());
 				}
 			}
@@ -5339,8 +5340,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					+ rows.size() + " registry rows)");
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 				if (rows.contains(entry.getValue().funcId())) {
-					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey() + "\tby\t"
-							+ DesignatorSpellings.matched(entry.getKey(), spelledLiterals, symbolBuilders));
+					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey() + "\tby\t" + DesignatorSpellings
+						.matched(entry.getKey(), spelledLiterals, symbolBuilders, setfNamesBuilt));
 				}
 			}
 		}

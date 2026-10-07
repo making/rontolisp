@@ -27162,6 +27162,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionNameBuiltAtRunTime() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component: the list reached the symbol runtime as it was and trapped.
+		String program = am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR;
+		String expected = am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR_EXPECTED;
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(expected);
+		assertThat(runComponentFrontendProgramWithDir(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

@@ -525,7 +525,11 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   in MAIN but run by RUN-CALLBACK printed `at <a line of MAIN> in RUN-CALLBACK`. A lowering's
   internal name is reported as the program spelled it (`UncaughtReport.functionName`): a method
   body is its generic (`%AREA--m0` -> `AREA`), a `%top-defun$` rename its original, a nested
-  `defun` its own name (`UncaughtReport.nestedDefun`).
+  `defun` its own name (`UncaughtReport.nestedDefun`), a `(setf name)` function or method the
+  list (`ClosRegistry.functionNameForReport`: `%setf-W` -> `(SETF W)`, SBCL's frame name; it
+  printed `in %setf-W` on every backend until 2026-10-07). The renamed `(defun (setf w) ...)` /
+  `defmethod` / `defgeneric` keeps the form's position, so `--report-locations=function` names
+  the line the definition starts on (it named the body's first line).
 - **Interpreter -- recorded on the throw path only** (`eval/ConditionTrace`, on
   `LispEvalException.trace()`): `evalCons` keeps the innermost `LocatedCons` it stepped onto and
   the lexical function of the scope it stepped onto it in (a type test and two stores per loop

@@ -33,14 +33,25 @@ class DesignatorSpellingsTest {
 		// function through (string '#:FN), exactly as the keyword one does, so it has
 		// to probe the same way. Before this, the '#: form compiled and
 		// then died undefined at run time.
-		assertThat(DesignatorSpellings.matched("PKG:FN", Set.of("#:FN"), true)).isEqualTo("#:FN");
-		assertThat(DesignatorSpellings.anySpelled("PKG:FN", Set.of("#:FN"), false)).isFalse();
+		assertThat(DesignatorSpellings.matched("PKG:FN", Set.of("#:FN"), true, false)).isEqualTo("#:FN");
+		assertThat(DesignatorSpellings.anySpelled("PKG:FN", Set.of("#:FN"), false, false)).isFalse();
+	}
+
+	@Test
+	void aSetfFunctionIsArmedByItsPlaceWhereTheProgramBuildsSetfNames() {
+		// (fdefinition (list 'setf 'fn)) reaches %setf-FN through the spelled place,
+		// and only in a program that maps such a list at run time.
+		assertThat(DesignatorSpellings.matched("%setf-PKG::FN", Set.of("PKG::FN"), false, true)).isEqualTo("PKG::FN");
+		assertThat(DesignatorSpellings.matched("%setf-FN", Set.of("\"FN\""), true, true)).isEqualTo("\"FN\"");
+		assertThat(DesignatorSpellings.anySpelled("%setf-FN", Set.of("FN"), false, false)).isFalse();
+		assertThat(DesignatorSpellings.anySpelled("FN", Set.of("SETF"), false, true)).isFalse();
 	}
 
 	@Test
 	void anUnspelledNameIsNotArmed() {
-		assertThat(DesignatorSpellings.anySpelled("PKG:FN", Set.of("OTHER", ":OTHER", "#:OTHER"), true)).isFalse();
-		assertThat(DesignatorSpellings.matched("PKG:FN", Set.of(), true)).isNull();
+		assertThat(DesignatorSpellings.anySpelled("PKG:FN", Set.of("OTHER", ":OTHER", "#:OTHER"), true, false))
+			.isFalse();
+		assertThat(DesignatorSpellings.matched("PKG:FN", Set.of(), true, false)).isNull();
 	}
 
 }

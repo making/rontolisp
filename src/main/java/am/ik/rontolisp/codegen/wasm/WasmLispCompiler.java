@@ -4110,7 +4110,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.UIOP_SYMBOL_CALL)
 				// A computed find-symbol (call position or the reference-gated #'
 				// wrapper) lowers to intern, so it needs the _intern runtime too.
-				|| programUsesSymbol(program, LispNames.FIND_SYMBOL);
+				|| programUsesSymbol(program, LispNames.FIND_SYMBOL)
+				// So does a (setf place) function name built at run time.
+				|| programUsesSymbol(program, LispNames.SETF_FUNCTION_SYMBOL_INTERNAL);
 
 		// Whether a mutable CHARACTER VECTOR can exist at run time
 		// (Ctx.charvecPossible). The question is decided by an ALLOWLIST -- the gate
@@ -9582,8 +9584,23 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private static boolean anyDefunNameSpelled(List<DefunDecl> defuns, Set<String> spelledLiterals,
 			boolean symbolBuilders) {
+		boolean setfNamesBuilt = definesSetfNameMapper(defuns);
 		for (DefunDecl defun : defuns) {
-			if (DesignatorSpellings.anySpelled(defun.name, spelledLiterals, symbolBuilders)) {
+			if (DesignatorSpellings.anySpelled(defun.name, spelledLiterals, symbolBuilders, setfNamesBuilt)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the program maps a {@code (setf place)} list built at run time onto its
+	 * function ({@code compiler.RuntimeFunctionNames}): then a {@code (setf place)}
+	 * function resolves wherever its place is spelled.
+	 */
+	private static boolean definesSetfNameMapper(List<DefunDecl> defuns) {
+		for (DefunDecl defun : defuns) {
+			if (LispNames.FUNCTION_NAME_INTERNAL.equals(defun.name)) {
 				return true;
 			}
 		}
@@ -9785,6 +9802,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			return all;
 		}
 		Set<Integer> rows = new HashSet<>();
+		boolean setfNamesBuilt = definesSetfNameMapper(defuns);
 		if (registryLive) {
 			for (int i = 0; i < defuns.size(); i++) {
 				if (callOnly.contains(defuns.get(i).name)) {
@@ -9795,7 +9813,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// BUILDER present) the framed string literal and the two package-less
 				// symbol spellings. The list is shared with the JVM twin
 				// (compiler.DesignatorSpellings) so the two cannot drift.
-				if (DesignatorSpellings.anySpelled(defuns.get(i).name, spelledLiterals, symbolBuilders)) {
+				if (DesignatorSpellings.anySpelled(defuns.get(i).name, spelledLiterals, symbolBuilders,
+						setfNamesBuilt)) {
 					rows.add(i);
 				}
 			}
@@ -9816,7 +9835,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				String name = defuns.get(i).name;
 				if (rows.contains(i)) {
 					System.err.println("[dispatch-gate] name-armed\t" + name + "\tby\t"
-							+ DesignatorSpellings.matched(name, spelledLiterals, symbolBuilders));
+							+ DesignatorSpellings.matched(name, spelledLiterals, symbolBuilders, setfNamesBuilt));
 				}
 				else if (!valueFuncIds.contains(i)) {
 					System.err.println("[dispatch-gate] call-only\t" + name);

@@ -2332,6 +2332,27 @@ public final class LispEvaluator {
 					}
 					return fn;
 				}));
+		// The compile paths' run-time (setf place) function-name helpers
+		// (compiler.RuntimeFunctionNames) call these two; the interpreter maps the list
+		// itself (functionName), and serves them so a program means the same thing here.
+		this.globalEnv.defineFunction(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL,
+				new LispFunction(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL, args -> {
+					requireSingleArg(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol place)) {
+						throw new LispEvalException(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL + " expects a symbol, got "
+								+ args.get(0).print());
+					}
+					return new LispSymbol(LispMacroExpander.setfFunctionName(place.name()));
+				}));
+		this.globalEnv.defineFunction(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, args -> {
+					requireSingleArg(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol place)) {
+						throw new LispEvalException(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL
+								+ " expects a symbol, got " + args.get(0).print());
+					}
+					throw CellErrorException.undefinedFunction(LispMacroExpander.setfFunctionName(place.name()));
+				}));
 		// find-symbol never creates: the symbol comes back only when the package makes
 		// the name accessible -- a present member (the package's member table, or a
 		// definition made under it: a definition IS an interning), an inherited export
