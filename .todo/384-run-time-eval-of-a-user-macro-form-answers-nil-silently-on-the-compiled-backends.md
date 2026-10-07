@@ -48,7 +48,3 @@ and the same program with a `#'read-char` anywhere answers the character.
 `(function name)` through the eval runtime, gets nil, and the dispatcher then reports
 `The function NIL is undefined` with `cell-error-name` NIL instead of the name the call
 spelled (found 2026-10-07 beside the undefined-function name slot fix, `.kb/error-handling.md`).
-
-A name only `(setf (symbol-function 'name) ...)` binds rides the same nil since its forwarder
-defun left the name registry (`.kb/symbol-runtime-api.md`): `(eval '(name 1))` before the setf
-runs answers NIL on JVM/wasm/component, where the interpreter signals `undefined-function`.

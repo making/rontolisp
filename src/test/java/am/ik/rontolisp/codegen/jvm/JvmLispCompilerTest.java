@@ -2078,6 +2078,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunExactPrefixFloatFold() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#exactPrefixFloatFold. The unboxed
+		// double fold converted every operand first, a site whose float only a call
+		// showed answered a float for exact operands, and the fused double path widened
+		// its leading integer constants one by one. Both levels: size declines fusion.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ExactPrefixFloatFoldFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.EXPECTED);
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
 	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
 		// Through the CLI's front end, which splices the prelude defuns (mismatch,
 		// search, count-if-not) the program reaches. The interpreter twin is

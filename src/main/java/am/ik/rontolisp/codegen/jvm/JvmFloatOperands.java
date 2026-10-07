@@ -70,14 +70,24 @@ final class JvmFloatOperands {
 	 * @return the evaluated operands
 	 */
 	static Operands evaluate(List<LispVal> forms, JvmLispCompiler.Ctx ctx, String className) {
+		return evaluate(forms, 0, ctx, className);
+	}
+
+	/**
+	 * {@link #evaluate(List, JvmLispCompiler.Ctx, String)} for a site whose first
+	 * {@code boxed} operands fold through the generic helpers (its exact prefix,
+	 * {@link JvmArithCompiler#exactPrefix}): an inner operation among them is evaluated
+	 * as a value, exact when its operands are, rather than as a raw double.
+	 */
+	private static Operands evaluate(List<LispVal> forms, int boxed, JvmLispCompiler.Ctx ctx, String className) {
 		List<Operand> operands = new ArrayList<>(forms.size());
-		for (LispVal form : forms) {
-			operands.add(evaluate(form, ctx, className));
+		for (int i = 0; i < forms.size(); i++) {
+			operands.add(evaluate(forms.get(i), i < boxed, ctx, className));
 		}
 		return new Operands(operands);
 	}
 
-	private static Operand evaluate(LispVal form, JvmLispCompiler.Ctx ctx, String className) {
+	private static Operand evaluate(LispVal form, boolean boxed, JvmLispCompiler.Ctx ctx, String className) {
 		if (form instanceof LispDouble d) {
 			return new Literal(form, d.value());
 		}
@@ -90,7 +100,7 @@ final class JvmFloatOperands {
 			ctx.body.dstore(raw);
 			return new Raw(raw);
 		}
-		String opKey = JvmArithCompiler.inlinedOpKey(form, ctx);
+		String opKey = boxed ? null : JvmArithCompiler.inlinedOpKey(form, ctx);
 		if (opKey != null) {
 			return compileInner((LispCons) form, opKey, ctx, className);
 		}
@@ -115,10 +125,12 @@ final class JvmFloatOperands {
 		int site = ctx.enterSite(form);
 		try {
 			List<LispVal> parts = form.toList();
-			Operands operands = evaluate(parts.subList(1, parts.size()), ctx, className);
+			List<LispVal> forms = parts.subList(1, parts.size());
+			int prefix = JvmArithCompiler.exactPrefix(forms, ctx);
+			Operands operands = evaluate(forms, prefix, ctx, className);
 			int raw = allocDouble(ctx);
 			if (!operands.mayHoldComplex()) {
-				foldRaw(operands, opKey, ctx, className);
+				foldRaw(operands, prefix, opKey, ctx, className);
 				ctx.body.dstore(raw);
 				return new Raw(raw);
 			}
@@ -126,7 +138,7 @@ final class JvmFloatOperands {
 			MethodCode.Label generic = ctx.body.newLabel();
 			MethodCode.Label done = ctx.body.newLabel();
 			operands.jumpIfComplex(ctx, className, generic);
-			foldRaw(operands, opKey, ctx, className);
+			foldRaw(operands, prefix, opKey, ctx, className);
 			ctx.body.dstore(raw).aconst_null().astore(boxed).goto_(done);
 			ctx.body.labelBinding(generic);
 			foldGeneric(operands, opKey, ctx, className);
@@ -150,9 +162,10 @@ final class JvmFloatOperands {
 	 * @param className the class being emitted
 	 */
 	static void compileArithmetic(List<LispVal> operandForms, String opKey, JvmLispCompiler.Ctx ctx, String className) {
-		Operands operands = evaluate(operandForms, ctx, className);
+		int prefix = JvmArithCompiler.exactPrefix(operandForms, ctx);
+		Operands operands = evaluate(operandForms, prefix, ctx, className);
 		branch(operands, ctx, className, () -> {
-			foldRaw(operands, opKey, ctx, className);
+			foldRaw(operands, prefix, opKey, ctx, className);
 			JvmEmitHelper.boxDouble(ctx);
 		}, () -> foldGeneric(operands, opKey, ctx, className));
 	}
@@ -205,8 +218,11 @@ final class JvmFloatOperands {
 	}
 
 	// JvmArithCompiler's raw fold, over the evaluated operands: the reciprocal and the
-	// negation as their IEEE operations, every other arity a left fold.
-	private static void foldRaw(Operands operands, String opKey, JvmLispCompiler.Ctx ctx, String className) {
+	// negation as their IEEE operations, every other arity a left fold -- its exact
+	// prefix through the generic helpers, joined to the raw operands by the _addd
+	// family's step (JvmArithCompiler.compileFold).
+	private static void foldRaw(Operands operands, int prefix, String opKey, JvmLispCompiler.Ctx ctx,
+			String className) {
 		int count = operands.size();
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && count == 1) {
 			ctx.body.dconst_1();
@@ -219,8 +235,27 @@ final class JvmFloatOperands {
 			ctx.body.dneg();
 			return;
 		}
-		operands.pushRaw(0, ctx, className);
-		for (int i = 1; i < count; i++) {
+		if (prefix > 0) {
+			operands.pushBoxed(0, ctx, className);
+			for (int i = 1; i < prefix; i++) {
+				operands.pushBoxed(i, ctx, className);
+				String toDouble = JvmArithCompiler.toDoubleKey(opKey);
+				if (i < prefix - 1) {
+					ctx.body.invokestatic(ctx.numOp(opKey));
+				}
+				else if (toDouble != null) {
+					ctx.body.invokestatic(ctx.numOp(toDouble));
+				}
+				else {
+					ctx.body.invokestatic(ctx.numOp(opKey));
+					JvmEmitHelper.unboxDouble(ctx);
+				}
+			}
+		}
+		else {
+			operands.pushRaw(0, ctx, className);
+		}
+		for (int i = Math.max(prefix, 1); i < count; i++) {
 			operands.pushRaw(i, ctx, className);
 			switch (opKey) {
 				case JvmNumericRuntimeBuilder.ADD -> ctx.body.dadd();

@@ -133,6 +133,19 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(type);
 	}
 
+	/**
+	 * Returns what {@code _apply} answers for the operator SYMBOL in {@code opSlot} and
+	 * no argument: its namespace probe reports the name undefined (a trap outside EH
+	 * mode), before any argument form is evaluated.
+	 */
+	private static void emitUndefinedOperatorReturn(WasmWriter w, int opSlot) {
+		getLocal(w, opSlot);
+		emitNull(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.write(Instruction.RETURN);
+	}
+
 	private static void emitNull(WasmWriter w) {
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
@@ -543,10 +556,15 @@ final class WasmEvalRuntimeBuilder {
 	 * assignment go through, or -1 when the program runs no form through eval or does not
 	 * carry it: a variable then lives in the {@code GLOBAL_ENV} mirror alone, as it
 	 * always did
+	 * @param fenvForwarders the names only a {@code (setf (symbol-function 'n) ...)}
+	 * binds, each registered in {@code off}: their forwarder defun is in no registry, so
+	 * a call of one with no {@code $fenv} binding is reported undefined instead of
+	 * answering nil
+	 * @param identityHash whether hash tables hash by identity
 	 * @return the encoded function body
 	 */
 	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, int globalAccessIndex,
-			boolean identityHash) {
+			java.util.List<String> fenvForwarders, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1313,6 +1331,12 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		emitCdrOf(w, TMP);
 		setLocal(w, FN);
+		// fmakunbound's tombstone (a nil cell): the name is undefined
+		getLocal(w, FN);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitUndefinedOperatorReturn(w, OP);
+		w.write(Instruction.END);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
@@ -1320,6 +1344,17 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+		// A name only (setf (symbol-function 'n) ...) binds, before the setf ran: its
+		// forwarder defun is in no registry, so the probes below would miss into the
+		// unknown operator's nil.
+		for (String forwarded : fenvForwarders) {
+			getLocal(w, OFF);
+			i32(w, off.of(forwarded));
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			emitUndefinedOperatorReturn(w, OP);
+			w.write(Instruction.END);
+		}
 		// (b) registered function -> evaluate every argument form, then apply. The count
 		// is the spread dispatcher's to judge -- its case measures the list against the
 		// callee's lambda list and reports a wrong count naming the operator -- so no
