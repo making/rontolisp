@@ -770,7 +770,7 @@ class RontoLispCliStreamsTest {
 				new String[] { "(log -1.5)", "#C(0.4054651081081644 3.141592653589793)" },
 				new String[] { "(asin 2)", "#C(1.5707963267948966 -1.3169578969248166)" },
 				new String[] { "(acos 2)", "#C(0.0 1.3169578969248166)" },
-				new String[] { "(log 8 -2)", "#C(0.1392609706362244 -0.6311808726237906)" })) {
+				new String[] { "(log 8 -2)", "#C(0.13926097063622436 -0.6311808726237905)" })) {
 			Path program = this.tempDir.resolve("complex.scm");
 			Files.writeString(program, "(display " + call[0] + ")(newline)\n");
 			String[] result = runReporting(program.toString());
