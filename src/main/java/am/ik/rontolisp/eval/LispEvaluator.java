@@ -1376,6 +1376,12 @@ public final class LispEvaluator {
 			// holds. The old tag/type-name view lives on as %class-designator.
 			LispVal v = args.get(0);
 			if (v instanceof LispInstance inst) {
+				// A built-in stream answers its standard class, before its layout's
+				// (the composites are prelude classes, the rest layout-only).
+				String streamClass = ClosRegistry.streamClassName(inst);
+				if (streamClass != null) {
+					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(streamClass));
+				}
 				LispVal metaobject = this.closRegistry.classMetaobject(inst.layout().tag());
 				if (metaobject != null) {
 					return metaobject;
@@ -1399,7 +1405,10 @@ public final class LispEvaluator {
 					// too).
 					LispVal v = args.get(0);
 					if (v instanceof LispInstance inst) {
-						return new LispSymbol(inst.layout().tag());
+						// A built-in stream designates its standard class, not its
+						// internal layout.
+						String streamClass = ClosRegistry.streamClassName(inst);
+						return new LispSymbol(streamClass != null ? streamClass : inst.layout().tag());
 					}
 					return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
 				}));
@@ -1812,10 +1821,12 @@ public final class LispEvaluator {
 		wrapGrayOwnableOperator(LispNames.INPUT_STREAM_P, GRAY_INPUT_STREAM_P_DISPATCH);
 		wrapGrayOwnableOperator(LispNames.OUTPUT_STREAM_P, GRAY_OUTPUT_STREAM_P_DISPATCH);
 		wrapGrayOwnableOperator(LispNames.STREAM_ELEMENT_TYPE, GRAY_STREAM_ELEMENT_TYPE_DISPATCH);
-		// streamp: a Gray stream IS a stream in Common Lisp, so the FUNCTION VALUE has to
-		// answer what the operator form's lowering answers. The lowering bakes the
-		// registry's descendant tags; this one reads them at call time, which is the same
-		// set.
+		// streamp: a Gray stream IS a stream in Common Lisp. The interpreter has no
+		// lowering for the call form -- it is this function value, so the registry's
+		// descendant tags are read when the argument has been evaluated. A lowering
+		// would bake them before the argument runs, and the argument may be what loads
+		// the class (the composite-stream constructors' prelude classes load on their
+		// first call).
 		LispVal baseStreamp = this.globalEnv.lookupFunction(LispNames.STREAMP);
 		this.globalEnv.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
 			if (args.size() == 1 && isGrayStreamInstance(args.get(0))) {
@@ -7551,8 +7562,6 @@ public final class LispEvaluator {
 			// mutation there; cl-who resolves it at macro-expansion time).
 			case LispNames.CONSTANTP:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandConstantp);
-			case LispNames.STREAMP:
-				return LispMacroExpander.expandStreamp(cons, true, true, this.closRegistry);
 			case LispNames.SIMPLE_STRING_P:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths

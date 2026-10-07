@@ -20,6 +20,14 @@
 ; => ((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T NIL) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2)) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 2))
 ```
 
+組み込みのストリームはその標準クラスを返します: `string-stream`、`file-stream`、`synonym-stream`、`two-way-stream`、`broadcast-stream`、`echo-stream`、`concatenated-stream` のいずれかで、それ以外の種類 (ソケット、`*error-output*`) は `stream` です。処理系が実装サブクラス (SBCL の `SB-IMPL::STRING-OUTPUT-STREAM`) を返すところで、rontolisp は標準クラスそのものを返すため、`(typep s (type-of s))` が成り立ち、名前は可搬です。
+
+```lisp
+(list (type-of (make-string-output-stream))
+      (type-of (make-two-way-stream (make-string-input-stream "a") (make-string-output-stream))))
+; => (STRING-STREAM TWO-WAY-STREAM)
+```
+
 ```lisp
 (defpackage :gfx (:use :cl) (:export :sprite))
 (in-package :gfx)

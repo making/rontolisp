@@ -299,9 +299,46 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
 - `<tags>` = the OPEN-stream layout tag `%STREAM` and the synonym-stream tag (each only when
   the program can build one), then `closRegistry.descendantTags(rontolisp:fundamental-stream)`.
   No `integerp` arm: every stream is a VALUE (`.kb/read-load-streams.md`).
+- **The interpreter does NOT lower the call form**: `(streamp x)` is the function value
+  (`LispEvaluator`'s wrap over `Environment`'s built-in), which reads the descendant tags AFTER
+  `x` ran. A lowering bakes them at expansion, before the argument runs, and the argument may be
+  what loads the class: the composite prelude classes load on the constructor's first CALL, so
+  `(streamp (make-two-way-stream ...))` as the program's first composite answered NIL there
+  until 2026-10-07 (SBCL, JVM, both WASM: T). `(typep x 'stream)` was spared: its lowering binds
+  `x` first and the `(streamp tmp)` it produces is expanded afterwards. Pin:
+  `CompositeStreampFixture` (the composite built inside the predicate, directly and through a
+  defun).
 - **A COMPUTED type specifier needs BOTH halves of the runtime typep machinery**
   (`.kb/clos.md`): `STREAM` in `RUNTIME_TYPEP_BUILTINS` AND a row in `%typep-tag-table%` —
   `%typep-runtime` tests `%obj-p` FIRST, so an instance never reaches the built-in name arms.
+- **The stream SUBTYPE names (`file-stream` ... `concatenated-stream`) answer computed as they do
+  literally** (`RUNTIME_TYPEP_STREAM_NAMES`, kept out of `RUNTIME_TYPEP_BUILTINS`: a non-instance
+  arm would be dead code, and that list also seeds the `subtypep` universe). Interpreter: one arm
+  each, after the built-ins. Compile paths: synonym and the composites are tag-table rows (a
+  composite only when its prelude class is registered); `file-stream`/`string-stream` share the
+  `%STREAM` tag, so their `KIND` test is the table scan's RESULT form (`streamKindFallback`),
+  reached only by a name the table lacks. Both gated on the program SPELLING the name (the probe
+  `narrowedDeftypeAliases` uses); spelling none -> byte-identical. `get-output-stream-string`'s
+  expansion spells `STRING-STREAM`, so its programs carry that arm. Pin:
+  `ComputedStreamTypepFixture`.
+- **`type-of`/`class-of` name a built-in stream by its STANDARD class, and `subtypep` places
+  the subtypes below `stream`** (2026-10-07; before, `%STREAM` / `%TWO-WAY-STREAM`, `(typep s
+  (type-of s))` NIL, `class-of` an error compiled). The ONE dispatch is `%class-designator`:
+  interpreter `ClosRegistry.streamClassName`, compile paths `streamClassDesignator` inside the
+  `%obj-p` arm, each arm gated on the program building that stream (`usesStreamValues`,
+  `usesSynonymStreams`, composite class registered), so `type-of`, `class-of`, the
+  `print-unreadable-object :type` text and the no-applicable-method message follow. The eight
+  names are in `BUILTIN_CLASS_NAMES` (slot-less metaobjects; `class-of` of a stream is `eq` to
+  `find-class` of the name -- SBCL answers an implementation subclass instead). `subtypep`:
+  seven `SUBTYPEP_PARENTS` edges to `STREAM` (ANSI CPLs: echo is NOT below two-way, unlike
+  SBCL) and a class with `rontolisp:fundamental-stream` among its ancestors is below `STREAM`.
+  Runtime tables: `runtimeStreamTypeNames` = the names spelled, or all seven when the program
+  references `type-of`/`class-of` (a name reached with nothing spelled); the `subtypep`
+  universe skips an edge outside that set, so a program meeting none keeps its table. Pin:
+  `StreamTypeLatticeFixture` (incl. an unspelled program). Not covered: a Gray base class
+  NAMED before gray.lisp loads on the interpreter (`(subtypep 'rontolisp:fundamental-stream
+  'stream)` as the first Gray reference) is an unknown class there; the compile paths splice
+  gray.lisp for any program naming one.
 - **`ArgumentShapes.Shape.INSTANCE` had to gain `STREAM`**: the compile-path dead-branch pruner
   deletes a `typecase` clause no value of the key's shape can satisfy, so `STREAM` absent from
   that row DELETED cl+ssl's `(etypecase socket (integer ...) (stream ...))` arm.

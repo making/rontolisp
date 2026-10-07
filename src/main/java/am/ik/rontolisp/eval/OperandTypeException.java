@@ -98,6 +98,20 @@ final class OperandTypeException extends LispEvalException {
 	}
 
 	/**
+	 * The error of an operand that is not of a compound type a lowering spells as a Lisp
+	 * value ({@code LispMacroExpander.stringOutputStreamType}), named after
+	 * {@code operator} when that is one of {@link OperandTypes}' operators.
+	 * @param datum the rejected operand
+	 * @param type the type
+	 * @param operator the operator's symbol name, or null for an unnamed report
+	 * @return the exception to throw
+	 */
+	static OperandTypeException notOfType(LispVal datum, LispVal type, @Nullable String operator) {
+		String reported = operator == null ? null : OperandTypes.reportedOperator(operator);
+		return new OperandTypeException(datum, OperandTypes.Kind.ARRAY, reported, type);
+	}
+
+	/**
 	 * A type error whose report the built-in words itself rather than as
 	 * {@code OP: The value X is not of type T} -- {@code subseq}'s bounds report, kept
 	 * byte-identical across the backends -- carrying its datum and compound type. It is

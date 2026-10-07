@@ -2,7 +2,7 @@
 
 `(subtypep type1 type2 &optional environment)`
 
-Whether `type1` names a subtype of `type2`, answering over the built-in type lattice (e.g. `integer` ⊂ `rational` ⊂ `real` ⊂ `number`, `string` ⊂ `vector` ⊂ `array`/`sequence`) plus the class registry's ancestor sets (`defclass`/`define-condition` hierarchies). Two values, as in CL: the answer, and a `valid-p` saying whether it is a decision (see below). The float and character type names collapse to the one runtime representation, so `(subtypep 'short-float 'single-float)` is `t`; `base-string`/`simple-base-string` collapse for the same reason (one character type). The `simple-` names do NOT: a fill pointer, `:adjustable t` or a displacement makes a non-simple array or string here, so `simple-vector`/`simple-array`/`simple-string` are proper subtypes of `vector`/`array`/`string` and the reverse direction is nil. `bfloat16`, the packed-array element width ([data types](../data-types.md)), is a rontolisp extension that sits *below* `float` rather than collapsing onto it: no scalar has the type, so `(subtypep 'bfloat16 'float)` is `t` and `(subtypep 'float 'bfloat16)` is nil. `environment` is accepted and ignored: there is one global environment.
+Whether `type1` names a subtype of `type2`, answering over the built-in type lattice (e.g. `integer` ⊂ `rational` ⊂ `real` ⊂ `number`, `string` ⊂ `vector` ⊂ `array`/`sequence`) plus the class registry's ancestor sets (`defclass`/`define-condition` hierarchies). Two values, as in CL: the answer, and a `valid-p` saying whether it is a decision (see below). The float and character type names collapse to the one runtime representation, so `(subtypep 'short-float 'single-float)` is `t`; `base-string`/`simple-base-string` collapse for the same reason (one character type). The `simple-` names do NOT: a fill pointer, `:adjustable t` or a displacement makes a non-simple array or string here, so `simple-vector`/`simple-array`/`simple-string` are proper subtypes of `vector`/`array`/`string` and the reverse direction is nil. `bfloat16`, the packed-array element width ([data types](../data-types.md)), is a rontolisp extension that sits *below* `float` rather than collapsing onto it: no scalar has the type, so `(subtypep 'bfloat16 'float)` is `t` and `(subtypep 'float 'bfloat16)` is nil. Each of `file-stream`, `string-stream`, `synonym-stream`, `two-way-stream`, `broadcast-stream`, `echo-stream` and `concatenated-stream` is directly below `stream`, as ANSI's class precedence lists place them (so an echo stream is not a two-way stream), and so is every Gray stream class. `environment` is accepted and ignored: there is one global environment.
 
 Either argument may be a class metaobject instead of a type name: what [`find-class`](find-class.md) and [`class-of`](class-of.md) answer designates its own class, so a metaobject compares exactly like the name spelling. Both arguments may also be computed at run time. On the JVM and WASM compilers a literal (quoted) pair is folded into a constant at compile time; anything else is answered at run time over the same lattice, with identical answers on all four backends.
 
@@ -46,4 +46,11 @@ The SECOND value is CL's `valid-p`: whether the answer is a decision rather than
 ```lisp
 (list (subtypep 'bfloat16 'float)
       (subtypep 'float 'bfloat16)) ; => (T NIL)
+```
+
+```lisp
+(defclass counter-stream (rontolisp:fundamental-character-output-stream) ())
+(list (subtypep 'string-stream 'stream)
+      (subtypep 'stream 'string-stream)
+      (subtypep 'counter-stream 'stream)) ; => (T NIL T)
 ```

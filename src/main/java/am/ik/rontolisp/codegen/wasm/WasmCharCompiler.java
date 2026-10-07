@@ -89,7 +89,31 @@ final class WasmCharCompiler {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		OperandTypes.Kind kind = OperandTypes.Kind.named(form.kind());
+		LispCons compoundType = form.compoundType();
+		if (compoundType != null) {
+			// A compound type is the report's own, printed and carried as it is: the
+			// compound landing under the operator's row.
+			if (operatorForm != null) {
+				WasmExprCompiler.compileExpr(operatorForm, ctx);
+				WasmEmitHelper.castI31GetS(ctx);
+				ctx.writer.write(Instruction.SET_GLOBAL);
+				ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+			}
+			else {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(WasmOperandTypes.operatorId(ctx, form.operator()));
+				ctx.writer.write(Instruction.SET_GLOBAL);
+				ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+			}
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			emitTypeValue(compoundType, ctx);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_OF);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		OperandTypes.Kind kind = OperandTypes.Kind.named(java.util.Objects.requireNonNull(form.kind()));
 		if (operatorForm != null) {
 			WasmExprCompiler.compileExpr(operatorForm, ctx);
 			WasmEmitHelper.castI31GetS(ctx);
@@ -101,6 +125,36 @@ final class WasmCharCompiler {
 			return;
 		}
 		WasmOperandTypes.withOperator(ctx, form.operator(), () -> WasmOperandTypes.emitTypeError(ctx, slot, kind));
+	}
+
+	/**
+	 * Pushes a compound type as the Lisp value it spells: a symbol its name (unspelled,
+	 * as {@code digit-char-p}'s {@code (INTEGER 2 36)} spells its head), an integer a
+	 * fixnum, a list a chain of conses.
+	 */
+	private static void emitTypeValue(LispVal type, WasmLispCompiler.Ctx ctx) {
+		if (type instanceof LispCons list) {
+			List<LispVal> elements = list.toList();
+			for (LispVal element : elements) {
+				emitTypeValue(element, ctx);
+			}
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			for (int i = 0; i < elements.size(); i++) {
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+		}
+		else if (type instanceof LispSymbol symbol) {
+			WasmEmitHelper.compileUnspelledLiteral(symbol.name(), ctx);
+		}
+		else if (type instanceof LispInteger n) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(Math.toIntExact(n.value()));
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		}
+		else {
+			throw new IllegalArgumentException("not a type: " + type.print());
+		}
 	}
 
 	/**

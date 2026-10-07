@@ -16,6 +16,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -10764,6 +10765,46 @@ class LispEvaluatorTest {
 		assertThat(evalPrinted(StreamOperandErrorsFixture.PROGRAM)).isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 		assertThat(evalPrinted(StreamOperandErrorsFixture.REPORT_PROGRAM))
 			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void getOutputStreamStringRefusesAnotherKindOfStream() {
+		// A stream that is no string output stream is the operator's type-error over
+		// the stream as given, expecting (AND STRING-STREAM (SATISFIES
+		// OUTPUT-STREAM-P)). Pinned on all four backends.
+		assertThat(evalPrinted(OutputStreamStringKindFixture.PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+		assertThat(evalPrinted(OutputStreamStringKindFixture.REPORT_PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes() {
+		// A stream type name held in a value decides what its literal spelling decides.
+		// Pinned on all four backends.
+		assertThat(evalPrinted(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+	}
+
+	@Test
+	void typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() {
+		// type-of and class-of name the standard stream class, typep and subtypep
+		// accept that name, a Gray stream class is below stream. Pinned on all four
+		// backends.
+		assertThat(evalPrinted(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+		assertThat(evalPrinted(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
+	void streampOfACompositeStreamBuiltInTheSameForm() {
+		// The composite class loads while the predicate's argument runs, after the call
+		// form was reached; the answer still counts it. Pinned on all four backends.
+		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(evalPrinted(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 	}
 
 	@Test

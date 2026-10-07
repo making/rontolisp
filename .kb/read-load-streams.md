@@ -553,7 +553,8 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   spellings (`expandMakeStringOutputStream`/`expandGetOutputStreamString`; the interpreter registers
   both as real `LispFunction`s so `#'` and native-image mode work), and
   **`%string-stream-contents` CLEARS the stream as it answers** (CL's contract; the WASM BUFFER
-  stays).
+  stays). A stream of another kind is its type-error: `.kb/error-handling.md`, "A wrong-type
+  argument names its operator".
 - `make-string-input-stream` (`expandMakeStringInputStream`) exists because a library needed the
   stream to OUTLIVE the form that made it: yason's `parse` makes one, so `lack/request` answered
   `400 Bad Request` to every JSON body (every `ningle` application). `&optional start end` routes
@@ -1517,6 +1518,8 @@ answer.
   `readtable` lowers to `null`. All four are in `PackageRegistry.CL_TYPES` and
   `LispMacroExpander.makeTypeTest`; **a name in the first without a case in the second is a hard
   expansion error in `typecase`, not a silent nil.**
+  `type-of`/`class-of` answer these standard names and `subtypep` places them below `stream`
+  (`.kb/gray-streams.md`).
 
 - **Open or closed is a fact about the VALUE on wasm** (2026-09-27). A WASI descriptor has no
   stream table behind it and the host hands the lowest free one to the next `open`, so a

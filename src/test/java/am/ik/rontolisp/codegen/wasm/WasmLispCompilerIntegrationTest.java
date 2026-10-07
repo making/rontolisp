@@ -20,6 +20,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -14944,6 +14945,56 @@ class WasmLispCompilerIntegrationTest {
 				.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 			assertThat(compileAndRunFrontEndWithDir(StreamOperandErrorsFixture.REPORT_PROGRAM, component))
 				.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+		}
+	}
+
+	@Test
+	void getOutputStreamStringRefusesAnotherKindOfStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAnotherKindOfStream, Preview 1
+		// and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.REPORT_PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
+		}
+	}
+
+	@Test
+	void computedTypepOfAStreamTypeName() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+		}
+	}
+
+	@Test
+	void typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+			assertThat(
+					compileAndRunFrontEndWithDir(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+		}
+	}
+
+	@Test
+	void streampOfACompositeStreamBuiltInTheSameForm() throws Exception {
+		// The wasm twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+			assertThat(compileAndRunFrontEndWithDir(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM, component))
+				.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 		}
 	}
 

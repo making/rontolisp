@@ -5,6 +5,7 @@ import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -14060,6 +14061,44 @@ class JvmLispCompilerTest {
 			.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
 		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.REPORT_PROGRAM))
 			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunGetOutputStreamStringRefusesAnotherKindOfStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAnotherKindOfStream, through
+		// the whole front end (the Gray class).
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.REPORT_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComputedTypepOfAStreamTypeName() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTypeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStreampOfACompositeStreamBuiltInTheSameForm() throws Exception {
+		// The JVM twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
 	}
 
 	@Test

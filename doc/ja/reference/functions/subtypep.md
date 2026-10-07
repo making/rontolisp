@@ -2,7 +2,7 @@
 
 `(subtypep type1 type2 &optional environment)`
 
-`type1` が `type2` のサブタイプかどうかを、組み込み型の束 (例: `integer` ⊂ `rational` ⊂ `real` ⊂ `number`、`string` ⊂ `vector` ⊂ `array`/`sequence`) とクラスレジストリの祖先集合 (`defclass`/`define-condition` 階層) に対して判定します。CL と同じく 2 値を返します: 判定結果と、それが「決定」かどうかを示す `valid-p` です (下記参照)。float・文字の型名は単一のランタイム表現に集約されるため `(subtypep 'short-float 'single-float)` は `t` です。`base-string` / `simple-base-string` も同じ理由 (文字型が 1 つ) で集約されます。一方 `simple-` 系は集約されません: fill pointer・`:adjustable t`・displacement があれば simple でない配列・文字列になるため、`simple-vector` / `simple-array` / `simple-string` は `vector` / `array` / `string` の真部分型であり、逆方向は nil です。パックド配列の要素幅である `bfloat16` ([データ型](../data-types.md)) は rontolisp の拡張で、`float` に集約されるのではなくその*下*に位置します: この型を持つスカラは存在しないため、`(subtypep 'bfloat16 'float)` は `t`、`(subtypep 'float 'bfloat16)` は nil です。`environment` は受け付けて無視します。環境はグローバルなものが 1 つだけです。
+`type1` が `type2` のサブタイプかどうかを、組み込み型の束 (例: `integer` ⊂ `rational` ⊂ `real` ⊂ `number`、`string` ⊂ `vector` ⊂ `array`/`sequence`) とクラスレジストリの祖先集合 (`defclass`/`define-condition` 階層) に対して判定します。CL と同じく 2 値を返します: 判定結果と、それが「決定」かどうかを示す `valid-p` です (下記参照)。float・文字の型名は単一のランタイム表現に集約されるため `(subtypep 'short-float 'single-float)` は `t` です。`base-string` / `simple-base-string` も同じ理由 (文字型が 1 つ) で集約されます。一方 `simple-` 系は集約されません: fill pointer・`:adjustable t`・displacement があれば simple でない配列・文字列になるため、`simple-vector` / `simple-array` / `simple-string` は `vector` / `array` / `string` の真部分型であり、逆方向は nil です。パックド配列の要素幅である `bfloat16` ([データ型](../data-types.md)) は rontolisp の拡張で、`float` に集約されるのではなくその*下*に位置します: この型を持つスカラは存在しないため、`(subtypep 'bfloat16 'float)` は `t`、`(subtypep 'float 'bfloat16)` は nil です。`file-stream`、`string-stream`、`synonym-stream`、`two-way-stream`、`broadcast-stream`、`echo-stream`、`concatenated-stream` はそれぞれ ANSI のクラス優先順位リストどおり `stream` の直下にあり (したがって echo ストリームは two-way ストリームではありません)、Gray ストリームのクラスも同様です。`environment` は受け付けて無視します。環境はグローバルなものが 1 つだけです。
 
 どちらの引数も型名の代わりにクラスメタオブジェクトを渡せます: [`find-class`](find-class.md) や [`class-of`](class-of.md) が返すものは自分自身のクラスを指し示すため、メタオブジェクトは型名の綴りとまったく同じように比較されます。両方の引数は実行時に計算されたものでも構いません。JVM / WASM コンパイラではリテラル (クオート) の組はコンパイル時に定数へ畳み込まれ、それ以外は同じ束の上で実行時に判定されます。4 つのバックエンドすべてが同じ答えを返します。
 
@@ -46,4 +46,11 @@
 ```lisp
 (list (subtypep 'bfloat16 'float)
       (subtypep 'float 'bfloat16)) ; => (T NIL)
+```
+
+```lisp
+(defclass counter-stream (rontolisp:fundamental-character-output-stream) ())
+(list (subtypep 'string-stream 'stream)
+      (subtypep 'stream 'string-stream)
+      (subtypep 'counter-stream 'stream)) ; => (T NIL T)
 ```
