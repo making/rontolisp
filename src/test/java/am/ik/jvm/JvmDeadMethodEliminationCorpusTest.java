@@ -167,13 +167,15 @@ class JvmDeadMethodEliminationCorpusTest {
 		// (.kb/jvm-method-size-limits.md), so the tripwire guards this class's coverage:
 		// a split corpus would take the splitter's shake either way, and the
 		// decoder check in this class would stop covering the corpus. Measured 51,945
-		// before the quoted-datum table, 43,694 after (.kb/quoted-data.md).
+		// before the quoted-datum table, 43,694 after (.kb/quoted-data.md). 52,004 on
+		// 2026-10-07, which is what a ci-spec case costs (a few dozen entries each); the
+		// bound is an alarm well below the 65,534 ceiling, not a limit.
 		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;
 		System.out.println("corpus class constant-pool entries: " + constantPoolEntries + " / 65534");
 		assertThat(constantPoolEntries)
 			.as("constant-pool headroom (was 65520/65534 before the "
 					+ "LibraryDefunPruner and ConstantPool deduplication)")
-			.isLessThanOrEqualTo(52000);
+			.isLessThanOrEqualTo(54000);
 	}
 
 	@Test

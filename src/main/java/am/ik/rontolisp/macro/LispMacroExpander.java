@@ -11298,12 +11298,12 @@ public final class LispMacroExpander {
 	 * stream has accumulated AND clears it -- CL's contract, so a second call sees only
 	 * what was written after the first. Anything but a string output stream is the
 	 * operator's type-error, as in SBCL: a stream of another kind -- a synonym stream
-	 * included, as SBCL refuses one -- expecting {@link #stringOutputStreamType}, a
-	 * non-stream {@code STREAM}.
+	 * included, as SBCL refuses one -- or a string output stream that is closed expecting
+	 * {@link #stringOutputStreamType}, a non-stream {@code STREAM}.
 	 *
 	 * <pre>
 	 * (let ((__goss_stream x))
-	 *   (if &lt;x is a :string-output stream value&gt; nil
+	 *   (if &lt;x is a :string-output stream value and (open-stream-p x)&gt; nil
 	 *       (if (streamp __goss_stream)
 	 *           (%operand-type-error __goss_stream 'get-output-stream-string
 	 *                                '(and string-stream (satisfies output-stream-p)))
@@ -11326,8 +11326,13 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.QUOTE), stringOutputStreamType())))),
 				listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), stream, operator,
 						quoteOf("STREAM"))));
-		LispVal check = makeIf(makeStreamKindTest(stream, List.of(LispLayout.Kinds.STRING_OUTPUT)), LispNil.INSTANCE,
-				refusal);
+		// A closed string output stream keeps its kind but has nothing left to answer
+		// (its
+		// buffer is released on close), so it is refused like any stream that is no open
+		// string output stream.
+		LispVal open = makeIf(makeStreamKindTest(stream, List.of(LispLayout.Kinds.STRING_OUTPUT)),
+				callOf(LispNames.OPEN_STREAM_P, stream), LispNil.INSTANCE);
+		LispVal check = makeIf(open, LispNil.INSTANCE, refusal);
 		return makeLet(GOSS_STREAM_VAR, parts.get(1),
 				mvCall(LispNames.PROGN, check, callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, stream)));
 	}
@@ -13526,7 +13531,9 @@ public final class LispMacroExpander {
 		if (synonymStreams) {
 			tags.add(LispLayout.SYNONYM_STREAM_TAG);
 		}
-		if (closRegistry != null && closRegistry.findClass(GRAY_FUNDAMENTAL_STREAM_CLASS) != null) {
+		if (closRegistry != null) {
+			// descendantTags, not a findClass probe: the interpreter's lookup of a Gray
+			// base class loads gray.lisp, and a stream test is no reason to.
 			tags.addAll(closRegistry.descendantTags(GRAY_FUNDAMENTAL_STREAM_CLASS));
 		}
 		return tags;

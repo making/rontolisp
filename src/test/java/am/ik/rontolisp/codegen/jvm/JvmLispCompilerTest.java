@@ -14075,6 +14075,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGetOutputStreamStringRefusesAClosedStringOutputStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAClosedStringOutputStream.
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.CLOSED_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+	}
+
+	@Test
 	void compileAndRunComputedTypepOfAStreamTypeName() throws Exception {
 		// The JVM twin of
 		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes.
@@ -14090,6 +14098,14 @@ class JvmLispCompilerTest {
 			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
 		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM)))
 			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAGrayBaseClassNamedFirstIsKnown() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayBaseClassNamedFirstIsKnown.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			assertThat(compileAndRun(fixtureProgram(c.program()))).as(c.program()).isEqualTo(c.expected());
+		}
 	}
 
 	@Test

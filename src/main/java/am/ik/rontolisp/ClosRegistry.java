@@ -1510,6 +1510,28 @@ public final class ClosRegistry {
 	private boolean mopClassesSeeded;
 
 	/**
+	 * Registers the class a {@link #findClass} lookup missed when a lazily loaded library
+	 * defines it, answering whether the lookup is worth repeating; null when every class
+	 * is registered up front (see
+	 * {@link #classMissLoader(java.util.function.Predicate)}).
+	 */
+	private java.util.function.@Nullable Predicate<String> classMissLoader;
+
+	/**
+	 * Installs the loader {@link #findClass} consults on a miss, before answering null.
+	 * The interpreter loads gray.lisp on first use, so a Gray base class NAMED as data
+	 * ({@code (find-class 'rontolisp:fundamental-stream)}, a {@code subtypep} or
+	 * {@code typep} specifier) before any write, {@code defclass} or protocol definition
+	 * loaded it would otherwise be unknown; the compile paths splice the library ahead of
+	 * expansion for any program naming one and install none.
+	 * @param loader receives the name as spelled; loads what defines it and answers
+	 * whether the lookup should be repeated
+	 */
+	public void classMissLoader(java.util.function.Predicate<String> loader) {
+		this.classMissLoader = loader;
+	}
+
+	/**
 	 * Whether the metaclass-protocol runtime ({@code macro/mop-protocol.lisp}) is part of
 	 * this evaluation/compilation -- set by the interpreter's protocol load and by the
 	 * compile paths when the forms are prepended. It gates the CHAIN-FILL construction of
@@ -2242,11 +2264,24 @@ public final class ClosRegistry {
 	 * name additionally matches a UNIQUELY-named class of any package, because quoted
 	 * class names ({@code (make-instance 'dog)}) are not package-resolved while
 	 * {@code defclass} names are (two packages defining the same class name make the bare
-	 * spelling unresolvable -- qualify it).
+	 * spelling unresolvable -- qualify it). A miss consults the
+	 * {@link #classMissLoader(java.util.function.Predicate) class-miss loader} before
+	 * answering null.
 	 * @param name the class name as spelled
 	 * @return the class, or null
 	 */
 	@Nullable public ClassInfo findClass(String name) {
+		ClassInfo found = lookupClass(name);
+		java.util.function.Predicate<String> loader = this.classMissLoader;
+		if (found == null && loader != null && loader.test(name)) {
+			// One repeat, never a recursion: a lookup made while the library loads
+			// misses through the loader again and answers null by itself.
+			found = lookupClass(name);
+		}
+		return found;
+	}
+
+	@Nullable private ClassInfo lookupClass(String name) {
 		ClassInfo exact = this.classes.get(normalize(name));
 		if (exact != null) {
 			return exact;

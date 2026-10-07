@@ -10779,6 +10779,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void getOutputStreamStringRefusesAClosedStringOutputStream() {
+		// A closed string output stream is the same type-error as a stream of another
+		// kind, not a simple-error. Pinned on all four backends.
+		assertThat(evalPrinted(OutputStreamStringKindFixture.CLOSED_PROGRAM))
+			.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+	}
+
+	@Test
 	void computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes() {
 		// A stream type name held in a value decides what its literal spelling decides.
 		// Pinned on all four backends.
@@ -10795,6 +10803,16 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
 		assertThat(evalPrinted(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
+	void aGrayBaseClassNamedFirstIsKnown() {
+		// The lookup of a Gray base class name loads gray.lisp, so a name used as data
+		// before any Gray write, defclass or protocol definition finds its class. Pinned
+		// on all four backends.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			assertThat(evalPrinted(c.program())).as(c.program()).isEqualTo(c.expected());
+		}
 	}
 
 	@Test

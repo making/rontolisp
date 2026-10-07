@@ -14962,6 +14962,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void getOutputStreamStringRefusesAClosedStringOutputStream() throws Exception {
+		// The wasm twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAClosedStringOutputStream,
+		// Preview 1 and the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunFrontEndWithDir(OutputStreamStringKindFixture.CLOSED_PROGRAM, component))
+				.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+		}
+	}
+
+	@Test
 	void computedTypepOfAStreamTypeName() throws Exception {
 		// The wasm twin of
 		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes,
@@ -14983,6 +14994,18 @@ class WasmLispCompilerIntegrationTest {
 			assertThat(
 					compileAndRunFrontEndWithDir(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM, component))
 				.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+		}
+	}
+
+	@Test
+	void aGrayBaseClassNamedFirstIsKnown() throws Exception {
+		// The wasm twin of LispEvaluatorTest#aGrayBaseClassNamedFirstIsKnown, Preview 1
+		// and the component.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			for (boolean component : new boolean[] { false, true }) {
+				assertThat(compileAndRunFrontEndWithDir(c.program(), component)).as(c.program())
+					.isEqualTo(c.expected());
+			}
 		}
 	}
 

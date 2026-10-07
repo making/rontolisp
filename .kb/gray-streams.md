@@ -118,8 +118,17 @@ the print family wrote PAST the instance to standard output on the compile paths
 - `read-sequence`/`write-sequence`/`write-char` are macro expansions, intercepted at
   `evalCons` (`evalSequenceWithGrayDispatch`, `evalWriteCharWithGrayDispatch`): args evaluate
   once, a non-instance re-enters the expansion with values QUOTED in place.
-- A `defclass` naming a Gray base class eager-loads gray.lisp
-  (`referencesGrayBaseClass`/`GRAY_BASE_CLASSES`) — else "unknown superclass".
+- **A class lookup of a Gray base class name loads gray.lisp**: `LispEvaluator` installs
+  `ClosRegistry.classMissLoader`, which `findClass` consults on a miss
+  (`GrayStreamsLibrary.namesBaseClass`: by MEMBER, the test `usesProtocol` splices on, so an
+  unqualified `fundamental-stream` resolves as on the compile paths). One seam for every
+  use of the name: `find-class`, `subtypep`/`typep` specifiers, `make-instance`, a
+  `defclass` superclass (qualified or not; it replaced a `defclass`-only eager load) and a
+  method specializer. Until 2026-10-07 a name used as DATA first (`(subtypep
+  'rontolisp:fundamental-stream 'stream)`, `find-class`) answered NIL / "unknown class" on the
+  interpreter, an unqualified superclass "unknown superclass" (SBCL, JVM, both WASM: the
+  class). A stream test is no trigger: `streamInstanceTags` reads `descendantTags`, never a
+  `findClass` probe. Pin: `GrayBaseClassNamedFirstFixture` (one program per first use).
 
 ## `warn` writes to a Gray `*error-output*`
 `warn` has no stream argument for either seam to see: its report is written by `%warn` to the
@@ -335,10 +344,8 @@ not a dispatch helper**: `(typep x 'stream)` lowers to `(streamp x)` in
   Runtime tables: `runtimeStreamTypeNames` = the names spelled, or all seven when the program
   references `type-of`/`class-of` (a name reached with nothing spelled); the `subtypep`
   universe skips an edge outside that set, so a program meeting none keeps its table. Pin:
-  `StreamTypeLatticeFixture` (incl. an unspelled program). Not covered: a Gray base class
-  NAMED before gray.lisp loads on the interpreter (`(subtypep 'rontolisp:fundamental-stream
-  'stream)` as the first Gray reference) is an unknown class there; the compile paths splice
-  gray.lisp for any program naming one.
+  `StreamTypeLatticeFixture` (incl. an unspelled program). A Gray base class NAMED before
+  gray.lisp loads on the interpreter: "Interpreter dispatch".
 - **`ArgumentShapes.Shape.INSTANCE` had to gain `STREAM`**: the compile-path dead-branch pruner
   deletes a `typecase` clause no value of the key's shape can satisfy, so `STREAM` absent from
   that row DELETED cl+ssl's `(etypecase socket (integer ...) (stream ...))` arm.
@@ -486,7 +493,8 @@ splices the whole entry.
   round trip + file-position, read-line/sequence defaults, peek/unread/no-hang, the
   unread-char method owning the pushback, the default parking on its instance, direction
   predicates, shim mixin + setf file-position, `grayStreamInstanceIsAStream`) and
-  `#unreadChar*`, `#evalFlexiStream*`.
+  `#unreadChar*`, `#evalFlexiStream*`, `#aGrayBaseClassNamedFirstIsKnown` (twins in the two
+  compiler suites).
 - `JvmLispCompilerTest#compileAndRunGray*` (10) + `#compileAndRunUnreadChar*`,
   `#grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
 - `WasmLispCompilerIntegrationTest#gray*` (8) + `#unreadChar*`.

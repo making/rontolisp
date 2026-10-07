@@ -1565,8 +1565,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   stream test knew no Gray instance), an unnamed `type-error` or an NPE's `simple-error` on the JVM,
   a cast-failure or out-of-bounds trap on wasm; a synonym over a string output stream answered its
   target's text on all four. The test is the value's KIND (`:STRING-OUTPUT`, `makeStreamKindTest`),
-  so a closed string output stream passes it and keeps its old per-backend answer (not covered:
-  SBCL answers the text, `.todo/e06`); a computed `typep` against the type answers nil even for a
+  so the expansion also asks `open-stream-p` (see the next bullet); a computed `typep` against the type answers nil even for a
   string output stream (`.todo/e05`). `%operand-type-error` takes a quoted COMPOUND type as well as a kind:
   interpreter `OperandTypeException.notOfType(datum, type, op)`, JVM `_teOf` over the type built
   at the site then `_opTypeErr`'s compound arm, wasm `_type_err_of` under the operator's row (the
@@ -1575,6 +1574,19 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   interpreter's built-in makes the same two tests, `streamp` looked up at call time (the Gray
   wrap). Pinned by `OutputStreamStringKindFixture` (ci-spec
   `get-output-stream-string-refuses-another-kind-of-stream`).
+- **`get-output-stream-string` of a CLOSED string output stream** (measured 2026-10-07, SBCL 2.2.9):
+  CLHS leaves a closed stream's consequences undefined. SBCL answers the text written before the
+  `close` for a stream closed by hand and takes a `MEMORY-FAULT-ERROR` for the one a finished
+  `with-output-to-string` bound. The four backends differed too (interpreter and JVM a
+  `simple-error`, both wasm backends an out-of-bounds trap), and none could answer the text: close
+  empties the interpreter's table entry, nulls the JVM slot and recycles the wasm slot (the buffer
+  is released, `.kb/read-load-streams.md` "String streams"). Now one catchable condition on all four,
+  the kind refusal's own `type-error` over the stream as given: the kind test is followed by
+  `open-stream-p` (the table entry, the JVM slot, the wasm closed mark of the VALUE, so a newer
+  stream reusing the slot changes nothing; the interpreter's built-in checks the table entry
+  itself). The text is not kept: that would defeat the slot recycling. Pinned by
+  `OutputStreamStringKindFixture.CLOSED_PROGRAM` (ci-spec
+  `get-output-stream-string-of-a-closed-string-output-stream`); SBCL's answer differs by design.
 - **`scale-float`** (measured 2026-10-06, SBCL 2.2.9): refuses a non-`FLOAT` first argument (a complex,
   an integer, a ratio, a symbol, `nil`) and then a non-`INTEGER` second one, each a `type-error` over the
   argument as given. Before, nothing checked either: the interpreter's `asDouble` answered `6.0` for `3`

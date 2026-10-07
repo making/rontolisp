@@ -1793,6 +1793,38 @@ cases:
       ((:TYPE-ERROR T T) (:TYPE-ERROR T T))
       (T "kept" #\a)
       "GET-OUTPUT-STREAM-STRING: The value T is not of type (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P))"
+  # get-output-stream-string of a CLOSED string output stream -- one closed by hand, one a finished
+  # with-output-to-string bound, even once a newer stream has taken its place -- is the same type-error
+  # over the stream as given. CL leaves a closed stream undefined (SBCL answers the text written before
+  # the close, or faults for the with-output-to-string one); the open stream beside it is untouched
+  # (OutputStreamStringKindFixture).
+  - name: get-output-stream-string-of-a-closed-string-output-stream
+    source: |
+      (defvar *gcs-type* (list 'and 'string-stream (list 'satisfies 'output-stream-p)))
+      (defun gcs-check (stream)
+        (handler-case (get-output-stream-string stream)
+          (type-error (c)
+            (list :type-error (eq (type-error-datum c) stream)
+                  (equal (type-error-expected-type c) *gcs-type*)))
+          (error () :other-error)))
+      (defvar *gcs-out* (make-string-output-stream))
+      (defvar *gcs-bound* nil)
+      (write-string "abc" *gcs-out*)
+      (with-output-to-string (s) (setq *gcs-bound* s) (write-string "xyz" s))
+      (print (list (get-output-stream-string *gcs-out*) (open-stream-p *gcs-out*)))
+      (write-string "def" *gcs-out*)
+      (close *gcs-out*)
+      (print (list (open-stream-p *gcs-out*) (gcs-check *gcs-out*) (gcs-check *gcs-bound*)))
+      (let ((newer (make-string-output-stream)))
+        (write-string "new" newer)
+        (print (list (gcs-check *gcs-out*) (gcs-check *gcs-bound*)
+                     (funcall #'get-output-stream-string newer)
+                     (close *gcs-out*)
+                     (gcs-check *gcs-out*))))
+    expected: |
+      ("abc" T)
+      (NIL (:TYPE-ERROR T T) (:TYPE-ERROR T T))
+      ((:TYPE-ERROR T T) (:TYPE-ERROR T T) "new" T (:TYPE-ERROR T T))
   - name: parse-integer-signals-a-parse-error
     source: |
       (defvar *pis-1* (read-from-string "1"))
