@@ -137,8 +137,10 @@ CLOS は**静的なサブセット**です
 読み取りは `unbound-slot` をシグナルします。
 [`change-class`](../reference/macros/change-class.md) はインスタンスのクラスを
 その場で変更し（対象は実行時のシンボルやクラスメタオブジェクトでも可）、
-`reinitialize-instance` / `shared-initialize` はユーザメソッドなしでも呼び出せ
-ます — CL と同様、システムデフォルトが指定された initarg を格納します。
+`initialize-instance` / `reinitialize-instance` / `shared-initialize` はユーザ
+メソッドなしでも呼び出せ、関数値にもなります — CL と同様、システムデフォルトが
+指定された initarg を格納し、インスタンスでない引数には no-applicable-method を
+シグナルします。
 **定義時 MOP サブセット**が入っています:
 [`find-class`](../reference/functions/find-class.md) と
 [`class-of`](../reference/functions/class-of.md) は実物の `standard-class`

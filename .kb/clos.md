@@ -348,6 +348,18 @@ Three congruence rules:
   that an UNSUPPLIED optional is not passed on. Gated on the body mentioning
   `call-next-method`/`next-method-p`; pinned against SBCL over six tail shapes.
 
+**The trio, `print-object` and `make-load-form` are function values with no method in the
+program** (`isCallableSystemGenericName`): the interpreter synthesizes the generic in
+`resolveFunction`, the compile path in `expandTopLevelDefinitions` for any program that NAMES one
+(which also takes it off the no-CLOS fast path). Measured 2026-10-07 before that: `#'initialize-instance`
+in a program with no CLOS definition refused on the JVM, P1 and the component (`Cannot compile:
+INITIALIZE-INSTANCE as a function value`), and the interpreter had no `make-load-form`.
+**The init defaults apply to instances only** (`whenInstance`: `(%obj-p x)`, else the
+no-applicable-method error, SBCL's answer): `(initialize-instance 1)` used to answer `1` on the
+compiled backends and signal `%MOP-FILL-SLOTS expects (instance initargs initforms-p)` on the
+interpreter. Every instance is `%obj-p` -- class metaobjects, structs and conditions too -- so the
+MOP protocol's own calls pass. Pin: `StandardGenericFunctionValueFixture`.
+
 **Cold-branch tolerance**: on the COMPILE paths only, `expandMakeInstance(cons, registry,
 true)` lowers an unknown class to a runtime `error` instead of failing the compile.
 

@@ -137,8 +137,10 @@ A slot written with no `:initform` starts UNBOUND, as in CL:
 read signals `unbound-slot`.
 [`change-class`](../reference/macros/change-class.md) changes an instance's class
 in place (the target may be a runtime symbol or a class metaobject), and
-`reinitialize-instance` / `shared-initialize` are callable with no user method —
-the system defaults fill the supplied initargs, as in CL. A **definition-time MOP
+`initialize-instance` / `reinitialize-instance` / `shared-initialize` are
+callable, and function values, with no user method — the system defaults fill
+the supplied initargs, as in CL, and a non-instance argument signals
+no-applicable-method. A **definition-time MOP
 subset** is in:
 [`find-class`](../reference/functions/find-class.md) and
 [`class-of`](../reference/functions/class-of.md) answer real `standard-class`

@@ -20958,6 +20958,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() {
+		// The reference answer for the compiled backends' twins of this name
+		// (.kb/clos.md, "The instance-initialization protocol").
+		assertThat(printedLines(am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES))
+			.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD))
+			.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS))
+			.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS_EXPECTED);
+	}
+
+	@Test
 	void aStandardFunctionTakenAsAValueAnswersAsItsCall() {
 		// The reference answer for the compiled backends' twins of this name, which
 		// refused every such program (.kb/lisp2-namespaces.md, "A native built-in's

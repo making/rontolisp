@@ -26960,6 +26960,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(runFrontendProgramWithDir(am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES, component))
+				.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES_EXPECTED);
+			assertThat(
+					runFrontendProgramWithDir(am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD, component))
+				.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD_EXPECTED);
+			assertThat(runFrontendProgramWithDir(am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS,
+					component))
+				.isEqualTo(am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS_EXPECTED);
+		}
+	}
+
+	@Test
 	void aStandardFunctionTakenAsAValueAnswersAsItsCall() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

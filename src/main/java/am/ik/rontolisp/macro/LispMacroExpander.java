@@ -24630,6 +24630,14 @@ public final class LispMacroExpander {
 			synthesized.add(methodDefun);
 			return makeProgn(synthesized);
 		}
+		// make-load-form too: its standard methods answer every instance (with an
+		// error), so a method on one type must leave the others theirs.
+		if (LispNames.MAKE_LOAD_FORM.equals(plainName(generic.name())) && !hasDefaultPrimary(generic)) {
+			List<LispVal> synthesized = new java.util.ArrayList<>();
+			synthesizeMakeLoadFormDefault(generic, synthesized);
+			synthesized.add(methodDefun);
+			return makeProgn(synthesized);
+		}
 		return methodDefun;
 	}
 
@@ -24652,17 +24660,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the name (as spelled, no package qualifier expected -- the three are
-	 * {@code cl} symbols and resolve plainly) is an instance-initialization generic a
-	 * program may CALL without ever defining a method on it. CL supplies each with a
-	 * system default, so {@code (reinitialize-instance obj :initarg v)} is ordinary CL
+	 * Whether the name (as spelled, no package qualifier expected -- these are {@code cl}
+	 * symbols and resolve plainly) is a standard generic a program may CALL, or take as a
+	 * function value, without ever defining a method on it: the instance-initialization
+	 * trio, {@code print-object} and {@code make-load-form}. CL supplies each with its
+	 * standard methods, so {@code (reinitialize-instance obj :initarg v)} is ordinary CL
 	 * with no user method in sight (upstream ASDF's {@code parse-component-form}).
 	 * @param name the function name being resolved
 	 * @return whether {@link #synthesizeCalledSystemGeneric} applies
 	 */
 	public static boolean isCallableSystemGenericName(String name) {
-		return isInitProtocolGeneric(name) || LispNames.PRINT_OBJECT.equals(name);
+		return CALLABLE_SYSTEM_GENERICS.contains(name);
 	}
+
+	/** The names {@link #isCallableSystemGenericName} answers, in synthesis order. */
+	private static final List<String> CALLABLE_SYSTEM_GENERICS = List.of(LispNames.INITIALIZE_INSTANCE,
+			LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE, LispNames.PRINT_OBJECT,
+			LispNames.MAKE_LOAD_FORM);
 
 	/**
 	 * Creates the plainly-named instance-initialization generic with its system default
@@ -24685,6 +24699,12 @@ public final class LispMacroExpander {
 					List.of(PRINT_OBJECT_VALUE_VAR, PRINT_OBJECT_STREAM_VAR));
 			closRegistry.registerGeneric(generic);
 			synthesizePrintObjectDefault(generic, out);
+			return out;
+		}
+		if (LispNames.MAKE_LOAD_FORM.equals(name)) {
+			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, List.of("%mlf-object"));
+			closRegistry.registerGeneric(generic);
+			synthesizeMakeLoadFormDefault(generic, out);
 			return out;
 		}
 		List<String> paramNames = "SHARED-INITIALIZE".equals(name) ? List.of("%obj", "%slot-names") : List.of("%obj");
@@ -24737,6 +24757,48 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, stream)), value));
 		out.add(listToCons(
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
+	}
+
+	/**
+	 * Synthesizes {@code make-load-form}'s standard methods into {@code out} as one
+	 * default primary registered on the generic: an instance -- a standard object, a
+	 * structure or a condition -- signals SBCL's "don't know how to dump" error (CLHS
+	 * {@code make-load-form}: the methods on {@code standard-object},
+	 * {@code structure-object} and {@code condition} signal an error), anything else the
+	 * no-applicable-method error. The compile path never calls it: a literal instance
+	 * whose type has no method of its own keeps the structural dump
+	 * ({@code LispEvaluator.makeLoadFormValues}).
+	 * @param generic the make-load-form generic
+	 * @param out the forms to append the default method's defun to
+	 */
+	private static void synthesizeMakeLoadFormDefault(ClosRegistry.GenericInfo generic, List<LispVal> out) {
+		List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
+		for (int i = 0; i < generic.paramNames().size(); i++) {
+			defaults.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		String defaultName = methodFunctionName(generic);
+		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.markVariadic();
+		List<LispVal> params = new java.util.ArrayList<>();
+		params.add(new LispSymbol(NEXT_METHOD_VAR));
+		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
+		params.add(new LispSymbol(LispNames.LAMBDA_REST));
+		params.add(new LispSymbol("%mlf-args"));
+		LispSymbol object = new LispSymbol(generic.paramNames().get(0));
+		LispVal body = whenInstance(generic, object, listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("don't know how to dump ~S (default MAKE-LOAD-FORM method called)."), object)));
+		out.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
+	}
+
+	/**
+	 * The body of a standard method that applies to every instance and to nothing else:
+	 * {@code body} when {@code value} is an instance, the generic's no-applicable-method
+	 * error otherwise. The synthesized method is unspecialized so that it stays the
+	 * generic's default primary; this test is what keeps a non-instance from reaching it.
+	 */
+	private static LispVal whenInstance(ClosRegistry.GenericInfo generic, LispSymbol value, LispVal body) {
+		return makeIf(callOf(LispNames.OBJ_P, value), body, noApplicableMethod(generic.name(), List.of(value)));
 	}
 
 	/**
@@ -24805,6 +24867,9 @@ public final class LispMacroExpander {
 					slotNamesArg, new LispSymbol("%init-args")));
 			body = makeProgn(List.of(applyCall, instanceVar));
 		}
+		// CL's system methods specialize on standard-object and structure-object: a
+		// non-instance has no applicable method.
+		body = whenInstance(generic, instanceVar, body);
 		out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName),
 				listToCons(defaultParams), body)));
 	}
@@ -26672,15 +26737,16 @@ public final class LispMacroExpander {
 		// constructor.
 		recordConditionRouting(program, closRegistry, signalMessages, dynamic, restartMode);
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
-		// print-object NAMED but not specialized: CL supplies a system method for every
-		// object, so a program that only CALLS it (or takes #'print-object) still needs
-		// the generic, its default method and a dispatcher -- and a program can do that
-		// with no CLOS definition in it at all, which is exactly what the fast path
-		// below is for. The init-protocol generics need no such gate: calling one
-		// without a single class definition anywhere is meaningless.
-		boolean callsPrintObject = program.stream().anyMatch(f -> usesSymbol(f, LispNames.PRINT_OBJECT));
+		// A standard generic NAMED but not specialized (print-object, the
+		// instance-initialization trio, make-load-form): CL supplies its standard
+		// methods, so a program that only CALLS one (or takes #'print-object) still
+		// needs the generic, its default method and a dispatcher -- and a program can do
+		// that with no CLOS definition in it at all, which is exactly what the fast path
+		// below is for.
+		java.util.Set<String> systemGenerics = java.util.Set.copyOf(CALLABLE_SYSTEM_GENERICS);
+		boolean namesSystemGeneric = program.stream().anyMatch(f -> usesAnySymbol(f, systemGenerics));
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !signalClauseMatch
-				&& !callsPrintObject && !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime
+				&& !namesSystemGeneric && !metaobjectRuntime && !allocateInstanceRuntime && !compileRuntime
 				&& !makeInstanceFunction && !classSlotDefsRuntime && !symbolFunctionWrite && !changeClassRuntime
 				&& !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
@@ -26822,11 +26888,10 @@ public final class LispMacroExpander {
 				out.add(form);
 			}
 		}
-		// An instance-initialization generic the program CALLS without defining a
+		// A standard generic the program CALLS (or takes as a value) without defining a
 		// method on it (upstream ASDF applies reinitialize-instance as a matter of
 		// course) still needs its system default and a dispatcher: CL supplies both.
-		for (String initName : List.of(LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE,
-				LispNames.SHARED_INITIALIZE, LispNames.PRINT_OBJECT)) {
+		for (String initName : CALLABLE_SYSTEM_GENERICS) {
 			if (closRegistry.findGeneric(initName) == null && program.stream().anyMatch(f -> usesSymbol(f, initName))) {
 				out.addAll(synthesizeCalledSystemGeneric(initName, closRegistry));
 				for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
