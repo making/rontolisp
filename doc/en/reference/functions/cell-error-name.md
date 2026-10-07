@@ -17,6 +17,13 @@ The `undefined-function` a call of an undefined name signals carries that name -
   (undefined-function (e) (cell-error-name e))) ; => CE-NO-SUCH-FUNCTION
 ```
 
+An undefined `(setf name)` function is named by the list `(setf name)`, as written, and the message spells it the same way:
+
+```lisp
+(handler-case (funcall #'(setf ce-no-such-setf) 1 2)
+  (undefined-function (e) (cell-error-name e))) ; => (SETF CE-NO-SUCH-SETF)
+```
+
 So does the `unbound-variable` a read of an unbound name signals -- through [`symbol-value`](symbol-value.md), a reference to a special variable declared without a value, or a reference to a global before its first assignment ([`setq`](../special-forms/setq.md)) -- on every backend:
 
 ```lisp

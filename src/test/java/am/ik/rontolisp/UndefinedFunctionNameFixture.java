@@ -126,6 +126,46 @@ public final class UndefinedFunctionNameFixture {
 			+ " (UFR-CALL-NOPE UNDEFINED-FUNCTION) (UFR-CALL-NOPE UFR-REF-NOPE))";
 
 	/**
+	 * A {@code (setf name)} function no definition has, called through
+	 * {@code #'(setf name)} at top level, from a {@code defun} body and through
+	 * {@code apply}: the condition names {@code (setf name)}, as SBCL does, not the
+	 * internal name the writer is stored under, and the report spells the same. A defined
+	 * one is the control. {@link #SETF_FUNCTION_RESTART} puts the compiled backends in
+	 * restart mode with a {@code handler-bind}.
+	 */
+	public static final String SETF_FUNCTION = """
+			(defun (setf ufs-defined) (v x) (list v x))
+			(defun ufs-text (c) (list (cell-error-name c) (princ-to-string c)))
+			(defun ufs-call (v x) (funcall #'(setf ufs-nope) v x))
+			(print (handler-case (funcall #'(setf ufs-nope) 1 2) (undefined-function (c) (ufs-text c))))
+			(print (handler-case (ufs-call 1 2) (undefined-function (c) (ufs-text c))))
+			(print (handler-case (apply #'(setf ufs-nope) '(1 2)) (undefined-function (c) (ufs-text c))))
+			(print (handler-case (ufs-call 1 2)
+			         (undefined-function (c) (equal (cell-error-name c) '(setf ufs-nope)))))
+			(print (funcall #'(setf ufs-defined) 1 2))
+			""";
+
+	/** What {@link #SETF_FUNCTION} prints, one value per line. */
+	public static final String SETF_FUNCTION_EXPECTED = String.join("\n",
+			"((SETF UFS-NOPE) \"The function (SETF UFS-NOPE) is undefined\")",
+			"((SETF UFS-NOPE) \"The function (SETF UFS-NOPE) is undefined\")",
+			"((SETF UFS-NOPE) \"The function (SETF UFS-NOPE) is undefined\")", "T", "(1 2)");
+
+	/** {@link #SETF_FUNCTION}'s call under a {@code handler-bind}. */
+	public static final String SETF_FUNCTION_RESTART = """
+			(defvar *ufs-seen* nil)
+			(defun ufs-call (v x) (funcall #'(setf ufs-nope) v x))
+			(print (list (handler-case
+			                 (handler-bind ((undefined-function (lambda (c) (push (cell-error-name c) *ufs-seen*))))
+			                   (ufs-call 1 2))
+			               (undefined-function (c) (cell-error-name c)))
+			             *ufs-seen*))
+			""";
+
+	/** What {@link #SETF_FUNCTION_RESTART} prints. */
+	public static final String SETF_FUNCTION_RESTART_EXPECTED = "((SETF UFS-NOPE) ((SETF UFS-NOPE)))";
+
+	/**
 	 * The program printing the report for a package-qualified, uninterned and lower-case
 	 * name.
 	 */

@@ -27102,6 +27102,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
+		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
+		// the component.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_EXPECTED },
+				{ am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART,
+						am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART_EXPECTED } }) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.isEqualTo(program[1]);
+			assertThat(runComponentFrontendProgramWithDir(program[0])).isEqualTo(program[1]);
+		}
+	}
+
+	@Test
 	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() throws Exception {
 		// The wasm twin of the JvmLispCompilerTest test of this name, on Preview 1 and
 		// the component.

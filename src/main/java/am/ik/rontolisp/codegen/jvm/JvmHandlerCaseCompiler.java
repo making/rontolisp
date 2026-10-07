@@ -784,15 +784,61 @@ final class JvmHandlerCaseCompiler {
 		ctx.body.aconst_null().astore(nameSlot);
 		ctx.body.labelBinding(named);
 		String nameVar = "__hc_name$" + nameSlot;
+		LispVal nameForm = new LispSymbol(nameVar);
+		int placeSlot = -1;
+		if (ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME.equals(cellClass)) {
+			// An undefined (setf place) function's text spells the name (SETF place):
+			// the condition names the list, not the symbol of that spelling.
+			placeSlot = ctx.allocTemp();
+			emitSetfPlace(nameSlot, placeSlot, ctx);
+			String placeVar = "__hc_place$" + placeSlot;
+			nameForm = form(new LispSymbol(LispNames.IF), new LispSymbol(placeVar), form(new LispSymbol(LispNames.LIST),
+					form(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SETF)), new LispSymbol(placeVar)),
+					nameForm);
+			ctx.locals.put(placeVar, placeSlot);
+		}
 		ctx.locals.put(nameVar, nameSlot);
 		try {
 			JvmExprCompiler.compileExpr(LispMacroExpander.reportingConditionForm(ctx.closRegistry, cellClass, msgVar,
-					java.util.Map.of("NAME", new LispSymbol(nameVar))), ctx, className);
+					java.util.Map.of("NAME", nameForm)), ctx, className);
 		}
 		finally {
 			ctx.locals.remove(nameVar);
+			if (placeSlot >= 0) {
+				ctx.locals.remove("__hc_place$" + placeSlot);
+			}
 		}
 		ctx.body.astore(condSlot);
+	}
+
+	/** The proper list of {@code elements}, as a form. */
+	private static LispVal form(LispVal... elements) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			out = new LispCons(elements[i], out);
+		}
+		return out;
+	}
+
+	/**
+	 * Emits {@code place = name != null && name.startsWith("(SETF ") ? name.substring(6,
+	 * name.length() - 1) : null}, the place of a reported {@code (setf place)} function
+	 * name ({@link ClosRegistry#setfPlaceOfReportedName}).
+	 */
+	private static void emitSetfPlace(int nameSlot, int placeSlot, JvmLispCompiler.Ctx ctx) {
+		MethodCode.Label notSetf = ctx.body.newLabel();
+		ctx.body.aconst_null().astore(placeSlot);
+		ctx.body.aload(nameSlot).ifnull(notSetf);
+		ctx.body.aload(nameSlot);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.SETF_FUNCTION_NAME_OPEN, ctx);
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z")).ifeq(notSetf);
+		ctx.body.aload(nameSlot);
+		JvmEmitHelper.emitIntConst(ctx, ClosRegistry.SETF_FUNCTION_NAME_OPEN.length());
+		ctx.body.aload(nameSlot).invokevirtual(JvmEmitHelper.stringMethod(ctx, "length", "()I"));
+		ctx.body.iconst_1().isub();
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;"));
+		ctx.body.astore(placeSlot);
+		ctx.body.labelBinding(notSetf);
 	}
 
 	/**

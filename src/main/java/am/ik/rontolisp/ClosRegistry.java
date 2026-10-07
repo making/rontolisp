@@ -211,6 +211,52 @@ public final class ClosRegistry {
 	public static final String UNDEFINED_FUNCTION_MESSAGE_SUFFIX = " is undefined";
 
 	/**
+	 * The prefix of the internal function-namespace name a {@code (setf place)} writer
+	 * function is stored under: {@code (defun (setf name) ...)} installs a plain defun
+	 * named {@code %setf-name}.
+	 */
+	public static final String SETF_FUNCTION_PREFIX = "%setf-";
+
+	/** What opens a {@code (setf place)} function name as a report spells it. */
+	public static final String SETF_FUNCTION_NAME_OPEN = "(SETF ";
+
+	/**
+	 * A function name as a report spells it: the {@code (setf place)} the program wrote
+	 * for a writer function stored under its {@link #SETF_FUNCTION_PREFIX} name, any
+	 * other name as it is. An undefined-function's message and warning use it, so the
+	 * internal name never reaches the user.
+	 * @param name the function-namespace name
+	 * @return the name to report
+	 */
+	public static String functionNameForReport(String name) {
+		String place = setfPlaceOfFunctionName(name);
+		return place != null ? SETF_FUNCTION_NAME_OPEN + place + ")" : name;
+	}
+
+	/**
+	 * The place of a function-namespace name that stores a {@code (setf place)} writer
+	 * function, or {@code null} for any other name.
+	 * @param name the function-namespace name
+	 * @return the place's spelling, or null
+	 */
+	public static @Nullable String setfPlaceOfFunctionName(String name) {
+		return name.startsWith(SETF_FUNCTION_PREFIX) ? name.substring(SETF_FUNCTION_PREFIX.length()) : null;
+	}
+
+	/**
+	 * The place of a {@code (setf place)} function name as {@link #functionNameForReport}
+	 * spells it, or {@code null} for a name that is not one: what a backend that only
+	 * sees the message of an undefined-function reads the condition's {@code name} back
+	 * from.
+	 * @param reported the name as reported
+	 * @return the place's spelling, or null
+	 */
+	public static @Nullable String setfPlaceOfReportedName(String reported) {
+		return reported.startsWith(SETF_FUNCTION_NAME_OPEN) && reported.endsWith(")")
+				? reported.substring(SETF_FUNCTION_NAME_OPEN.length(), reported.length() - 1) : null;
+	}
+
+	/**
 	 * The message a raw CAST failure reports. Both compiled and interpreted, the host's
 	 * own text for one names Java classes ({@code "class java.lang.Long cannot be cast to
 	 * class [Ljava.lang.Object;"}), which is not an answer rontolisp should print for a

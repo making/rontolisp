@@ -21171,6 +21171,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name:
+		// (setf name), not the internal name the writer is stored under.
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART_EXPECTED);
+	}
+
+	@Test
 	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() {
 		// The reference answer for the compiled backends' twins of this name
 		// (.kb/clos.md, "The instance-initialization protocol").

@@ -2579,6 +2579,35 @@ final class WasmRuntimeBuilder {
 			w.writeUnsignedLeb128(0); // $notFunction
 			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
 			emitSymbolSpelling(w, 0, msgLocal);
+			emitUndefinedTail(w, msgLocal);
+		}
+
+		/**
+		 * The throw for a {@code (setf place)} function no definition has, reached with
+		 * local 0 holding the list {@code (setf place)} itself -- the call-time stub of a
+		 * direct call or a {@code #'(setf place)} of a name no definition has, whose name
+		 * the program wrote as a list. The text spells it as the interpreter does
+		 * ({@link ClosRegistry#functionNameForReport}) and the condition's {@code name}
+		 * is the list.
+		 * @param w the writer
+		 * @param msgLocal a spare {@code (ref null eq)} local
+		 */
+		void emitUndefinedSetfThrow(WasmWriter w, int msgLocal) {
+			intern();
+			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+			emitUndefinedTail(w, msgLocal);
+		}
+
+		/**
+		 * Completes the {@code undefined-function} throw whose name (a symbol or a
+		 * {@code (setf place)} list) is still in local 0 and whose message's prefix and
+		 * name are on the stack: appends the suffix and throws.
+		 */
+		private void emitUndefinedTail(WasmWriter w, int msgLocal) {
 			emitConcat(w);
 			emitStrConst(w, Objects.requireNonNull(this.undefinedSuffix));
 			emitConcat(w);
@@ -3655,6 +3684,13 @@ final class WasmRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, 0x40);
+		notFunction.emitUndefinedSetfThrow(w, msgLocal);
+		w.write(Instruction.END);
 		w.write(Instruction.BLOCK, 0x40); // $notFunction
 		notFunction.emitUndefinedThrow(w, msgLocal, byteLocal);
 		w.write(Instruction.END); // $notFunction

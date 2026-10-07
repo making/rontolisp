@@ -165,7 +165,8 @@ final class JvmFunctionFormCompiler {
 			// A name no definition has: the interpreter's late binding, as for a direct
 			// call (JvmFunctionCallCompiler) -- the undefined-function is signalled where
 			// the reference is EVALUATED, so a branch never taken still compiles.
-			CompileWarnings.warn(null, "the function " + name + " is undefined; compiled as a run-time error");
+			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
+					+ " is undefined; compiled as a run-time error");
 			emitUndefinedFunctionThrow(name, ctx);
 		}
 		else {
@@ -256,9 +257,8 @@ final class JvmFunctionFormCompiler {
 		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
 		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		ctx.body.new_(runtimeEx).dup();
-		JvmEmitHelper.compileStringLiteral(
-				ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX,
-				ctx);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
+				+ ClosRegistry.functionNameForReport(name) + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx);
 		ctx.body.invokespecial(exCtor).athrow();
 	}
 

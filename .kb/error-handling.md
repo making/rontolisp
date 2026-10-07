@@ -1182,6 +1182,25 @@ message at the catching end** -- except for the failures the backends report as 
   interpreter prints `P::F` (`.todo/156`), so `UndefinedFunctionNameFixture.SPELLING` names
   its symbols by literal. An EMPTY symbol name still traps on wasm (`symbol-value`'s keyword
   probe and the undefined arm read byte 0) and gives `index out of bounds` on the JVM.
+- **An undefined `(setf name)` function is reported as `(setf name)`, not as the `%setf-name` it
+  is stored under** (SBCL: `cell-error-name` is the list `(SETF NAME)`; until 2026-10-07 every
+  backend answered the symbol `%setf-NAME` and the text `The function %setf-NAME is undefined`,
+  and the compile-time warning said the same). `ClosRegistry.functionNameForReport` maps the
+  stored name to the `(SETF NAME)` spelling and is the one place it is decided (the
+  `defgeneric`/`defmethod` refusals use it too). Interpreter: `CellErrorException` carries the
+  place, `synthesizeCondition` builds the list. JVM: the call-time stub throws the text spelled
+  `(SETF NAME)`, and `emitCellErrorConstruction` reads the place back out of the recovered name
+  (`startsWith("(SETF ")`) and makes the slot `(list 'setf place)`. wasm: the stub passes the
+  quoted LIST to `_undefined_function`, whose body tests for a cons ahead of the symbol arm
+  (`NotFunctionReport.emitUndefinedSetfThrow`) -- the dispatchers' `$undefined` arm is untouched.
+  Only a name known at compile time takes the mapping: a run-time symbol that happens to be
+  `%setf-X` (`(funcall (intern "%SETF-X"))`) still reports the stored name, which no program
+  writes. Pinned by `UndefinedFunctionNameFixture.SETF_FUNCTION` / `SETF_FUNCTION_RESTART`
+  (`anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote` in `LispEvaluatorTest` /
+  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`) and the warning by
+  `RontoLispCliStreamsTest`; not in ci-spec, whose compiles forbid the warning every such call
+  site prints.
+
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts

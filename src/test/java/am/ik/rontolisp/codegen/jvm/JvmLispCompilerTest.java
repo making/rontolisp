@@ -5804,6 +5804,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
+		// (setf name) and the landing pad reads the list back as the name.
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART_EXPECTED);
+	}
+
+	@Test
 	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end.
 		for (String[] program : new String[][] {

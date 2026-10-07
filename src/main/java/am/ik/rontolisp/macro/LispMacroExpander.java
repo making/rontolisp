@@ -4350,7 +4350,7 @@ public final class LispMacroExpander {
 	 * @return the mangled internal function name
 	 */
 	public static String setfFunctionName(String placeName) {
-		return "%setf-" + placeName;
+		return ClosRegistry.SETF_FUNCTION_PREFIX + placeName;
 	}
 
 	// Recognizes a (setf (apply #'aref array sub... tail-list) val) / #'svref place --
@@ -24378,9 +24378,9 @@ public final class LispMacroExpander {
 				String problem = existing.inlineMethodKeys().contains(method.getKey()) ? null
 						: method.getValue().incongruenceWith(shape, false);
 				if (problem != null) {
-					methodDefuns
-						.add(programErrorForm(cons, LispNames.DEFGENERIC + " " + genericDisplayName(nameSym.name())
-								+ ": the lambda list is incompatible with an existing method: " + problem));
+					methodDefuns.add(programErrorForm(cons,
+							LispNames.DEFGENERIC + " " + ClosRegistry.functionNameForReport(nameSym.name())
+									+ ": the lambda list is incompatible with an existing method: " + problem));
 					return ClosRegistry.normalize(nameSym.name());
 				}
 			}
@@ -24622,8 +24622,8 @@ public final class LispMacroExpander {
 		if (genericShape != null) {
 			String problem = methodShape.incongruenceWith(genericShape, keywordsDeclared);
 			if (problem != null) {
-				return programErrorForm(cons,
-						LispNames.DEFMETHOD + " " + genericDisplayName(nameSym.name()) + ": " + problem);
+				return programErrorForm(cons, LispNames.DEFMETHOD + " "
+						+ ClosRegistry.functionNameForReport(nameSym.name()) + ": " + problem);
 			}
 		}
 		if (generic == null) {
@@ -24989,15 +24989,6 @@ public final class LispMacroExpander {
 		body = whenInstance(generic, instanceVar, body);
 		out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName),
 				listToCons(defaultParams), body)));
-	}
-
-	/**
-	 * A generic function's name as a refusal reports it: a {@code %setf-} writer generic
-	 * as the {@code (setf name)} the program wrote.
-	 */
-	private static String genericDisplayName(String name) {
-		String writerPrefix = setfFunctionName("");
-		return name.startsWith(writerPrefix) ? "(SETF " + name.substring(writerPrefix.length()) + ")" : name;
 	}
 
 	/** Strips a package qualifier from a symbol name. */
@@ -26956,9 +26947,10 @@ public final class LispMacroExpander {
 					// The interpreter redefines the generic in place (CLHS defgeneric); a
 					// compiled program has ONE dispatcher per generic, whose lambda list
 					// cannot be both.
-					throw new UnsupportedOperationException(LispNames.DEFGENERIC + " " + genericDisplayName(generic)
-							+ ": redefining a generic function with a different number of required parameters"
-							+ " is supported by the interpreter only");
+					throw new UnsupportedOperationException(
+							LispNames.DEFGENERIC + " " + ClosRegistry.functionNameForReport(generic)
+									+ ": redefining a generic function with a different number of required parameters"
+									+ " is supported by the interpreter only");
 				}
 				out.addAll(methodDefuns);
 				if (placedDispatchers.add(generic)) {
@@ -36863,8 +36855,8 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal undefinedFunctionCallStub(String name) {
 		return listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), textDatum(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
-						+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)));
+				List.of(new LispSymbol(LispNames.ERROR), textDatum(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
+						+ ClosRegistry.functionNameForReport(name) + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)));
 	}
 
 	/**
