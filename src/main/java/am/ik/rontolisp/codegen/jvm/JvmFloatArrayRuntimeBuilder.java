@@ -241,7 +241,9 @@ final class JvmFloatArrayRuntimeBuilder {
 		methods.add(buildAsetN(cp, refs, objectArrayClass, longClass, numberClass, longIntValue, numberDoubleValue,
 				doubleValueOf, dbl, asetN, written));
 		methods.add(buildDims(cp, refs, objectClass, longValueOf, arrayDims));
-		methods.add(buildCheckRank(cp, refs, longClass, longIntValue, rtExClass, rtExInit, arrayCheckRank));
+		methods.add(buildCheckRank(cp, refs, longClass, longIntValue,
+				self(cp, selfClass, JvmArrayRuntimeBuilder.RANK_ERR, JvmArrayRuntimeBuilder.RANK_ERR_DESC),
+				arrayCheckRank));
 		methods.add(buildLength(cp, refs, longValueOf, toGeneral, lengthHelper));
 		MethodRefEntry dimsTotal = cp.methodRef(selfClass, JvmArrayRuntimeBuilder.DIMS_TOTAL,
 				JvmArrayRuntimeBuilder.DIMS_TOTAL_DESC);
@@ -857,13 +859,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	// reads it) compared against `given`; else delegate to _arrayCheckRank. Locals:
 	// 0=arr, 1=given, 2=rank, 3=giv.
 	private static ArrayMethod buildCheckRank(ConstantPool cp, Refs refs, ClassEntry longClass,
-			MethodRefEntry longIntValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
-			MethodRefEntry checkRankDelegate) {
-		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
-		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "()V");
-		MethodRefEntry sbAppendStr = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-		MethodRefEntry sbAppendInt = cp.methodRef(sbClass, "append", "(I)Ljava/lang/StringBuilder;");
-		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
+			MethodRefEntry longIntValue, MethodRefEntry rankErr, MethodRefEntry checkRankDelegate) {
 		int arr = 0, given = 1, rank = 2, giv = 3;
 		MethodCode a = new MethodCode();
 		emitQuantizedArm(a, refs, arr, qm -> {
@@ -872,59 +868,20 @@ final class JvmFloatArrayRuntimeBuilder {
 			a.loadConstant(4);
 			a.invokestatic(qm.qmInt());
 			a.istore(rank);
-			emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt,
-					sbToString, rtExClass, rtExInit, arr, given, rank, giv);
+			JvmArrayRuntimeBuilder.emitRankCheckAndReturn(a, longClass, longIntValue, rankErr, arr, given, rank, giv);
 		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
 			w.loadRank(asm);
 			asm.istore(rank);
-			emitRankCheckAndReturn(cp, asm, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt,
-					sbToString, rtExClass, rtExInit, arr, given, rank, giv);
+			JvmArrayRuntimeBuilder.emitRankCheckAndReturn(asm, longClass, longIntValue, rankErr, arr, given, rank, giv);
 		});
 		a.aload(arr);
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
 		return new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), a);
-	}
-
-	// Shared tail of _fvCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
-	// against the already-computed actual rank (rankSlot); a match returns arr (arrSlot)
-	// unchanged, a mismatch throws the "aref: expected N subscripts, got M" text
-	// LispFloatArray#flatIndex uses in the interpreter.
-	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
-			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
-			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
-			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
-		a.aload(givenSlot);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.istore(givSlot);
-		MethodCode.Label ok = a.newLabel();
-		a.iload(rankSlot);
-		a.iload(givSlot);
-		a.if_icmpeq(ok);
-		a.new_(rtExClass);
-		a.dup();
-		a.new_(sbClass);
-		a.dup();
-		a.invokespecial(sbInit);
-		a.ldc(cp.stringEntry("aref: expected "));
-		a.invokevirtual(sbAppendStr);
-		a.iload(rankSlot);
-		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.stringEntry(" subscripts, got "));
-		a.invokevirtual(sbAppendStr);
-		a.iload(givSlot);
-		a.invokevirtual(sbAppendInt);
-		a.invokevirtual(sbToString);
-		a.invokespecial(rtExInit);
-		a.athrow();
-		a.labelBinding(ok);
-		a.aload(arrSlot);
-		a.areturn();
 	}
 
 	// _fvLength(arr): packed rank-1 -> Long.valueOf(count); packed rank-n -> delegate via

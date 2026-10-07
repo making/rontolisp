@@ -181,15 +181,33 @@ public final class OperandTypes {
 	public static final String VECTOR_POP_EMPTY = "VECTOR-POP: there is nothing left to pop";
 
 	/**
-	 * The text in front of the rank in what an {@code aref} or {@code (setf aref)} whose
-	 * subscript count is not its array's rank signals -- {@code aref: expected 2
-	 * subscripts, got 1}, a {@code simple-error} on every compiled backend, under either
-	 * operator.
+	 * The symbol name of the type an access spelling one subscript requires of its array,
+	 * {@link #rankType}.
 	 */
-	public static final String RANK_MISMATCH_PREFIX = "aref: expected ";
+	public static final String VECTOR_TYPE = "VECTOR";
 
-	/** {@link #RANK_MISMATCH_PREFIX}'s text between the rank and the subscript count. */
-	public static final String RANK_MISMATCH_INFIX = " subscripts, got ";
+	/** The symbol name that opens {@link #rankType}'s list form. */
+	public static final String ARRAY_TYPE = "ARRAY";
+
+	/** The wildcard of {@link #rankType}'s element type and each of its dimensions. */
+	public static final String WILDCARD = "*";
+
+	/**
+	 * The type an array is not of when an {@code aref}, {@code (setf aref)},
+	 * {@code #'aref} or {@code array-row-major-index} spells {@code subscripts}
+	 * subscripts and its rank is another: the array of that rank -- {@code VECTOR} for
+	 * one subscript, {@code (ARRAY * NIL)} for none, {@code (ARRAY * (* *))} for two --
+	 * the expected type SBCL's check carries and spells. Nested lists like
+	 * {@link #FILL_POINTER_VECTOR_TYPE}.
+	 * @param subscripts the subscript count the access spells
+	 * @return the type: a symbol name or a list
+	 */
+	public static Object rankType(int subscripts) {
+		if (subscripts == 1) {
+			return VECTOR_TYPE;
+		}
+		return List.of(ARRAY_TYPE, WILDCARD, java.util.Collections.nCopies(subscripts, WILDCARD));
+	}
 
 	/**
 	 * The symbol name that opens a fill pointer's range type, {@link #fillPointerType}.

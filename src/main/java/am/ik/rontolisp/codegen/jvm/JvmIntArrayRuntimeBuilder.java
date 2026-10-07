@@ -158,7 +158,8 @@ final class JvmIntArrayRuntimeBuilder {
 		methods.add(buildAset1(cp, octets, longArrayClass, ckBound, longClass, bigIntegerClass, numberClass,
 				longValueOf, numberLongValue, rtExClass, rtExInit, aset1Delegate));
 		methods.add(buildDims(cp, octets, longArrayClass, objectClass, longValueOf, dimsDelegate));
-		methods.add(buildCheckRank(cp, octets, longArrayClass, longClass, longIntValue, rtExClass, rtExInit,
+		methods.add(buildCheckRank(cp, octets, longArrayClass, longClass, longIntValue,
+				self(cp, selfClass, JvmArrayRuntimeBuilder.RANK_ERR, JvmArrayRuntimeBuilder.RANK_ERR_DESC),
 				checkRankDelegate));
 		methods.add(buildLength(cp, octets, longArrayClass, longValueOf, lengthDelegate));
 		methods
@@ -460,13 +461,8 @@ final class JvmIntArrayRuntimeBuilder {
 	// always rank 1, no header field to read); else delegate down the chain. Locals:
 	// 0=arr, 1=given, 2=rank, 3=giv.
 	private static ArrayMethod buildCheckRank(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
-			ClassEntry longClass, MethodRefEntry longIntValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			ClassEntry longClass, MethodRefEntry longIntValue, MethodRefEntry rankErr,
 			MethodRefEntry checkRankDelegate) {
-		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
-		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "()V");
-		MethodRefEntry sbAppendStr = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-		MethodRefEntry sbAppendInt = cp.methodRef(sbClass, "append", "(I)Ljava/lang/StringBuilder;");
-		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
 		int arr = 0, given = 1, rank = 2, giv = 3;
 		MethodCode a = new MethodCode();
 		MethodCode.Label notPacked = a.newLabel();
@@ -481,51 +477,13 @@ final class JvmIntArrayRuntimeBuilder {
 		a.labelBinding(packed);
 		a.loadConstant(1);
 		a.istore(rank);
-		emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt, sbToString,
-				rtExClass, rtExInit, arr, given, rank, giv);
+		JvmArrayRuntimeBuilder.emitRankCheckAndReturn(a, longClass, longIntValue, rankErr, arr, given, rank, giv);
 		a.labelBinding(notPacked);
 		a.aload(arr);
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
 		return new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), a);
-	}
-
-	// Shared tail of _ivCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
-	// against the already-computed actual rank (rankSlot); a match returns arr (arrSlot)
-	// unchanged, a mismatch throws the "aref: expected N subscripts, got M" text the
-	// interpreter uses.
-	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
-			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
-			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
-			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
-		a.aload(givenSlot);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.istore(givSlot);
-		MethodCode.Label ok = a.newLabel();
-		a.iload(rankSlot);
-		a.iload(givSlot);
-		a.if_icmpeq(ok);
-		a.new_(rtExClass);
-		a.dup();
-		a.new_(sbClass);
-		a.dup();
-		a.invokespecial(sbInit);
-		a.ldc(cp.stringEntry("aref: expected "));
-		a.invokevirtual(sbAppendStr);
-		a.iload(rankSlot);
-		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.stringEntry(" subscripts, got "));
-		a.invokevirtual(sbAppendStr);
-		a.iload(givSlot);
-		a.invokevirtual(sbAppendInt);
-		a.invokevirtual(sbToString);
-		a.invokespecial(rtExInit);
-		a.athrow();
-		a.labelBinding(ok);
-		a.aload(arrSlot);
-		a.areturn();
 	}
 
 	// _ivLength(arr): packed -> Long.valueOf(arr.length - 1); else delegate. Locals:

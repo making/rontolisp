@@ -930,21 +930,19 @@ final class WasmArrayCompiler {
 
 	static void compileAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// The array expression is evaluated exactly once (side effects run once, not
-		// once per branch below): pushed here, then run through emitArefCheckRank, which
-		// fails unless the array's actual rank matches subscriptCount -- the ORIGINAL
-		// number of subscripts at this call site (0 for a bare (aref a), which reads a
-		// rank-0 array's single element), computed before any arity-specific dispatch
-		// below (todo 479; the JVM backend had the same hole --
-		// JvmArrayCompiler#compileAref
-		// carries the matching comment).
+		// Every argument form runs before anything is checked, as CL evaluates a call's
+		// arguments: the array expression once into a temp, then each subscript, its type
+		// checked where it is evaluated. Only then the array and its rank
+		// (emitArefCheckRank, or _idx_ref's own call), and then the bounds -- the
+		// interpreter's order (.kb/error-handling.md, "A rank mismatch").
+		// subscriptCount is the ORIGINAL number of subscripts at this call site (0 for a
+		// bare (aref a), which reads a rank-0 array's single element), computed before
+		// any arity-specific dispatch below.
 		int subscriptCount = args.size() - 2;
 		// Evaluate the array once; a packed farray reads its unboxed f64 store directly,
-		// a
-		// general array resolves the displacement chain into its buckets.
+		// a general array resolves the displacement chain into its buckets.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		if (subscriptCount <= 1) {
 			// Rank 0 or 1: evaluate the index once (the constant 0 for a bare (aref a):
 			// a rank-0 array holds its one element at row-major index 0), then dispatch
@@ -958,15 +956,16 @@ final class WasmArrayCompiler {
 			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING && reportsBounds(ctx)
 					&& WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 				// One representation: its bound compares inline after the subscript's
-				// type
-				// check, the read's hot path paying the one call that check was.
+				// type check and the rank check, the read's hot path paying the two calls
+				// those checks are.
 				compileSubscript(subscript, ctx);
 				int idxSlot = setTemp(ctx);
+				emitArefCheckRank(ctx, arrSlot, subscriptCount);
 				emitFlatCheck(ctx, arrSlot, idxSlot, false, kindedBound(ctx, kind, arrSlot, subscriptCount));
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
 				return;
 			}
-			int idxSlot = compileReadSubscript(subscript, ctx, arrSlot);
+			int idxSlot = compileReadSubscript(subscript, ctx, arrSlot, subscriptCount);
 			boolean checked = reportsBounds(ctx);
 			if (kind != null) {
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, checked);
@@ -976,23 +975,24 @@ final class WasmArrayCompiler {
 			}
 			return;
 		}
+		// The subscripts once, for whichever arm reads: each checked as an integer.
+		int[] subs = compileSubscripts(ctx, args, 2, subscriptCount);
+		emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// packed: box(data[Horner(subscripts)]), reading the f64/f32 store per width,
 		// each subscript checked against its own dimension (an axis the engine's check
 		// of the flat store cannot see).
-		int[] pSubs = compileSubscripts(ctx, args, 2, subscriptCount);
-		emitCheckedFlatIndex(ctx, pSubs, k -> farrayBound(ctx, arrSlot, k));
+		emitCheckedFlatIndex(ctx, subs, k -> farrayBound(ctx, arrSlot, k));
 		boxI31(ctx);
 		int pIdxSlot = setTemp(ctx);
 		emitPackedReadF64(ctx, arrSlot, pIdxSlot);
 		boxFloat(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		// general: arr -> header (the (dims . (meta . data)) cons), then data[flat].
-		int[] gSubs = compileSubscripts(ctx, args, 2, subscriptCount);
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
-		emitCheckedFlatIndex(ctx, gSubs, k -> generalBound(ctx, arrSlot, k));
+		emitCheckedFlatIndex(ctx, subs, k -> generalBound(ctx, arrSlot, k));
 		callArrGet(ctx);
 		ctx.writer.write(Instruction.END);
 	}
@@ -1002,7 +1002,9 @@ final class WasmArrayCompiler {
 	// actual rank doesn't match `given`, the subscript count the aref/%aset call site
 	// baked in at compile time -- the same invariant LispArray/LispFloatArray#flatIndex
 	// enforce in the interpreter. In an EH-mode module whose operator table names aref
-	// it signals their "aref: expected N subscripts, got M"; elsewhere it traps.
+	// it lands the site's operator's type-error over the array, whose expected type is
+	// the array of rank `given` (OperandTypes.rankType); elsewhere it traps. Every site
+	// calls it after the subscripts (and a store's value) are evaluated.
 	// The returned reference is dropped -- arrSlot already holds it, every arm below
 	// reads it from there -- so this is a call, not a per-site copy of the four-way
 	// representation dispatch (~90 bytes; see
@@ -1451,7 +1453,7 @@ final class WasmArrayCompiler {
 		int arrSlot = setTemp(ctx);
 		emitArrayCheck(ctx, arrSlot);
 		// A subscript that is no integer is ROW-MAJOR-AREF's type-error.
-		int idxSlot = compileReadSubscript(args.get(2), ctx, arrSlot);
+		int idxSlot = compileReadSubscript(args.get(2), ctx, arrSlot, WasmArrayRuntimeBuilder.ANY_RANK);
 		emitAref1FromSlots(ctx, arrSlot, idxSlot, reportsBounds(ctx));
 	}
 
@@ -1637,9 +1639,12 @@ final class WasmArrayCompiler {
 			// A store whose array representation is pinned down (declaration / accessor
 			// slot :type / this compile's own initializer choice) emits that ONE arm; a
 			// string kind never stores (strings are immutable structs -- the generic
-			// general arm's cast traps there too, so the generic path answers it).
+			// general arm's cast traps there too, so the generic path answers it). A
+			// packed integer vector is rank 1, so a rank-0 store to one is the generic
+			// path's: the kinded arm coerces the value before the rank check could run.
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
-			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING) {
+			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING
+					&& (kind.packedIntWidth() == 0 || subscriptCount == 1)) {
 				emitKindedAset1(args, idxExpr, kind, ctx, resultNeeded, subscriptCount);
 				return;
 			}
@@ -1657,7 +1662,6 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		// Whether this store checks its subscripts' bounds itself: every axis of a
 		// rank-2+ array, whose flat index the engine's own check cannot see through, and
 		// in a module that reports them every store; the checks follow the value's
@@ -1674,6 +1678,7 @@ final class WasmArrayCompiler {
 		if (checked || ctx.simd) {
 			int[] pSubs = compileSubscripts(ctx, args, 2, subscriptCount);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			boxFloat(ctx);
 			pBoxSlot = setTemp(ctx);
@@ -1696,6 +1701,7 @@ final class WasmArrayCompiler {
 			boxI31(ctx);
 			pIdxSlot = setTemp(ctx);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			boxFloat(ctx);
 			pBoxSlot = setTemp(ctx);
@@ -1705,7 +1711,8 @@ final class WasmArrayCompiler {
 		if (subscriptCount == 1) {
 			// packed integer vector: raw mask-store (no box on the value's fast path,
 			// see emitPackedIntStore), returning the value AS STORED when needed. A
-			// rank > 1 subscript set never targets one (rank-1 by construction).
+			// rank > 1 subscript set never targets one (rank-1 by construction), so this
+			// arm's rank always matches and it checks none.
 			testIntVector(ctx, arrSlot);
 			emitIfEq(ctx);
 			emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(args.size() - 1), resultNeeded);
@@ -1717,6 +1724,7 @@ final class WasmArrayCompiler {
 			int[] gSubs = compileSubscripts(ctx, args, 2, subscriptCount);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 			int valSlot = setTemp(ctx);
+			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 			if (subscriptCount == 1) {
 				emitFlatCheck(ctx, arrSlot, gSubs[0], false, generalBound(ctx, arrSlot, 0));
 			}
@@ -1738,6 +1746,7 @@ final class WasmArrayCompiler {
 			getLocal(ctx, headerSlot);
 			emitFlatIndex(ctx, headerSlot, args, 2, subscriptCount);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		}
 		callArrSet(ctx);
 		if (subscriptCount == 1) {
@@ -1761,7 +1770,6 @@ final class WasmArrayCompiler {
 		LispVal valueExpr = args.get(args.size() - 1);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		emitArefCheckRank(ctx, arrSlot, given);
 		switch (kind) {
 			case U8, U16, U32 -> {
 				int type = intArrType(kind.packedIntWidth());
@@ -1772,6 +1780,7 @@ final class WasmArrayCompiler {
 					// once the subscript passed.
 					int savedI64 = ctx.nextI64Local;
 					Runnable raw = compileIntStoreValue(valueExpr, ctx);
+					emitArefCheckRank(ctx, arrSlot, given);
 					emitFlatCheck(ctx, arrSlot, idxSlot, false, () -> {
 						getLocal(ctx, arrSlot);
 						ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -1797,6 +1806,7 @@ final class WasmArrayCompiler {
 						int valSlot = setTemp(ctx);
 						emitUnboxIntForStore(ctx, valSlot);
 					}
+					emitArefCheckRank(ctx, arrSlot, given);
 				}
 				ctx.writer.write(Instruction.I32_WRAP_I64);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
@@ -1809,6 +1819,7 @@ final class WasmArrayCompiler {
 				compileSubscript(idxExpr, ctx);
 				int idxSlot = setTemp(ctx);
 				WasmExprCompiler.compileExpr(valueExpr, ctx);
+				emitArefCheckRank(ctx, arrSlot, given);
 				WasmEmitHelper.castFloatGetF64(ctx);
 				boxFloat(ctx);
 				int boxSlot = setTemp(ctx);
@@ -1824,6 +1835,7 @@ final class WasmArrayCompiler {
 					int idxSlot = setTemp(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
 					int valSlot = setTemp(ctx);
+					emitArefCheckRank(ctx, arrSlot, given);
 					emitFlatCheck(ctx, arrSlot, idxSlot, false, given == 1 ? generalBound(ctx, arrSlot, 0) : null);
 					getLocal(ctx, arrSlot);
 					castCellGet0(ctx);
@@ -1837,6 +1849,7 @@ final class WasmArrayCompiler {
 					compileSubscript(idxExpr, ctx);
 					WasmEmitHelper.castI31GetS(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
+					emitArefCheckRank(ctx, arrSlot, given);
 				}
 				callArrSet(ctx);
 				if (!resultNeeded) {
@@ -1856,11 +1869,11 @@ final class WasmArrayCompiler {
 			boolean resultNeeded, int given) {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		emitArefCheckRank(ctx, arrSlot, given);
 		compileSubscript(idxExpr, ctx);
 		int idxSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		int valSlot = setTemp(ctx);
+		emitArefCheckRank(ctx, arrSlot, given);
 		// The sole subscript's bound, the total size, is checked in each arm once the
 		// value is evaluated and coerced.
 		testFarray(ctx, arrSlot);
@@ -1966,21 +1979,35 @@ final class WasmArrayCompiler {
 	}
 
 	/**
-	 * Compiles a READ's subscript into a temp. In a module that {@link #reportsBounds},
-	 * one {@code _idx_ref} call checks both its type (as {@code _idx_chk} would) and its
-	 * flat bound against the array in {@code arrSlot} -- the read's hot path pays the one
-	 * call it paid for the type check alone; elsewhere {@link #compileSubscript}.
+	 * Compiles a READ's subscript into a temp, then checks the array in {@code arrSlot}
+	 * against the rank {@code given} -- after the subscript is evaluated and its type
+	 * checked, the interpreter's order. In a module that {@link #reportsBounds}, one
+	 * {@code _idx_ref} call checks its type (as {@code _idx_chk} would), the array's rank
+	 * and its flat bound -- the read's hot path pays the two calls it paid for the rank
+	 * check and the type check; elsewhere {@link #compileSubscript} and
+	 * {@link #emitArefCheckRank}.
+	 * @param subscript the subscript form
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array
+	 * @param given the subscript count the site spells, or
+	 * {@link WasmArrayRuntimeBuilder#ANY_RANK} for a read of any rank whose array the
+	 * site has checked
+	 * @return the subscript's temp
 	 */
-	private static int compileReadSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx, int arrSlot) {
+	private static int compileReadSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx, int arrSlot, int given) {
 		if (!reportsBounds(ctx)) {
 			compileSubscript(subscript, ctx);
-			return setTemp(ctx);
+			int idxSlot = setTemp(ctx);
+			if (given != WasmArrayRuntimeBuilder.ANY_RANK) {
+				emitArefCheckRank(ctx, arrSlot, given);
+			}
+			return idxSlot;
 		}
 		WasmExprCompiler.compileExpr(subscript, ctx);
 		int idxSlot = setTemp(ctx);
 		getLocal(ctx, arrSlot);
 		getLocal(ctx, idxSlot);
-		i32Const(ctx, WasmOperandTypes.operatorId(ctx));
+		i32Const(ctx, given | WasmOperandTypes.operatorId(ctx) << 8);
 		boxI31(ctx);
 		callFixed(ctx, WasmLispCompiler.FUNC_IDX_REF);
 		ctx.writer.write(Instruction.DROP);
@@ -2037,10 +2064,11 @@ final class WasmArrayCompiler {
 		}
 		if (reportsBounds(ctx)) {
 			// _idx_ref, the operator its argument: one call, no register traffic at the
-			// site (its integer check is a re-check here, one type test)
+			// site (its integer check is a re-check here, one type test; the site
+			// checked the array and its rank)
 			getLocal(ctx, arrSlot);
 			getLocal(ctx, idxSlot);
-			i32Const(ctx, WasmOperandTypes.operatorId(ctx));
+			i32Const(ctx, WasmArrayRuntimeBuilder.ANY_RANK | WasmOperandTypes.operatorId(ctx) << 8);
 			boxI31(ctx);
 			callFixed(ctx, WasmLispCompiler.FUNC_IDX_REF);
 			ctx.writer.write(Instruction.DROP);

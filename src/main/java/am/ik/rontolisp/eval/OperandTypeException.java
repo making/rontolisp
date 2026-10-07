@@ -88,12 +88,13 @@ final class OperandTypeException extends LispEvalException {
 	/**
 	 * The unnamed error of an operand that is not of a compound type
 	 * ({@link OperandTypes#FILL_POINTER_VECTOR_TYPE},
-	 * {@link OperandTypes#fillPointerType}): the seam names it, keeping the type.
+	 * {@link OperandTypes#fillPointerType}, {@link OperandTypes#rankType}): the seam
+	 * names it, keeping the type.
 	 * @param datum the rejected operand
-	 * @param type the type, as nested lists of symbol names and numbers
+	 * @param type the type, as a symbol name or nested lists of symbol names and numbers
 	 * @return the exception to throw
 	 */
-	static OperandTypeException notOfType(LispVal datum, java.util.List<?> type) {
+	static OperandTypeException notOfType(LispVal datum, Object type) {
 		return new OperandTypeException(datum, OperandTypes.Kind.ARRAY, null, typeValue(type));
 	}
 

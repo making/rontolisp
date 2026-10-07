@@ -2110,12 +2110,16 @@ class JvmLispCompilerTest {
 	void compileAndRunArefChecksItsArraysRankAndItsSubscriptsType() throws Exception {
 		// The twin of LispEvaluatorTest#arefChecksItsArraysRankAndItsSubscriptsType. A
 		// fused tree's aref read a rank-2 array's flat storage as rank 1, and its
-		// fallback checked a non-integer subscript only against the bound. Both levels:
-		// size declines fusion.
+		// fallback checked a non-integer subscript only against the bound; a call
+		// checked the rank before it evaluated its subscripts and signalled a
+		// simple-error. Both levels: size declines fusion.
 		List<LispVal> program = fixtureProgram(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE);
+		List<LispVal> order = fixtureProgram(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_SOURCE);
 		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
 			assertThat(compileAndRun(program, level)).as("level %s", level)
 				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+			assertThat(compileAndRun(order, level)).as("order, level %s", level)
+				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_EXPECTED);
 		}
 	}
 
@@ -6342,19 +6346,23 @@ class JvmLispCompilerTest {
 		// positionally to a rank-3 array (0 * 2 + 1 = flat index 1, silently 1.0) instead
 		// of checking the count against the array's own rank, the way the interpreter's
 		// LispFloatArray#flatIndex does.
+		// The mismatch is AREF's type-error over the array, the expected type the array
+		// of the rank the subscripts spell (ArefRankAndSubscriptChecksFixture).
 		assertThatThrownBy(() -> compileAndRunLinalg("(print (aref (linalg:reshape (linalg:arange 8) '(2 2 2)) 0 1))"))
-			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+			.hasRootCauseMessage("AREF: The value #d(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))"
+					+ " is not of type (ARRAY * (* *))");
 		// The same hole existed for a general (non-packed) array and for %aset -- both
 		// went through the identical arity-picks-the-helper dispatch in
 		// JvmArrayCompiler#compileAref/#compileAset.
 		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2 2) :initial-element 0) 0 1))"))
-			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+			.hasRootCauseMessage("AREF: The value #3A(((0 0) (0 0)) ((0 0) (0 0))) is not of type (ARRAY * (* *))");
 		assertThatThrownBy(() -> compileAndRun("(setf (aref (make-array (list 2 2 2) :initial-element 0) 0 1) 9)"))
-			.hasRootCauseMessage("aref: expected 3 subscripts, got 2");
+			.hasRootCauseMessage(
+					"(SETF AREF): The value #3A(((0 0) (0 0)) ((0 0) (0 0))) is not of type (ARRAY * (* *))");
 		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2) :initial-element 0)))"))
-			.hasRootCauseMessage("aref: expected 2 subscripts, got 0");
+			.hasRootCauseMessage("AREF: The value #2A((0 0) (0 0)) is not of type (ARRAY * NIL)");
 		assertThatThrownBy(() -> compileAndRun("(print (aref #(1 2 3) 0 1))"))
-			.hasRootCauseMessage("aref: expected 1 subscripts, got 2");
+			.hasRootCauseMessage("AREF: The value #(1 2 3) is not of type (ARRAY * (* *))");
 		// row-major-aref/%row-major-aset intentionally accept any rank (flat indexing
 		// under the hood), so a mismatched subscript COUNT never applies to them; this is
 		// not retested here -- compileAndRunRowMajorArefReadsAndWritesFlat already pins
@@ -6388,10 +6396,10 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("""
 				4
 				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+				("AREF: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)
 				3
 				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
-				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+				("ARRAY-ROW-MAJOR-INDEX: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)""");
 	}
 
 	@Test
@@ -9916,7 +9924,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunMakeArrayInitialContentsFillsARunTimeRank() throws Exception {
 		// A dims list that exists only at run time took the rank-1 fill, whose store
-		// rejects a rank >= 2 array ("aref: expected 2 subscripts, got 1"). It fills
+		// rejects a rank >= 2 array (its rank mismatch). It fills
 		// row-major and checks every level, in the interpreter's depth-first order.
 		assertThat(compileAndRun(
 				"(print (let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6)))))"))

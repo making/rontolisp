@@ -152,15 +152,19 @@ final class WasmArrayRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _idx_ref (array, subscript, operator) -> subscript}
-	 * ({@link WasmLispCompiler#FUNC_IDX_REF}): an element READ's whole subscript check in
-	 * one call, EH mode only -- the check {@code _idx_chk} makes (a subscript that is no
-	 * integer is the operator's {@code INTEGER} type-error, through {@code _int_val}) and
-	 * the flat bound {@link #buildIndexBoundBody} checks (the array's total size by
-	 * representation; a string, or anything that is no array, passes). The operator id
-	 * arrives as an i31 and becomes the register value both landings read; a subscript
-	 * that passes clears it. A read site calls this INSTEAD of {@code _idx_chk}, so its
-	 * hot path pays one call, as before.
+	 * Builds {@code _idx_ref (array, subscript, given) -> subscript}
+	 * ({@link WasmLispCompiler#FUNC_IDX_REF}): an element READ's whole check in one call,
+	 * EH mode only, in the interpreter's order -- the check {@code _idx_chk} makes (a
+	 * subscript that is no integer is the operator's {@code INTEGER} type-error, through
+	 * {@code _int_val}), then the array and its rank ({@code _arr_check_rank} over
+	 * {@code given}, unless its rank byte is {@link #ANY_RANK}: a store or a pinned-kind
+	 * read checked them at the site), then the flat bound {@link #buildIndexBoundBody}
+	 * checks (the array's total size by representation; a string passes). {@code given}
+	 * is {@code _arr_check_rank}'s, the operator id above the rank byte, as an i31; the
+	 * id becomes the register value the landings read, and a subscript that passes clears
+	 * it. A rank-1 read site calls this INSTEAD of {@code _idx_chk} and
+	 * {@code _arr_check_rank}, so its hot path pays the two calls it paid when the rank
+	 * came first.
 	 * @param operatorGlobal the operator register (EH mode with the landing's index arm),
 	 * or -1, when the body is a bare trap no site calls
 	 * @return the function body (signature
@@ -189,8 +193,41 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32(w, 8);
+		w.write(Instruction.I32_SHR_U);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(operatorGlobal);
+		// the subscript's type first: a non-fixnum that is no wide integer lands
+		// INTEGER (a wide one is out of range below)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNotWideIntegerLands(w, idx);
+		w.write(Instruction.END);
+		// then the array and its rank, unless the site checked them
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(op);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32(w, ANY_RANK);
+		w.write(Instruction.I32_AND);
+		i32(w, ANY_RANK);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(op);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		call(w, WasmLispCompiler.FUNC_ARR_CHECK_RANK);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
 		// the bound, by representation; anything else passes with the register cleared
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.GET_LOCAL);
@@ -804,15 +841,15 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code arr}'s actual rank equals {@code given} -- 1 for a string (always a rank-1
 	 * character array) or a packed integer vector (rank-1 by construction), else the dims
 	 * buckets length (a packed farray's own field 0, or the general array header's car).
-	 * {@code aref}/{@code %aset} push the array once and call this before reading any
-	 * subscript, so the check runs regardless of which representation arm the value turns
-	 * out to be, and the returned reference is what every arm reads from -- the array is
-	 * evaluated exactly once at the call site (todo 479; the JVM backend's
+	 * {@code aref}/{@code %aset} evaluate the array once into a temp and call this once
+	 * their subscripts (and a store's value) are evaluated, before any arm reads or
+	 * stores, so the check runs regardless of which representation arm the value turns
+	 * out to be (todo 479; the JVM backend's
 	 * {@code _arrayCheckRank}/{@code _fvCheckRank}/{@code _ivCheckRank} chain, in
-	 * {@code JvmArrayRuntimeBuilder}, closes the same hole with a message the interpreter
-	 * matches, which the four-argument overload signals in EH mode). {@code given} used
-	 * to be inlined as a per-site constant compare; moved here (a call, not ~90 bytes of
-	 * REF_TEST chain per {@code aref}/{@code %aset} site) once
+	 * {@code JvmArrayRuntimeBuilder}, closes the same hole with the report the
+	 * interpreter gives, which the three-argument overload lands in EH mode).
+	 * {@code given} used to be inlined as a per-site constant compare; moved here (a
+	 * call, not ~90 bytes of REF_TEST chain per {@code aref}/{@code %aset} site) once
 	 * {@code WasmLispCompilerTest#anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime}
 	 * priced the inline form.
 	 * @return the function body (signature {@code ((ref null eq), i32) -> (ref null eq)},
@@ -842,38 +879,36 @@ final class WasmArrayRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildArrCheckRankBody(int operatorGlobal) {
-		return buildArrCheckRankBody(operatorGlobal, null, null, false);
+		return buildArrCheckRankBody(operatorGlobal, null, false);
 	}
 
 	/**
 	 * Builds {@code _arr_check_rank} as {@link #buildArrCheckRankBody(int)} does, and in
-	 * EH mode with the two texts a rank mismatch signals {@code aref: expected R
-	 * subscripts, got G} -- the instance-less payload on {@code $lisp-cond}, which a
-	 * handler takes as a {@code simple-error}, as every other backend signals it -- where
-	 * it trapped. Without the texts the body is {@link #buildArrCheckRankBody(int)}'s
-	 * byte for byte.
+	 * EH mode with the three symbol names a rank mismatch lands the site's operator's
+	 * {@code type-error} over the array ({@code _type_err_of}), the expected type the
+	 * array of the rank the site spells -- {@code VECTOR}, {@code (ARRAY * NIL)},
+	 * {@code (ARRAY * (* *))} ({@code OperandTypes.rankType}), built here at run time --
+	 * where it trapped. Without the names the body is
+	 * {@link #buildArrCheckRankBody(int)}'s byte for byte.
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
-	 * @param prefix the interned quote-framed {@code "aref: expected "}, or null
-	 * @param infix the interned quote-framed {@code " subscripts, got "}, or null
+	 * @param rankNames the interned {@code VECTOR}, {@code ARRAY} and {@code *}, or null
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @return the function body
 	 */
-	static byte[] buildArrCheckRankBody(int operatorGlobal, WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
-			WasmLispCompiler.StringTable.@Nullable StringEntry infix, boolean identityHash) {
+	static byte[] buildArrCheckRankBody(int operatorGlobal, @Nullable RankNames rankNames, boolean identityHash) {
 		boolean reports = operatorGlobal >= 0;
-		boolean signals = reports && prefix != null && infix != null;
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		// EH mode: 2 = the general arm's header (eqref), 3 = the rank the site wants,
-		// 4 = the array's own rank when a mismatch signals
+		// EH mode: 2 = the general arm's header (eqref), then the expected type's
+		// wildcards when a mismatch signals; 3 = the rank the site wants, then the
+		// wildcards still to cons
 		int headerSlot = 2;
 		int wantSlot = 3;
-		int rankSlot = 4;
 		if (reports) {
 			w.writeUnsignedLeb128(2);
 			w.writeUnsignedLeb128(1);
 			w.writeRefType(true, Type.EQ.code());
-			w.writeUnsignedLeb128(signals ? 2 : 1);
+			w.writeUnsignedLeb128(1);
 			w.write(Type.I32);
 		}
 		else {
@@ -980,10 +1015,6 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		if (signals) {
-			w.write(Instruction.TEE_LOCAL);
-			w.writeUnsignedLeb128(rankSlot);
-		}
 		if (reports) {
 			// rank != want, unless the site reads any rank
 			get(w, 1);
@@ -1002,8 +1033,8 @@ final class WasmArrayRuntimeBuilder {
 			w.write(Instruction.I32_NE);
 		}
 		w.write(Instruction.IF, 0x40);
-		if (reports && prefix != null && infix != null) {
-			emitRankMismatchThrow(w, prefix, infix, rankSlot, wantSlot, identityHash);
+		if (reports && rankNames != null) {
+			emitRankMismatchLanding(w, operatorGlobal, rankNames, headerSlot, wantSlot, identityHash);
 		}
 		else {
 			w.write(Instruction.UNREACHABLE);
@@ -1014,37 +1045,76 @@ final class WasmArrayRuntimeBuilder {
 		return out.toByteArray();
 	}
 
-	// Throws the instance-less (nil . "aref: expected <rank> subscripts, got <want>")
-	// payload on $lisp-cond -- what (error "...") throws, which a handler takes as a
-	// simple-error and the entry landing pad reports as the message. The site set no
-	// operator register (its id rides in `given`), so there is none to clear.
-	private static void emitRankMismatchThrow(WasmWriter w, WasmLispCompiler.StringTable.StringEntry prefix,
-			WasmLispCompiler.StringTable.StringEntry infix, int rankSlot, int wantSlot, boolean identityHash) {
+	/**
+	 * The symbol names {@code _arr_check_rank}'s expected type spells, interned where the
+	 * operator table names an access that checks a rank.
+	 *
+	 * @param vector {@code VECTOR}
+	 * @param array {@code ARRAY}
+	 * @param wildcard {@code *}
+	 */
+	record RankNames(WasmLispCompiler.StringTable.StringEntry vector, WasmLispCompiler.StringTable.StringEntry array,
+			WasmLispCompiler.StringTable.StringEntry wildcard) {
+	}
+
+	// A rank mismatch: the site's operator (the bits of `given` above the rank byte) into
+	// the register, then _type_err_of over the array and the type of the rank the site
+	// wants -- VECTOR, or (ARRAY * stars) with `want` wildcards consed in a loop that
+	// counts the want local down. Never returns.
+	private static void emitRankMismatchLanding(WasmWriter w, int operatorGlobal, RankNames names, int listSlot,
+			int countSlot, boolean identityHash) {
+		get(w, 1);
+		i32(w, 8);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		get(w, 0);
+		get(w, countSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		emitText(w, names.vector());
+		w.write(Instruction.ELSE);
+		emitText(w, names.array());
+		emitText(w, names.wildcard());
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
-		emitText(w, prefix);
-		emitPrintedI32(w, rankSlot);
-		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
-		emitText(w, infix);
-		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
-		emitPrintedI32(w, wantSlot);
-		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(listSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, countSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitText(w, names.wildcard());
+		get(w, listSlot);
 		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.THROW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(listSlot);
+		get(w, countSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(countSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, listSlot);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.END);
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR_OF);
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	private static void emitText(WasmWriter w, WasmLispCompiler.StringTable.StringEntry text) {
 		i32(w, text.offset());
 		i32(w, text.length());
 		call(w, WasmLispCompiler.FUNC_STR_BUILD);
-	}
-
-	// The i32 in `slot` as prin1 prints it, boxed as the fixnum it is.
-	private static void emitPrintedI32(WasmWriter w, int slot) {
-		get(w, slot);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
 	}
 
 	// _arr_check_rank's miss: the site's operator (the bits of `given` above the rank

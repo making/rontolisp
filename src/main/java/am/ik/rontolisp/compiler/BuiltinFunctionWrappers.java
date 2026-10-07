@@ -1102,17 +1102,16 @@ public final class BuiltinFunctionWrappers {
 	// The Horner fold of a RUNTIME subscript list over the array's dimensions -- the
 	// shape both #'aref and #'array-row-major-index need, because CL gives each of them
 	// one subscript per dimension and the rank is static only in call position. A
-	// subscript COUNT that does not match the rank is rejected before the loop runs
-	// (todo a58: the fold used to silently walk however many subscripts it was given,
-	// so a short or long list read the wrong element instead of erroring like the
-	// interpreter's LispArray#flatIndex/call-position path -- "aref: expected N
-	// subscripts, got M", verbatim regardless of which accessor triggered it, the way
-	// (setf (aref ...)) with a wrong count already reports it), and each subscript is
-	// checked against its OWN dimension as the loop steps onto it (.kb/error-handling.md,
-	// "An out-of-range subscript is a type-error naming its bound"):
+	// subscript COUNT that does not match the rank is the operator's type-error over the
+	// array before the loop runs -- its expected type the array of the rank the
+	// subscripts spell (OperandTypes#rankType: VECTOR, (ARRAY * NIL), (ARRAY * (* *))),
+	// computed at run time like the bound below -- and each subscript is checked against
+	// its OWN dimension as the loop steps onto it (.kb/error-handling.md, "An
+	// out-of-range subscript is a type-error naming its bound"):
 	// (let ((__aref_dims (array-dimensions a)))
 	// (if (/= (length idx) (length __aref_dims))
-	// (error "aref: expected ~a subscripts, got ~a" (length __aref_dims) (length idx))
+	// <signal a (if (= (length idx) 1) 'vector
+	// (list 'array '* (do ((s nil (cons '* s)) (k idx (cdr k))) ((null k) s))))>
 	// (do ((rm 0) (ds __aref_dims) (is idx))
 	// ((null is) <result>)
 	// (if (or (< (car is) 0) (>= (car is) (car ds))) <signal> nil)
@@ -1123,8 +1122,7 @@ public final class BuiltinFunctionWrappers {
 		LispSymbol dims0 = new LispSymbol("__aref_dims");
 		LispVal countMismatch = listToCons(List.of(new LispSymbol(LispNames.NE),
 				callV(LispNames.LENGTH, new LispSymbol("idx")), callV(LispNames.LENGTH, dims0)));
-		LispVal countError = callV(LispNames.ERROR, new LispString("aref: expected ~a subscripts, got ~a"),
-				callV(LispNames.LENGTH, dims0), callV(LispNames.LENGTH, new LispSymbol("idx")));
+		LispVal countError = typeErrorForm(new LispSymbol("a"), rankTypeForm(), operator);
 		LispVal bindings = listToCons(
 				List.of(callV("rm", new LispInteger(0)), callV("ds", dims0), callV("is", new LispSymbol("idx"))));
 		LispVal exit = listToCons(List.of(call(LispNames.NULL, "is"), result));
@@ -1141,39 +1139,77 @@ public final class BuiltinFunctionWrappers {
 				guarded));
 	}
 
+	// The rank type of the subscript list idx, built at run time (OperandTypes#rankType):
+	// (if (= (length idx) 1) 'vector
+	// (list 'array '* (do ((s nil (cons '* s)) (k idx (cdr k))) ((null k) s))))
+	private static LispVal rankTypeForm() {
+		LispVal wildcard = callV(LispNames.QUOTE, new LispSymbol(OperandTypes.WILDCARD));
+		LispVal stars = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(
+						listToCons(List.of(new LispSymbol("s"), LispNil.INSTANCE,
+								callV(LispNames.CONS, wildcard, new LispSymbol("s")))),
+						listToCons(List.of(new LispSymbol("k"), new LispSymbol("idx"), call(LispNames.CDR, "k"))))),
+				listToCons(List.of(call(LispNames.NULL, "k"), new LispSymbol("s")))));
+		LispVal list = callV(LispNames.LIST, callV(LispNames.QUOTE, new LispSymbol(OperandTypes.ARRAY_TYPE)), wildcard,
+				stars);
+		LispVal one = listToCons(List.of(new LispSymbol(LispNames.EQ), callV(LispNames.LENGTH, new LispSymbol("idx")),
+				new LispInteger(1)));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), one,
+				callV(LispNames.QUOTE, new LispSymbol(OperandTypes.VECTOR_TYPE)), list));
+	}
+
+	// The check every subscript gets before the array is looked at, as a call-position
+	// access orders them: one that is no integer is the operator's INTEGER type-error.
+	// (do ((is idx (cdr is))) ((null is) nil)
+	// (if (integerp (car is)) nil <signal (car is) 'integer>))
+	private static LispVal subscriptTypeCheckForm(String operator) {
+		LispVal binding = listToCons(List.of(new LispSymbol("is"), new LispSymbol("idx"), call(LispNames.CDR, "is")));
+		LispVal exit = listToCons(List.of(call(LispNames.NULL, "is"), LispNil.INSTANCE));
+		LispVal check = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.INTEGERP, call(LispNames.CAR, "is")),
+						LispNil.INSTANCE, typeErrorForm(call(LispNames.CAR, "is"),
+								callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.INTEGER.name())), operator)));
+		return listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(binding)), exit, check));
+	}
+
 	// The per-axis check the fold's loop runs before folding a subscript in: the
 	// operator's type-error over the subscript, naming the axis's own dimension --
 	// (INTEGER 0 (dim)) -- exactly the shape OperandTypeException#outOfRange signals for
 	// the call-position path (compiler/OperandTypes), built here directly since the
 	// dimension is a RUNTIME value no static %operand-type-error kind carries.
 	// (if (or (< (car is) 0) (>= (car is) (car ds)))
-	// (let ((__aref_type (list 'integer 0 (list (car ds)))))
-	// (error 'type-error :datum (car is) :expected-type __aref_type
-	// :format-control (%string-concat "OP: The value " (%string-concat
-	// (prin1-to-string (car is)) (%string-concat " is not of type "
-	// (prin1-to-string __aref_type))))))
+	// <signal (car is) (list 'integer 0 (list (car ds)))>
 	// nil)
 	private static LispVal subscriptBoundCheckForm(String operator) {
 		LispVal outOfRange = listToCons(List.of(new LispSymbol(LispNames.OR),
 				listToCons(List.of(new LispSymbol(LispNames.LT), call(LispNames.CAR, "is"), new LispInteger(0))),
 				listToCons(
 						List.of(new LispSymbol(LispNames.GE), call(LispNames.CAR, "is"), call(LispNames.CAR, "ds")))));
-		LispSymbol typeVar = new LispSymbol("__aref_type");
 		LispVal expectedType = callV(LispNames.LIST,
 				callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.INTEGER.name())), new LispInteger(0),
 				callV(LispNames.LIST, call(LispNames.CAR, "ds")));
-		String prefix = (operator == null ? "" : operator + OperandTypes.OPERATOR_SEPARATOR)
-				+ OperandTypes.VALUE_PREFIX;
-		LispVal message = stringConcatAll(
-				List.of(new LispString(prefix), callV(LispNames.PRIN1_TO_STRING, call(LispNames.CAR, "is")),
-						new LispString(OperandTypes.TYPE_INFIX), callV(LispNames.PRIN1_TO_STRING, typeVar)));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), outOfRange,
+				typeErrorForm(call(LispNames.CAR, "is"), expectedType, operator), LispNil.INSTANCE));
+	}
+
+	// The operator's type-error over datum (a variable or a car of one: it is evaluated
+	// twice), whose expected type the form type builds -- the report every backend's
+	// call position words, OP: The value X is not of type T:
+	// (let ((__aref_type <type>))
+	// (error 'type-error :datum <datum> :expected-type __aref_type
+	// :format-control (%string-concat "OP: The value " (%string-concat
+	// (prin1-to-string <datum>) (%string-concat " is not of type "
+	// (prin1-to-string __aref_type))))))
+	private static LispVal typeErrorForm(LispVal datum, LispVal type, String operator) {
+		LispSymbol typeVar = new LispSymbol("__aref_type");
+		String prefix = operator + OperandTypes.OPERATOR_SEPARATOR + OperandTypes.VALUE_PREFIX;
+		LispVal message = stringConcatAll(List.of(new LispString(prefix), callV(LispNames.PRIN1_TO_STRING, datum),
+				new LispString(OperandTypes.TYPE_INFIX), callV(LispNames.PRIN1_TO_STRING, typeVar)));
 		LispVal signal = callV(LispNames.ERROR,
 				callV(LispNames.QUOTE, new LispSymbol(ClosRegistry.TYPE_ERROR_CLASS_NAME)), new LispSymbol(":DATUM"),
-				call(LispNames.CAR, "is"), new LispSymbol(":EXPECTED-TYPE"), typeVar, new LispSymbol(":FORMAT-CONTROL"),
-				message);
-		LispVal signalLet = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of((LispVal) listToCons(List.of(typeVar, expectedType)))), signal));
-		return listToCons(List.of(new LispSymbol(LispNames.IF), outOfRange, signalLet, LispNil.INSTANCE));
+				datum, new LispSymbol(":EXPECTED-TYPE"), typeVar, new LispSymbol(":FORMAT-CONTROL"), message);
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(typeVar, type)))), signal));
 	}
 
 	// Right-associates a %string-concat chain over the given pieces, at least one.
@@ -1185,23 +1221,26 @@ public final class BuiltinFunctionWrappers {
 		return result;
 	}
 
-	// The #'aref wrapper body: fold the subscript list into the row-major index, then
-	// read there -- once the operand is known to be an array, since the fold's first
-	// step reads its dimensions and a value that is none would be ARRAY-DIMENSIONS'
-	// type-error rather than AREF's, which the call names:
-	// (if (arrayp a) <fold> (%operand-type-error a 'aref 'array)).
-	private static LispVal arefFoldBody() {
-		return listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.ARRAYP, "a"),
-				rowMajorFoldBody(call(LispNames.ROW_MAJOR_AREF, "a", "rm"), LispNames.AREF),
-				callV(LispNames.OPERAND_TYPE_ERROR_INTERNAL, new LispSymbol("a"),
-						callV(LispNames.QUOTE, new LispSymbol(LispNames.AREF)),
-						callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.ARRAY.typeName())))));
+	// The #'aref wrapper body: every subscript's type, then the fold of the subscript
+	// list into the row-major index and the read there -- once the operand is known to
+	// be an array, since the fold's first step reads its dimensions and a value that is
+	// none would be ARRAY-DIMENSIONS' type-error rather than AREF's, which the call
+	// names: (progn <subscript types> (if (arrayp a) <fold> (%operand-type-error a 'aref
+	// 'array))).
+	private static List<LispVal> arefFoldBody() {
+		return List.of(subscriptTypeCheckForm(LispNames.AREF),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.ARRAYP, "a"),
+						rowMajorFoldBody(call(LispNames.ROW_MAJOR_AREF, "a", "rm"), LispNames.AREF),
+						callV(LispNames.OPERAND_TYPE_ERROR_INTERNAL, new LispSymbol("a"),
+								callV(LispNames.QUOTE, new LispSymbol(LispNames.AREF)),
+								callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.ARRAY.typeName()))))));
 	}
 
-	// #'array-row-major-index: the same fold, answering the index itself.
+	// #'array-row-major-index: the same checks and fold, answering the index itself.
 	private static WrapperDef arrayRowMajorIndexWrapper() {
 		return new WrapperDef(LispNames.ARRAY_ROW_MAJOR_INDEX, List.of("a", LispNames.LAMBDA_REST, "idx"),
-				List.of(rowMajorFoldBody(new LispSymbol("rm"), LispNames.ARRAY_ROW_MAJOR_INDEX)));
+				List.of(subscriptTypeCheckForm(LispNames.ARRAY_ROW_MAJOR_INDEX),
+						rowMajorFoldBody(new LispSymbol("rm"), LispNames.ARRAY_ROW_MAJOR_INDEX)));
 	}
 
 	// #'vector: (lambda (&rest r) (coerce r 'vector)). The element COUNT is static in
@@ -2902,7 +2941,7 @@ public final class BuiltinFunctionWrappers {
 			// subscripts into the row-major index over the array's dimensions. Gated
 			// with the fill-pointer array group so array-free programs stay
 			// byte-identical.
-			new WrapperDef(LispNames.AREF, List.of("a", LispNames.LAMBDA_REST, "idx"), List.of(arefFoldBody())),
+			new WrapperDef(LispNames.AREF, List.of("a", LispNames.LAMBDA_REST, "idx"), arefFoldBody()),
 			// Fill-pointer array operators: gated like the hash-table group (see
 			// ARRAY_FILL_POINTER_FUNCTIONS). %set-fill-pointer is internal and omitted.
 			unary(LispNames.FILL_POINTER), unary(LispNames.ARRAY_HAS_FILL_POINTER_P),

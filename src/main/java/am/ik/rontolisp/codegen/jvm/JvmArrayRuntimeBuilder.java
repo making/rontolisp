@@ -131,14 +131,23 @@ final class JvmArrayRuntimeBuilder {
 	// _arrayCheckRank(arr, given): the array's own rank (its header dims length, or 1 for
 	// a string, which is always a rank-1 character array) compared against `given`, the
 	// subscript count the aref/%aset call site baked in at compile time. A mismatch
-	// throws "aref: expected N subscripts, got M" -- the same wording
-	// LispArray/LispFloatArray#flatIndex use in the interpreter
-	// (.kb/adjustable-arrays.md). A match returns `arr` unchanged, so this call slots in
-	// right after the array expression is evaluated, ahead of the subscripts. Never
-	// called from row-major-aref/%row-major-aset, which intentionally accept any rank.
+	// throws _rankErr's report for the operator's wrapper to name -- the interpreter's
+	// (.kb/error-handling.md, "A rank mismatch"). A match returns `arr` unchanged; the
+	// site calls it after the subscripts (and a store's value) are evaluated and
+	// type-checked. Never called from row-major-aref/%row-major-aset, which
+	// intentionally accept any rank.
 	static final String CHECK_RANK = "_arrayCheckRank";
 
 	static final String CHECK_RANK_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	// _rankErr(arr, given): the unnamed type-error of an array whose rank is not the
+	// `given` subscripts -- the datum the array, the expected type
+	// OperandTypes#rankType's (VECTOR, (ARRAY * NIL), (ARRAY * (* *)) ...) built at run
+	// time through _teOf. Every _*CheckRank and the quantized accessors' own rank checks
+	// throw it.
+	static final String RANK_ERR = "_rankErr";
+
+	static final String RANK_ERR_DESC = "(Ljava/lang/Object;I)Ljava/lang/RuntimeException;";
 
 	static final String TO_STRING = "_arrayToString";
 
@@ -358,8 +367,8 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER,
-			DIMS_TOTAL);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, RANK_ERR, ARRAY_BECOME_DISPLACED, CK_ARRAY,
+			CK_FILL_POINTER, DIMS_TOTAL);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
@@ -695,12 +704,7 @@ final class JvmArrayRuntimeBuilder {
 		// header's boxed dims (the same derivation DIMS uses, without building the cons
 		// list). A mismatch against `given` throws; a match returns `arr` unchanged.
 		// Locals: 0=arr, 1=given, 2=rank, 3=dims (Object[]), 4=giv.
-		ClassEntry crSbClass = cp.classEntry("java/lang/StringBuilder");
-		MethodRefEntry crSbInit = cp.methodRef(crSbClass, "<init>", "()V");
-		MethodRefEntry crSbAppendStr = cp.methodRef(crSbClass, "append",
-				"(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-		MethodRefEntry crSbAppendInt = cp.methodRef(crSbClass, "append", "(I)Ljava/lang/StringBuilder;");
-		MethodRefEntry crSbToString = cp.methodRef(crSbClass, "toString", "()Ljava/lang/String;");
+		MethodRefEntry rankErr = JvmOperandTypeRuntime.self(cp, selfClass, RANK_ERR, RANK_ERR_DESC);
 		int crArr = 0, crGiven = 1, crRank = 2, crDims = 3, crGiv = 4;
 		MethodCode cr = new MethodCode();
 		MethodCode.Label crNotString = cr.newLabel();
@@ -728,9 +732,51 @@ final class JvmArrayRuntimeBuilder {
 		cr.arraylength();
 		cr.istore(crRank);
 		cr.labelBinding(crHaveRank);
-		emitRankCheckAndReturn(cp, cr, longClass, longIntValue, crSbClass, crSbInit, crSbAppendStr, crSbAppendInt,
-				crSbToString, rtExClass, rtExInit, crArr, crGiven, crRank, crGiv);
+		emitRankCheckAndReturn(cr, longClass, longIntValue, rankErr, crArr, crGiven, crRank, crGiv);
 		methods.add(new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), cr));
+
+		// _rankErr(arr, given): the expected type, then _teOf. VECTOR for one subscript,
+		// else (ARRAY * stars), stars a list of `given` wildcards. Locals: 0=arr,
+		// 1=given, 2=stars, 3=k, 4=type.
+		MethodCode re = new MethodCode();
+		MethodCode.Label reList = re.newLabel();
+		MethodCode.Label reHaveType = re.newLabel();
+		re.iload(1);
+		re.loadConstant(1);
+		re.if_icmpne(reList);
+		re.ldc(cp.stringEntry(OperandTypes.VECTOR_TYPE));
+		re.astore(4);
+		re.goto_(reHaveType);
+		re.labelBinding(reList);
+		re.aconst_null();
+		re.astore(2);
+		re.iload(1);
+		re.istore(3);
+		MethodCode.Label reLoop = re.newLabel();
+		MethodCode.Label reDone = re.newLabel();
+		re.labelBinding(reLoop);
+		re.iload(3);
+		re.ifle(reDone);
+		// stars = {"*", stars}
+		emitList(re, objectClass, List.of(() -> re.ldc(cp.stringEntry(OperandTypes.WILDCARD))));
+		re.dup();
+		re.loadConstant(1);
+		re.aload(2);
+		re.aastore();
+		re.astore(2);
+		re.iinc(3, -1);
+		re.goto_(reLoop);
+		re.labelBinding(reDone);
+		emitList(re, objectClass, List.of(() -> re.ldc(cp.stringEntry(OperandTypes.ARRAY_TYPE)),
+				() -> re.ldc(cp.stringEntry(OperandTypes.WILDCARD)), () -> re.aload(2)));
+		re.astore(4);
+		re.labelBinding(reHaveType);
+		re.aload(0);
+		re.aload(4);
+		re.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_OF,
+				JvmOperandTypeRuntime.TE_OF_DESC));
+		re.areturn();
+		methods.add(new ArrayMethod(cp.utf8Entry(RANK_ERR), cp.utf8Entry(RANK_ERR_DESC), re));
 
 		// _aset2(arr, i, j, val): _rmSet(arr, 1 + i * cols + j, val) -- returns val
 		MethodCode s2 = new MethodCode();
@@ -3658,15 +3704,22 @@ final class JvmArrayRuntimeBuilder {
 		a.athrow();
 	}
 
-	// Shared tail of every _*CheckRank helper: unbox `given` (local givenSlot) to int
-	// (local givSlot), compare it against the already-computed actual rank (local
-	// rankSlot); a match returns arr (local arrSlot) unchanged, a mismatch throws
-	// new RuntimeException("aref: expected " + rank + " subscripts, got " + given) --
-	// the wording LispArray/LispFloatArray#flatIndex use in the interpreter.
-	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
-			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
-			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
-			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
+	/**
+	 * The shared tail of every {@code _*CheckRank} helper: unbox {@code given} (local
+	 * {@code givenSlot}) to an int (local {@code givSlot}) and compare it against the
+	 * already-computed rank (local {@code rankSlot}); a match returns the array (local
+	 * {@code arrSlot}) unchanged, a mismatch throws {@code _rankErr(arr, given)}.
+	 * @param a the helper's code
+	 * @param longClass {@code java/lang/Long}
+	 * @param longIntValue {@code Long.intValue}
+	 * @param rankErr the class's own {@link #RANK_ERR}
+	 * @param arrSlot the array's local
+	 * @param givenSlot the boxed subscript count's local
+	 * @param rankSlot the rank's local
+	 * @param givSlot a free int local
+	 */
+	static void emitRankCheckAndReturn(MethodCode a, ClassEntry longClass, MethodRefEntry longIntValue,
+			MethodRefEntry rankErr, int arrSlot, int givenSlot, int rankSlot, int givSlot) {
 		a.aload(givenSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
@@ -3675,21 +3728,9 @@ final class JvmArrayRuntimeBuilder {
 		a.iload(rankSlot);
 		a.iload(givSlot);
 		a.if_icmpeq(ok);
-		a.new_(rtExClass);
-		a.dup();
-		a.new_(sbClass);
-		a.dup();
-		a.invokespecial(sbInit);
-		a.ldc(cp.stringEntry("aref: expected "));
-		a.invokevirtual(sbAppendStr);
-		a.iload(rankSlot);
-		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.stringEntry(" subscripts, got "));
-		a.invokevirtual(sbAppendStr);
+		a.aload(arrSlot);
 		a.iload(givSlot);
-		a.invokevirtual(sbAppendInt);
-		a.invokevirtual(sbToString);
-		a.invokespecial(rtExInit);
+		a.invokestatic(rankErr);
 		a.athrow();
 		a.labelBinding(ok);
 		a.aload(arrSlot);
