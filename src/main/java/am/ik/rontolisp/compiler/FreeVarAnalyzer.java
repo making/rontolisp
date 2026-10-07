@@ -5,6 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -430,10 +431,12 @@ public final class FreeVarAnalyzer {
 							collectFreeVars(LispMacroExpander.expandWithMutex(cons), boundVars, knownFunctions, globals,
 									specialNames, freeVars);
 						case LispNames.FUNCTION -> {
-							// (function name) names the function namespace, not a
-							// variable; (function (lambda ...)) is analyzed like lambda
+							// (function name) and (function (setf name)) name the
+							// function namespace, not a variable; (function (lambda
+							// ...)) is analyzed like lambda
 							List<LispVal> parts = cons.toList();
-							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
+							if (parts.size() == 2 && parts.get(1) instanceof LispCons
+									&& LambdaLists.setfFunctionPlaceName(parts.get(1)) == null) {
 								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
 										freeVars);
 							}
@@ -788,7 +791,8 @@ public final class FreeVarAnalyzer {
 					acc.add(reach(LispMacroExpander.expandWithSimpleRestart(cons), insideLambda, memo));
 				case LispNames.FUNCTION -> {
 					List<LispVal> parts = cons.toList();
-					if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
+					if (parts.size() == 2 && parts.get(1) instanceof LispCons
+							&& LambdaLists.setfFunctionPlaceName(parts.get(1)) == null) {
 						acc.add(reach(parts.get(1), insideLambda, memo));
 					}
 				}

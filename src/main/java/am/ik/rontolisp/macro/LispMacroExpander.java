@@ -28120,9 +28120,14 @@ public final class LispMacroExpander {
 		}
 		for (LispVal form : program) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-					&& LispNames.DEFUN.equals(memberOf(op.name())) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol nameSym) {
-				names.remove(nameSym.name());
+					&& LispNames.DEFUN.equals(memberOf(op.name())) && cons.cdr() instanceof LispCons rest) {
+				LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(rest.car());
+				if (rest.car() instanceof LispSymbol nameSym) {
+					names.remove(nameSym.name());
+				}
+				else if (setfPlace != null) {
+					names.remove(setfFunctionName(setfPlace.name()));
+				}
 			}
 		}
 		names.removeIf(name -> closRegistry.findGeneric(name) != null);

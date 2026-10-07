@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -466,8 +467,13 @@ public final class ReadBeforeStore {
 				}
 				case LispNames.FUNCTION -> {
 					if (cons.cdr() instanceof LispCons fn) {
+						LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(fn.car());
 						if (fn.car() instanceof LispSymbol name) {
 							operator(name.name(), local);
+						}
+						else if (setfPlace != null) {
+							// #'(setf name): the writer, not a setf form.
+							operator(LispMacroExpander.setfFunctionName(setfPlace.name()), local);
 						}
 						else {
 							code(fn.car(), local);

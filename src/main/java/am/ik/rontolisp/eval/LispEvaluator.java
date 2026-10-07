@@ -1265,13 +1265,13 @@ public final class LispEvaluator {
 			}
 			return resolveFunction(name);
 		}));
-		// fdefinition = symbol-function for symbol designators (no setf-function names).
+		// fdefinition = symbol-function, which also takes a (setf name) function name.
 		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.FDEFINITION + " expects 1 argument, got " + args.size());
 			}
-			String name = standardSymbolName(args.get(0));
+			String name = functionName(args.get(0));
 			if (name == null) {
 				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
 			}
@@ -2272,10 +2272,10 @@ public final class LispEvaluator {
 				// (fboundp (find-symbol ...)) whose argument is nil on a miss.
 				return LispNil.INSTANCE;
 			}
-			if (!(args.get(0) instanceof LispSymbol sym)) {
+			String name = functionName(args.get(0));
+			if (name == null) {
 				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
 			}
-			String name = sym.name();
 			// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until
 			// its
 			// first #' resolution evaluates the wrapper (resolveFunction), and is a
@@ -2294,12 +2294,13 @@ public final class LispEvaluator {
 		// defprepared generated this way.
 		this.globalEnv.defineFunction(LispNames.FMAKUNBOUND, new LispFunction(LispNames.FMAKUNBOUND, args -> {
 			requireSingleArg(LispNames.FMAKUNBOUND, args);
-			if (!(args.get(0) instanceof LispSymbol sym)) {
+			String name = functionName(args.get(0));
+			if (name == null || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
 				throw new LispEvalException(LispNames.FMAKUNBOUND + " expects a symbol, got " + args.get(0).print());
 			}
-			this.globalEnv.undefineFunction(sym.name());
-			removeUserMacro(sym.name());
-			return sym;
+			this.globalEnv.undefineFunction(name);
+			removeUserMacro(name);
+			return args.get(0);
 		}));
 		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
 		// install fn as f's global function binding -- fmakunbound's write-side twin,
@@ -2307,12 +2308,14 @@ public final class LispEvaluator {
 		// fn, the setf value.
 		this.globalEnv.defineFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
 				new LispFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL, args -> {
-					if (args.size() != 2 || !(args.get(0) instanceof LispSymbol sym)) {
+					String name = args.size() == 2 && !(args.get(0) instanceof LispNil)
+							&& !(args.get(0) instanceof LispTrue) ? functionName(args.get(0)) : null;
+					if (name == null) {
 						throw new LispEvalException("(setf symbol-function) expects a symbol name, got "
 								+ (args.isEmpty() ? "nothing" : args.get(0).print()));
 					}
-					this.globalEnv.defineFunction(sym.name(), args.get(1));
-					removeUserMacro(sym.name());
+					this.globalEnv.defineFunction(name, args.get(1));
+					removeUserMacro(name);
 					return args.get(1);
 				}));
 		// The compile paths' setf-only-alias forwarder body reads the binding through
@@ -10377,6 +10380,18 @@ public final class LispEvaluator {
 	 * @param value the argument
 	 * @return the symbol's name, or {@code null} when the value is not a symbol
 	 */
+	/**
+	 * The function-namespace name of a function name: a symbol's
+	 * ({@link #standardSymbolName}), or for a {@code (setf name)} list the internal name
+	 * its writer function is stored under ({@link LispMacroExpander#setfFunctionName}).
+	 * @param value the function name
+	 * @return the name, or null when the value is no function name
+	 */
+	private static @Nullable String functionName(LispVal value) {
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(value);
+		return setfPlace != null ? LispMacroExpander.setfFunctionName(setfPlace.name()) : standardSymbolName(value);
+	}
+
 	private static @Nullable String standardSymbolName(LispVal value) {
 		return switch (value) {
 			case LispSymbol sym -> sym.name();

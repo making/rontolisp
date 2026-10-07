@@ -5804,6 +5804,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aSetfFunctionNameIsAFunctionNameInsideAClosure() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the closure's free-variable
+		// walk read (setf name) as a call and refused to capture NAME.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE_EXPECTED);
+	}
+
+	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionName() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR_EXPECTED);
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
 		// (setf name) and the landing pad reads the list back as the name.

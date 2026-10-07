@@ -21171,6 +21171,38 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aSetfFunctionNameIsAFunctionNameInsideAClosure() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE_EXPECTED);
+	}
+
+	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionName() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR_EXPECTED);
+	}
+
+	@Test
+	void theFunctionNameOperatorsTakeAComputedSetfFunctionName() {
+		// SBCL's answers. A list that is not (setf symbol) is no function name.
+		assertThat(printedLines("""
+				(defun (setf sfn-c) (v x) (list v x))
+				(defun sfn-name (place) (list 'setf place))
+				(print (funcall (fdefinition (sfn-name 'sfn-c)) 1 2))
+				(print (list (not (fboundp (sfn-name 'sfn-c))) (fboundp (sfn-name 'sfn-nope))))
+				(setf (fdefinition (sfn-name 'sfn-f)) (lambda (v x) (list :f v x)))
+				(print (funcall #'(setf sfn-f) 1 2))
+				(print (fmakunbound (sfn-name 'sfn-f)))
+				(print (fboundp (sfn-name 'sfn-f)))
+				(print (handler-case (fdefinition (sfn-name 'sfn-f)) (undefined-function (c) (cell-error-name c))))
+				(print (handler-case (fboundp (list 'sfn-c 'sfn-c)) (error () :error)))
+				""")).isEqualTo(
+				String.join("\n", "(1 2)", "(NIL NIL)", "(:F 1 2)", "(SETF SFN-F)", "NIL", "(SETF SFN-F)", ":ERROR"));
+	}
+
+	@Test
 	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() {
 		// The reference answer (SBCL's) for the compiled backends' twins of this name:
 		// (setf name), not the internal name the writer is stored under.

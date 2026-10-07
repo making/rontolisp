@@ -1,8 +1,8 @@
 # fboundp
 
-`(fboundp symbol)`
+`(fboundp function-name)`
 
-Returns `t` when `symbol` names something callable or expandable: a function (built-in or `defun`), a macro (built-in or `defmacro`), a special form, or a `car`/`cdr` composition like `cadr`. This matches Common Lisp, where `fboundp` is true of macros and special operators too.
+Returns `t` when `function-name` names something callable or expandable: a function (built-in or `defun`), a macro (built-in or `defmacro`), a special form, or a `car`/`cdr` composition like `cadr`. This matches Common Lisp, where `fboundp` is true of macros and special operators too. A `(setf name)` list is a function name too: `t` when a `(setf name)` function is defined. Like [`fdefinition`](fdefinition.md), the compiled backends take it quoted only.
 
 On the compiled backends a **literal** quoted argument is decided at compile time with full knowledge (macros and special forms included); a computed argument is checked at runtime against the function registries, which only know real functions — so `(fboundp (intern "cond"))` is nil in compiled code but `t` in the interpreter, and `defmacro` macros are likewise compile-time-only there.
 
@@ -27,4 +27,9 @@ A name retired by [`fmakunbound`](fmakunbound.md) answers `nil` again, at a lite
 
 ```lisp
 (fboundp 'no-such-fn) ; => NIL
+```
+
+```lisp
+(defun (setf fb-first) (value list) (setf (car list) value))
+(list (fboundp '(setf fb-first)) (fboundp '(setf fb-none))) ; => (T NIL)
 ```
