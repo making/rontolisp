@@ -17,6 +17,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -13725,6 +13726,13 @@ class JvmLispCompilerTest {
 		// LispEvaluatorTest#aCountedDeleteOrNsubstituteReportsUnderItsOwnName.
 		assertThat(compileAndRunExpanded(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM))
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFormatRWithoutARadixSpellsTheNumber() throws Exception {
+		// The JVM twin of LispEvaluatorTest#formatRWithoutARadixSpellsTheNumber.
+		assertThat(compileAndRunExpanded(FormatSpelledNumbersFixture.PROGRAM))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test

@@ -28468,8 +28468,9 @@ public final class LispMacroExpander {
 				case 'r' -> {
 					flushFmtLiteral(lit, ops);
 					if (!fmtHasParam(params, 0)) {
+						// Spelled out (English, Roman) by the runtime renderer only.
 						throw new UnsupportedOperationException(
-								"format: ~r requires a radix parameter (English cardinal/ordinal output is not supported)");
+								"format: ~r without a radix parameter is rendered at run time");
 					}
 					LispVal arg = args.next(directive);
 					LispVal digits = radixIntegerExpr(arg, fmtParam(params, 0), colon, fmtCommaChar(params, 3),

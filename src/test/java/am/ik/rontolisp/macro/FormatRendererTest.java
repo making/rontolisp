@@ -38,7 +38,8 @@ class FormatRendererTest {
 	@ParameterizedTest
 	@ValueSource(strings = { "~a ~s ~d|1 \"s\" 42", "~5,'0d|7", "~10a|~5,'0d||\"foo\" 42", "~:d and ~@d|1000000 42",
 			"~,2f and ~$|3.14159 3.14159", "~e and ~,4e|1234.5 3.14159265", "~x ~o ~b ~8r|255 64 5 4096",
-			"~c ~@c ~:c|#\\a #\\b #\\Newline", "~(~a~) ~:(~a~) ~@(~a~)|\"FOO BAR\" \"foo bar\" \"foo bar\"",
+			"~r ~:r ~@r ~:@r|12 12 14 14", "~r|1.5", "~,10:r ~v@r|101 nil 9", "~c ~@c ~:c|#\\a #\\b #\\Newline",
+			"~(~a~) ~:(~a~) ~@(~a~)|\"FOO BAR\" \"foo bar\" \"foo bar\"",
 			"~[zero~;one~:;many~] ~:[no~;yes~] ~@[x=~a~]|1 t 42", "~{<~a>~} ~:{(~a,~a)~}|'(1 2) '((x 1) (y 2))",
 			"~{~a~^, ~}|'(1 2 3)", "~a ~:* ~a|1", "~?|\"[~a-~a]\" '(1 2)", "~g ~g|1234.5 1.0e20",
 			"PostgreSQL warning: ~A~@[~%~A~]|\"relation exists\" nil", "~v,'*d|8 42", "~#[none~;one~:;many~]|'a 'b",

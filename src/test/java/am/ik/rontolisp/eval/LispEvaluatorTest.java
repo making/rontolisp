@@ -28,6 +28,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -10617,6 +10618,20 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void formatRWithoutARadixSpellsTheNumber() {
+		// ~r / ~:r / ~@r / ~:@r with no radix: English cardinal, ordinal, Roman and old
+		// Roman numerals with sbcl's range errors, through a literal and a runtime
+		// control,
+		// pinned on all four backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(FormatSpelledNumbersFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test

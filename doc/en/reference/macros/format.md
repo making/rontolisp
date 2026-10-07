@@ -42,7 +42,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~w`, `~W` | Write: prints the argument like `write` -- `prin1` under the printer control variables. It takes no prefix parameters, and its modifiers bind variables the printer does not honor (`~:W` binds `*print-pretty*`, `~@W` unbinds `*print-level*`/`*print-length*`), so all three spellings print the same text |
 | `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
 | `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
-| `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the decimal digits are printed (English cardinal/ordinal output is not implemented) |
+| `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the integer is spelled: `~R` an English cardinal (`twelve`), `~:R` an ordinal (`twelfth`), `~@R` Roman numerals (`XIV`), `~:@R` old Roman numerals (`XIIII`); the other parameters are ignored |
 | `~c`, `~C` | Character: prints the glyph like `write-char`. With `@`, the `#\` reader syntax (like `prin1`); with `:`, non-graphic characters print their name (`Newline`, `Space`, ...) |
 | `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+`. Full parameters: `~w,d,k,overflowchar,padchar F` |
 | `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+`. Full parameters: `~w,d,e,k,overflowchar,padchar,exponentchar E` (`k` must be 1) |
@@ -191,8 +191,7 @@ keep the directive available unconditionally. The interpreter always supports it
       (format nil "~/brackets/ ~:@/brackets/" 1 2)) ; => ("a and 1" "x-y" "<1> [2]")
 ```
 
-`~r` without a radix parameter prints the decimal digits; English cardinals and
-ordinals are not implemented.
+`~r` without a radix parameter handles integers up to magnitude 10^66 - 1 in English (`negative` precedes a negative one), 1..3999 as Roman numerals and 1..4999 as old Roman numerals; beyond that it signals a `simple-error` such as `Number too large to print in Roman numerals: 4,000`. A non-integer argument prints as if by `~a`.
 
 Like the other macros, `format` is not recognized by the embedded `eval` runtime
 in compiled output (see [Compiled `eval` limitations](../../guides/eval-limitations.md)).

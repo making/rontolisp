@@ -31,6 +31,7 @@ import am.ik.rontolisp.ReadFeatureGuardFixture;
 import am.ik.rontolisp.ReadFromStringLambdaListFixture;
 import am.ik.rontolisp.ReadFromStringMalformedFixture;
 import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
 import am.ik.rontolisp.StringNilStartFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.BoundedStringBoundsFixture;
@@ -14778,6 +14779,17 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
 		assertThat(compileAndRunFrontEndWithDir(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM, true))
 			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void formatRWithoutARadixSpellsTheNumber() throws Exception {
+		// The wasm twin of LispEvaluatorTest#formatRWithoutARadixSpellsTheNumber, Preview
+		// 1
+		// and the component.
+		assertThat(compileAndRunFrontEndWithDir(FormatSpelledNumbersFixture.PROGRAM, false))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(FormatSpelledNumbersFixture.PROGRAM, true))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
 	}
 
 	@Test
