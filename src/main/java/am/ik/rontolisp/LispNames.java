@@ -8953,6 +8953,42 @@ public final class LispNames {
 	public static final String FENV_FUNCTION_INTERNAL = "%FENV-FUNCTION";
 
 	/**
+	 * The compile paths' prelude helper mapping a function name built at run time onto
+	 * the name its function is stored under: a {@code (setf place)} list onto the
+	 * writer's internal symbol ({@link #SETF_FUNCTION_SYMBOL_INTERNAL}), anything else
+	 * onto itself. A computed designator given to {@code fboundp} or
+	 * {@code (setf fdefinition)} goes through it, where the program can build such a list
+	 * ({@code compiler.RuntimeFunctionNames.sites}).
+	 */
+	public static final String FUNCTION_NAME_INTERNAL = "%FUNCTION-NAME";
+
+	/**
+	 * The compile paths' prelude {@code fdefinition} of a computed function name: the
+	 * name mapped by {@link #FUNCTION_NAME_INTERNAL}, an undefined {@code (setf place)}
+	 * function reported as the list ({@link #UNDEFINED_SETF_FUNCTION_INTERNAL}).
+	 */
+	public static final String FDEFINITION_INTERNAL = "%FDEFINITION";
+
+	/**
+	 * The compile paths' prelude {@code fmakunbound} of a computed function name: the
+	 * name mapped by {@link #FUNCTION_NAME_INTERNAL} retired, the name given answered.
+	 */
+	public static final String FMAKUNBOUND_INTERNAL = "%FMAKUNBOUND";
+
+	/**
+	 * {@code (%setf-function-symbol place)}: the symbol a {@code (setf place)} function
+	 * is stored under, built when the program runs -- the prefix and the place's
+	 * spelling, interned on wasm, where symbols compare by string-table offset.
+	 */
+	public static final String SETF_FUNCTION_SYMBOL_INTERNAL = "%SETF-FUNCTION-SYMBOL";
+
+	/**
+	 * {@code (%undefined-setf-function place)}: signals the {@code undefined-function} a
+	 * call of the undefined {@code (setf place)} function signals, naming the list.
+	 */
+	public static final String UNDEFINED_SETF_FUNCTION_INTERNAL = "%UNDEFINED-SETF-FUNCTION";
+
+	/**
 	 * The {@code file-position} built-in function -- lite: always {@code nil} (streams do
 	 * not support repositioning), so callers take their non-seeking fallback.
 	 */

@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.jvm.ConstantPool;
 
 /**
@@ -419,7 +420,10 @@ final class JvmSymbolApiCompiler {
 			}
 			return;
 		}
-		compileComputedFboundp(parts.get(1), ctx, className);
+		// A (setf place) list built at run time probes the name its writer is stored
+		// under.
+		compileComputedFboundp(RuntimeFunctionNames.functionNameArgument(parts.get(1),
+				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)), ctx, className);
 	}
 
 	private static void compileComputedFboundp(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
@@ -506,6 +510,13 @@ final class JvmSymbolApiCompiler {
 	 */
 	static void compileFmakunbound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FMAKUNBOUND);
+		LispCons computed = RuntimeFunctionNames.fmakunboundCall(cons,
+				ctx.functions.containsKey(LispNames.FMAKUNBOUND_INTERNAL));
+		if (computed != null) {
+			// A name built at run time may be a (setf place) list.
+			JvmExprCompiler.compileExpr(computed, ctx, className);
+			return;
+		}
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
 		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
@@ -536,7 +547,9 @@ final class JvmSymbolApiCompiler {
 	 */
 	static void compileSetSymbolFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 2, LispNames.SET_SYMBOL_FUNCTION_INTERNAL);
-		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		// A name built at run time may be a (setf place) list: its writer's name.
+		int nameSlot = compileArgToTemp(RuntimeFunctionNames.functionNameArgument(parts.get(1),
+				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
 		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
@@ -556,6 +569,39 @@ final class JvmSymbolApiCompiler {
 		ctx.body.putstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.labelBinding(done);
 		ctx.body.aload(valueSlot);
+	}
+
+	/**
+	 * {@code (%setf-function-symbol place)}: the symbol the {@code (setf place)} function
+	 * is stored under, {@code "%setf-".concat(place)} -- a symbol is its spelling, a
+	 * {@code String}, and the namespace and registry lookups compare spellings.
+	 */
+	static void compileSetfFunctionSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 1, LispNames.SETF_FUNCTION_SYMBOL_INTERNAL);
+		JvmEmitHelper.compileStringLiteral(ClosRegistry.SETF_FUNCTION_PREFIX, ctx);
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		ctx.body.checkcast(ctx.stringClass);
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+	}
+
+	/**
+	 * {@code (%undefined-setf-function place)}: throws what a call of the undefined
+	 * {@code (setf place)} function throws -- the {@code (SETF place)} text, from which
+	 * the landing pad reads the list back as the condition's name
+	 * ({@link JvmFunctionFormCompiler#emitUndefinedFunctionThrow(String, JvmLispCompiler.Ctx)}).
+	 */
+	static void compileUndefinedSetfFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 1, LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL);
+		int placeSlot = compileArgToTemp(parts.get(1), ctx, className);
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
+		JvmEmitHelper.compileStringLiteral(
+				ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + ClosRegistry.SETF_FUNCTION_NAME_OPEN, ctx);
+		ctx.body.aload(placeSlot).checkcast(ctx.stringClass).invokevirtual(concat);
+		JvmEmitHelper.compileStringLiteral(")" + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx);
+		ctx.body.invokevirtual(concat);
+		ctx.body.invokespecial(ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V")).athrow();
 	}
 
 	/**

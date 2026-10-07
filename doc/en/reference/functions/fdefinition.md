@@ -4,7 +4,7 @@
 
 The function value of a function name: a symbol, like [`symbol-function`](symbol-function.md), or a `(setf name)` list naming the function `(defun (setf name) ...)` defines. An undefined name signals `undefined-function`, whose `cell-error-name` is the name, list included.
 
-A quoted symbol literal (`(fdefinition 'car)`) resolves at compile time in the compilers; a runtime-computed symbol resolves late through the compiled name registry and answers the same function value -- like [`symbol-function`](symbol-function.md), with no deviations. A quoted `(setf name)` list is `#'(setf name)` on every backend; the compiled backends do not take a `(setf name)` list built at run time, which only the interpreter accepts.
+A quoted symbol literal (`(fdefinition 'car)`) resolves at compile time in the compilers; a runtime-computed symbol resolves late through the compiled name registry and answers the same function value -- like [`symbol-function`](symbol-function.md), with no deviations. A quoted `(setf name)` list is `#'(setf name)` on every backend. A list built at run time is taken too; on the compiled backends its function resolves where the program spells its place symbol, as a computed symbol resolves where the program spells it.
 
 ```lisp
 (funcall (fdefinition 'car) '(1 2 3)) ; => 1
@@ -15,6 +15,13 @@ A quoted symbol literal (`(fdefinition 'car)`) resolves at compile time in the c
 (let ((l (list 1 2)))
   (funcall (fdefinition '(setf fd-first)) 9 l)
   l) ; => (9 2)
+```
+
+```lisp
+(defun (setf fd-second) (value list) (setf (cadr list) value))
+(let ((l (list 1 2)))
+  (funcall (fdefinition (list 'setf 'fd-second)) 9 l)
+  l) ; => (1 9)
 ```
 
 `fdefinition` is the same `setf` place as [`symbol-function`](symbol-function.md): `(setf (fdefinition 'name) fn)` installs `fn` as the symbol's global function definition, and `(setf (fdefinition '(setf name)) fn)` installs the `(setf name)` function.

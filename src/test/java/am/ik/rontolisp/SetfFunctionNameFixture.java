@@ -68,6 +68,42 @@ public final class SetfFunctionNameFixture {
 			"(NIL (:E 1 2) (:E 3 4))", "(SETF SFN-E)", "NIL", "(SETF SFN-E)", "(SETF SFN-D)", "NIL");
 
 	/**
+	 * A {@code (setf name)} designator built when the program runs, to the same
+	 * operators, as a function value and for a {@code defstruct} slot writer; a computed
+	 * symbol still designates its function. The compiled backends took the list quoted
+	 * only: the JVM threw a raw {@code ClassCastException}, both wasm targets trapped.
+	 */
+	public static final String COMPUTED_DESIGNATOR = """
+			(defun (setf sfr-d) (v x) (list v x))
+			(defun sfr-name (place) (list 'setf place))
+			(print (funcall (fdefinition (sfr-name 'sfr-d)) 1 2))
+			(print (list (not (fboundp (sfr-name 'sfr-d))) (fboundp (sfr-name 'sfr-nope))))
+			(print (handler-case (fdefinition (sfr-name 'sfr-nope))
+			         (undefined-function (c) (cell-error-name c))))
+			(print (funcall (lambda (p) (funcall (fdefinition (sfr-name p)) 3 4)) 'sfr-d))
+			(setf (fdefinition (sfr-name 'sfr-e)) (lambda (v x) (list :e v x)))
+			(print (list (not (fboundp (sfr-name 'sfr-e))) (funcall (fdefinition (sfr-name 'sfr-e)) 3 4)))
+			(print (fmakunbound (sfr-name 'sfr-e)))
+			(print (fboundp (sfr-name 'sfr-e)))
+			(print (handler-case (funcall (fdefinition (sfr-name 'sfr-e)) 1 2)
+			         (undefined-function (c) (cell-error-name c))))
+			(print (list (not (funcall #'fboundp (sfr-name 'sfr-d)))
+			             (funcall (funcall #'fdefinition (sfr-name 'sfr-d)) 5 6)))
+			(print (fmakunbound (sfr-name 'sfr-d)))
+			(print (fboundp (sfr-name 'sfr-d)))
+			(defun sfr-f (x) (* x 2))
+			(print (list (funcall (fdefinition (car (list 'sfr-f))) 4) (not (fboundp (car (list 'sfr-f))))))
+			(defstruct sfr-s a)
+			(let ((o (make-sfr-s :a 1)))
+			  (print (list (funcall (fdefinition (sfr-name 'sfr-s-a)) 9 o) (sfr-s-a o))))
+			""";
+
+	/** What {@link #COMPUTED_DESIGNATOR} prints, one value per line. */
+	public static final String COMPUTED_DESIGNATOR_EXPECTED = String.join("\n", "(1 2)", "(NIL NIL)", "(SETF SFR-NOPE)",
+			"(3 4)", "(NIL (:E 3 4))", "(SETF SFR-E)", "NIL", "(SETF SFR-E)", "(NIL (5 6))", "(SETF SFR-D)", "NIL",
+			"(8 NIL)", "(9 9)");
+
+	/**
 	 * {@code (setf (name args...) v)} of a name no definition makes a place: the
 	 * {@code (setf name)} function, defined later, installed at run time, or undefined.
 	 */

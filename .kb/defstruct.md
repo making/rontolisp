@@ -167,7 +167,9 @@ interpreter's `evalDefstruct` evaluates it beside each reader (a binding, and it
 of the `%struct-type-error` scan, only for an accessor whose `(setf ACC)` list or `%setf-ACC`
 symbol the expanded program spells (`referencedStructWriterDefuns`) and no defun already
 defines -- a place is the inline `%obj-set`, so a program that only writes through places carries
-no writer. A computed `(fdefinition (list 'setf 'acc))` names none (`.todo/e13`). A `:read-only`
+no writer. A program that maps a `(setf place)` list built at run time (it defines the prelude's
+`%function-name`, `.kb/symbol-runtime-api.md` "A `(setf name)` function name") gets every
+writable slot's writer, since a computed `(fdefinition (list 'setf 'acc))` can name any. A `:read-only`
 slot (its own option, an `:include` override's, or the parent's -- `ClosRegistry.structReadOnlySlots`)
 registers `READ_ONLY_SLOT_MARKER` (`0`): a reader, no writer, and its place falls through to the
 late-bound call above, so `(setf (ro o) v)` signals `undefined-function` `(SETF RO)` as in SBCL. A

@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -11,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -287,7 +289,13 @@ final class WasmSymbolApiCompiler {
 			}
 			return;
 		}
-		compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
+		// A (setf place) list built at run time probes the name its writer is stored
+		// under.
+		LispVal name = RuntimeFunctionNames.functionNameArgument(parts.get(1),
+				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL));
+		WasmExprCompiler.compileExpr(name, ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FBOUNDP);
 	}
 
 	/**
@@ -296,6 +304,13 @@ final class WasmSymbolApiCompiler {
 	 * ({@link WasmSymbolApiRuntimeBuilder#buildFmakunbound}).
 	 */
 	static void compileFmakunbound(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispCons computed = RuntimeFunctionNames.fmakunboundCall(cons,
+				ctx.functions.containsKey(LispNames.FMAKUNBOUND_INTERNAL));
+		if (computed != null) {
+			// A name built at run time may be a (setf place) list.
+			WasmExprCompiler.compileExpr(computed, ctx);
+			return;
+		}
 		compileUnaryCall(cons, LispNames.FMAKUNBOUND, WasmLispCompiler.FUNC_FMAKUNBOUND, ctx);
 	}
 
@@ -311,10 +326,101 @@ final class WasmSymbolApiCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.SET_SYMBOL_FUNCTION_INTERNAL + " expects 2 arguments, got " + (parts.size() - 1));
 		}
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		// A name built at run time may be a (setf place) list: its writer's name.
+		WasmExprCompiler.compileExpr(RuntimeFunctionNames.functionNameArgument(parts.get(1),
+				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)), ctx);
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
+	}
+
+	/**
+	 * {@code (%setf-function-symbol place)}: the symbol the {@code (setf place)} function
+	 * is stored under. The prefix and the place's spelling are assembled in the heap
+	 * scratch and canonicalized through {@code _intern}, so the symbol's offset is the
+	 * one the namespace and registry lookups compare -- the {@code _intern_sym} rail,
+	 * which is why the program counts as interning ({@code usesIntern}).
+	 */
+	static void compileSetfFunctionSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = requireArgs(cons, LispNames.SETF_FUNCTION_SYMBOL_INTERNAL);
+		byte[] prefix = ClosRegistry.SETF_FUNCTION_PREFIX.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		// The place's bytes after the prefix (_str_to_mem grows the memory to hold
+		// them, the prefix's room included); len = prefix + place.
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		emitHeapPtr(ctx);
+		emitI32(ctx, prefix.length);
+		ctx.writer.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrToMemCall(ctx.writer);
+		emitI32(ctx, prefix.length);
+		ctx.writer.write(Instruction.I32_ADD);
+		int savedI64Locals = ctx.nextI64Local;
+		int lenSlot = ctx.allocI64Temp();
+		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(lenSlot);
+		for (int i = 0; i < prefix.length; i++) {
+			emitHeapPtr(ctx);
+			emitI32(ctx, prefix[i]);
+			ctx.writer.write(Instruction.I32_STORE8, 0x00);
+			ctx.writer.writeUnsignedLeb128(i);
+		}
+		// _str_build(_intern(heap, len), len)
+		emitHeapPtr(ctx);
+		emitLen(ctx, lenSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		emitLen(ctx, lenSlot);
+		WasmEmitHelper.emitStrBuildCall(ctx.writer);
+		ctx.nextI64Local = savedI64Locals;
+	}
+
+	/**
+	 * {@code (%undefined-setf-function place)}: signals what a call of the undefined
+	 * {@code (setf place)} function signals -- {@code _undefined_function} of the list
+	 * where the module carries it, else the message-only error
+	 * ({@link WasmFunctionCallCompiler#emitUndefinedFunctionSignal}).
+	 */
+	static void compileUndefinedSetfFunction(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = requireArgs(cons, LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL);
+		LispVal name = list(new LispSymbol(LispNames.LIST),
+				list(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SETF)), parts.get(1));
+		if (ctx.undefinedFunctionFuncIndex >= 0) {
+			WasmExprCompiler.compileExpr(name, ctx);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.undefinedFunctionFuncIndex);
+			return;
+		}
+		WasmExprCompiler.compileExpr(list(new LispSymbol(LispNames.ERROR),
+				LispMacroExpander.textControlForm(list(new LispSymbol(LispNames.CONCATENATE),
+						list(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.STRING)),
+						new LispString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX),
+						list(new LispSymbol(LispNames.PRINC_TO_STRING), name),
+						new LispString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)))),
+				ctx);
+	}
+
+	private static LispVal list(LispVal... elements) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			out = new LispCons(elements[i], out);
+		}
+		return out;
+	}
+
+	private static void emitHeapPtr(WasmLispCompiler.Ctx ctx) {
+		emitI32(ctx, WasmLispCompiler.HEAP_PTR_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+	private static void emitI32(WasmLispCompiler.Ctx ctx, int value) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(value);
+	}
+
+	private static void emitLen(WasmLispCompiler.Ctx ctx, int lenSlot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(lenSlot);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
 	}
 
 	/**

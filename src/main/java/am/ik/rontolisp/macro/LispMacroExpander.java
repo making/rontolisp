@@ -19023,9 +19023,10 @@ public final class LispMacroExpander {
 	 * The {@link #structWriterDefun}s a program takes: one per writable slot accessor
 	 * whose {@code (setf accessor)} function the forms name -- {@code #'(setf accessor)},
 	 * a quoted {@code (setf accessor)}, or the {@code %setf-accessor} a designator was
-	 * rewritten to -- and that no defun of the program already defines. A place of the
-	 * accessor is the inline store, so a program that only writes through places gets
-	 * none.
+	 * rewritten to; every one in a program that maps a {@code (setf place)} list built at
+	 * run time ({@code compiler.RuntimeFunctionNames}) -- and that no defun of the
+	 * program already defines. A place of the accessor is the inline store, so a program
+	 * that only writes through places gets none.
 	 * @param program the expanded top-level forms
 	 * @param structAccessors the complete place registry
 	 * @param closRegistry the complete registry
@@ -19039,6 +19040,11 @@ public final class LispMacroExpander {
 		java.util.Set<String> named = new java.util.TreeSet<>();
 		for (LispVal form : program) {
 			collectSetfFunctionNames(form, named);
+			// A program that maps a (setf place) list built at run time onto its
+			// function can name any accessor's.
+			if (isDefunOf(form, LispNames.FUNCTION_NAME_INTERNAL)) {
+				named.addAll(structAccessors.keySet());
+			}
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		java.util.Set<String> defined = null;
@@ -28160,7 +28166,8 @@ public final class LispMacroExpander {
 		structAccessors.put(place.name(), SETF_FUNCTION_MARKER);
 		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
 		rewritten.set(1, new LispSymbol(setfFunctionName(place.name())));
-		return listToCons(rewritten);
+		// The definition keeps its position: a report names the line it starts on.
+		return SourceProvenance.inherit(cons, listToCons(rewritten));
 	}
 
 	/**
@@ -28189,7 +28196,7 @@ public final class LispMacroExpander {
 		structAccessors.put(place.name(), SETF_FUNCTION_MARKER);
 		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
 		rewritten.set(1, new LispSymbol(setfFunctionName(place.name())));
-		return (LispCons) listToCons(rewritten);
+		return SourceProvenance.inherit(cons, (LispCons) listToCons(rewritten));
 	}
 
 	private static boolean isClosDefinitionForm(LispVal form) {

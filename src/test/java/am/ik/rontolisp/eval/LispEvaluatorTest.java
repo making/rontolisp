@@ -21185,6 +21185,13 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionNameBuiltAtRunTime() {
+		// The reference answer (SBCL's) for the compiled backends' twins of this name.
+		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR_EXPECTED);
+	}
+
+	@Test
 	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() {
 		// The reference answer (SBCL's) for the compiled backends' twins of this name.
 		assertThat(printedLines(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE))

@@ -5819,6 +5819,14 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionNameBuiltAtRunTime() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the list reached the symbol
+		// runtime as it was and failed a cast to String.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR_EXPECTED);
+	}
+
+	@Test
 	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() throws Exception {
 		// Interpreter parity (the LispEvaluatorTest twin): the place was refused when
 		// the program compiled.

@@ -6,6 +6,8 @@ import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.ClosRegistry;
+
 /**
  * The literal spellings a compiled program can hold that still RESOLVE a function name at
  * run time -- the probe list behind both backends' funcall-dispatch gate
@@ -81,10 +83,14 @@ public final class DesignatorSpellings {
 	 * @param name the function's canonical name
 	 * @param spelledLiterals the spellings Pass 2 emitted as runtime values
 	 * @param symbolBuilders whether the program contains a symbol builder
+	 * @param setfNamesBuilt whether the program maps a {@code (setf place)} list built at
+	 * run time onto its function ({@link RuntimeFunctionNames}) -- then a
+	 * {@code (setf place)} function resolves wherever its PLACE is spelled
 	 * @return true when a runtime designator can resolve the name
 	 */
-	public static boolean anySpelled(String name, Set<String> spelledLiterals, boolean symbolBuilders) {
-		return matched(name, spelledLiterals, symbolBuilders) != null;
+	public static boolean anySpelled(String name, Set<String> spelledLiterals, boolean symbolBuilders,
+			boolean setfNamesBuilt) {
+		return matched(name, spelledLiterals, symbolBuilders, setfNamesBuilt) != null;
 	}
 
 	/**
@@ -93,15 +99,19 @@ public final class DesignatorSpellings {
 	 * @param name the function's canonical name
 	 * @param spelledLiterals the spellings Pass 2 emitted as runtime values
 	 * @param symbolBuilders whether the program contains a symbol builder
+	 * @param setfNamesBuilt whether the program maps a {@code (setf place)} list built at
+	 * run time onto its function
 	 * @return the matching spelling, or null when none is held
 	 */
-	public static @Nullable String matched(String name, Set<String> spelledLiterals, boolean symbolBuilders) {
+	public static @Nullable String matched(String name, Set<String> spelledLiterals, boolean symbolBuilders,
+			boolean setfNamesBuilt) {
 		for (String spelling : of(name, symbolBuilders)) {
 			if (spelledLiterals.contains(spelling)) {
 				return spelling;
 			}
 		}
-		return null;
+		String place = setfNamesBuilt ? ClosRegistry.setfPlaceOfFunctionName(name) : null;
+		return place != null ? matched(place, spelledLiterals, symbolBuilders, false) : null;
 	}
 
 }

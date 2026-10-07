@@ -117,6 +117,30 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void aSetfFunctionIsReportedByTheNameTheProgramWrote() throws Exception {
+		// The location line named the internal name the writer is stored under,
+		// %setf-RPT-W, where SBCL's backtrace names (SETF RPT-W); a method of a setf
+		// generic names the generic the same way.
+		Path program = write("setf-function.lisp", """
+				(defun (setf rpt-w) (v x)
+				  (declare (ignore x))
+				  (car v))
+
+				(funcall #'(setf rpt-w) 1 2)
+				""");
+		assertSameReport(program, "Unhandled condition: CAR: The value 1 is not of type LIST",
+				"  at " + program + ":3 in (SETF RPT-W)");
+		Path method = write("setf-method.lisp", """
+				(defgeneric (setf rpt-g) (v x))
+				(defmethod (setf rpt-g) (v (x cons))
+				  (error "no slot ~a" v))
+
+				(setf (rpt-g (list 1)) 2)
+				""");
+		assertSameReport(method, "Unhandled condition: no slot 2", "  at " + method + ":3 in (SETF RPT-G)");
+	}
+
+	@Test
 	void aReadOfASpecialWithoutAValueReportsWhereItIsRead() throws Exception {
 		// The compiled read used to answer nil and the program ran on to exit 0; it
 		// signals the interpreter's unbound-variable now, located at the form that reads

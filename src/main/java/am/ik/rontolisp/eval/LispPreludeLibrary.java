@@ -1292,6 +1292,14 @@ public final class LispPreludeLibrary {
 		// the inline lowering, printed, so the two cannot drift.
 		SOURCES.put(LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
 				am.ik.rontolisp.macro.LispMacroExpander.symbolInPackageDefinition());
+		// %function-name / %fdefinition / %fmakunbound: the compile paths' fdefinition,
+		// fboundp, fmakunbound and (setf fdefinition) of a function name built at run
+		// time, which may be a (setf place) list (compiler.RuntimeFunctionNames). The
+		// expression compilers call them; the surface fact selects them.
+		for (String helper : List.of(LispNames.FUNCTION_NAME_INTERNAL, LispNames.FDEFINITION_INTERNAL,
+				LispNames.FMAKUNBOUND_INTERNAL)) {
+			SOURCES.put(helper, am.ik.rontolisp.compiler.RuntimeFunctionNames.definition(helper));
+		}
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -4641,6 +4649,19 @@ public final class LispPreludeLibrary {
 		// computed package designator. A site synthesized later keeps the inline form.
 		if (LispNames.SYMBOL_IN_PACKAGE_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.callsWithComputedPackageDesignator(program);
+		}
+		// The run-time function-name helpers: the fdefinition / fboundp / fmakunbound
+		// lowerings call them from inside the expression compilers, after this pass,
+		// where the surface shows a (setf place) list built at run time can reach the
+		// operator.
+		if (LispNames.FUNCTION_NAME_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.compiler.RuntimeFunctionNames.sites(program).any();
+		}
+		if (LispNames.FDEFINITION_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.compiler.RuntimeFunctionNames.sites(program).fdefinition();
+		}
+		if (LispNames.FMAKUNBOUND_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.compiler.RuntimeFunctionNames.sites(program).fmakunbound();
 		}
 		// The entry uiop:with-temporary-file's EXPANSION calls. Same timing problem as
 		// %make-broadcast-stream: the expansion runs inside the expression compilers,
