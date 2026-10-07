@@ -2829,10 +2829,10 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalComplexFloatDivisionIsSmithsForm() {
-		// Float complex division folds on the LARGER divisor part (Smith's form, what
-		// SBCL 2.2.9 computes) instead of dividing by c^2+d^2. A REAL divisor makes the
-		// fold's r zero, so each part costs ONE rounding: this quotient is SBCL's
+	void evalComplexFloatDivisionIsSbclsForm() {
+		// Complex division is SBCL 2.2.9's dispatch: over a complex it folds on the
+		// LARGER divisor part instead of dividing by c^2+d^2, and a REAL divisor divides
+		// each part on its own, ONE rounding per part: this quotient is SBCL's
 		// #C(3.0 4.532360141827194), where the denominator form answered
 		// 2.9999999999999996 for the real part.
 		assertThat(eval("(/ #c(2.0794415416798357d0 3.141592653589793d0) 0.6931471805599453d0)").print())
@@ -2851,13 +2851,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(/ #c(1d0 2d0) #c(4d0 3d0))").print()).isEqualTo("#C(0.4 0.2)");
 		assertThat(eval("(/ #c(1d0 2d0) #c(0d0 1d0))").print()).isEqualTo("#C(2.0 -1.0)");
 		assertThat(eval("(/ 3d0 #c(1d0 2d0))").print()).isEqualTo("#C(0.6 -1.2)");
-		// A zero FLOAT divisor keeps the NaN the denominator form answered (r is 0/0):
-		// SBCL signals DIVISION-BY-ZERO there because its FPU traps, this runtime does
-		// not trap, and a part-wise infinity would claim an answer where there is none.
-		assertThat(realPartOf("(/ #c(1d0 2d0) 0d0)")).isNaN();
-		assertThat(imagPartOf("(/ #c(1d0 2d0) 0d0)")).isNaN();
+		// A zero REAL divisor divides each part by it, so the parts are what the real
+		// (/ 1d0 0d0) answers in this runtime, which does not trap: infinities. SBCL
+		// signals DIVISION-BY-ZERO for both because its FPU traps. A zero COMPLEX
+		// divisor makes the fold's r 0/0, and every part follows.
+		assertThat(eval("(/ #c(1d0 2d0) 0d0)").print()).isEqualTo("#C(Infinity Infinity)");
+		assertThat(eval("(/ #c(1d0 0d0) 0)").print()).isEqualTo("#C(Infinity NaN)");
 		assertThat(realPartOf("(/ #c(1d0 2d0) #c(0d0 0d0))")).isNaN();
-		// The EXACT arm is untouched, division by an exact zero included.
+		assertThat(imagPartOf("(/ #c(1d0 2d0) #c(0d0 0d0))")).isNaN();
+		// Exact parts stay exact, division by an exact zero included.
 		assertThat(eval("(/ #c(1 2) #c(3 4))").print()).isEqualTo("#C(11/25 2/25)");
 		assertThatThrownBy(() -> eval("(/ #c(1 2) 0)")).hasMessageContaining("Division by zero");
 	}
@@ -3770,8 +3772,9 @@ class LispEvaluatorTest {
 		assertThat(eval("(log 1000d0 10d0)")).isEqualTo(new LispDouble(StrictMath.log(1000.0) / StrictMath.log(10.0)));
 		// Each logarithm takes the real-domain escape on its own, so a negative number
 		// answers the plane divided by the real base. The QUOTIENT is the definition, so
-		// the identity is the pin -- and Smith's fold makes that quotient's real part
-		// ONE division by the real base, which is SBCL's #C(3.0 4.532360141827194) on
+		// the identity is the pin -- and a complex over a real divides each part, so
+		// that quotient's real part is ONE division by the real base, SBCL's
+		// #C(3.0 4.532360141827194) on
 		// every platform whose Math.log is correctly rounded (.kb/jvm-complex.md).
 		assertThat(eval("(log -8d0 2d0)")).isEqualTo(eval("(/ (log -8d0) (log 2d0))"));
 		assertThat(realPartOf("(log -8d0 2d0)")).isEqualTo(StrictMath.log(8.0) / StrictMath.log(2.0));
@@ -20450,6 +20453,17 @@ class LispEvaluatorTest {
 	void complexProductSignedZero() {
 		assertThat(printedLines(am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE))
 			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
+	// A sum, difference or quotient with a complex operand folds one pair at a time
+	// (the whole fold floated beside a float) and divides by SBCL's dispatch (one
+	// quotient form over (r, 0) lost signed zeros and digits). The twins are
+	// JvmLispCompilerTest#compileAndRunComplexSumQuotient
+	// and WasmLispCompilerIntegrationTest#complexSumQuotient.
+	@Test
+	void complexSumQuotient() {
+		assertThat(printedLines(am.ik.rontolisp.ComplexSumQuotientFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
 	}
 
 	// A sequence operator, an array accessor and a hash-table accessor handed a value

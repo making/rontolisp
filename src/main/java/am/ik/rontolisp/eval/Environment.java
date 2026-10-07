@@ -9670,59 +9670,71 @@ public final class Environment implements Scope {
 		return exactNeg(val);
 	}
 
+	// + and - fold left to right from the first operand, one pair at a time like SBCL
+	// and the compiled backends' _cadd/_csub, so an exact step stays exact whatever
+	// float follows: (+ z (- z) 1.5) over an exact z is 1.5, not #C(1.5 0.0). A pair
+	// with a complex operand counts a real as a zero-imagined complex -- SBCL adds an
+	// exact zero to the other imaginary part, and contagion makes that the same IEEE
+	// sum (so (+ #c(0.0 -0.0) 1) is #C(1.0 0.0) there too). A pair of reals is the real
+	// step below.
 	private static LispVal addComplex(List<LispVal> args) {
-		if (hasDouble(args) || hasComplexDoublePart(args)) {
-			double re = 0.0;
-			double im = 0.0;
-			boolean first = true;
-			for (LispVal arg : args) {
-				double[] p = complexDoubleParts(arg);
-				if (first) {
-					re = p[0];
-					im = p[1];
-					first = false;
-				}
-				else {
-					re += p[0];
-					im += p[1];
-				}
-			}
-			return LispComplex.valueOf(new LispDouble(re), new LispDouble(im));
+		LispVal acc = args.get(0);
+		for (int i = 1; i < args.size(); i++) {
+			acc = linearComplexPair(acc, args.get(i), false);
 		}
-		LispVal re = new LispInteger(0);
-		LispVal im = new LispInteger(0);
-		for (LispVal arg : args) {
-			re = exactAdd(re, complexReal(arg));
-			im = exactAdd(im, complexImag(arg));
-		}
-		return LispComplex.valueOf(re, im);
+		return acc;
 	}
 
 	private static LispVal subComplex(List<LispVal> args) {
-		if (hasDouble(args) || hasComplexDoublePart(args)) {
-			double[] first = complexDoubleParts(args.get(0));
-			if (args.size() == 1) {
-				return LispComplex.valueOf(new LispDouble(-first[0]), new LispDouble(-first[1]));
-			}
-			double re = first[0];
-			double im = first[1];
-			for (int i = 1; i < args.size(); i++) {
-				double[] p = complexDoubleParts(args.get(i));
-				re -= p[0];
-				im -= p[1];
-			}
-			return LispComplex.valueOf(new LispDouble(re), new LispDouble(im));
-		}
 		if (args.size() == 1) {
-			return LispComplex.valueOf(exactNeg(complexReal(args.get(0))), exactNeg(complexImag(args.get(0))));
+			return LispComplex.valueOf(negateReal(complexReal(args.get(0))), negateReal(complexImag(args.get(0))));
 		}
-		LispVal re = complexReal(args.get(0));
-		LispVal im = complexImag(args.get(0));
+		LispVal acc = args.get(0);
 		for (int i = 1; i < args.size(); i++) {
-			re = exactSub(re, complexReal(args.get(i)));
-			im = exactSub(im, complexImag(args.get(i)));
+			acc = linearComplexPair(acc, args.get(i), true);
 		}
+		return acc;
+	}
+
+	private static LispVal linearComplexPair(LispVal x, LispVal y, boolean subtract) {
+		if (!(x instanceof LispComplex) && !(y instanceof LispComplex)) {
+			return subtract ? realSubStep(x, y) : realAddStep(x, y);
+		}
+		LispVal re = subtract ? realSubStep(complexReal(x), complexReal(y))
+				: realAddStep(complexReal(x), complexReal(y));
+		LispVal im = subtract ? realSubStep(complexImag(x), complexImag(y))
+				: realAddStep(complexImag(x), complexImag(y));
 		return LispComplex.valueOf(re, im);
+	}
+
+	// One real step of a complex fold: exact over two rationals, the IEEE operation
+	// when either is a float (contagion converts the rational first, as in SBCL).
+	private static LispVal realAddStep(LispVal a, LispVal b) {
+		if (a instanceof LispDouble || b instanceof LispDouble) {
+			return new LispDouble(realToDouble(a) + realToDouble(b));
+		}
+		return exactAdd(a, b);
+	}
+
+	private static LispVal realSubStep(LispVal a, LispVal b) {
+		if (a instanceof LispDouble || b instanceof LispDouble) {
+			return new LispDouble(realToDouble(a) - realToDouble(b));
+		}
+		return exactSub(a, b);
+	}
+
+	private static LispVal realMulStep(LispVal a, LispVal b) {
+		if (a instanceof LispDouble || b instanceof LispDouble) {
+			return new LispDouble(realToDouble(a) * realToDouble(b));
+		}
+		return exactMul(a, b);
+	}
+
+	private static LispVal realDivStep(LispVal a, LispVal b) {
+		if (a instanceof LispDouble || b instanceof LispDouble) {
+			return new LispDouble(realToDouble(a) / realToDouble(b));
+		}
+		return exactDiv(a, b);
 	}
 
 	// A left fold from the first operand, one pair at a time like SBCL: a real operand
@@ -9742,10 +9754,7 @@ public final class Environment implements Scope {
 
 	private static LispVal mulComplexPair(LispVal x, LispVal y) {
 		if (!(x instanceof LispComplex) && !(y instanceof LispComplex)) {
-			if (x instanceof LispDouble || y instanceof LispDouble) {
-				return new LispDouble(realToDouble(x) * realToDouble(y));
-			}
-			return exactMul(x, y);
+			return realMulStep(x, y);
 		}
 		if (x instanceof LispComplex z && !(y instanceof LispComplex)) {
 			return mulComplexByReal(z, y);
@@ -9775,75 +9784,70 @@ public final class Environment implements Scope {
 		return LispComplex.valueOf(exactMul(z.real(), r), exactMul(z.imag(), r));
 	}
 
+	// / folds left to right one pair at a time like + and -; one argument is the
+	// reciprocal, 1 over it.
 	private static LispVal divComplex(List<LispVal> args) {
-		if (hasDouble(args) || hasComplexDoublePart(args)) {
-			double[] first = complexDoubleParts(args.get(0));
-			double re = first[0];
-			double im = first[1];
-			int start = 1;
-			if (args.size() == 1) {
-				re = 1.0;
-				im = 0.0;
-				start = 0;
-			}
-			for (int i = start; i < args.size(); i++) {
-				double[] p = complexDoubleParts(args.get(i));
-				double[] quotient = smithDivide(re, im, p[0], p[1]);
-				re = quotient[0];
-				im = quotient[1];
-			}
-			return LispComplex.valueOf(new LispDouble(re), new LispDouble(im));
-		}
-		LispVal re = new LispInteger(1);
-		LispVal im = new LispInteger(0);
-		int start = 1;
 		if (args.size() == 1) {
-			start = 0;
+			return divComplexPair(new LispInteger(1), args.get(0));
 		}
-		else {
-			re = complexReal(args.get(0));
-			im = complexImag(args.get(0));
+		LispVal acc = args.get(0);
+		for (int i = 1; i < args.size(); i++) {
+			acc = divComplexPair(acc, args.get(i));
 		}
-		for (int i = start; i < args.size(); i++) {
-			LispVal[] divided = exactDivComplex(re, im, complexReal(args.get(i)), complexImag(args.get(i)));
-			re = divided[0];
-			im = divided[1];
-		}
-		return LispComplex.valueOf(re, im);
+		return acc;
 	}
 
-	// (a+bi)/(c+di) in FLOATS by Smith's form: fold on whichever divisor part is
-	// larger, so the only quantity ever squared is the smaller part over the larger
-	// and nothing intermediate leaves the range the operands themselves live in. The
-	// c^2+d^2 denominator this replaced overflows above |c| ~ 1.3e154 and flushes to
-	// zero below ~1.5e-162, where both operands are perfectly representable:
-	// (/ #c(1d200 1d200) #c(1d200 1d200)) answered #C(NaN NaN) and is 1.0 here.
-	// A REAL divisor makes d, and with it r, zero and den c, so both parts reduce to
-	// ONE rounded division instead of three -- which is why (log -8d0 2d0) lands on
-	// SBCL's #C(3.0 4.532360141827194) where the denominator form answered
-	// 2.9999999999999996 for the real part. SBCL 2.2.9 computes this same form
-	// (measured on linux/amd64, 2026-09-11, every row of .kb/jvm-complex.md's table).
-	// A zero FLOAT divisor keeps the NaN the denominator form answered -- r is 0/0
-	// and every part follows -- rather than the part-wise infinity a d == 0.0 special
-	// case would produce: SBCL signals DIVISION-BY-ZERO there because its FPU traps,
-	// this runtime does not trap, and a non-answer is the honest image of a signal.
-	// The compiled twins are JvmComplexRuntimeBuilder.buildDiv's float tail and
-	// WasmComplexRuntimeBuilder.buildDivBody's float arm; all three must agree.
-	private static double[] smithDivide(double a, double b, double c, double d) {
-		if (Math.abs(c) >= Math.abs(d)) {
-			double r = d / c;
-			double den = c + d * r;
-			return new double[] { (a + b * r) / den, (b - a * r) / den };
+	// SBCL's two-argument / over a complex operand (measured against SBCL 2.2.9, see
+	// .kb/jvm-complex.md, "Complex division is SBCL's dispatch"): a complex over a real
+	// divides each part by it; over a complex the quotient folds on the divisor part
+	// of strictly larger magnitude -- for |c| > |d|, r = d/c and dn = c(1+r^2), so
+	// nothing intermediate leaves the operands' own range -- with a real dividend
+	// taking its own shorter form. Every operation is a real step, so an exact operand
+	// converts only where it meets a float: an EXACT divisor's r and dn stay exact
+	// beside a float dividend, and an exact zero dividend negates to an exact zero.
+	// The compiled twins are JvmComplexRuntimeBuilder.buildDiv and
+	// WasmComplexRuntimeBuilder.buildDivBody; all three must agree.
+	private static LispVal divComplexPair(LispVal x, LispVal y) {
+		if (!(y instanceof LispComplex divisor)) {
+			if (!(x instanceof LispComplex dividend)) {
+				return realDivStep(x, y);
+			}
+			return LispComplex.valueOf(realDivStep(dividend.real(), y), realDivStep(dividend.imag(), y));
 		}
-		double r = c / d;
-		double den = c * r + d;
-		return new double[] { (a * r + b) / den, (b * r - a) / den };
+		LispVal c = divisor.real();
+		LispVal d = divisor.imag();
+		boolean realFold = magnitudeGreater(c, d);
+		LispVal r = realFold ? realDivStep(d, c) : realDivStep(c, d);
+		LispVal dn = realMulStep(realFold ? c : d, realAddStep(new LispInteger(1), realMulStep(r, r)));
+		if (!(x instanceof LispComplex dividend)) {
+			if (realFold) {
+				return LispComplex.valueOf(realDivStep(x, dn), realDivStep(negateReal(realMulStep(x, r)), dn));
+			}
+			return LispComplex.valueOf(realDivStep(realMulStep(x, r), dn), realDivStep(negateReal(x), dn));
+		}
+		LispVal a = dividend.real();
+		LispVal b = dividend.imag();
+		if (realFold) {
+			return LispComplex.valueOf(realDivStep(realAddStep(a, realMulStep(b, r)), dn),
+					realDivStep(realSubStep(b, realMulStep(a, r)), dn));
+		}
+		return LispComplex.valueOf(realDivStep(realAddStep(realMulStep(a, r), b), dn),
+				realDivStep(realSubStep(realMulStep(b, r), a), dn));
 	}
 
-	// (a+bi)/(c+di) exactly: the denominator c^2+d^2 is real, so both parts divide
-	// by it. Exact rationals neither overflow nor round, so the float arm's Smith
-	// fold buys nothing here. A zero divisor signals division-by-zero, like real
-	// (/ x 0).
+	// |c| > |d| for the two parts of a canonical complex (both floats or both exact).
+	// Strict, like SBCL: a tie takes the c/d arm, and so does a NaN.
+	private static boolean magnitudeGreater(LispVal c, LispVal d) {
+		if (c instanceof LispDouble || d instanceof LispDouble) {
+			return Math.abs(realToDouble(c)) > Math.abs(realToDouble(d));
+		}
+		return compareNumeric(exactMul(c, c), exactMul(d, d)) > 0;
+	}
+
+	// (a+bi)/(c+di) exactly, for exptComplex's reciprocal: the denominator c^2+d^2 is
+	// real, so both parts divide by it. Exact rationals neither overflow nor round, so
+	// divComplexPair's fold would give the same value. A zero divisor signals
+	// division-by-zero, like real (/ x 0).
 	private static LispVal[] exactDivComplex(LispVal a, LispVal b, LispVal c, LispVal d) {
 		LispVal denom = exactAdd(exactMul(c, c), exactMul(d, d));
 		if (isZeroReal(denom)) {

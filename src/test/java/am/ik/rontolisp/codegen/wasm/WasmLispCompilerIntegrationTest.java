@@ -17231,13 +17231,11 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void compileAndRunComplexFloatDivisionIsSmithsForm() throws Exception {
-		// _c_div's float arm is Smith's fold, the interpreter's smithDivide: raw f64
-		// instructions, so unlike the software log core these digits ARE the JVM's.
-		// A real divisor is one division per part, and the fold never squares the
-		// larger part -- the c^2+d^2 denominator answered #C(NaN NaN) for the two
-		// range rows. The exact arm below keeps that denominator, where rationals
-		// neither round nor overflow.
+	void compileAndRunComplexFloatDivisionIsSbclsForm() throws Exception {
+		// _c_div is the interpreter's divComplexPair: raw f64 instructions over a float
+		// divisor, so unlike the software log core these digits ARE the JVM's. A real
+		// divisor is one division per part, and the fold never squares the larger part
+		// -- a c^2+d^2 denominator answers #C(NaN NaN) for the two range rows.
 		String[] out = compileAndRun("""
 				(print (/ #c(2.0794415416798357d0 3.141592653589793d0) 0.6931471805599453d0))
 				(print (/ #c(1d200 1d200) #c(1d200 1d200)))
@@ -27663,6 +27661,21 @@ class WasmLispCompilerIntegrationTest {
 		}
 		assertThat(compileComponentAndRunProgram(program))
 			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
+	@Test
+	void complexSumQuotient() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexSumQuotient.
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexSumQuotientFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"csq-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
+		}
+		assertThat(compileComponentAndRunProgram(program))
+			.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
 	}
 
 	@Test
